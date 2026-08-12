@@ -1375,7 +1375,6 @@
     "statusLabels": {
       "Available": "Available",
       "Destroyed": "Destroyed",
-      "Expired": "Expired",
       "PartiallyWithdrawn": "Partially Withdrawn",
       "TotallyWithdrawn": "Totally Withdrawn",
       "Unusable": "Unusable",
@@ -1384,7 +1383,6 @@
     "statusOptions": {
       "Available": "Available",
       "Destroyed": "Destroyed",
-      "Expired": "Expired",
       "Withdrawn": "Withdrawn"
     },
     "storageInline": {
