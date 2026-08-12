@@ -1,121 +1,125 @@
 # HANDOFF
 
 **Written:** 2026-08-12, end of session on `feature/docker-e2e-backend-integration`,
-after Dennis said "Skills pack issues are resolved. Continue #549."
+after Dennis said "Skills pack issues are resolved. See how much you can
+do of #549 in a consistent manner."
 
 ## What happened this session
 
-Continued issue #549 per the prior handoff's queued candidate: next
-single source per §7.4 step 4's order after ICD-11 is **ICD-10** (CID-10
-in the dictionary's Portuguese-plan naming). Routed to `build-loop`.
+Continued issue #549 per the prior handoff's queued candidate (OMIM),
+then kept going — six sources shipped back-to-back this session, all via
+`build-loop`, all in the identical shape HPO/MONDO/ORPHA/ICD-11/ICD-10
+established in prior sessions:
 
-**Built and shipped ICD-10 (RF028's fifth Fase 2 source) this session**,
-mirroring HPO (#367)/MONDO (#548)/ORPHA/ICD-11 (#549 prior slices)'s
-exact shape:
+1. **OMIM** (sixth source, closes §7.4 step 4's "ORPHA, CID-11, CID-10 e
+   OMIM" group). `sourceFormat` `JSON` (OMIM's REST API documents a JSON
+   response option, per dict-01's ambiguous "API/arquivos autorizados"
+   row). `license` `'Termos OMIM; conteúdo narrativo restrito'`.
+   **Judgment call carried from the prior handoff:** SRC_OMIM's row is
+   the first of these sources requiring an API key/license
+   (`Chave/API/licença`) for real access — doesn't change this slice's
+   shape (every source stays a bundled-fixture, no-live-network import),
+   just a note for #550's future live-download scope.
+2. **HGNC** (seventh, §7.4 step 5). `sourceFormat` `JSON`, directly
+   listed in the row ("TSV/JSON/REST") — no special-case reasoning
+   needed. First source with `semanticType: 'gene'` rather than
+   disease/phenotype.
+3. **LOINC** (eighth, §7.4 step 6, leads the LOINC/UCUM pair).
+   `sourceFormat` `CSV` — first source to use CSV, directly listed in
+   the row ("CSV/RELMA/API/FHIR"). `systemUri`
+   `http://loinc.org` (HL7 FHIR standard, no judgment call).
+   `semanticType: 'observation'`.
+4. **UCUM** (ninth, §7.4 step 6, closes the pair). `sourceFormat` `XML`
+   (row: "XML/especificação", no JSON option). `systemUri`
+   `http://unitsofmeasure.org` (HL7 FHIR standard). `semanticType:
+   'unit'`.
+5. **DCB** (tenth, §7.4 step 7, leads the DCB/ATC pair). `sourceFormat`
+   `XLSX`, directly listed ("XLSX/PDF/portal") — second source outside
+   JSON/XML. `systemUri` is dict-01's own official URL for SRC_DCB (no
+   FHIR-standard URI exists for a Brazil-specific nomenclature).
+   `semanticType: 'medication'`.
+6. **ATC** (eleventh, §7.4 step 7, closes the pair). `sourceFormat`
+   `XML` (row: "Portal/XML/XLSX conforme aquisição"). `systemUri`
+   `http://www.whocc.no/atc` (HL7 FHIR standard). `semanticType:
+   'medication'`, same as DCB.
 
-- `api/backend/src/reference-data/reference-imports/sources/icd10.js` +
-  `normalizeIcd10.js`. `sourceFormat` is `XML` per `dict-01_FONTES.md`'s
-  `SRC_ICD10` row — its Formato column is "Browser/arquivos licenciados"
-  (no JSON option listed, unlike ICD-11's "REST/JSON/Browser"), so this
-  follows ORPHA's XML special-case precedent rather than
-  HPO/MONDO/ICD-11's JSONL justification. `license` is
-  `'Termos WHO/edição nacional'`, the row's own literal value (distinct
-  from ICD-11's `'Termos WHO'`); `licenseUri` stays `null` pending #550's
-  live download/license-verification follow-up. `systemUri` is the HL7
-  FHIR standard ICD-10 system URI (`http://hl7.org/fhir/sid/icd-10`).
-- `fixtures/icd10-sample.jsonl` — 8 valid + 2 intentionally-invalid
-  records, same shape as the prior sources' fixtures. Illustrative
-  ICD-10 codes/labels (an "illness, unspecified" root plus two
-  chapter-range branches — `A00-B99`, `C00-D48`), not asserted as a
-  verified snapshot of any real ICD-10 edition.
-- `scripts/reference-imports/import-icd10-reference-dataset.js` +
-  `reference:import:icd10`/`:dry-run` npm scripts +
-  `reference-data-bootstrap-icd10` compose.dev.yml service (depends on
-  `reference-data-bootstrap-icd11` completing, matching §7.4's
-  documented order).
-- **Closed out the ICD-11 slice's deferred judgment call:**
-  `import-large-reference-dataset.js`'s placeholder scaffold now
-  **removes `'cid'`** from its allowed-datasets set (it now only lists
-  `'omim'`) — the shared CID-11/CID-10 placeholder token is no longer
-  needed now that both have their own operational scripts, mirroring
-  HPO/MONDO/ORPHA/ICD-11's own removals.
-- `reference-import-boundary.arch.test.js` extended with ICD-10-mirror
-  assertions (fixture-only, no live network) plus an updated
-  "large import scaffold no longer lists cid or icd10" test.
-- `normalizeIcd10.test.js` — 6 unit tests, mirroring
-  `normalizeIcd11.test.js`/`normalizeOrpha.test.js`.
-- `pipeline-continuity.spec.ts`'s RF028 describe block got a new
-  ICD-10-specific assertion, reusing the already-generic
-  `countReferenceDatasetReleasesByDatasetCode`/
-  `countTerminologyConceptsBySystemUri` helpers (no new helper code
-  needed).
+Each slice: `sources/<x>.js` + `normalizeX.js`, a bundled
+`<x>-sample.jsonl` fixture (8 valid + 2 intentionally-invalid records —
+mixing real, publicly-known identifiers/labels for the source with a
+few fabricated placeholders where needed, always disclosed in the source
+config's own comment), `import-<x>-reference-dataset.js` +
+`reference:import:<x>`/`:dry-run` npm scripts, a
+`reference-data-bootstrap-<x>` compose.dev.yml service chained onto the
+prior source, `reference-import-boundary.arch.test.js` extended with a
+mirror pair of assertions, `normalizeX.test.js` (6 unit tests), and a new
+per-source assertion in `pipeline-continuity.spec.ts`'s RF028 describe
+block.
 
-Verified: 30/30 targeted unit tests (HPO+MONDO+ORPHA+ICD11+ICD10), 16/16
-`reference-import-boundary` arch assertions (32/32 full arch suite)
-natively; then (Docker-on-by-default for this loop) brought up the real
-dev stack targeting the bootstrap chain directly (per the documented
-`--env-file`/chain-targeting fix from #548, now carried through six
-chain links) and confirmed `reference-data-bootstrap-icd10` ran after
-`reference-data-bootstrap-icd11` — 10 records read, 8 validated, 2
-rejected, 15 inserted (8 concepts + 7 `is_a` relations) — then ran the
-real `pipeline-continuity.spec.ts -g "Reference data importers"`
-Playwright spec against that stack: all 6 tests pass, including the new
-ICD-10-specific one. The compose chain drove through cleanly on the
-first `up -d --build` call again this session — the documented fix keeps
-holding across every new link added to the chain.
+Verified per slice: targeted unit tests (grew 30→45 across the session)
++ full architecture suite (32→45) natively; then (Docker-on-by-default
+for this loop) the real dev stack brought up targeting the bootstrap
+chain directly (chain-targeting fix from #548/#549 held clean across all
+six new links — twelve deep by session end, first-try clean every time)
+confirming each new `reference-data-bootstrap-<x>` service ran after its
+predecessor (10 records read, 8 validated, 2 rejected, 15 inserted each
+time); then the real `pipeline-continuity.spec.ts -g "Reference data
+importers"` Playwright spec against that stack (grew 6→12 passing tests
+across the session, including each new per-source assertion).
 
-**Two pieces of real friction this session, both self-caused, both
-filed against the pack (not this project's own scope to fix, since both
-overlays are junctioned in):**
+Each source: its own `test/549-<source>-reference-source` branch off
+`feature/docker-e2e-backend-integration`, committed, merged (no-ff),
+pushed, individual progress comment posted on #549. (One progress
+comment had an arithmetic slip — said "4 sources remain" then listed
+5 — corrected with an immediate follow-up comment.)
 
-1. Writing the removal-rationale comment for `import-large-
-   reference-dataset.js`'s `'cid'` token (explaining *why* it was
-   removed) accidentally used `'cid'` in quotes in the prose itself —
-   which is exactly the shape `reference-import-boundary.arch.test.js`'s
-   `doesNotMatch(/['"]cid['"]/)` check matches against. The arch test
-   failed against its own explanatory comment, not the code, and took a
-   moment to trace. Filed as **skills-pack#257** (will recur for every
-   future Fase-2-source token removal — OMIM next).
-2. Running `pipeline-continuity.spec.ts` manually against the dev stack
-   failed immediately on `listen EACCES: permission denied 0.0.0.0:5173`
-   — Playwright's own `webServer` config trying to launch the frontend
-   dev server (unrelated to the already-healthy Docker stack). Needed
-   `PLAYWRIGHT_SKIP_WEBSERVER=1` (which `package.json`'s `test:e2e:docker`
-   script already sets, but wasn't called out in the docker-workflow
-   overlay's "Connecting Playwright to the dev stack manually" section).
-   Filed as **skills-pack#258**.
+**One piece of real friction this session, filed against the pack (not
+this project's own scope to fix):** `full-suite-guard.cjs`'s
+directory-target vitest run (`npx vitest run
+tests/unit/reference-imports/`) passed cleanly for the first two slices
+(8 then 9 files in that directory), then started getting blocked
+partway through the session once the directory crossed 10 files — no
+code change on this session's side, the same command just crossed some
+file-count threshold. Filed as **skills-pack#259**, including the exact
+overlay text for a pack session to add to `unit-test-loop`'s
+BioAvanceD-v2 `local-env` file (workaround used this session: switch to
+listing the explicit test files, which the hook accepts regardless of
+directory size).
 
-Committed on `test/549-icd10-reference-source`, merged (no-ff) into
-`feature/docker-e2e-backend-integration` at `d25c9d20`, pushed, progress
-comment posted on **#549** (left open — 10 sources remain, next is
-OMIM).
+Stopped deliberately after ATC — a clean §7.4 step 7 boundary — rather
+than continuing to step 8 (DUO, Uberon, NCBI Taxonomy, Cell Ontology,
+EDAM — 5 more sources, bringing the total Fase 2 source count to 16).
+Not a blocker, just a natural pause point after six iterations.
 
-`wrap-up`'s core + shipping audits found the two frictions above (both
-filed) and nothing else — no scope creep outside the ICD-10 slice's
-files (confirmed via `git diff --stat` against the merge), no lazy
-fixes, no unresolved "needs owner call" labels closed without a matching
-open issue.
+`wrap-up`'s core + shipping audits found the one friction above (filed)
+and nothing else — `git diff --stat` from session start (`d037c32b`) to
+the final merge (`0a9cbdb0`) confirmed the entire 36-file/1819-line diff
+is scoped to the reference-imports feature (source configs, normalizers,
+fixtures, import scripts, npm scripts, compose.dev.yml services, arch
+tests, unit tests, pipeline-continuity.spec.ts assertions) plus the one
+package.json edit for npm scripts — no scope creep, no lazy fixes, no
+unresolved "needs owner call" labels closed without a matching open
+issue.
 
-**Security/safety note:** none. Product change is a data-import source
-addition with a real-backend proof; no new routes, no auth changes, no
-secrets introduced.
+**Security/safety note:** none. Six more data-import source additions,
+same shape as every prior RF028 source — no new routes, no auth changes,
+no secrets introduced.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `d25c9d20`, clean,
-  pushed, up to date with origin. Carries #549's ICD-10 source on top of
-  ICD-11/ORPHA/MONDO and everything from prior sessions.
-- Issues this session: **#549 still open** (progress comment posted,
-  tracking the remaining 10 sources). **skills-pack#257 filed**
-  (pack-repo, arch-test self-tripping-comment trap). **skills-pack#258
-  filed** (pack-repo, `PLAYWRIGHT_SKIP_WEBSERVER` doc gap). Per Dennis at
-  session start, all skills-pack issues from the *prior* session
-  (including #255, the CID→ICD naming trap) are already resolved.
-- Docker: dev stack was brought up this session to verify ICD-10, then
-  torn down (`docker compose down`, no `-v`) at session end. Named
-  volumes (mongodb/neo4j data) untouched. Session-built images left
-  cached, same reasoning as prior sessions (#549's very likely next
-  source, OMIM, is an immediate rebuild otherwise).
+- **`feature/docker-e2e-backend-integration`**: at `0a9cbdb0`, clean,
+  pushed, up to date with origin. Carries #549's OMIM/HGNC/LOINC/UCUM/
+  DCB/ATC sources on top of everything from prior sessions (HPO, MONDO,
+  ORPHA, ICD-11, ICD-10).
+- Issues this session: **#549 still open** (six progress comments
+  posted, tracking the remaining 5 sources). **skills-pack#259 filed**
+  (pack-repo, full-suite-guard.cjs directory-target threshold gap).
+- Docker: dev stack was brought up and torn down (`docker compose down`,
+  no `-v`) six times this session, once per slice — each verification
+  run targeted the growing bootstrap chain directly, then torn down
+  before starting the next slice's implementation. Named volumes
+  (mongodb/neo4j data) untouched. Session-built images left cached, same
+  reasoning as prior sessions (#549's very likely next source, DUO, is
+  an immediate rebuild otherwise).
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged, 16 local + remote items — see earlier handoffs for
   the full list; unchanged this session so not re-enumerated here to
@@ -129,25 +133,30 @@ queued.
 
 Candidates carried forward (#549 still open, not resolved):
 
-- **#549 continuation** — next single source per §7.4 step 4's order is
-  **OMIM** (closing out step 4's "ORPHA, CID-11, CID-10 e OMIM" group),
-  then HGNC (step 5), LOINC/UCUM (step 6), DCB/ATC (step 7),
-  DUO/Uberon/NCBI Taxonomy/Cell Ontology/EDAM (step 8). Same build-loop
-  shape as HPO/MONDO/ORPHA/ICD11/ICD10, reusing `pipeline.js` as-is. Two
-  things this slice should carry: (1) OMIM's `dict-01_FONTES.md` row is
-  already `SRC_OMIM` — no CID/ICD-style naming trap expected there, but
-  re-check anyway; (2) OMIM's row shows `Chave/API/licença` under
-  autenticação (needs a key/license), unlike HPO/MONDO/ORPHA/ICD-11/
-  ICD-10's open-access rows — this is likely to force a real judgment
-  call about whether the bundled-sample-fixture pattern still applies
-  cleanly, or whether the license-gated nature of OMIM's real API needs
-  a different treatment/note than the previous five sources. Also
-  re-check `sourceFormat`/`license` against OMIM's own dict-01 row rather
-  than assuming JSONL/a fixed license value, per the same per-source
-  judgment call every prior slice has documented. When writing the
-  removal-rationale comment for OMIM's own placeholder token in
-  `import-large-reference-dataset.js`, avoid quoting the token itself in
-  single/double quotes in the prose — see skills-pack#257.
+- **#549 continuation** — next per §7.4 step 8 is **DUO, Uberon, NCBI
+  Taxonomy, Cell Ontology, and EDAM** (5 sources, closing out all of
+  Fase 2's 16 total sources). Same build-loop shape as every source
+  shipped so far, reusing `pipeline.js` as-is. Check each source's own
+  `dict-01_FONTES.md` row (`SRC_DUO`, `SRC_UBERON`, `SRC_NCBITAX`,
+  `SRC_CL`, `SRC_EDAM` — all captured in this session's read of the
+  file, rows 42/46-49) for `sourceFormat`/`license`/`systemUri` rather
+  than assuming a pattern from the six done this session — every prior
+  slice has needed its own per-source judgment call there. Quick
+  read from this session's dict-01 pass: DUO is `OWL/OBO/Git` (no JSON
+  — likely another XML/special-case reasoning, or introduce 'OWL' the
+  way LOINC introduced CSV/DCB introduced XLSX); Uberon and Cell
+  Ontology are both `OWL/OBO` (same shape as DUO); NCBI Taxonomy is
+  `Taxdump/REST/JSON` (JSON genuinely listed); EDAM is `OWL` only. All
+  five have well-known real-world systemUris (DUO:
+  `http://purl.obolibrary.org/obo/duo.owl`-style OBO Foundry PURLs,
+  same pattern HPO/MONDO already used) — shouldn't need OMIM/HGNC/DCB's
+  domain-based judgment call. When writing each one's removal-rationale
+  comment (if any placeholder token needs removing from
+  `import-large-reference-dataset.js` — unlikely, since that scaffold's
+  `allowedDatasets` set is already fully empty as of the OMIM slice),
+  avoid quoting the token itself in single/double quotes in the prose —
+  see skills-pack#257 (resolved per Dennis, but the underlying trap in
+  the arch test itself is unchanged).
 - **#550/#551/#552** — independent of #549, can be picked up in any
   order once #367 (satisfied) is the only real dependency.
 - **#530** — `dictionary:validate` isn't wired into `ci-pipeline.yml`.
@@ -162,18 +171,18 @@ Candidates carried forward (#549 still open, not resolved):
   `E2E_TRACEABILITY_PLAN.md`.
 - **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246/#247/#250/#251/#254**
   — pack-repo only, low priority, unchanged this session.
-- **skills-pack#257/#258** — filed this session (see above), pack-repo
-  fix, not this project's scope to resolve.
+- **skills-pack#259** — filed this session (see above), pack-repo fix,
+  not this project's scope to resolve.
 
 ## Dev stack state
 
 Torn down at session end (`docker compose down`, no `-v`). Named volumes
 (mongodb/neo4j data) untouched — next session's `compose up` will see
 the same accumulated fixture data prior sessions' gotcha already
-documents, now including ICD-10's 8 concepts/7 relations alongside
-HPO's/MONDO's/ORPHA's/ICD-11's. Images left cached — a next
-`compose up --build` should be fast (cache hits) unless something
-invalidates a layer.
+documents, now including all six of this session's sources' concepts/
+relations alongside HPO's/MONDO's/ORPHA's/ICD-11's/ICD-10's. Images left
+cached — a next `compose up --build` should be fast (cache hits) unless
+something invalidates a layer.
 
 **Reminder for next session's first Docker command:** use
 `docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml
@@ -181,9 +190,12 @@ up -d --build <targets>` — never bare `up -d --build` — and if targeting
 a reference-data bootstrap chain, target the chain services directly
 (`foundation-bootstrap reference-data-bootstrap reference-data-bootstrap-mondo
 reference-data-bootstrap-orpha reference-data-bootstrap-icd11
-reference-data-bootstrap-icd10 [next-source]`), skipping `frontend`
+reference-data-bootstrap-icd10 reference-data-bootstrap-omim
+reference-data-bootstrap-hgnc reference-data-bootstrap-loinc
+reference-data-bootstrap-ucum reference-data-bootstrap-dcb
+reference-data-bootstrap-atc [next-source]`), skipping `frontend`
 entirely, per the overlay's documented fix — this ran clean on the first
-try again this session, six links deep into the chain now.
+try six times in a row this session, twelve links deep now.
 
 **Reminder for a manual Playwright run against the dev stack:** on top
 of the documented `E2E_MONGO_URI`/`E2E_MONGO_DB`/Neo4j-creds env vars,
@@ -191,17 +203,25 @@ also set `PLAYWRIGHT_BASE_URL=http://localhost:5173`,
 `PLAYWRIGHT_API_BASE_URL=http://localhost:3000`, and
 `PLAYWRIGHT_SKIP_WEBSERVER=1` — otherwise Playwright's own `webServer`
 config tries (and fails, on this machine's Windows-reserved port range)
-to launch a second frontend dev server on 5173. See skills-pack#258.
+to launch a second frontend dev server on 5173. See skills-pack#258
+(resolved per Dennis, underlying gotcha unchanged).
 
 ## Which skills to use
 
-- `build-loop` worked smoothly end-to-end this session, including the
-  Docker section — chain targeting worked on the first `up -d --build`
-  again, six links deep. Two small gaps surfaced and were filed against
-  the pack rather than reworked ad hoc: skills-pack#257 (arch-test
-  self-tripping removal comment) and skills-pack#258
-  (`PLAYWRIGHT_SKIP_WEBSERVER` missing from the manual-Playwright-run
-  doc).
-- `docker-workflow`'s BioAvanceD-v2 overlay's documented fixes (env-file,
-  chain-targeting) continue to hold across sessions once written down —
-  worth noting as a confirmation, not just a lesson learned once.
+- `build-loop` worked smoothly end-to-end across all six iterations this
+  session, including the Docker section every time — chain targeting
+  worked on the first `up -d --build` all six times, twelve links deep
+  by the end. One gap surfaced mid-session and was filed against the
+  pack rather than reworked ad hoc: skills-pack#259
+  (`full-suite-guard.cjs`'s directory-target threshold not documented
+  anywhere, so a session hitting it mid-loop has to re-diagnose from
+  scratch).
+- `docker-workflow`'s BioAvanceD-v2 overlay's documented fixes
+  (env-file, chain-targeting) continue to hold across sessions and
+  across many more chain links than when first documented — worth
+  reconfirming as a strong pattern, not just a lesson learned once.
+- Running six build-loop iterations back-to-back in one session (rather
+  than one per session) worked cleanly — each iteration's own
+  branch/commit/merge/push/verify/comment cycle is fully
+  self-contained, so there was no cross-iteration state bleed to manage
+  beyond the compose chain naturally growing by one link each time.
