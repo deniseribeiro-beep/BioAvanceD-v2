@@ -1,79 +1,78 @@
 # HANDOFF
 
 **Written:** 2026-08-12, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #541 (Dennis picked it directly off last session's
-carried-forward candidate list).
+after resolving #542 (Dennis said "Read handoff and pick #542").
 
 ## What happened this session
 
-Dennis said "pick #541." `work-issue` routed to `fix-bugs` (labeled
-`bug`, a concrete backend gating gap with a clear reproduction).
+Dennis said "pick #542." `work-issue` read the issue body: `'Expired'`
+appears in `frontend/src/types/models.ts`'s `Sample.currentStatus` union
+and `frontend/src/foundation/contracts.ts`'s `LegacySampleStatus` union,
+has i18n translations, and a dropdown option — but the issue's own trace
+found zero producers anywhere in the codebase, and explicitly asked for
+Dennis's call on whether it's a planned-but-unbuilt feature (sample
+expiry, maybe tied to `RetentionPolicy`/RF014/#440/#441) or dead cruft
+to drop.
 
-**#541 resolved** (`fix/541-withdraw-depleted-guard`, commit `28102aa0`,
-merged into the integration branch at `aaa199c9`) — `withdrawSample`'s
-status gate only checked `BLOCKED_SPECIMEN_STATUSES`
-(`unavailable`/`destroyed`/`disposed`/`quarantined`), which deliberately
-excludes `'depleted'`. A `'Total'` re-withdrawal on an already-depleted
-sample (`specimenStatus: 'depleted'`, `currentQuantity: 0`) fell through
-that gate: `withdrawQty` floored at `availableQty` (0) so the balance
-never went negative, but the call "succeeded" anyway — a zero-quantity
-`SampleMovement` ledger entry plus an overwritten
-`withdrawnAt`/`withdrawalResponsible`/`sampleDestination` on the Sample
-document, with nothing actually withdrawn. (`'Parcial'` re-withdrawal was
-already correctly rejected — only `'Total'` had the gap.)
+Per `work-issue`'s "needs owner's call → check `docs/` first" rule,
+checked the data dictionary before escalating: `dict-02_DICIONARIO.md`
+(v1.3.0, extracted under `docs/docs-7-27-2026/extracted/`) defines
+`Specimen.specimenStatus` (ELM-0123) as exactly
+`available|reserved|checked_out|partial|depleted|quarantined|destroyed|unavailable`
+— no `expired` value, ever. Confirmed the dictionary source itself isn't
+stale: `docs/docs-7-31-2026/CHANGELOG-2026-07-31.md` states the v1.3.0
+dictionary xlsx is byte-identical (SHA-256) between the 07-27 and 07-31
+batches, so there's no newer revision that could have added it. The
+actual planned retention/expiry mechanism (RF026,
+`RetentionPolicy`→`DispositionAction`, the thing #440/#441 build) works
+through a separate `dispositionAction` code
+(transfer/return/destroy/anonymize/preserve on a disposition record),
+not a `Sample.currentStatus` value — so `'Expired'` was never part of
+the canonical model, not a gap waiting to be filled. That settled the
+issue's own open question without needing to ask Dennis.
 
-The issue's own body offered two candidate fixes: add `'depleted'` to
-`BLOCKED_SPECIMEN_STATUSES`, or add an explicit `availableQty <= 0`
-guard. Traced both before picking: `BLOCKED_SPECIMEN_STATUSES` is also
-read by `SampleModel.computeStatus()` (`Sample.js:261`) to decide which
-statuses are *sticky* against quantity changes, and by `returnSample`'s
-own status gate (`sample.service.js:825`). Adding `'depleted'` there
-would have made it sticky in `computeStatus` and made `returnSample`
-reject any return attempt against a depleted sample — breaking the
-legitimate "return material after a full withdrawal" flow, a real
-regression, not just a side effect. Went with the explicit
-`availableQty <= 0` guard instead, placed ahead of the `Total`/`Parcial`
-branch, mirroring `returnSample`'s existing `pendingReturn <= 0` guard.
+**#542 resolved** (`fix/542-remove-dead-expired-status`, commit
+`51236eaf`, merged into the integration branch at `944f3635`) — removed
+`'Expired'` from `Sample['currentStatus']` (`models.ts`) and
+`LegacySampleStatus` (`contracts.ts`), the option row in
+`SampleDetailsPage.tsx`'s status dropdown, and the orphaned
+`statusLabels.Expired`/`statusOptions.Expired` i18n entries in
+`en-US.json`/`es-ES.json`/`pt-BR.json`. `tsc --noEmit` clean;
+`contracts.test.ts` (7 tests) green, both before and after the merge.
 
-Per the issue's own suggestion, double-checked `returnSample`'s
-equivalent gate for the same class of bug — it already has the matching
-guard (`pendingReturn <= 0`, with existing test coverage), so no
-analogous gap there. Nothing to fix on that side.
+**Found while tracing the dropdown, filed separately as #545** (not
+folded into #542, since it's a different value/finding, not the dead
+`'Expired'` value itself): `SampleDetailsPage.tsx`'s "Status Atual" edit
+dropdown sends `currentStatus` on `PUT /samples/:id`, but
+`sample.service.js#updateSample` has silently dropped that field since
+#540 (`specimenStatus` is now the sole persisted signal — confirmed at
+`sample.service.js:656`). That backend behavior is correct and
+intentional (#540's own close comment documents it), but the frontend
+still renders the dropdown as a normal editable control — every save
+"succeeds" with zero effect and no indication to the user. Needs a
+product call: remove the control, or make it read-only.
 
-New regression test in `api/backend/tests/unit/sample.service.test.js`
-(`'rejects a Total re-withdrawal on an already-depleted sample (#541)'`).
-208 tests green across `sample.service.test.js` + `sample.routes.test.js`
-(the only two files referencing `withdrawSample` in the test tree),
-re-verified on the merged integration-branch tree before pushing.
+**Security/safety note:** none — pure dead-type-union/i18n removal, no
+trust boundary or persisted-data behavior touched.
 
-**Security/safety note:** this fix hardens `withdrawSample`'s gating —
-fail-closed, it now blocks a call that previously silently no-op'd — with
-no new/relaxed trust boundary and full regression-test coverage. Same
-shape as #540 session's precedent; documented here rather than filing a
-redundant issue, since it's a confirmed-correct, test-covered gate
-tightening, not an open question.
-
-**Workflow friction this session:** none worth filing. The one hiccup —
-attempting the first test-file `Edit` before creating the `fix/541-...`
-branch, blocked by the protected-branch hook — was the hook working
-exactly as designed against an ordinary slip, not a skill gap; fixed by
-branching first and re-applying the same edit, no lost work. Remote
-fix-branch deletion was denied by the permission classifier, same
-already-documented pattern as #392/#482 (no new predictor found, nothing
-new to file).
+**Workflow friction this session:** none of note. `work-issue`'s
+docs-first check for "needs owner's call" issues worked exactly as
+designed — settled the design question from `docs/` without an
+`AskUserQuestion` round-trip. Branch create/merge/push/close/delete all
+succeeded without permission denials this session (contrast with #541's
+session, which hit a remote-delete denial — not repeated here).
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `aaa199c9`, clean,
-  pushed, up to date with origin. Contains #541's merge (`28102aa0`→`aaa199c9`).
-- `fix/541-withdraw-depleted-guard` merged and deleted locally; **remote
-  delete denied by the permission classifier** — the remote branch
-  `fix/541-withdraw-depleted-guard` still exists at `origin`, merged and
-  harmless, needs manual cleanup or an explicit permission grant next
-  session if automated deletion is wanted.
+- **`feature/docker-e2e-backend-integration`**: at `944f3635`, clean,
+  pushed, up to date with origin. Contains #542's merge
+  (`51236eaf`→`944f3635`).
+- `fix/542-remove-dead-expired-status` merged, closed out, and deleted
+  both locally and on `origin` — no remote-delete denial this session
+  (permission classifier allowed it, unlike #541's session).
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged, 16 total — see prior handoffs for the full list,
-  unchanged since #531/#535/#538/#539/#540's sessions): local —
+  unchanged since #531/#535/#538/#539/#540/#541's sessions): local —
   `fix/476-quarantine-status-design-call`,
   `fix/477-bulk-import-storage-allocation`,
   `fix/481-autoassign-precheck-repository`,
@@ -89,20 +88,26 @@ new to file).
   `test/511-intake-wizard-canonical-storage-assignment`,
   `worktree-agent-a8ad1494700a4a20e`. Remote —
   `fix/349-user-organization-picker` (last checked during #527's
-  session; not re-checked this session), **plus the new
-  `fix/541-withdraw-depleted-guard` (merged, remote-delete denied — see
-  above)**.
-- Issues this session: **#541 closed** (fix `28102aa0`, merge `aaa199c9`).
-  No new issues filed — the one thing worth checking (`returnSample`'s
-  equivalent gate) turned out to already be correct, not a gap.
+  session; not re-checked this session), plus **the merged-but-not-yet-
+  deleted `fix/541-withdraw-depleted-guard`** (flagged in #541's
+  handoff as remote-delete-denied; not re-attempted this session — still
+  needs manual cleanup or an explicit permission grant).
+- Issues this session: **#542 closed** (fix `51236eaf`, merge
+  `944f3635`). **#545 opened** (new — `SampleDetailsPage.tsx`'s status
+  dropdown is a no-op since #540; needs a product call on
+  remove-vs-read-only).
 
 ## Which issue is next
 
 Dennis has not yet said which issue to pick up next session; per this
 skill's "only if the user explicitly said so" rule, nothing is queued.
 
-Candidates carried forward (#541 now resolved, removed from this list):
+Candidates carried forward (#542 now resolved, removed from this list;
+#545 added, new this session):
 
+- **#545** — `SampleDetailsPage.tsx`'s "Status Atual" edit dropdown is a
+  no-op since #540 stopped persisting `currentStatus`. New this session.
+  Needs a product call: remove the control, or make it read-only.
 - **#544** — remove the `status: 'AVAILABLE'` write from
   `MongoStorageRepository.js`'s `allocateSamplePosition`/
   `autoAssignSamplePosition` (5th legacy-status writer, storage
@@ -117,8 +122,6 @@ Candidates carried forward (#541 now resolved, removed from this list):
 - **#537** — `GET /:id/compliance-graph`'s side-effect-on-GET API
   contract question. Needs Dennis's call on whether to split
   read/revalidate into separate endpoints.
-- **#542** — needs Dennis's call on whether `'Expired'` is planned or
-  dead; small either way once answered.
 - **#530** — `dictionary:validate` isn't wired into `ci-pipeline.yml`,
   so #529-class drift has no CI gate. Small, well-scoped fix.
 - **#390** — umbrella; all originally-tracked sub-issues closed, plus
@@ -138,27 +141,26 @@ Candidates carried forward (#541 now resolved, removed from this list):
 ## Dev stack state
 
 Nothing started this session. Same as prior sessions: native-only
-verification (vitest for backend unit + integration tests) — no
-Docker/live-DB needed or used, consistent with `fix-bugs`'/
-`resolve-issue`'s targeted per-iteration default.
+verification (`tsc --noEmit` + targeted `vitest run` for frontend) — no
+Docker/live-DB needed or used, consistent with `resolve-issue`'s
+targeted per-iteration default.
 
 ## Which skills to use
 
-- Confirmed again: when an issue itself names two candidate fixes,
-  trace *both* against the shared state they touch before picking —
-  `BLOCKED_SPECIMEN_STATUSES` looked like a simple two-line addition but
-  is read by three different call sites (`computeStatus`'s stickiness
-  algorithm, `withdrawSample`'s gate, `returnSample`'s gate), and the
-  "obvious" fix would have silently broken the un-deplete-on-return flow.
-  The narrower, more surgical fix (an explicit quantity guard local to
-  `withdrawSample`) was correct precisely because it didn't touch shared
-  state used elsewhere for a different purpose.
-- Confirmed again: `fix-bugs`' "double-check the sibling gate for the
-  same class of bug" instinct (here: `returnSample`'s equivalent status
-  check, prompted by the issue's own text) is worth running even when it
-  turns out clean — it's what caught that `returnSample` already had the
-  correct guard, closing the loop with confidence instead of a guess.
-- Protected-branch-before-first-edit hook fired correctly against an
-  ordinary sequencing slip (attempted the test edit before creating the
-  `fix/541-...` branch); not a gap, just a reminder the hook is doing its
-  job.
+- Confirmed again: `work-issue`/`resolve-issue`'s "if the issue frames
+  this as needing the owner's design call, check `docs/` first" rule is
+  worth taking seriously even when an issue's own text sounds like it's
+  asking a human a judgment question — `dict-02_DICIONARIO.md`'s
+  canonical enum answered #542's "planned or dead?" question outright,
+  no `AskUserQuestion` needed. Also confirmed `verify-intent`'s
+  "check for a newer doc batch that supersedes this one" instinct: the
+  07-31 batch's own changelog stating the dictionary xlsx was
+  byte-identical to 07-27's copy is what made trusting the 07-27
+  extraction safe, rather than assuming.
+- Confirmed again: `resolve-issue`'s "found something out of scope
+  while working → new issue, don't fold in" rule — tracing #542's dead
+  `'Expired'` value through `SampleDetailsPage.tsx`'s dropdown surfaced
+  a live but now-inert write path (#540 made the backend silently
+  ignore it). Filed as #545 rather than fixed inline, since it's a
+  different, broader finding (the whole dropdown, not just the
+  `'Expired'` option) that needs its own product call.
