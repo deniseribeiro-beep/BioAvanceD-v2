@@ -66,6 +66,8 @@
     "reference:import:ucum": "node scripts/reference-imports/import-ucum-reference-dataset.js",
     "reference:import:dcb:dry-run": "node scripts/reference-imports/import-dcb-reference-dataset.js --dry-run",
     "reference:import:dcb": "node scripts/reference-imports/import-dcb-reference-dataset.js",
+    "reference:import:atc:dry-run": "node scripts/reference-imports/import-atc-reference-dataset.js --dry-run",
+    "reference:import:atc": "node scripts/reference-imports/import-atc-reference-dataset.js",
     "test:architecture": "node --test \"tests/architecture/**/*.arch.test.js\"",
     "test:unit:vitest": "vitest run",
     "test": "vitest run",

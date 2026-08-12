@@ -1,0 +1,10 @@
+{"id":"ATC:0","lbl":"medicamento, não classificado","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"C","lbl":"cardiovascular system","is_a":["ATC:0"],"synonyms":[],"obsolete":false}
+{"id":"N","lbl":"nervous system","is_a":["ATC:0"],"synonyms":[],"obsolete":false}
+{"id":"C09A","lbl":"ace inhibitors, plain","is_a":["C"],"synonyms":[],"obsolete":false}
+{"id":"N02B","lbl":"other analgesics and antipyretics","is_a":["N"],"synonyms":[],"obsolete":false}
+{"id":"C09AA01","lbl":"captopril","is_a":["C09A"],"synonyms":[],"obsolete":false}
+{"id":"N02BE01","lbl":"paracetamol","is_a":["N02B"],"synonyms":["acetaminophen"],"obsolete":false}
+{"id":"N02BA01","lbl":"acetylsalicylic acid","is_a":["N02B"],"synonyms":["aspirin"],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"ZZZZZZZ","lbl":"","is_a":[],"synonyms":[],"obsolete":false}

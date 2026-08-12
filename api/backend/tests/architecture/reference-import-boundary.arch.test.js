@@ -238,3 +238,19 @@ test('DCB source config only ever points at the bundled fixture file', () => {
   assert.strictEqual(dcbSource.retrievalUri.startsWith('file://'), true);
   assert.strictEqual(fs.existsSync(dcbSource.fixturePath), true);
 });
+
+test('ATC importer reads a bundled fixture, not a live network source (#549 eleventh slice)', () => {
+  const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
+  for (const file of ['sources/atc.js', 'normalizeAtc.js']) {
+    const contents = read(path.join(importDir, file));
+    for (const pattern of networkCallPatterns) {
+      assert.doesNotMatch(contents, pattern);
+    }
+  }
+});
+
+test('ATC source config only ever points at the bundled fixture file', () => {
+  const atcSource = require(path.join(importDir, 'sources', 'atc.js'));
+  assert.strictEqual(atcSource.retrievalUri.startsWith('file://'), true);
+  assert.strictEqual(fs.existsSync(atcSource.fixturePath), true);
+});
