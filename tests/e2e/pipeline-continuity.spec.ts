@@ -210,4 +210,17 @@ test.describe('Reference data importers (RF028) — real backend', () => {
     const concepts = await countTerminologyConceptsBySystemUri('https://www.omim.org');
     expect(concepts).toBeGreaterThan(0);
   });
+
+  // #549: same rationale as the prior per-source assertions above — the
+  // generic checks can't prove HGNC specifically landed. Checks the HGNC
+  // release and its concepts by name, per §7.4 step 5 ("Importar HGNC e
+  // relações gene-fenótipo/doença"), right after the step 4 group closes
+  // out with OMIM.
+  test('the HGNC release and its terminology concepts are persisted', async () => {
+    const releases = await countReferenceDatasetReleasesByDatasetCode('HGNC');
+    expect(releases).toBeGreaterThan(0);
+
+    const concepts = await countTerminologyConceptsBySystemUri('https://www.genenames.org');
+    expect(concepts).toBeGreaterThan(0);
+  });
 });

@@ -58,6 +58,8 @@
     "reference:import:icd10": "node scripts/reference-imports/import-icd10-reference-dataset.js",
     "reference:import:omim:dry-run": "node scripts/reference-imports/import-omim-reference-dataset.js --dry-run",
     "reference:import:omim": "node scripts/reference-imports/import-omim-reference-dataset.js",
+    "reference:import:hgnc:dry-run": "node scripts/reference-imports/import-hgnc-reference-dataset.js --dry-run",
+    "reference:import:hgnc": "node scripts/reference-imports/import-hgnc-reference-dataset.js",
     "test:architecture": "node --test \"tests/architecture/**/*.arch.test.js\"",
     "test:unit:vitest": "vitest run",
     "test": "vitest run",
