@@ -26,6 +26,11 @@ const VALID_ENTITIES = [
   'User'
 ];
 
+// resourceType/resourceId are the canonical fields (dict-02_DICIONARIO.md
+// P1X-0326/P1X-0327: "Substitui o alias entity"/"Substitui entityID").
+// entity/entityID below are a deliberate, permanent dual-write fallback
+// for legacy raw inputs -- not unfinished migration work. See #439/#446/
+// #447/#448 for the investigation that established this (dict-07/#387).
 class LogModel {
   static validate(data) {
     const errors = [];
