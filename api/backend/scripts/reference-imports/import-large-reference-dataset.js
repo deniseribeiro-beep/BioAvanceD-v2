@@ -1,16 +1,16 @@
 // HPO graduated to its own operational importer (import-hpo-reference-dataset.js,
-// #367), MONDO to its own (import-mondo-reference-dataset.js, #548), and
-// ORPHA to its own (import-orpha-reference-dataset.js, #549) — all three
-// intentionally no longer listed here.
+// #367), MONDO to its own (import-mondo-reference-dataset.js, #548), ORPHA
+// to its own (import-orpha-reference-dataset.js, #549), and ICD-11 to its
+// own (import-icd11-reference-dataset.js, #549) — none of these are listed
+// here.
 //
-// 'cid' stays listed even though ICD-11 also graduated this slice
-// (import-icd11-reference-dataset.js, #549): the original token was one
-// placeholder standing in for BOTH §7.4 step 4 sources named "CID" in the
-// plan's Portuguese text — CID-11 (ICD-11, now operational) and CID-10
-// (ICD-10, not yet built). Removing 'cid' now would read as "CID-10 has
-// its own importer too," which isn't true yet — it stays until CID-10
-// graduates its own script, at which point 'cid' can finally be dropped.
-const allowedDatasets = new Set(['cid', 'omim']);
+// The cid token (lowercase, no longer present below) was the original
+// shared placeholder for BOTH §7.4 step 4 sources named "CID" in the
+// plan's Portuguese text — CID-11 (ICD-11) and CID-10 (ICD-10). Now that
+// CID-10 has graduated its own operational script too
+// (import-icd10-reference-dataset.js, #549), the token is dropped —
+// mirroring HPO/MONDO/ORPHA/ICD-11's own removals above.
+const allowedDatasets = new Set(['omim']);
 
 function parseArgs(argv) {
   const args = { dataset: null, sourceFile: null, dryRun: false };

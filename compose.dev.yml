@@ -194,6 +194,26 @@ services:
       reference-data-bootstrap-orpha:
         condition: service_completed_successfully
 
+  reference-data-bootstrap-icd10:
+    # RF028 (#549): one-shot, idempotent ICD-10 reference-data import —
+    # fifth of the 14 Fase 2 sources (Plano Integrado §7.4 step 4, third
+    # member of the "ORPHA, CID-11, CID-10 e OMIM" group, right after
+    # ICD-11). Runs after reference-data-bootstrap-icd11 completes, matching
+    # the documented recommended order. Idempotent via the run's
+    # idempotencyKey lookup; repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:icd10
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-icd11:
+        condition: service_completed_successfully
+
   neo4j-projection-worker:
     # Drains graph_projection_outbox into Neo4j (#309, follow-up from RF023/#292)
     # — without this service, outbox rows written by consent.service.js
