@@ -323,4 +323,18 @@ test.describe('Reference data importers (RF028) — real backend', () => {
     const concepts = await countTerminologyConceptsBySystemUri('http://purl.obolibrary.org/obo/cl.owl');
     expect(concepts).toBeGreaterThan(0);
   });
+
+  // #549: same rationale as the prior per-source assertions above — the
+  // generic checks can't prove EDAM specifically landed. Checks the EDAM
+  // release and its concepts by name, per §7.4 step 8 ("Importar DUO,
+  // Uberon, NCBI Taxonomy, Cell Ontology e EDAM"), fifth and last of the
+  // final five-source group right after Cell Ontology, closing out the
+  // entire 16-source Fase 2 group.
+  test('the EDAM release and its terminology concepts are persisted', async () => {
+    const releases = await countReferenceDatasetReleasesByDatasetCode('EDAM');
+    expect(releases).toBeGreaterThan(0);
+
+    const concepts = await countTerminologyConceptsBySystemUri('http://edamontology.org/EDAM.owl');
+    expect(concepts).toBeGreaterThan(0);
+  });
 });
