@@ -174,3 +174,19 @@ test('large import scaffold no longer lists omim as its own token (RF028 keeps O
   assert.match(scaffold, /not implemented until data model is finalized/);
   assert.doesNotMatch(scaffold, /['"]omim['"]/);
 });
+
+test('HGNC importer reads a bundled fixture, not a live network source (#549 seventh slice)', () => {
+  const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
+  for (const file of ['sources/hgnc.js', 'normalizeHgnc.js']) {
+    const contents = read(path.join(importDir, file));
+    for (const pattern of networkCallPatterns) {
+      assert.doesNotMatch(contents, pattern);
+    }
+  }
+});
+
+test('HGNC source config only ever points at the bundled fixture file', () => {
+  const hgncSource = require(path.join(importDir, 'sources', 'hgnc.js'));
+  assert.strictEqual(hgncSource.retrievalUri.startsWith('file://'), true);
+  assert.strictEqual(fs.existsSync(hgncSource.fixturePath), true);
+});

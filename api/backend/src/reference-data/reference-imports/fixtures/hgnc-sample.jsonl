@@ -1,0 +1,10 @@
+{"id":"HGNC:0000","lbl":"gene, unspecified","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"HGNCFAM:TSG","lbl":"tumor suppressor gene family","is_a":["HGNC:0000"],"synonyms":[],"obsolete":false}
+{"id":"HGNCFAM:ION","lbl":"ion channel gene family","is_a":["HGNC:0000"],"synonyms":[],"obsolete":false}
+{"id":"HGNC:1100","lbl":"BRCA1","is_a":["HGNCFAM:TSG"],"synonyms":["RNF53"],"obsolete":false}
+{"id":"HGNC:11998","lbl":"TP53","is_a":["HGNCFAM:TSG"],"synonyms":["p53"],"obsolete":false}
+{"id":"HGNC:1884","lbl":"CFTR","is_a":["HGNCFAM:ION"],"synonyms":["CF"],"obsolete":false}
+{"id":"HGNC:613","lbl":"APOE","is_a":["HGNC:0000"],"synonyms":[],"obsolete":false}
+{"id":"HGNC:9999","lbl":"illustrative modifier gene 1","is_a":["HGNC:1100"],"synonyms":[],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"HGNC:0001","lbl":"","is_a":[],"synonyms":[],"obsolete":false}

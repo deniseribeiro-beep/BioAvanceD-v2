@@ -11,6 +11,8 @@ const icd10Source = require('./sources/icd10');
 const { normalizeRecord: normalizeIcd10Record } = require('./normalizeIcd10');
 const omimSource = require('./sources/omim');
 const { normalizeRecord: normalizeOmimRecord } = require('./normalizeOmim');
+const hgncSource = require('./sources/hgnc');
+const { normalizeRecord: normalizeHgncRecord } = require('./normalizeHgnc');
 
 /** RF028 first importer — see sources/hpo.js for why HPO and why a bundled sample. */
 async function runHpoImport(db, opts = {}) {
@@ -42,4 +44,9 @@ async function runOmimImport(db, opts = {}) {
   return runImport({ db, source: omimSource, normalizeRecord: normalizeOmimRecord, ...opts });
 }
 
-module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport };
+/** RF028 seventh importer — see sources/hgnc.js for why HGNC and why a bundled sample. */
+async function runHgncImport(db, opts = {}) {
+  return runImport({ db, source: hgncSource, normalizeRecord: normalizeHgncRecord, ...opts });
+}
+
+module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport, runHgncImport };
