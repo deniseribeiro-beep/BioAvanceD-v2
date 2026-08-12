@@ -472,10 +472,20 @@ class SampleService {
       }
 
       // Calcular quantidade disponível atual
-      const availableQty = sample.currentQuantity !== undefined 
-        ? sample.currentQuantity 
+      const availableQty = sample.currentQuantity !== undefined
+        ? sample.currentQuantity
         : sample.quantity;
-      
+
+      // #541: 'depleted' isn't in BLOCKED_SPECIMEN_STATUSES (it can't be —
+      // that would also make it sticky in computeStatus and block
+      // returnSample's un-deplete-on-return flow), so a Total withdrawal
+      // on an already-exhausted sample isn't caught by the status gate
+      // above. Without this, withdrawQty floors at 0 and the write
+      // "succeeds" with nothing actually withdrawn.
+      if (availableQty <= 0) {
+        throw new Error(`Quantidade indisponível. Disponível: ${availableQty} ${sample.unit || 'µL'}`);
+      }
+
       // Determinar quantidade a retirar
       let withdrawQty;
       if (withdrawalData.withdrawalType === 'Total') {
