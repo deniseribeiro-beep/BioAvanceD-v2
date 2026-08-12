@@ -173,4 +173,16 @@ test.describe('Reference data importers (RF028) — real backend', () => {
     const concepts = await countTerminologyConceptsBySystemUri('http://www.orpha.net');
     expect(concepts).toBeGreaterThan(0);
   });
+
+  // #549: same rationale as the MONDO/ORPHA assertions above — the generic
+  // checks can't prove ICD-11 specifically landed. Checks the ICD11
+  // release and its concepts by name, per §7.4 step 4 (second member of
+  // the "ORPHA, CID-11, CID-10 e OMIM" group, right after ORPHA).
+  test('the ICD-11 release and its terminology concepts are persisted', async () => {
+    const releases = await countReferenceDatasetReleasesByDatasetCode('ICD11');
+    expect(releases).toBeGreaterThan(0);
+
+    const concepts = await countTerminologyConceptsBySystemUri('http://id.who.int/icd/release/11/mms');
+    expect(concepts).toBeGreaterThan(0);
+  });
 });
