@@ -9,6 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { getPatientDisplayName } from '../utils/patientAnonymization';
 import { getReportTypeDefinition } from '../config/constants/report.constants';
 import { getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
+import { resolveSpecimenStatus, translateSpecimenStatus } from '../utils/sampleHelpers';
 import './ReportViewPage.css';
 
 export default function ReportViewPage() {
@@ -274,7 +275,7 @@ export default function ReportViewPage() {
                         <tr key={s.sampleID}>
                           <td>{s.sampleID}</td>
                           <td>{s.sampleType}</td>
-                          <td>{s.currentStatus}</td>
+                          <td>{translateSpecimenStatus(resolveSpecimenStatus(s))}</td>
                           <td>{formatDate(s.registrationDate)}</td>
                         </tr>
                       ))}

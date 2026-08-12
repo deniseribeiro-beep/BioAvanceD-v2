@@ -4,6 +4,7 @@ const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const ReportsModel = require('../../models/Reports');
+const { SampleModel } = require('../../models/Sample');
 const logger = require('../../utils/logger');
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
@@ -408,7 +409,10 @@ async function buildPreviewData(db, rawType, filters = {}) {
         barcode: sample.barcode || null,
         sampleType: sample.sampleType || null,
         patientID: sample.patientID || null,
-        status: sample.currentStatus || sample.status || null,
+        // #539: derives from the canonical specimenStatus (dict-02
+        // ELM-0123) instead of the legacy currentStatus/status fields
+        // canonical-data-contract-v1.md bans.
+        status: SampleModel.resolveSpecimenStatus(sample),
         resultCount: sampleResults.length,
         hasResults: sampleResults.length > 0,
       };

@@ -41,6 +41,25 @@ export const LEGACY_SAMPLE_STATUS_LABELS: Record<SampleLifecycleStatus, LegacySa
   UNAVAILABLE: 'Unusable',
 };
 
+// #539: buckets the canonical specimenStatus enum (dict-02 ELM-0123 — 9
+// states, lowercase) down to this file's narrower SampleLifecycleStatus (4
+// states), so LEGACY_SAMPLE_STATUS_LABELS can produce a value shaped like
+// the legacy `Sample.currentStatus` field for readers that still need that
+// vocabulary (e.g. an editable form bound to it). `reserved`/`checked_out`
+// have no dedicated legacy label — fold into AVAILABLE, same as
+// `quarantined`/`destroyed`/`disposed` fold into UNAVAILABLE.
+export function resolveSampleLifecycleStatus(specimenStatus: string | null | undefined): SampleLifecycleStatus {
+  const status = String(specimenStatus || 'available').toLowerCase();
+  if (status === 'partial') return 'PARTIAL';
+  if (status === 'depleted') return 'DEPLETED';
+  if (['quarantined', 'destroyed', 'unavailable', 'disposed'].includes(status)) return 'UNAVAILABLE';
+  return 'AVAILABLE';
+}
+
+export function resolveLegacySampleStatus(specimenStatus: string | null | undefined): LegacySampleStatus {
+  return LEGACY_SAMPLE_STATUS_LABELS[resolveSampleLifecycleStatus(specimenStatus)];
+}
+
 export const ROLE_DEFINITIONS: Array<ContractOption<RoleName> & { accessType: number; description: string }> = [
   {
     value: 'Administrador',
