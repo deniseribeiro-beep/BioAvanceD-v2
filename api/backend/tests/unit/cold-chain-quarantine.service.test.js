@@ -152,8 +152,6 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(collections.samples.updateOne).toHaveBeenCalledTimes(1);
     const update = collections.samples.updateOne.mock.calls[0][1].$set;
     expect(update).toMatchObject({
-      status: 'QUARANTINED',
-      currentStatus: 'QUARANTINED',
       specimenStatus: 'quarantined',
       quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
       coldChainIncidentId: String(incidentId),
@@ -163,6 +161,9 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     });
     expect(update.availabilityStatus).toBeUndefined();
     expect(update.quarantineStatus).toBeUndefined();
+    // #540: status/currentStatus retired alongside them.
+    expect(update.status).toBeUndefined();
+    expect(update.currentStatus).toBeUndefined();
 
     expect(collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
     const movement = collections.sample_movements.insertOne.mock.calls[0][0];

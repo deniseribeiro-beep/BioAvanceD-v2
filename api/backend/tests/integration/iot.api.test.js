@@ -278,14 +278,15 @@ describe('IoT API integration', () => {
     // was never updated when equipment-sensor-quarantine.service.js's
     // write site migrated onto specimenStatus (part of #409). #531 also
     // retired the redundant release_status write from this same site.
+    // #540 retired the remaining status/currentStatus pair.
     expect(update).toMatchObject({
-      status: 'QUARANTINED',
-      currentStatus: 'QUARANTINED',
       specimenStatus: 'quarantined',
       quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
       coldChainSensorKey: 'sensor-1',
       coldChainStatus: 'INCIDENT_OPEN',
     });
+    expect(update.status).toBeUndefined();
+    expect(update.currentStatus).toBeUndefined();
     const movement = mockDb.sampleMovementsCollection.insertOne.mock.calls[0][0];
     expect(movement).toMatchObject({
       purpose: 'cold_chain_incident_quarantine',

@@ -134,10 +134,12 @@ async function enforcePersistedGovernanceStatus(req, body) {
   const existingSample = await samplesCollection.findOne(query);
   const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
 
+  // #540: status/currentStatus are legacy fields canonical-data-contract-v1.md
+  // bans on the Sample document — specimenStatus is the sole persisted signal.
+  // governanceStatus.status/currentStatus still feed buildSafeSampleSummary's
+  // response below (a display concern, not a Sample-document write).
   await samplesCollection.updateOne(query, {
     $set: {
-      status: governanceStatus.status,
-      currentStatus: governanceStatus.currentStatus,
       specimenStatus,
       quarantineReason: governanceStatus.quarantineReason,
       updatedAt: new Date(),

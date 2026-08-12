@@ -163,12 +163,16 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
       { $or: [{ specimenId: 'spec-1' }] },
       expect.objectContaining({
         $set: expect.objectContaining({
-          status: 'BLOCKED',
           specimenStatus: 'quarantined',
           quarantineReason: 'PENDING_SIGNATURE',
         }),
       })
     );
+    // #540: status/currentStatus are legacy fields canonical-data-contract-v1.md
+    // bans on the Sample document — specimenStatus is the sole persisted signal.
+    const persistedSet = samplesCollection.updateOne.mock.calls[0][1].$set;
+    expect(persistedSet.status).toBeUndefined();
+    expect(persistedSet.currentStatus).toBeUndefined();
     expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
       expect.objectContaining({ specimenIds: ['sample-1'], reasonCodes: ['PENDING_SIGNATURE'] }),
       undefined

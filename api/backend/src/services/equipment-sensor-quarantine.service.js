@@ -311,17 +311,15 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
   const movementsCollection = await getCollection(db, 'sampleMovements');
   const queryOptions = context.session ? { session: context.session } : undefined;
 
+  // #540: the "not already quarantined" guard reads the canonical
+  // specimenStatus field, not the legacy status/currentStatus pair (no
+  // longer written below either).
   const samples = await samplesCollection
     .find(
       {
         $and: [
           filter,
-          {
-            $or: [
-              { status: { $ne: 'QUARANTINED' } },
-              { currentStatus: { $ne: 'QUARANTINED' } }
-            ]
-          }
+          { specimenStatus: { $ne: 'quarantined' } }
         ]
       },
       queryOptions
@@ -339,8 +337,6 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
     const sampleId = String(sample._id);
     const specimenStatus = 'quarantined';
     const updatePayload = {
-      status: 'QUARANTINED',
-      currentStatus: 'QUARANTINED',
       specimenStatus,
       quarantineLocation: 'Quarentena',
       quarantineReason: context.reason || null,

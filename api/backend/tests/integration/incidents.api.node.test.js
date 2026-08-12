@@ -339,12 +339,14 @@ describe('Incidents API integration', () => {
     expect(incidentsState.samplesCollection.updateOne).toHaveBeenCalledTimes(1);
     const update = incidentsState.samplesCollection.updateOne.mock.calls[0][1].$set;
     expect(update).toMatchObject({
-      status: 'QUARANTINED',
-      currentStatus: 'QUARANTINED',
+      specimenStatus: 'quarantined',
       quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
       coldChainSensorKey: 'sensor-a1',
       coldChainStatus: 'INCIDENT_OPEN',
     });
+    // #540: status/currentStatus retired, specimenStatus is the sole signal.
+    expect(update.status).toBeUndefined();
+    expect(update.currentStatus).toBeUndefined();
   });
 
   it('PUT /api/incidents/:incidentId/resolve mantém amostra em revisão pós-incidente', async () => {
