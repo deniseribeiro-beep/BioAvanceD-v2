@@ -1,78 +1,66 @@
 # HANDOFF
 
 **Written:** 2026-08-12, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #542 (Dennis said "Read handoff and pick #542").
+after resolving #543 (Dennis said "Read handoff, pick issue #543").
 
 ## What happened this session
 
-Dennis said "pick #542." `work-issue` read the issue body: `'Expired'`
-appears in `frontend/src/types/models.ts`'s `Sample.currentStatus` union
-and `frontend/src/foundation/contracts.ts`'s `LegacySampleStatus` union,
-has i18n translations, and a dropdown option — but the issue's own trace
-found zero producers anywhere in the codebase, and explicitly asked for
-Dennis's call on whether it's a planned-but-unbuilt feature (sample
-expiry, maybe tied to `RetentionPolicy`/RF014/#440/#441) or dead cruft
-to drop.
+Dennis said "pick #543." `work-issue` read the issue body:
+`frontend/src/utils/userMethods.ts` (`createUser`, `validateUserStatus`,
+`registerPatient`, `registerSample`, `recordSampleWithdrawal`,
+`generateReports`, `viewTemperatureControl`, `registerSensor`,
+`getLogs`) had zero live callers anywhere in `frontend/src` (confirmed
+by grep) — a UML-diagram-to-code scaffold ("Implementação dos métodos
+da classe User conforme diagrama UML") never wired into any component,
+hook, or service call, with `services/api.ts` already providing the
+real, live implementation of the same-named operations. The issue's own
+text explicitly asked for Dennis's call on delete vs. wire-in.
 
 Per `work-issue`'s "needs owner's call → check `docs/` first" rule,
-checked the data dictionary before escalating: `dict-02_DICIONARIO.md`
-(v1.3.0, extracted under `docs/docs-7-27-2026/extracted/`) defines
-`Specimen.specimenStatus` (ELM-0123) as exactly
-`available|reserved|checked_out|partial|depleted|quarantined|destroyed|unavailable`
-— no `expired` value, ever. Confirmed the dictionary source itself isn't
-stale: `docs/docs-7-31-2026/CHANGELOG-2026-07-31.md` states the v1.3.0
-dictionary xlsx is byte-identical (SHA-256) between the 07-27 and 07-31
-batches, so there's no newer revision that could have added it. The
-actual planned retention/expiry mechanism (RF026,
-`RetentionPolicy`→`DispositionAction`, the thing #440/#441 build) works
-through a separate `dispositionAction` code
-(transfer/return/destroy/anonymize/preserve on a disposition record),
-not a `Sample.currentStatus` value — so `'Expired'` was never part of
-the canonical model, not a gap waiting to be filled. That settled the
-issue's own open question without needing to ask Dennis.
+checked `docs/architecture/canonical-active-surface.md` before
+escalating. It didn't list `userMethods.ts` by name (it's a
+`2026-07-08` snapshot, not exhaustive), but it states a general,
+directly-applicable policy for this exact shape: `frontend/src/components/v2/*`
+legacy surfaces not imported by `App.tsx` "should be deleted rather
+than normalized in place." Combined with `services/api.ts` already
+owning the live implementation (so wiring `userMethods.ts` in would
+create a duplicate/conflicting implementation, not fill a gap), that
+settled the delete-vs-wire-in call the same way `dict-02_DICIONARIO.md`
+settled #542's — no `AskUserQuestion` round-trip needed.
 
-**#542 resolved** (`fix/542-remove-dead-expired-status`, commit
-`51236eaf`, merged into the integration branch at `944f3635`) — removed
-`'Expired'` from `Sample['currentStatus']` (`models.ts`) and
-`LegacySampleStatus` (`contracts.ts`), the option row in
-`SampleDetailsPage.tsx`'s status dropdown, and the orphaned
-`statusLabels.Expired`/`statusOptions.Expired` i18n entries in
-`en-US.json`/`es-ES.json`/`pt-BR.json`. `tsc --noEmit` clean;
-`contracts.test.ts` (7 tests) green, both before and after the merge.
+**#543 resolved** (`fix/543-remove-dead-usermethods`, commit
+`82874805`, merged into the integration branch at `2a708dff`) —
+deleted `frontend/src/utils/userMethods.ts` and its unit test
+(`userMethods.test.ts`, added by #539 to cover the pure `registerSample`
+function). `tsc --noEmit` clean; `frontend/src/utils` vitest suite (20
+tests) green, both before and after the merge.
 
-**Found while tracing the dropdown, filed separately as #545** (not
-folded into #542, since it's a different value/finding, not the dead
-`'Expired'` value itself): `SampleDetailsPage.tsx`'s "Status Atual" edit
-dropdown sends `currentStatus` on `PUT /samples/:id`, but
-`sample.service.js#updateSample` has silently dropped that field since
-#540 (`specimenStatus` is now the sole persisted signal — confirmed at
-`sample.service.js:656`). That backend behavior is correct and
-intentional (#540's own close comment documents it), but the frontend
-still renders the dropdown as a normal editable control — every save
-"succeeds" with zero effect and no indication to the user. Needs a
-product call: remove the control, or make it read-only.
+**Security/safety note:** none — pure dead-code removal, no trust
+boundary or persisted-data behavior touched.
 
-**Security/safety note:** none — pure dead-type-union/i18n removal, no
-trust boundary or persisted-data behavior touched.
-
-**Workflow friction this session:** none of note. `work-issue`'s
-docs-first check for "needs owner's call" issues worked exactly as
-designed — settled the design question from `docs/` without an
-`AskUserQuestion` round-trip. Branch create/merge/push/close/delete all
-succeeded without permission denials this session (contrast with #541's
-session, which hit a remote-delete denial — not repeated here).
+**Workflow friction this session:** one hook inconsistency, filed as
+`dyeallpies-skills-pack#247` (not a BioAvanceD-v2 issue — the matcher
+logic lives in the pack's hook, not this repo's code). The
+targeted-vitest guard blocked `npx vitest run src/utils` when chained
+via `&&` after `npx tsc --noEmit`, with the exact "one bare directory
+doesn't count as targeted" message — but the byte-identical standalone
+`npx vitest run src/utils` call had succeeded moments earlier in the
+same session, both before and after this. Splitting the chained command
+back into two separate Bash calls worked both times. Trivial workaround
+(don't chain a vitest call with `&&`), but the block/allow outcome for
+the same arguments depending only on chaining shape is worth the pack
+maintainer's look.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `944f3635`, clean,
-  pushed, up to date with origin. Contains #542's merge
-  (`51236eaf`→`944f3635`).
-- `fix/542-remove-dead-expired-status` merged, closed out, and deleted
-  both locally and on `origin` — no remote-delete denial this session
-  (permission classifier allowed it, unlike #541's session).
+- **`feature/docker-e2e-backend-integration`**: at `2a708dff`, clean,
+  pushed, up to date with origin. Contains #543's merge
+  (`82874805`→`2a708dff`).
+- `fix/543-remove-dead-usermethods` merged, closed out, and deleted both
+  locally and on `origin` — no remote-delete denial this session.
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged, 16 total — see prior handoffs for the full list,
-  unchanged since #531/#535/#538/#539/#540/#541's sessions): local —
+  unchanged since #531/#535/#538/#539/#540/#541/#542's sessions): local —
   `fix/476-quarantine-status-design-call`,
   `fix/477-bulk-import-storage-allocation`,
   `fix/481-autoassign-precheck-repository`,
@@ -90,32 +78,28 @@ session, which hit a remote-delete denial — not repeated here).
   `fix/349-user-organization-picker` (last checked during #527's
   session; not re-checked this session), plus **the merged-but-not-yet-
   deleted `fix/541-withdraw-depleted-guard`** (flagged in #541's
-  handoff as remote-delete-denied; not re-attempted this session — still
-  needs manual cleanup or an explicit permission grant).
-- Issues this session: **#542 closed** (fix `51236eaf`, merge
-  `944f3635`). **#545 opened** (new — `SampleDetailsPage.tsx`'s status
-  dropdown is a no-op since #540; needs a product call on
-  remove-vs-read-only).
+  handoff as remote-delete-denied; still needs manual cleanup or an
+  explicit permission grant — not re-attempted again this session).
+- Issues this session: **#543 closed** (fix `82874805`, merge
+  `2a708dff`). No new project issues opened (the one finding this
+  session — the hook chaining inconsistency — was pack-repo mechanics,
+  filed as `dyeallpies-skills-pack#247` instead).
 
 ## Which issue is next
 
 Dennis has not yet said which issue to pick up next session; per this
 skill's "only if the user explicitly said so" rule, nothing is queued.
 
-Candidates carried forward (#542 now resolved, removed from this list;
-#545 added, new this session):
+Candidates carried forward (#543 now resolved, removed from this list):
 
-- **#545** — `SampleDetailsPage.tsx`'s "Status Atual" edit dropdown is a
-  no-op since #540 stopped persisting `currentStatus`. New this session.
-  Needs a product call: remove the control, or make it read-only.
 - **#544** — remove the `status: 'AVAILABLE'` write from
   `MongoStorageRepository.js`'s `allocateSamplePosition`/
   `autoAssignSamplePosition` (5th legacy-status writer, storage
   allocation subsystem, filed during #540's session). Small,
   well-scoped, same shape as #540's fix.
-- **#543** — `frontend/src/utils/userMethods.ts` is dead code
-  end-to-end (zero live callers on any export); needs the owner's call
-  on delete vs. wire-in.
+- **#545** — `SampleDetailsPage.tsx`'s "Status Atual" edit dropdown is a
+  no-op since #540 stopped persisting `currentStatus`. Needs a product
+  call: remove the control, or make it read-only.
 - **#536** — `Sample.releaseStatus` (camelCase) third-field cleanup.
   Likely small (probable deletion, no live consumer found) but confirm
   no external consumer first per the issue's own caveat.
@@ -135,8 +119,9 @@ Candidates carried forward (#542 now resolved, removed from this list;
   code to remove, or does something still call it?
 - Older backlog, unchanged: `#371`/`#373`/`#374`/`#378`/`#379`, `#368`,
   next e2e slice per `E2E_TRACEABILITY_PLAN.md`/`#331`.
-- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246** —
-  pack-repo only, low priority, unchanged this session.
+- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246/#247** —
+  pack-repo only, low priority, unchanged this session except #247
+  (new, filed this session).
 
 ## Dev stack state
 
@@ -148,19 +133,20 @@ targeted per-iteration default.
 ## Which skills to use
 
 - Confirmed again: `work-issue`/`resolve-issue`'s "if the issue frames
-  this as needing the owner's design call, check `docs/` first" rule is
-  worth taking seriously even when an issue's own text sounds like it's
-  asking a human a judgment question — `dict-02_DICIONARIO.md`'s
-  canonical enum answered #542's "planned or dead?" question outright,
-  no `AskUserQuestion` needed. Also confirmed `verify-intent`'s
-  "check for a newer doc batch that supersedes this one" instinct: the
-  07-31 batch's own changelog stating the dictionary xlsx was
-  byte-identical to 07-27's copy is what made trusting the 07-27
-  extraction safe, rather than assuming.
-- Confirmed again: `resolve-issue`'s "found something out of scope
-  while working → new issue, don't fold in" rule — tracing #542's dead
-  `'Expired'` value through `SampleDetailsPage.tsx`'s dropdown surfaced
-  a live but now-inert write path (#540 made the backend silently
-  ignore it). Filed as #545 rather than fixed inline, since it's a
-  different, broader finding (the whole dropdown, not just the
-  `'Expired'` option) that needs its own product call.
+  this as needing the owner's design call, check `docs/` first" rule —
+  this is the third session in a row (#538, #542, #543) where a
+  "needs owner's call" issue turned out to be directly settled by an
+  existing doc's stated policy, not an ambiguous judgment call. Worth
+  noting: `canonical-active-surface.md`'s policy statement
+  ("legacy surfaces not imported by `App.tsx` should be deleted rather
+  than normalized in place") was written about `frontend/src/components/v2/*`
+  specifically, but applied cleanly to a different orphaned file
+  (`utils/userMethods.ts`) once the same "unimported, has a live
+  replacement elsewhere" shape was confirmed — a doc's stated policy
+  can settle a design call even when the doc doesn't name the specific
+  file, as long as the shape it's addressing genuinely matches.
+- New this session: chaining a targeted `vitest run <dir>` call with
+  `&&` after another command can flip the vitest-guard hook's
+  block/allow decision for the exact same vitest arguments — filed as
+  `dyeallpies-skills-pack#247`. Until fixed, keep targeted vitest runs
+  in their own standalone Bash call rather than chaining them.
