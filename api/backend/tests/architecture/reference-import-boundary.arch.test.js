@@ -95,3 +95,29 @@ test('large import scaffold still excludes ORPHA from its allowed-datasets set (
   // of ORPHA in prose/comments explaining why it was removed.
   assert.doesNotMatch(scaffold, /['"]orpha['"]/);
 });
+
+test('ICD-11 importer reads a bundled fixture, not a live network source (#549 fourth slice)', () => {
+  const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
+  for (const file of ['sources/icd11.js', 'normalizeIcd11.js']) {
+    const contents = read(path.join(importDir, file));
+    for (const pattern of networkCallPatterns) {
+      assert.doesNotMatch(contents, pattern);
+    }
+  }
+});
+
+test('ICD-11 source config only ever points at the bundled fixture file', () => {
+  const icd11Source = require(path.join(importDir, 'sources', 'icd11.js'));
+  assert.strictEqual(icd11Source.retrievalUri.startsWith('file://'), true);
+  assert.strictEqual(fs.existsSync(icd11Source.fixturePath), true);
+});
+
+// Unlike HPO/MONDO/ORPHA, 'cid' deliberately stays in the placeholder
+// scaffold's allowed-datasets set after this slice — it's a shared token
+// for both CID-11 (graduated this slice) and CID-10 (not yet built). See
+// import-large-reference-dataset.js's own comment for the rationale.
+test('large import scaffold still marks itself unimplemented and does not list icd11 as its own token (RF028 keeps ICD-11 a separate, operational script)', () => {
+  const scaffold = read(path.join(repoRoot, 'scripts', 'reference-imports', 'import-large-reference-dataset.js'));
+  assert.match(scaffold, /not implemented until data model is finalized/);
+  assert.doesNotMatch(scaffold, /['"]icd11['"]/);
+});

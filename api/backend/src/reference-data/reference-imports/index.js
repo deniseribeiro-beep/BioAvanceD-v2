@@ -5,6 +5,8 @@ const mondoSource = require('./sources/mondo');
 const { normalizeRecord: normalizeMondoRecord } = require('./normalizeMondo');
 const orphaSource = require('./sources/orpha');
 const { normalizeRecord: normalizeOrphaRecord } = require('./normalizeOrpha');
+const icd11Source = require('./sources/icd11');
+const { normalizeRecord: normalizeIcd11Record } = require('./normalizeIcd11');
 
 /** RF028 first importer — see sources/hpo.js for why HPO and why a bundled sample. */
 async function runHpoImport(db, opts = {}) {
@@ -21,4 +23,9 @@ async function runOrphaImport(db, opts = {}) {
   return runImport({ db, source: orphaSource, normalizeRecord: normalizeOrphaRecord, ...opts });
 }
 
-module.exports = { runHpoImport, runMondoImport, runOrphaImport };
+/** RF028 fourth importer — see sources/icd11.js for why ICD-11 and why a bundled sample. */
+async function runIcd11Import(db, opts = {}) {
+  return runImport({ db, source: icd11Source, normalizeRecord: normalizeIcd11Record, ...opts });
+}
+
+module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import };
