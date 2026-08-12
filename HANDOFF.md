@@ -1,112 +1,79 @@
 # HANDOFF
 
 **Written:** 2026-08-12, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #540 (writer-removal phase of #538's currentStatus/specimenStatus
-vocabulary migration) and filing its follow-ups.
+after resolving #541 (Dennis picked it directly off last session's
+carried-forward candidate list).
 
 ## What happened this session
 
-Dennis said "pick #540" (the top carried-forward candidate from last
-session's handoff, unblocked once #539 landed). `work-issue` routed to
-`fix-bugs` (labeled `bug`, a concrete writer-removal with no design
-question left open).
+Dennis said "pick #541." `work-issue` routed to `fix-bugs` (labeled
+`bug`, a concrete backend gating gap with a clear reproduction).
 
-**#540 resolved** (`fix/540-remove-legacy-status-writers`, commit
-`4b3dc167`, merged into the integration branch at `62894411`) — removed
-the `status`/`currentStatus` legacy-field writes from all four sites
-#540's body (plus #539's follow-up comment) named:
-- `equipment-sensor-quarantine.service.js`'s `quarantineSamplesByFilter`
-  — also switched its "not already quarantined" dedup guard from the
-  legacy `status`/`currentStatus` `$or` pair to `specimenStatus`, since
-  that guard would have silently stopped working (always true) once the
-  fields went unwritten.
-- `intakeWizard.routes.js`'s `enforcePersistedGovernanceStatus` — the
-  `$set` payload now only sets `specimenStatus`; `governanceStatus.status`/
-  `currentStatus` still feed `buildSafeSampleSummary`'s JSON response
-  (a display-only, already-confirmed-dead field per #538's trace, left
-  alone — it's not a Sample-document write, out of #540's scope).
-- `eConsent.js`'s consent-driven quarantine/release — the
-  release-from-quarantine `find()` query switched from
-  `{ status: 'QUARANTINED' }` to `{ specimenStatus: 'quarantined' }` for
-  the same reason (the old filter would have matched zero documents
-  forever once the writer stopped).
-- `sample.service.js#updateSample` — `currentStatus`/`status` added to
-  the existing legacy-field-strip destructure alongside
-  `lifecycleStatus`/`availabilityStatus`/`quarantineStatus`.
+**#541 resolved** (`fix/541-withdraw-depleted-guard`, commit `28102aa0`,
+merged into the integration branch at `aaa199c9`) — `withdrawSample`'s
+status gate only checked `BLOCKED_SPECIMEN_STATUSES`
+(`unavailable`/`destroyed`/`disposed`/`quarantined`), which deliberately
+excludes `'depleted'`. A `'Total'` re-withdrawal on an already-depleted
+sample (`specimenStatus: 'depleted'`, `currentQuantity: 0`) fell through
+that gate: `withdrawQty` floored at `availableQty` (0) so the balance
+never went negative, but the call "succeeded" anyway — a zero-quantity
+`SampleMovement` ledger entry plus an overwritten
+`withdrawnAt`/`withdrawalResponsible`/`sampleDestination` on the Sample
+document, with nothing actually withdrawn. (`'Parcial'` re-withdrawal was
+already correctly rejected — only `'Total'` had the gap.)
 
-New/updated unit tests across all four files (plus three more caught by
-the fix-bugs "wider net" sweep that weren't found by the initial
-issue-number/filename grep: `iot.api.test.js`,
-`cold-chain-quarantine.service.test.js`,
-`incidents.api.node.test.js` — all three exercise
-`quarantineSamplesByFilter` through a different entry point and had
-their own un-weakened assertions on the old `status`/`currentStatus`
-payload). 427 tests green across the 20-file wider-net sweep, re-verified
-on the merged integration-branch tree before pushing.
-`canonical-data-contract-v1.md`'s Legacy Fields Prohibited list and its
-#533/#538/#539/#540 narrative section updated in the same commit.
+The issue's own body offered two candidate fixes: add `'depleted'` to
+`BLOCKED_SPECIMEN_STATUSES`, or add an explicit `availableQty <= 0`
+guard. Traced both before picking: `BLOCKED_SPECIMEN_STATUSES` is also
+read by `SampleModel.computeStatus()` (`Sample.js:261`) to decide which
+statuses are *sticky* against quantity changes, and by `returnSample`'s
+own status gate (`sample.service.js:825`). Adding `'depleted'` there
+would have made it sticky in `computeStatus` and made `returnSample`
+reject any return attempt against a depleted sample — breaking the
+legitimate "return material after a full withdrawal" flow, a real
+regression, not just a side effect. Went with the explicit
+`availableQty <= 0` guard instead, placed ahead of the `Total`/`Parcial`
+branch, mirroring `returnSample`'s existing `pendingReturn <= 0` guard.
 
-**Two findings surfaced while closing out #540, both filed rather than
-silently patched or left in chat:**
-- **#544** (bug, open, this repo) — a 5th live writer, not on #540's
-  list: `MongoStorageRepository.js`'s `allocateSamplePosition`/
-  `autoAssignSamplePosition` (storage allocation, a different subsystem
-  #538's original trace never covered) still writes
-  `status: 'AVAILABLE'` onto the Sample document, alongside
-  `storageLocation`, with no `specimenStatus` write in either function.
-  Found during #540's own "confirm with a final grep before closing"
-  check; not folded into #540 per `fix-bugs`' "don't chain fixes into
-  the picked issue" rule.
-- **skills-pack#246** (enhancement, open) — mirror case of last
-  session's skills-pack#245 (now closed/merged into `fix-bugs`): where
-  #245 covers a *reader*-migration fix checking for a live *writer*,
-  #246 is the reverse — a *writer*-removal fix should also grep for a
-  *reader that filters a query on the field's specific value* (not just
-  one that displays it). Two of #540's four writer sites had exactly
-  this shape (the equipment-sensor-quarantine dedup guard, the eConsent
-  release query) and would have shipped a silent regression — one
-  permanently-broken dedup guard, one flow that stops finding anything
-  to release, forever, with no error — if not caught by reading the
-  surrounding code rather than by any skill step. Existing tests didn't
-  catch it either, because the mocks ignored their `find()` filter
-  argument rather than asserting its shape.
+Per the issue's own suggestion, double-checked `returnSample`'s
+equivalent gate for the same class of bug — it already has the matching
+guard (`pendingReturn <= 0`, with existing test coverage), so no
+analogous gap there. Nothing to fix on that side.
 
-**Security/safety note:** the two query fixes above touch
-consent-driven and cold-chain quarantine/release logic (safety-relevant
-access control on specimens) but are behavior-*preserving* — same
-end-state, now reading the canonical field instead of a stale legacy
-one — not a new/relaxed/crossed trust boundary, and both are covered by
-new query-shape assertions (not just response-shape ones) so a future
-regression on the same field would fail loudly. No new route, no
-relaxed validator, no secret touched. Documented here per `wrap-up`'s
-"file even when confident it's correct" bar, though no new issue was
-judged necessary given the above.
+New regression test in `api/backend/tests/unit/sample.service.test.js`
+(`'rejects a Total re-withdrawal on an already-depleted sample (#541)'`).
+208 tests green across `sample.service.test.js` + `sample.routes.test.js`
+(the only two files referencing `withdrawSample` in the test tree),
+re-verified on the merged integration-branch tree before pushing.
 
-**Workflow friction this session:** none on the mechanical
-push/merge/close/branch-delete sequence — same as #539's session, a
-second data point (still not "fixed," per `fix-bugs`' own framing, just
-two clean sessions in a row). The one real friction was upstream of any
-single step: the initial "grep the test tree for existing coverage of
-these writers" pass was scoped by filename pattern matching the four
-changed source files, which structurally can't find sibling test files
-(`iot.api.test.js`, `cold-chain-quarantine.service.test.js`,
-`incidents.api.node.test.js`) that exercise the same underlying function
-through a different entry point under an unrelated name. The already-
-prescribed fix-bugs "wider net" step (run the changed modules' full
-requiring test set, not just filename-matched files) caught all three
-before merge — confirming that step earns its keep, not a new gap to
-file.
+**Security/safety note:** this fix hardens `withdrawSample`'s gating —
+fail-closed, it now blocks a call that previously silently no-op'd — with
+no new/relaxed trust boundary and full regression-test coverage. Same
+shape as #540 session's precedent; documented here rather than filing a
+redundant issue, since it's a confirmed-correct, test-covered gate
+tightening, not an open question.
+
+**Workflow friction this session:** none worth filing. The one hiccup —
+attempting the first test-file `Edit` before creating the `fix/541-...`
+branch, blocked by the protected-branch hook — was the hook working
+exactly as designed against an ordinary slip, not a skill gap; fixed by
+branching first and re-applying the same edit, no lost work. Remote
+fix-branch deletion was denied by the permission classifier, same
+already-documented pattern as #392/#482 (no new predictor found, nothing
+new to file).
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `62894411`, clean,
-  pushed, up to date with origin. Contains #540's merge (`4b3dc167`→`62894411`).
-- No dangling branches from this session's own work —
-  `fix/540-remove-legacy-status-writers` merged, closed, and deleted
-  both locally and on `origin`, no denial.
+- **`feature/docker-e2e-backend-integration`**: at `aaa199c9`, clean,
+  pushed, up to date with origin. Contains #541's merge (`28102aa0`→`aaa199c9`).
+- `fix/541-withdraw-depleted-guard` merged and deleted locally; **remote
+  delete denied by the permission classifier** — the remote branch
+  `fix/541-withdraw-depleted-guard` still exists at `origin`, merged and
+  harmless, needs manual cleanup or an explicit permission grant next
+  session if automated deletion is wanted.
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged, 16 total — see prior handoffs for the full list,
-  unchanged since #531/#535/#538/#539's sessions): local —
+  unchanged since #531/#535/#538/#539/#540's sessions): local —
   `fix/476-quarantine-status-design-call`,
   `fix/477-bulk-import-storage-allocation`,
   `fix/481-autoassign-precheck-repository`,
@@ -122,25 +89,25 @@ file.
   `test/511-intake-wizard-canonical-storage-assignment`,
   `worktree-agent-a8ad1494700a4a20e`. Remote —
   `fix/349-user-organization-picker` (last checked during #527's
-  session; not re-checked this session).
-- Issues this session: **#540 closed** (fix `4b3dc167`, merge `62894411`).
-  **#544 filed** (new, open, this repo). **skills-pack#246 filed** (new,
-  open, pack repo).
+  session; not re-checked this session), **plus the new
+  `fix/541-withdraw-depleted-guard` (merged, remote-delete denied — see
+  above)**.
+- Issues this session: **#541 closed** (fix `28102aa0`, merge `aaa199c9`).
+  No new issues filed — the one thing worth checking (`returnSample`'s
+  equivalent gate) turned out to already be correct, not a gap.
 
 ## Which issue is next
 
 Dennis has not yet said which issue to pick up next session; per this
 skill's "only if the user explicitly said so" rule, nothing is queued.
 
-Candidates carried forward (#540 now resolved, removed from this list;
-**#544 newly added**):
+Candidates carried forward (#541 now resolved, removed from this list):
 
-- **#544** — new: remove the `status: 'AVAILABLE'` write from
+- **#544** — remove the `status: 'AVAILABLE'` write from
   `MongoStorageRepository.js`'s `allocateSamplePosition`/
   `autoAssignSamplePosition` (5th legacy-status writer, storage
-  allocation subsystem). Small, well-scoped, same shape as #540's fix.
-- **#541** — small, well-scoped backend fix (`BLOCKED_SPECIMEN_STATUSES`
-  + `'depleted'`, or an explicit zero-quantity guard in `withdrawSample`).
+  allocation subsystem, filed during #540's session). Small,
+  well-scoped, same shape as #540's fix.
 - **#543** — `frontend/src/utils/userMethods.ts` is dead code
   end-to-end (zero live callers on any export); needs the owner's call
   on delete vs. wire-in.
@@ -166,8 +133,7 @@ Candidates carried forward (#540 now resolved, removed from this list;
 - Older backlog, unchanged: `#371`/`#373`/`#374`/`#378`/`#379`, `#368`,
   next e2e slice per `E2E_TRACEABILITY_PLAN.md`/`#331`.
 - **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246** —
-  pack-repo only, low priority, unchanged otherwise (#245 closed this
-  session's precedent-check, #246 newly added).
+  pack-repo only, low priority, unchanged this session.
 
 ## Dev stack state
 
@@ -178,21 +144,21 @@ Docker/live-DB needed or used, consistent with `fix-bugs`'/
 
 ## Which skills to use
 
-- Confirmed again (mirror of #539's session's #245 finding): a
-  writer-removal fix needs to check not just "does anything still read
-  this field for display" but "does any query filter *on* this field's
-  value" — a dedup guard or a lookup query can drift into permanently
-  wrong behavior (always-true, or always-empty) with no error and no
-  test failure, if the test's mock doesn't assert the query shape.
-  Filed as skills-pack#246 to turn this into an explicit `fix-bugs` step
-  rather than relying on incidental noticing next time (this session
-  caught both instances only by reading the surrounding code while
-  making the edit).
-- Confirmed again: the `fix-bugs` "wider net" step (run every test file
-  that `require`s the changed module, not just files whose name matches
-  the changed source file) is load-bearing, not optional — it caught
-  three un-weakened assertions in sibling test files this session's
-  initial filename-scoped grep structurally could not have found.
-- Confirmed again: `push-wrapup-checkpoint.cjs` fired at its usual point
-  (after the issue-close comment, before merge/push/branch-delete) —
-  same expected shape as every prior session; not re-filed.
+- Confirmed again: when an issue itself names two candidate fixes,
+  trace *both* against the shared state they touch before picking —
+  `BLOCKED_SPECIMEN_STATUSES` looked like a simple two-line addition but
+  is read by three different call sites (`computeStatus`'s stickiness
+  algorithm, `withdrawSample`'s gate, `returnSample`'s gate), and the
+  "obvious" fix would have silently broken the un-deplete-on-return flow.
+  The narrower, more surgical fix (an explicit quantity guard local to
+  `withdrawSample`) was correct precisely because it didn't touch shared
+  state used elsewhere for a different purpose.
+- Confirmed again: `fix-bugs`' "double-check the sibling gate for the
+  same class of bug" instinct (here: `returnSample`'s equivalent status
+  check, prompted by the issue's own text) is worth running even when it
+  turns out clean — it's what caught that `returnSample` already had the
+  correct guard, closing the loop with confidence instead of a guess.
+- Protected-branch-before-first-edit hook fired correctly against an
+  ordinary sequencing slip (attempted the test edit before creating the
+  `fix/541-...` branch); not a gap, just a reminder the hook is doing its
+  job.
