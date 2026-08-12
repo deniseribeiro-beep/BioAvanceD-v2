@@ -25,6 +25,8 @@ const duoSource = require('./sources/duo');
 const { normalizeRecord: normalizeDuoRecord } = require('./normalizeDuo');
 const uberonSource = require('./sources/uberon');
 const { normalizeRecord: normalizeUberonRecord } = require('./normalizeUberon');
+const ncbitaxSource = require('./sources/ncbitax');
+const { normalizeRecord: normalizeNcbitaxRecord } = require('./normalizeNcbitax');
 
 /** RF028 first importer — see sources/hpo.js for why HPO and why a bundled sample. */
 async function runHpoImport(db, opts = {}) {
@@ -91,4 +93,9 @@ async function runUberonImport(db, opts = {}) {
   return runImport({ db, source: uberonSource, normalizeRecord: normalizeUberonRecord, ...opts });
 }
 
-module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport, runHgncImport, runLoincImport, runUcumImport, runDcbImport, runAtcImport, runDuoImport, runUberonImport };
+/** RF028 fourteenth importer — see sources/ncbitax.js for why NCBI Taxonomy and why a bundled sample. */
+async function runNcbitaxImport(db, opts = {}) {
+  return runImport({ db, source: ncbitaxSource, normalizeRecord: normalizeNcbitaxRecord, ...opts });
+}
+
+module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport, runHgncImport, runLoincImport, runUcumImport, runDcbImport, runAtcImport, runDuoImport, runUberonImport, runNcbitaxImport };
