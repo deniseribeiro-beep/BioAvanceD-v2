@@ -72,6 +72,8 @@
     "reference:import:duo": "node scripts/reference-imports/import-duo-reference-dataset.js",
     "reference:import:uberon:dry-run": "node scripts/reference-imports/import-uberon-reference-dataset.js --dry-run",
     "reference:import:uberon": "node scripts/reference-imports/import-uberon-reference-dataset.js",
+    "reference:import:ncbitax:dry-run": "node scripts/reference-imports/import-ncbitax-reference-dataset.js --dry-run",
+    "reference:import:ncbitax": "node scripts/reference-imports/import-ncbitax-reference-dataset.js",
     "test:architecture": "node --test \"tests/architecture/**/*.arch.test.js\"",
     "test:unit:vitest": "vitest run",
     "test": "vitest run",
