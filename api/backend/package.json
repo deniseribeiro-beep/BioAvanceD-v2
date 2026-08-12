@@ -48,6 +48,8 @@
     "reference:import:plan": "node scripts/reference-imports/import-large-reference-dataset.js --dry-run",
     "reference:import:hpo:dry-run": "node scripts/reference-imports/import-hpo-reference-dataset.js --dry-run",
     "reference:import:hpo": "node scripts/reference-imports/import-hpo-reference-dataset.js",
+    "reference:import:mondo:dry-run": "node scripts/reference-imports/import-mondo-reference-dataset.js --dry-run",
+    "reference:import:mondo": "node scripts/reference-imports/import-mondo-reference-dataset.js",
     "test:architecture": "node --test \"tests/architecture/**/*.arch.test.js\"",
     "test:unit:vitest": "vitest run",
     "test": "vitest run",
