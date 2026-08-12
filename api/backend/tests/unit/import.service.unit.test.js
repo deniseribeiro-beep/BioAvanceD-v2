@@ -286,6 +286,17 @@ describe('ImportService.parseSampleCSV', () => {
     expect(data.participantId).toBe('P-9');
   });
 
+  it('resolves participantId via the patient_id legacy alias (#547: was shadowed by a duplicate canonical-key entry)', () => {
+    const { data } = importService.parseSampleCSV({ patient_id: 'P-77' });
+    expect(data.participantId).toBe('P-77');
+  });
+
+  it('resolves registeredAt via the dataRegistro legacy alias (#547: was shadowed by a duplicate canonical-key entry)', () => {
+    const { data } = importService.parseSampleCSV({ dataRegistro: '2026-01-15' });
+    expect(data.registeredAt instanceof Date).toBe(true);
+    expect(data.registeredAt.toISOString().slice(0, 10)).toBe('2026-01-15');
+  });
+
   it('collects a parse error and returns null for a non-numeric quantity', () => {
     const { data, parseErrors } = importService.parseSampleCSV({ quantity: 'not-a-number' });
     expect(data.quantity).toBeNull();
