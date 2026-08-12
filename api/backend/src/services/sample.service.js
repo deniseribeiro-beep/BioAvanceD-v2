@@ -639,10 +639,11 @@ class SampleService {
       );
 
       // lifecycleStatus/availabilityStatus/quarantineStatus are retired
-      // (#408) — specimenStatus is the sole source of truth, so any caller
-      // still sending the legacy fields on the wire is silently ignored
-      // rather than persisted.
-      const { lifecycleStatus, availabilityStatus, quarantineStatus, ...restUpdateData } = updateData;
+      // (#408), and status/currentStatus alongside them (#540) —
+      // specimenStatus is the sole source of truth, so any caller still
+      // sending the legacy fields on the wire is silently ignored rather
+      // than persisted.
+      const { lifecycleStatus, availabilityStatus, quarantineStatus, currentStatus, status, ...restUpdateData } = updateData;
 
       const payload = {
         ...restUpdateData,

@@ -552,6 +552,29 @@ the same class of pre-#389 leftover duplicate `release_status` turned
 out to be, but unconfirmed (unlike `release_status`, no consumer has
 been traced yet).
 
+**#533 confirmed and landed as #538 (readers traced, phased) → #539
+(readers migrated) → #540 (writers removed).** `status`/`currentStatus`
+were the same class of pre-#389 leftover duplicate `release_status`
+turned out to be: written alongside `specimenStatus` by
+`equipment-sensor-quarantine.service.js`, `intakeWizard.routes.js`'s
+`enforcePersistedGovernanceStatus`, and `eConsent.js`'s consent-driven
+quarantine/release, plus `sample.service.js#updateSample` (found while
+resolving #539 — a 4th writer, reachable via `PUT /samples/:id`, that
+`#538`'s original trace missed because it went through the raw MongoDB
+driver rather than Mongoose). #539 migrated every remaining reader
+(`SampleDetailsPage.tsx`, `ReportViewPage.tsx`, `reports.routes.js`'s
+`sampleanalysis` endpoint, `userMethods.ts`) onto `specimenStatus`; #540
+then removed the write in all four writer sites — `status` is added to
+the Legacy Fields Prohibited list above alongside `currentStatus`.
+**Not fully zero-producer yet:** a 5th writer, `status: 'AVAILABLE'` in
+`MongoStorageRepository.js`'s `allocateSamplePosition`/
+`autoAssignSamplePosition` (storage allocation, not governance/
+quarantine — a different subsystem #538's original trace never
+covered), was found during #540's own closeout grep and filed
+separately as #544 rather than folded in, per the same "don't chain
+fixes into the picked issue" reasoning #532's `releaseStatus` split
+(#536) already used.
+
 ### RcsAssessment
 
 - `specimenId` (reference to `Specimen`, not a duplicate — dict-07 row 38:
@@ -897,6 +920,8 @@ likely fix per that precedent, not new parsing.
 - `sampleId`
 - `registerDate`
 - `registrationDate`
+- `status` (Sample-level; not to be confused with other collections'
+  legitimate `status` fields — #540)
 - `currentStatus`
 - `lifecycleStatus`
 - `availabilityStatus`

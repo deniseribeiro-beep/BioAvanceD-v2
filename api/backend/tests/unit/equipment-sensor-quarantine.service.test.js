@@ -138,7 +138,10 @@ describe('equipment-sensor-quarantine.service', () => {
       expect(samplesCollection.find).toHaveBeenCalledWith(
         expect.objectContaining({
           $and: expect.arrayContaining([
-            { 'storageLocation.boxId': { $in: [boxId] } }
+            { 'storageLocation.boxId': { $in: [boxId] } },
+            // #540: the "not already quarantined" guard reads the canonical
+            // specimenStatus field now, not the legacy status/currentStatus pair.
+            { specimenStatus: { $ne: 'quarantined' } }
           ])
         }),
         undefined
@@ -148,8 +151,6 @@ describe('equipment-sensor-quarantine.service', () => {
         { _id: 'S1' },
         {
           $set: expect.objectContaining({
-            status: 'QUARANTINED',
-            currentStatus: 'QUARANTINED',
             specimenStatus: 'quarantined',
             quarantineSource: 'equipment',
             quarantineSourceId: '42',
@@ -158,6 +159,11 @@ describe('equipment-sensor-quarantine.service', () => {
         },
         undefined
       );
+      // #540: status/currentStatus are legacy fields canonical-data-contract-v1.md
+      // bans on the Sample document — specimenStatus is the sole persisted signal.
+      const persistedSet = samplesCollection.updateOne.mock.calls[0][1].$set;
+      expect(persistedSet.status).toBeUndefined();
+      expect(persistedSet.currentStatus).toBeUndefined();
 
       expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
         expect.objectContaining({

@@ -385,11 +385,13 @@ describe('eConsent.routes POST /update', () => {
       { _id: 'sample-1' },
       {
         $set: expect.objectContaining({
-          status: 'QUARANTINED',
           specimenStatus: 'quarantined',
         }),
       }
     );
+    // #540: status is a legacy field canonical-data-contract-v1.md bans on
+    // the Sample document — specimenStatus is the sole persisted signal.
+    expect(db.samplesCollection.updateOne.mock.calls[0][1].$set.status).toBeUndefined();
     expect(db.quarantineActionsCollection.insertOne).toHaveBeenCalledTimes(1);
     expect(db.quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
       expect.objectContaining({ specimenIds: ['sample-1'], reasonCodes: ['CONSENT_REVOKED'] }),
@@ -436,16 +438,19 @@ describe('eConsent.routes POST /update', () => {
       });
 
     expect(res.status).toBe(200);
-    expect(db.samplesCollection.find).toHaveBeenCalledWith({ participantId: '12345678', status: 'QUARANTINED' });
+    // #540: filters on the canonical specimenStatus field now, not the
+    // legacy status field (which is no longer written, so a stale-status
+    // filter would silently stop matching any sample).
+    expect(db.samplesCollection.find).toHaveBeenCalledWith({ participantId: '12345678', specimenStatus: 'quarantined' });
     expect(db.samplesCollection.updateOne).toHaveBeenCalledWith(
       { _id: 'sample-1' },
       {
         $set: expect.objectContaining({
-          status: 'AVAILABLE',
           specimenStatus: 'available',
         }),
       }
     );
+    expect(db.samplesCollection.updateOne.mock.calls[0][1].$set.status).toBeUndefined();
     expect(releaseSpy).toHaveBeenCalledWith(db, 'sample-1', 'SYSTEM');
     expect(io.to).toHaveBeenCalledWith('patient-12345678');
     expect(emit).toHaveBeenCalledWith('sample-released', { participantId: '12345678' });

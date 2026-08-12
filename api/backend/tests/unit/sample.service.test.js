@@ -978,6 +978,35 @@ describe('sample.service', () => {
       expect(result.currentQuantity).toBe(4);
     });
 
+    // #540: sample.service.js#updateSample used the raw MongoDB driver and
+    // only stripped the three already-retired fields above — a caller
+    // sending currentStatus/status in the PUT body (SampleDetailsPage.tsx's
+    // edit form did exactly this) got them persisted for real.
+    it('strips currentStatus/status from the persisted payload even when the caller sends them', async () => {
+      const db = makeDb();
+      const existing = {
+        _id: 'sample-1',
+        quantity: 10,
+        initialQuantity: 10,
+        currentQuantity: 10,
+        specimenStatus: 'available'
+      };
+      db.collections.samples.findOne
+        .mockResolvedValueOnce(existing)
+        .mockResolvedValueOnce(existing);
+
+      await sampleService.updateSample(db, 'sample-1', {
+        currentStatus: 'Available',
+        status: 'AVAILABLE',
+        notes: 'edited via SampleDetailsPage'
+      });
+
+      const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
+      expect(updateArg.$set.currentStatus).toBeUndefined();
+      expect(updateArg.$set.status).toBeUndefined();
+      expect(updateArg.$set.notes).toBe('edited via SampleDetailsPage');
+    });
+
     it('returns null when updateOne matches nothing', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', quantity: 10 });

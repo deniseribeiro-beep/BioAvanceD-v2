@@ -120,7 +120,7 @@ router.post('/update', async (req, res) => {
           const wasQuarantined = SampleModel.resolveSpecimenStatus(sample) === 'quarantined';
           await samplesCollection.updateOne(
             { _id: sample._id },
-            { $set: { status: 'QUARANTINED', specimenStatus, updatedAt: new Date() } }
+            { $set: { specimenStatus, updatedAt: new Date() } }
           );
           if (!wasQuarantined) {
             await quarantineActionService.recordAction(db, {
@@ -142,13 +142,16 @@ router.post('/update', async (req, res) => {
         const quarantineActionService = require('../services/quarantine-action.service');
         const samplesCollection = await getCollection(db, 'samples');
         const specimenStatus = 'available';
-        const samples = await samplesCollection.find({ participantId, status: 'QUARANTINED' }).toArray();
+        // #540: filters on the canonical specimenStatus field, not the
+        // legacy status field (no longer written above either — a
+        // stale-status filter would silently stop matching anything).
+        const samples = await samplesCollection.find({ participantId, specimenStatus: 'quarantined' }).toArray();
 
         for (const sample of samples) {
           const wasQuarantined = SampleModel.resolveSpecimenStatus(sample) === 'quarantined';
           await samplesCollection.updateOne(
             { _id: sample._id },
-            { $set: { status: 'AVAILABLE', specimenStatus, updatedAt: new Date() } }
+            { $set: { specimenStatus, updatedAt: new Date() } }
           );
           if (wasQuarantined) {
             await quarantineActionService.releaseActiveAction(db, String(sample._id), 'SYSTEM');
