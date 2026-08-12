@@ -1,120 +1,104 @@
 # HANDOFF
 
 **Written:** 2026-08-12, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #538 (Phase A) and filing its follow-ups.
+after resolving #539 (Phase B of #538's currentStatus/specimenStatus
+vocabulary migration) and filing its follow-ups.
 
 ## What happened this session
 
-Dennis said "Pick #538" — the big `currentStatus`/3-vocabulary issue
-carried forward from last session's handoff as "needs a dedicated
-session." `work-issue` routed to `resolve-issue`, which (per its own
-"needs owner design call" rule) checked `docs/` before treating the
-vocabulary question as genuinely open.
+Dennis said "pick #539" (offered as the top recommendation among
+last session's #538-follow-up candidates). `work-issue` routed to
+`fix-bugs` (labeled `bug`, a concrete reader-migration with no design
+question left open).
 
-**The design question turned out to already be answered**, not actually
-needing Dennis's call on vocabulary:
-- `docs/architecture/canonical-data-contract-v1.md`'s "Legacy Fields
-  Prohibited" list already bans `currentStatus`/`lifecycleStatus`/
-  `availabilityStatus`/`quarantineStatus` outright.
-- dict-02 ELM-0123's `specimenStatus` enum already has `partial`/
-  `depleted` values, and `Sample.js#computeStatus` already derives them
-  correctly from quantity on every `withdrawSample`/`returnSample`
-  write — the withdrawal-lifecycle concept doesn't need a new field.
-- `frontend/src/types/models.ts` and `frontend/src/foundation/
-  contracts.ts` (an unmounted "Foundation"/strangler-pattern scaffold,
-  `FoundationApp.tsx`) already carry the intended `specimenStatus`→
-  legacy-label mapping, just unused by the live withdrawal page.
+**#539 resolved** (`fix/539-remaining-readers-specimen-status`, commit
+`6f654f4f`, merged into the integration branch at `fb2b7ff9`) — migrated
+all four readers #538's trace named onto the canonical `specimenStatus`
+(dict-02 ELM-0123), off the legacy `currentStatus`/`status` fields
+`canonical-data-contract-v1.md` bans:
+- `SampleDetailsPage.tsx`'s editable `currentStatus` form field (three
+  spots: initial load, edit-mode `effectiveSample` memo, cancel-reset) —
+  previously an ad-hoc `.toUpperCase()` blend of `specimenStatus` that
+  didn't even match the form's own option casing.
+- `ReportViewPage.tsx:277`'s report table — now renders
+  `translateSpecimenStatus(resolveSpecimenStatus(s))`.
+- `reports.routes.js`'s `sampleanalysis` endpoint — now uses the
+  existing backend helper `SampleModel.resolveSpecimenStatus(sample)`
+  instead of `sample.currentStatus || sample.status || null`.
+- `userMethods.ts`'s `registerSample()` — now derives via the new
+  `resolveLegacySampleStatus(sampleData.specimenStatus)`.
 
-Finished the trace #538 left incomplete: confirmed `Sample.js`'s
-Mongoose schema does **not** declare `status`/`currentStatus` (the
-writes land anyway via raw MongoDB driver calls that bypass schema
-validation — `equipment-sensor-quarantine.service.js`); confirmed
-`fhir-import-staging.service.js`/`import.controller.js`/`intakeWizard.js`
-(the non-`.routes.js` one) do **not** write those fields (the latter
-actively rejects them as `NON_CANONICAL_FIELD`); confirmed
-`validateSampleStatus` (frontend) is dead, zero callers.
+Extracted Phase A's `resolveSpecimenStatus`/`getSpecimenStatusColor`/
+`translateSpecimenStatus` out of `SampleWithdrawalReturnPage.tsx` into
+`frontend/src/utils/sampleHelpers.ts` (shared, since #539 gave it 3+
+consumers); `SampleWithdrawalReturnPage.tsx` re-exports them so its own
+tests kept passing unchanged. Added `resolveLegacySampleStatus`/
+`resolveSampleLifecycleStatus` to `frontend/src/foundation/contracts.ts`,
+wiring in the previously-unused `LEGACY_SAMPLE_STATUS_LABELS` map #538's
+trace had flagged as "already built, just unused" — buckets the 9-state
+specimenStatus enum down to the 4-state/legacy-label shape the one
+reader that still needs it (`SampleDetailsPage`'s editable field)
+expects.
 
-**Confirmed too big for one sitting** (3 live writers, 5 live readers —
-same shape as the #398/#405-#408 `specimenStatus` consolidation, which
-took 4 phased issues). Confirmed the phased split with Dennis via
-`AskUserQuestion` before filing anything (`divide-and-conquer`'s
-design-split playbook) — he picked "phase it, ship one load-bearing
-slice now" and "file the two smaller side-findings separately, don't
-fold into the same branch."
+New unit tests: `sampleHelpers.test.ts`, `contracts.test.ts`,
+`userMethods.test.ts` (frontend, 33 tests total across the 4 targeted
+files), plus a new backend case in `reports.api.test.js` proving
+`status` now derives from `specimenStatus` and ignores stale
+`currentStatus`/`status`. `tsc --noEmit` clean. All targeted suites
+re-verified on the merged integration-branch tree before pushing.
 
-**#538 resolved as Phase A** (`fix/538-withdrawal-page-specimen-status`,
-commit `83859258`, merge commit `fb39e6db`) — the one *confirmed-broken*
-real business gate: `SampleWithdrawalReturnPage.tsx`'s `canWithdraw`/
-`getPendingReturnQuantity`/initial-tab-switch used to check
-`sample.currentStatus`, a field the real withdraw/return write path
-never sets. Rewired onto `specimenStatus`, extracted as pure exported
-functions (`resolveSpecimenStatus`/`canWithdrawSample`/
-`getPendingReturnQuantity`/`resolveInitialTab`/`getSpecimenStatusColor`/
-`translateSpecimenStatus`), 18 new unit tests, `tsc --noEmit` clean.
-Also added a frontend-only guard blocking re-withdrawal of a `depleted`
-sample (the backend's own gap here is #541, filed separately per
-Dennis's call, not touched in this branch).
-
-**Filed while resolving #538:**
-- **#539** (bug, open) — Phase B: migrate remaining live readers
-  (`SampleDetailsPage.tsx`, `ReportViewPage.tsx`, `reports.routes.js`,
-  `userMethods.ts`) onto `specimenStatus`. No dependency, can start
-  anytime.
-- **#540** (bug, open) — Phase C: remove the three dead writers (intake
-  wizard's `enforcePersistedGovernanceStatus`, `equipment-sensor-
-  quarantine.service.js`, `eConsent.js`). **Depends on #539** — these
-  readers still consume what the writers produce today.
-- **#541** (bug, open) — `withdrawSample`'s `BLOCKED_SPECIMEN_STATUSES`
-  doesn't include `'depleted'`, so a redundant `Total`-type re-withdrawal
-  on an already-fully-withdrawn sample silently no-ops (writes a
-  spurious zero-quantity ledger movement) instead of being rejected.
-  Doesn't lose material (balance floors at 0) but pollutes the audit
-  trail. Backend-only; the frontend already has its own guard as of
-  Phase A.
-- **#542** (bug, open) — frontend's `'Expired'` legacy status value has
-  zero producer anywhere in the codebase (backend or frontend) — looks
-  aspirational, needs Dennis's call on whether it's planned (RF014/
-  retention-policy adjacent, #440/#441) or dead.
-- **skills-pack#244** (enhancement, open) — `clean-up`'s branch domain
-  lists local-delete and remote-delete as two bullets but doesn't say to
-  issue them as two separate tool calls; chaining them with `&&` this
-  session meant the classifier's denial of the remote half also blocked
-  the (normally uncontroversial) local half, costing an extra
-  `AskUserQuestion` round-trip. Couldn't edit `clean-up` directly per
-  skill-maintenance's Rule 0.
+**Two findings surfaced while tracing #539's readers, both filed rather
+than silently patched or left in chat:**
+- **#543** (bug, open) — `frontend/src/utils/userMethods.ts` is entirely
+  dead code: `grep -rn "utils/userMethods"` across `frontend/src`
+  returns zero hits, so all 8 exported functions (including the
+  `registerSample()` this session fixed for vocabulary consistency)
+  have no live caller. Fixed anyway since it was explicitly named in
+  #539's body, but the dead-code question (delete vs. wire-in) is the
+  owner's call, unresolved here.
+- **#540 comment** (not a new issue — #540 is still open and is
+  specifically the "writers to remove" tracking issue) — tracing
+  `SampleDetailsPage.tsx`'s *save* path (adjacent to but out of #539's
+  reader-only scope) turned up a 4th live writer #540's list misses:
+  `sample.service.js#updateSample` (reachable via `PUT /samples/:id`),
+  raw MongoDB driver `updateOne`, strips only the three already-retired
+  legacy fields and **not** `currentStatus`/`status` — so
+  `SampleDetailsPage.tsx`'s edit-and-save flow persists a real
+  `currentStatus` value. #540's own closeout check ("once these three
+  writers are removed, zero producers left") would be wrong without
+  this 4th writer also being handled. Not fixed here — #539 was
+  readers-only.
+- **skills-pack#245** (enhancement, open) — suggested `fix-bugs`
+  addition: when a reader-migration fix leaves writer-removal for a
+  later phase, grep the *same files being edited* for writes of the
+  field too (not to fix them, just to check the writer-removal issue's
+  enumerated list is complete) — the #540-writer finding above
+  would have been caught by #538's original trace if that discipline
+  had applied there.
 
 **No security-relevant findings requiring separate filing** — all
-changes this session were frontend display/gating logic reading
-already-secured API responses; no new routes, no relaxed validators, no
-secrets touched.
+changes this session were read-path display/report derivation logic
+reading already-secured API responses; no new routes, no relaxed
+validators, no secrets touched.
 
-**Workflow friction this session:**
-- `push-wrapup-checkpoint.cjs` fired immediately after `gh issue close
-  538`, before the merge/push/branch-delete steps — same known
-  early-fire pattern noted in #525/#529/#531's handoffs (fires on
-  close/push, not just before branch-delete). Not re-filed, still the
-  expected shape.
-- Chaining local `git branch -d` + remote `git push origin --delete` in
-  one `&&` Bash call got the whole compound command denied by the
-  permission classifier, including the local half that's never been
-  denied on its own in this project's history — filed as
-  skills-pack#244 above (with the exact suggested wording) rather than
-  editing the junctioned `clean-up` skill directly.
-- No other denials this session (merge, push to the integration branch,
-  and issue creation all went through cleanly).
+**Workflow friction this session:** none. Push, merge, issue-close,
+local branch delete, and remote branch delete all went through with no
+permission denials — contrasts with #525/#529/#531/#538's sessions,
+where remote branch delete was denied and needed an `AskUserQuestion`
+round-trip. Still treat remote-delete denial as unpredictable (per
+`fix-bugs`' own framing), not "fixed" — this is one data point, not a
+new pattern.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `fb39e6db`, clean,
-  pushed, up to date with origin. Contains #538 Phase A's merge
-  (`83859258`→`fb39e6db`).
+- **`feature/docker-e2e-backend-integration`**: at `fb2b7ff9`, clean,
+  pushed, up to date with origin. Contains #539's merge (`6f654f4f`→`fb2b7ff9`).
 - No dangling branches from this session's own work —
-  `fix/538-withdrawal-page-specimen-status` merged, closed, and deleted
-  both locally and on `origin` (after an `AskUserQuestion` confirmation
-  per the classifier denial above).
+  `fix/539-remaining-readers-specimen-status` merged, closed, and deleted
+  both locally and on `origin`, no denial this time.
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged, 16 total — see prior handoffs for the full list,
-  unchanged since #531/#535's sessions): local —
+  unchanged since #531/#535/#538's sessions): local —
   `fix/476-quarantine-status-design-call`,
   `fix/477-bulk-import-storage-allocation`,
   `fix/481-autoassign-precheck-repository`,
@@ -131,27 +115,28 @@ secrets touched.
   `worktree-agent-a8ad1494700a4a20e`. Remote —
   `fix/349-user-organization-picker` (last checked during #527's
   session; not re-checked this session).
-- Issues this session: **#538 closed** (Phase A merged, commits above).
-  **#539, #540, #541, #542 filed** (new, open, this repo — #540 depends
-  on #539). **skills-pack#244 filed** (new, open, pack repo).
+- Issues this session: **#539 closed** (fix `6f654f4f`, merge `fb2b7ff9`).
+  **#543 filed** (new, open, this repo). **#540 commented** (still open,
+  scope expanded, not closed). **skills-pack#245 filed** (new, open,
+  pack repo).
 
 ## Which issue is next
 
 Dennis has not yet said which issue to pick up next session; per this
 skill's "only if the user explicitly said so" rule, nothing is queued.
 
-Candidates carried forward (#538 now resolved as Phase A, removed from
-this list; **#539/#540/#541/#542 newly added**):
+Candidates carried forward (#539 now resolved, removed from this list;
+**#543 newly added; #540's scope note updated**):
 
-- **#539** — Phase B of the currentStatus migration: migrate
-  `SampleDetailsPage.tsx`/`ReportViewPage.tsx`/`reports.routes.js`/
-  `userMethods.ts` onto `specimenStatus`. Follow the pattern
-  `SampleWithdrawalReturnPage.tsx` already set (Phase A) — pure exported
-  helper functions, unit-tested. No dependency, ready to pick up.
-- **#540** — Phase C: remove the three dead writers. **Do #539 first**
-  (explicit dependency).
+- **#540** — Phase C: remove the writers. **Now four, not three** — see
+  this session's comment adding `sample.service.js#updateSample`
+  alongside the original intake-wizard/equipment-sensor-quarantine/
+  eConsent trio. Unblocked now that #539 is done.
 - **#541** — small, well-scoped backend fix (`BLOCKED_SPECIMEN_STATUSES`
   + `'depleted'`, or an explicit zero-quantity guard in `withdrawSample`).
+- **#543** — new: `frontend/src/utils/userMethods.ts` is dead code
+  end-to-end (zero live callers on any export); needs the owner's call
+  on delete vs. wire-in.
 - **#536** — `Sample.releaseStatus` (camelCase) third-field cleanup.
   Likely small (probable deletion, no live consumer found) but confirm
   no external consumer first per the issue's own caveat.
@@ -170,45 +155,36 @@ this list; **#539/#540/#541/#542 newly added**):
 - **#386** — RBAC still keyed on `accessType`/`roleName` per dict-07,
   open, not re-triaged this session.
 - **#336** — still open: is `import.controller.js#importFhirBundle` dead
-  code to remove, or does something still call it? (Confirmed again this
-  session that it writes only `releaseStatus`/`status`-on-Consent, not
-  Sample `status`/`currentStatus` — doesn't resolve #336's own liveness
-  question, just narrows what it would affect.)
+  code to remove, or does something still call it?
 - Older backlog, unchanged: `#371`/`#373`/`#374`/`#378`/`#379`, `#368`,
   next e2e slice per `E2E_TRACEABILITY_PLAN.md`/`#331`.
-- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244** —
-  pack-repo only, low priority, unchanged otherwise (#244 newly added).
+- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#245** —
+  pack-repo only, low priority, unchanged otherwise (#245 newly added).
 
 ## Dev stack state
 
 Nothing started this session. Same as prior sessions: native-only
-verification (vitest for the frontend unit tests, real
+verification (vitest for frontend/backend unit + integration tests, real
 `tsc --noEmit`) — no Docker/live-DB needed or used, consistent with
-`resolve-issue`'s targeted per-iteration default.
+`fix-bugs`'/`resolve-issue`'s targeted per-iteration default.
 
 ## Which skills to use
 
-- `divide-and-conquer`'s design-split playbook (step 2, "confirm the
-  breakdown with the user before filing anything") did real work this
-  session — asking Dennis to confirm the phased split *and* how to
-  handle the two side-findings, via one `AskUserQuestion` call with two
-  questions, got a clean answer before any issue was filed. Worth
-  reusing verbatim: confirm the shape of the split, not just that a
-  split is needed.
-- Confirmed again: `resolve-issue`'s "check `docs/` before treating
-  something as needing an owner's design call" rule fully dissolved
-  what #538's own body framed as its central open question. Worth
-  restating as a pattern: when an issue's own trace already names the
-  specific docs section it *didn't* check, check that section first,
-  before reaching for `AskUserQuestion` on the design question itself.
-- New this session: when an issue's "not yet traced" list includes
-  "does the schema declare this field," don't stop at confirming it
-  doesn't — check *how* the write actually lands (raw MongoDB driver
-  call vs. Mongoose model method). A field genuinely absent from a
-  Mongoose schema can still be persisted for real if the writer bypasses
-  the ODM entirely, which changes what "the schema doesn't declare it"
-  actually implies about whether the writes are live.
-- Confirmed again: `push-wrapup-checkpoint.cjs`'s early-fire (relative
-  to merge/branch-delete) is now the *expected* shape across six
-  sessions running (#525, #529, #531, and the last two including this
-  one) — treat it as permanent behavior, not a bug to keep re-noting.
+- Confirmed again: reading a file for one purpose (migrating its *read*
+  side onto the canonical field) put its *write* side directly in view
+  even though writers were out of scope for the issue at hand — that
+  incidental visibility is how the #540-writer gap got caught. Worth
+  restating: when editing a file for a reader-only fix, a quick look at
+  the same file's write path costs nothing and can catch a writer-list
+  gap in a *different*, still-open issue. Filed as skills-pack#245 to
+  turn this into an explicit `fix-bugs` step rather than relying on
+  incidental noticing next time.
+- Confirmed again: the issue body's own "migration reference (already
+  built, just unused)" pointer (`LEGACY_SAMPLE_STATUS_LABELS` in
+  `foundation/contracts.ts`) was exactly the right design to wire in —
+  no need to invent a fresh mapping scheme. When an issue names a
+  specific existing-but-unused artifact as the intended pattern, use it
+  as-is rather than designing a parallel one.
+- Confirmed again: `push-wrapup-checkpoint.cjs` fired at its usual point
+  (after the issue-close comment, before merge/push/branch-delete) —
+  same expected shape as every prior session; not re-filed.
