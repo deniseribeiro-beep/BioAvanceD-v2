@@ -1,0 +1,10 @@
+{"id":"ORPHA:377794","lbl":"rare disease","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"ORPHA:377788","lbl":"rare genetic disease","is_a":["ORPHA:377794"],"synonyms":[],"obsolete":false}
+{"id":"ORPHA:377789","lbl":"rare neurologic disease","is_a":["ORPHA:377794"],"synonyms":[],"obsolete":false}
+{"id":"ORPHA:558","lbl":"Marfan syndrome","is_a":["ORPHA:377788"],"synonyms":[],"obsolete":false}
+{"id":"ORPHA:586","lbl":"Wilson disease","is_a":["ORPHA:377788"],"synonyms":["Hepatolenticular degeneration"],"obsolete":false}
+{"id":"ORPHA:98896","lbl":"Duchenne muscular dystrophy","is_a":["ORPHA:377788"],"synonyms":["DMD"],"obsolete":false}
+{"id":"ORPHA:100984","lbl":"Charcot-Marie-Tooth disease","is_a":["ORPHA:377789"],"synonyms":["CMT"],"obsolete":false}
+{"id":"ORPHA:773","lbl":"limb-girdle muscular dystrophy","is_a":["ORPHA:377788"],"synonyms":[],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"ORPHA:9999999","lbl":"","is_a":[],"synonyms":[],"obsolete":false}

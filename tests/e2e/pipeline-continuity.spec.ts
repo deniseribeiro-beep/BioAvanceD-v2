@@ -161,4 +161,16 @@ test.describe('Reference data importers (RF028) — real backend', () => {
     const concepts = await countTerminologyConceptsBySystemUri('http://purl.obolibrary.org/obo/mondo.owl');
     expect(concepts).toBeGreaterThan(0);
   });
+
+  // #549: same rationale as the MONDO assertion above — the generic checks
+  // are already satisfied by HPO/MONDO and can't prove ORPHA specifically
+  // landed. Checks the ORPHA release and its concepts by name, per §7.4
+  // step 4 ("Importar ORPHA, CID-11, CID-10 e OMIM...").
+  test('the ORPHA release and its terminology concepts are persisted', async () => {
+    const releases = await countReferenceDatasetReleasesByDatasetCode('ORPHA');
+    expect(releases).toBeGreaterThan(0);
+
+    const concepts = await countTerminologyConceptsBySystemUri('http://www.orpha.net');
+    expect(concepts).toBeGreaterThan(0);
+  });
 });
