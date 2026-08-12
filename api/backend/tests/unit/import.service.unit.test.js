@@ -303,6 +303,12 @@ describe('ImportService.parseSampleCSV', () => {
     expect(data.barcode).toBeNull();
   });
 
+  it('maps consentTemplateId and merkleRoot columns (#546: was set twice via a duplicate object key)', () => {
+    const { data } = importService.parseSampleCSV({ consentTemplateId: 'tcle-42', merkleRoot: 'root-hash-1' });
+    expect(data.consentTemplateId).toBe('tcle-42');
+    expect(data.merkleRoot).toBe('root-hash-1');
+  });
+
   it('maps the legacy lifecycleStatus column onto specimenStatus, not the trio', () => {
     const { data } = importService.parseSampleCSV({ lifecycleStatus: 'QUARANTINED' });
     expect(data.specimenStatus).toBe('quarantined');

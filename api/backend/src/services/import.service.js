@@ -836,7 +836,6 @@ class ImportService {
       sprec,
       clinicalData,
       consentTemplateId: normalizeString(tcleRaw),
-      consentTemplateId: normalizeString(tcleRaw),
       merkleRoot: normalizeString(merkleRaw),
     };
 
