@@ -4,7 +4,6 @@ import { ArrowLeft, Download, CheckCircle2, XCircle } from 'lucide-react';
 import Button from '../components/UI/Button';
 import Card from '../components/UI/Card';
 import Input from '../components/UI/Input';
-import Select from '../components/UI/Select';
 import Table from '../components/UI/Table';
 import { useSamples } from '../hooks/useSamples';
 import { useResults } from '../hooks/useResults';
@@ -19,6 +18,33 @@ import { resultService, sampleService } from '../services/api';
 import { storageApi } from '../services/storageApi';
 import { resolveLegacySampleStatus } from '../foundation/contracts';
 import './SamplesPage.css';
+
+type SampleEditForm = {
+  linkedProject: string;
+  currentQuantity: string;
+  sampleOrigin: string;
+  extractionProtocol: string;
+  participantId: string;
+};
+
+// #545: currentStatus/status are retired legacy fields — sample.service.js
+// strips them from every write since #540 (specimenStatus is the sole
+// source of truth) — so the update payload must never include them.
+export function buildSampleUpdatePayload(form: SampleEditForm, parsedAvailable: number | null): Partial<Sample> {
+  const payload: Partial<Sample> = {
+    linkedProject: form.linkedProject?.trim() || undefined,
+    sampleOrigin: form.sampleOrigin?.trim() || undefined,
+    extractionProtocol: form.extractionProtocol?.trim() || undefined,
+    participantId: form.participantId?.trim() || undefined,
+  };
+
+  if (parsedAvailable !== null) {
+    payload.currentQuantity = parsedAvailable;
+    payload.volumeCurrent = parsedAvailable;
+  }
+
+  return payload;
+}
 
 type ComplianceNode = {
   valid: boolean;
@@ -59,7 +85,6 @@ export default function SampleDetailsPage() {
   const [form, setForm] = useState({
     linkedProject: '',
     currentQuantity: '',
-    currentStatus: '',
     sampleOrigin: '',
     extractionProtocol: '',
     participantId: '',
@@ -123,10 +148,6 @@ export default function SampleDetailsPage() {
         setForm({
           linkedProject: foundSample.linkedProject || '',
           currentQuantity: (foundSample.volumeCurrent ?? foundSample.currentQuantity ?? foundSample.quantity ?? '').toString(),
-          // #539: derives from the canonical specimenStatus (dict-02
-          // ELM-0123) instead of the legacy currentStatus field
-          // canonical-data-contract-v1.md bans.
-          currentStatus: resolveLegacySampleStatus(foundSample.specimenStatus),
           sampleOrigin: foundSample.sampleOrigin || '',
           extractionProtocol: foundSample.extractionProtocol || '',
           participantId: (foundSample as any).participantId ? String((foundSample as any).participantId) : String((foundSample as any).patientID || ''),
@@ -219,9 +240,8 @@ export default function SampleDetailsPage() {
       currentQuantity: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.currentQuantity,
       volumeCurrent: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.volumeCurrent,
       linkedProject: form.linkedProject || sample?.linkedProject,
-      currentStatus: (form.currentStatus as Sample['currentStatus']) || resolveLegacySampleStatus(sample?.specimenStatus),
     } as Sample;
-  }, [isEditing, sample, form.currentQuantity, form.linkedProject, form.currentStatus]);
+  }, [isEditing, sample, form.currentQuantity, form.linkedProject]);
 
   const availabilityPreview = computeAvailability(effectiveSample);
   // #518: reads currentSpecimenPreanalytics (resolved server-side by GET
@@ -245,6 +265,14 @@ export default function SampleDetailsPage() {
     { value: 'Destroyed', label: t('samples.status.destroyed', 'Destruída') },
     { value: 'Unusable', label: t('samples.status.unusable', 'Inutilizada') },
   ]), [t]);
+
+  // #545: specimenStatus is the sole persisted source of truth (sample.service.js
+  // strips currentStatus/status from every write since #540) — "Status Atual"
+  // is a read-only derived display, not an editable field.
+  const derivedStatusLabel = useMemo(() => {
+    const derived = resolveLegacySampleStatus(sample?.specimenStatus);
+    return statusOptions.find((option) => option.value === derived)?.label || derived;
+  }, [sample?.specimenStatus, statusOptions]);
 
   const sampleResults = useMemo(() => {
     if (!sample) return [];
@@ -350,7 +378,6 @@ export default function SampleDetailsPage() {
       setForm({
         linkedProject: sample.linkedProject || '',
         currentQuantity: (sample.volumeCurrent ?? sample.currentQuantity ?? sample.quantity ?? '').toString(),
-        currentStatus: resolveLegacySampleStatus(sample.specimenStatus),
         sampleOrigin: sample.sampleOrigin || '',
         extractionProtocol: sample.extractionProtocol || '',
         participantId: sample.participantId ? String(sample.participantId) : '',
@@ -372,18 +399,7 @@ export default function SampleDetailsPage() {
       return;
     }
 
-    const payload: Partial<Sample> = {
-      linkedProject: form.linkedProject?.trim() || undefined,
-      currentStatus: (form.currentStatus as Sample['currentStatus']) || undefined,
-      sampleOrigin: form.sampleOrigin?.trim() || undefined,
-      extractionProtocol: form.extractionProtocol?.trim() || undefined,
-      participantId: form.participantId?.trim() || undefined,
-    };
-
-    if (parsedAvailable !== null) {
-      payload.currentQuantity = parsedAvailable;
-      payload.volumeCurrent = parsedAvailable;
-    }
+    const payload = buildSampleUpdatePayload(form, parsedAvailable);
 
     try {
       const targetId = sample._id || (sample as any).specimenId || id || '';
@@ -651,19 +667,7 @@ export default function SampleDetailsPage() {
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.currentStatus', 'Status Atual')}:</span>
-              {isEditing ? (
-                <div style={{ minWidth: '220px' }}>
-                  <Select
-                    value={form.currentStatus}
-                    onChange={(e) => handleChange('currentStatus', e.target.value)}
-                    options={statusOptions}
-                  />
-                </div>
-              ) : (
-                <span className={`availability-badge ${availabilityPreview.className}`}>
-                  {availabilityPreview.label}
-                </span>
-              )}
+              <span style={{ color: 'var(--text)' }}>{derivedStatusLabel}</span>
             </div>
           </div>
         </Card>
