@@ -1,86 +1,79 @@
 # HANDOFF
 
 **Written:** 2026-08-12, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #536 and #537 (Dennis said "Read handoff and pick issues
-#536 & #537").
+after resolving #546 and #547 (Dennis said "Read handoff and pick issues
+#546 & #547").
 
 ## What happened this session
 
-Dennis said "pick #536 & #537." Both were carried forward in the prior
-handoff as "needs a decision, same shape as #532" — `work-issue`'s rule to
-re-verify a carried-forward "needs owner's call" claim rather than trust
-it applied to both.
+Dennis said "pick #546 & #547." Both were duplicate-alias dead-code
+findings in `import.service.js`'s `parseSampleCSV`, filed during the
+prior session's #536 work.
 
-**#536** (`Sample.releaseStatus`, camelCase, a third undead legacy status
-field never folded into `specimenStatus`) — the issue's own text asked to
-"confirm no external consumer... since the trace above only covered
-`api/backend/src` and `frontend/src`" before deleting. Ran that check
-repo-wide this session: grepped the whole tree (backend, frontend, docs,
-the canonical-dictionary catalog JSON, and the RF/RNF requisitos index).
-Found zero readers of `Sample.releaseStatus` — the only other
-"releaseStatus" hits are the unrelated `ReferenceDatasetRelease.releaseStatus`
-field (different entity, dataset-release lifecycle, RF028). That satisfied
-the issue's own caveat, so no `AskUserQuestion` round-trip was needed —
-proceeded straight to `fix-bugs`.
+**#546 was already fixed before this session started** — a prior
+session (after rotating `HANDOFF.md` at commit `212f0d53`, then
+continuing to work past that point rather than stopping) had branched
+`fix/546-remove-duplicate-consenttemplateid-key`, committed the fix
+(`86b20dec`, deleted the duplicate `consentTemplateId:` key, added a
+regression test), pushed it, and commented the fix onto the issue — but
+never merged it into the integration branch, never closed the issue,
+and never re-rotated `HANDOFF.md` to reflect any of that. The prior
+handoff (as read at the start of this session) still described #546 as
+"opened, not yet acted on." `resolve-issue`'s pre-pickup dangling-branch
+check (`git branch -a` + `merge-base --is-ancestor`) caught this
+correctly — this is the mechanism working as designed, not a defect —
+but it's worth flagging that a `HANDOFF.md` rotation is not a hard stop
+on further work in the same session; if a session keeps working after
+rotating it, the file goes stale immediately. This session verified the
+fix (targeted vitest: 52/52 green before merge), merged it
+(`288b5e55`), and closed the issue against that merge — the part the
+prior session left undone.
 
-**#536 resolved** (`fix/536-remove-dead-sample-releasestatus`, commit
-`6686ba8e`, merged into the integration branch at `1c2cdaae`) — deleted
-the schema field/default (`Sample.js`) and every writer
-(`import.service.js` ×2 reconciliation blocks + row-builder field,
-`import-lgpd.service.js` ×2, `fhir-import-staging.service.js` ×2,
-`import.controller.js` ×2 incl. a dead log field). Un-weakened every test
-pinned to the removed field across 6 test files (11 files touched total).
-Targeted vitest: 226 tests / 10 files green, both before and after the
-merge.
+**#547** (`parseSampleCSV`'s `getRowValue(row, [...])` alias arrays had
+redundant duplicate entries, e.g. `['consentTemplateId',
+'consentTemplateId', 'consentTemplateId']`) — same root cause as #546:
+commit `e2549bee0` ("canonicalize participant flow") mechanically
+renamed legacy field names onto canonical ones, collapsing some
+previously-distinct alias-array entries onto the same string. Confirmed
+via `getRowValue`'s implementation (`import.service.js:35-44`) that it
+builds a `Set` from the alias list before checking row keys, so
+duplicates are provably inert — no different behavior was ever possible,
+this was the "behavior-invariant dead code" case (no reproduction
+needed, just static confirmation + regression coverage for the
+previously-untested paths). Two of the four affected aliases
+(`patient_id`, `dataRegistro`) had no direct test before; added one each.
 
-**#537** (`GET /:id/compliance-graph`'s side effect now mutates
-`specimenStatus`/`QuarantineAction`, not just a cosmetic field since
-#532) — this one is a genuine product/API-contract call (revalidate-on-GET
-vs. splitting read/revalidate into separate endpoints); no doc settled
-it, so asked Dennis directly via `AskUserQuestion`. **Decision: keep GET
-as revalidate-and-persist (status quo), no API split** — the #532
-safeguards (never downgrade a stronger unrelated block; no duplicate
-`QuarantineAction` for a stable re-evaluation) already bound the blast
-radius, and a GET/POST split wasn't judged worth the
-`sample.routes.js`/`SampleDetailsPage.tsx`/test churn.
+**#547 resolved** (`fix/547-remove-duplicate-getrowvalue-aliases`,
+commit `864b2ba3`, merged into the integration branch at `d584fe12`) —
+deduplicated all four alias arrays (`participantId`/`patient_id`/
+`idPaciente`; `registeredAt`/`dataRegistro`; `consentTemplateId`;
+`merkleRoot`), added the two missing regression tests. Targeted vitest
+(`import.service.unit.test.js`): 54/54 green on the merged tree.
 
-**#537 resolved** (`fix/537-compliance-graph-get-side-effect-decision`,
-commit `74e91c72`, merged into the integration branch at `3a737577`) —
-recorded the decision in `docs/architecture/canonical-data-contract-v1.md`
-next to where #537 was originally flagged (#532's entry). No code change.
+**Security/safety note:** none — both issues are pure dead-code removal
+(duplicate object key, duplicate array entries), no trust boundary
+touched, confirmed behavior-invariant before editing in both cases.
 
-**Security/safety note:** none for either issue — #536 is pure dead-write
-removal (no trust boundary touched); #537 is a decision to keep existing
-behavior, not a new surface.
-
-**New finding, filed as #546** (not chased further, out of #536's scope):
-while editing `import.service.js` for #536, noticed its CSV/XLSX
-sample-row builder sets `consentTemplateId` twice in the same object
-literal (harmless — both assignments are identical — but a
-copy-paste-leftover shape; needs the owner's call on whether a different
-field was meant there before just deleting the duplicate).
-
-**Workflow friction this session:** remote branch deletion for
-`fix/536-remove-dead-sample-releasestatus` was denied by the permission
-classifier — matches the already-documented precedent in `fix-bugs`'
-local-env overlay (no new pattern, left the merged remote branch in
-place). `fix/537-...`'s remote delete was *not* denied (succeeded
-cleanly), reinforcing that overlay's "no reliable predictor found" note
-rather than contradicting it. No new skill edits needed this session.
+**Workflow friction this session:** none beyond the stale-`HANDOFF.md`
+note above (which is really about the *prior* session's sequencing, not
+this one's). Both remote branch deletions (`fix/546-...`,
+`fix/547-...`) succeeded with no permission-classifier denial this
+time — consistent with `fix-bugs`'s existing "no reliable predictor
+found" framing for that denial, not a contradiction of it. No new
+skill edits needed.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `3a737577`, clean,
-  pushed, up to date with origin. Contains #536's merge (`6686ba8e`→
-  `1c2cdaae`) and #537's merge (`74e91c72`→`3a737577`).
-- `fix/536-remove-dead-sample-releasestatus`: merged, closed out, deleted
-  locally; **remote delete denied by classifier — still exists on
-  origin**, needs manual cleanup or an explicit permission grant.
-- `fix/537-compliance-graph-get-side-effect-decision`: merged, closed
-  out, deleted both locally and on origin — no denial this session.
+- **`feature/docker-e2e-backend-integration`**: at `d584fe12`, clean,
+  pushed, up to date with origin. Contains #546's merge (`86b20dec`→
+  `288b5e55`) and #547's merge (`864b2ba3`→`d584fe12`).
+- `fix/546-remove-duplicate-consenttemplateid-key`: merged, closed out,
+  deleted both locally and on origin this session.
+- `fix/547-remove-duplicate-getrowvalue-aliases`: merged, closed out,
+  deleted both locally and on origin this session.
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged, 16 total — see prior handoffs for the full list,
-  unchanged since #531/#535/.../#543's sessions): local —
+  unchanged since #531/.../#543/#536's sessions): local —
   `fix/476-quarantine-status-design-call`,
   `fix/477-bulk-import-storage-allocation`,
   `fix/481-autoassign-precheck-repository`,
@@ -96,33 +89,26 @@ rather than contradicting it. No new skill edits needed this session.
   `test/511-intake-wizard-canonical-storage-assignment`,
   `worktree-agent-a8ad1494700a4a20e`. Remote —
   `fix/349-user-organization-picker` (last checked during #527's
-  session; not re-checked this session), plus **the merged-but-not-yet-
-  deleted `fix/541-withdraw-depleted-guard`** (flagged in #541's handoff
-  as remote-delete-denied, still needs manual cleanup), plus **this
-  session's new addition: `fix/536-remove-dead-sample-releasestatus`**
-  (same shape — merged, remote-delete-denied).
-- Issues this session: **#536 closed** (fix `6686ba8e`, merge
-  `1c2cdaae`). **#537 closed** (decision `74e91c72`, merge `3a737577`).
-  **#546 opened** (duplicate `consentTemplateId` key in
-  `import.service.js`, found while resolving #536, not chased).
+  session; not re-checked this session), plus **merged-but-not-yet-
+  deleted**: `fix/541-withdraw-depleted-guard` (flagged in #541's
+  handoff) and `fix/536-remove-dead-sample-releasestatus` (flagged in
+  #536/#537's handoff) — both still on origin, remote-delete-denied in
+  their respective sessions, still need manual cleanup or an explicit
+  permission grant.
+- Issues this session: **#546 closed** (fix `86b20dec` from a prior
+  session, merge `288b5e55` this session). **#547 closed** (fix
+  `864b2ba3`, merge `d584fe12`, both this session). Confirmed **#544**
+  was already closed before this session (not by this session — no
+  record of who/when in the issue itself beyond its closed state).
 
 ## Which issue is next
 
 Dennis has not yet said which issue to pick up next session; per this
 skill's "only if the user explicitly said so" rule, nothing is queued.
 
-Candidates carried forward (#536/#537 now resolved, removed from this
-list; #546 added):
+Candidates carried forward (#546/#547 now resolved, #544 confirmed
+already closed, both removed from this list):
 
-- **#544** — remove the `status: 'AVAILABLE'` write from
-  `MongoStorageRepository.js`'s `allocateSamplePosition`/
-  `autoAssignSamplePosition` (5th legacy-status writer, storage
-  allocation subsystem, filed during #540's session). Small,
-  well-scoped, same shape as #540's fix.
-- **#546** — `import.service.js`'s CSV/XLSX row builder sets
-  `consentTemplateId` twice (duplicate object key, harmless but
-  copy-paste-shaped); needs owner's call on whether a different field
-  was meant there. New this session.
 - **#530** — `dictionary:validate` isn't wired into `ci-pipeline.yml`,
   so #529-class drift has no CI gate. Small, well-scoped fix.
 - **#390** — umbrella; all originally-tracked sub-issues closed, plus
@@ -135,7 +121,9 @@ list; #546 added):
 - **#336** — still open: is `import.controller.js#importFhirBundle` dead
   code to remove, or does something still call it?
 - Older backlog, unchanged: `#371`/`#373`/`#374`/`#378`/`#379`, `#368`,
-  next e2e slice per `E2E_TRACEABILITY_PLAN.md`/`#331`.
+  `#387`, `#345`, `#341`/`#340`, `#334`, `#331`/`#326`/`#325`, `#321`,
+  `#319`, `#286`, `#284`, `#283`, `#282`, `#228`, `#115`, next e2e slice
+  per `E2E_TRACEABILITY_PLAN.md`.
 - **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246/#247** —
   pack-repo only, low priority, unchanged this session.
 
@@ -148,23 +136,27 @@ default.
 
 ## Which skills to use
 
-- Confirmed again: `work-issue`/`resolve-issue`'s "re-verify a
-  carried-forward 'needs owner's call' claim rather than trust it" rule
-  — this is the fourth session in a row (#538, #542, #543, now #536)
-  where re-tracing turned a "needs Dennis" issue into a self-resolvable
-  one, this time via a repo-wide grep satisfying the issue's own stated
-  caveat rather than via a docs-policy match. Not every "needs owner's
-  call" dissolves this way, though — **#537 in this same session was a
-  genuine one**: no doc or grep settles an API-contract tradeoff
-  (GET-with-side-effect vs. a read/revalidate split), so it correctly
-  went to `AskUserQuestion` rather than being resolved solo. Worth
-  carrying forward: the distinguishing signal is whether the issue's own
-  ambiguity is a *fact* not yet checked (consumer trace, doc policy) vs.
-  a *preference* only the owner can set (API shape, UX tradeoff) — the
-  former dissolves under investigation, the latter doesn't.
-- New this session: for a "needs owner's call" issue that resolves as
-  "no code change" (like #537), the resolution still needs a durable
-  record — recorded the decision in the architecture doc where the
-  question was originally raised, then closed the issue pointing at that
-  doc commit, rather than leaving the decision only in the issue-close
-  comment (which is easy to miss on a later doc read).
+- Reinforced this session: `resolve-issue`'s pre-pickup "check for
+  stale/dangling branches, including work belonging to an issue that's
+  still open" step is load-bearing — it caught a fully-fixed-but-
+  unmerged branch (#546) that a prior session's `HANDOFF.md` had
+  described as untouched. **New nuance worth carrying forward:**
+  `HANDOFF.md` rotation is written as an end-of-session step, but
+  nothing prevents a session from continuing to work *after* rotating
+  it (as the #536/#537 session did, picking up #546 post-rotation).
+  When that happens, the freshly-rotated file is already stale the
+  moment further work lands, and the safety net is entirely
+  `resolve-issue`'s dangling-branch check, not the handoff file itself.
+  Not treated as a skill defect worth editing — `handoff`'s trigger
+  section already frames rotation as "before the final summary," and
+  this was a case of a session continuing past that point rather than
+  the trigger firing wrong — but noting it here in case it recurs
+  enough to warrant an explicit "don't start new work after rotating
+  handoff" rule.
+- `fix-bugs`'s "behavior-invariant dead code" exception (added during
+  #536/#546's session) applied cleanly a second time for #547 — same
+  shape (duplicate array entries feeding a `Set`-based lookup), same
+  resolution path (static confirmation via reading the consuming
+  function, then regression coverage for previously-uncovered paths
+  instead of a red-then-green reproduction). No further skill edit
+  needed; this is the exception working as intended.
