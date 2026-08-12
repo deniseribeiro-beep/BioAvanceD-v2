@@ -1,0 +1,10 @@
+{"id":"UBERON:0001062","lbl":"anatomical entity","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"UBERON:0000948","lbl":"heart","is_a":["UBERON:0001062"],"synonyms":[],"obsolete":false}
+{"id":"UBERON:0002107","lbl":"liver","is_a":["UBERON:0001062"],"synonyms":[],"obsolete":false}
+{"id":"UBERON:0002048","lbl":"lung","is_a":["UBERON:0001062"],"synonyms":[],"obsolete":false}
+{"id":"UBERON:0000955","lbl":"brain","is_a":["UBERON:0001062"],"synonyms":["encephalon"],"obsolete":false}
+{"id":"UBERON:0002082","lbl":"cardiac ventricle","is_a":["UBERON:0000948"],"synonyms":["ventricle of heart"],"obsolete":false}
+{"id":"UBERON:9001","lbl":"accessory anatomical structure","is_a":["UBERON:0001062"],"synonyms":[],"obsolete":false}
+{"id":"UBERON:9002","lbl":"regional anatomical subdivision","is_a":["UBERON:0001062"],"synonyms":[],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"UBERON:9999","lbl":"","is_a":[],"synonyms":[],"obsolete":false}
