@@ -78,6 +78,8 @@
     "reference:import:cl": "node scripts/reference-imports/import-cl-reference-dataset.js",
     "reference:import:edam:dry-run": "node scripts/reference-imports/import-edam-reference-dataset.js --dry-run",
     "reference:import:edam": "node scripts/reference-imports/import-edam-reference-dataset.js",
+    "reference:live-verify": "node scripts/reference-imports/live-verify/verify-live-release.js",
+    "reference:live-verify:hpo": "node scripts/reference-imports/live-verify/verify-live-release.js HPO",
     "test:architecture": "node --test \"tests/architecture/**/*.arch.test.js\"",
     "test:unit:vitest": "vitest run",
     "test": "vitest run",

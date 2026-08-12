@@ -1,0 +1,42 @@
+name: Reference data live verification (RF028)
+
+# #555 (RF028/#550 foundational piece): live download + real license
+# verification runs here, deliberately isolated from ci-pipeline.yml.
+# workflow_dispatch-only — never push/pull_request — so this never becomes
+# part of the normal gate and the fixture-only network boundary
+# reference-import-boundary.arch.test.js enforces stays intact everywhere
+# else. Manual trigger only, until #557 decides whether a schedule makes
+# sense once more than one source is covered.
+on:
+  workflow_dispatch:
+    inputs:
+      dataset_code:
+        description: "Dataset code to verify (see api/backend/scripts/reference-imports/live-verify/liveVerifySources.js for the known set)"
+        required: true
+        default: "HPO"
+
+permissions:
+  contents: read
+
+jobs:
+  live-verify:
+    name: Live download + license verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: api/backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm --prefix api/backend ci
+
+      - name: Run live verification
+        run: npm --prefix api/backend run reference:live-verify -- "${{ github.event.inputs.dataset_code }}"
