@@ -1,5 +1,6 @@
 // Implementação dos métodos da classe User conforme diagrama UML
 import type { Log, Patient, Reports, Sample, Sensor, Temperature, User, Withdrawal } from '../types/models';
+import { resolveLegacySampleStatus } from '../foundation/contracts';
 
 /**
  * Cria novo usuário
@@ -97,7 +98,11 @@ export function registerSample(sampleData: Partial<Sample>): Sample {
     withdrawalType: sampleData.withdrawalType || 'Parcial',
     withdrawalResponsible: sampleData.withdrawalResponsible || '',
     sampleDestination: sampleData.sampleDestination || '',
-    currentStatus: sampleData.currentStatus || 'Available',
+    // #539: derives from the canonical specimenStatus (dict-02 ELM-0123)
+    // instead of the legacy currentStatus field canonical-data-contract-v1.md
+    // bans. Falls back to 'Available' the same way resolveLegacySampleStatus
+    // already does when specimenStatus is absent.
+    currentStatus: resolveLegacySampleStatus(sampleData.specimenStatus),
   };
   
   return newSample;

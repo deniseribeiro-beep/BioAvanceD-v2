@@ -17,6 +17,7 @@ import { buildSprecAxisSummary, buildSprecSummary } from '../components/samples/
 import { Sample, SampleStorageLocationDTO } from '../types/models';
 import { resultService, sampleService } from '../services/api';
 import { storageApi } from '../services/storageApi';
+import { resolveLegacySampleStatus } from '../foundation/contracts';
 import './SamplesPage.css';
 
 type ComplianceNode = {
@@ -122,7 +123,10 @@ export default function SampleDetailsPage() {
         setForm({
           linkedProject: foundSample.linkedProject || '',
           currentQuantity: (foundSample.volumeCurrent ?? foundSample.currentQuantity ?? foundSample.quantity ?? '').toString(),
-          currentStatus: String((foundSample as any).specimenStatus || '').toUpperCase() || foundSample.currentStatus || 'Available',
+          // #539: derives from the canonical specimenStatus (dict-02
+          // ELM-0123) instead of the legacy currentStatus field
+          // canonical-data-contract-v1.md bans.
+          currentStatus: resolveLegacySampleStatus(foundSample.specimenStatus),
           sampleOrigin: foundSample.sampleOrigin || '',
           extractionProtocol: foundSample.extractionProtocol || '',
           participantId: (foundSample as any).participantId ? String((foundSample as any).participantId) : String((foundSample as any).patientID || ''),
@@ -215,7 +219,7 @@ export default function SampleDetailsPage() {
       currentQuantity: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.currentQuantity,
       volumeCurrent: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.volumeCurrent,
       linkedProject: form.linkedProject || sample?.linkedProject,
-      currentStatus: (form.currentStatus as Sample['currentStatus']) || (String((sample as any)?.specimenStatus || '').toUpperCase() as Sample['currentStatus']) || sample?.currentStatus,
+      currentStatus: (form.currentStatus as Sample['currentStatus']) || resolveLegacySampleStatus(sample?.specimenStatus),
     } as Sample;
   }, [isEditing, sample, form.currentQuantity, form.linkedProject, form.currentStatus]);
 
@@ -347,7 +351,7 @@ export default function SampleDetailsPage() {
       setForm({
         linkedProject: sample.linkedProject || '',
         currentQuantity: (sample.volumeCurrent ?? sample.currentQuantity ?? sample.quantity ?? '').toString(),
-      currentStatus: String((sample as any).specimenStatus || '').toUpperCase() || sample.currentStatus || 'Available',
+        currentStatus: resolveLegacySampleStatus(sample.specimenStatus),
         sampleOrigin: sample.sampleOrigin || '',
         extractionProtocol: sample.extractionProtocol || '',
         participantId: sample.participantId ? String(sample.participantId) : '',

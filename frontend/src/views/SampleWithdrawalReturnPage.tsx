@@ -8,7 +8,13 @@ import Input from '../components/UI/Input';
 import Select from '../components/UI/Select';
 import Card from '../components/UI/Card';
 import { MIABIS_QUALITY } from '../config/constants/specimen.constants';
+import { resolveSpecimenStatus, getSpecimenStatusColor, translateSpecimenStatus } from '../utils/sampleHelpers';
 import './SampleWithdrawalReturnPage.css';
+
+// #539: shared with every other specimenStatus reader (SampleDetailsPage,
+// ReportViewPage, ...) via sampleHelpers.ts — re-exported here so this
+// page's own imports/tests keep working unchanged.
+export { resolveSpecimenStatus, getSpecimenStatusColor, translateSpecimenStatus };
 
 // Tipos locais para formulários
 interface WithdrawalFormData {
@@ -36,45 +42,6 @@ interface ReturnFormData {
 // `depleted` values (Sample.js#computeStatus derives them from quantity on
 // every write). Deriving from specimenStatus below fixes that dead gate.
 type WithdrawalSample = Pick<Sample, 'specimenStatus' | 'totalWithdrawn' | 'totalReturned' | 'initialQuantity' | 'quantity'>;
-
-const SPECIMEN_STATUS_LABELS: Record<string, string> = {
-  available: 'Disponível',
-  reserved: 'Reservada',
-  checked_out: 'Retirada (Check-out)',
-  partial: 'Parcialmente Retirada',
-  depleted: 'Totalmente Retirada',
-  quarantined: 'Em Quarentena',
-  destroyed: 'Destruída',
-  unavailable: 'Indisponível',
-  disposed: 'Descartada',
-};
-
-const SPECIMEN_STATUS_COLORS: Record<string, string> = {
-  available: 'var(--success)',
-  reserved: 'var(--warning)',
-  checked_out: 'var(--warning)',
-  partial: 'var(--warning)',
-  depleted: 'var(--danger)',
-  quarantined: 'var(--danger)',
-  destroyed: 'var(--danger)',
-  unavailable: 'var(--danger)',
-  disposed: 'var(--danger)',
-};
-
-// Specimen documents always default specimenStatus to 'available' at write
-// time (Sample.js), so a missing value here means an unpopulated field, not
-// an unknown state.
-export function resolveSpecimenStatus(sample: WithdrawalSample | null): string {
-  return String(sample?.specimenStatus || 'available').toLowerCase();
-}
-
-export function getSpecimenStatusColor(status: string | undefined): string {
-  return SPECIMEN_STATUS_COLORS[String(status || '').toLowerCase()] || 'var(--text)';
-}
-
-export function translateSpecimenStatus(status: string | undefined): string {
-  return SPECIMEN_STATUS_LABELS[String(status || '').toLowerCase()] || (status || '-');
-}
 
 // Mirrors sample.service.js#withdrawSample's BLOCKED_SPECIMEN_STATUSES, plus
 // 'depleted' — a frontend-only UX guard against resubmitting a Total

@@ -477,6 +477,28 @@ describe('Reports API integration', () => {
       expect(response.body.data.analysis.find((item) => item.sampleID === 'S2').hasResults).toBe(false);
     });
 
+    // #539: this used to read the legacy currentStatus/status fields
+    // (`sample.currentStatus || sample.status || null`), which
+    // canonical-data-contract-v1.md's "Legacy Fields Prohibited" list bans —
+    // derives from the canonical specimenStatus (dict-02 ELM-0123) instead.
+    it('sampleanalysis: deriva status de specimenStatus, ignorando currentStatus/status legados', async () => {
+      const { db } = buildCollectionDb({
+        samples: [
+          { sampleID: 'S1', specimenStatus: 'depleted', currentStatus: 'Available', status: 'AVAILABLE' },
+          { sampleID: 'S2', currentStatus: 'Available', status: 'AVAILABLE' },
+        ],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/sampleanalysis/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.analysis.find((item) => item.sampleID === 'S1').status).toBe('depleted');
+      // No specimenStatus recorded: falls back to the schema default
+      // ('available'), not the stale legacy fields.
+      expect(response.body.data.analysis.find((item) => item.sampleID === 'S2').status).toBe('available');
+    });
+
     it('sensor/equipamento/resultado: retornam coleções genéricas com total', async () => {
       const { db } = buildCollectionDb({
         sensors: [{ id: 1 }],
