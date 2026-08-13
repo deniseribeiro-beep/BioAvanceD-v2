@@ -24,10 +24,25 @@ class ConsentController {
         const pendingPatients = await patientsCollection.find({
           status: 'PENDING_CONSENT',
           consentTemplateId: policyId
-        }).project({ participantId: 1, patientName: 1, email: 1, clinicalUnit: 1, consentNotifiedAt: 1 }).toArray();
+        }).project({ participantId: 1, email: 1, clinicalUnit: 1, consentNotifiedAt: 1 }).toArray();
+
+        // RF005/RNF007 (#562): patientName is civil identity — resolved via
+        // ParticipantIdentity, not read directly off Patient.
+        const identitiesCollection = db.collection('participantIdentities');
+        const participantIds = pendingPatients.map((patient) => patient.participantId).filter(Boolean);
+        const identities = participantIds.length > 0
+          ? await identitiesCollection.find({ participantId: { $in: participantIds } })
+            .project({ participantId: 1, patientName: 1 }).toArray()
+          : [];
+        const nameByParticipantId = new Map(identities.map((identity) => [identity.participantId, identity.patientName]));
+        const patientsWithNames = pendingPatients.map((patient) => ({
+          ...patient,
+          patientName: nameByParticipantId.get(patient.participantId) || null,
+        }));
+
         return res.status(200).json({
           success: true,
-          data: pendingPatients
+          data: patientsWithNames
         });
       } catch (error) {
         logger.error('Erro ao listar pacientes aguardando aprovação do TCLE:', error.message);

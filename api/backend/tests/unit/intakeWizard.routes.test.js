@@ -892,9 +892,26 @@ function defaultStorageContainersFindOne({ _id }) {
       expect(res.status).toBe(400);
     });
 
+    // #562: matching resolves via ParticipantIdentity (identityFindOne for
+    // an ID lookup, identityFind for the name+birthDate fallback), not
+    // Patient's own patientNameNormalized/birthDateKey fields — same pattern
+    // #561 applied to PatientIdentityService.js. A second `patients` lookup
+    // (by the resolved participantId) fills in `status`.
+    function makeIdentityCollectionRouter({ identityFindOne = vi.fn().mockResolvedValue(null), identityCandidates = [], patientRecord = null } = {}) {
+      const identityFind = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(identityCandidates) });
+      const patientsFindOne = vi.fn().mockResolvedValue(patientRecord);
+      const getCollectionImpl = vi.fn((db, key) =>
+        Promise.resolve(
+          key === 'participantIdentities'
+            ? { findOne: identityFindOne, find: identityFind }
+            : { findOne: patientsFindOne }
+        )
+      );
+      return { getCollectionImpl, identityFindOne, identityFind, patientsFindOne };
+    }
+
     it('returns matched:false when no patient is found by patientID', async () => {
-      const findOne = vi.fn().mockResolvedValue(null);
-      const getCollectionImpl = vi.fn().mockResolvedValue({ findOne });
+      const { getCollectionImpl } = makeIdentityCollectionRouter();
       const { router } = loadRoute({ getCollectionImpl });
       const app = buildApp(router, {});
 
@@ -906,13 +923,10 @@ function defaultStorageContainersFindOne({ _id }) {
     });
 
     it('returns matched:true with the patient data when found', async () => {
-      const findOne = vi.fn().mockResolvedValue({
-        patientID: '12345678',
-        patientName: 'Paciente Teste',
-        birthDate: '2000-01-01',
-        status: 'ACTIVE',
+      const { getCollectionImpl } = makeIdentityCollectionRouter({
+        identityFindOne: vi.fn().mockResolvedValue({ participantId: '12345678', patientName: 'Paciente Teste', birthDate: '2000-01-01' }),
+        patientRecord: { status: 'ACTIVE' },
       });
-      const getCollectionImpl = vi.fn().mockResolvedValue({ findOne });
       const { router } = loadRoute({ getCollectionImpl });
       const app = buildApp(router, {});
 
@@ -926,8 +940,9 @@ function defaultStorageContainersFindOne({ _id }) {
     });
 
     it('matches by normalized name + birthDate when patientID is absent', async () => {
-      const findOne = vi.fn().mockResolvedValue(null);
-      const getCollectionImpl = vi.fn().mockResolvedValue({ findOne });
+      const { getCollectionImpl, identityFind } = makeIdentityCollectionRouter({
+        identityCandidates: [{ participantId: '87654321', patientName: 'João Ção', birthDate: new Date(2000, 1, 1) }],
+      });
       const { router } = loadRoute({ getCollectionImpl });
       const app = buildApp(router, {});
 
@@ -936,9 +951,9 @@ function defaultStorageContainersFindOne({ _id }) {
         .query({ patientName: 'João Ção', birthDate: '01/02/2000' });
 
       expect(res.status).toBe(200);
-      expect(findOne).toHaveBeenCalledWith(
-        expect.objectContaining({ patientNameNormalized: 'joao cao', birthDateKey: '2000-02-01' }),
-        expect.anything()
+      expect(res.body.matched).toBe(true);
+      expect(identityFind).toHaveBeenCalledWith(
+        expect.objectContaining({ birthDate: expect.objectContaining({ $gte: expect.any(Date), $lt: expect.any(Date) }) })
       );
     });
 
@@ -952,9 +967,10 @@ function defaultStorageContainersFindOne({ _id }) {
       expect(res.status).toBe(500);
     });
 
-    it('matches by patientID OR normalized name+birthDate when both are provided', async () => {
-      const findOne = vi.fn().mockResolvedValue({ patientID: '12345678', patientName: 'Paciente Teste' });
-      const getCollectionImpl = vi.fn().mockResolvedValue({ findOne });
+    it('matches by patientID first, falling back to name+birthDate only when the ID lookup misses', async () => {
+      const { getCollectionImpl, identityFind } = makeIdentityCollectionRouter({
+        identityFindOne: vi.fn().mockResolvedValue({ participantId: '12345678', patientName: 'Paciente Teste' }),
+      });
       const { router } = loadRoute({ getCollectionImpl });
       const app = buildApp(router, {});
 
@@ -963,20 +979,14 @@ function defaultStorageContainersFindOne({ _id }) {
         .query({ patientID: '12345678', patientName: 'Paciente Teste', birthDate: '01/02/2000' });
 
       expect(res.status).toBe(200);
-      expect(findOne).toHaveBeenCalledWith(
-        expect.objectContaining({
-          $or: expect.arrayContaining([
-            { patientID: '12345678' },
-            { patientNameNormalized: 'paciente teste', birthDateKey: '2000-02-01' },
-          ]),
-        }),
-        expect.anything()
-      );
+      expect(res.body.matched).toBe(true);
+      expect(identityFind).not.toHaveBeenCalled();
     });
 
-    it('falls back to status ACTIVE and empty patientName/patientID when the stored patient lacks them', async () => {
-      const findOne = vi.fn().mockResolvedValue({ birthDate: '2000-01-01' });
-      const getCollectionImpl = vi.fn().mockResolvedValue({ findOne });
+    it('falls back to status ACTIVE and empty patientName/patientID when the stored identity lacks them', async () => {
+      const { getCollectionImpl } = makeIdentityCollectionRouter({
+        identityFindOne: vi.fn().mockResolvedValue({ birthDate: '2000-01-01' }),
+      });
       const { router } = loadRoute({ getCollectionImpl });
       const app = buildApp(router, {});
 

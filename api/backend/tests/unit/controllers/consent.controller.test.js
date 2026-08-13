@@ -61,20 +61,45 @@ describe('ConsentController.getPendingPatientsForPolicy', () => {
     expect(res.json).toHaveBeenCalledWith({ success: false, error: 'policyId é obrigatório' });
   });
 
-  it('returns 200 with pending patients on success', async () => {
-    const toArray = vi.fn().mockResolvedValue([{ patientID: 'p1' }]);
-    const project = vi.fn().mockReturnValue({ toArray });
-    const find = vi.fn().mockReturnValue({ project });
-    const collection = vi.fn().mockReturnValue({ find });
+  it('returns 200 with pending patients, resolving patientName via ParticipantIdentity (#562)', async () => {
+    const patientsToArray = vi.fn().mockResolvedValue([{ participantId: 'p1' }]);
+    const patientsProject = vi.fn().mockReturnValue({ toArray: patientsToArray });
+    const patientsFind = vi.fn().mockReturnValue({ project: patientsProject });
+
+    const identitiesToArray = vi.fn().mockResolvedValue([{ participantId: 'p1', patientName: 'Paciente QA' }]);
+    const identitiesProject = vi.fn().mockReturnValue({ toArray: identitiesToArray });
+    const identitiesFind = vi.fn().mockReturnValue({ project: identitiesProject });
+
+    const collection = vi.fn((name) =>
+      name === 'participantIdentities' ? { find: identitiesFind } : { find: patientsFind }
+    );
     const req = createReq({ params: { id: 'policy1' }, app: { locals: { db: { collection } } } });
     const res = createRes();
 
     await consentController.getPendingPatientsForPolicy(req, res);
 
     expect(collection).toHaveBeenCalledWith('patients');
-    expect(find).toHaveBeenCalledWith({ status: 'PENDING_CONSENT', consentTemplateId: 'policy1' });
+    expect(patientsFind).toHaveBeenCalledWith({ status: 'PENDING_CONSENT', consentTemplateId: 'policy1' });
+    expect(identitiesFind).toHaveBeenCalledWith({ participantId: { $in: ['p1'] } });
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: [{ patientID: 'p1' }] });
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: [{ participantId: 'p1', patientName: 'Paciente QA' }] });
+  });
+
+  it('skips the ParticipantIdentity lookup when no pending patients are found', async () => {
+    const patientsToArray = vi.fn().mockResolvedValue([]);
+    const patientsProject = vi.fn().mockReturnValue({ toArray: patientsToArray });
+    const patientsFind = vi.fn().mockReturnValue({ project: patientsProject });
+    const identitiesFind = vi.fn();
+    const collection = vi.fn((name) =>
+      name === 'participantIdentities' ? { find: identitiesFind } : { find: patientsFind }
+    );
+    const req = createReq({ params: { id: 'policy1' }, app: { locals: { db: { collection } } } });
+    const res = createRes();
+
+    await consentController.getPendingPatientsForPolicy(req, res);
+
+    expect(identitiesFind).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: [] });
   });
 
   it('returns 500 when the collection lookup throws', async () => {

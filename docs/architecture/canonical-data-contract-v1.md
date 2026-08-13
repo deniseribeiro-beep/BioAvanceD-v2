@@ -114,7 +114,18 @@ they're kept in sync via dual-write, since 15+ other consumers
 (consent/intake, import/FHIR, audit/notification/export — #562-#564)
 still read them directly off `Patient`.
 
-**Not yet landed (follow-up tracked separately):** `#562`-`#564`'s
+**Landed in #562:** consent/intake paths now resolve civil identity via
+`ParticipantIdentity` instead of `Patient`: `consent.controller.js`'s
+pending-consent listing resolves `patientName` per participant;
+`eConsent.js`'s public `GET /validate/:token` (e-consent signing page)
+merges `patientName`/`birthDate`/`identityDocument` from
+`ParticipantIdentity` into the returned patient object instead of
+trusting `Patient`'s own copy; `intakeWizard.js`'s `GET /patient-match`
+heuristic-matching endpoint now matches via `ParticipantIdentity` (this
+also fixed a latent bug — the old query matched on a `patientID` field
+that doesn't exist on `Patient` documents, which use `participantId`).
+
+**Not yet landed (follow-up tracked separately):** `#563`-`#564`'s
 consumer groups still read/write these fields directly on `Patient`.
 Also outstanding: encryption at rest for the segregated collection
 ("cifrar", #566), and the final backfill/removal (#565, depends on
