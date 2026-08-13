@@ -443,7 +443,9 @@ describe('StorageService.allocateSampleToPosition', () => {
 
     const sampleUpdateCall = samplesUpdateOne.mock.calls[0];
     expect(sampleUpdateCall[1].$set['storageLocation.position']).toBe('A1');
-    expect(sampleUpdateCall[1].$set['status']).toBe('AVAILABLE');
+    // #544: status is a retired legacy field (specimenStatus is the sole
+    // source of truth since #408) — allocation must not write it.
+    expect(sampleUpdateCall[1].$set['status']).toBeUndefined();
   });
 
   it('issue #23: increments currentOccupancy via a top-level $inc, not nested inside $set', async () => {
@@ -693,7 +695,9 @@ describe('StorageService.autoAssignSampleToBox', () => {
 
     const sampleUpdateCall = samplesUpdateOne.mock.calls[0];
     expect(sampleUpdateCall[1].$set['storageLocation.position']).toBe('A2');
-    expect(sampleUpdateCall[1].$set['status']).toBe('AVAILABLE');
+    // #544: status is a retired legacy field (specimenStatus is the sole
+    // source of truth since #408) — auto-assign must not write it.
+    expect(sampleUpdateCall[1].$set['status']).toBeUndefined();
   });
 
   it('#479: reports the transaction-committed position, not the stale pre-transaction scan, when they diverge', async () => {
