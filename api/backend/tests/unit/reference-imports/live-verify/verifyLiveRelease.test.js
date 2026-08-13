@@ -7,20 +7,20 @@ const { verify } = require('../../../../scripts/reference-imports/live-verify/ve
 // -verify.yml) is what exercises the real obophenotype/human-phenotype
 // -ontology GitHub API and LICENSE.md live.
 
-function mockFetchResponses({ releaseAssets, licenseText }) {
+function mockFetchResponses({ releaseAssets, licenseText, tagName = 'v2026-06-23' }) {
   global.fetch = vi.fn(async (url) => {
     if (url.includes('/releases/latest')) {
       return {
         ok: true,
         status: 200,
         json: async () => ({
-          tag_name: 'v2026-06-23',
+          tag_name: tagName,
           published_at: '2026-06-23T12:08:40Z',
           assets: releaseAssets.map((name) => ({ name })),
         }),
       };
     }
-    if (url.includes('LICENSE.md')) {
+    if (url.includes('LICENSE')) {
       return { ok: true, status: 200, text: async () => licenseText };
     }
     throw new Error(`Unexpected fetch URL in test: ${url}`);
@@ -72,6 +72,34 @@ describe('verify-live-release.verify', () => {
 
     expect(report.status).toBe('mismatch');
     expect(report.live.licensePointerPresent).toBe(false);
+  });
+
+  it('reports status "verified" for MONDO when the expected asset and license pointer are both live', async () => {
+    mockFetchResponses({
+      releaseAssets: ['mondo.owl', 'mondo.json'],
+      licenseText: 'Attribution 4.0 International\n\n===...',
+      tagName: 'v2026-08-04',
+    });
+
+    const report = await verify('MONDO');
+
+    expect(report.status).toBe('verified');
+    expect(report.live.assetPresent).toBe(true);
+    expect(report.live.licensePointerPresent).toBe(true);
+    expect(report.live.releaseTag).toBe('v2026-08-04');
+    expect(report.fixtureSource.systemUri).toBe('http://purl.obolibrary.org/obo/mondo.owl');
+  });
+
+  it('reports status "mismatch" for MONDO when the expected release asset is missing', async () => {
+    mockFetchResponses({
+      releaseAssets: ['mondo.json'],
+      licenseText: 'Attribution 4.0 International',
+    });
+
+    const report = await verify('MONDO');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.assetPresent).toBe(false);
   });
 
   it('rejects an unknown dataset code rather than silently skipping verification', async () => {
