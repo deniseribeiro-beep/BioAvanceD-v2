@@ -335,4 +335,59 @@ async function promote({ releases, concepts, relations, source, stagedConcepts, 
   return { releaseId: releaseDoc.referenceDatasetReleaseId, recordsInserted, recordsUpdated, recordsSkipped, issues };
 }
 
-module.exports = { runImport };
+/**
+ * AC 7 rollback: reactivates the release immediately before the dataset's
+ * current active one, one step at a time. Never deletes anything (Plano
+ * Integrado §7.2 step 12 / §7.3 "preserve history") — both releases stay in
+ * `referenceDatasetReleases`, only `releaseStatus` moves. The just-active
+ * release becomes `rolled_back` (not `superseded` — that status already
+ * means "an ordinary newer promotion replaced this one," a different event
+ * than an operator explicitly reverting it), and the one before it becomes
+ * `active` again. TerminologyConcept/TerminologyRelation docs are untouched:
+ * they're deduped by systemUri+code+version, not owned by one release, so
+ * nothing about them needs to change for a release-status rollback.
+ */
+async function rollbackRelease({ db, datasetCode, initiatedBy = 'system:reference-data-bootstrap' }) {
+  const releases = db.collection(CANONICAL_COLLECTIONS.referenceDatasetReleases);
+  const runs = db.collection(CANONICAL_COLLECTIONS.referenceImportRuns);
+
+  const activeRelease = await releases.findOne({ datasetCode, releaseStatus: 'active' });
+  if (!activeRelease) {
+    return { rolledBack: false, reason: 'no_active_release' };
+  }
+  if (!activeRelease.previousReleaseId) {
+    return { rolledBack: false, reason: 'no_previous_release' };
+  }
+  const previousRelease = await releases.findOne({ referenceDatasetReleaseId: activeRelease.previousReleaseId });
+  if (!previousRelease) {
+    return { rolledBack: false, reason: 'previous_release_not_found' };
+  }
+
+  await releases.updateOne(
+    { referenceDatasetReleaseId: activeRelease.referenceDatasetReleaseId },
+    { $set: { releaseStatus: 'rolled_back', updatedAt: new Date() } },
+  );
+  await releases.updateOne(
+    { referenceDatasetReleaseId: previousRelease.referenceDatasetReleaseId },
+    { $set: { releaseStatus: 'active', updatedAt: new Date() } },
+  );
+
+  const startedAt = new Date();
+  const runDoc = ReferenceImportRunModel.create({
+    referenceDatasetReleaseId: previousRelease.referenceDatasetReleaseId,
+    datasetCode,
+    importMode: 'rollback',
+    idempotencyKey: `${datasetCode}:rollback:${activeRelease.referenceDatasetReleaseId}`,
+    startedAt,
+    completedAt: new Date(),
+    runStatus: 'rolled_back',
+    inputChecksum: activeRelease.sourceChecksum,
+    validationSummary: { fatal: 0, errors: 0, warnings: 0, rejectionRate: 0, approved: true },
+    initiatedBy,
+  });
+  await runs.insertOne(runDoc);
+
+  return { rolledBack: true, run: runDoc, activeReleaseId: previousRelease.referenceDatasetReleaseId, rolledBackReleaseId: activeRelease.referenceDatasetReleaseId };
+}
+
+module.exports = { runImport, rollbackRelease };
