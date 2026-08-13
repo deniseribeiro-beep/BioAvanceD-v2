@@ -2,7 +2,7 @@
 // verify job. Deliberately separate from src/reference-data/reference-imports
 // /sources/*.js — those stay pointed at the bundled fixture only, per
 // reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
-// ORPHA, ICD-10/ICD-11, OMIM, and HGNC (#557) are populated so far; 9
+// ORPHA, ICD-10/ICD-11, OMIM, HGNC, and LOINC (#557) are populated so far; 8
 // sources remain, added here one entry at a time (per docs-7-31-2026/3-
 // Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem recomendada da
 // Fase 2").
@@ -24,7 +24,10 @@
 // unlike ICD-11/ICD-10, the entire public web domain is behind an
 // interactive Cloudflare bot challenge and its own robots.txt disallows
 // crawling — no automated request should even be attempted; see
-// verifyNotLiveVerifiable's comment), or 'rest-info' (HGNC's shape: a
+// verifyNotLiveVerifiable's comment; LOINC reuses this same kind for a
+// different pair of reasons — a Node-fetch()-specific Cloudflare challenge
+// plus a robots.txt disallow directed at AI crawlers by name, not a
+// domain-wide client-agnostic block), or 'rest-info' (HGNC's shape: a
 // genuinely public, unauthenticated REST API with no discrete
 // releases/tags/editions at all — the "release" signal is a live
 // `lastModified` timestamp from a JSON info endpoint instead; see
@@ -48,7 +51,15 @@
 // rest.genenames.org/info (with and without an explicit `Accept:
 // application/json` header — it silently 200s with XML unless that header
 // is sent) and www.genenames.org/about/ (its "Data release policy"
-// section).
+// section). LOINC: 2026-08-13 via curl and Node's own fetch() against
+// loinc.org's /downloads, /license, /kb/versioning pages (curl 200s all
+// three with a browser User-Agent; Node fetch() 403s all three with a
+// Cloudflare interactive challenge even given a full browser header set)
+// and its robots.txt (200, explicit `Disallow: /` for `ClaudeBot` and other
+// named AI crawlers specifically, `Allow: /` for generic User-agent: *) —
+// a negative result for the sanctioned fetchText/fetchJson client, same as
+// OMIM, but for reasons specific to this source rather than assumed from
+// OMIM's precedent.
 module.exports = {
   HPO: {
     datasetCode: 'HPO',
@@ -182,5 +193,38 @@ module.exports = {
     infoUrl: 'https://rest.genenames.org/info',
     licenseUrl: 'https://www.genenames.org/about/',
     expectedLicensePointer: 'No restrictions are imposed on access to, or use of, the data provided by the HGNC',
+  },
+  // #557: confirmed live on 2026-08-13, first source of §7.4 step 6 ("Importar
+  // LOINC e UCUM"). dict-01_FONTES.md's SRC_LOINC row lists auth as "Cadastro/
+  // chave conforme acesso" (registration/key per access) — and unlike HGNC's
+  // identically-worded-sounding row, that note is accurate here: loinc.org's
+  // /downloads, /license, /kb/versioning pages themselves carry the version
+  // table and license text unauthenticated (a browser-UA'd curl 200s all
+  // three), but every one of them 403s under Node's own `fetch()` with a
+  // genuine interactive Cloudflare "Just a moment..." challenge
+  // (`Cf-Mitigated: challenge`), confirmed with a full realistic browser
+  // header set (User-Agent, Accept, Accept-Language, Sec-Fetch-*) — not a
+  // simple User-Agent string check the way bare-curl's default UA failure
+  // was for HGNC/ICD-11. Separately and more fundamentally, loinc.org's own
+  // robots.txt explicitly disallows `ClaudeBot` (alongside GPTBot,
+  // Google-Extended, CCBot, Bytespider, Applebot-Extended, meta-externalagent,
+  // Amazonbot) site-wide via `Disallow: /`, while `User-agent: *` stays
+  // `Allow: /` — a directed opt-out of AI-crawler access specifically, not
+  // the generic "no automated access at all" shape OMIM's robots.txt had.
+  // Both facts independently rule out a real fetch() attempt here: the
+  // sanctioned client (fetchText/fetchJson, which only wrap global fetch)
+  // cannot pass the challenge regardless of headers, and even if it could,
+  // continuing to request the site would run against its explicit
+  // ClaudeBot disallow. Same 'not-live-verifiable' shape as OMIM — no
+  // fetch() attempted for this entry at all — for a different pair of
+  // reasons than OMIM's domain-wide, client-agnostic block.
+  LOINC: {
+    datasetCode: 'LOINC',
+    kind: 'not-live-verifiable',
+    reason:
+      "loinc.org's /downloads, /license, and /kb/versioning pages 403 under Node's fetch() with a genuine " +
+      'interactive Cloudflare challenge (Cf-Mitigated: challenge) even with a full realistic browser header set, ' +
+      "and the site's own robots.txt explicitly disallows ClaudeBot (Disallow: /) alongside other AI crawlers " +
+      '(GPTBot, Google-Extended, CCBot, and others), while generic User-agent: * stays Allow: /. Confirmed live 2026-08-13.',
   },
 };
