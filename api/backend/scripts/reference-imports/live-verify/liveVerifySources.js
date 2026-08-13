@@ -2,8 +2,8 @@
 // verify job. Deliberately separate from src/reference-data/reference-imports
 // /sources/*.js — those stay pointed at the bundled fixture only, per
 // reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
-// ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, DCB, and ATC (#557) are
-// populated so far; 5 sources remain, added here one entry at a time (per
+// ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, DCB, ATC, and DUO (#557) are
+// populated so far; 4 sources remain, added here one entry at a time (per
 // docs-7-31-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem
 // recomendada da Fase 2").
 //
@@ -31,9 +31,14 @@
 // genuinely public, unauthenticated REST API with no discrete
 // releases/tags/editions at all — the "release" signal is a live
 // `lastModified` timestamp from a JSON info endpoint instead; see
-// verifyRestInfo's comment). Not every remaining source will fit one of
-// these six as-is — confirm live shape before assuming one of them covers
-// it.
+// verifyRestInfo's comment), or 'github-release-file' (DUO's shape: a real
+// GitHub release exists via the releases API, but the release carries no
+// attached assets — the ontology file lives checked into the repo tree
+// itself, so asset presence is a HEAD check against its raw.githubusercontent
+// .com URL instead of scanning release.assets; see
+// verifyGithubReleaseFile's comment). Not every remaining source will fit
+// one of these seven as-is — confirm live shape before assuming one of them
+// covers it.
 //
 // releaseApiUrl/licenseUrl/expectedAssetName (or assetUrl/pageUrl/infoUrl
 // for direct-download/fixed-edition/rest-info entries) confirmed live
@@ -315,5 +320,28 @@ module.exports = {
     expectedEdition: '2026',
     licenseUrl: 'https://www.whocc.no/copyright_disclaimer/',
     expectedLicensePointer: 'WHO Collaborating Centre for Drug Statistics Methodology, Oslo, Norway',
+  },
+  // #557: confirmed live on 2026-08-13, first source of §7.4 step 8
+  // ("Importar DUO, Uberon, NCBI Taxonomy, Cell Ontology e EDAM"). Unlike
+  // HPO/MONDO, EBISPOT/DUO's latest GitHub release (v2021-02-23, confirmed
+  // via `gh api repos/EBISPOT/DUO/releases/latest`) carries no attached
+  // release assets — duo.owl lives checked into the repo tree itself
+  // (confirmed via the Contents API), not as a release download. A new
+  // 'github-release-file' kind covers this: it still proves a release
+  // exists via the releases API (same tag_name/published_at fields
+  // github-release checks), but proves the ontology file's presence via a
+  // HEAD check against its raw.githubusercontent.com URL instead of
+  // scanning release.assets. License is LICENSE.md at the repo root
+  // (spdx_id "NOASSERTION" like HPO, so verified by pointer text): "Creative
+  // Commons Attribution 4.0 International", matched on the durable
+  // creativecommons.org/licenses/by/4.0/ URL fragment.
+  DUO: {
+    datasetCode: 'DUO',
+    kind: 'github-release-file',
+    repo: 'EBISPOT/DUO',
+    releaseApiUrl: 'https://api.github.com/repos/EBISPOT/DUO/releases/latest',
+    fileUrl: 'https://raw.githubusercontent.com/EBISPOT/DUO/master/duo.owl',
+    licenseUrl: 'https://raw.githubusercontent.com/EBISPOT/DUO/master/LICENSE.md',
+    expectedLicensePointer: 'creativecommons.org/licenses/by/4.0',
   },
 };

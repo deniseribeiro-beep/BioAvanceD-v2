@@ -678,3 +678,85 @@ describe('verify-live-release.verify — ATC (fixed-edition)', () => {
     expect(report.live.licensePointerPresent).toBe(false);
   });
 });
+
+// #557 DUO: a new 'github-release-file' entry, first source of §7.4 step 8
+// ("Importar DUO, Uberon, NCBI Taxonomy, Cell Ontology e EDAM"). Unlike
+// HPO/MONDO, EBISPOT/DUO's latest GitHub release (tag v2021-02-23) carries
+// no attached release assets at all (`"assets":[]`, confirmed live via
+// `gh api repos/EBISPOT/DUO/releases/latest`) — duo.owl lives checked into
+// the repo tree itself (root-level, confirmed via the Contents API), not as
+// a release download. So this still proves a release exists (tag_name/
+// published_at from the releases API, same as HPO/MONDO), but proves the
+// ontology file's presence via a HEAD check against its raw.githubusercontent
+// .com URL instead of scanning `release.assets` for an expected name —
+// combining github-release's release-metadata check with direct-download's
+// HEAD-based asset check, neither existing kind alone. License is LICENSE.md
+// at the repo root (spdx_id "NOASSERTION" like HPO, so verified by pointer
+// text rather than SPDX id): "Creative Commons Attribution 4.0
+// International", pointing at creativecommons.org/licenses/by/4.0/ — same
+// durable URL-fragment pointer choice as ORPHA/MONDO.
+function mockGithubReleaseFileFetchResponses({ tagName = 'v2021-02-23', fileOk = true, licenseText }) {
+  global.fetch = vi.fn(async (url, options = {}) => {
+    if (url.includes('/releases/latest')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ tag_name: tagName, published_at: '2021-02-23T19:26:13Z' }),
+      };
+    }
+    if (url.includes('duo.owl')) {
+      expect(options.method).toBe('HEAD');
+      return { ok: fileOk, status: fileOk ? 200 : 404 };
+    }
+    if (url.includes('LICENSE.md')) {
+      return { ok: true, status: 200, text: async () => licenseText };
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — DUO (github-release-file)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "verified" when the release, repo-tracked file, and license pointer are all live', async () => {
+    mockGithubReleaseFileFetchResponses({
+      licenseText: 'Creative Commons Attribution 4.0 International License, http://creativecommons.org/licenses/by/4.0/',
+    });
+
+    const report = await verify('DUO');
+
+    expect(report.status).toBe('verified');
+    expect(report.live.releaseTag).toBe('v2021-02-23');
+    expect(report.live.filePresent).toBe(true);
+    expect(report.live.licensePointerPresent).toBe(true);
+    expect(report.fixtureSource.systemUri).toBe('http://purl.obolibrary.org/obo/duo.owl');
+  });
+
+  it('reports status "mismatch" when the repo-tracked ontology file is no longer reachable', async () => {
+    mockGithubReleaseFileFetchResponses({
+      fileOk: false,
+      licenseText: 'Creative Commons Attribution 4.0 International License, http://creativecommons.org/licenses/by/4.0/',
+    });
+
+    const report = await verify('DUO');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.filePresent).toBe(false);
+  });
+
+  it('reports status "mismatch" when LICENSE.md no longer contains the expected CC BY 4.0 pointer', async () => {
+    mockGithubReleaseFileFetchResponses({
+      licenseText: 'License terms have moved, see our new legal page.',
+    });
+
+    const report = await verify('DUO');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.licensePointerPresent).toBe(false);
+  });
+});
