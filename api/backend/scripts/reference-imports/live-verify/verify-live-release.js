@@ -121,6 +121,54 @@ async function verifyRedirectVersion(datasetCode, entry, fixtureSource) {
   };
 }
 
+// ICD-10 shape (#557): unlike ICD-11's "latest" URL, ICD-10's dict-01_FONTES.md
+// "URL oficial" (https://icd.who.int/browse10/2019/en) is a fixed-edition
+// browse page — it 200s directly with no redirect, and the edition ("2019")
+// is baked into the URL/page body rather than exposed by a redirects target,
+// releases API, or Last-Modified header. Confirmed live 2026-08-13: the page
+// is a client-rendered SPA shell with the edition present twice in static
+// markup (`<title>ICD-10 Version:2019</title>` and `oInfo.ontologyKey =
+// "2019"`), so `editionPattern` extracts it the same substring-match way
+// redirect-version reads a release off a redirect target. No ICD-10-specific
+// license document was found live (the page itself carries no license text,
+// and the only PDF linked from it — the Instruction Manual — is compressed,
+// so fetchText()'s naive UTF-8 decode doesn't surface plain-ASCII pointer
+// text from it the way it did for ICD-11's uncompressed license PDF).
+// dict-01_FONTES.md's own Licenciamento value for SRC_ICD10 is the generic
+// "Termos WHO/edição nacional" (no source-specific URL given, unlike
+// SRC_ICD11's dedicated license PDF), so this reuses WHO's sitewide Terms of
+// Use page (who.int/about/policies/terms-of-use) as the license-bearing
+// surface — confirmed live to contain the plain-text pointer "Copyright
+// World Health Organization (WHO)" in actual prose, not just page metadata.
+async function verifyFixedEdition(datasetCode, entry, fixtureSource) {
+  const pageText = await fetchText(entry.pageUrl);
+  const editionMatch = pageText.match(entry.editionPattern);
+  const liveEdition = editionMatch ? editionMatch[1] : null;
+  const editionMatchesExpected = liveEdition === entry.expectedEdition;
+
+  const licenseText = await fetchText(entry.licenseUrl);
+  const licenseChecksum = sha256Hex(licenseText);
+  const licensePointerPresent = licenseText.includes(entry.expectedLicensePointer);
+
+  const status = editionMatchesExpected && licensePointerPresent ? 'verified' : 'mismatch';
+
+  return {
+    datasetCode,
+    verifiedAt: new Date().toISOString(),
+    status,
+    live: {
+      pageUrl: entry.pageUrl,
+      liveEdition,
+      expectedEdition: entry.expectedEdition,
+      editionMatchesExpected,
+      licenseUrl: entry.licenseUrl,
+      licenseChecksum,
+      licensePointerPresent,
+    },
+    fixtureSource,
+  };
+}
+
 async function verify(datasetCode) {
   const entry = LIVE_SOURCES[datasetCode];
   if (!entry) {
@@ -136,6 +184,9 @@ async function verify(datasetCode) {
   }
   if (entry.kind === 'redirect-version') {
     return verifyRedirectVersion(datasetCode, entry, fixtureSource);
+  }
+  if (entry.kind === 'fixed-edition') {
+    return verifyFixedEdition(datasetCode, entry, fixtureSource);
   }
   return verifyGithubRelease(datasetCode, entry, fixtureSource);
 }

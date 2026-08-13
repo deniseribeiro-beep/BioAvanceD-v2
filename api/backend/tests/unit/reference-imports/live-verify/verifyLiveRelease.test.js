@@ -240,3 +240,68 @@ describe('verify-live-release.verify — ICD11 (redirect-version)', () => {
     expect(report.live.licensePointerPresent).toBe(false);
   });
 });
+
+// #557 ICD10: a 'fixed-edition' entry — unlike ICD-11's "latest" redirect,
+// ICD-10's WHO browse page (icd.who.int/browse10/2019/en) is a fixed-edition
+// URL that 200s directly with the edition embedded in the page body itself
+// (`<title>ICD-10 Version:2019</title>`), and no ICD-10-specific license
+// document was found live, so it reuses WHO's sitewide Terms of Use page as
+// the license-bearing surface instead.
+function mockFixedEditionFetchResponses({ pageText = '<title>ICD-10 Version:2019 </title>', licenseText }) {
+  global.fetch = vi.fn(async (url) => {
+    if (url.includes('browse10')) {
+      return { ok: true, status: 200, text: async () => pageText };
+    }
+    if (url.includes('terms-of-use')) {
+      return { ok: true, status: 200, text: async () => licenseText };
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — ICD10 (fixed-edition)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "verified" when the live page still carries the expected edition and the license pointer is live', async () => {
+    mockFixedEditionFetchResponses({
+      licenseText: '<p>&copy; Copyright World Health Organization (WHO), 2021. All Rights Reserved.</p>',
+    });
+
+    const report = await verify('ICD10');
+
+    expect(report.status).toBe('verified');
+    expect(report.live.liveEdition).toBe('2019');
+    expect(report.live.editionMatchesExpected).toBe(true);
+    expect(report.live.licensePointerPresent).toBe(true);
+    expect(report.fixtureSource.systemUri).toBe('http://hl7.org/fhir/sid/icd-10');
+  });
+
+  it('reports status "mismatch" when the live page no longer carries the expected edition', async () => {
+    mockFixedEditionFetchResponses({
+      pageText: '<title>ICD-10 Version:2022 </title>',
+      licenseText: '<p>&copy; Copyright World Health Organization (WHO), 2021. All Rights Reserved.</p>',
+    });
+
+    const report = await verify('ICD10');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.liveEdition).toBe('2022');
+    expect(report.live.editionMatchesExpected).toBe(false);
+  });
+
+  it('reports status "mismatch" when the WHO terms-of-use page no longer contains the expected pointer text', async () => {
+    mockFixedEditionFetchResponses({
+      licenseText: 'These terms have moved, see our new legal page.',
+    });
+
+    const report = await verify('ICD10');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.licensePointerPresent).toBe(false);
+  });
+});
