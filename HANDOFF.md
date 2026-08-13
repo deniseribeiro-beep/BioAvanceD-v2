@@ -4,86 +4,67 @@
 
 ## What happened this session
 
-Picked up `#552` (RF028 AC9 — Neo4j outbox projection for
-`TerminologyConcept`/`TerminologyRelation`) via `work-issue` →
-`build-loop`. This was the last of the four items `#373` (RF028 parent
-tracking issue) deferred, so closing it also closed the parent.
+Picked up `#368` (RF005/RNF007 follow-up to `#363` — migrating
+`Patient`'s remaining civil-identity fields off the document, plus the
+missing audited re-identification flow and encryption at rest) via
+`work-issue` → `divide-and-conquer`. No code changed this session —
+`#368`'s own body already called for `divide-and-conquer` before
+picking it up, and it turned out to need the "real design change, split
+into a plan of issues" playbook: 20+ consumers still read identity
+fields straight off `Patient`, plus a compliance-required
+re-identification flow that doesn't exist yet at all. Forcing the full
+scope through in one sitting was not viable; splitting it was.
 
-### `#552` closed — AC9 outbox projection landed
+### `#368` split into 7 issues, confirmed with Dennis before filing
 
-- `reference-imports/pipeline.js`'s `promote()` now appends a
-  `TERMINOLOGY_CONCEPT_PROMOTED`/`TERMINOLOGY_RELATION_PROMOTED` event to
-  `graph_projection_outbox` on the same write that inserts a
-  `TerminologyConcept`/`TerminologyRelation` — never on the skip-existing
-  branch. Mirrors RF023's consent/lineage/quality/telemetry outbox
-  discipline exactly: Mongo write is the source of truth, Neo4j is only
-  ever reached via the outbox.
-- `GraphProjectionService` gained `appendTerminologyConceptEvent`/
-  `appendTerminologyRelationEvent`; `Neo4jCanonicalProjectionService`
-  gained the matching `applyTerminologyConceptProjection`/
-  `applyTerminologyRelationProjection`. No worker changes needed —
-  `neo4jProjection.worker.js` is already fully generic over event type.
-  Concept nodes keyed by `id` (the Mongo `terminologyConceptId`), with
-  `systemUri`/`code`/`version`/`display`/`conceptStatus` as properties
-  (queryable by natural key without knowing the generated id ahead of
-  time). Relations project as a `TERMINOLOGY_RELATION` edge between two
-  `TerminologyConcept` nodes.
-- 93/93 unit tests, 41/41 architecture guard tests, no regressions.
-- **Verified live** against the dev Docker stack (Dennis started Docker
-  Desktop; per `docker-workflow`, this session didn't launch it itself):
-  cleared a stale prior-session HPO import first (idempotency would have
-  otherwise short-circuited before ever reaching the new code — see the
-  pack-repo follow-up below), re-ran `reference-data-bootstrap` genuinely
-  fresh, confirmed via `mongosh` that 15 outbox events were written and
-  drained to `PROJECTED` by the existing worker, then via `cypher-shell`
-  that the `HP:0000001` concept node and `HP:0000118→HP:0000001 is_a`
-  edge actually landed in Neo4j. New Playwright spec
-  (`pipeline-continuity.spec.ts`, "Outbox → Neo4j projection (RF028
-  AC9)") asserts the same via two new `queryNeo4j.ts` helpers
-  (`waitForTerminologyConceptNode`, `waitForTerminologyRelation`) — ran
-  green against the live stack. The file's other 21 pre-existing
-  assertions still pass unmodified; 2 unrelated RF023 consent tests
-  failed on this run only because the freshly-started stack had no admin
-  user yet (`npm run compose:seed-admin` was never run this session) —
-  not a regression, not investigated further.
-- Landed as `4feecab4` (branch `test/552-neo4j-outbox-projection`, now
-  merged and deleted), merge commit `9ac14682` on
-  `feature/docker-e2e-backend-integration`, pushed.
+Breakdown (proposed via `AskUserQuestion`, Dennis chose "file as
+proposed"):
 
-### `#373` closed — RF028 parent tracking issue, all 4 deferred items done
+- **`#560`** — authorized, audited re-identification flow (RNF007
+  AC#4/AC#5). Foundational, no deps. Must land before `#565`.
+- **`#566`** — encryption at rest for `participantIdentities`.
+  Independent, no deps.
+- **`#561`** — migrate core/search paths (`patient.service.js`'s
+  search/update paths, `PatientIdentityService.js`) off `Patient`'s
+  identity fields.
+- **`#562`** — migrate consent/intake paths (`consent.controller.js`,
+  `eConsent.js`, `intakeWizard.js`).
+- **`#563`** — migrate import/FHIR paths (`import.controller.js`,
+  `import-lgpd.controller.js`, `import.service.js`,
+  `import-lgpd.service.js`, `fhir-import-staging.service.js`,
+  `fhir-validator.service.js`, `fhir.service.js`,
+  `batch-validation-engine.service.js`).
+- **`#564`** — migrate audit/notification/export paths
+  (`reports.routes.js`, `NotificationService.js`, `sample.service.js`,
+  `MerkleService.js`, `auditLogger.js`, `userAnonymization.js`).
+- **`#565`** — one-time backfill + drop `patientName`/`birthDate`/
+  `identityDocument` from `Patient` entirely. **Depends on: `#560`,
+  `#561`, `#562`, `#563`, `#564`** — this is the step that turns
+  "inconsistent/half-migrated" if any consumer group or the
+  re-identification flow isn't done first, so it's explicitly last.
 
-`#549` (13 remaining sources), `#550` (live download/license), `#551`
-(full AC7 lifecycle), `#552` (this session's AC9 outbox projection) — all
-confirmed closed. Commented on `#373` naming all four, closed per
-`resolve-issue`'s parent-chain-check step (clean checklist match, not
-ambiguous). **RF028 is now fully complete** against its own originally
-scoped acceptance criteria.
+`#561`–`#564` (the four consumer-group migrations) have no dependencies
+on each other and can be picked up in any order or in parallel across
+sessions. `#566` (encryption) is also independent and can land anytime.
 
-### Filed this session
+`#368` itself was **left open** as the tracking issue, with a comment
+listing all 7 numbers and the dependency shape — not closed, since none
+of the actual migration work has landed yet.
 
-- pack-repo `dyeallpies-skills-pack#283` — a `docker-workflow` local-env
-  addition for BioAvanceD-v2 (re-verifying a change inside `promote()`'s
-  idempotency-guarded path against a dev stack with pre-existing data
-  silently no-ops instead of exercising the new code; the exact write-up
-  is in the issue for a pack-primary session to fold in verbatim). Not
-  urgent, same shape as prior precedent (`#280`).
+### Wrap-up / friction audit
+
+Ran clean — no code touched, no scope creep, nothing to file. The one
+hiccup (`gh issue create` blocked once by the repo's label-required
+hook, pack issue #148) was self-explanatory and resolved by adding
+`--label enhancement` to each call; not new friction worth a skill edit.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: clean, pushed, at
-  `9ac14682`. Carries this session's `#552` slice on top of everything
-  the prior handoff described.
-- The dev Docker stack (`compose.yml`+`compose.dev.yml`) was brought up
-  for this session's live verification, then torn down via `clean-up`
-  before session end (`docker compose ... down`, no `--volumes` — named
-  volumes including the fresh HPO/Neo4j data this session wrote are
-  preserved for next time). No stack running as of this handoff.
-- No stray local branches from this session — `test/552-neo4j-outbox-projection`
-  merged and deleted; a second throwaway branch
-  (`test/552-wrapup-notes`, opened only to attempt the now-redirected
-  local-env edit) was deleted unmerged since it carried no changes.
-  Session-local Playwright `test-results/` debris and the scratchpad
-  `compose-up-552.log` redirect target were also removed.
+- **`feature/docker-e2e-backend-integration`**: clean, unchanged this
+  session, still at `9ac14682` (same commit as the prior handoff — no
+  new commits, no pushes; this session was issue-tracker-only).
+- No Docker stack running, no stray local branches created this
+  session.
 - **Pre-existing dangling local branches, not touched this session**
   (carried forward unchanged from prior handoffs — `fix/476-...`,
   `fix/477-...`, `fix/481-...`, `fix/485-...`, `fix/513-...`,
@@ -96,16 +77,24 @@ scoped acceptance criteria.
 ## Next steps
 
 No issue named as next by Dennis. For context (not a directive):
-- **RF028 is done.** With `#373` closed, there's no open RF028 tracking
-  issue left to resume from — the next milestone pickup is a fresh area
-  (`#552`'s close comment didn't name one).
-- **pack-repo `#280`/`#281`** (from two sessions ago) — `#280` needs a
+- **`#560`** (audited re-identification flow) is the natural first pick
+  from the new split — it's the only piece with a downstream dependent
+  (`#565`) and unblocks the safety condition the whole migration plan
+  hinges on. `build-loop` is the likely route (new capability, not yet
+  in the code) given the `RF005 build-loop` label-mapping precedent
+  already in this repo's `work-issue` overlay for RF-numbered items.
+- **`#561`–`#564`** (consumer-group migrations) and **`#566`**
+  (encryption) are all independently pickable in any order once/if
+  `#560` is underway — none block each other.
+- **`#565`** is not pickable yet — blocked on all five of the above.
+- **pack-repo `#280`/`#281`** (long-carried) — `#280` needs a
   pack-primary session to fold its content into that repo's
-  `HANDOFF.md`; `#281` needs the `work-issue`/Rule-0-adjacent wording fix
-  it proposes. Still open, still small/self-contained.
-- **pack-repo `#283`** (this session) — same shape as `#280`: a
-  pack-primary session folds the local-env addition in verbatim.
-- **pack-repo `#248`/`#270`** — both still open from two sessions ago,
+  `HANDOFF.md`; `#281` needs the `work-issue`/Rule-0-adjacent wording
+  fix it proposes. Still open, still small/self-contained.
+- **pack-repo `#283`** (from last session) — same shape as `#280`: a
+  pack-primary session folds a `docker-workflow` local-env addition in
+  verbatim.
+- **pack-repo `#248`/`#270`** — both still open from prior sessions,
   both with two full sessions of negative-repro data each. Only
   remaining lever is "deep into a long, loaded, real session" rather
   than a dedicated isolated test — not worth another dedicated
