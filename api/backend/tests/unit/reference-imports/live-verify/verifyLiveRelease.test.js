@@ -453,3 +453,69 @@ describe('verify-live-release.verify — LOINC (not-live-verifiable)', () => {
     expect(report.fixtureSource.systemUri).toBe('http://loinc.org');
   });
 });
+
+// #557 UCUM: another 'fixed-edition' entry — unlike LOINC, ucum.org (same
+// steward, Regenstrief Institute, but a different domain/bot-protection
+// config) is genuinely open to Node's own fetch(), no Cloudflare challenge
+// and no AI-crawler-specific robots.txt disallow. The spec page
+// (ucum.org/ucum) carries a clean `<p>Version: 2.2</p>` in its own header
+// block, and the dedicated license page (ucum.org/license) carries the
+// copyright notice as a durable plain-text pointer.
+function mockUcumFixedEditionFetchResponses({ pageText = '<p>Version: 2.2</p>', licenseText }) {
+  global.fetch = vi.fn(async (url) => {
+    if (url.includes('ucum.org/ucum')) {
+      return { ok: true, status: 200, text: async () => pageText };
+    }
+    if (url.includes('ucum.org/license')) {
+      return { ok: true, status: 200, text: async () => licenseText };
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — UCUM (fixed-edition)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "verified" when the live spec page still carries the expected version and the license pointer is live', async () => {
+    mockUcumFixedEditionFetchResponses({
+      licenseText: '<p>...is copyright &#169;1999-2024, Regenstrief Institute, Inc. All rights reserved.</p>',
+    });
+
+    const report = await verify('UCUM');
+
+    expect(report.status).toBe('verified');
+    expect(report.live.liveEdition).toBe('2.2');
+    expect(report.live.editionMatchesExpected).toBe(true);
+    expect(report.live.licensePointerPresent).toBe(true);
+    expect(report.fixtureSource.systemUri).toBe('http://unitsofmeasure.org');
+  });
+
+  it('reports status "mismatch" when the live spec page no longer carries the expected version', async () => {
+    mockUcumFixedEditionFetchResponses({
+      pageText: '<p>Version: 2.3</p>',
+      licenseText: '<p>...is copyright &#169;1999-2024, Regenstrief Institute, Inc. All rights reserved.</p>',
+    });
+
+    const report = await verify('UCUM');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.liveEdition).toBe('2.3');
+    expect(report.live.editionMatchesExpected).toBe(false);
+  });
+
+  it('reports status "mismatch" when the license page no longer contains the expected copyright pointer', async () => {
+    mockUcumFixedEditionFetchResponses({
+      licenseText: 'This license has moved, see our new legal page.',
+    });
+
+    const report = await verify('UCUM');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.licensePointerPresent).toBe(false);
+  });
+});

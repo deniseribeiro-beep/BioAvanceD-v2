@@ -2,8 +2,8 @@
 // verify job. Deliberately separate from src/reference-data/reference-imports
 // /sources/*.js — those stay pointed at the bundled fixture only, per
 // reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
-// ORPHA, ICD-10/ICD-11, OMIM, HGNC, and LOINC (#557) are populated so far; 8
-// sources remain, added here one entry at a time (per docs-7-31-2026/3-
+// ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, and UCUM (#557) are populated so
+// far; 7 sources remain, added here one entry at a time (per docs-7-31-2026/3-
 // Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem recomendada da
 // Fase 2").
 //
@@ -59,7 +59,10 @@
 // named AI crawlers specifically, `Allow: /` for generic User-agent: *) —
 // a negative result for the sanctioned fetchText/fetchJson client, same as
 // OMIM, but for reasons specific to this source rather than assumed from
-// OMIM's precedent.
+// OMIM's precedent. UCUM: 2026-08-13 via curl (robots.txt, checked first
+// per LOINC's own lesson) and Node's fetch() against ucum.org/ucum (200,
+// no Cloudflare challenge, unlike its sibling loinc.org) and
+// ucum.org/license.
 module.exports = {
   HPO: {
     datasetCode: 'HPO',
@@ -226,5 +229,32 @@ module.exports = {
       'interactive Cloudflare challenge (Cf-Mitigated: challenge) even with a full realistic browser header set, ' +
       "and the site's own robots.txt explicitly disallows ClaudeBot (Disallow: /) alongside other AI crawlers " +
       '(GPTBot, Google-Extended, CCBot, and others), while generic User-agent: * stays Allow: /. Confirmed live 2026-08-13.',
+  },
+  // #557: confirmed live on 2026-08-13, closing out §7.4 step 6's "LOINC e
+  // UCUM" pair. Checked robots.txt first this time (per LOINC's own
+  // lesson, filed as dyeallpies-skills-pack#269) — ucum.org's is a plain
+  // `Disallow: /wp/wp-admin/` only, no AI-crawler-specific block, and
+  // Node's own fetch() 200s the spec page directly with no Cloudflare
+  // challenge (unlike loinc.org, despite sharing the same steward —
+  // ucum.org's copyright footer names Regenstrief Institute, Inc. too, and
+  // its own nav links to loinc.org/ucum.org/regenstrief.org as sibling
+  // sites — so the two domains evidently run different bot-protection
+  // configs). dict-01_FONTES.md's SRC_UCUM row states auth as "Não" (no
+  // auth) — accurate, and the simplest of this group's auth notes so far.
+  // The spec page (https://ucum.org/ucum) is a 'fixed-edition' shape like
+  // ICD-10: it 200s directly and carries a clean `<p>Version: 2.2</p>` in
+  // its own header block (no releases API, no redirect). License is a
+  // dedicated page (https://ucum.org/license, linked from the spec page's
+  // own site nav and its in-page license section) with the copyright
+  // notice "1999-2024, Regenstrief Institute, Inc." as a durable,
+  // contiguous plain-text pointer.
+  UCUM: {
+    datasetCode: 'UCUM',
+    kind: 'fixed-edition',
+    pageUrl: 'https://ucum.org/ucum',
+    editionPattern: /<p>Version: ([^<]+)<\/p>/,
+    expectedEdition: '2.2',
+    licenseUrl: 'https://ucum.org/license',
+    expectedLicensePointer: '1999-2024, Regenstrief Institute, Inc.',
   },
 };
