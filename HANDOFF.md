@@ -133,14 +133,31 @@ done, `#563`/`#564` remain.
 lands.
 
 **Skills-pack `#279`** (the dogfooding request this session was framed
-as satisfying) is not yet closed — this session exercised queue mode's
-core mechanics (queue determination from a parent's sub-issues,
-sequential resolvable-item picking, per-item single-issue-mode driving,
-wrap-up every iteration) but the queue never actually emptied and the
-upward parent-chain-close check (`#279`'s other named check) was never
-exercised, since no sub-issue closure has yet made `#368` closeable.
-Leave `#279` open until a future session either empties this queue or
-hits a real parent-chain cascade to verify against.
+as satisfying) is not yet closed. Fed back a feedback comment
+([comment](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/279#issuecomment-5286321313))
+covering what this session exercised (queue determination from a
+parent's sub-issues, sequential resolvable-item picking, per-item
+single-issue-mode driving, wrap-up every iteration — all worked) and
+two gaps: the "skip a blocked item" branch was never hit (nothing was
+blocked mid-run — only #565 was ever blocked, and it was blocked from
+the start, not skipped-over mid-pick), and queue mode's own "re-derive
+membership fresh before every pick" text wasn't followed literally
+(picked off the start-of-run snapshot; safe here since #368's sub-issue
+list never changed, but a real compliance gap against the written text).
+
+**Next session should continue `#279`'s dogfood by resuming this exact
+queue** — pick up `#563` (already reconnaissance'd: likely needs
+`divide-and-conquer` per the note above), then `#564`/`#566`, then
+`#565` once unblocked — via the same `Skill(issue-loop)` queue-mode
+invocation, not a fresh manual walk-through. That continuation is what
+finally exercises the two still-unproven mechanisms: the upward
+parent-chain-close check (fires once a sub-issue closure makes `#368`
+closeable — plausible once `#565` lands) and a genuine test of the
+fresh-re-derivation text (re-running `gh issue view 368`/`gh issue
+list` before each pick, not reusing this session's snapshot). Once the
+queue empties and `#368` closes (or a parent-chain cascade is
+otherwise confirmed), close out `#279` with those findings folded into
+the existing feedback comment.
 
 - **pack-repo `#280`/`#281`** (long-carried) — still open, still
   small/self-contained, unchanged this session.
