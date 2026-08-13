@@ -186,21 +186,22 @@ describe('PatientService.checkIdentifierConflict', () => {
     expect(result).toBeNull();
   });
 
-  it('flags identityDocument conflict when the normalized digits match', async () => {
-    const patientsCollection = makeFakeCollection({
+  it('flags identityDocument conflict when the normalized digits match (#561: resolved via ParticipantIdentity)', async () => {
+    const participantIdentitiesCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ identityDocument: '529.982.247-25' })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkIdentifierConflict(db, { identityDocument: '52998224725' });
     expect(result).toEqual({ field: 'identityDocument', value: '52998224725', existing: expect.anything() });
   });
 
   it('flags recordNumber conflict when identityDocument does not match but recordNumber does', async () => {
+    const participantIdentitiesCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ identityDocument: '00000000000', recordNumber: 'RN-1' })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkIdentifierConflict(db, {
       identityDocument: '52998224725',
@@ -209,18 +210,21 @@ describe('PatientService.checkIdentifierConflict', () => {
     expect(result).toEqual({ field: 'recordNumber', value: 'RN-1', existing: expect.anything() });
   });
 
-  it('falls back to a generic identifier conflict when neither field matches directly', async () => {
-    const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ identityDocument: '00000000000', recordNumber: 'other' })
+  it('checks identityDocument (ParticipantIdentity) before recordNumber (Patient) when both are provided', async () => {
+    const participantIdentitiesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ identityDocument: '52998224725' })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ recordNumber: 'RN-1' })
+    });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkIdentifierConflict(db, {
       identityDocument: '52998224725',
       recordNumber: 'RN-1'
     });
-    expect(result.field).toBe('identifier');
-    expect(result.value).toBeNull();
+    expect(result.field).toBe('identityDocument');
+    expect(patientsCollection.findOne).not.toHaveBeenCalled();
   });
 });
 
@@ -240,14 +244,14 @@ describe('PatientService.checkDuplicatePatient', () => {
     expect(result).toBeNull();
   });
 
-  it('finds a duplicate by normalized name and DD/MM/YYYY birthDate string', async () => {
+  it('finds a duplicate by normalized name and DD/MM/YYYY birthDate string (#561: resolved via ParticipantIdentity)', async () => {
     const toArrayMock = vi.fn().mockResolvedValue([
       { patientName: '  Maria   Silva ', birthDate: new Date(1990, 0, 1) }
     ]);
-    const patientsCollection = makeFakeCollection({
+    const participantIdentitiesCollection = makeFakeCollection({
       find: vi.fn().mockReturnValue({ toArray: toArrayMock })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkDuplicatePatient(db, {
       patientName: 'maria silva',
@@ -260,10 +264,10 @@ describe('PatientService.checkDuplicatePatient', () => {
 
   it('accepts a birthDate already given as a Date instance and returns null when no name matches', async () => {
     const toArrayMock = vi.fn().mockResolvedValue([{ patientName: 'Other Person', birthDate: new Date(1990, 0, 1) }]);
-    const patientsCollection = makeFakeCollection({
+    const participantIdentitiesCollection = makeFakeCollection({
       find: vi.fn().mockReturnValue({ toArray: toArrayMock })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkDuplicatePatient(db, {
       patientName: 'maria silva',
@@ -274,10 +278,10 @@ describe('PatientService.checkDuplicatePatient', () => {
   });
 
   it('returns null and logs when the collection lookup throws', async () => {
-    const patientsCollection = makeFakeCollection({
+    const participantIdentitiesCollection = makeFakeCollection({
       find: vi.fn().mockImplementation(() => { throw new Error('db down'); })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkDuplicatePatient(db, { patientName: 'Maria', birthDate: '01/01/1990' });
     expect(result).toBeNull();
@@ -328,15 +332,20 @@ describe('PatientService.searchPatients — date-search branches', () => {
     return vi.fn().mockReturnValue({ limit: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue(results) });
   }
 
-  it('adds a birthDate range filter for a valid DD/MM/YYYY term', async () => {
+  it('adds a participantId $in filter, resolved via ParticipantIdentity, for a valid DD/MM/YYYY term (#561)', async () => {
     const findMock = findWithResults([]);
     const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(0) });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const identitiesFindMock = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ participantId: '11111111' }]) });
+    const participantIdentitiesCollection = makeFakeCollection({ find: identitiesFindMock });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
 
     await patientService.searchPatients(db, '15/03/2000');
 
+    const identityQuery = identitiesFindMock.mock.calls[0][0];
+    expect(identityQuery.birthDate).toEqual(expect.objectContaining({ $gte: expect.any(Date), $lt: expect.any(Date) }));
+
     const passedQuery = findMock.mock.calls[0][0];
-    expect(passedQuery.$or).toEqual(expect.arrayContaining([{ birthDate: expect.objectContaining({ $gte: expect.any(Date), $lt: expect.any(Date) }) }]));
+    expect(passedQuery.$or).toEqual(expect.arrayContaining([{ participantId: { $in: ['11111111'] } }]));
   });
 
   it('does not add a birthDate filter when a slash-term does not split into 3 parts', async () => {
@@ -350,15 +359,17 @@ describe('PatientService.searchPatients — date-search branches', () => {
     expect(passedQuery.$or.some((clause) => clause.birthDate)).toBe(false);
   });
 
-  it('adds a birthDate range filter for a valid YYYY-MM-DD term', async () => {
+  it('adds a participantId $in filter, resolved via ParticipantIdentity, for a valid YYYY-MM-DD term (#561)', async () => {
     const findMock = findWithResults([]);
     const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(0) });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const identitiesFindMock = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ participantId: '22222222' }]) });
+    const participantIdentitiesCollection = makeFakeCollection({ find: identitiesFindMock });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
 
     await patientService.searchPatients(db, '2000-03-15');
 
     const passedQuery = findMock.mock.calls[0][0];
-    expect(passedQuery.$or).toEqual(expect.arrayContaining([{ birthDate: expect.objectContaining({ $gte: expect.any(Date), $lt: expect.any(Date) }) }]));
+    expect(passedQuery.$or).toEqual(expect.arrayContaining([{ participantId: { $in: ['22222222'] } }]));
   });
 
   it('does not add a birthDate filter for an unparseable YYYY-MM-DD-shaped term', async () => {

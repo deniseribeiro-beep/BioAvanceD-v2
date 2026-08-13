@@ -5,6 +5,15 @@ const patientIdentityService = require('../../src/services/PatientIdentityServic
 describe('PatientIdentityService - Heuristic Patient Matching', () => {
   let db;
   let patientsCollection;
+  let identitiesCollection;
+
+  // #561: name+birthDate matching resolves against ParticipantIdentity, not
+  // Patient's own patientNameNormalized/birthDateKey fields — seed
+  // identitiesCollection.find() with the candidates that used to live on
+  // patientsCollection.findOne().
+  function identityCandidates(docs = []) {
+    identitiesCollection.find.mockReturnValue({ toArray: vi.fn().mockResolvedValue(docs) });
+  }
 
   beforeEach(() => {
     patientsCollection = {
@@ -13,11 +22,16 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }),
     };
 
+    identitiesCollection = {
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+    };
+
     db = {
       listCollections: () => ({
-        toArray: async () => ([{ name: 'patients' }]),
+        toArray: async () => ([{ name: 'patients' }, { name: 'participantIdentities' }]),
       }),
-      collection: () => patientsCollection,
+      collection: (name) => (name === 'participantIdentities' ? identitiesCollection : patientsCollection),
     };
   });
 
@@ -61,7 +75,9 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
         birthDateKey: '1990-05-15',
       };
 
-      // First call returns existing patient (matched by name + birthDate)
+      // First, ParticipantIdentity resolves the match by name + birthDate;
+      // then Patient is looked up by the resolved participantId.
+      identityCandidates([{ participantId: '87654321', patientName: 'João Silva Santos', birthDate: new Date('1990-05-15') }]);
       patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
       patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
 
@@ -78,7 +94,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
     });
 
     it('deve criar novo paciente se nome + data de nascimento não encontrados', async () => {
-      patientsCollection.findOne.mockResolvedValueOnce(null);
+      identityCandidates([]);
       patientsCollection.insertOne.mockResolvedValueOnce({ insertedId: '999f1f77bcf86cd799439999' });
 
       const result = await patientIdentityService.matchOrUpsertParticipant(db, {
@@ -112,7 +128,8 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
         email: 'maria.silva@test.com',
       };
 
-      // Mock: primeiro encontra o paciente existente
+      // Mock: primeiro encontra a identidade existente (por nome+data), depois o paciente
+      identityCandidates([{ participantId: '11111111', patientName: 'Maria Silva', birthDate: new Date('1985-03-10') }]);
       patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
       patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
 
@@ -131,7 +148,8 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       patientsCollection.findOne.mockClear();
       patientsCollection.updateOne.mockClear();
 
-      // Mock: segunda vez, encontra o mesmo paciente
+      // Mock: segunda vez, encontra a mesma identidade e o mesmo paciente
+      identityCandidates([{ participantId: '11111111', patientName: 'Maria Silva', birthDate: new Date('1985-03-10') }]);
       patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
       patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
 
@@ -158,7 +176,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       ];
 
       for (const pattern of patterns) {
-        patientsCollection.findOne.mockResolvedValueOnce(null);
+        identityCandidates([]);
         patientsCollection.insertOne.mockResolvedValueOnce({ insertedId: '999f1f77bcf86cd799439999' });
 
         const result = await patientIdentityService.matchOrUpsertParticipant(db, {

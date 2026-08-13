@@ -7,6 +7,14 @@ describe('Smart Import - Patient Deduplication & ATC Validation', () => {
   let db;
   let patientsCollection;
   let samplesCollection;
+  let identitiesCollection;
+
+  // #561: PatientIdentityService's name+birthDate match resolves against
+  // ParticipantIdentity, not Patient's own fields — seed the candidates
+  // identities.find() should return.
+  function identityCandidates(docs = []) {
+    identitiesCollection.find.mockReturnValue({ toArray: vi.fn().mockResolvedValue(docs) });
+  }
 
   beforeEach(() => {
     patientsCollection = {
@@ -23,13 +31,20 @@ describe('Smart Import - Patient Deduplication & ATC Validation', () => {
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
     };
 
+    identitiesCollection = {
+      findOne: vi.fn(),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+    };
+
     db = {
       listCollections: () => ({
-        toArray: async () => ([{ name: 'patients' }, { name: 'samples' }]),
+        toArray: async () => ([{ name: 'patients' }, { name: 'samples' }, { name: 'participantIdentities' }]),
       }),
       collection: (name) => {
         if (name === 'patients' || name === 'pacientes') return patientsCollection;
         if (name === 'samples') return samplesCollection;
+        if (name === 'participantIdentities') return identitiesCollection;
         return {
           findOne: vi.fn(),
           insertOne: vi.fn(),
@@ -53,19 +68,12 @@ describe('Smart Import - Patient Deduplication & ATC Validation', () => {
 João Silva,01/05/1990,M,12345678901,PLASMA,ON_TREATMENT,Migalastat,A16AX27,ORPHA:324,Lyso-Gb3,4.2
 João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,Lyso-Gb3,4.5`;
 
-      // Mock: Primeira chamada retorna null (paciente novo)
-      // Segunda chamada retorna o paciente criado (matching)
-      patientsCollection.findOne
-        .mockResolvedValueOnce(null) // Novo paciente (linha 1)
-        .mockResolvedValueOnce(null) // Verificação de duplicata
-        .mockResolvedValueOnce({      // Linha 2: Encontra o paciente criado na linha 1
-          _id: '507f1f77bcf86cd799439011',
-          participantId: '11111111',
-          patientName: 'João Silva',
-          patientNameNormalized: 'joao silva',
-          birthDate: new Date('1990-05-01'),
-          birthDateKey: '1990-05-01',
-        });
+      // #561: name+birthDate matching resolves via ParticipantIdentity, so
+      // patientsCollection.findOne is now only hit by
+      // generateUniqueParticipantId's uniqueness check on the create path
+      // (row 1) — no longer once for the match filter itself.
+      identityCandidates([]); // Linha 1: nenhuma identidade existente ainda
+      patientsCollection.findOne.mockResolvedValueOnce(null); // generateUniqueParticipantId: ID disponível
 
       // Mock: Insert novo paciente
       patientsCollection.insertOne.mockResolvedValueOnce({
@@ -117,8 +125,9 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
       expect(result1.created).toBe(true);
       expect(patientsCollection.insertOne).toHaveBeenCalledTimes(1);
 
-      // Reset for row 2
-      patientsCollection.findOne.mockClear();
+      // Reset for row 2 — mockReset (not mockClear) so no leftover queued
+      // once-values from row 1 leak into row 2's calls.
+      patientsCollection.findOne.mockReset();
       patientsCollection.insertOne.mockClear();
 
       // Mock: Linha 2 deve encontrar o paciente pela normalização de nome + data
@@ -130,6 +139,7 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
         birthDate: new Date('1990-05-01'),
       };
 
+      identityCandidates([{ participantId: '11111111', patientName: 'João Silva', birthDate: new Date('1990-05-01') }]);
       patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
       patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
 
