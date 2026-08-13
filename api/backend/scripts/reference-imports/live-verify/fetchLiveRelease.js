@@ -38,9 +38,23 @@ async function fetchHead(url) {
   return { ok: response.ok, status: response.status, headers: response.headers };
 }
 
+/**
+ * GETs a stable "latest" URL and follows redirects to see where it lands —
+ * for sources whose release identifier is embedded in a redirect target
+ * rather than exposed by any releases API or asset filename (e.g. WHO's
+ * ICD-11 browser, #557: `/browse/latest-release/mms/en` 302s to
+ * `/browse/2026-01/mms/en`). Returns the final URL so a caller can extract
+ * the version from it; HEAD isn't usable here since this endpoint 405s on
+ * HEAD (confirmed live for ICD-11).
+ */
+async function fetchRedirectTarget(url) {
+  const response = await fetch(url);
+  return { ok: response.ok, status: response.status, url: response.url };
+}
+
 /** SHA-256 hex digest over a fetched body — same algorithm parseJsonLines.js's checksumFile uses over local fixtures. */
 function sha256Hex(text) {
   return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
-module.exports = { fetchJson, fetchText, fetchHead, sha256Hex };
+module.exports = { fetchJson, fetchText, fetchHead, fetchRedirectTarget, sha256Hex };

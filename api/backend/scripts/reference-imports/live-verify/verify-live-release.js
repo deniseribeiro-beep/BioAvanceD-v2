@@ -1,5 +1,5 @@
 const path = require('path');
-const { fetchJson, fetchText, fetchHead, sha256Hex } = require('./fetchLiveRelease');
+const { fetchJson, fetchText, fetchHead, fetchRedirectTarget, sha256Hex } = require('./fetchLiveRelease');
 const LIVE_SOURCES = require('./liveVerifySources');
 
 // #555/#556 (RF028/#550): reports whether a source's real upstream release
@@ -82,6 +82,45 @@ async function verifyDirectDownload(datasetCode, entry, fixtureSource) {
   };
 }
 
+// ICD-11 shape (#557): the WHO ICD API itself is OAuth/API-key gated per
+// dict-01_FONTES.md's SRC_ICD11 row, but the public browser at icd.who.int
+// isn't — `/browse/latest-release/mms/en` is a stable, unauthenticated URL
+// that 302s to the current release's own path (e.g. `/browse/2026-01/mms/
+// en`), so the release identifier is the redirect target itself rather than
+// a releases-API field or a Last-Modified header. License is a WHO-hosted
+// PDF (`ICD11-license.pdf`, linked from icd.who.int/en as "ICD-11 License")
+// rather than a LICENSE file or landing-page link — confirmed live 2026-08-13
+// that fetchText()'s UTF-8 decode still surfaces plain-ASCII pointer text
+// (e.g. "World Health Organization") from the PDF's uncompressed metadata,
+// so the same substring-match approach the other two shapes use still works
+// here without a PDF parser.
+async function verifyRedirectVersion(datasetCode, entry, fixtureSource) {
+  const redirect = await fetchRedirectTarget(entry.releaseUrl);
+  const versionMatch = redirect.url.match(entry.versionPattern);
+  const releaseVersion = versionMatch ? versionMatch[1] : null;
+
+  const licenseText = await fetchText(entry.licenseUrl);
+  const licenseChecksum = sha256Hex(licenseText);
+  const licensePointerPresent = licenseText.includes(entry.expectedLicensePointer);
+
+  const status = redirect.ok && releaseVersion && licensePointerPresent ? 'verified' : 'mismatch';
+
+  return {
+    datasetCode,
+    verifiedAt: new Date().toISOString(),
+    status,
+    live: {
+      releaseUrl: entry.releaseUrl,
+      redirectedTo: redirect.url,
+      releaseVersion,
+      licenseUrl: entry.licenseUrl,
+      licenseChecksum,
+      licensePointerPresent,
+    },
+    fixtureSource,
+  };
+}
+
 async function verify(datasetCode) {
   const entry = LIVE_SOURCES[datasetCode];
   if (!entry) {
@@ -94,6 +133,9 @@ async function verify(datasetCode) {
 
   if (entry.kind === 'direct-download') {
     return verifyDirectDownload(datasetCode, entry, fixtureSource);
+  }
+  if (entry.kind === 'redirect-version') {
+    return verifyRedirectVersion(datasetCode, entry, fixtureSource);
   }
   return verifyGithubRelease(datasetCode, entry, fixtureSource);
 }
