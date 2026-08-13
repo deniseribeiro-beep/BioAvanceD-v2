@@ -245,4 +245,89 @@ describe('graphProjection.service', () => {
       expect(call.payload.occurredAt).toBeInstanceOf(Date);
     });
   });
+
+  describe('appendTerminologyConceptEvent', () => {
+    it('emits TERMINOLOGY_CONCEPT_PROMOTED with provided fields', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await service.appendTerminologyConceptEvent({}, {
+        terminologyConceptId: 'tc-1',
+        systemUri: 'http://purl.obolibrary.org/obo/hp.owl',
+        code: 'HP:0000001',
+        version: 'sample-2026-07-31',
+        display: 'All',
+        conceptStatus: 'active',
+        referenceDatasetReleaseId: 'rel-1',
+      });
+
+      const call = outbox.appendEvent.mock.calls[0][1];
+      expect(call.eventType).toBe('TERMINOLOGY_CONCEPT_PROMOTED');
+      expect(call.aggregateType).toBe('TerminologyConcept');
+      expect(call.aggregateId).toBe('tc-1');
+      expect(call.payload).toEqual({
+        terminologyConceptId: 'tc-1',
+        systemUri: 'http://purl.obolibrary.org/obo/hp.owl',
+        code: 'HP:0000001',
+        version: 'sample-2026-07-31',
+        display: 'All',
+        conceptStatus: 'active',
+        referenceDatasetReleaseId: 'rel-1',
+      });
+    });
+
+    it('defaults conceptStatus to active and falls back to aggregateId', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await service.appendTerminologyConceptEvent({}, { aggregateId: 'agg-tc' });
+
+      const call = outbox.appendEvent.mock.calls[0][1];
+      expect(call.aggregateId).toBe('agg-tc');
+      expect(call.payload.conceptStatus).toBe('active');
+      expect(call.payload.systemUri).toBeNull();
+      expect(call.payload.code).toBeNull();
+    });
+  });
+
+  describe('appendTerminologyRelationEvent', () => {
+    it('emits TERMINOLOGY_RELATION_PROMOTED with provided fields', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await service.appendTerminologyRelationEvent({}, {
+        terminologyRelationId: 'tr-1',
+        sourceConceptId: 'tc-source',
+        targetConceptId: 'tc-target',
+        relationType: 'is_a',
+        relationVersion: 'sample-2026-07-31',
+        referenceDatasetReleaseId: 'rel-1',
+      });
+
+      const call = outbox.appendEvent.mock.calls[0][1];
+      expect(call.eventType).toBe('TERMINOLOGY_RELATION_PROMOTED');
+      expect(call.aggregateType).toBe('TerminologyRelation');
+      expect(call.aggregateId).toBe('tr-1');
+      expect(call.payload).toEqual({
+        terminologyRelationId: 'tr-1',
+        sourceConceptId: 'tc-source',
+        targetConceptId: 'tc-target',
+        relationType: 'is_a',
+        relationVersion: 'sample-2026-07-31',
+        referenceDatasetReleaseId: 'rel-1',
+      });
+    });
+
+    it('falls back to aggregateId when terminologyRelationId is absent', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await service.appendTerminologyRelationEvent({}, { aggregateId: 'agg-tr' });
+
+      const call = outbox.appendEvent.mock.calls[0][1];
+      expect(call.aggregateId).toBe('agg-tr');
+      expect(call.payload.sourceConceptId).toBeNull();
+      expect(call.payload.targetConceptId).toBeNull();
+    });
+  });
 });

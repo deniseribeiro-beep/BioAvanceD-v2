@@ -84,6 +84,20 @@ describe('neo4jCanonicalProjection.service', () => {
       expect(result.projected).toBe(true);
     });
 
+    it('routes TERMINOLOGY_CONCEPT_PROMOTED to applyTerminologyConceptProjection', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, { eventType: 'TERMINOLOGY_CONCEPT_PROMOTED', payload: {} });
+      expect(result.projected).toBe(true);
+    });
+
+    it('routes TERMINOLOGY_RELATION_PROMOTED to applyTerminologyRelationProjection', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, { eventType: 'TERMINOLOGY_RELATION_PROMOTED', payload: {} });
+      expect(result.projected).toBe(true);
+    });
+
     it('returns skipped for an unrecognized event type without calling session.run', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
@@ -240,6 +254,82 @@ describe('neo4jCanonicalProjection.service', () => {
       await service.applyQualityProjection(session, { aggregateId: 'agg-10', eventId: 'evt-8', payload: { evaluatedAt } });
       const params = session.run.mock.calls[0][1];
       expect(params.evaluatedAt).toBe('2026-01-05T00:00:00.000Z');
+    });
+  });
+
+  describe('applyTerminologyConceptProjection', () => {
+    it('projects systemUri/code/version/display from payload, keyed by terminologyConceptId', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const event = {
+        eventType: 'TERMINOLOGY_CONCEPT_PROMOTED',
+        aggregateId: 'agg-tc',
+        eventId: 'evt-tc-1',
+        schemaVersion: 1,
+        sourceService: 'reference-imports-pipeline',
+        payload: {
+          terminologyConceptId: 'tc-1',
+          systemUri: 'http://purl.obolibrary.org/obo/hp.owl',
+          code: 'HP:0000001',
+          version: 'sample-2026-07-31',
+          display: 'All',
+          conceptStatus: 'active',
+        },
+      };
+      const result = await service.applyTerminologyConceptProjection(session, event);
+      expect(result.projected).toBe(true);
+      expect(result.conceptId).toBe('tc-1');
+      const params = session.run.mock.calls[0][1];
+      expect(params.conceptId).toBe('tc-1');
+      expect(params.code).toBe('HP:0000001');
+      expect(params.systemUri).toBe('http://purl.obolibrary.org/obo/hp.owl');
+      expect(params.display).toBe('All');
+    });
+
+    it('falls back to aggregateId for conceptId and "active" for conceptStatus when payload omits them', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyTerminologyConceptProjection(session, { aggregateId: 'agg-tc-2', payload: {} });
+      expect(result.conceptId).toBe('agg-tc-2');
+      const params = session.run.mock.calls[0][1];
+      expect(params.conceptStatus).toBe('active');
+      expect(params.code).toBe('');
+    });
+  });
+
+  describe('applyTerminologyRelationProjection', () => {
+    it('projects sourceConceptId/targetConceptId/relationType from payload', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const event = {
+        eventType: 'TERMINOLOGY_RELATION_PROMOTED',
+        aggregateId: 'agg-tr',
+        eventId: 'evt-tr-1',
+        payload: {
+          terminologyRelationId: 'tr-1',
+          sourceConceptId: 'tc-source',
+          targetConceptId: 'tc-target',
+          relationType: 'is_a',
+          relationVersion: 'sample-2026-07-31',
+        },
+      };
+      const result = await service.applyTerminologyRelationProjection(session, event);
+      expect(result.projected).toBe(true);
+      expect(result.sourceConceptId).toBe('tc-source');
+      expect(result.targetConceptId).toBe('tc-target');
+      const params = session.run.mock.calls[0][1];
+      expect(params.relationId).toBe('tr-1');
+      expect(params.relationType).toBe('is_a');
+    });
+
+    it('falls back to aggregateId for relationId when payload omits terminologyRelationId', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      await service.applyTerminologyRelationProjection(session, { aggregateId: 'agg-tr-2', payload: {} });
+      const params = session.run.mock.calls[0][1];
+      expect(params.relationId).toBe('agg-tr-2');
+      expect(params.sourceConceptId).toBe('');
+      expect(params.targetConceptId).toBe('');
     });
   });
 

@@ -31,10 +31,17 @@ function createFakeCollection() {
     find(filter = {}) {
       return { toArray: async () => docs.filter((doc) => matches(doc, filter)) };
     },
-    async updateOne(filter, update) {
+    async updateOne(filter, update, options = {}) {
       calls.push({ method: 'updateOne', filter, update });
       const doc = docs.find((d) => matches(d, filter));
-      if (!doc) return { matchedCount: 0, modifiedCount: 0 };
+      if (!doc) {
+        if (!options.upsert) return { matchedCount: 0, modifiedCount: 0 };
+        // Neo4jOutboxService.appendEvent's upsert-by-eventId shape — needed
+        // now that promote() appends a real outbox event per AC9.
+        const newDoc = { ...filter, ...(update.$setOnInsert || {}), ...(update.$set || {}) };
+        docs.push(newDoc);
+        return { matchedCount: 0, modifiedCount: 0, upsertedCount: 1 };
+      }
       if (update.$set) Object.assign(doc, update.$set);
       return { matchedCount: 1, modifiedCount: 1 };
     },
@@ -52,6 +59,7 @@ function createFakeDb() {
     referenceImportStaging: createFakeCollection(),
     terminologyConcepts: createFakeCollection(),
     terminologyRelations: createFakeCollection(),
+    graph_projection_outbox: createFakeCollection(),
   };
   return {
     collections,
@@ -92,6 +100,82 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       expect(conceptIds.has(relation.sourceConceptId)).toBe(true);
       expect(conceptIds.has(relation.targetConceptId)).toBe(true);
     }
+  });
+
+  describe('outbox → Neo4j projection (AC9)', () => {
+    it('appends one TERMINOLOGY_CONCEPT_PROMOTED and one TERMINOLOGY_RELATION_PROMOTED event per promoted record', async () => {
+      const fakeDb = createFakeDb();
+
+      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      const outboxDocs = fakeDb.collections.graph_projection_outbox.docs;
+      expect(outboxDocs).toHaveLength(15); // 8 concepts + 7 relations, matching Mongo promotion counts
+      expect(outboxDocs.filter((doc) => doc.eventType === 'TERMINOLOGY_CONCEPT_PROMOTED')).toHaveLength(8);
+      expect(outboxDocs.filter((doc) => doc.eventType === 'TERMINOLOGY_RELATION_PROMOTED')).toHaveLength(7);
+      expect(outboxDocs.every((doc) => doc.status === 'PENDING')).toBe(true);
+
+      const rootConcept = fakeDb.collections.terminologyConcepts.docs.find((c) => c.code === 'HP:0000001');
+      const rootEvent = outboxDocs.find(
+        (doc) => doc.eventType === 'TERMINOLOGY_CONCEPT_PROMOTED' && doc.payload.terminologyConceptId === rootConcept.terminologyConceptId,
+      );
+      expect(rootEvent.aggregateType).toBe('TerminologyConcept');
+      expect(rootEvent.aggregateId).toBe(rootConcept.terminologyConceptId);
+      expect(rootEvent.payload).toMatchObject({
+        systemUri: hpoSource.systemUri,
+        code: 'HP:0000001',
+        version: hpoSource.datasetVersion,
+        display: 'All',
+        conceptStatus: 'active',
+        referenceDatasetReleaseId: rootConcept.referenceDatasetReleaseId,
+      });
+
+      const relationDoc = fakeDb.collections.terminologyRelations.docs[0];
+      const relationEvent = outboxDocs.find(
+        (doc) => doc.eventType === 'TERMINOLOGY_RELATION_PROMOTED' && doc.payload.terminologyRelationId === relationDoc.terminologyRelationId,
+      );
+      expect(relationEvent.aggregateType).toBe('TerminologyRelation');
+      expect(relationEvent.payload).toMatchObject({
+        sourceConceptId: relationDoc.sourceConceptId,
+        targetConceptId: relationDoc.targetConceptId,
+        relationType: 'is_a',
+        relationVersion: hpoSource.datasetVersion,
+      });
+    });
+
+    it('does not append duplicate outbox events on a second, idempotent run', async () => {
+      const fakeDb = createFakeDb();
+
+      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord });
+      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord });
+
+      expect(fakeDb.collections.graph_projection_outbox.docs).toHaveLength(15);
+    });
+
+    it('does not append an outbox event for a concept that promote() finds already exists (skip-existing branch)', async () => {
+      const fakeDb = createFakeDb();
+
+      // Seed a pre-existing TerminologyConcept matching HP:0000001's exact
+      // systemUri+code+version — promote()'s findOne hits this and takes the
+      // recordsSkipped branch (no insertOne, so no outbox event either),
+      // while the other 7 concepts in the fixture still promote normally.
+      fakeDb.collections.terminologyConcepts.docs.push({
+        terminologyConceptId: 'pre-existing-root',
+        systemUri: hpoSource.systemUri,
+        code: 'HP:0000001',
+        version: hpoSource.datasetVersion,
+        display: 'All',
+      });
+
+      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      // 1 pre-seeded + 7 newly inserted (HP:0000001 was skipped, not re-inserted).
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(8);
+      const conceptEvents = fakeDb.collections.graph_projection_outbox.docs.filter(
+        (doc) => doc.eventType === 'TERMINOLOGY_CONCEPT_PROMOTED',
+      );
+      expect(conceptEvents).toHaveLength(7);
+      expect(conceptEvents.some((doc) => doc.payload.terminologyConceptId === 'pre-existing-root')).toBe(false);
+    });
   });
 
   it('is idempotent on a second run against the same content and version', async () => {

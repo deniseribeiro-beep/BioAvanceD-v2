@@ -80,6 +80,49 @@ class GraphProjectionService {
       schemaVersion: 1,
     });
   }
+
+  // RF028 AC9: "Persistir primeiro no MongoDB e projetar no Neo4j
+  // exclusivamente pelo outbox" — appended by reference-imports/pipeline.js's
+  // promote() on the same write that inserts a TerminologyConcept, same
+  // outbox pattern RF023 uses for consent/lineage/quality/telemetry.
+  async appendTerminologyConceptEvent(db, payload) {
+    return this.outbox.appendEvent(db, {
+      eventType: 'TERMINOLOGY_CONCEPT_PROMOTED',
+      aggregateType: 'TerminologyConcept',
+      aggregateId: String(payload.terminologyConceptId || payload.aggregateId || ''),
+      payload: {
+        terminologyConceptId: payload.terminologyConceptId || null,
+        systemUri: payload.systemUri || null,
+        code: payload.code || null,
+        version: payload.version || null,
+        display: payload.display || null,
+        conceptStatus: payload.conceptStatus || 'active',
+        referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null,
+      },
+      sourceService: payload.sourceService || 'graph-projection-service',
+      traceId: payload.traceId || null,
+      schemaVersion: 1,
+    });
+  }
+
+  async appendTerminologyRelationEvent(db, payload) {
+    return this.outbox.appendEvent(db, {
+      eventType: 'TERMINOLOGY_RELATION_PROMOTED',
+      aggregateType: 'TerminologyRelation',
+      aggregateId: String(payload.terminologyRelationId || payload.aggregateId || ''),
+      payload: {
+        terminologyRelationId: payload.terminologyRelationId || null,
+        sourceConceptId: payload.sourceConceptId || null,
+        targetConceptId: payload.targetConceptId || null,
+        relationType: payload.relationType || null,
+        relationVersion: payload.relationVersion || null,
+        referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null,
+      },
+      sourceService: payload.sourceService || 'graph-projection-service',
+      traceId: payload.traceId || null,
+      schemaVersion: 1,
+    });
+  }
 }
 
 module.exports = {

@@ -6,6 +6,7 @@ const ReferenceImportIssueModel = require('../../models/ReferenceImportIssue');
 const TerminologyConceptModel = require('../../models/TerminologyConcept');
 const TerminologyRelationModel = require('../../models/TerminologyRelation');
 const { CANONICAL_COLLECTIONS } = require('../../config/collections');
+const { GraphProjectionService } = require('../../services/graphProjection.service');
 
 // AC 10-style gate: a batch this bad blocks promotion outright rather than
 // letting a mostly-broken parse silently become an "active" release.
@@ -32,6 +33,7 @@ async function runImport({
   dryRun = false,
   initiatedBy = 'system:reference-data-bootstrap',
   batchSize = DEFAULT_BATCH_SIZE,
+  graphProjection = new GraphProjectionService(),
 }) {
   const releases = db.collection(CANONICAL_COLLECTIONS.referenceDatasetReleases);
   const runs = db.collection(CANONICAL_COLLECTIONS.referenceImportRuns);
@@ -177,7 +179,7 @@ async function runImport({
   let recordsSkipped = 0;
 
   if (approved && !dryRun) {
-    const promotion = await promote({ releases, concepts, relations, source, stagedConcepts, stagedRelations, checksum, fileSize });
+    const promotion = await promote({ db, releases, concepts, relations, source, stagedConcepts, stagedRelations, checksum, fileSize, graphProjection });
     releaseId = promotion.releaseId;
     recordsInserted = promotion.recordsInserted;
     recordsUpdated = promotion.recordsUpdated;
@@ -228,7 +230,7 @@ async function runImport({
   return { run: runDoc, releaseId, approved, idempotent: false };
 }
 
-async function promote({ releases, concepts, relations, source, stagedConcepts, stagedRelations, checksum, fileSize }) {
+async function promote({ db, releases, concepts, relations, source, stagedConcepts, stagedRelations, checksum, fileSize, graphProjection }) {
   const issues = [];
 
   const existingActive = await releases.findOne({ datasetCode: source.datasetCode, releaseStatus: 'active' });
@@ -291,6 +293,19 @@ async function promote({ releases, concepts, relations, source, stagedConcepts, 
     await concepts.insertOne(conceptDoc);
     codeToConceptId.set(candidate.code, conceptDoc.terminologyConceptId);
     recordsInserted += 1;
+    // AC9: Mongo write is the source of truth, appended on the same request
+    // the concept is actually inserted — never for the skip-existing branch
+    // above, mirroring RF023's "append on write" outbox discipline.
+    await graphProjection.appendTerminologyConceptEvent(db, {
+      terminologyConceptId: conceptDoc.terminologyConceptId,
+      systemUri: conceptDoc.systemUri,
+      code: conceptDoc.code,
+      version: conceptDoc.version,
+      display: conceptDoc.display,
+      conceptStatus: conceptDoc.conceptStatus,
+      referenceDatasetReleaseId: conceptDoc.referenceDatasetReleaseId,
+      sourceService: 'reference-imports-pipeline',
+    });
   }
 
   for (const candidate of stagedRelations) {
@@ -330,6 +345,15 @@ async function promote({ releases, concepts, relations, source, stagedConcepts, 
     });
     await relations.insertOne(relationDoc);
     recordsInserted += 1;
+    await graphProjection.appendTerminologyRelationEvent(db, {
+      terminologyRelationId: relationDoc.terminologyRelationId,
+      sourceConceptId: relationDoc.sourceConceptId,
+      targetConceptId: relationDoc.targetConceptId,
+      relationType: relationDoc.relationType,
+      relationVersion: relationDoc.relationVersion,
+      referenceDatasetReleaseId: relationDoc.referenceDatasetReleaseId,
+      sourceService: 'reference-imports-pipeline',
+    });
   }
 
   return { releaseId: releaseDoc.referenceDatasetReleaseId, recordsInserted, recordsUpdated, recordsSkipped, issues };
