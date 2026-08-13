@@ -10,13 +10,19 @@
 // Each entry carries a `kind` deciding which verification shape
 // verify-live-release.js runs: 'github-release' (default, omittable — HPO/
 // MONDO's shape: GitHub releases API + a LICENSE file/page reachable by
-// URL) or 'direct-download' (ORPHA's shape: a stable direct file URL with
-// no releases API, license stated on the download's own landing page — see
-// verifyDirectDownload's comment in verify-live-release.js). Not every
-// remaining source will fit either shape as-is (e.g. WHO's ICD-11/ICD-10
-// and OMIM are API-key-gated per dict-01_FONTES.md's SRC_ICD11/SRC_ICD10/
-// SRC_OMIM rows) — confirm live shape before assuming one of these two
-// covers it.
+// URL), 'direct-download' (ORPHA's shape: a stable direct file URL with no
+// releases API, license stated on the download's own landing page — see
+// verifyDirectDownload's comment in verify-live-release.js), or
+// 'redirect-version' (ICD-11's shape: the actual WHO ICD API is OAuth/
+// API-key gated, but its public browser exposes the release via a redirect
+// target instead of a releases API — see verifyRedirectVersion's comment).
+// Not every remaining source will fit one of these three as-is (e.g. ICD-10
+// is WHO-hosted like ICD-11 but its "URL oficial" is a fixed-edition browse
+// page rather than a "latest" redirect, so confirm rather than assume it
+// reuses ICD-11's shape verbatim; OMIM is a licensed/keyed API per
+// dict-01_FONTES.md's SRC_OMIM row with no public unauthenticated surface
+// found yet) — confirm live shape before assuming one of these three covers
+// it.
 //
 // releaseApiUrl/licenseUrl/expectedAssetName (or assetUrl for
 // direct-download entries) confirmed live against the real upstream before
@@ -67,5 +73,23 @@ module.exports = {
     // surrounding marketing prose, same durability reasoning as HPO's
     // pointer choice.
     expectedLicensePointer: 'creativecommons.org/licenses/by/4.0',
+  },
+  // #557: confirmed live on 2026-08-13. The WHO ICD API itself
+  // (icd.who.int/icdapi) requires OAuth2 client-credentials per
+  // dict-01_FONTES.md's SRC_ICD11 row, but the public browser is
+  // unauthenticated: `GET /browse/latest-release/mms/en` 302s to the
+  // current release's own path (curl -sD- -L confirmed `Location:
+  // /browse/2026-01/mms/en`; HEAD isn't usable, that path 405s on HEAD).
+  // License is a WHO-hosted PDF linked from icd.who.int/en as "ICD-11
+  // License" rather than a LICENSE file/landing-page link; its raw bytes
+  // decode (via fetchText's UTF-8 .text()) with "World Health Organization"
+  // intact as plain ASCII in the PDF's uncompressed outline metadata.
+  ICD11: {
+    datasetCode: 'ICD11',
+    kind: 'redirect-version',
+    releaseUrl: 'https://icd.who.int/browse/latest-release/mms/en',
+    versionPattern: /\/browse\/([^/]+)\/mms/,
+    licenseUrl: 'https://icd.who.int/en/docs/ICD11-license.pdf',
+    expectedLicensePointer: 'World Health Organization',
   },
 };

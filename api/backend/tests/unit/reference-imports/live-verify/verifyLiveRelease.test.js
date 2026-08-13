@@ -174,3 +174,69 @@ describe('verify-live-release.verify — ORPHA (direct-download)', () => {
     expect(report.live.licensePointerPresent).toBe(false);
   });
 });
+
+// #557 ICD11: a 'redirect-version' entry — the WHO ICD API itself is
+// OAuth-gated, so there's no releases API or direct-download asset to check;
+// instead a stable "latest" URL 302s to the current release's own path, and
+// the release identifier is read off the redirect target (response.url)
+// rather than any JSON field or header. License is a WHO-hosted PDF, so the
+// mock's "license" branch returns raw-ish text the way fetchText()'s UTF-8
+// decode of the real PDF's bytes still surfaces the plain-ASCII pointer
+// phrase live (confirmed 2026-08-13).
+function mockRedirectVersionFetchResponses({ redirectOk = true, redirectedUrl = 'https://icd.who.int/browse/2026-01/mms/en', licenseText }) {
+  global.fetch = vi.fn(async (url) => {
+    if (url.includes('/browse/latest-release/')) {
+      return { ok: redirectOk, status: redirectOk ? 200 : 404, url: redirectedUrl };
+    }
+    if (url.includes('ICD11-license.pdf')) {
+      return { ok: true, status: 200, text: async () => licenseText };
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — ICD11 (redirect-version)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "verified" when the redirect resolves to a release path and the license pointer is live', async () => {
+    mockRedirectVersionFetchResponses({
+      licenseText: 'International Classification of Diseases, Eleventh Revision (ICD-11), World Health Organization (WHO) 2019',
+    });
+
+    const report = await verify('ICD11');
+
+    expect(report.status).toBe('verified');
+    expect(report.live.releaseVersion).toBe('2026-01');
+    expect(report.live.redirectedTo).toBe('https://icd.who.int/browse/2026-01/mms/en');
+    expect(report.live.licensePointerPresent).toBe(true);
+    expect(report.fixtureSource.systemUri).toBe('http://id.who.int/icd/release/11/mms');
+  });
+
+  it('reports status "mismatch" when the redirect target no longer carries a recognizable release path', async () => {
+    mockRedirectVersionFetchResponses({
+      redirectedUrl: 'https://icd.who.int/en/maintenance',
+      licenseText: 'World Health Organization',
+    });
+
+    const report = await verify('ICD11');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.releaseVersion).toBe(null);
+  });
+
+  it('reports status "mismatch" when the license PDF no longer contains the expected pointer text', async () => {
+    mockRedirectVersionFetchResponses({
+      licenseText: 'This document has moved.',
+    });
+
+    const report = await verify('ICD11');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.licensePointerPresent).toBe(false);
+  });
+});
