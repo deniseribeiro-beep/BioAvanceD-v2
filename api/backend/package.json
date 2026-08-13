@@ -93,6 +93,7 @@
     "reference:live-verify:duo": "node scripts/reference-imports/live-verify/verify-live-release.js DUO",
     "reference:live-verify:uberon": "node scripts/reference-imports/live-verify/verify-live-release.js UBERON",
     "reference:live-verify:ncbitax": "node scripts/reference-imports/live-verify/verify-live-release.js NCBITAX",
+    "reference:live-verify:cl": "node scripts/reference-imports/live-verify/verify-live-release.js CL",
     "test:architecture": "node --test \"tests/architecture/**/*.arch.test.js\"",
     "test:unit:vitest": "vitest run",
     "test": "vitest run",
