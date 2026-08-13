@@ -7,90 +7,106 @@ after Dennis said "Continue 557" (following the prior handoff's top candidate).
 
 Continued #557 ("apply #556's live-download + license-verification pattern
 to the remaining Fase 2 sources") via `build-loop`, picking up right after
-the prior session's ORPHA slice.
+the prior session's ICD-11 slice with the next source in
+`docs/docs-7-31-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md` §7.4's
+"ORPHA, CID-11, CID-10 e OMIM" group: **ICD-10**.
 
-- Per `docs/docs-7-31-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md`
-  §7.4 "Ordem recomendada da Fase 2" step 4's "ORPHA, CID-11, CID-10 e
-  OMIM" group, the next source after ORPHA is **ICD-11** (dict-01's
-  `SRC_ICD11` — remember to translate CID→ICD before grepping the dict,
-  per the build-loop overlay's confirmed trap).
-- `dict-01_FONTES.md`'s `SRC_ICD11` row correctly flags the WHO ICD API
-  itself (`https://icd.who.int/icdapi`) as OAuth/API-key gated — but that
-  turned out not to be the whole story. **Discovered `icd.who.int`'s
-  public browser (a separate surface from the API) is unauthenticated**:
-  `GET https://icd.who.int/browse/latest-release/mms/en` 302-redirects to
-  the current release's own path (confirmed live 2026-08-13:
-  `Location: /browse/2026-01/mms/en`; HEAD isn't usable there — 405).
-  License is a WHO-hosted PDF linked from `icd.who.int/en` as "ICD-11
-  License" (`ICD11-license.pdf`); confirmed its raw bytes still surface a
-  plain-ASCII pointer phrase ("World Health Organization") through a
-  normal UTF-8 `.text()` decode, so the existing `fetchText()` helper
-  works on it unmodified.
-- **Generalized `verify-live-release.js` with a third `kind`**:
-  `'redirect-version'` (ICD-11's shape — GET a stable "latest" URL,
-  extract the release version from the redirect target via
-  `response.url`, no releases API or asset check involved), alongside
-  the existing `'github-release'` (HPO/MONDO) and `'direct-download'`
-  (ORPHA). Added `fetchRedirectTarget()` to `fetchLiveRelease.js`.
-- Added the `ICD11` entry to `liveVerifySources.js`, `reference:live-verify:icd11`
-  npm script, 3 new mocked-fetch unit tests (verified/mismatch-redirect/
-  mismatch-license, mirroring the HPO/MONDO/ORPHA cases but exercising
-  the new redirect-version mock shape).
-- **`npm run reference:live-verify:icd11` run natively end-to-end against
-  the real icd.who.int upstream** — reports `status: "verified"`.
-  Also re-ran `reference:live-verify:orpha` and `reference:live-verify:mondo`
-  natively as regression checks on the twice-refactored
-  `verify-live-release.js` — both still `"verified"`.
+- Confirmed the trap flagged in the prior handoff was real: per
+  `dict-01_FONTES.md`'s SRC_ICD10 row, the "URL oficial"
+  (`https://icd.who.int/browse10/2019/en`) is a **fixed-edition** browse
+  page, not a "latest" redirect like ICD-11's. Live checks (curl,
+  2026-08-13): the page 200s directly (no redirect; HEAD also works,
+  unlike ICD-11's redirect target which 405s on HEAD), and the edition is
+  embedded twice in static page markup — `<title>ICD-10 Version:2019</title>`
+  and `oInfo.ontologyKey = "2019"` — rather than exposed via a redirect
+  target, releases API, or Last-Modified header.
+- **No ICD-10-specific license document was found live.** The browse page
+  itself carries no license/copyright text; the one PDF it links (the
+  Instruction Manual, `ICD10Volume2_en_2019.pdf`) is compressed, so
+  `fetchText()`'s naive UTF-8 `.text()` decode — which worked for ICD-11's
+  *uncompressed* license PDF — doesn't surface readable "World Health
+  Organization" text from it. `dict-01_FONTES.md`'s SRC_ICD10 row itself
+  only gives the generic "Termos WHO/edição nacional" with no
+  source-specific license URL (unlike SRC_ICD11's dedicated PDF).
+  Resolved by reusing **WHO's sitewide Terms of Use page**
+  (`https://www.who.int/about/policies/terms-of-use`) as the
+  license-bearing surface — confirmed live to contain the durable
+  plain-text pointer "Copyright World Health Organization (WHO)" in
+  actual prose (not just page `<meta>` tags). This is a second precedent
+  (after #265's API-vs-public-website lesson) for not treating a missing
+  source-specific license link as a dead end — check the authority's
+  general/sitewide terms page before concluding a source can't be
+  verified.
+- **Added a fourth `kind` to `verify-live-release.js`**: `'fixed-edition'`
+  (`verifyFixedEdition`) — GETs a stable, non-redirecting page URL,
+  extracts the live edition via a regex against the page body, and
+  compares it to the expected edition, alongside the existing
+  `'github-release'` (HPO/MONDO), `'direct-download'` (ORPHA), and
+  `'redirect-version'` (ICD-11) shapes.
+- Added the `ICD10` entry to `liveVerifySources.js`, `reference:live-verify:icd10`
+  npm script, 3 new mocked-fetch unit tests (verified/mismatch-edition/
+  mismatch-license, mirroring the other three shapes' test structure).
+- **`npm run reference:live-verify:icd10` run natively end-to-end against
+  the real icd.who.int/who.int upstream** — reports `status: "verified"`.
+  Also re-ran `reference:live-verify:icd11`, `:orpha`, and `:mondo`
+  natively as regression checks on the twice-more-refactored
+  `verify-live-release.js` — all three still `"verified"`.
 - No changes needed to the arch tests or the CI workflow — same as
-  MONDO/ORPHA's precedent, #555's directory-wide arch-test design and the
-  generic `workflow_dispatch` input already cover any new registry entry
-  automatically.
+  MONDO/ORPHA/ICD-11's precedent, #555's directory-wide arch-test design
+  and the generic `workflow_dispatch` input already cover any new
+  registry entry automatically.
+- Did **not** touch `src/reference-data/reference-imports/sources/icd10.js`
+  (the fixture source config) — confirmed via `icd11.js`'s precedent that
+  the fixture-source comment intentionally stays pointed at "#550 the
+  live-verify follow-up" without being updated once that follow-up lands
+  for a given source; the live-verify registry (`liveVerifySources.js`)
+  is the one place this work records itself, per the architectural
+  boundary `reference-import-boundary.arch.test.js`/
+  `reference-live-verify-boundary.arch.test.js` enforce.
 
 Verified: 60/60 architecture tests (native, `node --test`, unchanged
-count), 118/118 unit tests across `tests/unit/reference-imports/`
-(vitest, up from 115 — the 3 new ICD11 cases), lint (383 files) clean,
-all three live-verify scripts (ICD11, ORPHA regression, MONDO
-regression) run natively against their real upstreams.
+count), 121/121 unit tests across `tests/unit/reference-imports/`
+(vitest, up from 118 — the 3 new ICD10 cases), lint (383 files) clean,
+all four live-verify scripts (ICD10, ICD11 regression, ORPHA regression,
+MONDO regression) run natively against their real upstreams.
 
-Own branch `test/557-live-verify-icd11` (same `test/<slug>` fallback as
-prior #557 slices — no dedicated `build-loop` prefix exists yet),
-committed, merged (no-ff) into `feature/docker-e2e-backend-integration`,
-pushed (`a07a3d4e`), local branch deleted (never pushed to remote, so no
-remote delete needed).
-**#557 left open** with a progress comment (4 of 15 done — HPO, MONDO,
-ORPHA, ICD-11 — 12 remain) — not closed, since the issue covers all 15
-sources and only one landed this session.
+Own branch `test/557-live-verify-icd10` (same `test/<slug>` fallback as
+prior #557 slices), committed, merged (no-ff) into
+`feature/docker-e2e-backend-integration`, pushed (`607542b0`), local
+branch deleted (never pushed to remote, so no remote delete needed).
+**#557 left open** with a progress comment (5 of 15 done — HPO, MONDO,
+ORPHA, ICD-11, ICD-10 — 10 remain) — not closed, since the issue covers
+all 15 sources and only one landed this session.
 
-`wrap-up` filed one issue: **dyeallpies-skills-pack#265** — a follow-up
-to the now-closed `#264`, since ICD-11's slice resolved #264's "part 2"
-question (whether CID-11/CID-10/OMIM would need a third `kind` or a
-"not live-verifiable without credentials" carve-out) with an answer
-neither option anticipated: the API being auth-gated doesn't mean the
-*authority's public website* is too — check for an unauthenticated
-browse/docs/landing surface exposing the same release signal before
-assuming the carve-out applies. Flags that CID-10 (fixed-edition browse
-page per the dict, not a "latest" redirect — may not reuse ICD-11's
-shape verbatim) and OMIM (licensed/keyed API, no public surface found
-yet) are still genuinely open. Filed against the skills-pack tracker
-rather than edited directly (Rule 0 — this session isn't a pack-repo
-session).
+`wrap-up` filed one issue: **dyeallpies-skills-pack#266** — the
+`build-loop` BioAvanceD-v2 overlay's "Not every RF028 Fase 2 source is
+GitHub-hosted" bullet had gone stale: it predicted CID-11/CID-10 would
+share one new third `kind` or need a "not live-verifiable" carve-out.
+Neither happened — ICD-11 used `'redirect-version'` and ICD-10 needed
+its *own* fourth `kind`, `'fixed-edition'`, plus the license-surface
+lesson above. Filed against the skills-pack tracker with the exact
+replacement paragraph, rather than edited directly, because the overlay
+file at `.claude/skills/build-loop/local-env/bioavanced-v2.md` is a
+junction into the skills-pack clone (Rule 0) — confirmed the hard way
+this session when a first attempt to edit it in place was blocked by the
+pack's own guard hook.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `a07a3d4e`, clean,
+- **`feature/docker-e2e-backend-integration`**: at `607542b0`, clean,
   pushed, up to date with origin. Carries #555/#556's live-verify
-  infrastructure + HPO pilot + MONDO + ORPHA (prior sessions) + this
-  session's ICD-11 entry and the third-`kind`-generalized
+  infrastructure + HPO pilot + MONDO + ORPHA + ICD-11 (prior sessions) +
+  this session's ICD-10 entry and the fourth-`kind`-generalized
   `verify-live-release.js`, on top of #549's full 16-source Fase 2
   fixture-import group.
 - Issues this session: **none closed**. **#557 open**, progress comment
-  added (HPO/MONDO/ORPHA/ICD-11 done, 12 sources remain: CID-10, OMIM,
+  added (HPO/MONDO/ORPHA/ICD-11/ICD-10 done, 10 sources remain: OMIM,
   HGNC, LOINC, UCUM, DCB, ATC, DUO, Uberon, NCBI Taxonomy, Cell Ontology,
   EDAM). **#550 open** (tracking issue for the original 3-way split,
-  unchanged). **dyeallpies-skills-pack#265 opened** (pack-repo tracker,
-  follow-up to the now-closed #264 — see above).
+  unchanged). **dyeallpies-skills-pack#266 opened** (pack-repo tracker,
+  stale-overlay fix for the ICD-11/ICD-10 prediction — see above).
 - Docker: not used this session — live-verify is a network-only script,
-  no Mongo/Docker involved, same as HPO/MONDO/ORPHA precedent.
+  no Mongo/Docker involved, same as HPO/MONDO/ORPHA/ICD-11 precedent.
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged from before — see earlier handoffs for the full list;
   not re-enumerated here to avoid drift from a list nobody re-verified
@@ -104,18 +120,20 @@ Dennis has not explicitly said which issue to pick up next session — per
 Candidates carried forward:
 
 - **#557** — continue the live-verify pattern for the next source in
-  recommended order: **CID-10 (ICD-10)** (§7.4 step 4, same group as
-  ORPHA/ICD-11/OMIM — translate "CID" → "ICD" before grepping
-  `dict-01_FONTES.md`). **Known trap before assuming ICD-11's shape
-  applies:** per `dict-01_FONTES.md`'s SRC_ICD10 row, the "URL oficial"
-  is a fixed-edition browse page (`https://icd.who.int/browse10/2019/en`),
-  not a "latest release" redirect like ICD-11's — confirm the actual live
-  shape (curl/WebFetch) rather than assuming `'redirect-version'` reuses
-  verbatim; it may need its own `kind` or turn out to fit one of the
-  three already implemented. See dyeallpies-skills-pack#265 for the fuller
-  context. OMIM (same step-4 group) is a licensed/keyed API with no known
-  public unauthenticated surface yet — may be the first source that
-  genuinely needs a "not live-verifiable without credentials" carve-out.
+  recommended order: **OMIM** (§7.4 step 4, last member of the
+  "ORPHA, CID-11, CID-10, OMIM" group). Per `dict-01_FONTES.md`'s
+  SRC_OMIM row, OMIM is a licensed/keyed API (`https://omim.org/api/`,
+  "Chave/API/licença") with the general `omim.org` landing page as the
+  only unauthenticated surface known so far — **check whether that
+  landing page (or any OMIM docs/about page) exposes a release/version
+  signal and license terms unauthenticated before assuming this needs a
+  "not live-verifiable without credentials" carve-out** (the same check
+  that resolved ICD-11's and ICD-10's nominally-gated sources into real
+  `kind`s rather than carve-outs, both times — see
+  dyeallpies-skills-pack#266 for the fuller ICD-10 context). If OMIM
+  really has no public unauthenticated surface, this would be the first
+  Fase 2 source needing the documented carve-out itself, which is its
+  own kind of "shape to confirm and record."
 - **#550** — stays open as the tracking issue for the original split
   until #557 fully lands.
 - **#551** — full AC7 lifecycle (checkpoint/resume, quarantine recovery,
@@ -136,10 +154,10 @@ Candidates carried forward:
   `#341`/`#340`, `#334`, `#331`/`#326`/`#325`, `#321`, `#319`, `#286`,
   `#284`, `#283`, `#282`, `#228`, `#115`, next e2e slice per
   `E2E_TRACEABILITY_PLAN.md`.
-- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246/#247/#250/#251/#254/#259/#260/#262/#263/#265**
-  — pack-repo only, low priority except #265 (adds the live-vs-API-surface
-  precedent for the very next #557 slice), unchanged otherwise this
-  session.
+- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246/#247/#250/#251/#254/#259/#260/#262/#263/#265/#266**
+  — pack-repo only, low priority except #266 (the stale ICD-11/ICD-10
+  prediction fix for the very next #557 slice's own overlay text),
+  unchanged otherwise this session.
 
 ## Dev stack state
 
@@ -151,31 +169,38 @@ Same state as the prior handoff left it: torn down, named volumes
 
 - `build-loop`'s "check spec docs for recommended order before asking the
   user which sub-item to start with" guidance paid off again — §7.4 gave
-  ICD-11 as the unambiguous next pick after ORPHA with no need to ask
+  ICD-10 as the unambiguous next pick after ICD-11 with no need to ask
   Dennis.
-- **New lesson this session, not yet in the build-loop overlay** (filed as
-  dyeallpies-skills-pack#265 rather than edited directly, per Rule 0):
-  an API-key-gated dict-01 row doesn't automatically mean "not
-  live-verifiable without credentials" — the same authority often runs a
-  separate, unauthenticated public website (browse UI, docs page, landing
-  page) exposing the same release/version signal the gated API would.
-  Check for that surface before reaching for the "can't verify" carve-out.
-- Confirmed pattern for future #557 sources, updated: (1) read the
-  existing fixture source file in
+- Confirmed pattern for future #557 sources, unchanged from the prior
+  handoff: (1) read the existing fixture source file in
   `src/reference-data/reference-imports/sources/<code>.js` for
   `systemUri`/`license`/`licenseUri`, (2) check `dict-01_FONTES.md`'s row
   for the source's stated distribution channel first — GitHub repo,
   direct-download URL, or an authenticated API — rather than assuming the
-  GitHub shape, (3) **for a nominally API-key-gated source, also check
+  GitHub shape, (3) for a nominally API-key-gated source, also check
   whether the authority's public website exposes the release/license
-  signal unauthenticated before assuming no live-check is possible** (new
-  this session, see #265), (4) for a GitHub-hosted source: `gh api
-  repos/<org>/<repo>` for license auto-detection + `.../releases/latest`
-  for the asset list; for a direct-download source: `curl -I` the stable
-  asset URL and `curl`/WebFetch the license-bearing page for the pointer
-  phrase; for a redirect-based source (ICD-11's shape): GET the stable
-  "latest" URL and read the redirect target (`response.url`) rather than
-  HEAD (may 405), (5) add the registry entry (with the right `kind`) + npm
-  script + mocked unit tests + run the live script natively, re-running
-  the already-landed sources too as a regression check whenever
-  `verify-live-release.js` itself changed.
+  signal unauthenticated before assuming no live-check is possible (#265,
+  reconfirmed by ICD-10's license surface this session — see #266), (4)
+  for a GitHub-hosted source: `gh api repos/<org>/<repo>` for license
+  auto-detection + `.../releases/latest` for the asset list; for a
+  direct-download source: `curl -I` the stable asset URL and
+  `curl`/WebFetch the license-bearing page for the pointer phrase; for a
+  redirect-based source (ICD-11's shape): GET the stable "latest" URL and
+  read the redirect target (`response.url`) rather than HEAD (may 405);
+  for a fixed-edition source (ICD-10's shape, new this session): GET the
+  stable page URL directly (HEAD also works here, unlike the redirect
+  shape) and extract the edition from the page body via regex, (5) add
+  the registry entry (with the right `kind`) + npm script + mocked unit
+  tests + run the live script natively, re-running the already-landed
+  sources too as a regression check whenever `verify-live-release.js`
+  itself changed.
+- **New lesson this session**: `.claude/skills/build-loop/local-env/`
+  overlay files are junctions into the skills-pack clone, not
+  project-local editable files, even though they're gitignored in this
+  repo (gitignored ≠ project-local-and-freely-editable — those are
+  independent facts, and this session initially conflated them). Editing
+  one directly from a BioAvanceD-v2 session is blocked by the pack's own
+  guard hook (Rule 0) the same as any other pack skill file; file an
+  issue against the skills-pack repo with the exact replacement text
+  instead (see dyeallpies-skills-pack#266 for the pattern used this
+  session).
