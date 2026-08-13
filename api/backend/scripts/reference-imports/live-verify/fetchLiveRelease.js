@@ -8,9 +8,15 @@ const crypto = require('crypto');
 // never be imported by any of them. Verification-only: never writes to
 // Mongo, never runs pipeline.js's promote() step.
 
-/** Fetches JSON from a live URL (e.g. a GitHub releases API endpoint). */
-async function fetchJson(url) {
-  const response = await fetch(url, { headers: { Accept: 'application/vnd.github+json' } });
+/**
+ * Fetches JSON from a live URL (e.g. a GitHub releases API endpoint).
+ * `headers` defaults to GitHub's own recommended Accept type — override it
+ * for APIs that content-negotiate differently (e.g. HGNC's REST API, #557:
+ * confirmed live that rest.genenames.org/info returns XML unless the
+ * request sends a plain `Accept: application/json` header).
+ */
+async function fetchJson(url, headers = { Accept: 'application/vnd.github+json' }) {
+  const response = await fetch(url, { headers });
   if (!response.ok) {
     throw new Error(`fetchJson failed for ${url}: HTTP ${response.status}`);
   }

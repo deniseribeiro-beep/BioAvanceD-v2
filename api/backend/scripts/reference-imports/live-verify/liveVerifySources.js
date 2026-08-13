@@ -2,9 +2,10 @@
 // verify job. Deliberately separate from src/reference-data/reference-imports
 // /sources/*.js — those stay pointed at the bundled fixture only, per
 // reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
-// ORPHA, ICD-10/ICD-11, and OMIM (#557) are populated so far; 10 sources
-// remain, added here one entry at a time (per docs-7-31-2026/3-Plano_
-// Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem recomendada da Fase 2").
+// ORPHA, ICD-10/ICD-11, OMIM, and HGNC (#557) are populated so far; 9
+// sources remain, added here one entry at a time (per docs-7-31-2026/3-
+// Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem recomendada da
+// Fase 2").
 //
 // Each entry carries a `kind` deciding which verification shape
 // verify-live-release.js runs: 'github-release' (default, omittable — HPO/
@@ -19,27 +20,35 @@
 // fixed-edition browse page rather than a "latest" redirect — the edition is
 // read out of the page body itself, and no source-specific license document
 // was found live, so it reuses WHO's sitewide Terms of Use page instead —
-// see verifyFixedEdition's comment), or 'not-live-verifiable' (OMIM's shape:
+// see verifyFixedEdition's comment), 'not-live-verifiable' (OMIM's shape:
 // unlike ICD-11/ICD-10, the entire public web domain is behind an
 // interactive Cloudflare bot challenge and its own robots.txt disallows
 // crawling — no automated request should even be attempted; see
-// verifyNotLiveVerifiable's comment). Not every remaining source will fit
-// one of these five as-is — confirm live shape before assuming one of them
-// covers it.
+// verifyNotLiveVerifiable's comment), or 'rest-info' (HGNC's shape: a
+// genuinely public, unauthenticated REST API with no discrete
+// releases/tags/editions at all — the "release" signal is a live
+// `lastModified` timestamp from a JSON info endpoint instead; see
+// verifyRestInfo's comment). Not every remaining source will fit one of
+// these six as-is — confirm live shape before assuming one of them covers
+// it.
 //
-// releaseApiUrl/licenseUrl/expectedAssetName (or assetUrl/pageUrl for
-// direct-download/fixed-edition entries) confirmed live against the real
-// upstream before being added — never assumed from training-data recall.
-// HPO/MONDO: 2026-08-12/13 via `gh api repos/<org>/<repo>` + `.../releases/
-// latest`. ORPHA: 2026-08-13 via curl against orphacode.org (no GitHub
-// involved) — same verification discipline EDAM's #549 slice established.
-// ICD-10: 2026-08-13 via curl against icd.who.int/browse10 and
-// who.int/about/policies/terms-of-use. OMIM: 2026-08-13 via curl and
-// WebFetch against omim.org/www.omim.org (all 403, `Cf-Mitigated:
-// challenge`) and its robots.txt (200, explicit crawl disallow + auto-block
-// warning) — a negative result, not a positive one, but confirmed live
-// rather than assumed from the dict-01 row's "Chave/API/licença" auth note
-// alone.
+// releaseApiUrl/licenseUrl/expectedAssetName (or assetUrl/pageUrl/infoUrl
+// for direct-download/fixed-edition/rest-info entries) confirmed live
+// against the real upstream before being added — never assumed from
+// training-data recall. HPO/MONDO: 2026-08-12/13 via `gh api repos/<org>/
+// <repo>` + `.../releases/latest`. ORPHA: 2026-08-13 via curl against
+// orphacode.org (no GitHub involved) — same verification discipline EDAM's
+// #549 slice established. ICD-10: 2026-08-13 via curl against
+// icd.who.int/browse10 and who.int/about/policies/terms-of-use. OMIM:
+// 2026-08-13 via curl and WebFetch against omim.org/www.omim.org (all 403,
+// `Cf-Mitigated: challenge`) and its robots.txt (200, explicit crawl
+// disallow + auto-block warning) — a negative result, not a positive one,
+// but confirmed live rather than assumed from the dict-01 row's
+// "Chave/API/licença" auth note alone. HGNC: 2026-08-13 via curl against
+// rest.genenames.org/info (with and without an explicit `Accept:
+// application/json` header — it silently 200s with XML unless that header
+// is sent) and www.genenames.org/about/ (its "Data release policy"
+// section).
 module.exports = {
   HPO: {
     datasetCode: 'HPO',
@@ -149,5 +158,29 @@ module.exports = {
       'omim.org (both apex and www) returns HTTP 403 with a Cloudflare interactive bot challenge ' +
       '(Cf-Mitigated: challenge) on every page tried (/, /help/api, /downloads, /about), and its own ' +
       'robots.txt explicitly disallows crawling and warns of automatic IP blocking. Confirmed live 2026-08-13.',
+  },
+  // #557: confirmed live on 2026-08-13. dict-01_FONTES.md's SRC_HGNC row
+  // states "Não ou conforme endpoint" for auth — genenames.org's REST API
+  // (rest.genenames.org) is genuinely public with no key/token anywhere.
+  // Unlike every prior source in this group, HGNC has no discrete
+  // releases/tags/editions to check at all: the row's own "Atualização"
+  // value is "Contínua" (continuous), and `GET rest.genenames.org/info`
+  // confirms this directly — it returns a live `lastModified` timestamp
+  // (currently 2026-08-11) and a `numDoc` record count (currently 46832)
+  // rather than any versioned identifier. That request only returns valid
+  // JSON when it sends an explicit `Accept: application/json` header
+  // (confirmed via curl both with and without one — without it, or with
+  // GitHub's `application/vnd.github+json`, the endpoint silently 200s with
+  // an XML body instead). License is on genenames.org's own "About" page
+  // (https://www.genenames.org/about/), in a "Data release policy" section
+  // reading "No restrictions are imposed on access to, or use of, the data
+  // provided by the HGNC" — no separate LICENSE file, PDF, or CC-style badge
+  // the way HPO/MONDO/ORPHA have.
+  HGNC: {
+    datasetCode: 'HGNC',
+    kind: 'rest-info',
+    infoUrl: 'https://rest.genenames.org/info',
+    licenseUrl: 'https://www.genenames.org/about/',
+    expectedLicensePointer: 'No restrictions are imposed on access to, or use of, the data provided by the HGNC',
   },
 };

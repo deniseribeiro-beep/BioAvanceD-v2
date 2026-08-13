@@ -344,3 +344,71 @@ describe('verify-live-release.verify — OMIM (not-live-verifiable)', () => {
     expect(report.fixtureSource.systemUri).toBe('https://www.omim.org');
   });
 });
+
+// #557 HGNC: a 'rest-info' entry — genenames.org's REST API is genuinely
+// public (dict-01_FONTES.md's SRC_HGNC row: "Não ou conforme endpoint" for
+// auth), but unlike every other source in this group HGNC has no discrete
+// release/tag/edition at all — it's a continuously-updated dataset, so the
+// "release" signal is a live `lastModified` timestamp from a JSON info
+// endpoint instead. Confirmed live 2026-08-13 that the endpoint only
+// returns JSON when the request sends an explicit `Accept: application/json`
+// header (without one it silently 200s with XML instead), so the mock
+// asserts that header is actually sent, not just that some fetch happened.
+function mockRestInfoFetchResponses({ lastModified = '2026-08-11T11:45:27.655Z', numDoc = 46832, licenseText }) {
+  global.fetch = vi.fn(async (url, options = {}) => {
+    if (url.includes('rest.genenames.org/info')) {
+      expect(options.headers).toEqual({ Accept: 'application/json' });
+      return { ok: true, status: 200, json: async () => ({ lastModified, numDoc }) };
+    }
+    if (url.includes('genenames.org/about')) {
+      return { ok: true, status: 200, text: async () => licenseText };
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — HGNC (rest-info)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "verified" when the info endpoint reports a lastModified timestamp and the license pointer is live', async () => {
+    mockRestInfoFetchResponses({
+      licenseText: 'No restrictions are imposed on access to, or use of, the data provided by the HGNC, which are provided to enhance knowledge.',
+    });
+
+    const report = await verify('HGNC');
+
+    expect(report.status).toBe('verified');
+    expect(report.live.lastModified).toBe('2026-08-11T11:45:27.655Z');
+    expect(report.live.numDoc).toBe(46832);
+    expect(report.live.licensePointerPresent).toBe(true);
+    expect(report.fixtureSource.systemUri).toBe('https://www.genenames.org');
+  });
+
+  it('reports status "mismatch" when the info endpoint no longer reports a lastModified timestamp', async () => {
+    mockRestInfoFetchResponses({
+      lastModified: null,
+      licenseText: 'No restrictions are imposed on access to, or use of, the data provided by the HGNC.',
+    });
+
+    const report = await verify('HGNC');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.lastModified).toBeNull();
+  });
+
+  it('reports status "mismatch" when the About page no longer contains the expected license pointer', async () => {
+    mockRestInfoFetchResponses({
+      licenseText: 'Our data release policy has moved, see our new legal page.',
+    });
+
+    const report = await verify('HGNC');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.licensePointerPresent).toBe(false);
+  });
+});
