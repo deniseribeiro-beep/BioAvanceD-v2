@@ -241,20 +241,21 @@ describe('PatientService.checkIdentifierConflict', () => {
     ).resolves.toBeNull();
   });
 
-  it('returns null when no existing patient matches the $or filter', async () => {
+  it('returns null when no existing identity/patient matches', async () => {
     const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const participantIdentitiesCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkIdentifierConflict(db, { identityDocument: '52998224725' });
 
     expect(result).toBeNull();
   });
 
-  it('reports an identityDocument conflict when the existing record matches on identityDocument', async () => {
-    const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ identityDocument: '529.982.247-25', recordNumber: 'OTHER' })
+  it('reports an identityDocument conflict when the existing record matches on identityDocument (#561: resolved via ParticipantIdentity)', async () => {
+    const participantIdentitiesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ identityDocument: '529.982.247-25' })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkIdentifierConflict(db, {
       identityDocument: '52998224725',
@@ -265,10 +266,11 @@ describe('PatientService.checkIdentifierConflict', () => {
   });
 
   it('reports a recordNumber conflict when the existing record matches on recordNumber only', async () => {
+    const participantIdentitiesCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ identityDocument: 'DIFFERENT', recordNumber: 'REC-1' })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkIdentifierConflict(db, {
       identityDocument: '52998224725',
@@ -276,17 +278,6 @@ describe('PatientService.checkIdentifierConflict', () => {
     });
 
     expect(result).toEqual({ field: 'recordNumber', value: 'REC-1', existing: expect.any(Object) });
-  });
-
-  it('reports a generic "identifier" conflict when the matched record does not match either field specifically', async () => {
-    const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ identityDocument: 'SOMETHING-ELSE', recordNumber: 'SOMETHING-ELSE-2' })
-    });
-    const db = makeFakeDb({ patients: patientsCollection });
-
-    const result = await patientService.checkIdentifierConflict(db, { identityDocument: '52998224725' });
-
-    expect(result).toEqual({ field: 'identifier', value: null, existing: expect.any(Object) });
   });
 });
 
@@ -303,13 +294,13 @@ describe('PatientService.checkDuplicatePatient', () => {
     expect(result).toBeNull();
   });
 
-  it('matches an existing patient when birthDate is already a Date instance', async () => {
-    const patientsCollection = makeFakeCollection({
+  it('matches an existing identity when birthDate is already a Date instance (#561: resolved via ParticipantIdentity)', async () => {
+    const participantIdentitiesCollection = makeFakeCollection({
       find: vi.fn().mockReturnValue({
         toArray: vi.fn().mockResolvedValue([{ patientName: 'Maria Silva', birthDate: new Date(1990, 0, 1) }])
       })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkDuplicatePatient(db, {
       patientName: '  MARIA   SILVA ',
@@ -319,13 +310,13 @@ describe('PatientService.checkDuplicatePatient', () => {
     expect(result).toEqual({ patientName: 'Maria Silva', birthDate: new Date(1990, 0, 1) });
   });
 
-  it('matches an existing patient when birthDate is a DD/MM/YYYY string', async () => {
-    const patientsCollection = makeFakeCollection({
+  it('matches an existing identity when birthDate is a DD/MM/YYYY string', async () => {
+    const participantIdentitiesCollection = makeFakeCollection({
       find: vi.fn().mockReturnValue({
         toArray: vi.fn().mockResolvedValue([{ patientName: 'Maria Silva', birthDate: new Date(1990, 0, 1) }])
       })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkDuplicatePatient(db, {
       patientName: 'Maria Silva',
@@ -336,12 +327,12 @@ describe('PatientService.checkDuplicatePatient', () => {
   });
 
   it('parses a non-DD/MM/YYYY string birthDate via the generic Date constructor', async () => {
-    const patientsCollection = makeFakeCollection({
+    const participantIdentitiesCollection = makeFakeCollection({
       find: vi.fn().mockReturnValue({
         toArray: vi.fn().mockResolvedValue([{ patientName: 'Maria Silva', birthDate: new Date(1990, 0, 1) }])
       })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkDuplicatePatient(db, {
       patientName: 'Maria Silva',
@@ -361,12 +352,12 @@ describe('PatientService.checkDuplicatePatient', () => {
   });
 
   it('returns null when no candidate matches the normalized name', async () => {
-    const patientsCollection = makeFakeCollection({
+    const participantIdentitiesCollection = makeFakeCollection({
       find: vi.fn().mockReturnValue({
         toArray: vi.fn().mockResolvedValue([{ patientName: 'Ana Souza', birthDate: new Date(1990, 0, 1) }])
       })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkDuplicatePatient(db, {
       patientName: 'Maria Silva',
@@ -411,14 +402,14 @@ describe('PatientService.createPatient consentTemplateId branches', () => {
 });
 
 describe('PatientService.createPatient identifier-conflict handling', () => {
-  it('rejects with a 409 and identityDocument-specific message on an identityDocument conflict', async () => {
+  it('rejects with a 409 and identityDocument-specific message on an identityDocument conflict (#561: resolved via ParticipantIdentity)', async () => {
     const consentTemplatesCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
     });
-    const patientsCollection = makeFakeCollection({
+    const participantIdentitiesCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ identityDocument: '52998224725' })
     });
-    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection, consent_templates: consentTemplatesCollection });
 
     await expect(
       patientService.createPatient(db, validPatientData({ identityDocument: '52998224725' }), {
@@ -451,23 +442,10 @@ describe('PatientService.createPatient identifier-conflict handling', () => {
     });
   });
 
-  it('rejects with a 409 and the generic message when the conflict does not map to a specific field', async () => {
-    const consentTemplatesCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
-    });
-    const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ identityDocument: 'SOMETHING-ELSE', recordNumber: 'SOMETHING-ELSE-2' })
-    });
-    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
-
-    await expect(
-      patientService.createPatient(db, validPatientData({ identityDocument: '52998224725' }), {
-        skipConsentNotification: true,
-        skipBiomarkerArtifacts: true
-      })
-    ).rejects.toMatchObject({
-      statusCode: 409,
-      message: 'Paciente com identificadores já cadastrado no sistema.'
-    });
-  });
+  // #561: checkIdentifierConflict no longer builds a combined $or across
+  // both fields on one collection — identityDocument (ParticipantIdentity)
+  // and recordNumber (Patient) are each queried by their own exact field,
+  // so a match is always specifically one or the other. The generic
+  // "identifier" fallback this used to cover is no longer a reachable
+  // code path.
 });

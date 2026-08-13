@@ -262,26 +262,30 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     });
 
     it('Given: nome + data nascimento já cadastrados | When: tenta registrar paciente duplicado | Then: retorna 409', async () => {
-      const existingPatient = {
-        patientID: '87654321',
+      const existingIdentity = {
+        participantId: '87654321',
         patientName: 'Paciente QA Teste',
         birthDate: new Date(1990, 0, 20)
       };
       const patientsCollection = {
-        findOne: vi.fn()
-          .mockResolvedValueOnce(null) // CPF check
-          .mockResolvedValueOnce(null), // Documento check
-        find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([existingPatient]) }),
-        countDocuments: vi.fn().mockResolvedValue(1),
+        findOne: vi.fn().mockResolvedValue(null),
+        find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+        countDocuments: vi.fn().mockResolvedValue(0),
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'patient-duplicate-should-not-insert' }),
         updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+      };
+      // #561: name+birthDate duplicate detection resolves via
+      // ParticipantIdentity, not Patient's own fields.
+      const participantIdentitiesCollection = {
+        findOne: vi.fn().mockResolvedValue(null),
+        find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([existingIdentity]) }),
       };
 
       const consentTemplatesCollection = {
         findOne: vi.fn().mockResolvedValue({ _id: '60b8d295f1bfdc3b8c8f9b01' }),
       };
 
-      app.locals.db = dbWithRbac({ patients: patientsCollection, consentTemplates: consentTemplatesCollection, consent_templates: consentTemplatesCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection, consentTemplates: consentTemplatesCollection, consent_templates: consentTemplatesCollection });
 
       const response = await request(app)
         .post('/api/patients')

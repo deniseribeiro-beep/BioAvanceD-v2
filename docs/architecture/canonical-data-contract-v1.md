@@ -102,13 +102,23 @@ lookup) and requiring a `reason` in the request body, which is recorded
 on every call via `auditLogger` (`action: 'REIDENTIFY'`, success and
 not-found cases both audited).
 
-**Not yet landed (follow-up tracked separately):** the `Patient` document
-itself still carries these fields internally — 20+ existing consumers
-(search, consent notifications, exports, FHIR/import staging, audit
-logging) still read them off `Patient`, so removing them from that
-document is a larger migration than this slice (#561-#565). Also
-outstanding: encryption at rest for the segregated collection ("cifrar",
-#566).
+**Landed in #561:** `patient.service.js`'s core/search paths
+(`checkIdentifierConflict`'s `identityDocument` clause,
+`checkDuplicatePatient`, `listPatients`'s `patientName` filter,
+`searchPatients`'s `birthDate` clause, `updatePatient`'s dual-write to
+`ParticipantIdentity`) and `PatientIdentityService.js`'s import-time
+name+birthDate matching now resolve civil identity via
+`ParticipantIdentity` instead of `Patient`'s own copy of the fields.
+`Patient` still carries the fields (not removed yet — that's #565) and
+they're kept in sync via dual-write, since 15+ other consumers
+(consent/intake, import/FHIR, audit/notification/export — #562-#564)
+still read them directly off `Patient`.
+
+**Not yet landed (follow-up tracked separately):** `#562`-`#564`'s
+consumer groups still read/write these fields directly on `Patient`.
+Also outstanding: encryption at rest for the segregated collection
+("cifrar", #566), and the final backfill/removal (#565, depends on
+#560-#564 all landing).
 
 ### Specimen
 

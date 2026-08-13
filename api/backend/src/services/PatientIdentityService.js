@@ -37,6 +37,7 @@ function parseBirthDate(value) {
 class participantIdentityService {
   async matchOrUpsertParticipant(db, payload = {}) {
     const participants = await getCollection(db, 'patients');
+    const identities = await getCollection(db, 'participantIdentities');
     const participantId = normalizeString(payload.participantId);
     const patientName = normalizeString(payload.patientName);
     const birthDate = parseBirthDate(payload.birthDate);
@@ -51,11 +52,24 @@ class participantIdentityService {
       throw new Error('Identificação insuficiente: informe participantId ou (patientName + birthDate).');
     }
 
-    const matchFilter = participantId
-      ? { participantId }
-      : { patientNameNormalized: normalizedName, birthDateKey: birthDate.toISOString().slice(0, 10) };
+    // RF005/RNF007 (#561): resolve the name+birthDate match via
+    // ParticipantIdentity, not Patient's own (soon to be removed)
+    // patientNameNormalized/birthDateKey fields.
+    let matchedParticipantId = participantId || null;
+    if (!matchedParticipantId) {
+      const startOfDay = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
+      const endOfDay = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), startOfDay.getDate() + 1);
+      const candidates = await identities.find({ birthDate: { $gte: startOfDay, $lt: endOfDay } }).toArray();
+      const matchedIdentity = candidates.find((candidate) => normalizeName(candidate.patientName) === normalizedName);
+      if (matchedIdentity) {
+        matchedParticipantId = matchedIdentity.participantId;
+      }
+    }
 
-    const existing = await participants.findOne(matchFilter);
+    const existing = matchedParticipantId
+      ? await participants.findOne({ participantId: matchedParticipantId })
+      : null;
+
     if (existing) {
       const update = {
         patientName: patientName || existing.patientName,
@@ -70,6 +84,20 @@ class participantIdentityService {
         updatedAt: new Date()
       };
       await participants.updateOne({ _id: existing._id }, { $set: update });
+      await identities.updateOne(
+        { participantId: matchedParticipantId },
+        {
+          $set: {
+            patientName: update.patientName,
+            birthDate: update.birthDate,
+            identityDocument: update.identityDocument,
+            email: update.email,
+            phone: update.phone,
+            updatedAt: update.updatedAt,
+          },
+        },
+        { upsert: true }
+      );
       return { created: false, matchType: participantId ? 'participantId' : 'name+birthDate', patient: { ...existing, ...update, participantId: existing.participantId || participantId } };
     }
 
@@ -89,6 +117,21 @@ class participantIdentityService {
       updatedAt: new Date()
     };
     const result = await participants.insertOne(toInsert);
+    await identities.updateOne(
+      { participantId: generatedParticipantId },
+      {
+        $set: {
+          participantId: generatedParticipantId,
+          patientName: toInsert.patientName,
+          birthDate: toInsert.birthDate,
+          identityDocument: toInsert.identityDocument,
+          email: toInsert.email,
+          phone: toInsert.phone,
+          updatedAt: toInsert.updatedAt,
+        },
+      },
+      { upsert: true }
+    );
     return { created: true, matchType: 'new', patient: { _id: result.insertedId, ...toInsert } };
   }
 }

@@ -120,6 +120,10 @@ class PatientService {
     indexedPatientCollections.add(collectionName);
   }
 
+  async getIdentityCollection(db) {
+    return getCollection(db, 'participantIdentities');
+  }
+
   async getPatientsCollection(db) {
     const patientsCollection = await getCollection(db, 'patients');
     const collectionName = patientsCollection?.collectionName || 'patients';
@@ -298,36 +302,29 @@ class PatientService {
   }
 
   async checkIdentifierConflict(db, patientData) {
-    const patientsCollection = await this.getPatientsCollection(db);
     const normalizedidentityDocument = this.normalizeidentityDocument(patientData?.identityDocument);
     const normalizedRecordNumber = this.normalizeRecordNumber(patientData?.recordNumber);
 
-    const orFilters = [];
+    // RF005/RNF007 (#561): identityDocument is civil identity — resolved via
+    // ParticipantIdentity, not Patient. recordNumber is a hospital record
+    // number, not civil identity, so it stays checked against Patient.
     if (normalizedidentityDocument) {
-      orFilters.push({ identityDocument: normalizedidentityDocument });
+      const identityCollection = await this.getIdentityCollection(db);
+      const existingIdentity = await identityCollection.findOne({ identityDocument: normalizedidentityDocument });
+      if (existingIdentity) {
+        return { field: 'identityDocument', value: normalizedidentityDocument, existing: existingIdentity };
+      }
     }
+
     if (normalizedRecordNumber) {
-      orFilters.push({ recordNumber: normalizedRecordNumber });
+      const patientsCollection = await this.getPatientsCollection(db);
+      const existingPatient = await patientsCollection.findOne({ recordNumber: normalizedRecordNumber });
+      if (existingPatient) {
+        return { field: 'recordNumber', value: normalizedRecordNumber, existing: existingPatient };
+      }
     }
 
-    if (orFilters.length === 0) {
-      return null;
-    }
-
-    const existing = await patientsCollection.findOne({ $or: orFilters });
-    if (!existing) {
-      return null;
-    }
-
-    if (normalizedidentityDocument && String(existing.identityDocument || '').replace(/\D/g, '') === normalizedidentityDocument) {
-      return { field: 'identityDocument', value: normalizedidentityDocument, existing };
-    }
-
-    if (normalizedRecordNumber && String(existing.recordNumber || '').trim() === normalizedRecordNumber) {
-      return { field: 'recordNumber', value: normalizedRecordNumber, existing };
-    }
-
-    return { field: 'identifier', value: null, existing };
+    return null;
   }
 
   /**
@@ -336,15 +333,17 @@ class PatientService {
    */
   async checkDuplicatePatient(db, patientData) {
     try {
-      const patientsCollection = await this.getPatientsCollection(db);
-      
+      // RF005/RNF007 (#561): patientName/birthDate are civil identity —
+      // resolved via ParticipantIdentity, not the Patient document.
+      const identityCollection = await this.getIdentityCollection(db);
+
       if (!patientData.patientName || !patientData.birthDate) {
         return null; // Não pode verificar sem nome e data
       }
-      
+
       // Normaliza nome (remove espaços extras, converte para minúsculas)
       const normalizedName = patientData.patientName.trim().toLowerCase().replace(/\s+/g, ' ');
-      
+
       // Normaliza data de nascimento (converte para Date se necessário)
       let birthDate;
       if (patientData.birthDate instanceof Date) {
@@ -360,39 +359,39 @@ class PatientService {
       } else {
         birthDate = patientData.birthDate;
       }
-      
+
       // Garante que birthDate é um objeto Date válido
       if (!(birthDate instanceof Date) || isNaN(birthDate.getTime())) {
         return null; // Data inválida, não pode verificar
       }
-      
+
       // Normaliza a data para comparar apenas dia/mês/ano (ignora hora)
       const normalizedBirthDate = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
-      
-      // Busca todos os pacientes e verifica manualmente (mais confiável para comparação de strings)
+
+      // Busca todas as identidades e verifica manualmente (mais confiável para comparação de strings)
       // Alternativa: usar índice composto se necessário para performance
-      const allPatients = await patientsCollection.find({
+      const allIdentities = await identityCollection.find({
         birthDate: {
           $gte: new Date(normalizedBirthDate.getFullYear(), normalizedBirthDate.getMonth(), normalizedBirthDate.getDate()),
           $lt: new Date(normalizedBirthDate.getFullYear(), normalizedBirthDate.getMonth(), normalizedBirthDate.getDate() + 1)
         }
       }).toArray();
-      
-      // Verifica se algum paciente tem o mesmo nome normalizado
-      for (const patient of allPatients) {
-        if (patient.patientName && patient.birthDate) {
-          const existingName = patient.patientName.trim().toLowerCase().replace(/\s+/g, ' ');
-          const existingDate = patient.birthDate instanceof Date 
-            ? new Date(patient.birthDate.getFullYear(), patient.birthDate.getMonth(), patient.birthDate.getDate())
-            : new Date(patient.birthDate);
-          
-          if (existingName === normalizedName && 
+
+      // Verifica se alguma identidade tem o mesmo nome normalizado
+      for (const identity of allIdentities) {
+        if (identity.patientName && identity.birthDate) {
+          const existingName = identity.patientName.trim().toLowerCase().replace(/\s+/g, ' ');
+          const existingDate = identity.birthDate instanceof Date
+            ? new Date(identity.birthDate.getFullYear(), identity.birthDate.getMonth(), identity.birthDate.getDate())
+            : new Date(identity.birthDate);
+
+          if (existingName === normalizedName &&
               existingDate.getTime() === normalizedBirthDate.getTime()) {
-            return patient;
+            return identity;
           }
         }
       }
-      
+
       return null;
     } catch (error) {
       logger.error('Erro ao verificar duplicidade de paciente:', error.message);
@@ -584,8 +583,14 @@ class PatientService {
       const patientsCollection = await this.getPatientsCollection(db);
       const query = {};
 
+      // RF005/RNF007 (#561): patientName is civil identity — resolved via
+      // ParticipantIdentity, not read/filtered directly off Patient.
       if (filters.patientName) {
-        query.patientName = { $regex: filters.patientName, $options: 'i' };
+        const identityCollection = await this.getIdentityCollection(db);
+        const matchingIdentities = await identityCollection
+          .find({ patientName: { $regex: filters.patientName, $options: 'i' } })
+          .toArray();
+        query.participantId = { $in: matchingIdentities.map((identity) => identity.participantId) };
       }
 
       if (filters.clinicalUnit) {
@@ -640,8 +645,12 @@ class PatientService {
       }
 
       // Busca por data de nascimento (formato DD/MM/YYYY ou YYYY-MM-DD)
+      // RF005/RNF007 (#561): birthDate is civil identity — resolved via
+      // ParticipantIdentity, not matched directly on the Patient document.
       if (term.includes('/') || term.includes('-')) {
         let searchDate;
+        let startDate;
+        let endDate;
         if (term.includes('/')) {
           // Formato DD/MM/YYYY
           const parts = term.split('/');
@@ -652,14 +661,8 @@ class PatientService {
             if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
               searchDate = new Date(year, month, day);
               // Busca por data exata (ignora hora)
-              const startDate = new Date(year, month, day);
-              const endDate = new Date(year, month, day + 1);
-              query.$or.push({
-                birthDate: {
-                  $gte: startDate,
-                  $lt: endDate
-                }
-              });
+              startDate = new Date(year, month, day);
+              endDate = new Date(year, month, day + 1);
             }
           }
         } else if (term.includes('-')) {
@@ -669,14 +672,18 @@ class PatientService {
             const year = searchDate.getFullYear();
             const month = searchDate.getMonth();
             const day = searchDate.getDate();
-            const startDate = new Date(year, month, day);
-            const endDate = new Date(year, month, day + 1);
-            query.$or.push({
-              birthDate: {
-                $gte: startDate,
-                $lt: endDate
-              }
-            });
+            startDate = new Date(year, month, day);
+            endDate = new Date(year, month, day + 1);
+          }
+        }
+
+        if (startDate && endDate) {
+          const identityCollection = await this.getIdentityCollection(db);
+          const matchingIdentities = await identityCollection
+            .find({ birthDate: { $gte: startDate, $lt: endDate } })
+            .toArray();
+          if (matchingIdentities.length > 0) {
+            query.$or.push({ participantId: { $in: matchingIdentities.map((identity) => identity.participantId) } });
           }
         }
       }
@@ -829,6 +836,34 @@ class PatientService {
 
       const updatedPatient = await patientsCollection.findOne(query);
       const decryptedUpdatedPatient = this.decryptSensitivePatientFields(updatedPatient);
+
+      // RF005/RNF007 (#561): keep ParticipantIdentity in sync on update —
+      // #363's dual-write only covered createPatient, so an edit to any of
+      // these fields via updatePatient previously drifted the two records
+      // apart silently.
+      if (updatedPatient?.participantId && (
+        Object.prototype.hasOwnProperty.call(updateData, 'patientName') ||
+        Object.prototype.hasOwnProperty.call(updateData, 'birthDate') ||
+        Object.prototype.hasOwnProperty.call(updateData, 'identityDocument')
+      )) {
+        const identityUpdate = { updatedAt: updateData.updatedAt };
+        if (Object.prototype.hasOwnProperty.call(updateData, 'patientName')) {
+          identityUpdate.patientName = updateData.patientName;
+        }
+        if (Object.prototype.hasOwnProperty.call(updateData, 'birthDate')) {
+          identityUpdate.birthDate = updateData.birthDate ? new Date(updateData.birthDate) : null;
+        }
+        if (Object.prototype.hasOwnProperty.call(updateData, 'identityDocument')) {
+          identityUpdate.identityDocument = updateData.identityDocument;
+        }
+
+        const identityCollection = await this.getIdentityCollection(db);
+        await identityCollection.updateOne(
+          { participantId: updatedPatient.participantId },
+          { $set: identityUpdate },
+          { upsert: true }
+        );
+      }
 
       return { success: true };
     } catch (error) {
