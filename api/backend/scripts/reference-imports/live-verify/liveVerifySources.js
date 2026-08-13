@@ -3,9 +3,10 @@
 // /sources/*.js — those stay pointed at the bundled fixture only, per
 // reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
 // ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, DCB, ATC, DUO, UBERON,
-// NCBITAX, and CL (#557) are populated so far; 1 source remains (EDAM),
-// added here one entry at a time (per docs-7-31-2026/3-Plano_Integrado_
-// Foundation_Data_Pipeline.md §7.4 "Ordem recomendada da Fase 2").
+// NCBITAX, CL, and EDAM (#557) — all 16 Fase 2 sources are now populated,
+// closing out RF028's live-verify build-loop (per docs-7-31-2026/3-
+// Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem recomendada da
+// Fase 2").
 //
 // Each entry carries a `kind` deciding which verification shape
 // verify-live-release.js runs: 'github-release' (default, omittable — HPO/
@@ -406,5 +407,25 @@ module.exports = {
     licenseUrl: 'https://raw.githubusercontent.com/obophenotype/cell-ontology/master/LICENSE',
     expectedLicensePointer: 'Attribution 4.0 International',
     expectedAssetName: 'cl.owl', // matches sources/cl.js's systemUri basename
+  },
+  // #557: confirmed live on 2026-08-13, fifth and final source of §7.4 step
+  // 8, closing out RF028's Fase 2 live-verify pattern entirely. Another
+  // plain 'github-release' entry (same shape as MONDO/CL):
+  // edamontology/edamontology's latest release (tag 1.25.20260626T1230Z, a
+  // dated-and-timestamped tag rather than the obophenotype family's
+  // v-prefixed date) carries an asset matching systemUri's basename
+  // (EDAM.owl, confirmed via `gh api
+  // repos/edamontology/edamontology/releases/latest`). GitHub auto-detects
+  // this repo's license as CC-BY-SA-4.0 (the "ShareAlike" variant, unlike
+  // every other CC BY source in this loop), and the LICENSE file carries
+  // the full plain-text legal code directly, matched on
+  // "Attribution-ShareAlike 4.0 International".
+  EDAM: {
+    datasetCode: 'EDAM',
+    repo: 'edamontology/edamontology',
+    releaseApiUrl: 'https://api.github.com/repos/edamontology/edamontology/releases/latest',
+    licenseUrl: 'https://raw.githubusercontent.com/edamontology/edamontology/main/LICENSE',
+    expectedLicensePointer: 'Attribution-ShareAlike 4.0 International',
+    expectedAssetName: 'EDAM.owl', // matches sources/edam.js's systemUri basename
   },
 };

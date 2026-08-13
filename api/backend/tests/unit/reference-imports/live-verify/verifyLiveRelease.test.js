@@ -984,3 +984,81 @@ describe('verify-live-release.verify — CL (github-release)', () => {
     expect(report.live.licensePointerPresent).toBe(false);
   });
 });
+
+// #557 EDAM: fifth and final source of §7.4 step 8, closing out RF028's
+// Fase 2 live-verify pattern entirely. Another plain 'github-release' entry
+// (same shape as MONDO/CL): edamontology/edamontology's latest release
+// (tag 1.25.20260626T1230Z, a dated-and-timestamped tag rather than the
+// obophenotype family's v-prefixed date, confirmed via `gh api
+// repos/edamontology/edamontology/releases/latest`) carries an asset
+// matching systemUri's basename (EDAM.owl). GitHub auto-detects this repo's
+// license as CC-BY-SA-4.0 (the "ShareAlike" variant, unlike every other CC
+// BY source in this loop), and the LICENSE file carries the full plain-text
+// legal code directly, matched on "Attribution-ShareAlike 4.0
+// International" — same "full legal text in the file" shape MONDO/CL had,
+// just the SA variant's own distinct pointer phrase.
+function mockEdamFetchResponses({ releaseAssets = ['EDAM.owl', 'changelog.md'], licenseText, tagName = '1.25.20260626T1230Z' }) {
+  global.fetch = vi.fn(async (url) => {
+    if (url.includes('/releases/latest')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          tag_name: tagName,
+          published_at: '2026-06-27T23:50:57Z',
+          assets: releaseAssets.map((name) => ({ name })),
+        }),
+      };
+    }
+    if (url.includes('LICENSE')) {
+      return { ok: true, status: 200, text: async () => licenseText };
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — EDAM (github-release)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "verified" when the expected asset and license pointer are both live', async () => {
+    mockEdamFetchResponses({
+      licenseText: 'Attribution-ShareAlike 4.0 International\n\n===...',
+    });
+
+    const report = await verify('EDAM');
+
+    expect(report.status).toBe('verified');
+    expect(report.live.assetPresent).toBe(true);
+    expect(report.live.licensePointerPresent).toBe(true);
+    expect(report.live.releaseTag).toBe('1.25.20260626T1230Z');
+    expect(report.fixtureSource.systemUri).toBe('http://edamontology.org/EDAM.owl');
+  });
+
+  it('reports status "mismatch" when the expected release asset is missing', async () => {
+    mockEdamFetchResponses({
+      releaseAssets: ['changelog.md'],
+      licenseText: 'Attribution-ShareAlike 4.0 International',
+    });
+
+    const report = await verify('EDAM');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.assetPresent).toBe(false);
+  });
+
+  it('reports status "mismatch" when the license text no longer contains the expected pointer', async () => {
+    mockEdamFetchResponses({
+      licenseText: 'License terms have moved, see our new legal page.',
+    });
+
+    const report = await verify('EDAM');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.licensePointerPresent).toBe(false);
+  });
+});
