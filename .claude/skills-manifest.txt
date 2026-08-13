@@ -8,6 +8,7 @@
 # generic workflow skills
 work-issue
 resolve-issue
+issue-loop
 fix-bugs
 test-loop
 unit-test-loop
