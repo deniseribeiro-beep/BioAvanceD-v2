@@ -11,6 +11,10 @@ const sessionService = require('../../src/services/session.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const { createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const participantIdentityService = require('../../src/services/participantIdentity.service');
+
+process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXQ=';
+process.env.ENCRYPTION_KEY_ID = process.env.ENCRYPTION_KEY_ID || 'test-key-1';
 
 const RBAC_TEST_USERS = [
   { userAccountId: 'qa-admin-1', accessType: 4 },
@@ -103,6 +107,43 @@ describe('🔐 Reidentificação de participante - Testes de Integracao', () => 
           payload: expect.objectContaining({ reason: 'Notificação de resultado crítico ao participante' }),
         })
       );
+    });
+
+    it('Given: identidade civil cifrada em repouso (#566) | When: reidentifica | Then: retorna 200 com os valores decifrados', async () => {
+      const patient = { participantId: '12345678', status: 'ACTIVE' };
+      const plainIdentity = {
+        participantId: '12345678',
+        patientName: 'Paciente QA Teste',
+        birthDate: new Date('1990-01-20'),
+        identityDocument: '11144477735',
+      };
+      // #566: at rest, this record only carries ciphertext for these three
+      // fields — same shape a real write via encryptIdentityFields leaves
+      // behind (dual-write: plaintext still present today, but a database
+      // read in isolation should still resolve correctly from ciphertext
+      // alone if it were ever absent).
+      const encrypted = participantIdentityService.encryptIdentityFields(plainIdentity);
+      const storedIdentity = { ...encrypted, patientName: null, birthDate: null, identityDocument: null };
+
+      expect(JSON.stringify(storedIdentity.patientNameEncrypted)).not.toContain('Paciente QA Teste');
+      expect(JSON.stringify(storedIdentity.identityDocumentEncrypted)).not.toContain('11144477735');
+
+      const patientsCollection = { findOne: vi.fn().mockResolvedValue(patient) };
+      const participantIdentitiesCollection = { findOne: vi.fn().mockResolvedValue(storedIdentity) };
+
+      app.locals.db = dbWithRbac({
+        patients: patientsCollection,
+        participantIdentities: participantIdentitiesCollection,
+      });
+
+      const response = await request(app)
+        .post('/api/patients/12345678/reidentify')
+        .set('Authorization', `Bearer ${createAdminToken()}`)
+        .send({ reason: 'Verificação de identidade cifrada' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.patientName).toBe('Paciente QA Teste');
+      expect(response.body.data.identityDocument).toBe('11144477735');
     });
 
     it('Given: administrador sem motivo informado | When: reidentifica | Then: retorna 400 e não acessa a identidade', async () => {

@@ -11,6 +11,7 @@ const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
+const participantIdentityService = require('./participantIdentity.service');
 const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
@@ -319,7 +320,10 @@ class ImportService {
           // segregated ParticipantIdentity collection, same as
           // patient.service.js#createPatient.
           const identityCollection = getCollection(db, 'participantIdentities');
-          await identityCollection.insertOne(ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId }));
+          const identityDoc = participantIdentityService.encryptIdentityFields(
+            ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
+          );
+          await identityCollection.insertOne(identityDoc);
 
           if (patient.participantId) {
             try {
@@ -362,7 +366,7 @@ class ImportService {
             const identityCollection = getCollection(db, 'participantIdentities');
             await identityCollection.updateOne(
               { participantId: merged.participantId },
-              { $set: identityUpdate },
+              { $set: participantIdentityService.encryptIdentityFields(identityUpdate) },
               { upsert: true }
             );
           }
