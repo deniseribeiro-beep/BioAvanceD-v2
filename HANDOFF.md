@@ -93,8 +93,10 @@ branch-hygiene miss above, filed as `#286`.
   `#564`'s merge, plus the mid-session HANDOFF.md rotation).
 - Local branches `test/563-import-fhir-identity-migration` and
   `test/564-audit-notification-export-identity-migration` — both
-  merged, not deleted (consistent with this repo's existing pile of
-  un-deleted merged branches).
+  merged, both deleted by this session's end-of-session `clean-up` pass
+  (neither had a remote counterpart; both were local-only work
+  branches). First session this queue to actually apply `clean-up`'s
+  merged-branch domain rather than leaving them in the pile.
 - No Docker stack running, nothing left mid-flight. Both slices proved
   native-only per the `build-loop` overlay (backend-internal service
   logic, not the milestone's own e2e specs) — full backend suite run
