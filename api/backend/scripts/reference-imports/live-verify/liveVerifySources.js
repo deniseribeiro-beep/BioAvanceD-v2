@@ -2,8 +2,8 @@
 // verify job. Deliberately separate from src/reference-data/reference-imports
 // /sources/*.js — those stay pointed at the bundled fixture only, per
 // reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
-// ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, and UCUM (#557) are populated so
-// far; 7 sources remain, added here one entry at a time (per docs-7-31-2026/3-
+// ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, and DCB (#557) are populated
+// so far; 6 sources remain, added here one entry at a time (per docs-7-31-2026/3-
 // Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem recomendada da
 // Fase 2").
 //
@@ -256,5 +256,37 @@ module.exports = {
     expectedEdition: '2.2',
     licenseUrl: 'https://ucum.org/license',
     expectedLicensePointer: '1999-2024, Regenstrief Institute, Inc.',
+  },
+  // #557: confirmed live on 2026-08-13, first source of §7.4 step 7 ("Importar
+  // DCB e ATC/DDD"). dict-01_FONTES.md's SRC_DCB "URL oficial"
+  // (gov.br/anvisa/.../farmacopeia/dcb) 200s directly under Node's own
+  // fetch() and its own page body embeds the current updating Instrução
+  // Normativa inline ("Instrução Normativa – IN nº 342, de 20 de dezembro de
+  // 2024"), so this is a third 'fixed-edition' entry — the IN number stands
+  // in for ICD-10/UCUM's edition/version string. The page also links out to
+  // the Anvisa Digital Library (bibliotecadigital.anvisa.gov.br) for the
+  // actual consolidated-list download, which repeats LOINC's curl-vs-fetch()
+  // split exactly (curl with a full browser User-Agent gets a clean 200;
+  // Node's own fetch() 403s with a Cloudflare "Attention Required!"
+  // challenge) — but that split doesn't block verification here, since the
+  // release signal this entry checks lives entirely on the reachable
+  // gov.br page, not the blocked library one. No DCB-specific license URL
+  // exists (dict-01's SRC_DCB row: "Termos do portal oficial", no dedicated
+  // link), so this reuses gov.br's own sitewide Terms of Use page
+  // (gov.br/pt-br/termos-de-uso) — its footer carries a durable CC BY-ND 3.0
+  // licence link, confirmed live to contain
+  // "creativecommons.org/licenses/by-nd/3.0" — same "reuse the sitewide
+  // terms page when no source-specific one exists" precedent ICD-10
+  // established for WHO's Terms of Use page.
+  DCB: {
+    datasetCode: 'DCB',
+    kind: 'fixed-edition',
+    pageUrl: 'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb',
+    // [^\d,]+ (not \w+) for the month name — accented Portuguese month
+    // names like "março" aren't matched by \w without the unicode flag.
+    editionPattern: /IN nº (\d+), de \d+ de [^\d,]+ de \d{4}/,
+    expectedEdition: '342',
+    licenseUrl: 'https://www.gov.br/pt-br/termos-de-uso',
+    expectedLicensePointer: 'creativecommons.org/licenses/by-nd/3.0',
   },
 };

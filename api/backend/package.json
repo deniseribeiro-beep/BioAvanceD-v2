@@ -88,6 +88,7 @@
     "reference:live-verify:hgnc": "node scripts/reference-imports/live-verify/verify-live-release.js HGNC",
     "reference:live-verify:loinc": "node scripts/reference-imports/live-verify/verify-live-release.js LOINC",
     "reference:live-verify:ucum": "node scripts/reference-imports/live-verify/verify-live-release.js UCUM",
+    "reference:live-verify:dcb": "node scripts/reference-imports/live-verify/verify-live-release.js DCB",
     "test:architecture": "node --test \"tests/architecture/**/*.arch.test.js\"",
     "test:unit:vitest": "vitest run",
     "test": "vitest run",

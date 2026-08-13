@@ -519,3 +519,83 @@ describe('verify-live-release.verify — UCUM (fixed-edition)', () => {
     expect(report.live.licensePointerPresent).toBe(false);
   });
 });
+
+// #557 DCB: a third 'fixed-edition' entry — dict-01_FONTES.md's SRC_DCB row
+// ("URL oficial" https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb)
+// 200s directly under Node's own fetch() (unlike the Anvisa Digital Library
+// page it links out to for the actual XLSX download, which 403s under
+// fetch() with a Cloudflare challenge even though curl with a full browser
+// User-Agent gets a clean 200 — the same curl-vs-fetch() split LOINC's slice
+// established, but here it doesn't block verification because the release
+// signal itself lives on the reachable page, not the blocked one). The DCB
+// page's own body embeds the current updating Instrução Normativa inline
+// ("Instrução Normativa – IN nº 342, de 20 de dezembro de 2024"), so the
+// edition read out is the IN number rather than a year. No DCB-specific
+// license URL exists (dict-01's SRC_DCB row: "Termos do portal oficial",
+// no dedicated link), so this reuses gov.br's own sitewide Terms of Use
+// page (gov.br/pt-br/termos-de-uso), whose footer carries a durable CC
+// BY-ND 3.0 licence link — same "reuse the sitewide terms page" precedent
+// ICD-10 established for WHO.
+function mockDcbFixedEditionFetchResponses({
+  pageText = 'Instrução Normativa – IN nº 342, de 20 de dezembro de 2024',
+  licenseText,
+}) {
+  global.fetch = vi.fn(async (url) => {
+    if (url.includes('farmacopeia/dcb')) {
+      return { ok: true, status: 200, text: async () => pageText };
+    }
+    if (url.includes('termos-de-uso')) {
+      return { ok: true, status: 200, text: async () => licenseText };
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — DCB (fixed-edition)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "verified" when the live page still carries the expected updating IN and the license pointer is live', async () => {
+    mockDcbFixedEditionFetchResponses({
+      licenseText:
+        'Todo o conteúdo deste site está publicado sob a licença <a rel="license" href="https://creativecommons.org/licenses/by-nd/3.0/deed.pt_BR">Creative Commons Atribuição-SemDerivações 3.0 Não Adaptada</a>.',
+    });
+
+    const report = await verify('DCB');
+
+    expect(report.status).toBe('verified');
+    expect(report.live.liveEdition).toBe('342');
+    expect(report.live.editionMatchesExpected).toBe(true);
+    expect(report.live.licensePointerPresent).toBe(true);
+    expect(report.fixtureSource.systemUri).toBe('https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb');
+  });
+
+  it('reports status "mismatch" when the live page no longer carries the expected updating IN', async () => {
+    mockDcbFixedEditionFetchResponses({
+      pageText: 'Instrução Normativa – IN nº 399, de 5 de março de 2027',
+      licenseText:
+        'Todo o conteúdo deste site está publicado sob a licença <a rel="license" href="https://creativecommons.org/licenses/by-nd/3.0/deed.pt_BR">Creative Commons Atribuição-SemDerivações 3.0 Não Adaptada</a>.',
+    });
+
+    const report = await verify('DCB');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.liveEdition).toBe('399');
+    expect(report.live.editionMatchesExpected).toBe(false);
+  });
+
+  it('reports status "mismatch" when the gov.br terms-of-use page no longer contains the expected licence pointer', async () => {
+    mockDcbFixedEditionFetchResponses({
+      licenseText: 'These terms have moved, see our new legal page.',
+    });
+
+    const report = await verify('DCB');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.licensePointerPresent).toBe(false);
+  });
+});
