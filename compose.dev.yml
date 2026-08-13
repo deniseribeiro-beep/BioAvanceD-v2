@@ -118,7 +118,7 @@ services:
 
   reference-data-bootstrap:
     # RF028 (#367 slice 1): one-shot, idempotent HPO reference-data import —
-    # first of the 14 Fase 2 sources, runs after foundation-bootstrap so
+    # first of the 16 Fase 2 sources, runs after foundation-bootstrap so
     # Fase 1 schemas/collections are ready first (Plano Integrado Fase 2
     # dependency). Idempotent via the run's idempotencyKey lookup; repeat
     # runs are no-ops.
@@ -137,7 +137,7 @@ services:
 
   reference-data-bootstrap-mondo:
     # RF028 (#548): one-shot, idempotent MONDO reference-data import — second
-    # of the 14 Fase 2 sources (Plano Integrado §7.4 step 3, right after
+    # of the 16 Fase 2 sources (Plano Integrado §7.4 step 3, right after
     # HPO). Runs after reference-data-bootstrap completes, matching the
     # documented recommended order. Idempotent via the run's idempotencyKey
     # lookup; repeat runs are no-ops.
@@ -156,7 +156,7 @@ services:
 
   reference-data-bootstrap-orpha:
     # RF028 (#549): one-shot, idempotent ORPHA reference-data import — third
-    # of the 14 Fase 2 sources (Plano Integrado §7.4 step 4, leading the
+    # of the 16 Fase 2 sources (Plano Integrado §7.4 step 4, leading the
     # "ORPHA, CID-11, CID-10 e OMIM" group right after MONDO). Runs after
     # reference-data-bootstrap-mondo completes, matching the documented
     # recommended order. Idempotent via the run's idempotencyKey lookup;
@@ -176,7 +176,7 @@ services:
 
   reference-data-bootstrap-icd11:
     # RF028 (#549): one-shot, idempotent ICD-11 reference-data import —
-    # fourth of the 14 Fase 2 sources (Plano Integrado §7.4 step 4, second
+    # fourth of the 16 Fase 2 sources (Plano Integrado §7.4 step 4, second
     # member of the "ORPHA, CID-11, CID-10 e OMIM" group, right after
     # ORPHA). Runs after reference-data-bootstrap-orpha completes, matching
     # the documented recommended order. Idempotent via the run's
@@ -196,7 +196,7 @@ services:
 
   reference-data-bootstrap-icd10:
     # RF028 (#549): one-shot, idempotent ICD-10 reference-data import —
-    # fifth of the 14 Fase 2 sources (Plano Integrado §7.4 step 4, third
+    # fifth of the 16 Fase 2 sources (Plano Integrado §7.4 step 4, third
     # member of the "ORPHA, CID-11, CID-10 e OMIM" group, right after
     # ICD-11). Runs after reference-data-bootstrap-icd11 completes, matching
     # the documented recommended order. Idempotent via the run's
@@ -216,7 +216,7 @@ services:
 
   reference-data-bootstrap-omim:
     # RF028 (#549): one-shot, idempotent OMIM reference-data import — sixth
-    # of the 14 Fase 2 sources (Plano Integrado §7.4 step 4, closing out the
+    # of the 16 Fase 2 sources (Plano Integrado §7.4 step 4, closing out the
     # "ORPHA, CID-11, CID-10 e OMIM" group, right after ICD-10). Runs after
     # reference-data-bootstrap-icd10 completes, matching the documented
     # recommended order. Idempotent via the run's idempotencyKey lookup;
@@ -236,7 +236,7 @@ services:
 
   reference-data-bootstrap-hgnc:
     # RF028 (#549): one-shot, idempotent HGNC reference-data import —
-    # seventh of the 14 Fase 2 sources (Plano Integrado §7.4 step 5,
+    # seventh of the 16 Fase 2 sources (Plano Integrado §7.4 step 5,
     # "Importar HGNC e relações gene-fenótipo/doença", right after the
     # §7.4 step 4 group closes out with OMIM). Runs after
     # reference-data-bootstrap-omim completes, matching the documented
@@ -257,7 +257,7 @@ services:
 
   reference-data-bootstrap-loinc:
     # RF028 (#549): one-shot, idempotent LOINC reference-data import —
-    # eighth of the 14 Fase 2 sources (Plano Integrado §7.4 step 6,
+    # eighth of the 16 Fase 2 sources (Plano Integrado §7.4 step 6,
     # "Importar LOINC e UCUM", leading the pair right after HGNC). Runs
     # after reference-data-bootstrap-hgnc completes, matching the
     # documented recommended order. Idempotent via the run's
@@ -277,7 +277,7 @@ services:
 
   reference-data-bootstrap-ucum:
     # RF028 (#549): one-shot, idempotent UCUM reference-data import — ninth
-    # of the 14 Fase 2 sources (Plano Integrado §7.4 step 6, closing out
+    # of the 16 Fase 2 sources (Plano Integrado §7.4 step 6, closing out
     # the "LOINC e UCUM" pair right after LOINC). Runs after
     # reference-data-bootstrap-loinc completes, matching the documented
     # recommended order. Idempotent via the run's idempotencyKey lookup;
@@ -297,7 +297,7 @@ services:
 
   reference-data-bootstrap-dcb:
     # RF028 (#549): one-shot, idempotent DCB reference-data import — tenth
-    # of the 14 Fase 2 sources (Plano Integrado §7.4 step 7, "Importar DCB
+    # of the 16 Fase 2 sources (Plano Integrado §7.4 step 7, "Importar DCB
     # e ATC/DDD", leading the pair right after UCUM closes out step 6).
     # Runs after reference-data-bootstrap-ucum completes, matching the
     # documented recommended order. Idempotent via the run's
@@ -317,7 +317,7 @@ services:
 
   reference-data-bootstrap-atc:
     # RF028 (#549): one-shot, idempotent ATC reference-data import —
-    # eleventh of the 14 Fase 2 sources (Plano Integrado §7.4 step 7,
+    # eleventh of the 16 Fase 2 sources (Plano Integrado §7.4 step 7,
     # closing out the "DCB e ATC/DDD" pair right after DCB). Runs after
     # reference-data-bootstrap-dcb completes, matching the documented
     # recommended order. Idempotent via the run's idempotencyKey lookup;

@@ -11,7 +11,7 @@ const path = require('path');
  * (seed-boundary.arch.test.js). Wiring the real download/license-verification
  * step against the official HPO release repository (obophenotype/
  * human-phenotype-ontology on GitHub) is follow-up scope, together with the
- * remaining 13 Fase 2 sources.
+ * remaining 15 Fase 2 sources.
  */
 const fixturePath = path.join(__dirname, '..', 'fixtures', 'hpo-sample.jsonl');
 

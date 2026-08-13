@@ -15,7 +15,7 @@ const REJECTION_RATE_BLOCK_THRESHOLD = 0.5;
  * Runs the RF028 universal import pipeline (Plano Integrado §7.2) for one
  * source against one Mongo `db` handle. Only the HPO source is wired up
  * this slice — `source`/`normalizeRecord` are already generic so the
- * remaining 13 Fase 2 sources can reuse this runner directly.
+ * remaining 15 Fase 2 sources can reuse this runner directly.
  */
 async function runImport({ db, source, normalizeRecord, dryRun = false, initiatedBy = 'system:reference-data-bootstrap' }) {
   const releases = db.collection(CANONICAL_COLLECTIONS.referenceDatasetReleases);
