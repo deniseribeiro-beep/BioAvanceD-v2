@@ -135,3 +135,99 @@ export async function removeSampleNodes(sampleIds: string[]): Promise<void> {
     await session.close();
   }
 }
+
+/**
+ * RF028 AC9 (#552) fixture: proves the graph_projection_outbox → Neo4j
+ * projection pipeline runs for TerminologyConcept promotions too, not just
+ * RF023's consent/lineage/quality/telemetry events — same generic worker
+ * (neo4jProjection.worker.js), a new event type
+ * (TERMINOLOGY_CONCEPT_PROMOTED) and Cypher branch
+ * (neo4jCanonicalProjection.service.js's applyTerminologyConceptProjection).
+ * Queried by code+systemUri, not terminologyConceptId — the Mongo id is a
+ * random UUID unknown ahead of time, but code+systemUri is the source's own
+ * stable natural key (see TerminologyConcept.js's logical-key comment).
+ */
+async function readTerminologyConceptDisplay(code: string, systemUri: string): Promise<string | null> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      'MATCH (c:TerminologyConcept {code: $code, systemUri: $systemUri}) RETURN c.display AS display',
+      { code, systemUri }
+    );
+    if (result.records.length === 0) {
+      return null;
+    }
+    return result.records[0].get('display');
+  } finally {
+    await session.close();
+  }
+}
+
+/** Polls Neo4j until the projected `:TerminologyConcept` node reaches `expectedDisplay`, or throws once `timeoutMs` elapses. */
+export async function waitForTerminologyConceptNode(
+  code: string,
+  systemUri: string,
+  expectedDisplay: string,
+  { timeoutMs = 30_000, intervalMs = 500 }: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastSeen: string | null = null;
+
+  while (Date.now() < deadline) {
+    lastSeen = await readTerminologyConceptDisplay(code, systemUri);
+    if (lastSeen === expectedDisplay) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(
+    `waitForTerminologyConceptNode: timed out after ${timeoutMs}ms waiting for TerminologyConcept ` +
+      `${systemUri}#${code} to reach display "${expectedDisplay}" (last seen: ${lastSeen ?? 'no node found'})`
+  );
+}
+
+async function readTerminologyRelationType(sourceCode: string, targetCode: string, systemUri: string): Promise<string | null> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      `MATCH (a:TerminologyConcept {code: $sourceCode, systemUri: $systemUri})
+             -[r:TERMINOLOGY_RELATION]->
+             (b:TerminologyConcept {code: $targetCode, systemUri: $systemUri})
+       RETURN r.relationType AS relationType`,
+      { sourceCode, targetCode, systemUri }
+    );
+    if (result.records.length === 0) {
+      return null;
+    }
+    return result.records[0].get('relationType');
+  } finally {
+    await session.close();
+  }
+}
+
+/** Polls Neo4j until the `sourceCode -[TERMINOLOGY_RELATION]-> targetCode` edge reaches `expectedRelationType`, or throws once `timeoutMs` elapses. */
+export async function waitForTerminologyRelation(
+  sourceCode: string,
+  targetCode: string,
+  systemUri: string,
+  expectedRelationType: string,
+  { timeoutMs = 30_000, intervalMs = 500 }: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastSeen: string | null = null;
+
+  while (Date.now() < deadline) {
+    lastSeen = await readTerminologyRelationType(sourceCode, targetCode, systemUri);
+    if (lastSeen === expectedRelationType) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(
+    `waitForTerminologyRelation: timed out after ${timeoutMs}ms waiting for ${sourceCode} ` +
+      `-[TERMINOLOGY_RELATION]-> ${targetCode} to reach relationType "${expectedRelationType}" ` +
+      `(last seen: ${lastSeen ?? 'no relation found'})`
+  );
+}

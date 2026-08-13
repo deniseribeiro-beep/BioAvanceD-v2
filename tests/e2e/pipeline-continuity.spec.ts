@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
 import { createRealParticipant, closeSeedDb } from './helpers/seedParticipant';
-import { waitForEthicalConsentStatus, closeNeo4jDriver } from './helpers/queryNeo4j';
+import { waitForEthicalConsentStatus, waitForTerminologyConceptNode, waitForTerminologyRelation, closeNeo4jDriver } from './helpers/queryNeo4j';
 import {
   countEssentialReferenceDocs,
   countFoundationDataRuns,
@@ -92,6 +92,33 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
     expect(revoke.ok()).toBe(true);
 
     await waitForEthicalConsentStatus(consentId, 'REVOKED');
+  });
+});
+
+// RF028 AC9 ("Persistir primeiro no MongoDB e projetar no Neo4j
+// exclusivamente pelo outbox", #552): reference-imports/pipeline.js's
+// promote() now appends a TERMINOLOGY_CONCEPT_PROMOTED/
+// TERMINOLOGY_RELATION_PROMOTED event to graph_projection_outbox on the same
+// write that inserts a TerminologyConcept/TerminologyRelation, same pattern
+// RF023 uses above — the generic neo4jProjection.worker.js drains both. HPO
+// is imported automatically as part of the Foundation Data Pipeline
+// bootstrap (RF022/#367), so this test doesn't trigger a promotion itself —
+// it only waits for HP:0000001 ("All", the bundled fixture's root concept)
+// and its HP:0000118→HP:0000001 is_a relation to already be there. Same
+// bootstrap-dependency caveat as "Reference data importers (RF028)" below:
+// only proven against the dev stack until #371 wires the bootstrap into
+// compose.test.yml too.
+test.describe('Outbox → Neo4j projection (RF028 AC9) — real backend', () => {
+  test.afterAll(async () => {
+    await closeNeo4jDriver();
+  });
+
+  test('a bootstrapped HPO concept projects into Neo4j as a TerminologyConcept node', async () => {
+    await waitForTerminologyConceptNode('HP:0000001', 'http://purl.obolibrary.org/obo/hp.owl', 'All');
+  });
+
+  test('a bootstrapped HPO is_a relation projects into Neo4j as a TERMINOLOGY_RELATION edge', async () => {
+    await waitForTerminologyRelation('HP:0000118', 'HP:0000001', 'http://purl.obolibrary.org/obo/hp.owl', 'is_a');
   });
 });
 
