@@ -1,87 +1,106 @@
 # HANDOFF
 
-**Written:** 2026-08-13, mid-session on `feature/docker-e2e-backend-integration`, continuing into `#564` in the same sitting.
+**Written:** 2026-08-13, end of session on `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Continuation of the `#368` queue (`#560`-`#566`, per the prior handoff),
-resumed via `work-issue` → `issue-loop` (queue mode) → `build-loop`,
-still dogfooding skills-pack issue `#279`. Picked up where the prior
-session paused: `#563` (import/FHIR paths off `Patient`'s civil-identity
-fields), confirmed the queue's largest remaining piece.
+Continuation of the `#368` queue (`#560`-`#566`, per two prior handoffs),
+driven via `work-issue` → `issue-loop` (queue mode) → `build-loop` per
+item, still dogfooding skills-pack issue `#279`. Picked up at `#563`
+(paused there by the prior session), shipped it, then continued
+immediately in the same sitting into `#564` per queue mode's own rules.
+Two full consumer-group migrations landed, fully tested, merged, and
+closed; paused before `#566` once it was confirmed a different kind of
+work (a feature build, not another consumer-migration slice).
 
 ### `#563` — migrate import/FHIR paths off Patient's civil-identity fields
 
-Full triage first (an Explore agent covered 3 files, this session
-covered the other 5 directly): the raw grep sweep looked huge (~80
-hits), but real scope was much narrower than either that count or the
-prior session's ~38-hit estimate suggested. Only **3 files** actually
-needed changes — `import.service.js`, `import-lgpd.service.js`,
-`fhir-import-staging.service.js` — all following `#561`/`#562`'s
-established `ParticipantIdentity` dual-write/read-migration pattern:
+Full triage first (raw grep looked like ~80 hits; real scope was 3
+files): `import.service.js` (`prepareParticipantId`'s identityDocument
+lookup migrated off a raw Patient query onto `ParticipantIdentity`,
+mirroring `patient.service.js#checkIdentifierConflict` from `#561`;
+`upsertPatient`'s create branch gained the missing dual-write, its
+merge/update branch gained the on-update sync `#561` established),
+`import-lgpd.service.js` (two patient-creation paths gained the missing
+dual-write), `fhir-import-staging.service.js` (`commitBatch`'s upsert
+gained the missing dual-write). The other 5 files named in the issue
+needed no change (noise: template strings, FHIR-standard field names,
+comments, or pre-persistence validation on plain objects). Merge
+`e507ab20`.
 
-- `import.service.js` — `prepareParticipantId()`'s `identityDocument`
-  lookup now resolves via `ParticipantIdentity` instead of a raw
-  `Patient` query (mirroring `patient.service.js#checkIdentifierConflict`,
-  `#561`); `upsertPatient()`'s create branch gained the missing
-  `ParticipantIdentity` dual-write; its merge/update branch gained the
-  same on-update sync `patient.service.js#updatePatient` does (`#561`).
-- `import-lgpd.service.js` — two near-identical patient-creation code
-  paths (`importPatients`, `importPatientsSmart`) both did
-  `PatientModel.create` + raw `insertOne` with zero `ParticipantIdentity`
-  dual-write; both fixed.
-- `fhir-import-staging.service.js` — `commitBatch()`'s Patient upsert had
-  no accompanying `ParticipantIdentity` write at all; added as a matching
-  idempotent upsert (new test file, since no existing test exercised
-  `commitBatch`'s real logic — it was only mocked at the controller
-  level).
+Follow-ups filed, not fixed (pre-existing, unrelated, confirmed via
+base-branch diff): **`#570`** (`import.controller.js#importFhirBundle`
+writes a malformed Patient document via raw `insertOne`, bypassing
+`PatientModel`), **`#571`** (`fhir-import-staging.service.js`'s
+Patient-side upsert writes a non-canonical `cpf` field), **`#572`** (8
+tests across 5 files fail pre-existing, stale from `#561`/`#562`'s own
+migration — root-caused, not fixed).
 
-The other 5 files named in `#563`'s body (`import.controller.js`,
-`import-lgpd.controller.js`, `fhir-validator.service.js`,
-`fhir.service.js`, `batch-validation-engine.service.js`) needed **no
-code change** — their civil-identity-field-name hits were noise
-(template/help-text strings, FHIR-standard resource field names distinct
-from this app's `Patient` document, code comments) or pre-persistence
-validation on plain in-memory row objects that never read/write an
-actual `Patient` document. Merge `e507ab20`.
+### `#564` — migrate audit/notification/export paths off Patient's civil-identity fields
 
-Three follow-ups filed along the way (all confirmed pre-existing /
-unrelated to `#563`'s own diff, not fixed there):
-- **`#570`** — `import.controller.js#importFhirBundle` writes a
-  malformed `Patient` document via a raw `insertOne`, bypassing
-  `PatientModel` entirely (wrong field names — `name`/`cpf` instead of
-  `patientName`/`identityDocument` — and missing required fields).
-- **`#571`** — `fhir-import-staging.service.js#commitBatch`'s Patient-side
-  upsert writes a non-canonical `cpf` field and omits required fields,
-  same shape as `#570`, independent code path.
-- **`#572`** — 8 tests across 5 files fail pre-existing, stale from
-  `#561`/`#562`'s `ParticipantIdentity` read-path migration (confirmed
-  identical on the base branch before `#563`'s changes — not a
-  regression from this session). Root-caused but not fixed: test
-  fixtures never updated to mock a working `participantIdentities`
-  collection.
+Real scope: 6 fix locations. Four from the issue's own file list —
+`reports.routes.js` (patientName keyword search in both preview
+branches now resolves via `ParticipantIdentity`), `sample.service.js`
+(`getSampleByBarcode`'s anonymized name), `auditLogger.js`/
+`userAnonymization.js` (both files' redaction blocklists predated
+`ParticipantIdentity`'s canonical field names — added `identityDocument`
+to both, `patientName` to `userAnonymization.js`). Two more were the
+actual functional root of "migrate `NotificationService.js`" even though
+that file itself turned out to be pure pass-through with no direct
+document access: `patient.service.js#resendConsentNotification` and
+`consent.service.js`'s policy-publish pending-patient notification loop
+both fetch a raw Patient document and feed it into
+`NotificationService`, so both now resolve `patientName` via
+`ParticipantIdentity` first. `NotificationService.js`/`MerkleService.js`
+needed no change. Merge `92aa7d4c`.
 
-### Wrap-up / friction audit
+Follow-up filed, not fixed: **`#573`** — `reports.routes.js`'s preview
+queries filter on `patientID`, a field that doesn't exist on real
+`Patient` documents (canonical field is `participantId`) — makes the
+`samplesbypatient` preview type's sample-linking silently always return
+empty, independent of civil-identity segregation.
 
-Ran clean on scope (`git diff --stat` matched intent exactly: 3 product
-files + 4 test files, all within `#563`'s consumer group). No lazy
-fixes — both pre-existing bugs found during triage were filed (`#570`,
-`#571`) rather than silently left. One minor, self-contained friction
-noted (not filed): the full `npx vitest run` output was streamed
-directly into the conversation instead of redirected to a file and
-grepped for just the failure summary — worth tightening next time, not a
-skill defect.
+### Process miss, self-caught and fixed this session
+
+Continuing straight from `#563`'s merge into `#564`'s edits, the session
+stayed on `feature/docker-e2e-backend-integration` and made all of
+`#564`'s product-file edits there directly — no `test/564-...` branch
+was created first, violating `build-loop`'s own "branch before the first
+Edit/Write" rule. Caught via `git status` right before committing (no
+work lost — `git checkout -b` from the dirty tree carried the
+uncommitted changes cleanly), then recovered by branching there. Filed
+to the skills-pack as **`#286`**: the routing gate that blocks
+product-file edits without a routed workflow skill invoked doesn't
+separately check that the *current branch* matches what that skill's
+own rules require — it only checks "was some workflow skill invoked
+this session," which stayed satisfied across the `#563`→`#564`
+boundary even though no fresh branch existed for `#564`.
+
+### Wrap-up / friction audits (each iteration)
+
+Both iterations ran clean on scope (`git diff --stat` matched intent
+each time) with no lazy fixes — every pre-existing bug found during
+triage was filed (`#570`, `#571`, `#573`) rather than silently left or
+patched around. `#563`'s audit noted one self-contained inefficiency
+(full test output streamed into context instead of redirected+grepped —
+corrected for `#564`'s own full-suite run). `#564`'s audit surfaced the
+branch-hygiene miss above, filed as `#286`.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: pushed, at `e507ab20`
-  (1 commit ahead of where this session started: `#563`'s merge commit).
-- Local branch `test/563-import-fhir-identity-migration` — merged, not
-  deleted (consistent with this repo's existing pile of un-deleted
-  merged branches).
-- No Docker stack running, nothing left mid-flight (this slice's proof
-  bar was native-only per the `build-loop` overlay — backend-internal
-  service logic, not one of the milestone's own e2e specs).
+- **`feature/docker-e2e-backend-integration`**: pushed, at `92aa7d4c`
+  (3 commits ahead of where this session started: `#563`'s merge,
+  `#564`'s merge, plus the mid-session HANDOFF.md rotation).
+- Local branches `test/563-import-fhir-identity-migration` and
+  `test/564-audit-notification-export-identity-migration` — both
+  merged, not deleted (consistent with this repo's existing pile of
+  un-deleted merged branches).
+- No Docker stack running, nothing left mid-flight. Both slices proved
+  native-only per the `build-loop` overlay (backend-internal service
+  logic, not the milestone's own e2e specs) — full backend suite run
+  after each merge, confirmed clean against the known `#572` baseline
+  (8 pre-existing failures, unrelated, unchanged before/after both
+  slices).
 - **Pre-existing dangling local branches, not touched this session**
   (carried forward unchanged — `fix/476-...`, `fix/477-...`,
   `fix/481-...`, `fix/485-...`, `fix/513-...`, `test/377-...`,
@@ -92,28 +111,46 @@ skill defect.
 
 ## Next steps
 
-**Continuing the `#368` queue in this same sitting** (queue mode,
-re-derived fresh after `#563`'s close): `#564` (audit/notification/export
-paths) and `#566` (encryption at rest) are both now confirmed open and
-unblocked — picking up `#564` next. `#565` (final backfill + drop legacy
-fields) stays blocked until `#560`-`#564` all land; `#560`-`#563` are
-done, `#564` is in flight, `#566` remains after that.
+**`#566`** (encryption at rest for `participantIdentities`) is the
+natural next pick — confirmed independently pickable (`Depends on:
+none`), and unlike `#560`-`#564` it's a genuine feature build (field-level
+encryption, key management, routing decryption through `#560`'s
+re-identification flow), not another consumer-read-migration slice —
+worth its own focused iteration rather than a third consecutive cycle
+squeezed into this sitting. Its own body suggests checking
+`docs/architecture/` first for an existing encryption-at-rest pattern
+before inventing one — `patient.service.js` already has
+`encryptSensitivePatientFields`/`decryptSensitivePatientFields` and a
+`getEncryptedFieldMap()` for `Patient`'s own sensitive fields
+(`representativeIdentityDocument` etc.), which is very likely the
+pattern to reuse/extend for `participantIdentities` rather than a new
+mechanism.
 
-**`#368`** (the tracking issue) checked for closeability after `#563`'s
-close — still has open sub-items (`#564`, `#565`, `#566`), correctly
-stays open. This is the first real exercise of `issue-loop`'s upward
-parent-chain-close check finding "not yet closeable" rather than never
-firing at all.
+**`#565`** (final backfill + drop legacy fields) stays blocked until
+`#566` lands too (`#560`-`#564` are now done).
+
+**`#368`** (the tracking issue) checked for closeability after both
+`#563`'s and `#564`'s closes — still has open sub-items (`#565`,
+`#566`), correctly stays open both times. The upward parent-chain-close
+check has now fired twice this session, both correctly finding "not yet
+closeable" — still hasn't been exercised on an actual cascade (that
+needs `#566` and `#565` to both land).
 
 **Skills-pack `#279`** (the dogfooding request) — still not closed. This
-session's continuation is exercising the two gaps the prior session's
-feedback comment flagged as unproven: fresh re-derivation of queue
-membership before each pick (done explicitly this session, confirmed via
-`gh issue list` before picking `#563` and again before picking `#564`)
-and the upward parent-chain-close check (fired this session, correctly
-found `#368` not yet closeable). Once the queue empties and `#368`
-closes (or a genuine multi-level cascade is confirmed), close out `#279`
-with these findings folded into the existing feedback comment.
+session's continuation exercised both gaps the prior session's feedback
+comment flagged as unproven: fresh re-derivation of queue membership
+before each pick (done explicitly before both `#563` and `#564`, via
+fresh `gh issue list`/`gh issue view 368` calls, not a reused snapshot)
+and the upward parent-chain-close check (fired twice, both times
+correctly "not yet closeable"). Once `#566`/`#565` land and `#368`
+closes (or a genuine multi-level cascade is otherwise confirmed), close
+out `#279` with these findings folded into the existing feedback
+comment. One new, unplanned finding from this session worth folding in
+too: the branch-hygiene gap (`#286`) is itself a `#279`-relevant
+finding — queue mode's "continue immediately into the next item" model
+is exactly the shape that made skipping a fresh branch easy to do by
+habit, since each item's `build-loop` invocation returns to the
+integration branch after the prior item's merge.
 
 - **pack-repo `#280`/`#281`** (long-carried) — still open, still
   small/self-contained, unchanged this session.
