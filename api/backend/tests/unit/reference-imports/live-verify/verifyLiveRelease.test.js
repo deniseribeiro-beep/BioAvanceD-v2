@@ -836,3 +836,76 @@ describe('verify-live-release.verify — UBERON (github-release)', () => {
     expect(report.live.licensePointerPresent).toBe(false);
   });
 });
+
+// #557 NCBITAX: a new 'rest-version' entry, third source of §7.4 step 8.
+// dict-01_FONTES.md's SRC_NCBITAX row states auth "Não" (no auth) and
+// "Atualização: Frequente" — genuinely public and continuously updated,
+// similar in spirit to HGNC's 'rest-info' shape (no discrete releases/tags
+// either), but the concrete live signal is different enough to need its own
+// kind rather than reusing 'rest-info' as-is: the NCBI Datasets v2 REST API
+// (the row's own "URL de download/API") exposes a dedicated
+// `/datasets/v2/version` endpoint returning `{"version":"18.35.0",
+// "major_ver":18,"minor_ver":35}` — a clean live API-version signal, a
+// different field name/shape than HGNC's `lastModified` timestamp. License
+// is NCBI's own sitewide "Copyright Status of Webpages" section (on
+// ncbi.nlm.nih.gov/home/about/policies/), stating US-government content on
+// the site is public domain — reused the same "sitewide policy page when no
+// source-specific license URL exists" precedent ICD-10/DCB established.
+function mockRestVersionFetchResponses({ version = '18.35.0', licenseText }) {
+  global.fetch = vi.fn(async (url) => {
+    if (url.includes('/datasets/v2/version')) {
+      return { ok: true, status: 200, json: async () => ({ version, major_ver: 18, minor_ver: 35 }) };
+    }
+    if (url.includes('policies')) {
+      return { ok: true, status: 200, text: async () => licenseText };
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — NCBITAX (rest-version)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "verified" when the API reports a version and the license pointer is live', async () => {
+    mockRestVersionFetchResponses({
+      licenseText:
+        'Information that is created by or for the US government on this site is within the public domain.',
+    });
+
+    const report = await verify('NCBITAX');
+
+    expect(report.status).toBe('verified');
+    expect(report.live.apiVersion).toBe('18.35.0');
+    expect(report.live.licensePointerPresent).toBe(true);
+    expect(report.fixtureSource.systemUri).toBe('http://purl.obolibrary.org/obo/ncbitaxon.owl');
+  });
+
+  it('reports status "mismatch" when the API no longer reports a version', async () => {
+    mockRestVersionFetchResponses({
+      version: null,
+      licenseText:
+        'Information that is created by or for the US government on this site is within the public domain.',
+    });
+
+    const report = await verify('NCBITAX');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.apiVersion).toBeNull();
+  });
+
+  it('reports status "mismatch" when the policies page no longer contains the expected public-domain pointer', async () => {
+    mockRestVersionFetchResponses({
+      licenseText: 'Our policies have moved, see our new legal page.',
+    });
+
+    const report = await verify('NCBITAX');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.licensePointerPresent).toBe(false);
+  });
+});

@@ -2,10 +2,10 @@
 // verify job. Deliberately separate from src/reference-data/reference-imports
 // /sources/*.js — those stay pointed at the bundled fixture only, per
 // reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
-// ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, DCB, ATC, DUO, and UBERON
-// (#557) are populated so far; 3 sources remain, added here one entry at a
-// time (per docs-7-31-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md
-// §7.4 "Ordem recomendada da Fase 2").
+// ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, DCB, ATC, DUO, UBERON, and
+// NCBITAX (#557) are populated so far; 2 sources remain, added here one
+// entry at a time (per docs-7-31-2026/3-Plano_Integrado_Foundation_Data_
+// Pipeline.md §7.4 "Ordem recomendada da Fase 2").
 //
 // Each entry carries a `kind` deciding which verification shape
 // verify-live-release.js runs: 'github-release' (default, omittable — HPO/
@@ -36,9 +36,13 @@
 // attached assets — the ontology file lives checked into the repo tree
 // itself, so asset presence is a HEAD check against its raw.githubusercontent
 // .com URL instead of scanning release.assets; see
-// verifyGithubReleaseFile's comment). Not every remaining source will fit
-// one of these seven as-is — confirm live shape before assuming one of them
-// covers it.
+// verifyGithubReleaseFile's comment), or 'rest-version' (NCBI Taxonomy's
+// shape: a genuinely public, continuously-updated REST API like HGNC's
+// rest-info, but the live signal is a dedicated version endpoint returning
+// an API-version string rather than a lastModified timestamp field; see
+// verifyRestVersion's comment). Not every remaining source will fit one of
+// these eight as-is — confirm live shape before assuming one of them covers
+// it.
 //
 // releaseApiUrl/licenseUrl/expectedAssetName (or assetUrl/pageUrl/infoUrl
 // for direct-download/fixed-edition/rest-info entries) confirmed live
@@ -361,5 +365,29 @@ module.exports = {
     licenseUrl: 'https://raw.githubusercontent.com/obophenotype/uberon/master/LICENSE',
     expectedLicensePointer: 'Attribution 3.0 Unported',
     expectedAssetName: 'uberon.owl', // matches sources/uberon.js's systemUri basename
+  },
+  // #557: confirmed live on 2026-08-13, third source of §7.4 step 8.
+  // dict-01_FONTES.md's SRC_NCBITAX row states auth "Não" and "Atualização:
+  // Frequente" — genuinely public, no GitHub involved, and continuously
+  // updated (no discrete releases/tags), similar in spirit to HGNC's
+  // 'rest-info' shape but different enough in concrete signal to need its
+  // own kind: the row's own "URL de download/API" (NCBI Datasets v2 REST
+  // API) exposes a dedicated `/datasets/v2/version` endpoint returning a
+  // live API-version string rather than a lastModified timestamp field.
+  // Checked robots.txt first (ncbi.nlm.nih.gov) — only specific interactive
+  // query endpoints (/Taxonomy/Selector, /Taxonomy/CommonTree, the ?term=
+  // search form) are disallowed, no AI-crawler-specific block, and none of
+  // those disallowed paths are touched by this entry. No NCBITAX-specific
+  // license URL exists (dict-01's row: "Termos NCBI", no dedicated link),
+  // so this reuses NCBI's own sitewide policies page — its "Copyright
+  // Status of Webpages" section states US-government content on the site
+  // is public domain — same "reuse the sitewide policy page when no
+  // source-specific one exists" precedent ICD-10/DCB established.
+  NCBITAX: {
+    datasetCode: 'NCBITAX',
+    kind: 'rest-version',
+    versionUrl: 'https://api.ncbi.nlm.nih.gov/datasets/v2/version',
+    licenseUrl: 'https://www.ncbi.nlm.nih.gov/home/about/policies/',
+    expectedLicensePointer: 'created by or for the US government on this site is within the public domain',
   },
 };

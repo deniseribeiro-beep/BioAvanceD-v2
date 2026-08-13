@@ -278,6 +278,37 @@ async function verifyGithubReleaseFile(datasetCode, entry, fixtureSource) {
   };
 }
 
+// NCBITAX shape (#557): dict-01_FONTES.md's SRC_NCBITAX row states auth
+// "Não" and "Atualização: Frequente" — genuinely public and continuously
+// updated, similar in spirit to HGNC's rest-info shape (no discrete
+// releases/tags), but the concrete signal differs enough for its own kind:
+// the NCBI Datasets v2 REST API exposes a dedicated `/datasets/v2/version`
+// endpoint returning a live API-version string (`{"version":"18.35.0",...}`)
+// rather than HGNC's lastModified timestamp field.
+async function verifyRestVersion(datasetCode, entry, fixtureSource) {
+  const info = await fetchJson(entry.versionUrl, { Accept: 'application/json' });
+
+  const licenseText = await fetchText(entry.licenseUrl);
+  const licenseChecksum = sha256Hex(licenseText);
+  const licensePointerPresent = licenseText.includes(entry.expectedLicensePointer);
+
+  const status = Boolean(info.version) && licensePointerPresent ? 'verified' : 'mismatch';
+
+  return {
+    datasetCode,
+    verifiedAt: new Date().toISOString(),
+    status,
+    live: {
+      versionUrl: entry.versionUrl,
+      apiVersion: info.version ?? null,
+      licenseUrl: entry.licenseUrl,
+      licenseChecksum,
+      licensePointerPresent,
+    },
+    fixtureSource,
+  };
+}
+
 async function verify(datasetCode) {
   const entry = LIVE_SOURCES[datasetCode];
   if (!entry) {
@@ -305,6 +336,9 @@ async function verify(datasetCode) {
   }
   if (entry.kind === 'github-release-file') {
     return verifyGithubReleaseFile(datasetCode, entry, fixtureSource);
+  }
+  if (entry.kind === 'rest-version') {
+    return verifyRestVersion(datasetCode, entry, fixtureSource);
   }
   return verifyGithubRelease(datasetCode, entry, fixtureSource);
 }
