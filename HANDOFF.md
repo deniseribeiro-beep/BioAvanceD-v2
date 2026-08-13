@@ -138,20 +138,35 @@ check has now fired twice this session, both correctly finding "not yet
 closeable" — still hasn't been exercised on an actual cascade (that
 needs `#566` and `#565` to both land).
 
-**Skills-pack `#279`** (the dogfooding request) — still not closed. This
-session's continuation exercised both gaps the prior session's feedback
-comment flagged as unproven: fresh re-derivation of queue membership
-before each pick (done explicitly before both `#563` and `#564`, via
-fresh `gh issue list`/`gh issue view 368` calls, not a reused snapshot)
-and the upward parent-chain-close check (fired twice, both times
-correctly "not yet closeable"). Once `#566`/`#565` land and `#368`
-closes (or a genuine multi-level cascade is otherwise confirmed), close
-out `#279` with these findings folded into the existing feedback
-comment. One new, unplanned finding from this session worth folding in
-too: the branch-hygiene gap (`#286`) is itself a `#279`-relevant
-finding — queue mode's "continue immediately into the next item" model
-is exactly the shape that made skipping a fresh branch easy to do by
-habit, since each item's `build-loop` invocation returns to the
+**Skills-pack `#279`** (the dogfooding request) — still open, but this
+session's follow-up
+[comment](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/279#issuecomment-5286955921)
+is already posted (not deferred to a future close-out) — covers the
+fresh-re-derivation gap now closed (done explicitly before both `#563`
+and `#564`, via fresh `gh issue list`/`gh issue view 368` calls, not a
+reused snapshot), the parent-chain-close check firing for real twice
+(both times correctly "not yet closeable"), the blocked-item-skip
+branch still unexercised, and the new branch-hygiene finding below.
+**Dennis is going to the skills-pack repo to fix `#286` (and whatever
+else needs it) directly, then returning here to resume from this
+handoff** — so the next BioAvanceD-v2 session picking this up should
+check whether `#286`'s routing-gate branch-check landed before assuming
+it's still open, and shouldn't re-file or re-diagnose it. `#279` itself
+stays open regardless — it only closes once `#566`/`#565` land and
+`#368` closes (or a genuine multi-level cascade is otherwise confirmed),
+at which point fold this session's comment's findings into a final
+close-out.
+
+New, unplanned finding this session, filed to the pack as **`#286`**:
+the routing gate that blocks product-file edits without a routed
+workflow skill invoked doesn't separately check that the *current
+branch* matches what that skill's own rules require — it only checks
+"was some workflow skill invoked this session," which stayed satisfied
+across the `#563`→`#564` boundary even though no fresh branch existed
+for `#564` (see "Process miss" above). This is a `#279`-relevant finding
+in its own right: queue mode's "continue immediately into the next
+item" model is exactly the shape that made skipping a fresh branch easy
+to do by habit, since each item's `build-loop` invocation returns to the
 integration branch after the prior item's merge.
 
 - **pack-repo `#280`/`#281`** (long-carried) — still open, still
