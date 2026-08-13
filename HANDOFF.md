@@ -1,59 +1,96 @@
 # HANDOFF
 
 **Written:** 2026-08-13, end of session on `feature/docker-e2e-backend-integration`,
-after Dennis picked up two backlog items ("Pick #553 & #518" — #518 turned
-out already closed/merged, corrected to #558 mid-conversation).
+after Dennis said "Pick #551".
 
 ## What happened this session
 
-Ran `work-issue` to classify both picks, then routed each to its matching
-workflow skill and resolved both in full, one iteration apiece with its
-own `wrap-up` audit.
+Ran `work-issue` on #551 (RF028 AC7 full lifecycle: checkpoint/resume,
+quarantine recovery, rollback), routed to `build-loop` per the repo's
+own overlay (a capability spec'd in RF028/AC7 but not yet built, not a
+bug or coverage gap). #551 bundles three roughly-equal-but-not-actually-
+equal sub-items; checked the spec docs for an explicit build order first
+(per `build-loop`'s own rule) and concluded AC7's own listing — "dry
+run, checkpoint, retomada, idempotência, quarentena, verificação e
+rollback" — isn't a real sequence (it interleaves two already-built
+items, dry run and idempotência, so it's a feature enumeration, not a
+build order). Picked by sizing/risk instead and did **one of the three
+pieces** this session:
 
-- **#553** (`resolve-issue`, doc-accuracy/board-hygiene route) — Fixed the
-  "14 Fase 2 sources" miscount to 16 (Plano Integrado §7.4 steps 2-8 sum
-  to 16, not 14). Corrected all 11 `reference-data-bootstrap-*` comments
-  in `compose.dev.yml`, plus the related "remaining 13 Fase 2 sources"
-  phrasing (13 = 14 - 1 HPO) to "remaining 15" in
-  `docs/architecture/reference-data-seeding.md` and the `hpo.js`/
-  `pipeline.js` docstrings. Doc-only, no functional impact. Branch
-  `test/553-fase2-source-count-fix`, commit `d624d9f1`, merged `c01bd3d5`.
-- **#558** (`fix-bugs`, stale-test direction — route 2) — Un-weakened the
-  2 pinned assertions in `api/backend/tests/unit/storageService.test.js`
-  (`allocateSampleToPosition`/`autoAssignSampleToBox` happy paths) that
-  still expected `$set['status'] === 'AVAILABLE'`, stale since #544
-  (`c1b9ad03`) removed that write from `MongoStorageRepository` (which
-  `storageService.js` delegates to entirely). Reproduced first (both
-  failed with "expected undefined to be 'AVAILABLE'"), then fixed to
-  `toBeUndefined()` with the same explanatory comment #544's own fix
-  already used in `MongoStorageRepository.test.js`. Test-only — no
-  product code touched. 63/63 green in `storageService.test.js`, both
-  pre- and post-merge. Branch
-  `fix/558-storageservice-stale-status-assertions`, commit `ae969030`,
-  merged `daa17123`.
+- **Quarantine recovery** (`resolveImportIssue()`,
+  `api/backend/src/reference-data/reference-imports/quarantine.js`):
+  transitions a quarantined `ReferenceImportIssue`
+  (`resolutionStatus: 'open'`) to a terminal status
+  (`accepted`/`corrected`/`ignored_with_justification`/`reprocessed`/
+  `closed`), recording `resolvedAt`/`resolvedBy`/`resolutionNotes`.
+  Refuses to resolve back to `open`, refuses to double-resolve an
+  already-resolved issue, requires `resolvedBy`. Purely additive — no
+  existing code touched. Test: `quarantine.test.js`, 6/6 green, same
+  "real query-matching fake collection" bar `pipeline.test.js` already
+  set for this directory (this repo has no live-Mongo tier; that fake
+  *is* the "real backend" proof for a backend-internal slice per the
+  `build-loop` overlay). Branch `test/551-quarantine-issue-resolution`,
+  commit `de01f3f1`, merged `5bd6cb1e`, pushed. Progress comment posted
+  on #551 naming the two remaining pieces.
 
-Neither iteration touched product source beyond the one test file #558
-needed (#553 was docs/comments only). Both branches deleted locally after
-merge (no remote branches were ever pushed for either — merged straight
-into the integration branch before the first push of that branch).
+**Not done this session — still open under #551, same issue number**
+(following the #549 nine-source precedent: multiple slices, one tracked
+issue, close only when all pieces land):
+
+- **Checkpoint/resume**: the bigger of the two remaining pieces.
+  `runImport()` currently reads the whole fixture into memory in one
+  pass and only persists staged *concepts* to the `referenceImportStaging`
+  collection at the very end (one `insertMany`) — staged **relations**
+  aren't persisted anywhere, only held in an in-memory array. A real
+  checkpoint/resume needs: batched read/stage/checkpoint-write cycles
+  (so a crash mid-run leaves a resumable `checkpoint: {offset: N}` on
+  the `ReferenceImportRun` doc), staging relations too (not just
+  concepts, or a resumed run silently loses batch-1 relations — a
+  §7.3 "no silent loss" violation), and resume-reload logic that
+  distinguishes "existing run is `running` with a checkpoint → resume
+  from it" from the current idempotent-short-circuit ("existing run in
+  a terminal status → return it unchanged"). This is a real
+  restructuring of `runImport`'s core loop, not just a new sibling
+  function — expect it to need its own full iteration, not a quick
+  follow-on to quarantine recovery.
+- **Rollback**: reactivate the previous `ReferenceDatasetRelease` for a
+  `datasetCode` (flip it back to `active`, flip the current active one
+  back to `superseded`, preserve history per §7.2 step 12/§7.3 — no
+  physical deletion), and write a `ReferenceImportRun` with
+  `importMode: 'rollback'`, `runStatus: 'rolled_back'`. Looked smaller
+  and purely additive (a new sibling function next to `promote()` in
+  `pipeline.js`, same shape as quarantine recovery) but wasn't started
+  this session — go here next if picking up #551, since it's likely the
+  faster of the two remaining pieces.
 
 ### Closed this session
 
-- **#553** and **#558**, both closed with resolution comments naming the
-  merge commit hash.
+None. #551 stays open — one of three sub-items done.
 
 ### Filed this session
 
-None — no new findings surfaced during either fix.
+- **skills-pack#278** — `build-loop`'s "check spec docs for a
+  recommended sequence" step (from skills-pack#167) doesn't say what to
+  do when an AC's own item list interleaves already-built items with
+  the remaining ones (this session's exact situation) — proposed text
+  to distinguish a real recommended-order doc (like §7.4's own sequence)
+  from a mere feature enumeration, plus proposed text for the
+  same-issue-multiple-slices-across-sessions pattern (#549's precedent)
+  vs. an actual `divide-and-conquer` issue split. Not applied — no
+  write access to the pack from this session (Rule 0).
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `daa17123`, clean,
-  pushed, up to date with origin. Carries #553's doc-count fix and #558's
-  test un-weakening on top of everything the prior handoff described
-  (the full RF028 Fase 2 live-verify cluster, closed last session).
-- Docker: not used this session — both fixes were doc/test-only, no
-  Mongo/Docker-dependent code touched.
+- **`feature/docker-e2e-backend-integration`**: at `5bd6cb1e`, clean,
+  pushed, up to date with origin. Carries #551's quarantine-recovery
+  slice on top of everything the prior handoff described (#553's
+  doc-count fix, #558's test un-weakening, and the full RF028 Fase 2
+  live-verify cluster from before that).
+- Docker: not used this session — this slice's proof bar (per the
+  `build-loop` overlay, backend-internal slice, not one of the
+  milestone's own e2e Playwright specs) is the native in-memory fake-
+  collection tier, not literal Docker/live-Mongo. Dev stack untouched,
+  same as it was left: torn down, named volumes intact, images cached.
 - **Pre-existing dangling local branches, not touched this session**
   (carried forward unchanged — `fix/476-...`, `fix/477-...`,
   `fix/481-...`, `fix/485-...`, `fix/513-...`, `test/377-...`,
@@ -66,14 +103,15 @@ None — no new findings surfaced during either fix.
 
 ## Which issue is next
 
-Dennis has not said what's next this session — per this skill's own
-rule, **none queued**.
+**#551, continuing it** — pick rollback first (smaller, purely
+additive, same shape as this session's quarantine-recovery slice), then
+checkpoint/resume (the restructuring one, see above). This is Dennis's
+own pick from this session, still in progress, not a guess off the
+backlog.
 
-Candidates carried forward from the prior handoff (both this session's
-picks, #553 and #558, are now resolved and removed from the list):
+Candidates carried forward from the prior handoff, unchanged, still
+queued behind #551:
 
-- **#551** — full AC7 lifecycle (checkpoint/resume, quarantine recovery,
-  rollback). Unchanged, still open.
 - **#552** — Neo4j outbox projection (AC9) for TerminologyConcept/
   TerminologyRelation. Unchanged, still open.
 - **#530** — `dictionary:validate` isn't wired into `ci-pipeline.yml`.
@@ -86,34 +124,44 @@ picks, #553 and #558, are now resolved and removed from the list):
   `#341`/`#340`, `#334`, `#331`/`#326`/`#325`, `#321`, `#319`, `#286`,
   `#284`, `#283`, `#282`, `#228`, `#115`, next e2e slice per
   `E2E_TRACEABILITY_PLAN.md`.
-- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246/#247/#250/#251/#254/#259/#260/#262/#263/#265/#267/#268/#269/#270/#271**
-  — pack-repo only, low priority, unchanged this session. (#266 is
-  resolved by #267; #267/#268/#269/#270/#271 are the pack maintainer's
-  call, not this repo's.)
+- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246/#247/#250/#251/#254/#259/#260/#262/#263/#265/#267/#268/#269/#270/#271/#278**
+  — pack-repo only, low priority, unchanged this session (adds #278,
+  filed this session). (#266 is resolved by #267; #267/#268/#269/#270/
+  #271 are the pack maintainer's call, not this repo's.)
 
 ## Dev stack state
 
-Not brought up this session — no Docker/database-dependent code touched.
-Same state as the prior handoff left it: torn down, named volumes
-(mongodb/neo4j data) untouched, images cached.
+Not brought up this session — this slice's proof bar was native-only
+(see "Repo state" above). Same state as the prior handoff left it: torn
+down, named volumes (mongodb/neo4j data) untouched, images cached.
 
 ## Which skills to use
 
-- **`work-issue` → `resolve-issue`/`fix-bugs` routing worked cleanly for
-  both picks this session** — no misroute, no skill-text friction to
-  report from either `wrap-up` audit. #553 was the route-6 default
-  (board-hygiene, doc-only); #558 was route 2 (stale test broken by an
-  owner's own intentional prior change, confirmed via `git log --grep`
-  against the exact commit the issue named before touching anything).
-- **When un-weakening a pinned assertion that has an exact sibling
-  precedent from an earlier related fix** (here: #544's own
-  `MongoStorageRepository.test.js` edit, same repo, same day-ish,
-  same root cause cascading to a second file), pull the precedent
-  commit's diff (`git show <hash> -- <file>`) and match its comment
-  wording/assertion style exactly rather than inventing new phrasing —
-  keeps the two sibling fixes reading as one consistent decision instead
-  of two independently-worded ones.
+- **`work-issue` → `build-loop` routing was correct and clean** — the
+  `bioavanced-v2.md` overlay's route-4 mapping (spec'd-but-unbuilt
+  capability → `build-loop`) matched #551 exactly, no misroute.
+- **When a `build-loop` requirement's scope spans multiple roughly-equal
+  sub-items and the spec doc's own text lists them, check whether that
+  list is genuinely a *build order* or just a *feature enumeration*
+  before treating it as skills-pack#167's "explicit recommended
+  sequence" signal** — an AC that interleaves already-implemented items
+  with remaining ones (this session's RF028 AC7: "dry run, checkpoint,
+  retomada, idempotência, quarentena, verificação e rollback," where
+  dry run/idempotência are done) is the enumeration case, not the
+  sequence case. Fall back to sizing/risk (smallest, most
+  self-contained, lowest-risk-to-existing-code first) instead — filed as
+  skills-pack#278 with proposed skill text, not yet applied.
+- **For a multi-piece `build-loop` requirement worked across sessions,
+  default to keeping every piece under the same tracked issue** (progress
+  comment per landed piece, close only once every piece is done) **rather
+  than splitting into a new issue number per piece** — followed the
+  precedent BioAvanceD-v2#549 set (nine sources, nine branches, one
+  issue) for #551 this session. Also proposed in skills-pack#278 as
+  explicit skill text, not yet applied.
 - Nothing else new to report — see prior handoffs for the accumulated
   repo-wide lessons (`.claude/skills/build-loop/local-env/` junctions,
-  `test-loop`'s full-suite-guard hook inconsistency, etc.), all still
-  believed current.
+  `test-loop`'s full-suite-guard hook inconsistency, the Bash/Glob
+  skill-junction read-block quirk which is known and already closed
+  upstream as skills-pack#126/#177/#204 — recurred again this session,
+  worked around with the `Read`/`Grep` tools each time, not re-filed),
+  all still believed current.
