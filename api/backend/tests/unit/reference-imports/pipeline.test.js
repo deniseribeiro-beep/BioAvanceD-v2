@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-const { runImport } = require('../../../src/reference-data/reference-imports/pipeline');
+const { runImport, rollbackRelease } = require('../../../src/reference-data/reference-imports/pipeline');
 const hpoSource = require('../../../src/reference-data/reference-imports/sources/hpo');
 const { normalizeRecord } = require('../../../src/reference-data/reference-imports/normalizeHpo');
 
@@ -235,6 +235,66 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       expect(stagedConcepts).toHaveLength(8);
       expect(stagedRelations).toHaveLength(7);
       expect(stagedRelations.every((d) => d.candidate.sourceCode && d.candidate.targetCode)).toBe(true);
+    });
+  });
+
+  describe('rollback (AC 7)', () => {
+    it('reactivates the previous release against a real two-version promotion history from runImport', async () => {
+      const fakeDb = createFakeDb();
+      const v1Source = { ...hpoSource, datasetVersion: 'v1' };
+      const v2Source = { ...hpoSource, datasetVersion: 'v2' };
+
+      await runImport({ db: fakeDb, source: v1Source, normalizeRecord, initiatedBy: 'test-actor' });
+      await runImport({ db: fakeDb, source: v2Source, normalizeRecord, initiatedBy: 'test-actor' });
+
+      const releasesBefore = fakeDb.collections.referenceDatasetReleases.docs;
+      expect(releasesBefore).toHaveLength(2);
+      const v2Release = releasesBefore.find((r) => r.datasetVersion === 'v2');
+      const v1Release = releasesBefore.find((r) => r.datasetVersion === 'v1');
+      expect(v2Release.releaseStatus).toBe('active');
+      expect(v1Release.releaseStatus).toBe('superseded');
+      expect(v2Release.previousReleaseId).toBe(v1Release.referenceDatasetReleaseId);
+
+      const result = await rollbackRelease({ db: fakeDb, datasetCode: hpoSource.datasetCode, initiatedBy: 'test-actor' });
+
+      expect(result.rolledBack).toBe(true);
+      expect(result.activeReleaseId).toBe(v1Release.referenceDatasetReleaseId);
+
+      // Both releases preserved — no physical deletion (§7.2 step 12/§7.3).
+      expect(fakeDb.collections.referenceDatasetReleases.docs).toHaveLength(2);
+      const releasesAfter = fakeDb.collections.referenceDatasetReleases.docs;
+      expect(releasesAfter.find((r) => r.referenceDatasetReleaseId === v1Release.referenceDatasetReleaseId).releaseStatus).toBe('active');
+      expect(releasesAfter.find((r) => r.referenceDatasetReleaseId === v2Release.referenceDatasetReleaseId).releaseStatus).toBe('rolled_back');
+
+      const rollbackRun = fakeDb.collections.referenceImportRuns.docs.find((r) => r.importMode === 'rollback');
+      expect(rollbackRun).toBeDefined();
+      expect(rollbackRun.runStatus).toBe('rolled_back');
+      expect(rollbackRun.referenceDatasetReleaseId).toBe(v1Release.referenceDatasetReleaseId);
+      expect(rollbackRun.datasetCode).toBe(hpoSource.datasetCode);
+      expect(rollbackRun.initiatedBy).toBe('test-actor');
+    });
+
+    it('reports rolledBack:false with no active release for the dataset', async () => {
+      const fakeDb = createFakeDb();
+
+      const result = await rollbackRelease({ db: fakeDb, datasetCode: 'NOT_A_REAL_DATASET', initiatedBy: 'test-actor' });
+
+      expect(result.rolledBack).toBe(false);
+      expect(result.reason).toBe('no_active_release');
+      expect(fakeDb.collections.referenceImportRuns.docs).toHaveLength(0);
+    });
+
+    it('reports rolledBack:false when the active release has no prior release to restore', async () => {
+      const fakeDb = createFakeDb();
+      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      const result = await rollbackRelease({ db: fakeDb, datasetCode: hpoSource.datasetCode, initiatedBy: 'test-actor' });
+
+      expect(result.rolledBack).toBe(false);
+      expect(result.reason).toBe('no_previous_release');
+      // Left untouched — still active, no rollback run written.
+      expect(fakeDb.collections.referenceDatasetReleases.docs[0].releaseStatus).toBe('active');
+      expect(fakeDb.collections.referenceImportRuns.docs.some((r) => r.importMode === 'rollback')).toBe(false);
     });
   });
 });
