@@ -599,3 +599,82 @@ describe('verify-live-release.verify — DCB (fixed-edition)', () => {
     expect(report.live.licensePointerPresent).toBe(false);
   });
 });
+
+// #557 ATC: a fourth 'fixed-edition' entry, closing out §7.4 step 7's "DCB e
+// ATC/DDD" pair. dict-01_FONTES.md's SRC_ATC "URL oficial"
+// (whocc.no/atc_ddd_index/) 301-redirects to the WHO Collaborating Centre's
+// actual current domain (atcddd.fhi.no — the Centre moved host to the
+// Norwegian Institute of Public Health), which Node's own fetch() follows
+// transparently (fetch() follows redirects by default; response.ok stays
+// true). The redirected page's own body carries a clean `<h1>ATC/DDD Index
+// 2026</h1>` heading — the annual index year stands in for ICD-10/UCUM/DCB's
+// edition/version string, matching dict-01's own "Índice anual vigente"
+// wording. No releases API or download-asset URL is involved (WHOCC
+// distributes the full index via a licensed portal/file per dict-01's
+// "Cadastro/aquisição possível" auth note, out of scope for what this
+// verification checks — it only proves the same free public index page and
+// license terms dict-01 already cites are still live). License is on a
+// dedicated Copyright/Disclaimer page (whocc.no/copyright_disclaimer/,
+// itself redirected to atcddd.fhi.no) with a durable plain-text attribution
+// pointer ("WHO Collaborating Centre for Drug Statistics Methodology, Oslo,
+// Norway").
+function mockAtcFixedEditionFetchResponses({ pageText = '<h1>ATC/DDD Index 2026</h1>', licenseText }) {
+  global.fetch = vi.fn(async (url) => {
+    if (url.includes('atc_ddd_index')) {
+      return { ok: true, status: 200, text: async () => pageText };
+    }
+    if (url.includes('copyright_disclaimer')) {
+      return { ok: true, status: 200, text: async () => licenseText };
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — ATC (fixed-edition)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "verified" when the live page still carries the expected annual index year and the license pointer is live', async () => {
+    mockAtcFixedEditionFetchResponses({
+      licenseText:
+        'WHO Collaborating Centre for Drug Statistics Methodology, Oslo, Norway. Use of all or parts of the material requires reference to the WHO Collaborating Centre for Drug Statistics Methodology.',
+    });
+
+    const report = await verify('ATC');
+
+    expect(report.status).toBe('verified');
+    expect(report.live.liveEdition).toBe('2026');
+    expect(report.live.editionMatchesExpected).toBe(true);
+    expect(report.live.licensePointerPresent).toBe(true);
+    expect(report.fixtureSource.systemUri).toBe('http://www.whocc.no/atc');
+  });
+
+  it('reports status "mismatch" when the live page no longer carries the expected annual index year', async () => {
+    mockAtcFixedEditionFetchResponses({
+      pageText: '<h1>ATC/DDD Index 2027</h1>',
+      licenseText:
+        'WHO Collaborating Centre for Drug Statistics Methodology, Oslo, Norway. Use of all or parts of the material requires reference to the WHO Collaborating Centre for Drug Statistics Methodology.',
+    });
+
+    const report = await verify('ATC');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.liveEdition).toBe('2027');
+    expect(report.live.editionMatchesExpected).toBe(false);
+  });
+
+  it('reports status "mismatch" when the Copyright/Disclaimer page no longer contains the expected attribution pointer', async () => {
+    mockAtcFixedEditionFetchResponses({
+      licenseText: 'This page has moved, see our new legal page.',
+    });
+
+    const report = await verify('ATC');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.licensePointerPresent).toBe(false);
+  });
+});
