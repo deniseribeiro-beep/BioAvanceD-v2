@@ -760,3 +760,79 @@ describe('verify-live-release.verify — DUO (github-release-file)', () => {
     expect(report.live.licensePointerPresent).toBe(false);
   });
 });
+
+// #557 UBERON: second source of §7.4 step 8. Back to the plain
+// 'github-release' shape HPO/MONDO established — unlike DUO's sibling repo,
+// obophenotype/uberon's latest release does carry an asset matching
+// systemUri's basename (uberon.owl, confirmed live via `gh api
+// repos/obophenotype/uberon/releases/latest`). GitHub reports this repo's
+// license as spdx_id "NOASSERTION" too (same as HPO), but unlike HPO's
+// LICENSE.md (a redirect pointer to an external page), this repo's LICENSE
+// file carries the full plain-text CC BY 3.0 legal code directly — same
+// "full legal text, not a redirect" shape MONDO's LICENSE file had, just a
+// different (older, 3.0 Unported vs. 4.0 International) CC version.
+function mockUberonFetchResponses({ releaseAssets = ['uberon.owl', 'uberon.json'], licenseText, tagName = 'v2026-06-23' }) {
+  global.fetch = vi.fn(async (url) => {
+    if (url.includes('/releases/latest')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          tag_name: tagName,
+          published_at: '2026-06-23T16:30:42Z',
+          assets: releaseAssets.map((name) => ({ name })),
+        }),
+      };
+    }
+    if (url.includes('LICENSE')) {
+      return { ok: true, status: 200, text: async () => licenseText };
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — UBERON (github-release)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "verified" when the expected asset and license pointer are both live', async () => {
+    mockUberonFetchResponses({
+      licenseText: 'Creative Commons Legal Code\n\nAttribution 3.0 Unported\n\n...',
+    });
+
+    const report = await verify('UBERON');
+
+    expect(report.status).toBe('verified');
+    expect(report.live.assetPresent).toBe(true);
+    expect(report.live.licensePointerPresent).toBe(true);
+    expect(report.live.releaseTag).toBe('v2026-06-23');
+    expect(report.fixtureSource.systemUri).toBe('http://purl.obolibrary.org/obo/uberon.owl');
+  });
+
+  it('reports status "mismatch" when the expected release asset is missing', async () => {
+    mockUberonFetchResponses({
+      releaseAssets: ['uberon.json'],
+      licenseText: 'Attribution 3.0 Unported',
+    });
+
+    const report = await verify('UBERON');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.assetPresent).toBe(false);
+  });
+
+  it('reports status "mismatch" when the license text no longer contains the expected pointer', async () => {
+    mockUberonFetchResponses({
+      licenseText: 'License terms have moved, see our new legal page.',
+    });
+
+    const report = await verify('UBERON');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.licensePointerPresent).toBe(false);
+  });
+});
