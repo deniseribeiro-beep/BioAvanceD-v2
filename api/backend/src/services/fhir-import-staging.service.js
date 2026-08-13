@@ -5,6 +5,7 @@ const notificationService = require('./NotificationService');
 const qualityDomain = require('./quality-domain.service');
 const logger = require('../utils/logger');
 const { SampleModel } = require('../models/Sample');
+const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const quarantineActionService = require('./quarantine-action.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
@@ -922,6 +923,26 @@ async function commitBatch(db, batchIdRaw) {
         $set: {
           updatedAt: new Date(),
         },
+      },
+      { upsert: true }
+    );
+
+    // RF005/RNF007 (#363/#563): mirror civil identity into the segregated
+    // ParticipantIdentity collection, same as patient.service.js#createPatient
+    // — kept as an upsert (rather than a plain insertOne) to match the
+    // Patient upsert above's own idempotent-on-participantId semantics.
+    const identities = collection(db, 'participantIdentities');
+    const identityFields = ParticipantIdentityModel.fieldsOf({
+      participantId: normalized.participantId,
+      patientName: normalized.patientName,
+      birthDate: normalized.patientBirthDate,
+      identityDocument: normalized.patientDocument,
+    });
+    await identities.updateOne(
+      { participantId: normalized.participantId },
+      {
+        $setOnInsert: { ...identityFields, createdAt: new Date() },
+        $set: { updatedAt: new Date() },
       },
       { upsert: true }
     );

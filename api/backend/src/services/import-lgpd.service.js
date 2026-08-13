@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
 const PatientModel = require('../models/Patient');
+const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const { SampleModel } = require('../models/Sample');
 const patientService = require('./patient.service');
 const notificationService = require('./notification.service');
@@ -649,9 +650,15 @@ class ImportLGPDService {
 
           // Cria paciente
           const patient = PatientModel.create(patientData);
-          
+
           // Insere no banco
           const insertResult = await patientsCollection.insertOne(patient);
+
+          // RF005/RNF007 (#363/#563): mirror civil identity into the
+          // segregated ParticipantIdentity collection, same as
+          // patient.service.js#createPatient.
+          const identityCollection = getCollection(db, 'participantIdentities');
+          await identityCollection.insertOne(ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId }));
 
           try {
             const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
@@ -1840,6 +1847,12 @@ class ImportLGPDService {
 
         const patient = PatientModel.create(patientData);
         const insertResult = await patientsCollection.insertOne(patient);
+
+        // RF005/RNF007 (#363/#563): mirror civil identity into the
+        // segregated ParticipantIdentity collection, same as
+        // patient.service.js#createPatient.
+        const identityCollection = getCollection(db, 'participantIdentities');
+        await identityCollection.insertOne(ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId }));
 
         try {
           const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
