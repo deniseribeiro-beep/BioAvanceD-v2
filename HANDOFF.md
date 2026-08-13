@@ -73,17 +73,17 @@ scoped acceptance criteria.
 - **`feature/docker-e2e-backend-integration`**: clean, pushed, at
   `9ac14682`. Carries this session's `#552` slice on top of everything
   the prior handoff described.
-- The dev Docker stack (`compose.yml`+`compose.dev.yml`) is currently
-  **up** — `mongodb`, `neo4j`, `redis`, `influxdb`, `tsa`, `witness`,
-  `backend`, `neo4j-projection-worker` running; `foundation-bootstrap`
-  and `reference-data-bootstrap` (HPO) exited 0. `clean-up` has **not**
-  yet been run this session to tear it down — do that first thing next
-  session if nothing else needs it running, per `docker-workflow`'s
-  "inherited a stack you didn't start" case.
+- The dev Docker stack (`compose.yml`+`compose.dev.yml`) was brought up
+  for this session's live verification, then torn down via `clean-up`
+  before session end (`docker compose ... down`, no `--volumes` — named
+  volumes including the fresh HPO/Neo4j data this session wrote are
+  preserved for next time). No stack running as of this handoff.
 - No stray local branches from this session — `test/552-neo4j-outbox-projection`
   merged and deleted; a second throwaway branch
   (`test/552-wrapup-notes`, opened only to attempt the now-redirected
   local-env edit) was deleted unmerged since it carried no changes.
+  Session-local Playwright `test-results/` debris and the scratchpad
+  `compose-up-552.log` redirect target were also removed.
 - **Pre-existing dangling local branches, not touched this session**
   (carried forward unchanged from prior handoffs — `fix/476-...`,
   `fix/477-...`, `fix/481-...`, `fix/485-...`, `fix/513-...`,
