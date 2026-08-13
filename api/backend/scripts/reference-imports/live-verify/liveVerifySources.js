@@ -1,35 +1,39 @@
 // #555/#556 (RF028/#550): live-source registry for the workflow_dispatch-only
 // verify job. Deliberately separate from src/reference-data/reference-imports
 // /sources/*.js — those stay pointed at the bundled fixture only, per
-// reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO, and
-// ORPHA (#557) are populated so far; the other 13 sources are #557's
-// remaining scope, added here one entry at a time (per docs-7-31-2026/
-// 3-Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem recomendada da
-// Fase 2" order: CID-11, CID-10, OMIM next).
+// reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
+// ORPHA, and ICD-10/ICD-11 (#557) are populated so far; the other 11 sources
+// are #557's remaining scope, added here one entry at a time (per
+// docs-7-31-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem
+// recomendada da Fase 2" order: OMIM next).
 //
 // Each entry carries a `kind` deciding which verification shape
 // verify-live-release.js runs: 'github-release' (default, omittable — HPO/
 // MONDO's shape: GitHub releases API + a LICENSE file/page reachable by
 // URL), 'direct-download' (ORPHA's shape: a stable direct file URL with no
 // releases API, license stated on the download's own landing page — see
-// verifyDirectDownload's comment in verify-live-release.js), or
-// 'redirect-version' (ICD-11's shape: the actual WHO ICD API is OAuth/
-// API-key gated, but its public browser exposes the release via a redirect
-// target instead of a releases API — see verifyRedirectVersion's comment).
-// Not every remaining source will fit one of these three as-is (e.g. ICD-10
-// is WHO-hosted like ICD-11 but its "URL oficial" is a fixed-edition browse
-// page rather than a "latest" redirect, so confirm rather than assume it
-// reuses ICD-11's shape verbatim; OMIM is a licensed/keyed API per
+// verifyDirectDownload's comment in verify-live-release.js), 'redirect-
+// version' (ICD-11's shape: the actual WHO ICD API is OAuth/API-key gated,
+// but its public browser exposes the release via a redirect target instead
+// of a releases API — see verifyRedirectVersion's comment), or 'fixed-
+// edition' (ICD-10's shape: also WHO-hosted, but the "URL oficial" is a
+// fixed-edition browse page rather than a "latest" redirect — the edition is
+// read out of the page body itself, and no source-specific license document
+// was found live, so it reuses WHO's sitewide Terms of Use page instead —
+// see verifyFixedEdition's comment). Not every remaining source will fit one
+// of these four as-is (e.g. OMIM is a licensed/keyed API per
 // dict-01_FONTES.md's SRC_OMIM row with no public unauthenticated surface
-// found yet) — confirm live shape before assuming one of these three covers
+// found yet) — confirm live shape before assuming one of these four covers
 // it.
 //
-// releaseApiUrl/licenseUrl/expectedAssetName (or assetUrl for
-// direct-download entries) confirmed live against the real upstream before
-// being added — never assumed from training-data recall. HPO/MONDO:
-// 2026-08-12/13 via `gh api repos/<org>/<repo>` + `.../releases/latest`.
-// ORPHA: 2026-08-13 via curl against orphacode.org (no GitHub involved) —
-// same verification discipline EDAM's #549 slice established.
+// releaseApiUrl/licenseUrl/expectedAssetName (or assetUrl/pageUrl for
+// direct-download/fixed-edition entries) confirmed live against the real
+// upstream before being added — never assumed from training-data recall.
+// HPO/MONDO: 2026-08-12/13 via `gh api repos/<org>/<repo>` + `.../releases/
+// latest`. ORPHA: 2026-08-13 via curl against orphacode.org (no GitHub
+// involved) — same verification discipline EDAM's #549 slice established.
+// ICD-10: 2026-08-13 via curl against icd.who.int/browse10 and
+// who.int/about/policies/terms-of-use.
 module.exports = {
   HPO: {
     datasetCode: 'HPO',
@@ -91,5 +95,28 @@ module.exports = {
     versionPattern: /\/browse\/([^/]+)\/mms/,
     licenseUrl: 'https://icd.who.int/en/docs/ICD11-license.pdf',
     expectedLicensePointer: 'World Health Organization',
+  },
+  // #557: confirmed live on 2026-08-13. Unlike ICD-11's "latest" redirect,
+  // dict-01_FONTES.md's SRC_ICD10 "URL oficial" is a fixed-edition browse
+  // page (https://icd.who.int/browse10/2019/en) — it 200s directly, and the
+  // edition ("2019") is embedded in the page body itself (`<title>ICD-10
+  // Version:2019</title>`), not a redirect target. No ICD-10-specific
+  // license document was found live: the browse page carries no license
+  // text, and the one PDF it links (the Instruction Manual) is compressed,
+  // so fetchText()'s plain UTF-8 decode doesn't surface readable pointer
+  // text from it the way it did for ICD-11's uncompressed license PDF.
+  // SRC_ICD10's own Licenciamento value is the generic "Termos WHO/edição
+  // nacional" with no source-specific URL given (unlike SRC_ICD11's
+  // dedicated PDF), so this reuses WHO's sitewide Terms of Use page as the
+  // license-bearing surface — confirmed live to contain "Copyright World
+  // Health Organization (WHO)" in actual prose.
+  ICD10: {
+    datasetCode: 'ICD10',
+    kind: 'fixed-edition',
+    pageUrl: 'https://icd.who.int/browse10/2019/en',
+    editionPattern: /ICD-10 Version:(\d{4})/,
+    expectedEdition: '2019',
+    licenseUrl: 'https://www.who.int/about/policies/terms-of-use',
+    expectedLicensePointer: 'Copyright World Health Organization (WHO)',
   },
 };
