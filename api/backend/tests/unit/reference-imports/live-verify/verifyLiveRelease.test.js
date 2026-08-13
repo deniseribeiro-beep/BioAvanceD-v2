@@ -106,3 +106,71 @@ describe('verify-live-release.verify', () => {
     await expect(verify('NOT_A_REAL_SOURCE')).rejects.toThrow(/No live-verify entry for/);
   });
 });
+
+// #557 ORPHA: a 'direct-download' entry — no releases API, asset presence is
+// a HEAD 200 on a stable file URL, license lives on the pack's own landing
+// page. Exercises verify-live-release.js's second verification path, kept
+// separate from the 'github-release' mocks above since it hits fetch() with
+// a different URL/response shape (HEAD + Headers.get, not releases-API JSON).
+function mockDirectDownloadFetchResponses({ assetOk = true, lastModified = 'Thu, 02 Jul 2026 07:06:46 GMT', licenseText }) {
+  global.fetch = vi.fn(async (url, options = {}) => {
+    if (url.includes('.zip')) {
+      expect(options.method).toBe('HEAD');
+      return {
+        ok: assetOk,
+        status: assetOk ? 200 : 404,
+        headers: { get: (name) => (name === 'last-modified' ? lastModified : null) },
+      };
+    }
+    if (url.includes('pack-nomenclature')) {
+      return { ok: true, status: 200, text: async () => licenseText };
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — ORPHA (direct-download)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "verified" when the pack download and license pointer are both live', async () => {
+    mockDirectDownloadFetchResponses({
+      licenseText: '<a href="https://creativecommons.org/licenses/by/4.0">CC BY 4.0 licence</a>',
+    });
+
+    const report = await verify('ORPHA');
+
+    expect(report.status).toBe('verified');
+    expect(report.live.assetPresent).toBe(true);
+    expect(report.live.assetLastModified).toBe('Thu, 02 Jul 2026 07:06:46 GMT');
+    expect(report.live.licensePointerPresent).toBe(true);
+    expect(report.fixtureSource.systemUri).toBe('http://www.orpha.net');
+  });
+
+  it('reports status "mismatch" when the pack download is unreachable', async () => {
+    mockDirectDownloadFetchResponses({
+      assetOk: false,
+      licenseText: '<a href="https://creativecommons.org/licenses/by/4.0">CC BY 4.0 licence</a>',
+    });
+
+    const report = await verify('ORPHA');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.assetPresent).toBe(false);
+  });
+
+  it('reports status "mismatch" when the license page no longer links CC BY 4.0', async () => {
+    mockDirectDownloadFetchResponses({
+      licenseText: 'License terms have moved, see our new legal page.',
+    });
+
+    const report = await verify('ORPHA');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.licensePointerPresent).toBe(false);
+  });
+});

@@ -81,6 +81,7 @@
     "reference:live-verify": "node scripts/reference-imports/live-verify/verify-live-release.js",
     "reference:live-verify:hpo": "node scripts/reference-imports/live-verify/verify-live-release.js HPO",
     "reference:live-verify:mondo": "node scripts/reference-imports/live-verify/verify-live-release.js MONDO",
+    "reference:live-verify:orpha": "node scripts/reference-imports/live-verify/verify-live-release.js ORPHA",
     "test:architecture": "node --test \"tests/architecture/**/*.arch.test.js\"",
     "test:unit:vitest": "vitest run",
     "test": "vitest run",
