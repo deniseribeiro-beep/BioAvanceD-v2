@@ -1,77 +1,92 @@
 # HANDOFF
 
 **Written:** 2026-08-13, end of session on `feature/docker-e2e-backend-integration`,
-after Dennis said "Pick #557" (following the prior handoff's top candidate).
+after Dennis said "Continue 557" (following the prior handoff's top candidate).
 
 ## What happened this session
 
-Read the prior HANDOFF, then routed #557 ("apply #556's live-download +
-license-verification pattern to the remaining 15 Fase 2 sources") via
-`work-issue` → `build-loop` (route 4: capability spec'd/pattern-established
-but not yet built for these sources, proven with a real-backend/real-upstream
-test — not a bug, not existing-code coverage).
+Continued #557 ("apply #556's live-download + license-verification pattern
+to the remaining Fase 2 sources") via `build-loop`, picking up right after
+the prior session's MONDO slice.
 
-- Read #557's body and #555/#556's existing `live-verify/` infrastructure
-  (`fetchLiveRelease.js`, `liveVerifySources.js`, `verify-live-release.js`)
-  before picking a slice. 15 sources in one issue is too big for one
-  iteration — #557's own body anticipated this ("can still be split further
-  per-source at pickup time"), so no separate `divide-and-conquer` call was
-  needed; just sliced to one source per build-loop's normal sizing.
-- Checked `docs/docs-7-31-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md`
-  §7.4 "Ordem recomendada da Fase 2" for sequencing before picking which
-  source: HPO (done, #556) then **MONDO** is next in the recommended order
-  (step 3), ahead of ORPHA/CID-11/CID-10/OMIM (step 4).
-- **MONDO confirmed live against the real upstream, not assumed**:
-  `gh api repos/monarch-initiative/mondo` — license auto-detected as
-  `CC-BY-4.0` (unlike HPO's `NOASSERTION`; matches `sources/mondo.js`'s
-  `'CC BY 4.0'` fixture license exactly). `gh api
-  repos/monarch-initiative/mondo/releases/latest` — latest release
-  `v2026-08-04` includes `mondo.owl`, matching `sources/mondo.js`'s
-  `systemUri` basename. `curl` on the repo's `LICENSE` file confirmed
-  `"Attribution 4.0 International"` full-legal-text pointer (MONDO's
-  license page isn't a redirect like HPO's, so the pointer target is the
-  license text itself, not an external URL string).
-- Added `MONDO` entry to `liveVerifySources.js`, `reference:live-verify:mondo`
-  npm script, 2 new mocked-fetch unit tests (+ generalized the existing HPO
-  mock helper from matching `LICENSE.md` literally to matching any
-  `LICENSE*` filename, since MONDO's file is bare `LICENSE`).
-- **`npm run reference:live-verify:mondo` run natively end-to-end against
-  the real GitHub API/LICENSE file** — reports `status: "verified"`.
-- No changes needed to the arch tests, the CI workflow, or
-  `fetchLiveRelease.js`/`verify-live-release.js` — #555's directory-wide
-  arch-test design and generic CLI (`dataset_code` as a workflow input)
-  already cover any new registry entry automatically, confirming that
-  infrastructure is source-agnostic as intended.
+- Per `docs/docs-7-31-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md`
+  §7.4 "Ordem recomendada da Fase 2", the next source after MONDO is
+  **ORPHA** (step 4's "ORPHA, CID-11, CID-10 e OMIM" group).
+- **Discovered ORPHA breaks the GitHub-releases-API shape** HPO/MONDO both
+  happened to share (both are OBO Foundry ontologies on GitHub). Confirmed
+  live via `curl` against `orphacode.org` (not GitHub at all, per
+  `dict-01_FONTES.md`'s SRC_ORPHA row: "Download/API",
+  `https://www.orphacode.org/pack-nomenclature/` /
+  `https://api.orphacode.org/`): the Orphanet Nomenclature Pack is a
+  stable, unversioned direct-download URL
+  (`https://www.orphacode.org/data/packs/Orphanet_Nomenclature_Pack_EN.zip`,
+  HEAD 200, `Last-Modified: Thu, 02 Jul 2026 07:06:46 GMT` as the only
+  release-date signal) with the license stated on its own landing page
+  ("CC BY 4.0 licence" linking `creativecommons.org/licenses/by/4.0`,
+  matching `sources/orpha.js`'s fixture license exactly) rather than a
+  separate `LICENSE` file.
+- **Generalized `verify-live-release.js`** with a `kind` field on each
+  `liveVerifySources.js` entry: `'github-release'` (default, HPO/MONDO's
+  existing behavior, unchanged) vs. the new `'direct-download'` (ORPHA's
+  shape — HEAD-check a stable asset URL, no releases API). Added
+  `fetchHead()` to `fetchLiveRelease.js` for the HEAD check.
+- Added the `ORPHA` entry to `liveVerifySources.js`, `reference:live-verify:orpha`
+  npm script, 3 new mocked-fetch unit tests (verified/mismatch-asset/
+  mismatch-license, mirroring the existing HPO/MONDO cases but exercising
+  the new direct-download mock shape).
+- **`npm run reference:live-verify:orpha` run natively end-to-end against
+  the real orphacode.org upstream** — reports `status: "verified"`.
+  Also re-ran `reference:live-verify:mondo` natively as a regression check
+  on the refactored `verify-live-release.js` — still `"verified"`,
+  confirming the `kind` branch didn't disturb the existing GitHub path.
+- No changes needed to the arch tests or the CI workflow — same as MONDO's
+  precedent, #555's directory-wide arch-test design and generic CLI
+  already cover any new registry entry automatically.
 
-Verified: 60/60 architecture tests (native, `node --test`, unchanged count —
-directory-wide checks, no new per-source line needed), 6/6 unit tests
-(vitest, up from 4 — the 2 new MONDO cases), lint (383 files) and typecheck
-clean, the live-verify script run natively against the real MONDO upstream.
+Verified: 60/60 architecture tests (native, `node --test`, unchanged
+count), 115/115 unit tests across `tests/unit/reference-imports/`
+(vitest, up from 112 — the 3 new ORPHA cases), lint (383 files) clean,
+both live-verify scripts (ORPHA, MONDO regression) run natively against
+their real upstreams.
 
-Own branch `test/557-live-verify-mondo` (no dedicated `build-loop` prefix
-exists yet; used the `test/<slug>` fallback per the build-loop overlay),
-committed, merged (no-ff) into `feature/docker-e2e-backend-integration`,
-pushed (`51129cb7`), branch deleted (local + remote). **#557 left open**
-with a progress comment (1 of 15 done, 14 remain) — not closed, since the
-issue covers all 15 sources and only one landed this session.
+Own branch `test/557-live-verify-orpha` (no dedicated `build-loop` prefix
+exists yet; used the `test/<slug>` fallback per the build-loop overlay,
+same as MONDO's session), committed, merged (no-ff) into
+`feature/docker-e2e-backend-integration`, pushed (`dcb1b75b`), local
+branch deleted (never pushed to remote, so no remote delete needed).
+**#557 left open** with a progress comment (2 of 15 done — HPO, MONDO,
+ORPHA — 13 remain) — not closed, since the issue covers all 15 sources
+and only one landed this session.
 
-`wrap-up` ran clean — no friction, scope stayed to the 3 files the slice
-implied (`package.json`, `liveVerifySources.js`, the unit test file), no
-lazy fixes, no new issues needed (the 14 remaining sources are already
-covered by #557 itself, explicitly left open for them).
+`wrap-up` surfaced one finding: the ORPHA slice required a judgment call
+(generalizing `verify-live-release.js` with a `kind` field) that
+`skills/build-loop/local-env/bioavanced-v2.md` doesn't yet document, and
+flagged that CID-11/CID-10/OMIM (the rest of step 4's group) are
+API-key-gated per `dict-01_FONTES.md` and won't fit either existing
+`kind` as-is. Filed against the skills-pack tracker rather than edited
+directly (Rule 0 — this session isn't a pack-repo session):
+**dyeallpies-skills-pack#264**, asking for a bullet in the build-loop
+overlay covering (1) confirm live distribution shape before assuming
+`'github-release'`, (2) CID-11/CID-10/OMIM will need a third `kind` or a
+documented "not live-verifiable without credentials" carve-out. No
+BioAvanceD-v2-side issue needed — #557 already tracks the remaining
+sources including that trio.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `51129cb7`, clean,
+- **`feature/docker-e2e-backend-integration`**: at `dcb1b75b`, clean,
   pushed, up to date with origin. Carries #555/#556's live-verify
-  infrastructure + HPO pilot + this session's MONDO entry on top of #549's
-  full 16-source Fase 2 fixture-import group.
+  infrastructure + HPO pilot + MONDO (prior session) + this session's
+  ORPHA entry and the `kind`-generalized `verify-live-release.js`, on top
+  of #549's full 16-source Fase 2 fixture-import group.
 - Issues this session: **none closed**. **#557 open**, progress comment
-  added (MONDO done, 14 sources remain: ORPHA, CID-11, CID-10, OMIM, HGNC,
-  LOINC, UCUM, DCB, ATC, DUO, Uberon, NCBI Taxonomy, Cell Ontology, EDAM).
-  **#550 open** (tracking issue for the original 3-way split, unchanged).
-- Docker: not used this session — live-verify is a network-only script, no
-  Mongo/Docker involved, same as #556's HPO pilot precedent.
+  added (HPO/MONDO/ORPHA done, 13 sources remain: CID-11, CID-10, OMIM,
+  HGNC, LOINC, UCUM, DCB, ATC, DUO, Uberon, NCBI Taxonomy, Cell Ontology,
+  EDAM). **#550 open** (tracking issue for the original 3-way split,
+  unchanged). **dyeallpies-skills-pack#264 opened** (pack-repo tracker,
+  build-loop overlay gap — see above).
+- Docker: not used this session — live-verify is a network-only script,
+  no Mongo/Docker involved, same as HPO/MONDO precedent.
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged from before — see earlier handoffs for the full list;
   not re-enumerated here to avoid drift from a list nobody re-verified
@@ -85,16 +100,18 @@ Dennis has not explicitly said which issue to pick up next session — per
 Candidates carried forward:
 
 - **#557** — continue the live-verify pattern for the next source in
-  recommended order: **ORPHA** (§7.4 step 4, same group as CID-11/CID-10/
-  OMIM — translate "CID" → "ICD" before grepping `dict-01_FONTES.md`, per
-  the build-loop overlay's confirmed trap). Each source needs its own
-  live-API confirmation (`gh api`/`curl`/WebFetch) before writing a
-  `liveVerifySources.js` entry — same discipline HPO/MONDO both used.
-  14 sources remain; can keep splitting one-per-iteration or bundle a
-  few per iteration once the per-source effort is well understood (this
-  session's MONDO slice took no infrastructure changes at all, just a
-  registry entry + tests + live confirmation — future sources may go
-  faster once that's confirmed as the steady-state shape).
+  recommended order: **CID-11 (ICD-11)** (§7.4 step 4, same group as
+  ORPHA/CID-10/OMIM — translate "CID" → "ICD" before grepping
+  `dict-01_FONTES.md`, per the build-loop overlay's confirmed trap).
+  **Known blocker before writing code:** per `dict-01_FONTES.md`'s
+  SRC_ICD11 row, WHO's ICD-11 API requires OAuth/API key — confirm
+  whether an unauthenticated live-check is possible at all (e.g. a public
+  release-notes/version page) before assuming the existing
+  `'github-release'`/`'direct-download'` `kind`s apply; may need a third
+  `kind` or a documented "not live-verifiable without credentials"
+  outcome for this source (see dyeallpies-skills-pack#264). CID-10 and
+  OMIM in the same step-4 group have the same API-key-gated shape per the
+  dictionary and will hit the identical question.
 - **#550** — stays open as the tracking issue for the original split
   until #557 fully lands.
 - **#551** — full AC7 lifecycle (checkpoint/resume, quarantine recovery,
@@ -115,8 +132,9 @@ Candidates carried forward:
   `#341`/`#340`, `#334`, `#331`/`#326`/`#325`, `#321`, `#319`, `#286`,
   `#284`, `#283`, `#282`, `#228`, `#115`, next e2e slice per
   `E2E_TRACEABILITY_PLAN.md`.
-- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246/#247/#250/#251/#254/#259/#260/#262/#263**
-  — pack-repo only, low priority, unchanged this session.
+- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246/#247/#250/#251/#254/#259/#260/#262/#263/#264**
+  — pack-repo only, low priority except #264 (adds useful precedent for
+  the very next #557 slice), unchanged otherwise this session.
 
 ## Dev stack state
 
@@ -126,21 +144,30 @@ Same state as the prior handoff left it: torn down, named volumes
 
 ## Which skills to use
 
-- `work-issue` → `build-loop` routing worked cleanly for #557: the issue
-  itself already named the "capability pattern established, apply to N
-  more instances" shape and even pre-anticipated the per-source split, so
-  no back-and-forth was needed to classify it correctly.
 - `build-loop`'s "check spec docs for recommended order before asking the
   user which sub-item to start with" guidance paid off again — §7.4 gave
-  MONDO as the unambiguous next pick after HPO with no need to ask Dennis.
-- Confirmed pattern for future #557 sources: (1) read the existing fixture
-  source file in `src/reference-data/reference-imports/sources/<code>.js`
-  for `systemUri`/`license`/`licenseUri`, (2) `gh api repos/<org>/<repo>`
-  for license auto-detection (compare `spdx_id` against the fixture's
-  license — matches mean a straightforward `LICENSE` file check; a
-  `NOASSERTION` case like HPO needs the actual license file read for a
-  pointer phrase instead), (3) `gh api repos/<org>/<repo>/releases/latest`
-  for the asset list, confirm the fixture's `systemUri` basename appears,
-  (4) add the registry entry + npm script + 2 mocked unit tests + run the
-  live script natively. No infrastructure changes needed per-source —
-  `liveVerifySources.js` is the only file that grows.
+  ORPHA as the unambiguous next pick after MONDO with no need to ask
+  Dennis.
+- **New lesson this session, not yet in the build-loop overlay** (filed as
+  dyeallpies-skills-pack#264 rather than edited directly, per Rule 0):
+  don't assume every remaining #557 source shares HPO/MONDO's
+  GitHub-releases-API shape just because the first two happened to.
+  Confirm each source's actual live distribution (curl/WebFetch against
+  the real upstream, same discipline already used for license/asset
+  details) before reusing a prior source's registry-entry shape verbatim.
+- Confirmed pattern for future #557 sources, updated: (1) read the
+  existing fixture source file in
+  `src/reference-data/reference-imports/sources/<code>.js` for
+  `systemUri`/`license`/`licenseUri`, (2) **check `dict-01_FONTES.md`'s
+  row for the source's actual distribution channel first** — GitHub repo,
+  direct-download URL, or an authenticated API — rather than assuming the
+  GitHub shape, (3) for a GitHub-hosted source: `gh api
+  repos/<org>/<repo>` for license auto-detection + `gh api
+  repos/<org>/<repo>/releases/latest` for the asset list; for a
+  direct-download source: `curl -I` the stable asset URL and `curl`/
+  WebFetch the license-bearing page for the pointer phrase; for an
+  API-key-gated source: unresolved as of this session, see #557's ORPHA
+  comment and dyeallpies-skills-pack#264, (4) add the registry entry
+  (with the right `kind`) + npm script + mocked unit tests + run the live
+  script natively, re-running one already-landed source too as a
+  regression check whenever `verify-live-release.js` itself changed.
