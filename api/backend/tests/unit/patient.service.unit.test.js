@@ -514,6 +514,22 @@ describe('PatientService.resendConsentNotification', () => {
     );
   });
 
+  it('resolves patientName via ParticipantIdentity before building/sending the notification (#561/#564)', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: 'p1', participantId: '12345678', status: 'PENDING_CONSENT' }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+    });
+    const participantIdentitiesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678', patientName: 'Maria Silva' }),
+    });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
+
+    await patientService.resendConsentNotification(db, '12345678');
+
+    expect(buildLinkSpy).toHaveBeenCalledWith(expect.objectContaining({ patientName: 'Maria Silva' }), expect.any(String));
+    expect(enqueueSpy).toHaveBeenCalledWith(expect.objectContaining({ patientName: 'Maria Silva' }), expect.any(String));
+  });
+
   it('reuses the existing token when it is still valid', async () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({

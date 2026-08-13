@@ -1076,7 +1076,7 @@ describe('sample.service', () => {
 
   // -------------------------------------------------------------------
   describe('getSampleByBarcode', () => {
-    it('returns the sample and an anonymized participant on exact match', async () => {
+    it('returns the sample and an anonymized participant on exact match, resolving patientName via ParticipantIdentity (#561/#564)', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValueOnce({
         _id: 's1',
@@ -1085,8 +1085,11 @@ describe('sample.service', () => {
       });
       db.collections.patients.findOne.mockResolvedValue({
         participantId: '12345678',
-        patientName: 'Maria Silva',
         recordNumber: 'RN1'
+      });
+      db.collection('participantIdentities').findOne.mockResolvedValue({
+        participantId: '12345678',
+        patientName: 'Maria Silva',
       });
 
       const { sample, participant } = await sampleService.getSampleByBarcode(db, 'BR-1');
@@ -1154,8 +1157,11 @@ describe('sample.service', () => {
       });
       db.collections.patients.findOne.mockResolvedValue({
         participantId: '12345678',
-        patientName: 'Cher',
         recordNumber: 'RN1'
+      });
+      db.collection('participantIdentities').findOne.mockResolvedValue({
+        participantId: '12345678',
+        patientName: 'Cher',
       });
 
       const { participant } = await sampleService.getSampleByBarcode(db, 'BR-1');

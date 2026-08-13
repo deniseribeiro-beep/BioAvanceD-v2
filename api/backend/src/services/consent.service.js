@@ -487,11 +487,18 @@ class ConsentService {
           consentTemplateId: result.insertedId.toString()
         }).toArray();
         const notificationService = require('./notification.service');
+        const identityCollection = await getCollection(db, 'participantIdentities');
         for (const patient of pendingPatients) {
+          // RF005/RNF007 (#561/#564): patientName resolved via
+          // ParticipantIdentity instead of read directly off the Patient
+          // document.
+          const identity = await identityCollection.findOne({ participantId: patient.participantId });
+          const patientWithIdentity = identity ? { ...patient, patientName: identity.patientName } : patient;
+
           // Generate new consent token for each patient
           const consentMetadata = notificationService.buildConsentMetadata();
-          const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
-          await notificationService.enqueueConsentNotification(patient, consentLink);
+          const consentLink = notificationService.buildConsentLink(patientWithIdentity, consentMetadata.token);
+          await notificationService.enqueueConsentNotification(patientWithIdentity, consentLink);
           await patientsCollection.updateOne(
             { _id: patient._id },
             {

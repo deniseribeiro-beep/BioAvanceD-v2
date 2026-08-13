@@ -651,17 +651,20 @@ describe('ConsentService.updateTemplate', () => {
 });
 
 describe('ConsentService.createPolicy', () => {
-  it('creates a policy document and notifies pending patients', async () => {
+  it('creates a policy document and notifies pending patients, resolving patientName via ParticipantIdentity (#561/#564)', async () => {
     const templates = makeCollection({
       find: vi.fn(() => makeCursor([])), // no prior versions -> v1
       insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
     });
-    const pendingPatient = { _id: new ObjectId(), status: 'PENDING_CONSENT' };
+    const pendingPatient = { _id: new ObjectId(), participantId: '10203040', status: 'PENDING_CONSENT' };
     const patients = makeCollection({
       find: vi.fn(() => makeCursor([pendingPatient])),
       updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
     });
-    const db = makeDb({ consent_templates: templates, patients });
+    const participantIdentities = makeCollection({
+      findOne: vi.fn(async ({ participantId }) => (participantId === '10203040' ? { participantId: '10203040', patientName: 'Maria Silva' } : null)),
+    });
+    const db = makeDb({ consent_templates: templates, patients, participantIdentities });
 
     vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
       token: 'tok-123',
@@ -686,7 +689,7 @@ describe('ConsentService.createPolicy', () => {
     expect(result.revisionType).toBe('create');
     expect(templates.insertOne).toHaveBeenCalled();
     expect(notificationService.enqueueConsentNotification).toHaveBeenCalledWith(
-      pendingPatient,
+      { ...pendingPatient, patientName: 'Maria Silva' },
       'https://example.com/consent/tok-123'
     );
     expect(patients.updateOne).toHaveBeenCalled();

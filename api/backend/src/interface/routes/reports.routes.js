@@ -8,6 +8,7 @@ const { SampleModel } = require('../../models/Sample');
 const logger = require('../../utils/logger');
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
+const { getCollection } = require('../../utils/collectionResolver');
 
 function normalizeReport(report) {
   return {
@@ -221,6 +222,18 @@ async function buildSampleQuery(db, filters = {}) {
   return conditions.length > 0 ? { $and: conditions } : {};
 }
 
+// RF005/RNF007 (#561/#564): patientName search resolves via
+// ParticipantIdentity instead of a direct Patient-document query, same
+// pattern as patient.service.js#listPatients.
+async function resolveParticipantIdsByNameKeyword(db, keyword) {
+  if (!keyword) return [];
+  const identityCollection = getCollection(db, 'participantIdentities');
+  const matches = await identityCollection
+    .find({ patientName: { $regex: String(keyword), $options: 'i' } })
+    .toArray();
+  return matches.map((identity) => identity.participantId).filter(Boolean);
+}
+
 async function getMatchingPatientIds(samplesCollection, sampleQuery) {
   if (!sampleQuery || Object.keys(sampleQuery).length === 0) {
     return [];
@@ -271,9 +284,10 @@ async function buildPreviewData(db, rawType, filters = {}) {
 
     const patientQueryParts = [];
     if (filters.keyword) {
+      const matchingParticipantIds = await resolveParticipantIdsByNameKeyword(db, filters.keyword);
       patientQueryParts.push({
         $or: [
-        { patientName: { $regex: String(filters.keyword), $options: 'i' } },
+        { participantId: { $in: matchingParticipantIds } },
         { patientID: { $regex: String(filters.keyword), $options: 'i' } },
         ],
       });
@@ -348,9 +362,10 @@ async function buildPreviewData(db, rawType, filters = {}) {
 
     const patientQueryParts = [];
     if (filters.keyword) {
+      const matchingParticipantIds = await resolveParticipantIdsByNameKeyword(db, filters.keyword);
       patientQueryParts.push({
         $or: [
-          { patientName: { $regex: String(filters.keyword), $options: 'i' } },
+          { participantId: { $in: matchingParticipantIds } },
           { patientID: { $regex: String(filters.keyword), $options: 'i' } },
         ],
       });
