@@ -27,6 +27,9 @@ router.post('/:id/observations', authenticate, requirePermission('createPatient'
 // Buscar paciente por ID
 router.get('/:id', authenticate, patientController.buscar.bind(patientController));
 
+// Reidentificação autorizada e auditada (RNF007 AC#4/AC#5, Administrador)
+router.post('/:id/reidentify', authenticate, requirePermission('reidentifyParticipant'), patientController.reidentify.bind(patientController));
+
 // Atualizar paciente
 router.put('/:id', authenticate, requirePermission('createPatient'), patientController.atualizar.bind(patientController));
 

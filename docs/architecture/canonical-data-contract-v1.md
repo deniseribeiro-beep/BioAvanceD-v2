@@ -92,13 +92,23 @@ alongside `Patient` at intake (`patient.service.js#createPatient`); the
 `birthDate`/`identityDocument` as direct fields, for any caller regardless
 of `createPatient` permission (RNF007 AC#1/AC#2).
 
+**Landed in #560:** an authorized, audited re-identification flow
+(RNF007 AC#4/AC#5) — `POST /api/patients/:id/reidentify`
+(`paciente.controller.js#reidentify`, `participantIdentity.service.js`),
+gated by the `reidentifyParticipant` permission (Administrador-only,
+deliberately not granted alongside `createPatient` or any broader role —
+RNF007 AC#5 requires a legitimate, defined need, not a general-purpose
+lookup) and requiring a `reason` in the request body, which is recorded
+on every call via `auditLogger` (`action: 'REIDENTIFY'`, success and
+not-found cases both audited).
+
 **Not yet landed (follow-up tracked separately):** the `Patient` document
 itself still carries these fields internally — 20+ existing consumers
 (search, consent notifications, exports, FHIR/import staging, audit
 logging) still read them off `Patient`, so removing them from that
-document is a larger migration than this slice. Also outstanding: an
-authorized, audited re-identification flow (RNF007 AC#4/AC#5) and
-encryption at rest for the segregated collection ("cifrar").
+document is a larger migration than this slice (#561-#565). Also
+outstanding: encryption at rest for the segregated collection ("cifrar",
+#566).
 
 ### Specimen
 
