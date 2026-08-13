@@ -305,3 +305,42 @@ describe('verify-live-release.verify — ICD10 (fixed-edition)', () => {
     expect(report.live.licensePointerPresent).toBe(false);
   });
 });
+
+// #557 OMIM: a 'not-live-verifiable' entry — unlike ICD-11/ICD-10 (API
+// gated, but a public unauthenticated page still exposes a release/license
+// signal), omim.org's entire public web domain sits behind an interactive
+// Cloudflare bot challenge on every path (confirmed live 2026-08-13: `/`,
+// `/help/api`, `/downloads`, `/about` on both `omim.org` and `www.omim.org`
+// all 403 with a `Cf-Mitigated: challenge` header, regardless of
+// User-Agent), and the domain's own robots.txt explicitly disallows
+// crawling and warns it auto-blocks IPs that request pages. No automated
+// client — this script, the workflow_dispatch job, or any future scheduled
+// job — can pass that challenge or should be attempting to per the site's
+// own terms, so this entry must never call fetch() at all: attempting one
+// would only reproduce the 403, not produce a meaningful mismatch signal,
+// and would violate the robots.txt disallow.
+function mockFetchThrowsIfCalled() {
+  global.fetch = vi.fn(async (url) => {
+    throw new Error(`verify-live-release must not fetch OMIM (not-live-verifiable): ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — OMIM (not-live-verifiable)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "not-verifiable" with a reason, never calling fetch()', async () => {
+    mockFetchThrowsIfCalled();
+
+    const report = await verify('OMIM');
+
+    expect(report.status).toBe('not-verifiable');
+    expect(report.live.reason).toMatch(/Cloudflare/);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(report.fixtureSource.systemUri).toBe('https://www.omim.org');
+  });
+});

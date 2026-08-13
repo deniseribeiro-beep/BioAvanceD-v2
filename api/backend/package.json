@@ -84,6 +84,7 @@
     "reference:live-verify:orpha": "node scripts/reference-imports/live-verify/verify-live-release.js ORPHA",
     "reference:live-verify:icd11": "node scripts/reference-imports/live-verify/verify-live-release.js ICD11",
     "reference:live-verify:icd10": "node scripts/reference-imports/live-verify/verify-live-release.js ICD10",
+    "reference:live-verify:omim": "node scripts/reference-imports/live-verify/verify-live-release.js OMIM",
     "test:architecture": "node --test \"tests/architecture/**/*.arch.test.js\"",
     "test:unit:vitest": "vitest run",
     "test": "vitest run",

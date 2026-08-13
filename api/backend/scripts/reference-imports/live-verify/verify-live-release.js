@@ -169,6 +169,35 @@ async function verifyFixedEdition(datasetCode, entry, fixtureSource) {
   };
 }
 
+// OMIM shape (#557): unlike ICD-11/ICD-10 (the WHO ICD API is gated, but a
+// public unauthenticated page still exposes a release/license signal),
+// omim.org's entire public web domain sits behind an interactive
+// Cloudflare bot challenge on every path tried — root, /help/api,
+// /downloads, /about, on both omim.org and www.omim.org — returning HTTP
+// 403 with a `Cf-Mitigated: challenge` header regardless of User-Agent
+// (confirmed live 2026-08-13). The domain's own robots.txt (which itself
+// isn't challenge-gated) explicitly disallows crawling and warns it will
+// auto-block IPs that request pages. No JS-executing client is available
+// to this script (or the workflow_dispatch job that runs it), and
+// attempting one would violate the site's own robots.txt disallow for no
+// benefit — every request would just reproduce the 403, not produce a
+// meaningful mismatch signal. This is a genuine "not live-verifiable
+// without solving an interactive bot challenge" case, not an OAuth/
+// API-key gate resolvable via a redirect-version/fixed-edition-style
+// public surface like ICD-11/ICD-10's. Reports 'not-verifiable' directly,
+// without calling fetch() at all.
+async function verifyNotLiveVerifiable(datasetCode, entry, fixtureSource) {
+  return {
+    datasetCode,
+    verifiedAt: new Date().toISOString(),
+    status: 'not-verifiable',
+    live: {
+      reason: entry.reason,
+    },
+    fixtureSource,
+  };
+}
+
 async function verify(datasetCode) {
   const entry = LIVE_SOURCES[datasetCode];
   if (!entry) {
@@ -187,6 +216,9 @@ async function verify(datasetCode) {
   }
   if (entry.kind === 'fixed-edition') {
     return verifyFixedEdition(datasetCode, entry, fixtureSource);
+  }
+  if (entry.kind === 'not-live-verifiable') {
+    return verifyNotLiveVerifiable(datasetCode, entry, fixtureSource);
   }
   return verifyGithubRelease(datasetCode, entry, fixtureSource);
 }
