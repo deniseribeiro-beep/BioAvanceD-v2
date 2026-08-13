@@ -380,6 +380,96 @@ class PacienteController {
     }
   }
 
+  /**
+   * RF005/RNF007 AC#4/AC#5 (#560): resolve a identidade civil segregada em
+   * ParticipantIdentity — único ponto de reidentificação autorizado. Exige
+   * `reidentifyParticipant` (RBAC, gate de rota) e `reason` (finalidade
+   * legítima vinculada ao acesso), e audita cada chamada.
+   */
+  async reidentify(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const { id } = req.params;
+      const { reason } = req.body || {};
+
+      if (!reason || typeof reason !== 'string' || reason.trim().length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Finalidade obrigatória',
+          message: 'É necessário informar o motivo (reason) da reidentificação'
+        });
+      }
+
+      const patient = await patientService.getPatient(db, id);
+      if (!patient) {
+        return res.status(404).json({
+          success: false,
+          error: 'Paciente não encontrado'
+        });
+      }
+
+      const participantIdentityService = require('../services/participantIdentity.service');
+      const identity = await participantIdentityService.getIdentityByParticipantId(db, patient.participantId);
+
+      const auditLogger = require('../utils/auditLogger');
+      auditLogger.init(db);
+
+      if (!identity) {
+        await auditLogger.log({
+          action: 'REIDENTIFY',
+          resourceType: 'ParticipantIdentity',
+          resourceId: patient.participantId,
+          status: 'error',
+          severity: 'warning',
+          message: `Reidentificação sem registro de identidade: ${reason}`,
+          payload: { reason },
+          req: req,
+          module: 'Cadastro'
+        });
+        return res.status(404).json({
+          success: false,
+          error: 'Identidade não encontrada'
+        });
+      }
+
+      await auditLogger.log({
+        action: 'REIDENTIFY',
+        resourceType: 'ParticipantIdentity',
+        resourceId: patient.participantId,
+        status: 'success',
+        severity: 'warning',
+        message: `Reidentificação autorizada: ${reason}`,
+        payload: { reason },
+        req: req,
+        module: 'Cadastro'
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          participantId: identity.participantId,
+          patientName: identity.patientName,
+          birthDate: identity.birthDate,
+          identityDocument: identity.identityDocument
+        }
+      });
+    } catch (error) {
+      logger.error('Erro ao reidentificar participante:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro interno do servidor',
+        message: error.message
+      });
+    }
+  }
+
   async resendConsentNotification(req, res) {
     try {
       const db = req.app.locals.db;
