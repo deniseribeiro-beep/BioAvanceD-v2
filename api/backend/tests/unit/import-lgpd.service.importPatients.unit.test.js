@@ -45,11 +45,16 @@ function makeDb({ templateFound = true } = {}) {
   const pacientesCollection = {
     findOne: vi.fn().mockResolvedValue(null), // no collision -> first generated ID wins
   };
+  // RF005/RNF007 (#363/#563): create dual-writes ParticipantIdentity.
+  const participantIdentitiesCollection = {
+    insertOne: vi.fn().mockResolvedValue({ insertedId: 'identity-id-1' }),
+  };
 
   const collections = {
     patients: patientsCollection,
     consent_templates: consentTemplatesCollection,
     pacientes: pacientesCollection,
+    participantIdentities: participantIdentitiesCollection,
   };
 
   const db = {
@@ -63,16 +68,17 @@ function makeDb({ templateFound = true } = {}) {
     }),
   };
 
-  return { db, patientsCollection, consentTemplatesCollection, pacientesCollection };
+  return { db, patientsCollection, consentTemplatesCollection, pacientesCollection, participantIdentitiesCollection };
 }
 
 describe('ImportLGPDService.importPatients', () => {
   let db;
   let patientsCollection;
   let consentTemplatesCollection;
+  let participantIdentitiesCollection;
 
   beforeEach(() => {
-    ({ db, patientsCollection, consentTemplatesCollection } = makeDb());
+    ({ db, patientsCollection, consentTemplatesCollection, participantIdentitiesCollection } = makeDb());
 
     vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
       token: 'tok-1',
@@ -181,6 +187,12 @@ describe('ImportLGPDService.importPatients', () => {
       { _id: 'patient-id-1' },
       { $set: { consentNotifiedAt: expect.any(Date) } }
     );
+
+    // RF005/RNF007 (#363/#563): create also dual-writes ParticipantIdentity.
+    expect(participantIdentitiesCollection.insertOne).toHaveBeenCalledTimes(1);
+    const insertedIdentity = participantIdentitiesCollection.insertOne.mock.calls[0][0];
+    expect(insertedIdentity.participantId).toBe(insertedPatient.participantId);
+    expect(insertedIdentity.patientName).toBe('Maria Silva');
   });
 
   it('still counts the row as a success when notification enqueueing fails (the failure is logged, not fatal)', async () => {

@@ -10,6 +10,7 @@ const TemperatureModel = require('../models/Temperature');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
+const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
@@ -280,18 +281,30 @@ class ImportService {
       // qualquer campo fora do allowlist canônico) e gera/preserva o
       // participantId ANTES da validação, mesmo padrão adotado em
       // import-lgpd.service.js para #199/#226.
+      //
+      // RF005/RNF007 (#563): identityDocument is civil identity — resolved
+      // via ParticipantIdentity, same as patient.service.js#checkIdentifierConflict
+      // (#561). recordNumber is a hospital record number, not civil
+      // identity, so it stays checked against Patient directly.
       async function prepareParticipantId(db, patientData) {
-        const query = {};
-        if (patientData.identityDocument) query.identityDocument = patientData.identityDocument;
-        else if (patientData.recordNumber) query.recordNumber = patientData.recordNumber;
-        else return { existing: null, error: 'Sem identificador único (Documento de identidade ou Prontuário)' };
+        let existing = null;
+        if (patientData.identityDocument) {
+          const identityCollection = getCollection(db, 'participantIdentities');
+          const existingIdentity = await identityCollection.findOne({ identityDocument: patientData.identityDocument });
+          if (existingIdentity) {
+            existing = await patientsCollection.findOne({ participantId: existingIdentity.participantId });
+          }
+        } else if (patientData.recordNumber) {
+          existing = await patientsCollection.findOne({ recordNumber: patientData.recordNumber });
+        } else {
+          return { existing: null, error: 'Sem identificador único (Documento de identidade ou Prontuário)' };
+        }
 
-        const existing = await patientsCollection.findOne(query);
         patientData.participantId = existing ? existing.participantId : await generateUniqueParticipantId(db);
         return { existing };
       }
 
-      async function upsertPatient(patientData, existing) {
+      async function upsertPatient(db, patientData, existing) {
         if (!existing) {
           // Novo cadastro
           const consentMetadata = notificationService.buildConsentMetadata();
@@ -301,6 +314,13 @@ class ImportService {
           patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
           const patient = PatientModel.create(patientData);
           const insertResult = await patientsCollection.insertOne(patient);
+
+          // RF005/RNF007 (#363/#563): mirror civil identity into the
+          // segregated ParticipantIdentity collection, same as
+          // patient.service.js#createPatient.
+          const identityCollection = getCollection(db, 'participantIdentities');
+          await identityCollection.insertOne(ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId }));
+
           if (patient.participantId) {
             try {
               const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
@@ -324,6 +344,28 @@ class ImportService {
           }
           merged.updatedAt = new Date();
           await patientsCollection.updateOne({ _id: existing._id }, { $set: merged });
+
+          // RF005/RNF007 (#561/#563): keep ParticipantIdentity in sync on
+          // update, same as patient.service.js#updatePatient — an import
+          // merge that touches civil identity fields must not drift the
+          // two records apart.
+          if (merged.participantId && (
+            Object.prototype.hasOwnProperty.call(merged, 'patientName') ||
+            Object.prototype.hasOwnProperty.call(merged, 'birthDate') ||
+            Object.prototype.hasOwnProperty.call(merged, 'identityDocument')
+          )) {
+            const identityUpdate = { updatedAt: merged.updatedAt };
+            if (Object.prototype.hasOwnProperty.call(merged, 'patientName')) identityUpdate.patientName = merged.patientName;
+            if (Object.prototype.hasOwnProperty.call(merged, 'birthDate')) identityUpdate.birthDate = merged.birthDate ? new Date(merged.birthDate) : null;
+            if (Object.prototype.hasOwnProperty.call(merged, 'identityDocument')) identityUpdate.identityDocument = merged.identityDocument;
+
+            const identityCollection = getCollection(db, 'participantIdentities');
+            await identityCollection.updateOne(
+              { participantId: merged.participantId },
+              { $set: identityUpdate },
+              { upsert: true }
+            );
+          }
           return { action: 'merge' };
         }
       }
@@ -349,7 +391,7 @@ class ImportService {
               });
               continue;
             }
-            const upsertResult = await upsertPatient(patientData, existing);
+            const upsertResult = await upsertPatient(db, patientData, existing);
             if (upsertResult.action === 'error') {
               results.errors.push({
                 row: results.total,
@@ -392,7 +434,7 @@ class ImportService {
               });
               continue;
             }
-            const upsertResult = await upsertPatient(patientData, existing);
+            const upsertResult = await upsertPatient(db, patientData, existing);
             if (upsertResult.action === 'error') {
               results.errors.push({
                 row: results.total,

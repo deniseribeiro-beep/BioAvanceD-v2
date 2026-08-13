@@ -25,7 +25,13 @@ afterEach(() => {
   }
 });
 
-function makePatientsCollection({ existing = null } = {}) {
+// RF005/RNF007 (#563): import.service.js#importPatients now resolves
+// identityDocument via ParticipantIdentity and dual-writes it on
+// create/merge, same as patient.service.js#createPatient/#updatePatient
+// (#363/#561). `findOne` here ignores its query argument, matching this
+// file's pre-#563 fixture style (a fixed `existing` record) since no test
+// needs genuine multi-record query matching.
+function makeCollection({ existing = null } = {}) {
   const inserted = [];
   const updates = [];
   return {
@@ -34,11 +40,21 @@ function makePatientsCollection({ existing = null } = {}) {
     findOne: async () => existing,
     insertOne: async (doc) => {
       inserted.push(doc);
-      return { insertedId: 'patient-1' };
+      return { insertedId: 'generated-id' };
     },
     updateOne: async (query, update) => {
       updates.push({ query, update });
       return { modifiedCount: 1 };
+    },
+  };
+}
+
+function makeDb({ patients, participantIdentities }) {
+  return {
+    collection: (name) => {
+      if (name === 'patients') return patients;
+      if (name === 'participantIdentities') return participantIdentities;
+      throw new Error(`unexpected collection requested: ${name}`);
     },
   };
 }
@@ -58,92 +74,118 @@ const validPatient = (overrides = {}) => ({
 });
 
 describe('ImportService.importPatients (JSON)', () => {
-  it('inserts a new patient, generating a participantId and dropping the legacy cpf field', async () => {
+  it('inserts a new patient, generating a participantId and dropping the legacy cpf field, and dual-writes ParticipantIdentity', async () => {
     const notifySpy = vi.spyOn(notificationService, 'enqueueConsentNotification');
     const filePath = writeTmpFile('new.json', JSON.stringify(validPatient()));
-    const collection = makePatientsCollection();
-    const db = { collection: () => collection };
+    const patients = makeCollection();
+    const participantIdentities = makeCollection();
+    const db = makeDb({ patients, participantIdentities });
 
     const result = await importService.importPatients(db, { path: filePath, originalname: 'new.json' });
 
     expect(result.success).toBe(1);
     expect(result.total).toBe(1);
     expect(result.errors).toEqual([]);
-    expect(collection.inserted).toHaveLength(1);
-    expect(collection.inserted[0].status).toBe('PENDING_CONSENT');
-    expect(collection.inserted[0].identityDocument).toBe('12345678900');
-    expect(collection.inserted[0].cpf).toBeUndefined();
-    expect(collection.inserted[0].participantId).toMatch(/^\d{8}$/);
+    expect(patients.inserted).toHaveLength(1);
+    expect(patients.inserted[0].status).toBe('PENDING_CONSENT');
+    expect(patients.inserted[0].identityDocument).toBe('12345678900');
+    expect(patients.inserted[0].cpf).toBeUndefined();
+    expect(patients.inserted[0].participantId).toMatch(/^\d{8}$/);
     expect(notifySpy).toHaveBeenCalledTimes(1);
+
+    expect(participantIdentities.inserted).toHaveLength(1);
+    expect(participantIdentities.inserted[0]).toMatchObject({
+      participantId: patients.inserted[0].participantId,
+      patientName: 'Maria Silva',
+      identityDocument: '12345678900',
+    });
   });
 
   it('swallows notification errors and still counts the patient as successfully imported', async () => {
     vi.spyOn(notificationService, 'enqueueConsentNotification').mockRejectedValue(new Error('queue down'));
     const filePath = writeTmpFile('notify-fails.json', JSON.stringify(validPatient()));
-    const collection = makePatientsCollection();
+    const patients = makeCollection();
+    const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'notify-fails.json' });
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'notify-fails.json' });
 
     expect(result.success).toBe(1);
     expect(result.errors).toEqual([]);
-    expect(collection.updates).toHaveLength(0);
+    expect(patients.updates).toHaveLength(0);
   });
 
-  it('merges into an existing patient found by identityDocument, preserving its participantId', async () => {
+  it('merges into an existing patient found by identityDocument, preserving its participantId, and syncs ParticipantIdentity', async () => {
     const filePath = writeTmpFile('merge.json', JSON.stringify(validPatient({ notes: 'Updated note' })));
-    const collection = makePatientsCollection({
+    const patients = makeCollection({
       existing: { _id: 'existing-1', participantId: '10203040', identityDocument: '12345678900', birthDate: '1985-05-20' },
     });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocument: '12345678900' },
+    });
 
-    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'merge.json' });
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge.json' });
 
     expect(result.success).toBe(1);
-    expect(collection.updates).toHaveLength(1);
-    expect(collection.updates[0].update.$set.participantId).toBe('10203040');
-    expect(collection.updates[0].update.$set.updatedAt).toBeInstanceOf(Date);
+    expect(patients.updates).toHaveLength(1);
+    expect(patients.updates[0].update.$set.participantId).toBe('10203040');
+    expect(patients.updates[0].update.$set.updatedAt).toBeInstanceOf(Date);
     // notes is a legacy non-canonical field and is stripped before merge
-    expect(collection.updates[0].update.$set.notes).toBeUndefined();
+    expect(patients.updates[0].update.$set.notes).toBeUndefined();
+
+    expect(participantIdentities.updates).toHaveLength(1);
+    expect(participantIdentities.updates[0].query).toEqual({ participantId: '10203040' });
+    expect(participantIdentities.updates[0].update.$set).toMatchObject({
+      patientName: 'Maria Silva',
+      identityDocument: '12345678900',
+    });
   });
 
-  it('records a merge error when birthDate conflicts with the existing record', async () => {
+  it('records a merge error when birthDate conflicts with the existing record, without touching ParticipantIdentity', async () => {
     const filePath = writeTmpFile('conflict.json', JSON.stringify(validPatient({ birthDate: '1999-01-01' })));
-    const collection = makePatientsCollection({
+    const patients = makeCollection({
       existing: { _id: 'existing-1', participantId: '10203040', identityDocument: '12345678900', birthDate: '1985-05-20' },
     });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocument: '12345678900' },
+    });
 
-    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'conflict.json' });
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'conflict.json' });
 
     expect(result.success).toBe(0);
     expect(result.errors).toEqual([
       expect.objectContaining({ error: expect.stringContaining('Data de nascimento') }),
     ]);
-    expect(collection.updates).toHaveLength(0);
+    expect(patients.updates).toHaveLength(0);
+    expect(participantIdentities.updates).toHaveLength(0);
   });
 
   it('skips a patient with neither identityDocument/cpf nor recordNumber, recording the reason as an error', async () => {
     const filePath = writeTmpFile('no-id.json', JSON.stringify(validPatient({ cpf: undefined })));
-    const collection = makePatientsCollection();
+    const patients = makeCollection();
+    const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'no-id.json' });
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'no-id.json' });
 
     expect(result.success).toBe(0);
     expect(result.total).toBe(1);
     expect(result.errors).toEqual([
       expect.objectContaining({ error: expect.stringContaining('Sem identificador único') }),
     ]);
-    expect(collection.inserted).toHaveLength(0);
+    expect(patients.inserted).toHaveLength(0);
   });
 
   it('records a model-validation error and does not insert when required fields are missing', async () => {
     const filePath = writeTmpFile('invalid.json', JSON.stringify({ patientName: '', sex: 'X', recordNumber: '42' }));
-    const collection = makePatientsCollection();
+    const patients = makeCollection();
+    const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'invalid.json' });
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'invalid.json' });
 
     expect(result.success).toBe(0);
     expect(result.total).toBe(1);
     expect(result.errors[0].errors.length).toBeGreaterThan(0);
-    expect(collection.inserted).toHaveLength(0);
+    expect(patients.inserted).toHaveLength(0);
+    expect(participantIdentities.inserted).toHaveLength(0);
   });
 
   it('appends array fields and deep-merges object fields when merging into an existing patient', async () => {
@@ -151,7 +193,7 @@ describe('ImportService.importPatients (JSON)', () => {
       dadosEspecificos: ['item-2'],
       anamneseGeral: { source: 'import' },
     })));
-    const collection = makePatientsCollection({
+    const patients = makeCollection({
       existing: {
         _id: 'existing-1',
         participantId: '10203040',
@@ -161,12 +203,15 @@ describe('ImportService.importPatients (JSON)', () => {
         anamneseGeral: { region: 'south' },
       },
     });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocument: '12345678900' },
+    });
 
-    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'merge-array-object.json' });
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge-array-object.json' });
 
     expect(result.success).toBe(1);
-    expect(collection.updates[0].update.$set.dadosEspecificos).toEqual(['item-1', 'item-2']);
-    expect(collection.updates[0].update.$set.anamneseGeral).toEqual({ region: 'south', source: 'import' });
+    expect(patients.updates[0].update.$set.dadosEspecificos).toEqual(['item-1', 'item-2']);
+    expect(patients.updates[0].update.$set.anamneseGeral).toEqual({ region: 'south', source: 'import' });
   });
 
   it('imports an array of JSON patients, counting successes and the invalid row in total', async () => {
@@ -174,9 +219,10 @@ describe('ImportService.importPatients (JSON)', () => {
       validPatient({ cpf: '11111111111' }),
       { patientName: '', sex: 'X', recordNumber: '43' },
     ]));
-    const collection = makePatientsCollection();
+    const patients = makeCollection();
+    const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'array.json' });
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'array.json' });
 
     expect(result.total).toBe(2);
     expect(result.success).toBe(1);
@@ -185,29 +231,37 @@ describe('ImportService.importPatients (JSON)', () => {
 });
 
 describe('ImportService.importPatients (CSV)', () => {
-  it('successfully imports a CSV row with email/consentTemplateId/cpf mapped to identityDocument (fixed, issue #87/#225)', async () => {
+  it('successfully imports a CSV row with email/consentTemplateId/cpf mapped to identityDocument (fixed, issue #87/#225), and dual-writes ParticipantIdentity', async () => {
     const filePath = writeTmpFile('patients.csv', 'patientName,birthDate,sex,email,consentTemplateId,cpf\nJoão Souza,1990-01-01,M,joao@example.com,tcle-1,98765432100\n');
-    const collection = makePatientsCollection();
+    const patients = makeCollection();
+    const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'patients.csv' });
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'patients.csv' });
 
     expect(result.success).toBe(1);
     expect(result.errors).toHaveLength(0);
-    expect(collection.inserted).toHaveLength(1);
-    expect(collection.inserted[0]).toMatchObject({
+    expect(patients.inserted).toHaveLength(1);
+    expect(patients.inserted[0]).toMatchObject({
       email: 'joao@example.com',
       consentTemplateId: 'tcle-1',
       identityDocument: '98765432100',
     });
-    expect(collection.inserted[0].cpf).toBeUndefined();
-    expect(collection.inserted[0].participantId).toMatch(/^\d{8}$/);
+    expect(patients.inserted[0].cpf).toBeUndefined();
+    expect(patients.inserted[0].participantId).toMatch(/^\d{8}$/);
+
+    expect(participantIdentities.inserted).toHaveLength(1);
+    expect(participantIdentities.inserted[0]).toMatchObject({
+      participantId: patients.inserted[0].participantId,
+      identityDocument: '98765432100',
+    });
   });
 
   it('records an error for a CSV row that fails model validation', async () => {
     const filePath = writeTmpFile('patients-invalid.csv', 'patientName,birthDate,sex,email,consentTemplateId,cpf\n,1990-01-01,M,joao@example.com,tcle-1,98765432100\n');
-    const collection = makePatientsCollection();
+    const patients = makeCollection();
+    const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'patients-invalid.csv' });
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'patients-invalid.csv' });
 
     expect(result.success).toBe(0);
     expect(result.errors).toHaveLength(1);
@@ -215,9 +269,10 @@ describe('ImportService.importPatients (CSV)', () => {
 
   it('skips a CSV row with no identifier, recording the reason as an error', async () => {
     const filePath = writeTmpFile('patients-no-id.csv', 'patientName,birthDate,sex\nJoão Sem Documento,1990-01-01,M\n');
-    const collection = makePatientsCollection();
+    const patients = makeCollection();
+    const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'patients-no-id.csv' });
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'patients-no-id.csv' });
 
     expect(result.success).toBe(0);
     expect(result.errors).toEqual([
@@ -227,17 +282,20 @@ describe('ImportService.importPatients (CSV)', () => {
 
   it('records a merge error when birthDate conflicts with the existing record (CSV)', async () => {
     const filePath = writeTmpFile('patients-conflict.csv', 'patientName,birthDate,sex,consentTemplateId,cpf\nJoão Souza,1999-01-01,M,tcle-1,98765432100\n');
-    const collection = makePatientsCollection({
+    const patients = makeCollection({
       existing: { _id: 'existing-1', participantId: '10203040', identityDocument: '98765432100', birthDate: '1990-01-01' },
     });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocument: '98765432100' },
+    });
 
-    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'patients-conflict.csv' });
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'patients-conflict.csv' });
 
     expect(result.success).toBe(0);
     expect(result.errors).toEqual([
       expect.objectContaining({ error: expect.stringContaining('Data de nascimento') }),
     ]);
-    expect(collection.updates).toHaveLength(0);
+    expect(patients.updates).toHaveLength(0);
   });
 });
 
