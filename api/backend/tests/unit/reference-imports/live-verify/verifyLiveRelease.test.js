@@ -412,3 +412,44 @@ describe('verify-live-release.verify — HGNC (rest-info)', () => {
     expect(report.live.licensePointerPresent).toBe(false);
   });
 });
+
+// #557 LOINC: a 'not-live-verifiable' entry — unlike HGNC (whose auth note
+// turned out to be a red herring, the REST API is genuinely open) LOINC's
+// registration note holds, but not for the "registration wall" reason
+// dict-01_FONTES.md's row implies: loinc.org's /downloads, /license, and
+// /kb/versioning pages themselves are unauthenticated and carry the
+// version/license text in plain view (confirmed live via curl with a
+// browser User-Agent), but every one of them 403s under Node's own
+// fetch() with a genuine interactive Cloudflare challenge, confirmed even
+// with a full realistic browser header set — not the simple default-UA
+// rejection HGNC/ICD-11 hit. Independently, loinc.org's robots.txt
+// explicitly disallows `ClaudeBot` (Disallow: /) by name alongside other
+// named AI crawlers, while generic browsers stay Allow: / — so even if a
+// technique existed to pass the challenge, this script should not attempt
+// it. Same fetch()-never-called contract as OMIM's test.
+function mockFetchThrowsIfCalledForLoinc() {
+  global.fetch = vi.fn(async (url) => {
+    throw new Error(`verify-live-release must not fetch LOINC (not-live-verifiable): ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — LOINC (not-live-verifiable)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "not-verifiable" with a reason, never calling fetch()', async () => {
+    mockFetchThrowsIfCalledForLoinc();
+
+    const report = await verify('LOINC');
+
+    expect(report.status).toBe('not-verifiable');
+    expect(report.live.reason).toMatch(/Cloudflare/);
+    expect(report.live.reason).toMatch(/ClaudeBot/);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(report.fixtureSource.systemUri).toBe('http://loinc.org');
+  });
+});
