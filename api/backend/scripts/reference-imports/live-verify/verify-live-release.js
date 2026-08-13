@@ -198,6 +198,48 @@ async function verifyNotLiveVerifiable(datasetCode, entry, fixtureSource) {
   };
 }
 
+// HGNC shape (#557): dict-01_FONTES.md's SRC_HGNC row lists auth as "Não ou
+// conforme endpoint" (no auth, or per-endpoint) — genenames.org's REST API
+// (rest.genenames.org/info) turns out to be a genuinely public,
+// unauthenticated JSON endpoint. Unlike HPO/MONDO/ORPHA/ICD-11/ICD-10, HGNC
+// has no discrete releases/tags/editions at all — dict-01's own
+// "Atualização" value for this row is "Contínua" (continuous), matching
+// what the endpoint actually reports: a live `lastModified` timestamp and
+// `numDoc` record count rather than a version string. Confirmed live
+// 2026-08-13 that the endpoint 200s with valid JSON *only* when the request
+// sends an explicit `Accept: application/json` header — without one (or
+// with GitHub's `application/vnd.github+json`, fetchJson's existing
+// default), it silently 200s with XML instead, which would break
+// response.json() the same way an HTTP error would, just less obviously.
+// License is on genenames.org's own "About" page, in a "Data release
+// policy" section — no separate LICENSE file/PDF/CC badge — stating "No
+// restrictions are imposed on access to, or use of, the data provided by
+// the HGNC".
+async function verifyRestInfo(datasetCode, entry, fixtureSource) {
+  const info = await fetchJson(entry.infoUrl, { Accept: 'application/json' });
+
+  const licenseText = await fetchText(entry.licenseUrl);
+  const licenseChecksum = sha256Hex(licenseText);
+  const licensePointerPresent = licenseText.includes(entry.expectedLicensePointer);
+
+  const status = Boolean(info.lastModified) && licensePointerPresent ? 'verified' : 'mismatch';
+
+  return {
+    datasetCode,
+    verifiedAt: new Date().toISOString(),
+    status,
+    live: {
+      infoUrl: entry.infoUrl,
+      lastModified: info.lastModified,
+      numDoc: info.numDoc,
+      licenseUrl: entry.licenseUrl,
+      licenseChecksum,
+      licensePointerPresent,
+    },
+    fixtureSource,
+  };
+}
+
 async function verify(datasetCode) {
   const entry = LIVE_SOURCES[datasetCode];
   if (!entry) {
@@ -219,6 +261,9 @@ async function verify(datasetCode) {
   }
   if (entry.kind === 'not-live-verifiable') {
     return verifyNotLiveVerifiable(datasetCode, entry, fixtureSource);
+  }
+  if (entry.kind === 'rest-info') {
+    return verifyRestInfo(datasetCode, entry, fixtureSource);
   }
   return verifyGithubRelease(datasetCode, entry, fixtureSource);
 }
