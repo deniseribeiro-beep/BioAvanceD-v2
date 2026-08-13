@@ -26,9 +26,21 @@ async function fetchText(url) {
   return response.text();
 }
 
+/**
+ * HEAD-checks a live URL without downloading the body — for sources
+ * distributed as a direct file download rather than a GitHub releases API
+ * (e.g. Orphanet's Nomenclature Pack, #557 ORPHA). Returns ok/status plus
+ * the raw Headers object so a caller can read e.g. last-modified as a
+ * release-date proxy when no API-reported tag/timestamp exists.
+ */
+async function fetchHead(url) {
+  const response = await fetch(url, { method: 'HEAD' });
+  return { ok: response.ok, status: response.status, headers: response.headers };
+}
+
 /** SHA-256 hex digest over a fetched body — same algorithm parseJsonLines.js's checksumFile uses over local fixtures. */
 function sha256Hex(text) {
   return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
-module.exports = { fetchJson, fetchText, sha256Hex };
+module.exports = { fetchJson, fetchText, fetchHead, sha256Hex };

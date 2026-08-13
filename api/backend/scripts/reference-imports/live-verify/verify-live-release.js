@@ -1,5 +1,5 @@
 const path = require('path');
-const { fetchJson, fetchText, sha256Hex } = require('./fetchLiveRelease');
+const { fetchJson, fetchText, fetchHead, sha256Hex } = require('./fetchLiveRelease');
 const LIVE_SOURCES = require('./liveVerifySources');
 
 // #555/#556 (RF028/#550): reports whether a source's real upstream release
@@ -9,18 +9,20 @@ const LIVE_SOURCES = require('./liveVerifySources');
 // fixture-based import pipeline. Run via `npm run reference:live-verify:<code>`
 // or the reference-data-live-verify.yml workflow_dispatch job.
 
-async function verify(datasetCode) {
-  const entry = LIVE_SOURCES[datasetCode];
-  if (!entry) {
-    throw new Error(
-      `No live-verify entry for "${datasetCode}" yet (see #557 for the remaining sources). Known: ${Object.keys(LIVE_SOURCES).join(', ')}`,
-    );
-  }
-
+function loadFixtureSource(datasetCode) {
   const fixtureSource = require(
     path.join('..', '..', '..', 'src', 'reference-data', 'reference-imports', 'sources', datasetCode.toLowerCase()),
   );
+  return {
+    systemUri: fixtureSource.systemUri,
+    license: fixtureSource.license,
+    licenseUri: fixtureSource.licenseUri,
+  };
+}
 
+// HPO/MONDO shape: upstream is a GitHub repo with a releases API and a
+// LICENSE file/page reachable by URL.
+async function verifyGithubRelease(datasetCode, entry, fixtureSource) {
   const release = await fetchJson(entry.releaseApiUrl);
   const assetNames = Array.isArray(release.assets) ? release.assets.map((asset) => asset.name) : [];
   const assetPresent = assetNames.includes(entry.expectedAssetName);
@@ -29,12 +31,11 @@ async function verify(datasetCode) {
   const licenseChecksum = sha256Hex(licenseText);
   const licensePointerPresent = licenseText.includes(entry.expectedLicensePointer);
 
-  const verifiedAt = new Date().toISOString();
   const status = assetPresent && licensePointerPresent ? 'verified' : 'mismatch';
 
   return {
     datasetCode,
-    verifiedAt,
+    verifiedAt: new Date().toISOString(),
     status,
     live: {
       repo: entry.repo,
@@ -46,12 +47,55 @@ async function verify(datasetCode) {
       licenseChecksum,
       licensePointerPresent,
     },
-    fixtureSource: {
-      systemUri: fixtureSource.systemUri,
-      license: fixtureSource.license,
-      licenseUri: fixtureSource.licenseUri,
-    },
+    fixtureSource,
   };
+}
+
+// ORPHA shape (#557): upstream has no GitHub releases API — the Orphanet
+// Nomenclature Pack is a direct file download at a stable (unversioned)
+// URL, and the license is stated on the pack's landing page rather than a
+// separate LICENSE file. "Release" here is proven by the download actually
+// resolving (HEAD 200), with the Last-Modified header standing in for a
+// GitHub release's tag/published_at since no such field exists upstream.
+async function verifyDirectDownload(datasetCode, entry, fixtureSource) {
+  const head = await fetchHead(entry.assetUrl);
+
+  const licenseText = await fetchText(entry.licenseUrl);
+  const licenseChecksum = sha256Hex(licenseText);
+  const licensePointerPresent = licenseText.includes(entry.expectedLicensePointer);
+
+  const status = head.ok && licensePointerPresent ? 'verified' : 'mismatch';
+
+  return {
+    datasetCode,
+    verifiedAt: new Date().toISOString(),
+    status,
+    live: {
+      assetUrl: entry.assetUrl,
+      assetPresent: head.ok,
+      assetLastModified: head.headers.get('last-modified'),
+      licenseUrl: entry.licenseUrl,
+      licenseChecksum,
+      licensePointerPresent,
+    },
+    fixtureSource,
+  };
+}
+
+async function verify(datasetCode) {
+  const entry = LIVE_SOURCES[datasetCode];
+  if (!entry) {
+    throw new Error(
+      `No live-verify entry for "${datasetCode}" yet (see #557 for the remaining sources). Known: ${Object.keys(LIVE_SOURCES).join(', ')}`,
+    );
+  }
+
+  const fixtureSource = loadFixtureSource(datasetCode);
+
+  if (entry.kind === 'direct-download') {
+    return verifyDirectDownload(datasetCode, entry, fixtureSource);
+  }
+  return verifyGithubRelease(datasetCode, entry, fixtureSource);
 }
 
 async function main() {
