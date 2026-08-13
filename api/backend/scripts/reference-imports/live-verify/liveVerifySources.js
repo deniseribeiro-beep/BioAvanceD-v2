@@ -2,10 +2,10 @@
 // verify job. Deliberately separate from src/reference-data/reference-imports
 // /sources/*.js — those stay pointed at the bundled fixture only, per
 // reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
-// ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, and DCB (#557) are populated
-// so far; 6 sources remain, added here one entry at a time (per docs-7-31-2026/3-
-// Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem recomendada da
-// Fase 2").
+// ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, DCB, and ATC (#557) are
+// populated so far; 5 sources remain, added here one entry at a time (per
+// docs-7-31-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem
+// recomendada da Fase 2").
 //
 // Each entry carries a `kind` deciding which verification shape
 // verify-live-release.js runs: 'github-release' (default, omittable — HPO/
@@ -288,5 +288,32 @@ module.exports = {
     expectedEdition: '342',
     licenseUrl: 'https://www.gov.br/pt-br/termos-de-uso',
     expectedLicensePointer: 'creativecommons.org/licenses/by-nd/3.0',
+  },
+  // #557: confirmed live on 2026-08-13, closing out §7.4 step 7's "DCB e
+  // ATC/DDD" pair. dict-01_FONTES.md's SRC_ATC "URL oficial"
+  // (whocc.no/atc_ddd_index/) 301-redirects to the WHO Collaborating
+  // Centre's actual current host (atcddd.fhi.no — the Centre moved to the
+  // Norwegian Institute of Public Health) — Node's own fetch() follows the
+  // redirect transparently, so this is a fifth 'fixed-edition' entry rather
+  // than needing a new 'redirect-*' kind: fetchText() just returns the
+  // final page's body, which carries a clean `<h1>ATC/DDD Index 2026</h1>`
+  // heading, matching dict-01's own "Índice anual vigente" wording. License
+  // is a dedicated Copyright/Disclaimer page (also redirected to
+  // atcddd.fhi.no) with a durable plain-text attribution pointer ("WHO
+  // Collaborating Centre for Drug Statistics Methodology, Oslo, Norway") —
+  // avoiding the page's own mangled copyright-symbol glyph (an iso-8859-1
+  // page decoded as UTF-8) as the match target, same "match a clean
+  // adjacent phrase, not encoding-fragile punctuation" reasoning as every
+  // prior license-pointer choice in this file. robots.txt (checked first,
+  // both whocc.no's own and the redirected atcddd.fhi.no's) carries only a
+  // generic `Crawl-Delay: 10`, no AI-crawler-specific disallow.
+  ATC: {
+    datasetCode: 'ATC',
+    kind: 'fixed-edition',
+    pageUrl: 'https://www.whocc.no/atc_ddd_index/',
+    editionPattern: /ATC\/DDD Index (\d{4})/,
+    expectedEdition: '2026',
+    licenseUrl: 'https://www.whocc.no/copyright_disclaimer/',
+    expectedLicensePointer: 'WHO Collaborating Centre for Drug Statistics Methodology, Oslo, Norway',
   },
 };
