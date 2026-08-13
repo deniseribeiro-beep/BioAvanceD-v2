@@ -240,6 +240,44 @@ async function verifyRestInfo(datasetCode, entry, fixtureSource) {
   };
 }
 
+// DUO shape (#557): the GitHub releases API confirms a real release exists
+// (tag_name/published_at, same fields github-release checks), but unlike
+// HPO/MONDO the latest release carries no attached assets at all — the
+// ontology file (duo.owl) lives checked into the repo tree itself rather
+// than as a release download. So the "asset present" proof is a HEAD check
+// against the file's raw.githubusercontent.com URL (direct-download's
+// technique) instead of scanning release.assets for an expected name
+// (github-release's technique) — this kind combines both rather than
+// reusing either alone.
+async function verifyGithubReleaseFile(datasetCode, entry, fixtureSource) {
+  const release = await fetchJson(entry.releaseApiUrl);
+
+  const fileHead = await fetchHead(entry.fileUrl);
+
+  const licenseText = await fetchText(entry.licenseUrl);
+  const licenseChecksum = sha256Hex(licenseText);
+  const licensePointerPresent = licenseText.includes(entry.expectedLicensePointer);
+
+  const status = fileHead.ok && licensePointerPresent ? 'verified' : 'mismatch';
+
+  return {
+    datasetCode,
+    verifiedAt: new Date().toISOString(),
+    status,
+    live: {
+      repo: entry.repo,
+      releaseTag: release.tag_name,
+      releasePublishedAt: release.published_at,
+      fileUrl: entry.fileUrl,
+      filePresent: fileHead.ok,
+      licenseUrl: entry.licenseUrl,
+      licenseChecksum,
+      licensePointerPresent,
+    },
+    fixtureSource,
+  };
+}
+
 async function verify(datasetCode) {
   const entry = LIVE_SOURCES[datasetCode];
   if (!entry) {
@@ -264,6 +302,9 @@ async function verify(datasetCode) {
   }
   if (entry.kind === 'rest-info') {
     return verifyRestInfo(datasetCode, entry, fixtureSource);
+  }
+  if (entry.kind === 'github-release-file') {
+    return verifyGithubReleaseFile(datasetCode, entry, fixtureSource);
   }
   return verifyGithubRelease(datasetCode, entry, fixtureSource);
 }
