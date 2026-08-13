@@ -148,7 +148,11 @@ function sanitizePayload(payload) {
     'name', 'nome', 'userName', 'username', 'email', 'e-mail',
     'cpf', 'document', 'documento', 'phone', 'telefone',
     'address', 'endereco', 'birthDate', 'dataNascimento',
-    'password', 'passwordHash', 'mfaSecret', 'token', 'secret'
+    'password', 'passwordHash', 'mfaSecret', 'token', 'secret',
+    // RF005/RNF007 (#363/#564): the canonical ParticipantIdentity field
+    // names — 'name'/'document' above predate them and don't cover the
+    // fields by their actual names.
+    'patientName', 'identityDocument'
   ];
 
   sensitiveFields.forEach(field => {

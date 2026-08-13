@@ -954,8 +954,14 @@ class PatientService {
       tokenExpiresAt = consentMetadata.expiresAt;
     }
 
-    const consentLink = notificationService.buildConsentLink(patient, token);
-    await notificationService.enqueueConsentNotification(patient, consentLink);
+    // RF005/RNF007 (#561/#564): patientName resolved via ParticipantIdentity
+    // instead of read directly off the Patient document.
+    const identityCollection = await this.getIdentityCollection(db);
+    const identity = await identityCollection.findOne({ participantId });
+    const patientWithIdentity = identity ? { ...patient, patientName: identity.patientName } : patient;
+
+    const consentLink = notificationService.buildConsentLink(patientWithIdentity, token);
+    await notificationService.enqueueConsentNotification(patientWithIdentity, consentLink);
 
     const updatePayload = {
       consentNotifiedAt: new Date(),

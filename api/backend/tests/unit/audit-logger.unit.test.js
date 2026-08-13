@@ -45,6 +45,17 @@ describe('AuditLogger.sanitizePayload', () => {
     expect(result.participantId).toBe('12345678');
     expect(result.status).toBe('active');
   });
+
+  // RF005/RNF007 (#363/#564): identityDocument is the canonical
+  // ParticipantIdentity field name — must be redacted like any other
+  // sensitive field even outside the Patient-specific allowlist branch
+  // (e.g. a non-Patient entity payload that happens to carry it).
+  it('removes identityDocument for a non-Patient entity payload', () => {
+    const payload = { entity: 'Sample', identityDocument: '11144477735', count: 5 };
+    const result = auditLogger.sanitizePayload(payload, 'Sample');
+    expect(result.identityDocument).toBeUndefined();
+    expect(result.count).toBe(5);
+  });
 });
 
 describe('AuditLogger.extractErrorStack', () => {

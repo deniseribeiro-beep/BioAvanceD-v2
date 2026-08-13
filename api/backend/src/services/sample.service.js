@@ -758,6 +758,11 @@ class SampleService {
       if (sample.participantId) {
         participant = await patientsCollection.findOne({ participantId: sample.participantId });
         if (participant) {
+          // RF005/RNF007 (#561/#564): patientName resolved via
+          // ParticipantIdentity instead of read directly off the Patient
+          // document.
+          const identityCollection = await getCollection(db, 'participantIdentities');
+          const identity = await identityCollection.findOne({ participantId: sample.participantId });
           const anonymizeName = (name) => {
             if (!name) return '***';
             const parts = name.trim().split(' ');
@@ -766,7 +771,7 @@ class SampleService {
           };
           participant = {
             participantId: participant.participantId,
-            patientName: anonymizeName(participant.patientName),
+            patientName: anonymizeName(identity?.patientName),
             recordNumber: participant.recordNumber
           };
         }

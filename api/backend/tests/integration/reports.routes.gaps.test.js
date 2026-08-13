@@ -301,6 +301,27 @@ describe('reports.routes.js gaps', () => {
     expect(response.body.data.previewLimited).toBe(false);
   });
 
+  // RF005/RNF007 (#561/#564): keyword search resolves patientName via
+  // ParticipantIdentity instead of a direct Patient-document query —
+  // resolved participantIds must flow into the patients query's $or leg.
+  it('paciente: keyword search resolves matching participantIds via ParticipantIdentity', async () => {
+    const { db, capturedQueries } = buildCollectionDb({
+      patients: [{ patientID: 'P1', participantId: 'P1' }],
+      participantIdentities: [{ participantId: 'P1', patientName: 'Ana' }],
+    });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp).post('/api/reports/paciente/preview').send({ filters: { keyword: 'Ana' } });
+
+    expect(response.status).toBe(200);
+    expect(capturedQueries.participantIdentities).toEqual({ patientName: { $regex: 'Ana', $options: 'i' } });
+    expect(capturedQueries.patients.$and).toEqual(
+      expect.arrayContaining([
+        { $or: [{ participantId: { $in: ['P1'] } }, { patientID: { $regex: 'Ana', $options: 'i' } }] },
+      ])
+    );
+  });
+
   it('sampleanalysis: amostras sem sampleID são ignoradas no agrupamento de resultados', async () => {
     const { db } = buildCollectionDb({
       samples: [

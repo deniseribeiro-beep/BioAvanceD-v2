@@ -136,7 +136,11 @@ class AuditLogger {
     const sensitiveFields = [
       'password', 'passwordHash', 'mfaSecret', 'token', 'secret',
       'patientName', 'name', 'email', 'cpf', 'document', 'address',
-      'phone', 'telefone', 'birthDate', 'dataNascimento'
+      'phone', 'telefone', 'birthDate', 'dataNascimento',
+      // RF005/RNF007 (#363/#564): identityDocument is the canonical
+      // civil-identity field ParticipantIdentity introduced — 'document'
+      // above predates it and doesn't cover the field by its actual name.
+      'identityDocument'
     ];
 
     sensitiveFields.forEach(field => {

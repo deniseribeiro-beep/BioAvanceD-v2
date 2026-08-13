@@ -111,6 +111,16 @@ describe('sanitizePayload', () => {
     expect(result.entity).toBe('Sample');
     expect(result.count).toBe(5);
   });
+
+  // RF005/RNF007 (#363/#564): patientName/identityDocument are the
+  // canonical ParticipantIdentity field names — 'name'/'document' predate
+  // them and don't cover the fields by their actual names.
+  it('removes patientName and identityDocument fields', () => {
+    const result = sanitizePayload({ patientName: 'João', identityDocument: '11144477735', id: 1 });
+    expect(result.patientName).toBeUndefined();
+    expect(result.identityDocument).toBeUndefined();
+    expect(result.id).toBe(1);
+  });
 });
 
 describe('sanitizeMessage', () => {
