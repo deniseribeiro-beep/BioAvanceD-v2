@@ -1,5 +1,6 @@
 const PatientModel = require('../models/Patient');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
+const participantIdentityService = require('./participantIdentity.service');
 const OrganizationModel = require('../models/Organization');
 const logger = require('../utils/logger');
 const { generateUniqueParticipantId, sanitizePatientForLogs } = require('../utils/patientAnonymization');
@@ -524,7 +525,10 @@ class PatientService {
       // off the Patient doc; migrating those off is tracked separately) but the
       // API surface (paciente.controller.js#buscar) no longer returns them.
       const identityCollection = await getCollection(db, 'participantIdentities');
-      await identityCollection.insertOne(ParticipantIdentityModel.create({ ...patientData, participantId }));
+      const identityDoc = participantIdentityService.encryptIdentityFields(
+        ParticipantIdentityModel.create({ ...patientData, participantId })
+      );
+      await identityCollection.insertOne(identityDoc);
 
       if (options.skipConsentNotification !== true) {
         try {

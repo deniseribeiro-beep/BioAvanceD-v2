@@ -125,11 +125,43 @@ heuristic-matching endpoint now matches via `ParticipantIdentity` (this
 also fixed a latent bug — the old query matched on a `patientID` field
 that doesn't exist on `Patient` documents, which use `participantId`).
 
-**Not yet landed (follow-up tracked separately):** `#563`-`#564`'s
-consumer groups still read/write these fields directly on `Patient`.
-Also outstanding: encryption at rest for the segregated collection
-("cifrar", #566), and the final backfill/removal (#565, depends on
-#560-#564 all landing).
+**Landed in #566:** `patientName`/`birthDate`/`identityDocument` are now
+encrypted at rest in `participantIdentities` (dict-07 row 1, "cifrar";
+dict-02 P1X-0350/P1X-0351/P1X-0354/P1X-0362), reusing the same AES-256-GCM
+utility (`utils/fieldEncryption.js`) and key-rotation convention
+(`ENCRYPTION_KEY`/`ENCRYPTION_KEY_ID`, `config/keyRegistry.js`) already
+established for `Patient.representativeIdentityDocument`. Every write path
+(`patient.service.js#createPatient`, `import.service.js`'s create/merge
+branches, `import-lgpd.service.js`'s two intake paths,
+`fhir-import-staging.service.js#commitBatch`) now calls
+`participantIdentity.service.js#encryptIdentityFields`, which adds
+`patientNameEncrypted`/`birthDateEncrypted`/`identityDocumentEncrypted`
+ciphertext siblings plus `encryptionKeyVersion` (dict-02 P1X-0362, the
+active key's `keyId`, for auditable rotation) alongside the existing
+plaintext fields — **additive dual-write, not a cutover**: per #566's own
+scope ("this... only touches how participantIdentities documents are
+stored, not who reads them"), the 10+ established consumers (#561-#564)
+that read `patientName`/`birthDate`/`identityDocument` directly off this
+collection's plaintext keep working unchanged. `participantIdentity.service.js#getIdentityByParticipantId`
+— the sole path behind #560's authorized `reidentify` flow — decrypts via
+`decryptIdentity`, preferring ciphertext when present and falling back to
+plaintext for pre-#566 records.
+
+**Not yet landed (follow-up tracked separately):** cutting the plaintext
+over to ciphertext-only (dropping `patientName`/`birthDate`/`identityDocument`
+as directly-stored values) needs every remaining reader repointed onto
+`participantIdentity.service.js`'s decrypt path first — mechanical for
+most (`consent.controller.js`, `eConsent.js`, `consent.service.js`,
+`sample.service.js`: single `findOne` + decrypt), but two consumers query
+these fields at the MongoDB level in ways ciphertext can't support directly
+(`import.service.js`'s exact-match `identityDocument` dedup,
+`intakeWizard.js`'s and `PatientIdentityService.js`'s `birthDate`
+day-range + `patientName` matching) and need a blind-index/hash sibling
+field, not just a decrypt-after-fetch; `reports.routes.js`'s `patientName`
+`$regex` keyword search can't be blind-indexed at all and needs its own
+redesign. Also outstanding: `#563`-`#564`'s consumer groups still
+read/write these fields directly on `Patient`, and the final backfill/
+removal (#565, depends on #560-#564 all landing).
 
 ### Specimen
 

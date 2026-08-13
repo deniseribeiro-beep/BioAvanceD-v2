@@ -5,6 +5,10 @@ const path = require('path');
 const logger = require('../utils/logger');
 const PatientModel = require('../models/Patient');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
+// Named distinctly from participantIdentityService below (that name is
+// already taken in this file by ./PatientIdentityService.js, the
+// import-time name+DOB matching service — a different entity concern).
+const participantIdentityEncryptionService = require('./participantIdentity.service');
 const { SampleModel } = require('../models/Sample');
 const patientService = require('./patient.service');
 const notificationService = require('./notification.service');
@@ -658,7 +662,10 @@ class ImportLGPDService {
           // segregated ParticipantIdentity collection, same as
           // patient.service.js#createPatient.
           const identityCollection = getCollection(db, 'participantIdentities');
-          await identityCollection.insertOne(ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId }));
+          const identityDoc = participantIdentityEncryptionService.encryptIdentityFields(
+            ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
+          );
+          await identityCollection.insertOne(identityDoc);
 
           try {
             const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
@@ -1852,7 +1859,10 @@ class ImportLGPDService {
         // segregated ParticipantIdentity collection, same as
         // patient.service.js#createPatient.
         const identityCollection = getCollection(db, 'participantIdentities');
-        await identityCollection.insertOne(ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId }));
+        const identityDoc = participantIdentityEncryptionService.encryptIdentityFields(
+          ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
+        );
+        await identityCollection.insertOne(identityDoc);
 
         try {
           const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);

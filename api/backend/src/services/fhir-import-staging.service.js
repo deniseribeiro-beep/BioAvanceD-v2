@@ -6,6 +6,7 @@ const qualityDomain = require('./quality-domain.service');
 const logger = require('../utils/logger');
 const { SampleModel } = require('../models/Sample');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
+const participantIdentityService = require('./participantIdentity.service');
 const quarantineActionService = require('./quarantine-action.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
@@ -932,12 +933,14 @@ async function commitBatch(db, batchIdRaw) {
     // — kept as an upsert (rather than a plain insertOne) to match the
     // Patient upsert above's own idempotent-on-participantId semantics.
     const identities = collection(db, 'participantIdentities');
-    const identityFields = ParticipantIdentityModel.fieldsOf({
-      participantId: normalized.participantId,
-      patientName: normalized.patientName,
-      birthDate: normalized.patientBirthDate,
-      identityDocument: normalized.patientDocument,
-    });
+    const identityFields = participantIdentityService.encryptIdentityFields(
+      ParticipantIdentityModel.fieldsOf({
+        participantId: normalized.participantId,
+        patientName: normalized.patientName,
+        birthDate: normalized.patientBirthDate,
+        identityDocument: normalized.patientDocument,
+      })
+    );
     await identities.updateOne(
       { participantId: normalized.participantId },
       {
