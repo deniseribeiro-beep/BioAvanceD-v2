@@ -632,14 +632,18 @@ router.get('/patient-match', async (req, res) => {
 
   const patientName = normalizeString(req.query?.patientName || req.query?.name);
   const birthDate = parseBirthDate(req.query?.birthDate);
-  const patientID = normalizeString(req.query?.patientID || req.query?.patientId);
+  const participantIdQuery = normalizeString(req.query?.patientID || req.query?.patientId);
 
-  if (!patientID && (!patientName || !birthDate)) {
+  if (!participantIdQuery && (!patientName || !birthDate)) {
     return res.status(400).json({ success: false, error: 'Informe patientID ou (patientName + birthDate).' });
   }
 
   try {
-    const patientsCollection = await getCollection(db, 'patients');
+    // RF005/RNF007 (#562): resolve the match via ParticipantIdentity, not
+    // Patient's own (never actually populated by the main intake path)
+    // patientNameNormalized/birthDateKey fields, same pattern #561 applied
+    // to PatientIdentityService.js's import-time matching.
+    const identityCollection = await getCollection(db, 'participantIdentities');
     const patientNameNormalized = patientName
       ? patientName
         .normalize('NFD')
@@ -648,44 +652,49 @@ router.get('/patient-match', async (req, res) => {
         .replace(/\s+/g, ' ')
       : '';
 
-    const birthDateKey = birthDate
-      ? `${birthDate.getFullYear()}-${String(birthDate.getMonth() + 1).padStart(2, '0')}-${String(birthDate.getDate()).padStart(2, '0')}`
-      : '';
+    let identity = participantIdQuery
+      ? await identityCollection.findOne({ participantId: participantIdQuery })
+      : null;
 
-    const patient = await patientsCollection.findOne(
-      patientID
-        ? {
-          $or: [
-            { patientID },
-            ...(patientNameNormalized && birthDateKey ? [{ patientNameNormalized, birthDateKey }] : []),
-          ],
-        }
-        : { patientNameNormalized, birthDateKey },
-      {
-        projection: {
-          patientID: 1,
-          patientName: 1,
-          birthDate: 1,
-          status: 1,
-        },
-      }
-    );
+    if (!identity && patientNameNormalized && birthDate) {
+      const startOfDay = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
+      const endOfDay = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), startOfDay.getDate() + 1);
+      const candidates = await identityCollection.find({ birthDate: { $gte: startOfDay, $lt: endOfDay } }).toArray();
+      identity = candidates.find((candidate) => {
+        const candidateNormalized = normalizeString(candidate.patientName)
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/\s+/g, ' ');
+        return candidateNormalized === patientNameNormalized;
+      }) || null;
+    }
+
+    let patientStatus = 'ACTIVE';
+    if (identity?.participantId) {
+      const patientsCollection = await getCollection(db, 'patients');
+      const patientRecord = await patientsCollection.findOne(
+        { participantId: identity.participantId },
+        { projection: { status: 1 } }
+      );
+      patientStatus = normalizeString(patientRecord?.status) || 'ACTIVE';
+    }
 
     auditLogger.init(db);
     await auditLogger.log({
       action: 'PATIENT_MATCH_UPSERT',
       resourceType: 'Patient',
-      resourceId: patient?.patientID || patientID || null,
+      resourceId: identity?.participantId || participantIdQuery || null,
       status: 'success',
       severity: 'info',
-      message: patient
+      message: identity
         ? 'Heurística de intake encontrou paciente existente para upsert.'
         : 'Heurística de intake não encontrou paciente correspondente.',
       payload: {
         endpoint: '/patient-match',
-        matched: Boolean(patient),
+        matched: Boolean(identity),
         query: {
-          patientID: patientID || null,
+          patientID: participantIdQuery || null,
           patientName: patientName || null,
           birthDate: birthDate ? birthDate.toISOString().slice(0, 10) : null,
         },
@@ -696,16 +705,16 @@ router.get('/patient-match', async (req, res) => {
 
     return res.json({
       success: true,
-      matched: Boolean(patient),
-      patient: patient
+      matched: Boolean(identity),
+      patient: identity
         ? {
-          patientID: normalizeString(patient.patientID),
-          patientName: normalizeString(patient.patientName),
-          birthDate: patient.birthDate || null,
-          status: normalizeString(patient.status || 'ACTIVE'),
+          patientID: normalizeString(identity.participantId),
+          patientName: normalizeString(identity.patientName),
+          birthDate: identity.birthDate || null,
+          status: patientStatus,
         }
         : null,
-      message: patient
+      message: identity
         ? 'Paciente identificado. Novos dados serão vinculados ao perfil histórico.'
         : '',
     });

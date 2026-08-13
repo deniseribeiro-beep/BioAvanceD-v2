@@ -42,12 +42,25 @@ router.get('/validate/:token', async (req, res) => {
     const patient = await db.collection('patients').findOne({ participantId: payload.participantId });
     if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
 
+    // RF005/RNF007 (#562): patientName/birthDate/identityDocument are civil
+    // identity — resolved via ParticipantIdentity, not trusted from Patient's
+    // own (soon to be removed) copy of the fields.
+    const identity = await db.collection('participantIdentities').findOne({ participantId: payload.participantId });
+    const patientWithIdentity = identity
+      ? {
+        ...patient,
+        patientName: identity.patientName,
+        birthDate: identity.birthDate,
+        identityDocument: identity.identityDocument,
+      }
+      : patient;
+
     const consentService = require('../services/consent.service');
     const template = await consentService.getActiveTemplate(db);
     const currentConsent = await consentService.getPatientConsent(db, payload.participantId);
 
     res.json({
-      patient,
+      patient: patientWithIdentity,
       template: template
         ? { id: String(template._id), title: template.title, permissions: template.permissions || [] }
         : null,

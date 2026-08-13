@@ -160,10 +160,22 @@ describe('eConsent.routes GET /validate/:token', () => {
     expect(PatientModel.findOne).toBeUndefined();
   });
 
-  it('returns the patient, the active template and current responses for a valid token', async () => {
-    const patient = { participantId: '12345678', name: 'Jane Doe' };
-    const findOne = vi.fn().mockResolvedValue(patient);
-    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+  // #562: patientName/birthDate/identityDocument are resolved via
+  // ParticipantIdentity, merged into the returned `patient` object — a
+  // second db.collection('participantIdentities') lookup alongside the
+  // existing db.collection('patients') one.
+  function buildPatientDb({ patient, identity = null }) {
+    return {
+      collection: vi.fn((name) => ({
+        findOne: vi.fn().mockResolvedValue(name === 'participantIdentities' ? identity : patient),
+      })),
+    };
+  }
+
+  it('returns the patient (with identity merged from ParticipantIdentity), the active template and current responses for a valid token', async () => {
+    const patient = { participantId: '12345678', name: 'Jane Doe', email: 'jane@example.com' };
+    const identity = { participantId: '12345678', patientName: 'Jane Doe', birthDate: '1990-01-20', identityDocument: '11144477735' };
+    const db = buildPatientDb({ patient, identity });
     const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [{ key: 'general', label: 'Aceito participar' }] };
     const currentConsent = { _id: 'consent-1', status: 'ACTIVE', responses: { general: true } };
     vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
@@ -174,19 +186,33 @@ describe('eConsent.routes GET /validate/:token', () => {
     const res = await request(app).get(`/e-consent/validate/${token}`);
 
     expect(db.collection).toHaveBeenCalledWith('patients');
-    expect(findOne).toHaveBeenCalledWith({ participantId: '12345678' });
+    expect(db.collection).toHaveBeenCalledWith('participantIdentities');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
-      patient,
+      patient: { ...patient, patientName: identity.patientName, birthDate: identity.birthDate, identityDocument: identity.identityDocument },
       template: { id: 'tmpl-1', title: 'TCLE v1', permissions: template.permissions },
       responses: { general: true },
     });
   });
 
+  it('returns the raw patient unchanged when no ParticipantIdentity record exists yet', async () => {
+    const patient = { participantId: '12345678', name: 'Jane Doe' };
+    const db = buildPatientDb({ patient, identity: null });
+    const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [] };
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app).get(`/e-consent/validate/${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.patient).toEqual(patient);
+  });
+
   it('returns empty responses when the patient has no active consent', async () => {
     const patient = { participantId: '12345678', name: 'Jane Doe' };
-    const findOne = vi.fn().mockResolvedValue(patient);
-    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const db = buildPatientDb({ patient });
     const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [{ key: 'general', label: 'Aceito participar' }] };
     vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
@@ -201,8 +227,7 @@ describe('eConsent.routes GET /validate/:token', () => {
 
   it('returns a null template when no ConsentTemplate is active', async () => {
     const patient = { participantId: '12345678', name: 'Jane Doe' };
-    const findOne = vi.fn().mockResolvedValue(patient);
-    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const db = buildPatientDb({ patient });
     vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(null);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
     const app = buildApp(loadRealAuthRouter(), db);
