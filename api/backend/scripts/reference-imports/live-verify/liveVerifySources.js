@@ -2,10 +2,10 @@
 // verify job. Deliberately separate from src/reference-data/reference-imports
 // /sources/*.js — those stay pointed at the bundled fixture only, per
 // reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
-// ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, DCB, ATC, and DUO (#557) are
-// populated so far; 4 sources remain, added here one entry at a time (per
-// docs-7-31-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem
-// recomendada da Fase 2").
+// ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, DCB, ATC, DUO, and UBERON
+// (#557) are populated so far; 3 sources remain, added here one entry at a
+// time (per docs-7-31-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md
+// §7.4 "Ordem recomendada da Fase 2").
 //
 // Each entry carries a `kind` deciding which verification shape
 // verify-live-release.js runs: 'github-release' (default, omittable — HPO/
@@ -343,5 +343,23 @@ module.exports = {
     fileUrl: 'https://raw.githubusercontent.com/EBISPOT/DUO/master/duo.owl',
     licenseUrl: 'https://raw.githubusercontent.com/EBISPOT/DUO/master/LICENSE.md',
     expectedLicensePointer: 'creativecommons.org/licenses/by/4.0',
+  },
+  // #557: confirmed live on 2026-08-13, second source of §7.4 step 8. Back
+  // to the plain 'github-release' shape (unlike its sibling DUO):
+  // obophenotype/uberon's latest release does carry an asset matching
+  // systemUri's basename (uberon.owl, confirmed via `gh api
+  // repos/obophenotype/uberon/releases/latest`). GitHub reports this repo's
+  // license as spdx_id "NOASSERTION" (same as HPO), but unlike HPO's
+  // LICENSE.md (an external redirect pointer), this repo's LICENSE file
+  // carries the full plain-text CC BY 3.0 Unported legal code directly —
+  // same "full legal text in the file itself" shape MONDO's LICENSE had,
+  // just an older CC version (3.0 Unported vs. MONDO's 4.0 International).
+  UBERON: {
+    datasetCode: 'UBERON',
+    repo: 'obophenotype/uberon',
+    releaseApiUrl: 'https://api.github.com/repos/obophenotype/uberon/releases/latest',
+    licenseUrl: 'https://raw.githubusercontent.com/obophenotype/uberon/master/LICENSE',
+    expectedLicensePointer: 'Attribution 3.0 Unported',
+    expectedAssetName: 'uberon.owl', // matches sources/uberon.js's systemUri basename
   },
 };
