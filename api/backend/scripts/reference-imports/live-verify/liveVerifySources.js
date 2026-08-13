@@ -2,10 +2,9 @@
 // verify job. Deliberately separate from src/reference-data/reference-imports
 // /sources/*.js — those stay pointed at the bundled fixture only, per
 // reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
-// ORPHA, and ICD-10/ICD-11 (#557) are populated so far; the other 11 sources
-// are #557's remaining scope, added here one entry at a time (per
-// docs-7-31-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem
-// recomendada da Fase 2" order: OMIM next).
+// ORPHA, ICD-10/ICD-11, and OMIM (#557) are populated so far; 10 sources
+// remain, added here one entry at a time (per docs-7-31-2026/3-Plano_
+// Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem recomendada da Fase 2").
 //
 // Each entry carries a `kind` deciding which verification shape
 // verify-live-release.js runs: 'github-release' (default, omittable — HPO/
@@ -15,16 +14,18 @@
 // verifyDirectDownload's comment in verify-live-release.js), 'redirect-
 // version' (ICD-11's shape: the actual WHO ICD API is OAuth/API-key gated,
 // but its public browser exposes the release via a redirect target instead
-// of a releases API — see verifyRedirectVersion's comment), or 'fixed-
+// of a releases API — see verifyRedirectVersion's comment), 'fixed-
 // edition' (ICD-10's shape: also WHO-hosted, but the "URL oficial" is a
 // fixed-edition browse page rather than a "latest" redirect — the edition is
 // read out of the page body itself, and no source-specific license document
 // was found live, so it reuses WHO's sitewide Terms of Use page instead —
-// see verifyFixedEdition's comment). Not every remaining source will fit one
-// of these four as-is (e.g. OMIM is a licensed/keyed API per
-// dict-01_FONTES.md's SRC_OMIM row with no public unauthenticated surface
-// found yet) — confirm live shape before assuming one of these four covers
-// it.
+// see verifyFixedEdition's comment), or 'not-live-verifiable' (OMIM's shape:
+// unlike ICD-11/ICD-10, the entire public web domain is behind an
+// interactive Cloudflare bot challenge and its own robots.txt disallows
+// crawling — no automated request should even be attempted; see
+// verifyNotLiveVerifiable's comment). Not every remaining source will fit
+// one of these five as-is — confirm live shape before assuming one of them
+// covers it.
 //
 // releaseApiUrl/licenseUrl/expectedAssetName (or assetUrl/pageUrl for
 // direct-download/fixed-edition entries) confirmed live against the real
@@ -33,7 +34,12 @@
 // latest`. ORPHA: 2026-08-13 via curl against orphacode.org (no GitHub
 // involved) — same verification discipline EDAM's #549 slice established.
 // ICD-10: 2026-08-13 via curl against icd.who.int/browse10 and
-// who.int/about/policies/terms-of-use.
+// who.int/about/policies/terms-of-use. OMIM: 2026-08-13 via curl and
+// WebFetch against omim.org/www.omim.org (all 403, `Cf-Mitigated:
+// challenge`) and its robots.txt (200, explicit crawl disallow + auto-block
+// warning) — a negative result, not a positive one, but confirmed live
+// rather than assumed from the dict-01 row's "Chave/API/licença" auth note
+// alone.
 module.exports = {
   HPO: {
     datasetCode: 'HPO',
@@ -118,5 +124,30 @@ module.exports = {
     expectedEdition: '2019',
     licenseUrl: 'https://www.who.int/about/policies/terms-of-use',
     expectedLicensePointer: 'Copyright World Health Organization (WHO)',
+  },
+  // #557: confirmed live on 2026-08-13, closing out the "ORPHA, CID-11,
+  // CID-10 e OMIM" group. Unlike ICD-11/ICD-10 (an OAuth/API-key-gated API
+  // with a still-public browse surface), omim.org's entire public web
+  // domain 403s with an interactive Cloudflare bot challenge
+  // (`Cf-Mitigated: challenge`) on every path tried — `/`, `/help/api`,
+  // `/downloads`, `/about`, both `omim.org` and `www.omim.org`, with a
+  // browser User-Agent — and the domain's own robots.txt (itself not
+  // challenge-gated, 200 OK) explicitly disallows crawling and warns it
+  // auto-blocks IPs that request pages. dict-01_FONTES.md's SRC_OMIM row's
+  // "Chave/API/licença" auth note predicted the *API* needs credentials,
+  // same as ICD-11's OAuth note did before its public browse surface turned
+  // out to be open — but here the whole domain, not just the API, is
+  // walled, and its own crawl policy says not to try. This is the first
+  // Fase 2 source genuinely needing the "not live-verifiable without
+  // credentials" carve-out anticipated since ICD-11/ICD-10 (see
+  // verifyNotLiveVerifiable's comment in verify-live-release.js) — no
+  // fetch() is attempted for this entry at all.
+  OMIM: {
+    datasetCode: 'OMIM',
+    kind: 'not-live-verifiable',
+    reason:
+      'omim.org (both apex and www) returns HTTP 403 with a Cloudflare interactive bot challenge ' +
+      '(Cf-Mitigated: challenge) on every page tried (/, /help/api, /downloads, /about), and its own ' +
+      'robots.txt explicitly disallows crawling and warns of automatic IP blocking. Confirmed live 2026-08-13.',
   },
 };
