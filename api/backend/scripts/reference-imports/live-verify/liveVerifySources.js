@@ -2,10 +2,10 @@
 // verify job. Deliberately separate from src/reference-data/reference-imports
 // /sources/*.js — those stay pointed at the bundled fixture only, per
 // reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
-// ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, DCB, ATC, DUO, UBERON, and
-// NCBITAX (#557) are populated so far; 2 sources remain, added here one
-// entry at a time (per docs-7-31-2026/3-Plano_Integrado_Foundation_Data_
-// Pipeline.md §7.4 "Ordem recomendada da Fase 2").
+// ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, DCB, ATC, DUO, UBERON,
+// NCBITAX, and CL (#557) are populated so far; 1 source remains (EDAM),
+// added here one entry at a time (per docs-7-31-2026/3-Plano_Integrado_
+// Foundation_Data_Pipeline.md §7.4 "Ordem recomendada da Fase 2").
 //
 // Each entry carries a `kind` deciding which verification shape
 // verify-live-release.js runs: 'github-release' (default, omittable — HPO/
@@ -389,5 +389,22 @@ module.exports = {
     versionUrl: 'https://api.ncbi.nlm.nih.gov/datasets/v2/version',
     licenseUrl: 'https://www.ncbi.nlm.nih.gov/home/about/policies/',
     expectedLicensePointer: 'created by or for the US government on this site is within the public domain',
+  },
+  // #557: confirmed live on 2026-08-13, fourth source of §7.4 step 8. Back
+  // to the plain 'github-release' shape (same as UBERON, its OBO Foundry
+  // sibling): obophenotype/cell-ontology's latest release carries an asset
+  // matching systemUri's basename (cl.owl, confirmed via `gh api
+  // repos/obophenotype/cell-ontology/releases/latest`). Unlike HPO/UBERON,
+  // GitHub auto-detects this repo's license (spdx_id "CC-BY-4.0"), and the
+  // LICENSE file itself carries the full plain-text CC BY 4.0 legal code
+  // directly — same "full legal text in the file, matched on 'Attribution
+  // 4.0 International'" shape MONDO's LICENSE had.
+  CL: {
+    datasetCode: 'CL',
+    repo: 'obophenotype/cell-ontology',
+    releaseApiUrl: 'https://api.github.com/repos/obophenotype/cell-ontology/releases/latest',
+    licenseUrl: 'https://raw.githubusercontent.com/obophenotype/cell-ontology/master/LICENSE',
+    expectedLicensePointer: 'Attribution 4.0 International',
+    expectedAssetName: 'cl.owl', // matches sources/cl.js's systemUri basename
   },
 };

@@ -909,3 +909,78 @@ describe('verify-live-release.verify — NCBITAX (rest-version)', () => {
     expect(report.live.licensePointerPresent).toBe(false);
   });
 });
+
+// #557 CL: fourth source of §7.4 step 8, back to the plain 'github-release'
+// shape (same as UBERON, its OBO Foundry sibling). obophenotype/cell-ontology
+// 's latest release carries an asset matching systemUri's basename (cl.owl,
+// confirmed via `gh api repos/obophenotype/cell-ontology/releases/latest`).
+// Unlike HPO/UBERON, GitHub auto-detects this repo's license (spdx_id
+// "CC-BY-4.0", matching sources/cl.js's 'Licença indicada no OBO Foundry'
+// fixture note), and the LICENSE file itself carries the full plain-text CC
+// BY 4.0 legal code directly — same "full legal text in the file, matched
+// on 'Attribution 4.0 International'" shape MONDO's LICENSE had.
+function mockClFetchResponses({ releaseAssets = ['cl.owl', 'cl.json'], licenseText, tagName = 'v2026-06-08' }) {
+  global.fetch = vi.fn(async (url) => {
+    if (url.includes('/releases/latest')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          tag_name: tagName,
+          published_at: '2026-06-08T14:53:12Z',
+          assets: releaseAssets.map((name) => ({ name })),
+        }),
+      };
+    }
+    if (url.includes('LICENSE')) {
+      return { ok: true, status: 200, text: async () => licenseText };
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  });
+}
+
+describe('verify-live-release.verify — CL (github-release)', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reports status "verified" when the expected asset and license pointer are both live', async () => {
+    mockClFetchResponses({
+      licenseText: 'Attribution 4.0 International\n\n===...',
+    });
+
+    const report = await verify('CL');
+
+    expect(report.status).toBe('verified');
+    expect(report.live.assetPresent).toBe(true);
+    expect(report.live.licensePointerPresent).toBe(true);
+    expect(report.live.releaseTag).toBe('v2026-06-08');
+    expect(report.fixtureSource.systemUri).toBe('http://purl.obolibrary.org/obo/cl.owl');
+  });
+
+  it('reports status "mismatch" when the expected release asset is missing', async () => {
+    mockClFetchResponses({
+      releaseAssets: ['cl.json'],
+      licenseText: 'Attribution 4.0 International',
+    });
+
+    const report = await verify('CL');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.assetPresent).toBe(false);
+  });
+
+  it('reports status "mismatch" when the license text no longer contains the expected pointer', async () => {
+    mockClFetchResponses({
+      licenseText: 'License terms have moved, see our new legal page.',
+    });
+
+    const report = await verify('CL');
+
+    expect(report.status).toBe('mismatch');
+    expect(report.live.licensePointerPresent).toBe(false);
+  });
+});
