@@ -78,7 +78,7 @@ ingestion time" rather than a fixed value, and this repo keeps import
 scripts free of live network calls (`reference-import-boundary.arch.test.js`).
 Live download, real license verification, checkpoint/resume, quarantine
 recovery, rollback, and Neo4j outbox projection are follow-up scope,
-together with the remaining 13 Fase 2 sources.
+together with the remaining 15 Fase 2 sources.
 
 ## Runtime guarantees
 
