@@ -11,13 +11,28 @@ const { CANONICAL_COLLECTIONS } = require('../../config/collections');
 // letting a mostly-broken parse silently become an "active" release.
 const REJECTION_RATE_BLOCK_THRESHOLD = 0.5;
 
+// AC 7 checkpoint/resume: a run in one of these statuses is finished and
+// short-circuits on retry (existing idempotency behavior). 'running' is the
+// one non-terminal status this pipeline ever persists — anything else found
+// there is a prior attempt that was interrupted before finishing and is
+// resumed from its checkpoint instead.
+const TERMINAL_RUN_STATUSES = ['validated', 'completed', 'failed', 'cancelled', 'rolled_back'];
+const DEFAULT_BATCH_SIZE = 500;
+
 /**
  * Runs the RF028 universal import pipeline (Plano Integrado §7.2) for one
  * source against one Mongo `db` handle. Only the HPO source is wired up
  * this slice — `source`/`normalizeRecord` are already generic so the
  * remaining 15 Fase 2 sources can reuse this runner directly.
  */
-async function runImport({ db, source, normalizeRecord, dryRun = false, initiatedBy = 'system:reference-data-bootstrap' }) {
+async function runImport({
+  db,
+  source,
+  normalizeRecord,
+  dryRun = false,
+  initiatedBy = 'system:reference-data-bootstrap',
+  batchSize = DEFAULT_BATCH_SIZE,
+}) {
   const releases = db.collection(CANONICAL_COLLECTIONS.referenceDatasetReleases);
   const runs = db.collection(CANONICAL_COLLECTIONS.referenceImportRuns);
   const issuesCollection = db.collection(CANONICAL_COLLECTIONS.referenceImportIssues);
@@ -30,57 +45,131 @@ async function runImport({ db, source, normalizeRecord, dryRun = false, initiate
   const importMode = dryRun ? 'dry_run' : 'full';
   const idempotencyKey = `${source.datasetCode}:${source.datasetVersion}:sha256:${checksum}`;
 
-  // AC 7 idempotency: an identical prior attempt (same source content,
-  // version, and mode) is not re-processed at all — matching the
-  // $setOnInsert-driven "safe to re-run" contract RF022's bootstrap uses.
+  // AC 7 idempotency vs. resume: an existing *terminal* attempt (same
+  // source content, version, and mode) is not re-processed at all —
+  // matching the $setOnInsert-driven "safe to re-run" contract RF022's
+  // bootstrap uses. An existing attempt still in 'running' status is a
+  // prior run that was interrupted before finishing — resumed below from
+  // its checkpoint, not restarted or treated as a fresh idempotent no-op.
   // Filtered on importMode too: a dry run and a full run of identical
   // content are distinct attempts and must not short-circuit each other.
   const existingRun = await runs.findOne({ idempotencyKey, importMode });
-  if (existingRun) {
+  if (existingRun && TERMINAL_RUN_STATUSES.includes(existingRun.runStatus)) {
     return { run: existingRun, idempotent: true };
   }
 
-  const startedAt = new Date();
   const integrityOk = checksum === source.expectedChecksum;
 
-  let recordsRead = 0;
-  let stagedConcepts = new Map();
-  let stagedRelations = [];
-  let issues = [];
-
-  if (integrityOk) {
-    const rawLines = [];
-    for await (const entry of streamJsonLines(source.fixturePath)) {
-      rawLines.push(entry);
-    }
-    ({ recordsRead, concepts: stagedConcepts, relations: stagedRelations, issues } = processRecords(rawLines, normalizeRecord));
-  } else {
-    issues.push({
-      entityType: 'ReferenceDatasetRelease',
-      errorCode: 'CHECKSUM_MISMATCH',
-      errorMessage: `Checksum calculado (${checksum}) diverge do checksum esperado (${source.expectedChecksum}) para ${source.datasetCode}.`,
-      severity: 'fatal',
-      rawValue: { checksum, expectedChecksum: source.expectedChecksum },
+  if (!integrityOk) {
+    // No staging/checkpoint machinery needed for a doomed run — nothing was
+    // ever going to be staged, so there's nothing to resume either.
+    const issues = [
+      {
+        entityType: 'ReferenceDatasetRelease',
+        errorCode: 'CHECKSUM_MISMATCH',
+        errorMessage: `Checksum calculado (${checksum}) diverge do checksum esperado (${source.expectedChecksum}) para ${source.datasetCode}.`,
+        severity: 'fatal',
+        rawValue: { checksum, expectedChecksum: source.expectedChecksum },
+      },
+    ];
+    const runDoc = ReferenceImportRunModel.create({
+      referenceDatasetReleaseId: null,
+      datasetCode: source.datasetCode,
+      importMode,
+      idempotencyKey,
+      startedAt: new Date(),
+      completedAt: new Date(),
+      runStatus: 'failed',
+      inputChecksum: checksum,
+      validationSummary: { fatal: 1, errors: 0, warnings: 0, rejectionRate: 0, approved: false },
+      initiatedBy,
     });
+    await runs.insertOne(runDoc);
+    await issuesCollection.insertMany(
+      issues.map((issue) =>
+        ReferenceImportIssueModel.create({ ...issue, referenceImportRunId: runDoc.referenceImportRunId, referenceDatasetReleaseId: 'unresolved' }),
+      ),
+    );
+    return { run: runDoc, releaseId: null, approved: false, idempotent: false };
   }
 
-  // 7.2 step 7 "Stage": isolated, disposable staging area tagged by run —
-  // written even for a dry run so the stage itself is provable.
-  const runIdForStaging = `pending-${idempotencyKey}`;
-  if (stagedConcepts.size > 0) {
+  // Resuming an interrupted run reuses its own doc/id; a fresh attempt
+  // creates one now (not at the end) so staging can be tagged with its
+  // real referenceImportRunId from the very first batch — the earlier
+  // `pending-<idempotencyKey>` placeholder made every batch's staging rows
+  // orphaned from the run that actually produced them.
+  const resuming = Boolean(existingRun) && existingRun.runStatus === 'running';
+  let runDoc = resuming ? existingRun : null;
+  if (!runDoc) {
+    runDoc = ReferenceImportRunModel.create({
+      referenceDatasetReleaseId: null,
+      datasetCode: source.datasetCode,
+      importMode,
+      idempotencyKey,
+      startedAt: new Date(),
+      runStatus: 'running',
+      checkpoint: null,
+      batchSize,
+      inputChecksum: checksum,
+      initiatedBy,
+    });
+    await runs.insertOne(runDoc);
+  }
+
+  // Parsing is a pure, deterministic function of the (checksum-verified,
+  // unchanged) source content — re-parsing on resume reproduces the exact
+  // same concepts/relations/issues a first attempt would have, so nothing
+  // about cross-record validation (e.g. relation-orphan checks) changes
+  // between a fresh run and a resumed one.
+  const rawLines = [];
+  for await (const entry of streamJsonLines(source.fixturePath)) {
+    rawLines.push(entry);
+  }
+  const { recordsRead, concepts: parsedConcepts, relations: parsedRelations, issues } = processRecords(rawLines, normalizeRecord);
+
+  // 7.2 step 7 "Stage", batched (#551 AC 7 checkpoint/resume): a single
+  // order-stable list covering *both* concepts and relations (§7.3 "no
+  // silent loss" — relations used to live only in an in-memory array and
+  // were never persisted, so a resumed run silently lost batch-1's
+  // relations). Written in batchSize-sized chunks, checkpointing the run
+  // doc's offset after each chunk so a crash mid-stage leaves a resumable
+  // position instead of losing the whole attempt. Resuming continues from
+  // the existing checkpoint instead of re-staging (and thus duplicating)
+  // what a prior, interrupted attempt already committed.
+  const stagingItems = [
+    ...Array.from(parsedConcepts.values()).map((candidate) => ({ entityType: 'TerminologyConcept', candidate })),
+    ...parsedRelations.map((candidate) => ({ entityType: 'TerminologyRelation', candidate })),
+  ];
+  let offset = (runDoc.checkpoint && runDoc.checkpoint.offset) || 0;
+  while (offset < stagingItems.length) {
+    const chunk = stagingItems.slice(offset, offset + batchSize);
     await staging.insertMany(
-      Array.from(stagedConcepts.values()).map((candidate) => ({
-        referenceImportRunId: runIdForStaging,
+      chunk.map((item) => ({
+        referenceImportRunId: runDoc.referenceImportRunId,
         datasetCode: source.datasetCode,
+        entityType: item.entityType,
         stagedAt: new Date(),
-        candidate,
+        candidate: item.candidate,
       })),
     );
+    offset += chunk.length;
+    const checkpoint = { offset };
+    await runs.updateOne({ referenceImportRunId: runDoc.referenceImportRunId }, { $set: { checkpoint, updatedAt: new Date() } });
+    runDoc = { ...runDoc, checkpoint };
   }
+
+  // The staging collection, not the in-memory parse, is the source of truth
+  // for promotion — identical whether this call staged everything itself or
+  // resumed a prior attempt's partial work.
+  const stagedDocs = await staging.find({ referenceImportRunId: runDoc.referenceImportRunId }).toArray();
+  const stagedConcepts = new Map(
+    stagedDocs.filter((doc) => doc.entityType === 'TerminologyConcept').map((doc) => [doc.candidate.code, doc.candidate]),
+  );
+  const stagedRelations = stagedDocs.filter((doc) => doc.entityType === 'TerminologyRelation').map((doc) => doc.candidate);
 
   const fatalIssues = issues.filter((issue) => issue.severity === 'fatal');
   const rejectionRate = recordsRead > 0 ? issues.length / recordsRead : 0;
-  const approved = integrityOk && fatalIssues.length === 0 && rejectionRate <= REJECTION_RATE_BLOCK_THRESHOLD && Boolean(source.license);
+  const approved = fatalIssues.length === 0 && rejectionRate <= REJECTION_RATE_BLOCK_THRESHOLD && Boolean(source.license);
 
   let releaseId = null;
   let recordsInserted = 0;
@@ -96,28 +185,22 @@ async function runImport({ db, source, normalizeRecord, dryRun = false, initiate
     issues.push(...promotion.issues);
   }
 
-  const runStatus = !integrityOk || fatalIssues.length > 0 || rejectionRate > REJECTION_RATE_BLOCK_THRESHOLD
+  const runStatus = fatalIssues.length > 0 || rejectionRate > REJECTION_RATE_BLOCK_THRESHOLD
     ? 'failed'
     : dryRun
       ? 'validated'
       : 'completed';
 
-  const runDoc = ReferenceImportRunModel.create({
+  const finalFields = {
     referenceDatasetReleaseId: releaseId,
-    datasetCode: source.datasetCode,
-    importMode,
-    idempotencyKey,
-    startedAt,
     completedAt: new Date(),
     runStatus,
-    batchSize: stagedConcepts.size || 1,
     recordsRead,
     recordsValidated: stagedConcepts.size,
     recordsInserted,
     recordsUpdated,
     recordsSkipped,
     recordsRejected: issues.filter((issue) => issue.entityType !== undefined).length,
-    inputChecksum: checksum,
     validationSummary: {
       fatal: fatalIssues.length,
       errors: issues.filter((issue) => issue.severity === 'error').length,
@@ -125,10 +208,10 @@ async function runImport({ db, source, normalizeRecord, dryRun = false, initiate
       rejectionRate,
       approved,
     },
-    initiatedBy,
-  });
-
-  await runs.insertOne(runDoc);
+    updatedAt: new Date(),
+  };
+  await runs.updateOne({ referenceImportRunId: runDoc.referenceImportRunId }, { $set: finalFields });
+  runDoc = { ...runDoc, ...finalFields };
 
   if (issues.length > 0) {
     await issuesCollection.insertMany(

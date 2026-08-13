@@ -76,9 +76,10 @@ This first slice imports a small bundled fixture
 download — dict-01_FONTES.md's SRC_HPO row lists the license as "verify at
 ingestion time" rather than a fixed value, and this repo keeps import
 scripts free of live network calls (`reference-import-boundary.arch.test.js`).
-Live download, real license verification, checkpoint/resume, quarantine
-recovery, rollback, and Neo4j outbox projection are follow-up scope,
-together with the remaining 15 Fase 2 sources.
+Checkpoint/resume (#551) and quarantine recovery (#551) have since
+landed in `pipeline.js`/`quarantine.js`. Live download, real license
+verification, rollback, and Neo4j outbox projection are still follow-up
+scope, together with the remaining 15 Fase 2 sources.
 
 ## Runtime guarantees
 

@@ -12,9 +12,11 @@ const { normalizeRecord } = require('../../../src/reference-data/reference-impor
  */
 function createFakeCollection() {
   const docs = [];
+  const calls = [];
   const matches = (doc, filter) => Object.keys(filter).every((key) => doc[key] === filter[key]);
   return {
     docs,
+    calls,
     async insertOne(doc) {
       docs.push(doc);
       return { insertedId: doc._id || 'fake-id' };
@@ -26,7 +28,11 @@ function createFakeCollection() {
     async findOne(filter = {}) {
       return docs.find((doc) => matches(doc, filter)) || null;
     },
+    find(filter = {}) {
+      return { toArray: async () => docs.filter((doc) => matches(doc, filter)) };
+    },
     async updateOne(filter, update) {
+      calls.push({ method: 'updateOne', filter, update });
       const doc = docs.find((d) => matches(d, filter));
       if (!doc) return { matchedCount: 0, modifiedCount: 0 };
       if (update.$set) Object.assign(doc, update.$set);
@@ -127,7 +133,9 @@ describe('reference-imports pipeline runImport (HPO)', () => {
     expect(fakeDb.collections.referenceDatasetReleases.docs).toHaveLength(0);
     expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(0);
     expect(fakeDb.collections.terminologyRelations.docs).toHaveLength(0);
-    expect(fakeDb.collections.referenceImportStaging.docs).toHaveLength(8);
+    // 8 concepts + 7 relations — staging now covers both (#551 AC 7:
+    // relations used to be held in memory only and never staged at all).
+    expect(fakeDb.collections.referenceImportStaging.docs).toHaveLength(15);
 
     const runDoc = fakeDb.collections.referenceImportRuns.docs[0];
     expect(runDoc.importMode).toBe('dry_run');
@@ -144,5 +152,89 @@ describe('reference-imports pipeline runImport (HPO)', () => {
     expect(fullResult.idempotent).toBe(false);
     expect(fakeDb.collections.referenceImportRuns.docs).toHaveLength(2);
     expect(fakeDb.collections.referenceDatasetReleases.docs).toHaveLength(1);
+  });
+
+  describe('checkpoint/resume (AC 7)', () => {
+    it('writes the checkpoint in batches as staging progresses, not once at the end', async () => {
+      const fakeDb = createFakeDb();
+
+      // HPO's bundled fixture stages 8 concepts + 7 relations = 15 items;
+      // batchSize 5 should produce 3 incremental checkpoint writes (5, 10,
+      // 15), not a single one after everything is already staged.
+      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor', batchSize: 5 });
+
+      const checkpointWrites = fakeDb.collections.referenceImportRuns.calls.filter(
+        (call) => call.method === 'updateOne' && call.update.$set && call.update.$set.checkpoint,
+      );
+      expect(checkpointWrites.length).toBeGreaterThanOrEqual(3);
+      expect(checkpointWrites.map((call) => call.update.$set.checkpoint.offset)).toEqual([5, 10, 15]);
+
+      // Final state is still a normal completed run with everything promoted.
+      const runDoc = fakeDb.collections.referenceImportRuns.docs[0];
+      expect(runDoc.runStatus).toBe('completed');
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(8);
+      expect(fakeDb.collections.terminologyRelations.docs).toHaveLength(7);
+    });
+
+    it('resumes a run left in "running" status from its checkpoint instead of restarting or re-staging', async () => {
+      // Learn the real staged shape from a normal, uninterrupted run first.
+      const referenceDb = createFakeDb();
+      await runImport({ db: referenceDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor', batchSize: 5 });
+      const referenceRun = referenceDb.collections.referenceImportRuns.docs[0];
+      const referenceStaged = referenceDb.collections.referenceImportStaging.docs;
+      expect(referenceStaged.length).toBe(15); // 8 concepts + 7 relations
+
+      // Build a resume scenario: a "running" run with a checkpoint at offset
+      // 5 (one batch in), and only that first batch actually staged — the
+      // rest was never written because the process was interrupted.
+      const resumeDb = createFakeDb();
+      const seededRunId = 'seeded-run-in-progress';
+      resumeDb.collections.referenceImportRuns.docs.push({
+        ...referenceRun,
+        referenceImportRunId: seededRunId,
+        runStatus: 'running',
+        completedAt: null,
+        checkpoint: { offset: 5 },
+      });
+      for (const doc of referenceStaged.slice(0, 5)) {
+        resumeDb.collections.referenceImportStaging.docs.push({ ...doc, referenceImportRunId: seededRunId });
+      }
+
+      const result = await runImport({ db: resumeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor', batchSize: 5 });
+
+      // Same run resumed, not a second run created for the same idempotency key.
+      expect(resumeDb.collections.referenceImportRuns.docs).toHaveLength(1);
+      expect(result.run.referenceImportRunId).toBe(seededRunId);
+      expect(result.run.runStatus).toBe('completed');
+
+      // The already-staged first batch was not re-inserted; the remaining
+      // 10 items (5 concepts + 5 relations) were staged to reach the same
+      // total the uninterrupted run reached.
+      expect(resumeDb.collections.referenceImportStaging.docs).toHaveLength(15);
+
+      // Resuming still reaches the exact same promoted, provable end state.
+      expect(resumeDb.collections.terminologyConcepts.docs).toHaveLength(8);
+      expect(resumeDb.collections.terminologyRelations.docs).toHaveLength(7);
+      expect(resumeDb.collections.referenceDatasetReleases.docs).toHaveLength(1);
+      expect(result.approved).toBe(true);
+
+      // Checkpoint writes during resume only cover the remaining items
+      // (offset continues from 5, doesn't restart at 0 or re-cover 0-5).
+      const checkpointOffsets = resumeDb.collections.referenceImportRuns.calls
+        .filter((call) => call.method === 'updateOne' && call.update.$set && call.update.$set.checkpoint)
+        .map((call) => call.update.$set.checkpoint.offset);
+      expect(checkpointOffsets).toEqual([10, 15]);
+    });
+
+    it('does not lose relations on resume — staging persists both concepts and relations (not just concepts)', async () => {
+      const fakeDb = createFakeDb();
+      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      const stagedRelations = fakeDb.collections.referenceImportStaging.docs.filter((d) => d.entityType === 'TerminologyRelation');
+      const stagedConcepts = fakeDb.collections.referenceImportStaging.docs.filter((d) => d.entityType === 'TerminologyConcept');
+      expect(stagedConcepts).toHaveLength(8);
+      expect(stagedRelations).toHaveLength(7);
+      expect(stagedRelations.every((d) => d.candidate.sourceCode && d.candidate.targetCode)).toBe(true);
+    });
   });
 });
