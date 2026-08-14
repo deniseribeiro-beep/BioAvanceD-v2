@@ -64,29 +64,71 @@ export interface SeededParticipant {
   consentTemplateId: string;
 }
 
-/**
- * Seeds a usable physical location + operational sensor — sample.service.js's
- * createSample requires locationID to resolve to a `locations` doc with an
- * associated, non-critical-status `sensors` doc (no equipmentID here, so
- * the equipment check is skipped). Neither collection is seeded by the test
- * stack by default; every happy-path specimen create needs one.
- */
-export async function seedOperationalLocation(): Promise<number> {
-  const db = await getDb();
-  const locationID = Date.now() % 1_000_000;
+export interface SeededStorageBox {
+  boxId: string;
+  positionCode: string;
+}
 
-  await db.collection('locations').insertOne({
-    locationID,
-    name: `RF004 e2e location ${locationID}`,
+/**
+ * Seeds a usable StorageBox -> RACK -> SHELF -> FREEZER hierarchy plus an
+ * operational equipment + sensor pair — sample.service.js's createSample
+ * (#462) requires boxId/positionCode to resolve through
+ * resolveStorageHierarchyForBox to a FREEZER whose containerID matches a
+ * non-blocked-status Equipment doc and a non-critical-status Sensor doc.
+ * Supersedes the pre-#462 `seedOperationalLocation` (legacy `locationID` ->
+ * `locations` doc), which sample.service.js no longer reads at all
+ * (`delete sampleData.locationID` happens unconditionally on create).
+ */
+export async function seedStorageBoxLocation(): Promise<SeededStorageBox> {
+  const db = await getDb();
+  const suffix = Date.now();
+  const containerID = `RF004-e2e-EQ-${suffix}`;
+  const positionCode = 'A1';
+
+  const freezerResult = await db.collection('storageContainers').insertOne({
+    name: `RF004 e2e freezer ${suffix}`,
+    containerType: 'FREEZER',
+    containerID,
+    parent_id: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  const shelfResult = await db.collection('storageContainers').insertOne({
+    name: `RF004 e2e shelf ${suffix}`,
+    containerType: 'SHELF',
+    parent_id: freezerResult.insertedId,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  const rackResult = await db.collection('storageContainers').insertOne({
+    name: `RF004 e2e rack ${suffix}`,
+    containerType: 'RACK',
+    parent_id: shelfResult.insertedId,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  const boxResult = await db.collection('storageBoxes').insertOne({
+    name: `RF004 e2e box ${suffix}`,
+    parent_id: rackResult.insertedId,
+    // #474: allocateSamplePosition's in-bounds check needs this — 'A1'
+    // (rowIndex 0, column 1) is within an 8x12 box.
+    dimension: { rows: 8, cols: 12 },
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  await db.collection('equipment').insertOne({
+    equipmentID: containerID,
+    status: 'operational',
     createdAt: new Date(),
   });
   await db.collection('sensors').insertOne({
-    locationID,
+    locationId: containerID,
     status: 'ok',
     createdAt: new Date(),
   });
 
-  return locationID;
+  return { boxId: boxResult.insertedId.toString(), positionCode };
 }
 
 /**
@@ -147,23 +189,29 @@ export async function createRealParticipant(
  * seed the referent directly, the same way seedOperationalLocation does
  * for locations/sensors.
  */
-export async function seedStudy(studyId: string): Promise<void> {
+// studyStatus defaults to 'active' (StudyModel.create's own default) —
+// pass an override to seed a study RF021 AC#5's enforcement path (#591,
+// #596) must reject linkage against.
+export async function seedStudy(studyId: string, options: { studyStatus?: string } = {}): Promise<void> {
   const db = await getDb();
   await db.collection('studies').insertOne({
     studyId,
     studyTitle: `RF004 e2e study ${studyId}`,
-    studyStatus: 'active',
+    studyStatus: options.studyStatus || 'active',
     ethicsApprovalId: [`CAAE-${studyId}`],
     createdAt: new Date(),
   });
 }
 
-export async function seedProtocol(protocolId: string): Promise<void> {
+// approvalStatus defaults to 'approved' (ProtocolModel.create's own
+// default) — pass an override to seed a protocol RF021 AC#5's enforcement
+// path (#591) must reject linkage against.
+export async function seedProtocol(protocolId: string, options: { approvalStatus?: string } = {}): Promise<void> {
   const db = await getDb();
   await db.collection('protocols').insertOne({
     protocolId,
     protocolName: `RF004 e2e protocol ${protocolId}`,
-    approvalStatus: 'approved',
+    approvalStatus: options.approvalStatus || 'approved',
     effectivePeriod: { start: new Date('2026-01-01'), end: null },
     createdAt: new Date(),
   });

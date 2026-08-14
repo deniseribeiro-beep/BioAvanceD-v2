@@ -443,7 +443,10 @@ describe('MongoStorageRepository', () => {
       // #544: status is a retired legacy field (specimenStatus is the sole
       // source of truth since #408) — allocation must not write it.
       expect(setPayload.status).toBeUndefined();
-      expect(setPayload['storageLocation.position']).toBe('A1');
+      // storageLocation defaults to a literal `null` on create (Sample.js) —
+      // a dotted-path $set into it is rejected by real MongoDB, so the first
+      // allocation must replace the whole object, not set nested paths.
+      expect(setPayload.storageLocation).toEqual({ boxId: expect.anything(), position: 'A1' });
     });
 
     // Issue #402: opening a position must also open a StorageAssignment
@@ -579,7 +582,10 @@ describe('MongoStorageRepository', () => {
       expect(position).toBe('A2');
       expect(storageBoxes.updateOne.mock.calls[0][0][`occupancyGrid.A2`]).toEqual({ $exists: false });
       const sampleSet = samples.updateOne.mock.calls[0][1].$set;
-      expect(sampleSet['storageLocation.position']).toBe('A2');
+      // storageLocation defaults to a literal `null` on create (Sample.js) —
+      // a dotted-path $set into it is rejected by real MongoDB, so the first
+      // allocation must replace the whole object, not set nested paths.
+      expect(sampleSet.storageLocation).toEqual({ boxId: expect.anything(), position: 'A2' });
       // #544: status is a retired legacy field (specimenStatus is the sole
       // source of truth since #408) — auto-assign must not write it.
       expect(sampleSet.status).toBeUndefined();

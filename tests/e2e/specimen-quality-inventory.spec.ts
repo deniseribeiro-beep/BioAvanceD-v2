@@ -3,7 +3,7 @@ import { realLogin } from './helpers/realAuth';
 import {
   createRealParticipant,
   seedActiveConsent,
-  seedOperationalLocation,
+  seedStorageBoxLocation,
   seedStudy,
   seedProtocol,
   seedCollectionEntity,
@@ -18,9 +18,12 @@ const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 
 test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
-// A well-formed sample payload minus participantId — reused so each test
-// only varies the one field it's proving, per validateCreateSamplePayload
-// (sample.routes.js) / specimen.constants.js's MIABIS-controlled vocab.
+// A well-formed sample payload minus participantId/boxId/positionCode —
+// reused so each test only varies the one field it's proving, per
+// validateCreateSamplePayload (sample.routes.js) / specimen.constants.js's
+// MIABIS-controlled vocab. boxId/positionCode (#462) are seeded separately
+// per test via seedStorageBoxLocation(), not baked in here, since they're
+// real ObjectId-backed documents rather than a static literal.
 function validSampleFields() {
   return {
     sampleType: 'PLASMA',
@@ -29,7 +32,6 @@ function validSampleFields() {
     quantity: 5,
     quality: 'GOOD',
     linkedProject: 'RF004 e2e fixture project',
-    locationID: 1,
     registeredAt: new Date().toISOString(),
   };
 }
@@ -42,12 +44,19 @@ test.describe('Specimen registration (RF004) — real backend, negative paths', 
 
   test('rejects specimen creation when participantId does not exist (criterion 1)', async ({ request }) => {
     const admin = await realLogin(request);
+    // validateCreateSamplePayload (#462) batch-validates every required
+    // field together, boxId/positionCode included — without a valid pair
+    // here the route rejects on that before ever reaching the participantId
+    // lookup this criterion is proving, masking the intended 404 with 422.
+    const { boxId, positionCode } = await seedStorageBoxLocation();
 
     const response = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         participantId: '99999999', // well-formed (8 digits), never seeded
         ...validSampleFields(),
+        boxId,
+        positionCode,
       },
     });
 
@@ -128,17 +137,22 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
   test('generates a unique specimenId on each successful create (criterion 2)', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const locationID = await seedOperationalLocation();
 
-    const create = () =>
-      request.post(`${apiBaseURL}/api/samples`, {
+    // Each call seeds its own box/position — the two creates would otherwise
+    // collide on the same occupancyGrid slot (#474) and the second legitimately
+    // 409s, which isn't what this criterion (specimenId uniqueness) is testing.
+    const create = async () => {
+      const { boxId, positionCode } = await seedStorageBoxLocation();
+      return request.post(`${apiBaseURL}/api/samples`, {
         headers: { Authorization: `Bearer ${admin.token}` },
         data: {
           participantId: participant.participantId,
           ...validSampleFields(),
-          locationID,
+          boxId,
+          positionCode,
         },
       });
+    };
 
     // 201 or 202 (topology sync fell back to quarantine) are both a
     // successful create — only the topology sync's own success is
@@ -171,7 +185,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
   test('records SPREC variables on a successful create (criterion 5)', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const locationID = await seedOperationalLocation();
+    const { boxId, positionCode } = await seedStorageBoxLocation();
 
     const sprec = {
       preCentrifugation: 'A',
@@ -187,7 +201,8 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
-        locationID,
+        boxId,
+        positionCode,
         sprec,
       },
     });
@@ -208,7 +223,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
   }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const locationID = await seedOperationalLocation();
+    const { boxId, positionCode } = await seedStorageBoxLocation();
     // Deliberately not calling seedActiveConsent — a freshly-created
     // participant has none, per patient.service.js (consent is a separate
     // `consents` collection, not set at patient creation).
@@ -218,7 +233,8 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
-        locationID,
+        boxId,
+        positionCode,
       },
     });
     expect([201, 202]).toContain(create.status());
@@ -259,7 +275,7 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
   // once supplied each must resolve to a real, already-cadastrado document
   // — not arbitrary client-supplied text. No CRUD API exists yet for any of
   // the three, so the referent is seeded directly against Mongo (same
-  // pattern as seedOperationalLocation).
+  // pattern as seedStorageBoxLocation).
   test.afterAll(async () => {
     await closeSeedDb();
   });
@@ -267,14 +283,15 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
   test('rejects a create when studyId does not resolve to a real Study', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const locationID = await seedOperationalLocation();
+    const { boxId, positionCode } = await seedStorageBoxLocation();
 
     const response = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
-        locationID,
+        boxId,
+        positionCode,
         studyId: 'does-not-exist',
       },
     });
@@ -287,14 +304,15 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
   test('rejects a create when protocolId does not resolve to a real Protocol', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const locationID = await seedOperationalLocation();
+    const { boxId, positionCode } = await seedStorageBoxLocation();
 
     const response = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
-        locationID,
+        boxId,
+        positionCode,
         protocolId: 'does-not-exist',
       },
     });
@@ -307,14 +325,15 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
   test('rejects a create when collectionId does not resolve to a real Collection', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const locationID = await seedOperationalLocation();
+    const { boxId, positionCode } = await seedStorageBoxLocation();
 
     const response = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
-        locationID,
+        boxId,
+        positionCode,
         collectionId: 'does-not-exist',
       },
     });
@@ -327,7 +346,7 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
   test('accepts and persists a create whose study/protocol/collection references all resolve', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const locationID = await seedOperationalLocation();
+    const { boxId, positionCode } = await seedStorageBoxLocation();
 
     const studyId = `study-${Date.now()}`;
     const protocolId = `protocol-${Date.now()}`;
@@ -341,7 +360,8 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
-        locationID,
+        boxId,
+        positionCode,
         studyId,
         protocolId,
         collectionId,
@@ -359,6 +379,84 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     expect(persisted.studyId).toBe(studyId);
     expect(persisted.protocolId).toBe(protocolId);
     expect(persisted.collectionId).toBe(collectionId);
+  });
+});
+
+test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible protocol and study rejection (#591, #592)', () => {
+  // Existence alone isn't enough — sample.service.js also rejects when the
+  // referenced Study/Protocol resolves but isn't active/approved (#591).
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  test('rejects a create when the referenced study is not active', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const studyId = `study-inactive-${Date.now()}`;
+    await seedStudy(studyId, { studyStatus: 'closed-to-accrual' });
+
+    const response = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        boxId,
+        positionCode,
+        studyId,
+      },
+    });
+
+    expect(response.status()).toBe(422);
+    const body = await response.json();
+    expect(body.message).toMatch(/não está ativo/);
+  });
+
+  test('rejects a create when the referenced protocol is not approved', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const protocolId = `protocol-draft-${Date.now()}`;
+    await seedProtocol(protocolId, { approvalStatus: 'draft' });
+
+    const response = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        boxId,
+        positionCode,
+        protocolId,
+      },
+    });
+
+    expect(response.status()).toBe(422);
+    const body = await response.json();
+    expect(body.message).toMatch(/não está aprovado/);
+  });
+
+  test('accepts a create when the referenced study/protocol are active/approved', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const studyId = `study-active-${Date.now()}`;
+    const protocolId = `protocol-approved-${Date.now()}`;
+    await seedStudy(studyId, { studyStatus: 'active' });
+    await seedProtocol(protocolId, { approvalStatus: 'approved' });
+
+    const response = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        boxId,
+        positionCode,
+        studyId,
+        protocolId,
+      },
+    });
+
+    expect([201, 202]).toContain(response.status());
   });
 });
 
@@ -381,7 +479,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
   async function seedWithdrawableSample(request: import('@playwright/test').APIRequestContext, admin: { token: string }) {
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
     await seedActiveConsent(participant.participantId);
-    const locationID = await seedOperationalLocation();
+    const { boxId, positionCode } = await seedStorageBoxLocation();
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -389,7 +487,8 @@ test.describe('Chain of custody (RF006) — real backend', () => {
         participantId: participant.participantId,
         ...validSampleFields(),
         quantity: 10,
-        locationID,
+        boxId,
+        positionCode,
       },
     });
     expect([201, 202]).toContain(create.status());
@@ -498,7 +597,9 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     expect(withdraw.status()).toBe(400);
     const body = await withdraw.json();
     expect(body.message).toMatch(/não está disponível para retirada/);
-    expect(body.message).toMatch(/DESTROYED/);
+    // specimenStatus (#408/#540) is lowercase-canonical ('destroyed'), not
+    // the uppercase legacy enum this assertion was written against.
+    expect(body.message).toMatch(/destroyed/);
   });
 
   test('custody events cannot be altered or deleted — no route accepts a mutation (criterion 5)', async ({ request }) => {
@@ -562,7 +663,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
   async function seedQuarantinableSample(request: import('@playwright/test').APIRequestContext, admin: { token: string }) {
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
     await seedActiveConsent(participant.participantId);
-    const locationID = await seedOperationalLocation();
+    const { boxId, positionCode } = await seedStorageBoxLocation();
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -570,7 +671,8 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
         participantId: participant.participantId,
         ...validSampleFields(),
         quantity: 10,
-        locationID,
+        boxId,
+        positionCode,
       },
     });
     expect([201, 202]).toContain(create.status());
@@ -607,7 +709,9 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     expect(withdraw.status()).toBe(400);
     const body = await withdraw.json();
     expect(body.message).toMatch(/não está disponível para retirada/);
-    expect(body.message).toMatch(/QUARANTINED/);
+    // specimenStatus (#408/#540) is lowercase-canonical ('quarantined'), not
+    // the uppercase legacy enum this assertion was written against.
+    expect(body.message).toMatch(/quarantined/);
   });
 
   test('release requires an authorized actor and is audited with an evidence trail (criteria 7, 8)', async ({ request }) => {

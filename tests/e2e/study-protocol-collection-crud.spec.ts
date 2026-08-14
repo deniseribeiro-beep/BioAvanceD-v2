@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
+import { createRealParticipant, seedStudy, closeSeedDb } from './helpers/seedParticipant';
 
 // Real backend only — see specimen-quality-inventory.spec.ts for the same
 // skip rationale. Run via `npm run test:e2e:docker` against the compose
@@ -156,5 +157,147 @@ test.describe('organizations create+list (#325)', () => {
     });
 
     expect(response.status()).toBe(400);
+  });
+});
+
+// #578 (RF021, narrowed) -> #587 rabbit-hole tracker -> #590 (split into
+// #593/#594) -> #596. Study/consent/participant linkage (#593/#594) already
+// has unit coverage but no real-backend proof; this covers both the
+// existence-must-resolve requirement (#593/#594's own scope) and the
+// inactive-study rejection (#596's, mirroring #591's Sample-side proof in
+// specimen-quality-inventory.spec.ts).
+test.describe('Consent/patient study linkage (RF021 AC#4/AC#5) — #593, #594, #596', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  test('rejects linking a consent to a study that does not exist', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const response = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        consentTemplateId: participant.consentTemplateId,
+        responses: {},
+        studyId: 'does-not-exist',
+        signatureName: 'e2e signer',
+        signatureImageBase64: Buffer.from('e2e-signature').toString('base64'),
+      },
+    });
+
+    // consent.controller.js's catch: res.status(error.statusCode || 400) —
+    // the not-found path throws a plain Error with no statusCode set.
+    expect(response.status()).toBe(400);
+    const body = await response.json();
+    expect(JSON.stringify(body)).toMatch(/studyId/);
+  });
+
+  test('rejects linking a consent to a study that is not active (#596)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const studyId = `study-consent-inactive-${Date.now()}`;
+    await seedStudy(studyId, { studyStatus: 'withdrawn' });
+
+    const response = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        consentTemplateId: participant.consentTemplateId,
+        responses: {},
+        studyId,
+        signatureName: 'e2e signer',
+        signatureImageBase64: Buffer.from('e2e-signature').toString('base64'),
+      },
+    });
+
+    expect(response.status()).toBe(422);
+    const body = await response.json();
+    expect(JSON.stringify(body)).toMatch(/não está ativo/);
+  });
+
+  test('links a consent to a study that resolves and is active', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const studyId = `study-consent-active-${Date.now()}`;
+    await seedStudy(studyId, { studyStatus: 'active' });
+
+    const response = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        consentTemplateId: participant.consentTemplateId,
+        responses: {},
+        studyId,
+        signatureName: 'e2e signer',
+        signatureImageBase64: Buffer.from('e2e-signature').toString('base64'),
+      },
+    });
+
+    expect(response.status()).toBe(201);
+    const body = await response.json();
+    expect(body.data.studyId).toBe(studyId);
+  });
+
+  test('rejects creating a patient linked to a study that is not active (#596)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const studyId = `study-patient-inactive-${Date.now()}`;
+    await seedStudy(studyId, { studyStatus: 'closed-to-accrual' });
+
+    // Mirrors createRealParticipant's own consent-template seed step, just
+    // inlined so this test can also pass studyId on the create call itself.
+    const { consentTemplateId } = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const response = await request.post(`${apiBaseURL}/api/patients`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: 'placeholder',
+        patientName: `e2e patient ${Date.now()}`,
+        birthDate: '1990-01-01',
+        sex: 'F',
+        consentTemplateId,
+        studyId,
+      },
+    });
+
+    expect(response.status()).toBe(422);
+    const body = await response.json();
+    expect(body.message || body.error).toMatch(/não está ativo/);
+  });
+
+  test('links a patient to a study that resolves and is active', async ({ request }) => {
+    const admin = await realLogin(request);
+    const studyId = `study-patient-active-${Date.now()}`;
+    await seedStudy(studyId, { studyStatus: 'active' });
+
+    const { consentTemplateId } = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const response = await request.post(`${apiBaseURL}/api/patients`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: 'placeholder',
+        patientName: `e2e patient ${Date.now()}`,
+        birthDate: '1990-01-01',
+        sex: 'F',
+        consentTemplateId,
+        studyId,
+      },
+    });
+
+    expect(response.status()).toBe(201);
+    const body = await response.json();
+    // The create response deliberately echoes back only participantId (LGPD
+    // — paciente.controller.js#cadastrar) — fetch the persisted record to
+    // confirm studyId actually landed.
+    const participantId = body.data.participantId;
+    expect(participantId).toBeTruthy();
+
+    const get = await request.get(`${apiBaseURL}/api/patients/${participantId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(get.status()).toBe(200);
+    const persisted = await get.json();
+    expect(persisted.data.studyId).toBe(studyId);
   });
 });
