@@ -306,7 +306,7 @@ describe('reports.routes.js gaps', () => {
   // resolved participantIds must flow into the patients query's $or leg.
   it('paciente: keyword search resolves matching participantIds via ParticipantIdentity', async () => {
     const { db, capturedQueries } = buildCollectionDb({
-      patients: [{ patientID: 'P1', participantId: 'P1' }],
+      patients: [{ participantId: 'P1' }],
       participantIdentities: [{ participantId: 'P1', patientName: 'Ana' }],
     });
     const testApp = appWithDb(db);
@@ -315,9 +315,12 @@ describe('reports.routes.js gaps', () => {
 
     expect(response.status).toBe(200);
     expect(capturedQueries.participantIdentities).toEqual({ patientName: { $regex: 'Ana', $options: 'i' } });
+    // #573: the patients-collection $or leg queries participantId (the
+    // canonical field — Patient documents never had `patientID`), not a
+    // second, non-existent field.
     expect(capturedQueries.patients.$and).toEqual(
       expect.arrayContaining([
-        { $or: [{ participantId: { $in: ['P1'] } }, { patientID: { $regex: 'Ana', $options: 'i' } }] },
+        { $or: [{ participantId: { $in: ['P1'] } }, { participantId: { $regex: 'Ana', $options: 'i' } }] },
       ])
     );
   });
@@ -470,10 +473,10 @@ describe('reports.routes.js gaps', () => {
 
   it('samplesbypatient: sem orphaCode, com keyword e matchingPatientIds não vazio', async () => {
     const { db } = buildCollectionDb({
-      patients: [{ patientID: 'P1', patientName: 'Ana' }],
+      patients: [{ participantId: 'P1', patientName: 'Ana' }],
       samples: [
-        { patientID: 'P1', sampleID: 'S1', participantId: 'P1' },
-        { patientID: '', sampleID: 'S2', participantId: 'P2' },
+        { participantId: 'P1', sampleID: 'S1' },
+        { participantId: 'P2', sampleID: 'S2' },
       ],
     });
     const testApp = appWithDb(db);
@@ -484,14 +487,14 @@ describe('reports.routes.js gaps', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.total).toBe(1);
-    const p1 = response.body.data.patients.find((p) => p.patientID === 'P1');
+    const p1 = response.body.data.patients.find((p) => p.participantId === 'P1');
     expect(p1.sampleCount).toBe(1);
   });
 
   it('paciente: com orphaCode (sem keyword) e matchingPatientIds não vazio', async () => {
     const { db } = buildCollectionDb({
-      patients: [{ patientID: 'P1', patientName: 'Ana' }],
-      samples: [{ patientID: 'P1', sampleID: 'S1', participantId: 'P1' }],
+      patients: [{ participantId: 'P1', patientName: 'Ana' }],
+      samples: [{ participantId: 'P1', sampleID: 'S1' }],
     });
     const testApp = appWithDb(db);
 
@@ -516,12 +519,12 @@ describe('reports.routes.js gaps', () => {
     expect(response.body.data.analysis[0].hasResults).toBe(true);
   });
 
-  it('samplesbypatient: amostra com patientID vazio não é agrupada', async () => {
+  it('samplesbypatient: amostra com participantId vazio não é agrupada', async () => {
     const { db } = buildCollectionDb({
-      patients: [{ patientID: 'P1', patientName: 'Ana' }],
+      patients: [{ participantId: 'P1', patientName: 'Ana' }],
       samples: [
-        { patientID: 'P1', sampleID: 'S1' },
-        { patientID: '', sampleID: 'S2' },
+        { participantId: 'P1', sampleID: 'S1' },
+        { participantId: '', sampleID: 'S2' },
       ],
     });
     const testApp = appWithDb(db);
@@ -531,7 +534,7 @@ describe('reports.routes.js gaps', () => {
       .send({ filters: {} });
 
     expect(response.status).toBe(200);
-    const p1 = response.body.data.patients.find((p) => p.patientID === 'P1');
+    const p1 = response.body.data.patients.find((p) => p.participantId === 'P1');
     expect(p1.sampleCount).toBe(1);
   });
 

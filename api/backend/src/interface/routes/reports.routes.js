@@ -288,7 +288,7 @@ async function buildPreviewData(db, rawType, filters = {}) {
       patientQueryParts.push({
         $or: [
         { participantId: { $in: matchingParticipantIds } },
-        { patientID: { $regex: String(filters.keyword), $options: 'i' } },
+        { participantId: { $regex: String(filters.keyword), $options: 'i' } },
         ],
       });
     }
@@ -307,24 +307,24 @@ async function buildPreviewData(db, rawType, filters = {}) {
     }
 
     if (matchingPatientIds.length > 0) {
-      patientQueryParts.push({ patientID: { $in: matchingPatientIds } });
+      patientQueryParts.push({ participantId: { $in: matchingPatientIds } });
     }
 
     const patientQuery = patientQueryParts.length > 0 ? { $and: patientQueryParts } : {};
     const patients = await patientsCollection.find(patientQuery).limit(20).toArray();
-    const patientIds = patients.map((patient) => patient.patientID).filter(Boolean);
+    const patientIds = patients.map((patient) => patient.participantId).filter(Boolean);
     const sampleFilter = { ...(Object.keys(sampleQuery).length > 0 ? sampleQuery : {}) };
     const samples = patientIds.length
       ? await samplesCollection.find({
           $and: [
-            { patientID: { $in: patientIds } },
+            { participantId: { $in: patientIds } },
             ...(Object.keys(sampleFilter).length > 0 ? [sampleFilter] : []),
           ],
         }).toArray()
       : [];
 
     const groupedSamples = samples.reduce((acc, sample) => {
-      const key = String(sample.patientID || '');
+      const key = String(sample.participantId || '');
       if (!key) {
         return acc;
       }
@@ -336,7 +336,7 @@ async function buildPreviewData(db, rawType, filters = {}) {
     }, {});
 
     const enrichedPatients = patients.map((patient) => {
-      const key = String(patient.patientID || '');
+      const key = String(patient.participantId || '');
       const patientSamples = groupedSamples[key] || [];
       const limitedSamples = patientSamples.slice(0, 10);
       return {
@@ -366,7 +366,7 @@ async function buildPreviewData(db, rawType, filters = {}) {
       patientQueryParts.push({
         $or: [
           { participantId: { $in: matchingParticipantIds } },
-          { patientID: { $regex: String(filters.keyword), $options: 'i' } },
+          { participantId: { $regex: String(filters.keyword), $options: 'i' } },
         ],
       });
     }
@@ -385,7 +385,7 @@ async function buildPreviewData(db, rawType, filters = {}) {
     }
 
     if (matchingPatientIds.length > 0) {
-      patientQueryParts.push({ patientID: { $in: matchingPatientIds } });
+      patientQueryParts.push({ participantId: { $in: matchingPatientIds } });
     }
 
     const query = patientQueryParts.length > 0 ? { $and: patientQueryParts } : {};

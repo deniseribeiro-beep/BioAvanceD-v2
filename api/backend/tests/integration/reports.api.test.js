@@ -327,13 +327,13 @@ describe('Reports API integration', () => {
     it('samplesbypatient: agrupa amostras por paciente e aplica filtro de keyword/orphaCode', async () => {
       const { db } = buildCollectionDb({
         patients: [
-          { patientID: 'P1', patientName: 'Ana' },
-          { patientID: 'P2', patientName: 'Bruno' },
+          { participantId: 'P1', patientName: 'Ana' },
+          { participantId: 'P2', patientName: 'Bruno' },
         ],
         samples: [
-          { patientID: 'P1', sampleID: 'S1', clinical_data: { orphaCode: '558' } },
-          { patientID: 'P1', sampleID: 'S2', clinical_data: { orphaCode: '558' } },
-          { patientID: 'P2', sampleID: 'S3', clinical_data: { orphaCode: '558' } },
+          { participantId: 'P1', sampleID: 'S1', clinical_data: { orphaCode: '558' } },
+          { participantId: 'P1', sampleID: 'S2', clinical_data: { orphaCode: '558' } },
+          { participantId: 'P2', sampleID: 'S3', clinical_data: { orphaCode: '558' } },
         ],
       });
 
@@ -344,19 +344,19 @@ describe('Reports API integration', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.data.total).toBe(2);
-      const p1 = response.body.data.patients.find((p) => p.patientID === 'P1');
+      const p1 = response.body.data.patients.find((p) => p.participantId === 'P1');
       expect(p1.sampleCount).toBe(2);
       expect(p1.samples).toHaveLength(2);
     });
 
-    it('samplesbypatient: usa fallback vazio para paciente sem patientID e sem amostras correspondentes', async () => {
+    it('samplesbypatient: usa fallback vazio para paciente sem participantId e sem amostras correspondentes', async () => {
       const { db } = buildCollectionDb({
         patients: [
           { patientName: 'Sem ID' },
-          { patientID: 'P9', patientName: 'Sem Amostras' },
+          { participantId: 'P9', patientName: 'Sem Amostras' },
         ],
         samples: [
-          { patientID: 'P1', sampleID: 'S1' },
+          { participantId: 'P1', sampleID: 'S1' },
         ],
       });
 
@@ -370,7 +370,7 @@ describe('Reports API integration', () => {
       const semId = response.body.data.patients.find((p) => p.patientName === 'Sem ID');
       expect(semId.sampleCount).toBe(0);
       expect(semId.samples).toEqual([]);
-      const semAmostras = response.body.data.patients.find((p) => p.patientID === 'P9');
+      const semAmostras = response.body.data.patients.find((p) => p.participantId === 'P9');
       expect(semAmostras.sampleCount).toBe(0);
       expect(semAmostras.samples).toEqual([]);
     });
