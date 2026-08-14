@@ -110,5 +110,13 @@ Carried forward from prior handoffs, still relevant once `#575` wraps:
   not touched this session, carried forward again.
 - **Skills-pack `#295`** (new this session) — the Stop-hook-fires-mid-task
   bug described above.
+- **Skills-pack [`#296`](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/296)**
+  (new this session) — `ship-integration-branch`'s BioAvanceD-v2 overlay
+  documents a bare `npx vitest run` native pre-flight command that
+  `full-suite-guard.cjs` now blocks; the working 3-directory
+  `--coverage` form lives only in `unit-test-loop`'s overlay, not
+  cross-referenced from the ship-gate step. Use the working form
+  directly (already updated in "Next steps" step 2 above) until the
+  overlay itself is fixed.
 - pack-repo `#280`/`#281`/`#283`/`#248`/`#270`/`#286` — unchanged, not
   checked this session.
