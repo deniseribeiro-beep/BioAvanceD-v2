@@ -342,6 +342,22 @@ describe('reports.routes.js gaps', () => {
     expect(response.body.data.analysis.find((item) => item.barcode === 'B2').hasResults).toBe(false);
   });
 
+  // #595: patientID isn't a real field on Sample documents (Sample.js uses
+  // participantId) — the preview row must resolve from participantId, not
+  // always output null.
+  it('sampleanalysis: linha de análise resolve patientID a partir de participantId', async () => {
+    const { db } = buildCollectionDb({
+      samples: [{ sampleID: 'S1', barcode: 'B1', participantId: 'P1' }],
+      results: [],
+    });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp).post('/api/reports/sampleanalysis/preview').send({ filters: {} });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.analysis.find((item) => item.sampleID === 'S1').patientID).toBe('P1');
+  });
+
   it('temperatura: sem filtros de data nem alerta crítico usa query vazia e modo report', async () => {
     const { db, capturedQueries } = buildCollectionDb({
       temperature: [{ temperatureValue: '5', readingStatus: 'normal' }],

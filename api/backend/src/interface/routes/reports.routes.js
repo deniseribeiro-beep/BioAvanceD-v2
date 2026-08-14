@@ -423,7 +423,7 @@ async function buildPreviewData(db, rawType, filters = {}) {
         sampleID: sample.sampleID || sample._id,
         barcode: sample.barcode || null,
         sampleType: sample.sampleType || null,
-        patientID: sample.patientID || null,
+        patientID: sample.participantId || null,
         // #539: derives from the canonical specimenStatus (dict-02
         // ELM-0123) instead of the legacy currentStatus/status fields
         // canonical-data-contract-v1.md bans.
