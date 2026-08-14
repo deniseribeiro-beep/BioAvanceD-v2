@@ -60,11 +60,15 @@ skipping the larger/owner-gated ones (`#585`, `#579`, `#570` — see
 Nothing explicitly queued by the user beyond "pick a group" (done).
 Carried-forward candidates, unchanged by this session except where noted:
 
-- **`#599`** (new this session) — needs Denise's call on whether
-  `ci-pipeline.yml` should also trigger on
-  `feature/docker-e2e-backend-integration`, so our own branch gets CI
-  signal before a change ever reaches `main`. Not code-resolvable
-  without her input.
+- **`#599`** (new this session) — **not actually an open owner-call**;
+  corrected after the user pointed at the repo's GitHub milestones.
+  The "CI Integration for E2E Tests" milestone already records Dennis's
+  2026-07-27 sequencing: unit tests → Playwright e2e (milestone, still
+  open) → Docker hardening → CI wiring. `#599`'s finding (CI trigger is
+  `main`-only, so `feature/docker-e2e-backend-integration` gets no CI
+  signal) is real and stays open/tracked under that milestone alongside
+  `#284`, but isn't actionable until the Playwright e2e milestone
+  closes — don't pick it up before then.
 - **`test/human-showcase-video`** — still awaiting Dennis's go to
   show/merge (unrelated to this session's work, just still open).
 - **`#336`** — still needs Dennis's call (fix vs. retire the legacy
