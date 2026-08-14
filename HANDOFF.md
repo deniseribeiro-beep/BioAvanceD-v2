@@ -1,77 +1,68 @@
 # HANDOFF
 
-**Written:** 2026-08-14, end of `#588` iteration on
+**Written:** 2026-08-14, end of `#589` iteration on
 `feature/docker-e2e-backend-integration`. **Still inside a rabbit hole —
 not a session end.**
 
 ## Rabbit-hole state: STILL INSIDE
 
 Dogfooding the new `rabbit-hole` skill for the first time. Seed `#578`
-(RF021, too big for one sitting — ~15-19 points against the skill's
-~10-point budget, confirmed with Dennis via `AskUserQuestion`).
+(RF021, too big for one sitting — confirmed with Dennis via
+`AskUserQuestion` up front).
 
 - **Tracker:** [`#587`](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/587)
   — split via `divide-and-conquer` into `#588`-`#592`.
-- **Budget spent so far this sitting: ~2-3 points** (`#588` closed,
-  medium-sized).
-- **Queue remaining:** `#589` (protocol-versioning design decision),
-  `#590` (study↔consent↔participant linkage) — either order, both
-  independent — then `#591` (inactive-protocol enforcement, depends on
-  `#590` for its consent-side portion), then `#592` (e2e coverage,
-  depends on `#588`✓/`#590`/`#591`).
+- **Budget spent so far this sitting: ~3-4 points** (`#588` medium,
+  closed; `#589` small/decision-only, closed).
+- **Queue remaining:** `#590` (study↔consent↔participant linkage,
+  large — the next natural pick), then `#591` (inactive-protocol
+  enforcement, depends on `#590` for its consent-side portion), then
+  `#592` (e2e coverage, depends on `#588`✓/`#590`/`#591`).
 
-### `#588` — CLOSED this iteration
+### `#588` and `#589` — CLOSED this sitting
 
-Routed to `build-loop`. Ground-truth check against
-`dict-02_DICIONARIO.md` found the issue's own title/premise wrong —
-CAAE isn't a Protocol field, it's `Study.ethicsApprovalId` (ELM-0060);
-the validity-period field is `Protocol.effectivePeriod` (ELM-0072).
-Corrected via a comment on `#588` before implementing (don't re-litigate
-this if `#578`'s original wording resurfaces elsewhere in the tracker).
-
-Implemented: `StudyModel.ethicsApprovalId` (required, non-empty string
-array) and `ProtocolModel.effectivePeriod` (required `{start, end}`,
-`start` required valid date, `end` optional/open-ended, must not precede
-`start`). Both go through the shared `createMasterDataRouter` factory
-(`api/backend/src/interface/routes/master-data.routes.js`) — no route
-code needed changing, only the models. Unit coverage: 17/17 new tests in
-`api/backend/tests/unit/models/studyProtocolModels.test.js` (dedicated
-file — the existing `masterDataModels.test.js` table-driven pattern
-doesn't fit Study/Protocol's shape). Updated
-`tests/e2e/study-protocol-collection-crud.spec.ts` and
-`tests/e2e/helpers/seedParticipant.ts`'s `seedStudy`/`seedProtocol` so
-the new required fields don't break existing e2e fixtures (not run live
-this iteration — no Docker; native unit coverage was the proof bar per
-the build-loop overlay for a backend-internal model slice, not one of
-the milestone's own e2e specs).
-
-Merged: `6d484bed` / merge `28f93db8` on
-`feature/docker-e2e-backend-integration`. Closed with the merge hash
-noted on the issue. Branch `test/588-protocol-caae-validity-period`
-deleted locally and remotely after merge.
+- **`#588`**: Study.ethicsApprovalId + Protocol.effectivePeriod, built
+  and unit-tested (17/17). Field placement corrected against
+  dict-02_DICIONARIO.md before implementing — see prior handoff entries
+  or the issue's own comment thread for the full reasoning. Merged
+  `6d484bed` / `28f93db8`.
+- **`#589`**: design decision, not a build. Checked whether Protocol
+  needs a real version-history mechanism (like ConsentTemplate's
+  `versionGroupId`/`previousConsentTemplateId`, P1X-0365/P1X-0366) or
+  should stay a plain `protocolVersion` string (ELM-0071). **Decided:
+  plain string is correct** — the dictionary defines no supersession
+  pair for Protocol specifically, unlike ConsentTemplate, and ELM-0071's
+  own definition ("Versão formal controlada", matching FHIR
+  `PlanDefinition.version`) is a single-value field by design. No code
+  behavior changed — only a comment recorded in `Protocol.js` explaining
+  the decision and dictionary evidence, so a future session doesn't
+  reintroduce a supersession pair on the ConsentTemplate precedent
+  without a matching dictionary entry. Merged `24988100` / `e7e6a50c`.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed at `28f93db8`,
-  working tree clean. Carries this session's rabbit-hole-skill-install
-  commit (`f18dfca9`) and `#588`'s merge on top of the prior handoff's
-  `d42fa72b`. **Still not merged to `main` — no PR opened.**
-- Docker/CI gate hasn't run this session (native-only, per build-loop's
-  backend-internal-slice proof bar) — still owed at ship time per
-  `ship-integration-branch`, same standing note as every prior handoff.
-- Issues this session (cumulative): `#587` (tracker), `#588` (closed),
-  `#589`-`#592` (open, queued), `dyeallpies-skills-pack#308` (Stop-hook
-  checkpoint gap for backgrounded `Agent`-tool waits).
+- On `feature/docker-e2e-backend-integration`, pushed at `e7e6a50c`,
+  working tree clean. Carries this sitting's rabbit-hole-skill-install
+  commit, `#588`'s merge, and `#589`'s merge on top of the prior
+  handoff's `d42fa72b`. **Still not merged to `main` — no PR opened.**
+- Docker/CI gate hasn't run this sitting (both iterations were
+  native-provable per their own bar) — still owed at ship time.
+- Issues this sitting (cumulative): `#587` (tracker, open), `#588`
+  (closed), `#589` (closed), `#590`-`#592` (open, queued),
+  `dyeallpies-skills-pack#308` (Stop-hook checkpoint gap for
+  backgrounded `Agent`-tool waits — filed, not yet fixed).
 
 ## Recommended next steps
 
-**Resume inside the rabbit hole** if continuing this sitting — pick
-`#589` or `#590` next (both independent, no ordering preference), route
-each through `work-issue`'s classification same as `#588` was. Re-derive
-tracker `#587`'s membership before popping (a mid-run split could add a
-member). Budget allows roughly one more medium item or a small one
-before the ~10-point sitting guidance is reached — Dennis should confirm
-whether to continue this sitting or pick it up later.
+**Resume inside the rabbit hole** if continuing this sitting — `#590`
+(study↔consent↔participant linkage) is next: add `studyId` to
+`ConsentTemplate`/consent creation and to `Patient`/`ParticipantIdentity`
+linkage, matching the pattern `Sample.js` already uses for
+`studyId`/`protocolId`. Sized "large" (~5 points) in the original
+tracker estimate — likely the point at which this sitting's ~10-point
+budget runs out; check with Dennis before continuing past it rather than
+assuming. Re-derive tracker `#587`'s membership before popping (a
+mid-run split could add a member).
 
 Carried forward from prior handoffs, still relevant, not touched this
 session:
