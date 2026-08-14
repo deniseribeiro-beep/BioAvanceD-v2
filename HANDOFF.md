@@ -118,5 +118,14 @@ Carried forward from prior handoffs, still relevant once `#575` wraps:
   cross-referenced from the ship-gate step. Use the working form
   directly (already updated in "Next steps" step 2 above) until the
   overlay itself is fixed.
+- **Skills-pack [`#297`](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/297)**
+  (new this session, found in a later autonomous-loop tick on this same
+  conversation) — no graceful way to confirm/exit an ongoing dynamic
+  loop (`ScheduleWakeup`): a stray `ScheduleWakeup` call mid-task (my
+  own mistake, unrelated to `#295`) later fired as a phantom
+  "autonomous loop check" tick even though no real `/loop` had been
+  invoked; `stop: true`'s response is generic boilerplate covering
+  Monitor/cron/dynamic-wakeup regardless of which actually applied,
+  rather than confirming what was actually cleaned up.
 - pack-repo `#280`/`#281`/`#283`/`#248`/`#270`/`#286` — unchanged, not
   checked this session.
