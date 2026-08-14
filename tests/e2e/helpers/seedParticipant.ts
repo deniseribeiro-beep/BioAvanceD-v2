@@ -89,6 +89,13 @@ export async function seedStorageBoxLocation(): Promise<SeededStorageBox> {
     name: `RF004 e2e freezer ${suffix}`,
     containerType: 'FREEZER',
     containerID,
+    // #598: a raw insertOne bypasses StorageContainer.js's Mongoose
+    // default (`status: 'OPERATIONAL'`) — without this explicit field,
+    // MongoStorageTopologyReadRepository.listOperationalFreezers() (GET
+    // /api/storage/freezers, the real freezer picker) never returns this
+    // freezer, even though createSample's own storage resolution doesn't
+    // check status at all. Matches seedSensor.ts's seedFreezerContainer().
+    status: 'OPERATIONAL',
     parent_id: null,
     createdAt: new Date(),
     updatedAt: new Date(),
