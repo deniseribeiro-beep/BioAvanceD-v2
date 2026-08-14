@@ -110,18 +110,36 @@ model change and every write-path update must land together.
 **`#368`** (the tracking issue) stays open — `#575` is what actually
 finishes it.
 
-**Skills-pack `#279`** (dogfooding) — follow-up comment posted, covering:
-this session bypassed queue mode entirely (only one queue item remained,
-so `work-issue` routed straight to `resolve-issue`, never `issue-loop`);
-the parent-chain-close check (`resolve-issue` rule 7) fired a third time,
-in a new shape (the queue's last listed item closed but only against a
-narrowed deliverable, real remaining work moved to `#575` which `#368`
-never mentions — the check still got it right); blocked-item-skip is
-still unexercised across four sessions now; and a new finding that
-`#565`'s `Depends on:` line being fully satisfied said nothing about
-whether its own scope was still accurate (it wasn't — `divide-and-
-conquer`, not queue mode, is what actually caught that). `#279` stays
-open.
+**Skills-pack `#279`** (dogfooding, queue-mode) — **deliberately try to
+feed this more data next session**, specifically the one mechanism with
+*zero* data across four sessions now: blocked-item-skip (an item goes
+from open-and-resolvable to blocked *mid-run*, and the loop correctly
+skips it for the next resolvable one). This session's follow-up
+[comment](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/279)
+names the same gap but didn't create an opportunity to close it — none
+of #368's remaining shape offered one. Two concrete ways the next
+session could:
+- If `#575` gets triaged and turns out to `divide-and-conquer`-split
+  into multiple sub-issues with a real dependency chain (some blocked on
+  others, not all-or-nothing) — file them that way, then drive them via
+  `Skill(issue-loop)` queue mode instead of `resolve-issue` directly, the
+  way this session and the one before it *didn't*. A chain where one
+  sub-issue only becomes pickable after another lands is exactly the
+  blocked-item-skip shape.
+- Failing that, scan the wider open backlog (not just `#368`) for an
+  existing tracking issue whose sub-issues already have this shape — a
+  parent with 3+ children where one is blocked on a sibling rather than
+  on something already closed — and dogfood queue mode against *that*
+  instead of waiting for `#368`'s own queue to happen to produce it.
+
+Also worth carrying into that comment: the parent-chain-close check
+fired a third time this session, in a new shape (the queue's last listed
+item closed but only against a narrowed deliverable, real remaining work
+moved to `#575` which `#368` never mentions — the check still got it
+right); and a new finding that `#565`'s `Depends on:` line being fully
+satisfied said nothing about whether its own scope was still accurate
+(it wasn't — `divide-and-conquer`, not queue mode, is what actually
+caught that). `#279` stays open.
 
 - **pack-repo `#280`/`#281`** (long-carried) — still open, unchanged,
   not checked this session.
