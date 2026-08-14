@@ -1,151 +1,132 @@
 # HANDOFF
 
-**Written:** 2026-08-13, end of session on `feature/docker-e2e-backend-integration`.
+**Written:** 2026-08-13, mid-session on `feature/docker-e2e-backend-integration`.
+Session in progress — this rotation is a checkpoint after closing `#325`,
+not the session's final one; `#326` is still queued for this same
+sitting via `issue-loop` queue mode.
 
 ## What happened this session
 
-Continuation of the `#368` queue, driven via `work-issue` → `resolve-issue`.
-Picked up right after the prior session shipped `#566` and paused before
-`#565`, the queue's last remaining item.
+Opened by reading the prior handoff, then asked Dennis where to focus
+(three options: start `#575` directly, triage `#575` for an `issue-loop`
+split, or check the long-carried pack-repo backlog). He picked triaging
+`#575`.
 
-### `#565` — closed against a narrowed backfill+parity deliverable; the real removal split out to `#575`
+### `#575` triage — confirmed it does not split
 
-`#565`'s own text described the removal as touching `patient.service.js
-#createPatient`'s dual-write plus a schema/model change, with
-`Depends on: #560, #561, #562, #563, #564` (all closed — correctly
-unblocked on paper). A consumer audit run before touching any code (a
-backgrounded `Explore` agent, gated through `agent-delegation` first)
-found the real removal surface is roughly 4x that: an entire
-undocumented service (`PatientIdentityService.js` — the naming-collision
-service flagged in `#566`'s own handoff, distinct from
-`services/participantIdentity.service.js`) reads and writes
-`patientName`/`birthDate`/`identityDocument` directly onto `Patient`
-documents for its own import-time matching, live via `intakeWizard.js`
-and `import-lgpd.service.js#importSamples` — never mentioned in `#565`'s
-dependency list at all. Plus: an independent dual-write bug in
-`patient.service.js#updatePatient` (never stripped from the `Patient`
-`$set`), four more live write paths across `import.service.js` and
-`import-lgpd.service.js`, two MongoDB indexes built directly on these
-fields, and ~10 test files that pin the current behavior (one,
-`patient-identity.service.test.js`, needing substantial rework, not just
-field deletion).
+`#575`'s own text is explicit that the removal is "some changes are only
+correct applied whole, not a chunkable one" (a half-applied version
+breaks `PatientModel.create()` immediately). No dependency chain to
+extract there. `#570`/`#571` are separate, pre-filed, "recommended not
+hard-blocking" issues — no real blocked-sibling shape either.
 
-Per `divide-and-conquer`'s "some changes are only correct applied whole"
-test: the actual field-removal has to land as one atomic commit (a
-half-applied version breaks `PatientModel.create()`'s own validation
-immediately), so it couldn't ride along with this session's work.
-Surfaced the scope gap to Dennis via `AskUserQuestion` before proceeding
-given the LGPD-sensitive nature of the data — confirmed "split it."
+### Backlog scan for a live blocked-item-skip shape (the `#279` dogfooding gap)
 
-**Landed** (`fix/565-participantidentity-backfill`, merged into
-`feature/docker-e2e-backend-integration` at `29b9b0f9`):
-- `services/participant-identity-backfill.service.js` —
-  `backfillParticipantIdentities(db)` (idempotent, creates a
-  `ParticipantIdentity` for any pre-`#363` `Patient` missing one) and
-  `checkParticipantIdentityParity(db)` (reports any `Patient` with no
-  matching identity record, or one whose fields have drifted from the
-  mirror — decrypts ciphertext-only records via `#566`'s
-  `decryptIdentity` before comparing).
-- `scripts/backfillParticipantIdentities.js` — thin CLI wrapper (Pattern
-  B, matching `backfillSealedSnapshotPins.js`'s convention: delegates to
-  the service, no dry-run flag, `connectDB`/`closeConnection`).
-- 9 unit tests, `tests/unit/services/participant-identity-backfill.service.test.js`
-  — passed both on the fix branch and after the merge, alongside
-  `patient.model.unit.test.js` and `participantIdentity.service.encryption.unit.test.js`
-  (76 tests total, all green).
+Per the prior handoff's fallback suggestion, scanned the wider backlog
+for a tracking issue with a real blocked-on-sibling shape. Found `#331`
+(Wave 2 e2e integration tracker) — 7 of 9 children closed, 2 open
+(`#325`, `#326`). Both referenced a shared blocker, `#320` (Study/
+Protocol/Collection CRUD gap) — but `#320` was already closed, so no live
+block existed either. Net: two dead ends this session for `#279`'s
+zero-data blocked-item-skip mechanism; asked Dennis what to do next, he
+chose to just work `#331`'s remaining queue (`#325`/`#326`) via
+`issue-loop` queue mode despite the lack of a chain shape.
 
-`#565` closed against this narrowed deliverable. Local/remote branch
-deleted post-merge.
+### `#325` (RF020 Metadados institucionais e MIABIS) — closed against a narrowed deliverable
 
-### `#575` filed — carries the corrected full removal scope
+Pre-work scoping (a backgrounded `Explore` agent, gated through
+`agent-delegation` first, plus my own spot-checks) found the full RF020
+capability doesn't exist: `organization.routes.js` has only `GET`/`POST`
+(no update/delete), and `Collection.js`'s own header comment says "Fase
+1: apenas identidade/atributos essenciais — não o conjunto MIABIS
+completo." Per `divide-and-conquer` (and per `#325`'s own issue text,
+which named this exact scenario as the expected move):
 
-New issue, `Depends on: #565` (this backfill, so no data loss) plus
-`#570`/`#571` (recommended, not hard-blocking — those two are raw
-MongoDB bypasses that also write these field names onto `Patient`
-outside `PatientModel` entirely; landing them first makes "stop writing
-them anywhere" actually true rather than true-for-`PatientModel`-paths-
-only). Full write-path inventory, the two indexes, the ~10 tests, the
-frontend TS-type update (`frontend/src/types/models.ts`), and the
-`docs/architecture/canonical-data-contract-v1.md` update are all listed
-in `#575`'s body with file:line references — that's the resumable
-source of truth for whoever picks it up, not this file.
-
-### `#368` — commented, stays open
-
-`#565` was `#368`'s last listed item, but only the backfill half landed.
-Commented on `#368` explaining the split and that it stays open until
-`#575` (the actual field-removal) lands.
+- Filed **`#576`** — carries the missing capability (Organization
+  update/delete route, full MIABIS field set on Organization/Collection,
+  a management UI).
+- Commented on `#325` narrowing its scope to what's actually testable:
+  Study/Protocol/Collection CRUD (already covered by `#320`'s existing
+  spec) plus Organization create+list.
+- Routed the narrowed issue through `test-loop` → `e2e-test-loop`. Added
+  an `organizations create+list (#325)` block to
+  `tests/e2e/study-protocol-collection-crud.spec.ts` — create+list, a
+  validation-rejection case, and an `AuditEvent` assertion (via
+  `watchAuditTrail`/`assertAuditEventRecorded`) proving the global audit
+  middleware records the create.
+- Brought up the `compose.test.yml` stack fresh this session (Docker
+  Desktop wasn't running) to verify: all 11 tests in the file pass
+  (9 pre-existing `#320` tests + 2 new).
+- Committed on `test/325-rf020-institutional-metadata-crud`, merged into
+  `feature/docker-e2e-backend-integration` (`3e6e04de`), pushed, branch
+  deleted locally (never pushed remotely, so nothing to delete there).
+- Closed `#325` against the narrowed deliverable, naming `#576` as the
+  carried remainder.
+- `wrap-up` found one finding: `E2E_TRACEABILITY_PLAN.md`'s
+  "Grouping strategy" table still names an un-created file
+  (`participant-consent-studies.spec.ts`) for the RF004/RF005/RF010/
+  RF020/RF021 group — actual coverage landed in topic-specific files
+  instead (`intake-wizard.spec.ts`, `tcle-dinamico.spec.ts`,
+  `study-protocol-collection-crud.spec.ts`). Filed as **`#577`**
+  (documentation, low priority).
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: pushed, at `29b9b0f9`
-  (merge commit for the `#565` backfill work, on top of `#566`'s prior
-  commits). Working tree clean.
-- No Docker stack running, nothing left mid-flight. Backfill work proved
-  native-only (a new service + script, no live-Mongo tier in this repo) —
-  targeted vitest runs only, per `resolve-issue`'s default execution
-  contract.
-- `fix/565-participantidentity-backfill` — merged, closed, branch deleted
-  (local + remote) this session.
-- **Pre-existing dangling local branches, not touched this session**
-  (carried forward unchanged — same list as prior handoffs: `fix/476-...`,
-  `fix/477-...`, `fix/481-...`, `fix/485-...`, `fix/513-...`,
-  `test/377-...`, `test/428-...`, `test/431-...`, `test/440-...`,
-  `test/441-...`, `test/486-...`, `test/507-...` through `test/511-...`,
-  the nine `test/549-*-reference-source` branches, plus a stray
-  `worktree-agent-*` branch).
+- **`feature/docker-e2e-backend-integration`**: pushed, at `3e6e04de`.
+  Working tree clean.
+- **Docker test stack is up** (`compose.test.yml`, brought up this
+  session for `#325`'s verification) — `mongodb-test`, `neo4j-test`,
+  `redis-test`, `mqtt-test`, `influxdb-test`, `smtp-test`, `tsa-test`,
+  `witness-test`, `backend-app-test`, `worker-test`, `frontend-app-test`,
+  `admin-bootstrap-test` all healthy. `playwright-runner` was stopped
+  per the docker-workflow overlay's gotcha before the manual run. **Left
+  running** — `#326` (next in this same sitting) is also a real-backend
+  e2e slice and can reuse this stack; tear down with `docker compose -f
+  compose.test.yml down` (add `--volumes` for a from-scratch reseed) once
+  the session's e2e work is actually done, not mid-queue.
+- `test/325-rf020-institutional-metadata-crud` — merged, deleted
+  (local only; never pushed).
 
 ## Next steps
 
-**`#575`** (the atomic removal — drop `patientName`/`birthDate`/
-`identityDocument` from `Patient`'s model/schema and every write path)
-is the queue's actual remaining item now, not `#565`. Its own body
-carries the full scope; re-read it directly rather than re-deriving from
-this summary. Before starting: `#570`/`#571` are recommended
-prerequisites (see above) — check whether either landed since this
-session. This is explicitly **not** a "pick one small piece" task —
-`#575`'s own note repeats `divide-and-conquer`'s atomicity warning: the
-model change and every write-path update must land together.
+**`#326`** (RF021 Estudos, protocolos e ética — real-backend spec, Wave
+2) is next, same sitting, via `issue-loop` queue mode continuing on
+`#331`'s queue. Not yet scoped this session — check whether its
+capability already exists (same kind of check `#325` needed) before
+assuming it's a plain `test-loop` slice; `#326`'s own issue text already
+flags "same CRUD-gap overlap as RF020... see #320" and suggests
+"consider scoping both together if the underlying API surface is the
+same slice of work." Given `#325` closed narrow and `#576` now carries
+the actual institutional-metadata gap, re-check `#326`'s own scope
+against current code rather than assuming the `#320` overlap note is
+still the live blocker (it wasn't, for `#325`).
 
-**`#368`** (the tracking issue) stays open — `#575` is what actually
-finishes it.
+After `#326`: per `issue-loop` queue mode, walk `#331`'s parent chain —
+if both children are now closed (narrowly or otherwise), check whether
+`#331` itself is closeable (it explicitly requires **all** Wave 2 issues
+closed or superseded by tracked follow-ups, which both `#325`→`#576` and
+a to-be-determined `#326` outcome would satisfy under the "superseded by
+follow-up" clause).
 
-**Skills-pack `#279`** (dogfooding, queue-mode) — **deliberately try to
-feed this more data next session**, specifically the one mechanism with
-*zero* data across four sessions now: blocked-item-skip (an item goes
-from open-and-resolvable to blocked *mid-run*, and the loop correctly
-skips it for the next resolvable one). This session's follow-up
-[comment](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/279)
-names the same gap but didn't create an opportunity to close it — none
-of #368's remaining shape offered one. Two concrete ways the next
-session could:
-- If `#575` gets triaged and turns out to `divide-and-conquer`-split
-  into multiple sub-issues with a real dependency chain (some blocked on
-  others, not all-or-nothing) — file them that way, then drive them via
-  `Skill(issue-loop)` queue mode instead of `resolve-issue` directly, the
-  way this session and the one before it *didn't*. A chain where one
-  sub-issue only becomes pickable after another lands is exactly the
-  blocked-item-skip shape.
-- Failing that, scan the wider open backlog (not just `#368`) for an
-  existing tracking issue whose sub-issues already have this shape — a
-  parent with 3+ children where one is blocked on a sibling rather than
-  on something already closed — and dogfood queue mode against *that*
-  instead of waiting for `#368`'s own queue to happen to produce it.
+**`#575`** (the atomic Patient civil-identity field removal) is still
+the queue's actual big remaining item — untouched this session beyond
+triage. Its own body carries full scope.
 
-Also worth carrying into that comment: the parent-chain-close check
-fired a third time this session, in a new shape (the queue's last listed
-item closed but only against a narrowed deliverable, real remaining work
-moved to `#575` which `#368` never mentions — the check still got it
-right); and a new finding that `#565`'s `Depends on:` line being fully
-satisfied said nothing about whether its own scope was still accurate
-(it wasn't — `divide-and-conquer`, not queue mode, is what actually
-caught that). `#279` stays open.
+**`#368`** (tracking issue) stays open — `#575` is what finishes it.
+
+**Skills-pack `#279`** (dogfooding, queue-mode blocked-item-skip) —
+still zero live data after this session's two dead-end checks (`#575`
+doesn't split; `#331`'s remaining children weren't actually blocked on
+each other). Worth a short follow-up comment on `#279` next session
+noting these are two more negative results, and considering whether the
+mechanism needs to be manufactured deliberately rather than found
+organically in this repo's current backlog shape.
 
 - **pack-repo `#280`/`#281`** (long-carried) — still open, unchanged,
   not checked this session.
 - **pack-repo `#283`** — same shape as `#280`, unchanged.
 - **pack-repo `#248`/`#270`** — still open, unchanged; only remaining
   lever is a long loaded real session, not a dedicated debugging pass.
-- **pack-repo `#286`** — per two prior handoffs, Dennis was going to fix
-  this directly in the pack repo. Not checked this session — carry the
-  same "check if it landed" note forward again.
+- **pack-repo `#286`** — per prior handoffs, Dennis was going to fix this
+  directly in the pack repo. Not checked this session — carry the same
+  "check if it landed" note forward again.
