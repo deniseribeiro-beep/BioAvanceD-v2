@@ -338,6 +338,50 @@ describe('sample.service', () => {
       ).rejects.toMatchObject({ statusCode: 404 });
     });
 
+    it('accepts an active study and an approved protocol (RF021 AC#5, #591)', async () => {
+      const db = makeDb({ studies: makeCollection('studies'), protocols: makeCollection('protocols') });
+      mockOperationalStorage(db);
+      db.collections.studies.findOne.mockResolvedValue({ studyId: 'STU-1', studyStatus: 'active' });
+      db.collections.protocols.findOne.mockResolvedValue({ protocolId: 'PRO-1', approvalStatus: 'approved' });
+
+      const result = await sampleService.createSample(db, validSampleData({ studyId: 'STU-1', protocolId: 'PRO-1' }));
+
+      expect(result.studyId).toBe('STU-1');
+      expect(result.protocolId).toBe('PRO-1');
+    });
+
+    it('rejects with 422 when the study is not active (RF021 AC#5, #591)', async () => {
+      const db = makeDb({ studies: makeCollection('studies') });
+      mockOperationalStorage(db);
+      db.collections.studies.findOne.mockResolvedValue({ studyId: 'STU-1', studyStatus: 'closed-to-accrual' });
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ studyId: 'STU-1' }))
+      ).rejects.toMatchObject({ statusCode: 422 });
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects with 422 when the protocol is not approved (RF021 AC#5, #591)', async () => {
+      const db = makeDb({ protocols: makeCollection('protocols') });
+      mockOperationalStorage(db);
+      db.collections.protocols.findOne.mockResolvedValue({ protocolId: 'PRO-1', approvalStatus: 'draft' });
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ protocolId: 'PRO-1' }))
+      ).rejects.toMatchObject({ statusCode: 422 });
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects with 422 when the protocol is retired (RF021 AC#5, #591)', async () => {
+      const db = makeDb({ protocols: makeCollection('protocols') });
+      mockOperationalStorage(db);
+      db.collections.protocols.findOne.mockResolvedValue({ protocolId: 'PRO-1', approvalStatus: 'retired' });
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ protocolId: 'PRO-1' }))
+      ).rejects.toMatchObject({ statusCode: 422 });
+    });
+
     it('rolls back the inserted sample when the ledger append fails', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
