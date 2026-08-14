@@ -80,6 +80,41 @@ for (const { path, singular, idField, nameField } of entities) {
   });
 }
 
+// #326 (RF021, narrowed — see issue comment: full ethics/versioning scope
+// split out to #578 since approvalStatus is set at creation and never read
+// anywhere else, and no CAAE/validity-period field exists). Covers the one
+// gap in existing coverage: protocolVersion/approvalStatus round-trip
+// through create — the fields exist and persist, just weren't asserted by
+// the generic protocols CRUD loop above.
+test.describe('protocol version/approvalStatus round-trip (#326)', () => {
+  test('persists protocolVersion and approvalStatus through create', async ({ request }) => {
+    const admin = await realLogin(request);
+    const id = `protocols-version-${Date.now()}`;
+
+    const createResponse = await request.post(`${apiBaseURL}/api/protocols`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        protocolId: id,
+        protocolName: `e2e protocol ${id}`,
+        protocolVersion: '2.1',
+        approvalStatus: 'rejected',
+      },
+    });
+    expect(createResponse.status()).toBe(201);
+    const created = await createResponse.json();
+    expect(created.data.protocolVersion).toBe('2.1');
+    expect(created.data.approvalStatus).toBe('rejected');
+
+    const getResponse = await request.get(`${apiBaseURL}/api/protocols/${id}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(getResponse.status()).toBe(200);
+    const fetched = await getResponse.json();
+    expect(fetched.data.protocolVersion).toBe('2.1');
+    expect(fetched.data.approvalStatus).toBe('rejected');
+  });
+});
+
 // #325 (RF020, narrowed — see issue comment: full MIABIS-institutional
 // scope split out to #576 since organization.routes.js has no PUT/DELETE
 // and Collection is Fase-1-only). Covers the organization operations that
