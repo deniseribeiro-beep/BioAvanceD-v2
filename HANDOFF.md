@@ -8,67 +8,74 @@ hole** — this is not an exit handoff.
 ## What landed this session (so far)
 
 - **`#591`** — `sample.service.js`'s `createSample` had existence-only
-  checks for `studyId`/`protocolId` (resolves to a real document, no
-  status check). Extended to also reject when `study.studyStatus !==
-  'active'` or `protocol.approvalStatus !== 'approved'` (RF021 AC#5).
-  Added 4 unit cases to `sample.service.test.js` (accept active+approved,
-  reject inactive study, reject draft protocol, reject retired protocol);
-  full file 97/97 passing on the merged tree. Merged
-  `fix/591-inactive-protocol-enforcement` → `feature/docker-e2e-backend-integration`
-  at `dcb04e6f`, pushed. Closed.
-- **`#596`** — filed this session, **new tracker member**. `wrap-up`'s
-  audit caught that `#591`'s own close comment listed the consent-side
-  status check as "out of scope, tracked separately" with no issue
-  actually existing yet for it. `consent.service.js` (`createPatientConsent`,
-  landed via `#593`) and `patient.service.js` (landed via `#594`) each
-  mirror the *same pre-`#591`* existence-only `studyId` check — no
-  `studyStatus` gate. Scope: extend both to reject on
-  `studyStatus !== 'active'`, same message/statusCode pattern as `#591`,
-  plus matching unit coverage. Not started.
+  checks for `studyId`/`protocolId`. Extended to reject when
+  `study.studyStatus !== 'active'` or `protocol.approvalStatus !==
+  'approved'` (RF021 AC#5). 4 new unit cases in `sample.service.test.js`;
+  97/97 passing. Merged `dcb04e6f`. Closed.
+- **`#596`** — filed this session from `#591`'s own `wrap-up` audit:
+  `consent.service.js`'s `createPatientConsent` and `patient.service.js`'s
+  `createPatient` mirrored the same pre-`#591` existence-only `studyId`
+  check (landed via `#593`/`#594`), no `studyStatus` gate. Extended both
+  to reject with 422 when `studyStatus !== 'active'`. Fixed 2 existing
+  `#593`/`#594` "accept" test fixtures that mocked a Study doc with no
+  `studyStatus` field (would've false-failed under the new gate — no
+  real Study document has that shape, `StudyModel.create` always
+  defaults it). Verified `tests/e2e/helpers/seedParticipant.ts`'s
+  `seedStudy`/`seedProtocol` e2e fixtures already set
+  `studyStatus: 'active'`/`approvalStatus: 'approved'` explicitly, so
+  neither this nor `#591`'s gate breaks existing e2e setup. 2 new unit
+  cases; 250/250 passing across the 3 targeted files. Merged `3a619f30`.
+  Closed.
 
 ## Tracker `#587` current membership (re-derived, not from memory)
 
-- `#588`, `#589`, `#590` (with its own split children `#593`/`#594`),
-  `#591` — **closed**.
-- `#596` — **open, not started**. Independent (consent/patient linkage
-  already landed via `#593`/`#594`; this just adds the status gate).
-- `#592` — **open, not started**. Real-backend e2e coverage for the full
-  enforcement path. Originally depended on `#588`/`#590`/`#591`; now also
-  effectively depends on `#596` for the consent/patient half of the
-  enforcement path to have something real to assert against.
+- `#588`, `#589`, `#590` (+ split children `#593`/`#594`), `#591`,
+  `#596` — **all closed**.
+- `#592` — **open, not started. Last remaining member.** Real-backend
+  e2e coverage for the full enforcement path (protocol + study status
+  gates across Sample/Consent/Patient). Its stated dependencies
+  (`#588`, `#590`, `#591`, and now `#596`) are all landed — **unblocked**.
 
-**Queue for next iteration: `#596` → `#592`.** Re-derive via
-`gh issue view 587` before resuming regardless — this file is a snapshot,
-not the source of truth, and the rabbit-hole skill's membership rule
-(re-derive before every pick) applies even mid-sitting.
+**Next step: pick up `#592`.** Re-derive via `gh issue view 587` before
+resuming regardless — this file is a snapshot, not the source of truth.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed at `dcb04e6f`,
-  working tree clean. `fix/591-inactive-protocol-enforcement` merged
-  `--no-ff`, deleted locally (never pushed to remote, so no remote
-  deletion needed).
-- Docker is **on** this session (user confirmed) — available for `#592`'s
-  e2e work when the queue reaches it. Not yet exercised this session
-  (`#591`/`#596` are both native-provable per `build-loop`'s
-  BioAvanceD-v2 overlay: no live-Mongo tier in this repo, mocked-collection
-  unit tests are the "real backend" proof bar for backend-internal slices;
-  literal Docker is reserved for `#592`'s own e2e Playwright spec).
+- On `feature/docker-e2e-backend-integration`, pushed at `3a619f30`,
+  working tree clean. Both fix branches (`fix/591-...`, `fix/596-...`)
+  merged `--no-ff` and deleted locally (neither was ever pushed to
+  remote, so no remote deletion needed).
+- Docker is **on** this session (user confirmed), not yet exercised.
+  `#591`/`#596` were both native-provable (no live-Mongo tier in this
+  repo; mocked-collection unit tests are the proof bar for
+  backend-internal slices per `build-loop`'s BioAvanceD-v2 overlay).
+  `#592` is the actual e2e Playwright spec this milestone's Docker-on
+  default exists for — first real use of Docker this session.
 
 ## Recommended next steps
 
-Continue the `rabbit-hole` sitting: pick up `#596` next (independent,
-no blockers), then `#592` (needs `#596` landed first for full coverage,
-plus Docker for the live-backend Playwright spec). Once both close,
-re-run the tracker's upward-cascade check — `#587` closes only when
-`#588`/`#589`/`#590`/`#591`/`#592`/`#596` (and anything they still spin
-off) are all resolved and no further split is pending; `#578` (the seed)
-closes separately, per its own comment, once `#587`'s full membership
-lands.
+Continue the `rabbit-hole` sitting: `#592` is the only open member left.
+Write a real-backend Playwright spec covering: creating a protocol with
+CAAE/validity fields (`#588`), the study/consent/participant linkage
+(`#590`/`#593`/`#594`), and the inactive/incompatible-protocol and
+inactive-study rejection paths (`#591`/`#596`) — see `#592`'s own body
+for its full scope, including the `E2E_TRACEABILITY_PLAN.md` update it
+calls for. Confirm Docker is actually running before the first
+`docker build`/`up` call (invoke `docker-workflow` fresh, per
+`build-loop`'s own instruction — don't assume from "Docker is on" alone).
+
+Once `#592` closes, run the tracker's upward-cascade check: `#587`
+closes only when all six split issues (`#588`/`#589`/`#590`/`#591`/
+`#592`/`#596`) and anything they spun off are resolved and no further
+split is pending — that condition will be met once `#592` lands, nothing
+else is outstanding. `#578` (the seed) closes separately per its own
+comment, once `#587`'s full membership lands — don't forget that second
+close, it doesn't happen automatically.
 
 No other work queued outside this rabbit hole this session — Dennis's
 instruction was specifically to resume `#587` and work it without
-stopping for questions, filing follow-ups instead. Carried-forward
-items from the prior handoff (`#336`, `#579`/`#331`, `#585`, `#586`,
-skills-pack backlog) are unchanged and not re-derived here; see the
-previous `HANDOFF.md` revision (git history) if needed.
+stopping for questions, filing follow-ups instead (which is how `#596`
+came to exist). Carried-forward items from the prior handoff (`#336`,
+`#579`/`#331`, `#585`, `#586`, skills-pack backlog) are unchanged and
+not re-derived here; see git history for the previous `HANDOFF.md`
+revision if needed.
