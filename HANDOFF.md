@@ -1,81 +1,109 @@
 # HANDOFF
 
-**Written:** 2026-08-14, mid-`rabbit-hole` sitting on tracker `#587`
-(RF021 protocol/consent/study linkage, seed `#578`), resumed on Dennis's
-explicit instruction ("pick the rabbit hole again"). **Still inside the
-hole** — this is not an exit handoff.
+**Written:** 2026-08-14, end of session. **Exited the rabbit hole** —
+tracker `#587` (RF021 protocol/consent/study linkage, seed `#578`) is
+closed, along with the seed itself. This is a clean exit, not a
+mid-sitting pause: nothing from that hole remains open.
 
-## What landed this session (so far)
+## What landed this session
 
-- **`#591`** — `sample.service.js`'s `createSample` had existence-only
-  checks for `studyId`/`protocolId`. Extended to reject when
-  `study.studyStatus !== 'active'` or `protocol.approvalStatus !==
-  'approved'` (RF021 AC#5). 4 new unit cases in `sample.service.test.js`;
-  97/97 passing. Merged `dcb04e6f`. Closed.
-- **`#596`** — filed this session from `#591`'s own `wrap-up` audit:
-  `consent.service.js`'s `createPatientConsent` and `patient.service.js`'s
-  `createPatient` mirrored the same pre-`#591` existence-only `studyId`
-  check (landed via `#593`/`#594`), no `studyStatus` gate. Extended both
-  to reject with 422 when `studyStatus !== 'active'`. Fixed 2 existing
-  `#593`/`#594` "accept" test fixtures that mocked a Study doc with no
-  `studyStatus` field (would've false-failed under the new gate — no
-  real Study document has that shape, `StudyModel.create` always
-  defaults it). Verified `tests/e2e/helpers/seedParticipant.ts`'s
-  `seedStudy`/`seedProtocol` e2e fixtures already set
-  `studyStatus: 'active'`/`approvalStatus: 'approved'` explicitly, so
-  neither this nor `#591`'s gate breaks existing e2e setup. 2 new unit
-  cases; 250/250 passing across the 3 targeted files. Merged `3a619f30`.
-  Closed.
+Resumed `#587` on Dennis's explicit instruction ("pick the rabbit hole
+again... without asking me questions") and drove it to completion.
 
-## Tracker `#587` current membership (re-derived, not from memory)
+- **`#591`** — `sample.service.js`'s `createSample` extended to reject
+  when the linked study isn't active or the linked protocol isn't
+  approved (RF021 AC#5). Merged `dcb04e6f`.
+- **`#596`** — filed mid-session from `#591`'s own wrap-up audit:
+  `consent.service.js`/`patient.service.js` had the identical
+  existence-only gap for their own optional `studyId` linkage. Same fix
+  pattern applied to both. Merged `3a619f30`.
+- **`#592`** — real-backend e2e coverage proving the above, plus the
+  pre-existing study/protocol/collection linkage (`#588`/`#590`/
+  `#593`/`#594`) that had unit coverage but no e2e proof. Building this
+  surfaced two real bugs, both fixed:
+  - **`MongoStorageRepository.allocateSamplePosition`/
+    `autoAssignSamplePosition`** did a dotted `$set` into
+    `storageLocation.boxId`/`.position`, but `Sample.js` defaults
+    `storageLocation` to a literal `null` — real MongoDB rejects a
+    dotted-path `$set` into a null parent. **Every real specimen
+    creation had been silently broken since `#474`**, never caught
+    because unit-test mocks don't replicate this Mongo behavior. Fixed
+    by `$set`-ing the whole object on first allocation; updated 4
+    pinned unit assertions across `MongoStorageRepository.test.js` and
+    `storageService.test.js` (the latter caught by a broader grep sweep
+    during this session's own wrap-up audit, after the first targeted
+    test run missed it).
+  - `specimen-quality-inventory.spec.ts`'s create-path fixtures were
+    stale since `#462` (`locationID` → `boxId`/`positionCode`) — 17 of
+    24 tests in that file were failing against the real backend before
+    this. `seedStorageBoxLocation()` (in `seedParticipant.ts`) replaces
+    the removed `seedOperationalLocation()`. Two unrelated stale
+    assertions (uppercase `DESTROYED`/`QUARANTINED` regexes vs. the
+    now-lowercase-canonical `specimenStatus`, per `#408`/`#540`) fixed
+    alongside.
+  Merged `08afec7e`, then a same-session follow-up fixing the
+  `storageService.test.js` gap at `5ff09639`.
+- **`#587`/`#578`** — tracker and seed both closed; full resolution
+  summary on `#587`'s own closing comment.
 
-- `#588`, `#589`, `#590` (+ split children `#593`/`#594`), `#591`,
-  `#596` — **all closed**.
-- `#592` — **open, not started. Last remaining member.** Real-backend
-  e2e coverage for the full enforcement path (protocol + study status
-  gates across Sample/Consent/Patient). Its stated dependencies
-  (`#588`, `#590`, `#591`, and now `#596`) are all landed — **unblocked**.
+### Follow-ups filed (not part of this session's own work)
 
-**Next step: pick up `#592`.** Re-derive via `gh issue view 587` before
-resuming regardless — this file is a snapshot, not the source of truth.
+- **`deniseribeiro-beep/BioAvanceD-v2#597`** — `scientific-data-access.spec.ts`
+  (RF007) has the identical stale-`locationID` e2e fixture bug `#592`
+  fixed in `specimen-quality-inventory.spec.ts`. Different RF, out of
+  scope for the RF021 rabbit hole. Not started.
+- **`DyeAllPies/dyeallpies-skills-pack#313`** — `docker-workflow`'s
+  existing "never combine trailing `&` with `run_in_background: true`"
+  warning doesn't cover using shell `&` *alone* (no tool param at all),
+  which also silently orphans a `docker compose up` — hit this directly
+  this session, cost one redo cycle. Pack-repo issue, not editable from
+  here per skill-maintenance's Rule 0.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed at `3a619f30`,
-  working tree clean. Both fix branches (`fix/591-...`, `fix/596-...`)
-  merged `--no-ff` and deleted locally (neither was ever pushed to
-  remote, so no remote deletion needed).
-- Docker is **on** this session (user confirmed), not yet exercised.
-  `#591`/`#596` were both native-provable (no live-Mongo tier in this
-  repo; mocked-collection unit tests are the proof bar for
-  backend-internal slices per `build-loop`'s BioAvanceD-v2 overlay).
-  `#592` is the actual e2e Playwright spec this milestone's Docker-on
-  default exists for — first real use of Docker this session.
+- On `feature/docker-e2e-backend-integration`, pushed at `5ff09639`,
+  working tree clean. Every fix/test branch this session (`fix/591-...`,
+  `fix/596-...`, `test/592-...`, `fix/592-storageservice-pinned-tests`)
+  merged `--no-ff` and deleted locally; none were ever pushed to remote,
+  so no remote cleanup needed.
+- **Docker test stack is still up** (`compose.test.yml`, brought up this
+  session for `#592`'s real-backend verification) — needs teardown.
+  `docker-workflow`'s Docker-on-by-default-per-iteration note for this
+  kind of loop applies regardless of who started the stack; tear it down
+  at session end (`clean-up` skill's docker domain) rather than leaving
+  it idle across sessions (the exact shape that produced pack `#160`).
+- Backend unit suite: 593/593 across every file touching
+  `storageLocation` (17 files, targeted sweep — full-suite run is
+  reserved for the ship gate). Real-backend e2e: 41/41 across
+  `specimen-quality-inventory.spec.ts` + `study-protocol-collection-crud.spec.ts`.
+  Neither is the full e2e suite — not run this session.
 
 ## Recommended next steps
 
-Continue the `rabbit-hole` sitting: `#592` is the only open member left.
-Write a real-backend Playwright spec covering: creating a protocol with
-CAAE/validity fields (`#588`), the study/consent/participant linkage
-(`#590`/`#593`/`#594`), and the inactive/incompatible-protocol and
-inactive-study rejection paths (`#591`/`#596`) — see `#592`'s own body
-for its full scope, including the `E2E_TRACEABILITY_PLAN.md` update it
-calls for. Confirm Docker is actually running before the first
-`docker build`/`up` call (invoke `docker-workflow` fresh, per
-`build-loop`'s own instruction — don't assume from "Docker is on" alone).
+Dennis didn't name a specific next task before this sitting — **none
+queued**. The rabbit hole this session existed to close is closed; no
+new one was opened. Candidates below are carried forward from backlog
+state (mostly unchanged from the prior handoff), not an instruction to
+pick any particular one:
 
-Once `#592` closes, run the tracker's upward-cascade check: `#587`
-closes only when all six split issues (`#588`/`#589`/`#590`/`#591`/
-`#592`/`#596`) and anything they spun off are resolved and no further
-split is pending — that condition will be met once `#592` lands, nothing
-else is outstanding. `#578` (the seed) closes separately per its own
-comment, once `#587`'s full membership lands — don't forget that second
-close, it doesn't happen automatically.
-
-No other work queued outside this rabbit hole this session — Dennis's
-instruction was specifically to resume `#587` and work it without
-stopping for questions, filing follow-ups instead (which is how `#596`
-came to exist). Carried-forward items from the prior handoff (`#336`,
-`#579`/`#331`, `#585`, `#586`, skills-pack backlog) are unchanged and
-not re-derived here; see git history for the previous `HANDOFF.md`
-revision if needed.
+- **`deniseribeiro-beep/BioAvanceD-v2#597`** — new this session, the
+  `scientific-data-access.spec.ts` fixture fix. Small, mechanical,
+  same shape as `#592`'s own fix.
+- **`#336`** — still needs Dennis's call (fix vs. retire the legacy
+  `import.controller.js#importFhirBundle` endpoint); `#570`'s findings
+  are posted on its own thread, cross-referenced from `#336`.
+- **`#579`** (systemic `MongoTopologyClosedError` in shared e2e Mongo
+  singleton helpers, blocking `#331`'s close) — still open, needs the
+  live Docker stack to reproduce/root-cause. Docker is up this session
+  if picked up immediately, though brought up for a different purpose
+  (`#592`'s stack, not necessarily configured for `#579`'s repro).
+- **`#331`** stays open pending `#579`.
+- `deniseribeiro-beep/BioAvanceD-v2#585` — repo-owner call on reviving or
+  retiring `playwright-runner`/`frontend-unit-runner`. Not
+  code-resolvable.
+- `deniseribeiro-beep/BioAvanceD-v2#586` — re-identification authorization
+  follow-up for `toFhirPatient`, not urgent, no live caller yet.
+- Skills-pack `#297`/`#294` — still open, unchanged.
+- pack-repo `#279`/`#280`/`#281`/`#283`/`#248`/`#270`/`#286`/`#301`/
+  `#309`/`#310`/`#311`/`#312` — unchanged, not checked this session.
+- pack-repo `#313` — new this session, see above.
