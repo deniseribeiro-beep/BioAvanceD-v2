@@ -110,10 +110,18 @@ model change and every write-path update must land together.
 **`#368`** (the tracking issue) stays open — `#575` is what actually
 finishes it.
 
-**Skills-pack `#279`** (dogfooding) — not touched this session; no
-follow-up comment posted. If the next session is asked to continue that
-angle, the prior sessions' comments on `#279` are the place to pick up
-from, not this file.
+**Skills-pack `#279`** (dogfooding) — follow-up comment posted, covering:
+this session bypassed queue mode entirely (only one queue item remained,
+so `work-issue` routed straight to `resolve-issue`, never `issue-loop`);
+the parent-chain-close check (`resolve-issue` rule 7) fired a third time,
+in a new shape (the queue's last listed item closed but only against a
+narrowed deliverable, real remaining work moved to `#575` which `#368`
+never mentions — the check still got it right); blocked-item-skip is
+still unexercised across four sessions now; and a new finding that
+`#565`'s `Depends on:` line being fully satisfied said nothing about
+whether its own scope was still accurate (it wasn't — `divide-and-
+conquer`, not queue mode, is what actually caught that). `#279` stays
+open.
 
 - **pack-repo `#280`/`#281`** (long-carried) — still open, unchanged,
   not checked this session.
