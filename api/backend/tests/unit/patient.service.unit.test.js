@@ -202,7 +202,7 @@ describe('PatientService.createPatient', () => {
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011', name: 'Template' })
     });
     const studiesCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ studyId: 'study-1' })
+      findOne: vi.fn().mockResolvedValue({ studyId: 'study-1', studyStatus: 'active' })
     });
     const db = makeFakeDb({
       patients: patientsCollection,
@@ -237,6 +237,28 @@ describe('PatientService.createPatient', () => {
         skipBiomarkerArtifacts: true
       })
     ).rejects.toMatchObject({ message: expect.stringContaining('studyId does-not-exist não encontrado') });
+  });
+
+  it('rejects creation with 422 when the linked study is not active (RF021 AC#5, #596)', async () => {
+    const patientsCollection = makeFakeCollection();
+    const consentTemplatesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011', name: 'Template' })
+    });
+    const studiesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ studyId: 'study-1', studyStatus: 'withdrawn' })
+    });
+    const db = makeFakeDb({
+      patients: patientsCollection,
+      consent_templates: consentTemplatesCollection,
+      studies: studiesCollection
+    });
+
+    await expect(
+      patientService.createPatient(db, validPatientData({ studyId: 'study-1' }), {
+        skipConsentNotification: true,
+        skipBiomarkerArtifacts: true
+      })
+    ).rejects.toMatchObject({ statusCode: 422 });
   });
 
   it('rejects creation when an identifier conflict (duplicate identityDocument) exists', async () => {

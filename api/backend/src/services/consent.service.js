@@ -713,6 +713,13 @@ class ConsentService {
         if (!study) {
           throw new Error(`studyId ${normalizedPayload.studyId} não encontrado`);
         }
+        // RF021 AC#5 (#596): same status gate #591 added for Sample.studyId
+        // — a consent can't be linked to a study that isn't active.
+        if (study.studyStatus !== 'active') {
+          const error = new Error(`Estudo ${normalizedPayload.studyId} não está ativo (status: ${study.studyStatus})`);
+          error.statusCode = 422;
+          throw error;
+        }
       }
 
       const consentsCollection = await getCollection(db, 'consents');
