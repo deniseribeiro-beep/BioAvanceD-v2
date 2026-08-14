@@ -134,6 +134,25 @@ test.describe('Inline storage movement panel (#488)', () => {
   });
 
   test('explicit-position path calls storageApi.moveSample for an already-stored sample', async ({ page }) => {
+    // #495 migrated the panel to resolve current location via
+    // GET /storage/sample/:sampleId instead of reading sample.storageLocation
+    // directly — isAlreadyStored only resolves true once this route is mocked.
+    await page.route(`**/api/storage/sample/${STORED_SAMPLE._id}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            specimenId: STORED_SAMPLE._id,
+            box: { boxId: 'box-488-0', boxName: 'Caixa 0', position: 'A1' },
+            path: 'Freezer 488/Prateleira 1/Rack 1/Caixa 0',
+            fullHierarchy: { freezerId: FREEZER._id, shelfId: 'shelf-0', rackId: 'rack-0', boxId: 'box-488-0' },
+          },
+        }),
+      });
+    });
+
     await openPanelForSample(page, STORED_SAMPLE);
 
     await page.getByLabel('Especificar posição exata').check();

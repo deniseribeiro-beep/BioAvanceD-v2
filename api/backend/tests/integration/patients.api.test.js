@@ -134,13 +134,15 @@ describe('RF005 - POST /api/v1/patients', () => {
 
     const patientsCollection = {
       createIndex: vi.fn().mockResolvedValue('idx'),
+      // RF005/RNF007 (#575): identityDocument conflicts are now resolved via
+      // ParticipantIdentity (generic mock branch in createDbMock, always
+      // null) — this collection only still owns the recordNumber check.
       findOne: vi.fn().mockImplementation(async (query) => {
-        if (query && query.$or) {
+        if (query && query.recordNumber) {
           return {
             _id: 'existing-patient-1',
             participantId: '12345678',
             recordNumber: 'PRONT-DUP-01',
-            identityDocument: '52998224725',
           };
         }
         if (query && query.participantId) return null;

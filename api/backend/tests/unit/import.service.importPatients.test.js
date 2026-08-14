@@ -88,7 +88,9 @@ describe('ImportService.importPatients (JSON)', () => {
     expect(result.errors).toEqual([]);
     expect(patients.inserted).toHaveLength(1);
     expect(patients.inserted[0].status).toBe('PENDING_CONSENT');
-    expect(patients.inserted[0].identityDocument).toBe('12345678900');
+    // RF005/RNF007 (#575): identityDocument is civil identity — never on
+    // Patient, only on the ParticipantIdentity assertion below.
+    expect(patients.inserted[0].identityDocument).toBeUndefined();
     expect(patients.inserted[0].cpf).toBeUndefined();
     expect(patients.inserted[0].participantId).toMatch(/^\d{8}$/);
     expect(notifySpy).toHaveBeenCalledTimes(1);
@@ -244,8 +246,10 @@ describe('ImportService.importPatients (CSV)', () => {
     expect(patients.inserted[0]).toMatchObject({
       email: 'joao@example.com',
       consentTemplateId: 'tcle-1',
-      identityDocument: '98765432100',
     });
+    // RF005/RNF007 (#575): identityDocument is civil identity — never on
+    // Patient, only on the ParticipantIdentity assertion below.
+    expect(patients.inserted[0].identityDocument).toBeUndefined();
     expect(patients.inserted[0].cpf).toBeUndefined();
     expect(patients.inserted[0].participantId).toMatch(/^\d{8}$/);
 

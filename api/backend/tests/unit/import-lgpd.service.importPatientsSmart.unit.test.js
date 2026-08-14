@@ -196,7 +196,9 @@ describe('ImportLGPDService.importPatientsSmart', () => {
 
     expect(patientsCollection.insertOne).toHaveBeenCalledTimes(1);
     const insertedPatient = patientsCollection.insertOne.mock.calls[0][0];
-    expect(insertedPatient.patientName).toBe('MARIA SILVA');
+    // RF005/RNF007 (#575): patientName is civil identity — never on
+    // Patient, only on the ParticipantIdentity assertion below.
+    expect(insertedPatient.patientName).toBeUndefined();
     expect(insertedPatient.participantId).toMatch(/^\d{8}$/);
     expect(insertedPatient.status).toBe('PENDING_CONSENT');
     expect(notificationService.enqueueConsentNotification).toHaveBeenCalledTimes(1);

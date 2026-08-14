@@ -13,9 +13,7 @@ test('Patient model rejects canonical aliases with 422 metadata', () => {
   try {
     ParticipantModel.create({
       participantId: '12345678',
-      patientID: '12345678',
-      patientName: 'Paciente',
-      birthDate: '1990-01-01',
+      patientID: '12345678', // RF005/RNF007 (#575): patientName/birthDate no longer valid Patient fields either — see patient.model.unit.test.js for that coverage.
       sex: 'F',
       consentTemplateId: 'tpl-1'
     });

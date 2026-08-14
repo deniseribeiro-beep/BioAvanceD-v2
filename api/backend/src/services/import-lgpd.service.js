@@ -14,6 +14,7 @@ const patientService = require('./patient.service');
 const notificationService = require('./notification.service');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
+const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
 const {
   SPECIMEN_TYPES,
   SAMPLE_ORIGINS,
@@ -606,7 +607,7 @@ class ImportLGPDService {
           patientData.participantId = participantId;
 
           // Valida dados
-          const validation = PatientModel.validate(patientData);
+          const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
           if (!validation.isValid) {
             // Adiciona número da linha em cada erro para melhor rastreabilidade
             const detailedErrors = validation.errors.map(err => `Linha ${rowNumber}: ${err}`);
@@ -653,14 +654,15 @@ class ImportLGPDService {
           }
 
           // Cria paciente
-          const patient = PatientModel.create(patientData);
+          const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
 
           // Insere no banco
           const insertResult = await patientsCollection.insertOne(patient);
 
-          // RF005/RNF007 (#363/#563): mirror civil identity into the
-          // segregated ParticipantIdentity collection, same as
-          // patient.service.js#createPatient.
+          // RF005/RNF007 (#575): patientName/birthDate/identityDocument are
+          // civil identity — they never land on Patient. ParticipantIdentity
+          // is the sole write target; patientData (not the stripped
+          // `patient`) still carries them here for that write.
           const identityCollection = getCollection(db, 'participantIdentities');
           const identityDoc = participantIdentityEncryptionService.encryptIdentityFields(
             ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
@@ -1215,11 +1217,12 @@ class ImportLGPDService {
             });
           }
 
+          // RF005/RNF007 (#575): patientName is civil identity — never
+          // written to Patient (was a bare patientName $set here before).
           await patientsCollection.updateOne(
             { _id: matchedPatient.patient._id },
             {
               $set: {
-                patientName: sample.patientName || matchedPatient.patient.patientName,
                 updatedAt: new Date(),
                 lastClinicalData: sample.clinicalData || {},
               },
@@ -1840,7 +1843,7 @@ class ImportLGPDService {
         delete patientData.geneticVariant;
         delete patientData.notes;
 
-        const validation = PatientModel.validate(patientData);
+        const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
         if (!validation.isValid) {
           results.errors.push({ row: rowNumber, errors: validation.errors.map((error) => `Linha ${rowNumber}: ${error}`) });
           continue;
@@ -1852,12 +1855,13 @@ class ImportLGPDService {
         patientData.consentTokenCreatedAt = consentMetadata.createdAt;
         patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
-        const patient = PatientModel.create(patientData);
+        const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
         const insertResult = await patientsCollection.insertOne(patient);
 
-        // RF005/RNF007 (#363/#563): mirror civil identity into the
-        // segregated ParticipantIdentity collection, same as
-        // patient.service.js#createPatient.
+        // RF005/RNF007 (#575): patientName/birthDate/identityDocument are
+        // civil identity — they never land on Patient. ParticipantIdentity
+        // is the sole write target; patientData (not the stripped
+        // `patient`) still carries them here for that write.
         const identityCollection = getCollection(db, 'participantIdentities');
         const identityDoc = participantIdentityEncryptionService.encryptIdentityFields(
           ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })

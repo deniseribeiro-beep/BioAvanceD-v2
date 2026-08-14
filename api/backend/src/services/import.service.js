@@ -10,6 +10,7 @@ const TemperatureModel = require('../models/Temperature');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
+const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const participantIdentityService = require('./participantIdentity.service');
 const SampleGraphValidator = require('./SampleGraphValidator');
@@ -287,6 +288,31 @@ class ImportService {
       // via ParticipantIdentity, same as patient.service.js#checkIdentifierConflict
       // (#561). recordNumber is a hospital record number, not civil
       // identity, so it stays checked against Patient directly.
+      // RF005/RNF007 (#575): patientName/birthDate were previously enforced
+      // as required by PatientModel.validate() (they were in its
+      // requiredText list). Now that they're civil identity — segregated to
+      // ParticipantIdentity, never a Patient field — validate() no longer
+      // checks them, so this import path needs its own explicit check
+      // (import-lgpd.service.js's importPatients/importPatientsSmart already
+      // do this independently) or a row with no name/birthdate would import
+      // silently with an empty ParticipantIdentity.
+      function validateIdentityFieldsPresent(patientData) {
+        const errors = [];
+        if (!patientData.patientName || (typeof patientData.patientName === 'string' && patientData.patientName.trim() === '')) {
+          errors.push('patientName é obrigatório');
+        }
+        // Mirrors PatientModel.validate()'s old birthDate check: a Date
+        // instance or a non-empty string are both accepted here (parsing
+        // into an actual Date happens later, in ParticipantIdentityModel.create()).
+        const isValidBirthDate = patientData.birthDate instanceof Date
+          ? !Number.isNaN(patientData.birthDate.getTime())
+          : typeof patientData.birthDate === 'string' && patientData.birthDate.trim() !== '';
+        if (!isValidBirthDate) {
+          errors.push('birthDate é obrigatório');
+        }
+        return errors;
+      }
+
       async function prepareParticipantId(db, patientData) {
         let existing = null;
         if (patientData.identityDocument) {
@@ -313,12 +339,13 @@ class ImportService {
           patientData.consentToken = consentMetadata.token;
           patientData.consentTokenCreatedAt = consentMetadata.createdAt;
           patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
-          const patient = PatientModel.create(patientData);
+          const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
           const insertResult = await patientsCollection.insertOne(patient);
 
-          // RF005/RNF007 (#363/#563): mirror civil identity into the
-          // segregated ParticipantIdentity collection, same as
-          // patient.service.js#createPatient.
+          // RF005/RNF007 (#575): patientName/birthDate/identityDocument are
+          // civil identity — they never land on Patient. ParticipantIdentity
+          // is the sole write target; patientData (not the stripped
+          // `patient`) still carries them here for that write.
           const identityCollection = getCollection(db, 'participantIdentities');
           const identityDoc = participantIdentityService.encryptIdentityFields(
             ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
@@ -347,7 +374,11 @@ class ImportService {
             return { action: 'error', error: mergeError.message };
           }
           merged.updatedAt = new Date();
-          await patientsCollection.updateOne({ _id: existing._id }, { $set: merged });
+          // RF005/RNF007 (#575): patientName/birthDate/identityDocument
+          // never land on Patient — `merged` (used below, un-stripped, for
+          // the ParticipantIdentity sync) may still carry them from
+          // `existing` (pre-#575 data) even when `patientData` doesn't.
+          await patientsCollection.updateOne({ _id: existing._id }, { $set: omitLegacyIdentityFields(merged) });
 
           // RF005/RNF007 (#561/#563): keep ParticipantIdentity in sync on
           // update, same as patient.service.js#updatePatient — an import
@@ -387,11 +418,13 @@ class ImportService {
               results.errors.push({ row: results.total, error: idError });
               continue;
             }
-            const validation = PatientModel.validate(patientData);
-            if (!validation.isValid) {
+            const identityErrors = validateIdentityFieldsPresent(patientData);
+            const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
+            const errors = [...identityErrors, ...validation.errors];
+            if (errors.length > 0) {
               results.errors.push({
                 row: results.total,
-                errors: validation.errors
+                errors
               });
               continue;
             }
@@ -430,11 +463,13 @@ class ImportService {
               results.errors.push({ row: results.total, error: idError });
               continue;
             }
-            const validation = PatientModel.validate(patientData);
-            if (!validation.isValid) {
+            const identityErrors = validateIdentityFieldsPresent(patientData);
+            const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
+            const errors = [...identityErrors, ...validation.errors];
+            if (errors.length > 0) {
               results.errors.push({
                 row: results.total,
-                errors: validation.errors
+                errors
               });
               continue;
             }

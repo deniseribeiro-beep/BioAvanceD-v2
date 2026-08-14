@@ -22,6 +22,7 @@ function makeFakeCollection(overrides = {}) {
     }),
     countDocuments: vi.fn().mockResolvedValue(0),
     createIndex: vi.fn().mockResolvedValue(undefined),
+    dropIndex: vi.fn().mockResolvedValue(undefined),
     ...overrides
   };
 }
@@ -149,15 +150,20 @@ describe('PatientService.ensurePatientIndexes', () => {
     await expect(patientService.ensurePatientIndexes({}, null)).resolves.toBeUndefined();
   });
 
-  it('creates all four indexes and memoizes so a second call is a no-op', async () => {
+  // RF005/RNF007 (#575): patients_name_document_text_v1/patients_name_idx_v1
+  // are dropped, not created — only 2 indexes get createIndex'd now.
+  it('creates both remaining indexes, drops the two legacy ones, and memoizes so a second call is a no-op', async () => {
     const collection = makeFakeCollection();
     const collectionName = `patients_test_${Date.now()}`;
 
     await patientService.ensurePatientIndexes(collection, collectionName);
-    expect(collection.createIndex).toHaveBeenCalledTimes(4);
+    expect(collection.createIndex).toHaveBeenCalledTimes(2);
+    expect(collection.dropIndex).toHaveBeenCalledWith('patients_name_document_text_v1');
+    expect(collection.dropIndex).toHaveBeenCalledWith('patients_name_idx_v1');
 
     await patientService.ensurePatientIndexes(collection, collectionName);
-    expect(collection.createIndex).toHaveBeenCalledTimes(4);
+    expect(collection.createIndex).toHaveBeenCalledTimes(2);
+    expect(collection.dropIndex).toHaveBeenCalledTimes(2);
   });
 
   it('logs a warning and continues when an index creation fails', async () => {
@@ -167,7 +173,7 @@ describe('PatientService.ensurePatientIndexes', () => {
     const collectionName = `patients_test_fail_${Date.now()}`;
 
     await expect(patientService.ensurePatientIndexes(collection, collectionName)).resolves.toBeUndefined();
-    expect(collection.createIndex).toHaveBeenCalledTimes(4);
+    expect(collection.createIndex).toHaveBeenCalledTimes(2);
   });
 });
 
