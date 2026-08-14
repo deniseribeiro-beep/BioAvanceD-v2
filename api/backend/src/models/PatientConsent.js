@@ -47,6 +47,10 @@ class PatientConsentModel {
       errors.push('signatureHash deve ser string');
     }
 
+    if (data.studyId !== undefined && data.studyId !== null && typeof data.studyId !== 'string') {
+      errors.push('studyId deve ser string');
+    }
+
     return {
       isValid: errors.length === 0,
       errors
@@ -68,6 +72,7 @@ class PatientConsentModel {
       signatureMimeType: data.signatureMimeType || null,
       signatureHash: data.signatureHash || null,
       responses: data.responses || {},
+      studyId: data.studyId || null,
       createdAt: new Date(),
       updatedAt: new Date()
     };
