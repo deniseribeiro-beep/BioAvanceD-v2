@@ -255,6 +255,25 @@ services:
         condition: service_healthy
     networks: [bioavanced-test]
 
+  foundation-bootstrap-test:
+    # RF022 (#371): one-shot, idempotent essential-reference-data seed —
+    # mirrors compose.dev.yml's `foundation-bootstrap`, wired into the test
+    # stack so pipeline-continuity.spec.ts's RF022/RF028 real-backend
+    # assertions have something to find (#600's trace: zero without this).
+    # Runs once backend-app-test is healthy, same trigger foundation-bootstrap
+    # uses in the dev stack; upsertDocs's $setOnInsert makes repeat runs
+    # no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "seed:essential"]
+    depends_on:
+      backend-app-test:
+        condition: service_healthy
+    networks: [bioavanced-test]
+
   worker-test:
     build:
       context: ./api/backend
