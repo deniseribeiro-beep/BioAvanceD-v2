@@ -61,7 +61,17 @@ test('the live-verify module lives outside src/reference-data/reference-imports/
   assert.strictEqual(liveVerifyDir.startsWith(importDir), false);
 });
 
-test('the reference-data-live-verify workflow only ever runs on workflow_dispatch, never push/pull_request', () => {
+// #584: backend-unit-runner's Docker build context is `./api/backend` only
+// — `.github/` is never inside it, so this repo-root-relative check can
+// never pass there. It already runs natively with full checkout access via
+// ci-pipeline.yml's separate "Backend architecture tests" step (`npm run
+// test:architecture`, no Docker involved), so skipping it here when
+// `.github/workflows/` isn't reachable doesn't lose coverage.
+test('the reference-data-live-verify workflow only ever runs on workflow_dispatch, never push/pull_request', {
+  skip: fs.existsSync(workflowsDir)
+    ? false
+    : `.github/workflows/ not reachable from ${workflowsDir} (expected when running inside a container whose build context excludes it) — this check runs natively in CI's own "Backend architecture tests" step instead`
+}, () => {
   const workflowPath = path.join(workflowsDir, 'reference-data-live-verify.yml');
   const contents = read(workflowPath);
   assert.match(contents, /workflow_dispatch:/);
