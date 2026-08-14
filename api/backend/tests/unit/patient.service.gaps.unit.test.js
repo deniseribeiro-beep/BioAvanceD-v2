@@ -9,6 +9,8 @@ function makeFakeCollection(overrides = {}) {
   return {
     findOne: vi.fn().mockResolvedValue(null),
     find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+    createIndex: vi.fn().mockResolvedValue(undefined),
+    dropIndex: vi.fn().mockResolvedValue(undefined),
     ...overrides
   };
 }

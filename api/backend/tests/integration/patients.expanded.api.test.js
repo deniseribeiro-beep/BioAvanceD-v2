@@ -164,6 +164,8 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'patient-1' }),
         updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
         countDocuments: vi.fn().mockResolvedValue(0),
+        createIndex: vi.fn().mockResolvedValue(undefined),
+        dropIndex: vi.fn().mockResolvedValue(undefined),
       };
 
       const consentTemplatesCollection = {
@@ -615,6 +617,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
           toArray: vi.fn().mockResolvedValue(observations),
         }),
         countDocuments: vi.fn().mockResolvedValue(observations.length),
+        createIndex: vi.fn().mockResolvedValue(undefined),
       };
 
       // Provide both collections the backend may query
@@ -631,6 +634,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     it('Given: payload de nova observação biomarcadora | When: submete POST | Then: retorna 201 e cria registro', async () => {
       const observationsCollection = {
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'obs-1' }),
+        createIndex: vi.fn().mockResolvedValue(undefined),
       };
 
       app.locals.db = dbWithRbac({ observations: observationsCollection, biomarker_observations: observationsCollection });

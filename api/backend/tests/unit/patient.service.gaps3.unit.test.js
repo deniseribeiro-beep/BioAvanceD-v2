@@ -22,6 +22,7 @@ function makeFakeCollection(overrides = {}) {
     }),
     countDocuments: vi.fn().mockResolvedValue(0),
     createIndex: vi.fn().mockResolvedValue(undefined),
+    dropIndex: vi.fn().mockResolvedValue(undefined),
     ...overrides
   };
 }
