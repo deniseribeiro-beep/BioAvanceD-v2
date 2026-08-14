@@ -328,12 +328,16 @@ class MongoStorageRepository {
       throw new Error('STORAGE_COLLISION: posição já ocupada');
     }
 
+    // SampleModel.create() defaults storageLocation to a literal `null`
+    // (not an empty object) — a dotted-path $set into a null field is
+    // rejected by real MongoDB ("Cannot create field 'boxId' in element
+    // {storageLocation: null}"), so the very first allocation after create
+    // must replace the whole object, not set nested paths inside it.
     const updateSample = await samplesCollection.updateOne(
       { _id: sampleObjId },
       {
         $set: {
-          'storageLocation.boxId': boxObjId,
-          'storageLocation.position': normalizedPosition,
+          storageLocation: { boxId: boxObjId, position: normalizedPosition },
           updatedAt: new Date()
         }
       },
@@ -406,12 +410,14 @@ class MongoStorageRepository {
       throw new Error('STORAGE_COLLISION: Colisão detectada durante alocação automática');
     }
 
+    // Same null-parent dotted-path issue allocateSamplePosition fixes above
+    // — storageLocation starts as a literal `null`, so the first allocation
+    // must replace the whole object rather than $set nested paths into it.
     const updateSampleResult = await samplesCollection.updateOne(
       { _id: sampleObjId },
       {
         $set: {
-          'storageLocation.boxId': boxObjId,
-          'storageLocation.position': lockedPosition,
+          storageLocation: { boxId: boxObjId, position: lockedPosition },
           updatedAt: new Date()
         }
       },
