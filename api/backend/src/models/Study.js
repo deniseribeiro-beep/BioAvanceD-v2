@@ -14,6 +14,16 @@ class StudyModel {
       errors.push('studyTitle é obrigatório e deve ser string');
     }
 
+    if (!Array.isArray(data.ethicsApprovalId) || data.ethicsApprovalId.length === 0) {
+      errors.push('ethicsApprovalId é obrigatório e deve ser um array não vazio de strings');
+    } else {
+      data.ethicsApprovalId.forEach((value, index) => {
+        if (typeof value !== 'string' || value.trim() === '') {
+          errors.push(`ethicsApprovalId[${index}] deve ser uma string não vazia`);
+        }
+      });
+    }
+
     return { isValid: errors.length === 0, errors };
   }
 
@@ -22,6 +32,9 @@ class StudyModel {
       studyId: data.studyId,
       studyTitle: data.studyTitle,
       studyStatus: data.studyStatus || 'active',
+      ethicsApprovalId: Array.isArray(data.ethicsApprovalId)
+        ? data.ethicsApprovalId.map((value) => (typeof value === 'string' ? value.trim() : value))
+        : data.ethicsApprovalId,
       createdAt: new Date(),
       updatedAt: new Date()
     };
