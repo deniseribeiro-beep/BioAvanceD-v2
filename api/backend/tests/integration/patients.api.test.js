@@ -84,6 +84,7 @@ describe('RF005 - POST /api/v1/patients', () => {
           insertOne: vi.fn().mockResolvedValue({ insertedId: 'ignored' }),
           updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
           createIndex: vi.fn().mockResolvedValue('idx'),
+          dropIndex: vi.fn().mockResolvedValue(undefined),
           find: vi.fn().mockReturnValue({
             limit: vi.fn().mockReturnThis(),
             skip: vi.fn().mockReturnThis(),
@@ -101,6 +102,7 @@ describe('RF005 - POST /api/v1/patients', () => {
 
     const patientsCollection = {
       createIndex: vi.fn().mockResolvedValue('idx'),
+      dropIndex: vi.fn().mockResolvedValue(undefined),
       findOne: vi.fn().mockImplementation(async (query) => {
         if (query && query.participantId) return null;
         if (query && query.$or) return null;
@@ -134,6 +136,7 @@ describe('RF005 - POST /api/v1/patients', () => {
 
     const patientsCollection = {
       createIndex: vi.fn().mockResolvedValue('idx'),
+      dropIndex: vi.fn().mockResolvedValue(undefined),
       // RF005/RNF007 (#575): identityDocument conflicts are now resolved via
       // ParticipantIdentity (generic mock branch in createDbMock, always
       // null) — this collection only still owns the recordNumber check.
