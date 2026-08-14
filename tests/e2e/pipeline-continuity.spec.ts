@@ -106,8 +106,8 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
 // it only waits for HP:0000001 ("All", the bundled fixture's root concept)
 // and its HP:0000118→HP:0000001 is_a relation to already be there. Same
 // bootstrap-dependency caveat as "Reference data importers (RF028)" below:
-// only proven against the dev stack until #371 wires the bootstrap into
-// compose.test.yml too.
+// #371 wired the bootstrap into compose.test.yml, so this is now proven
+// against the test stack too, not just the dev stack.
 test.describe('Outbox → Neo4j projection (RF028 AC9) — real backend', () => {
   test.afterAll(async () => {
     await closeNeo4jDriver();
@@ -129,13 +129,11 @@ test.describe('Outbox → Neo4j projection (RF028 AC9) — real backend', () => 
 // api/backend/scripts/seed-essential-reference-data.js is wired as exactly
 // that (#366) for compose.dev.yml's `foundation-bootstrap` one-shot service,
 // writing one FoundationDataRun document per run (#370) instead of the
-// per-manifest-entry `referenceSeedRuns` rows #366 started with. Cutting
-// compose.test.yml/CI over to the same bootstrap is #371 — until that
-// lands, current-state:ci only ever runs the script with --dry-run
-// (api/backend/package.json's current-state:ci) and compose.test.yml never
-// invokes it at all, so these assertions (read directly from Mongo — there's
-// no API surface for any of this) still fail against a freshly-booted test
-// stack, only passing against the dev stack today.
+// per-manifest-entry `referenceSeedRuns` rows #366 started with. #371 cut
+// compose.test.yml over to the same bootstrap (`foundation-bootstrap-test`,
+// mirroring the dev service) — these assertions (read directly from Mongo —
+// there's no API surface for any of this) now pass against a freshly-booted
+// test stack too, not just the dev stack.
 test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () => {
   test.afterAll(async () => {
     await closeFoundationDb();
