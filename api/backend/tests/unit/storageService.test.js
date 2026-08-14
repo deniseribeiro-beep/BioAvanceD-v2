@@ -442,7 +442,11 @@ describe('StorageService.allocateSampleToPosition', () => {
     expect(boxUpdateCall[1].$set[`occupancyGrid.A1`]).toBeInstanceOf(ObjectId);
 
     const sampleUpdateCall = samplesUpdateOne.mock.calls[0];
-    expect(sampleUpdateCall[1].$set['storageLocation.position']).toBe('A1');
+    // storageLocation defaults to a literal `null` on create (Sample.js) —
+    // a dotted-path $set into it is rejected by real MongoDB, so
+    // MongoStorageRepository.allocateSamplePosition replaces the whole
+    // object on first allocation instead of setting nested paths (#592).
+    expect(sampleUpdateCall[1].$set.storageLocation).toEqual({ boxId: expect.anything(), position: 'A1' });
     // #544: status is a retired legacy field (specimenStatus is the sole
     // source of truth since #408) — allocation must not write it.
     expect(sampleUpdateCall[1].$set['status']).toBeUndefined();
@@ -694,7 +698,11 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(boxUpdateCall[0][`occupancyGrid.A2`]).toEqual({ $exists: false });
 
     const sampleUpdateCall = samplesUpdateOne.mock.calls[0];
-    expect(sampleUpdateCall[1].$set['storageLocation.position']).toBe('A2');
+    // storageLocation defaults to a literal `null` on create (Sample.js) —
+    // a dotted-path $set into it is rejected by real MongoDB, so
+    // MongoStorageRepository.autoAssignSamplePosition replaces the whole
+    // object on first allocation instead of setting nested paths (#592).
+    expect(sampleUpdateCall[1].$set.storageLocation).toEqual({ boxId: expect.anything(), position: 'A2' });
     // #544: status is a retired legacy field (specimenStatus is the sole
     // source of truth since #408) — auto-assign must not write it.
     expect(sampleUpdateCall[1].$set['status']).toBeUndefined();
