@@ -198,7 +198,14 @@ describe('intakeWizard helpers', () => {
         return { insertedId: 'patient-object-1' };
       },
     };
-    const db = { collection: () => patientsCollection };
+    // RF005/RNF007 (#575): patientName/birthDate/identityDocument are
+    // written to ParticipantIdentity, not Patient — needs its own mock.
+    const identitiesCollection = {
+      updateOne: async () => ({ acknowledged: true }),
+    };
+    const db = {
+      collection: (name) => (name === 'participantIdentities' ? identitiesCollection : patientsCollection),
+    };
 
     const result = await helpers.resolveMatchedPatient(db, {
       participant: {

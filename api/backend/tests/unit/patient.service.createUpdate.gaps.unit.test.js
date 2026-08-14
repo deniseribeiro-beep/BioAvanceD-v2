@@ -70,13 +70,14 @@ describe('PatientService.createPatient additional branches', () => {
     const consentTemplatesCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
     });
-    const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue(null),
+    // RF005/RNF007 (#575): duplicate detection matches name+birthDate via
+    // ParticipantIdentity, not the Patient collection.
+    const identitiesCollection = makeFakeCollection({
       find: vi.fn().mockReturnValue({
         toArray: vi.fn().mockResolvedValue([{ patientName: 'Maria Silva', birthDate: new Date(1990, 0, 1) }])
       })
     });
-    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
+    const db = makeFakeDb({ participantIdentities: identitiesCollection, consent_templates: consentTemplatesCollection });
 
     await expect(
       patientService.createPatient(db, validPatientData(), {

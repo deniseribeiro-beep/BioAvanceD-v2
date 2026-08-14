@@ -197,13 +197,20 @@ describe('PatientService.createPatient', () => {
   });
 
   it('rejects creation when an identifier conflict (duplicate identityDocument) exists', async () => {
-    const patientsCollection = makeFakeCollection({
+    // RF005/RNF007 (#575): identityDocument conflicts are checked against
+    // ParticipantIdentity, not the Patient collection.
+    const identitiesCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ _id: 'x', identityDocument: '52998224725' })
     });
+    const patientsCollection = makeFakeCollection();
     const consentTemplatesCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
     });
-    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
+    const db = makeFakeDb({
+      patients: patientsCollection,
+      participantIdentities: identitiesCollection,
+      consent_templates: consentTemplatesCollection
+    });
 
     await expect(
       patientService.createPatient(db, validPatientData({ identityDocument: '529.982.247-25' }), {
@@ -240,22 +247,29 @@ describe('PatientService.getPatient', () => {
 
 describe('PatientService.listPatients', () => {
   it('passes patientName and clinicalUnit filters into the collection query and returns pagination shape', async () => {
-    const toArrayMock = vi.fn().mockResolvedValue([{ patientID: '12345678' }]);
+    // RF005/RNF007 (#575): patientName resolves via ParticipantIdentity to a
+    // participantId $in filter, not a direct field match on Patient.
+    const toArrayMock = vi.fn().mockResolvedValue([{ participantId: '12345678' }]);
     const findMock = vi.fn().mockReturnValue({
       limit: vi.fn().mockReturnThis(),
       skip: vi.fn().mockReturnThis(),
       toArray: toArrayMock
     });
+    const identitiesCollection = makeFakeCollection({
+      find: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([{ participantId: '12345678', patientName: 'Maria' }])
+      })
+    });
     const patientsCollection = makeFakeCollection({
       find: findMock,
       countDocuments: vi.fn().mockResolvedValue(1)
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: identitiesCollection });
 
     const result = await patientService.listPatients(db, { patientName: 'Maria', clinicalUnit: 'UTI-A', limit: 10, skip: 5 });
 
     expect(findMock).toHaveBeenCalledWith({
-      patientName: { $regex: 'Maria', $options: 'i' },
+      participantId: { $in: ['12345678'] },
       clinicalUnit: 'UTI-A'
     });
     expect(result.total).toBe(1);

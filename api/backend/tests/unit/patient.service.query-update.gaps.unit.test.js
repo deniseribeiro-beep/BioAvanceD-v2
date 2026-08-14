@@ -62,20 +62,28 @@ describe('PatientService.getPatient', () => {
 
 describe('PatientService.listPatients', () => {
   it('applies patientName and clinicalUnit filters and default limit/skip', async () => {
+    // RF005/RNF007 (#575): patientName resolves via ParticipantIdentity to a
+    // participantId $in filter, not a direct field match on Patient.
+    const identitiesCollection = makeFakeCollection({
+      find: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([{ participantId: '12345678', patientName: 'Maria' }])
+      })
+    });
     const patientsCollection = makeFakeCollection({
       find: vi.fn().mockReturnValue({
         limit: vi.fn().mockReturnThis(),
         skip: vi.fn().mockReturnThis(),
-        toArray: vi.fn().mockResolvedValue([{ patientName: 'Maria' }])
+        toArray: vi.fn().mockResolvedValue([{ participantId: '12345678' }])
       }),
       countDocuments: vi.fn().mockResolvedValue(1)
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: identitiesCollection });
 
     const result = await patientService.listPatients(db, { patientName: 'Maria', clinicalUnit: 'UTI' });
 
+    expect(identitiesCollection.find).toHaveBeenCalledWith({ patientName: { $regex: 'Maria', $options: 'i' } });
     const queryArg = patientsCollection.find.mock.calls[0][0];
-    expect(queryArg.patientName).toEqual({ $regex: 'Maria', $options: 'i' });
+    expect(queryArg.participantId).toEqual({ $in: ['12345678'] });
     expect(queryArg.clinicalUnit).toBe('UTI');
     expect(result.limit).toBe(50);
     expect(result.skip).toBe(0);
@@ -116,16 +124,25 @@ describe('PatientService.searchPatients', () => {
   });
 
   it('parses a DD/MM/YYYY date term into a birthDate range clause', async () => {
+    // RF005/RNF007 (#575): birthDate matching queries ParticipantIdentity;
+    // a hit there becomes a participantId $in clause on the Patient query.
+    const identitiesCollection = makeFakeCollection({
+      find: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([{ participantId: '11112222' }])
+      })
+    });
     const patientsCollection = makeFakeCollection();
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: identitiesCollection });
 
     await patientService.searchPatients(db, '15/06/1990');
 
+    const identityQueryArg = identitiesCollection.find.mock.calls[0][0];
+    expect(identityQueryArg.birthDate.$gte).toEqual(new Date(1990, 5, 15));
+    expect(identityQueryArg.birthDate.$lt).toEqual(new Date(1990, 5, 16));
+
     const queryArg = patientsCollection.find.mock.calls[0][0];
-    const birthClause = queryArg.$or.find((clause) => clause.birthDate);
-    expect(birthClause).toBeDefined();
-    expect(birthClause.birthDate.$gte).toEqual(new Date(1990, 5, 15));
-    expect(birthClause.birthDate.$lt).toEqual(new Date(1990, 5, 16));
+    const participantClause = queryArg.$or.find((clause) => clause.participantId && clause.participantId.$in);
+    expect(participantClause).toEqual({ participantId: { $in: ['11112222'] } });
   });
 
   it('does not add a birthDate clause for a malformed DD/MM/YYYY term', async () => {
@@ -140,20 +157,30 @@ describe('PatientService.searchPatients', () => {
   });
 
   it('parses a YYYY-MM-DD date term into a birthDate range clause', async () => {
+    // RF005/RNF007 (#575): birthDate matching queries ParticipantIdentity;
+    // a hit there becomes a participantId $in clause on the Patient query.
+    const identitiesCollection = makeFakeCollection({
+      find: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([{ participantId: '33334444' }])
+      })
+    });
     const patientsCollection = makeFakeCollection();
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: identitiesCollection });
 
     await patientService.searchPatients(db, '1990-06-15');
 
-    const queryArg = patientsCollection.find.mock.calls[0][0];
-    const birthClause = queryArg.$or.find((clause) => clause.birthDate);
-    expect(birthClause).toBeDefined();
     // The source parses the term with `new Date(term)` (UTC midnight) then reconstructs
     // start/end from its *local* year/month/date components, so the expected value must
     // be derived the same way rather than assuming the literal calendar date survives.
     const parsedUtc = new Date('1990-06-15');
     const expectedStart = new Date(parsedUtc.getFullYear(), parsedUtc.getMonth(), parsedUtc.getDate());
-    expect(birthClause.birthDate.$gte).toEqual(expectedStart);
+
+    const identityQueryArg = identitiesCollection.find.mock.calls[0][0];
+    expect(identityQueryArg.birthDate.$gte).toEqual(expectedStart);
+
+    const queryArg = patientsCollection.find.mock.calls[0][0];
+    const participantClause = queryArg.$or.find((clause) => clause.participantId && clause.participantId.$in);
+    expect(participantClause).toEqual({ participantId: { $in: ['33334444'] } });
   });
 
   it('does not add a birthDate clause for an invalid YYYY-MM-DD term', async () => {
