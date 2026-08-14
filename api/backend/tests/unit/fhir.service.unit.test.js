@@ -16,15 +16,17 @@ describe('FHIRService.validateFHIRResource', () => {
 });
 
 describe('FHIRService.toFhirPatient', () => {
-  it('builds a FHIR Patient resource from a participant', () => {
+  it('builds a FHIR Patient resource from a participant plus its resolved identity', () => {
     const participant = {
       participantId: 'P100',
-      patientName: 'Maria Silva Santos',
       sex: 'female',
+    };
+    const identity = {
+      patientName: 'Maria Silva Santos',
       birthDate: '1990-05-20',
     };
 
-    const result = fhirService.toFhirPatient(participant);
+    const result = fhirService.toFhirPatient(participant, identity);
 
     expect(result.resourceType).toBe('Patient');
     expect(result.id).toBe('P100');
@@ -34,7 +36,7 @@ describe('FHIRService.toFhirPatient', () => {
     expect(result.gender).toBe('female');
   });
 
-  it('falls back to empty identifier/name and unknown gender when fields are absent', () => {
+  it('falls back to empty identifier/name and unknown gender when fields and identity are absent', () => {
     const result = fhirService.toFhirPatient({});
 
     expect(result.id).toBeUndefined();
@@ -42,6 +44,14 @@ describe('FHIRService.toFhirPatient', () => {
     expect(result.name).toEqual([]);
     expect(result.birthDate).toBeUndefined();
     expect(result.gender).toBe('unknown');
+  });
+
+  it('falls back to empty name/birthDate when a participant is given but no identity is resolved', () => {
+    const result = fhirService.toFhirPatient({ participantId: 'P100', sex: 'male' });
+
+    expect(result.name).toEqual([]);
+    expect(result.birthDate).toBeUndefined();
+    expect(result.gender).toBe('male');
   });
 
   it('throws when given a non-object participant', () => {

@@ -1,10 +1,17 @@
-function toFhirPatient(participant) {
+// RF005/RNF007 (#575/#582): patientName/birthDate no longer live on Patient
+// documents — the caller must resolve `identity` itself via
+// participantIdentity.service.js#getIdentityByParticipantId (the sole
+// authorized re-identification path, per that service's own comment) and
+// pass the result in. This function stays a pure transform and never
+// performs that lookup itself, so wiring it up can't bypass the
+// authorization/audit boundary the re-identification flow requires.
+function toFhirPatient(participant, identity) {
   return {
     resourceType: 'Patient',
     id: participant.participantId,
     identifier: participant.participantId ? [{ value: participant.participantId }] : [],
-    name: participant.patientName ? [{ use: 'official', text: participant.patientName }] : [],
-    birthDate: participant.birthDate || undefined,
+    name: identity?.patientName ? [{ use: 'official', text: identity.patientName }] : [],
+    birthDate: identity?.birthDate || undefined,
     gender: participant.sex || 'unknown'
   };
 }
