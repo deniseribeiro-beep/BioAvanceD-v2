@@ -115,11 +115,16 @@ triage. Its own body carries full scope.
 
 **`#368`** (tracking issue) stays open — `#575` is what finishes it.
 
-**Skills-pack `#279`** (dogfooding, queue-mode blocked-item-skip) —
-still zero live data after this session's two dead-end checks. Worth a
-short follow-up comment next session; consider whether the mechanism
-needs to be manufactured deliberately rather than found organically in
-this repo's current backlog shape.
+**Skills-pack [`#279`](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/279)**
+(dogfooding `issue-loop`'s queue mode against a real multi-issue queue,
+specifically the blocked-item-skip mechanism) — confirmed still **open**
+as of this session's end. Still zero live data after this session's two
+dead-end checks (`#575` doesn't split; `#331`'s remaining children
+weren't actually blocked on each other). Worth a short follow-up comment
+next session; consider whether the mechanism needs to be manufactured
+deliberately rather than found organically in this repo's current
+backlog shape. Don't let this one drop — it's been carried across
+multiple sessions now with no real progress toward closing it.
 
 - **pack-repo `#280`/`#281`** (long-carried) — still open, unchanged,
   not checked this session.
