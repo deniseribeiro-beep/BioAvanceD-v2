@@ -15,12 +15,14 @@ test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test
 // /api/protocols and /api/collections routes exist and round-trip a
 // real document through the real backend.
 const entities = [
-  { path: 'studies', singular: 'study', idField: 'studyId', nameField: 'studyTitle' },
-  { path: 'protocols', singular: 'protocol', idField: 'protocolId', nameField: 'protocolName' },
-  { path: 'collections', singular: 'collection', idField: 'collectionId', nameField: 'collectionName' },
+  // ethicsApprovalId (#588, RF021 AC#3/ELM-0060) is required on Study.
+  { path: 'studies', singular: 'study', idField: 'studyId', nameField: 'studyTitle', extraFields: { ethicsApprovalId: ['CAAE-e2e-crud'] } },
+  // effectivePeriod (#588, RF021 AC#3/ELM-0072) is required on Protocol.
+  { path: 'protocols', singular: 'protocol', idField: 'protocolId', nameField: 'protocolName', extraFields: { effectivePeriod: { start: '2026-01-01' } } },
+  { path: 'collections', singular: 'collection', idField: 'collectionId', nameField: 'collectionName', extraFields: {} },
 ];
 
-for (const { path, singular, idField, nameField } of entities) {
+for (const { path, singular, idField, nameField, extraFields } of entities) {
   test.describe(`${path} CRUD (#320)`, () => {
     test(`creates, lists, fetches and updates a ${singular}`, async ({ request }) => {
       const admin = await realLogin(request);
@@ -28,7 +30,7 @@ for (const { path, singular, idField, nameField } of entities) {
 
       const createResponse = await request.post(`${apiBaseURL}/api/${path}`, {
         headers: { Authorization: `Bearer ${admin.token}` },
-        data: { [idField]: id, [nameField]: `e2e ${path} ${id}` },
+        data: { [idField]: id, [nameField]: `e2e ${path} ${id}`, ...extraFields },
       });
       expect(createResponse.status()).toBe(201);
       const created = await createResponse.json();
@@ -62,7 +64,7 @@ for (const { path, singular, idField, nameField } of entities) {
 
       const response = await request.post(`${apiBaseURL}/api/${path}`, {
         headers: { Authorization: `Bearer ${admin.token}` },
-        data: { [idField]: `${path}-${Date.now()}-invalid` },
+        data: { [idField]: `${path}-${Date.now()}-invalid`, ...extraFields },
       });
 
       expect(response.status()).toBe(422);
@@ -81,11 +83,11 @@ for (const { path, singular, idField, nameField } of entities) {
 }
 
 // #326 (RF021, narrowed — see issue comment: full ethics/versioning scope
-// split out to #578 since approvalStatus is set at creation and never read
-// anywhere else, and no CAAE/validity-period field exists). Covers the one
-// gap in existing coverage: protocolVersion/approvalStatus round-trip
-// through create — the fields exist and persist, just weren't asserted by
-// the generic protocols CRUD loop above.
+// split out to #578, then #588-#592). #588 added Study.ethicsApprovalId
+// and Protocol.effectivePeriod (asserted by the generic CRUD loop above,
+// via extraFields); this block covers the remaining gap: protocolVersion/
+// approvalStatus round-trip through create — the fields exist and persist,
+// just weren't asserted by the generic protocols CRUD loop above.
 test.describe('protocol version/approvalStatus round-trip (#326)', () => {
   test('persists protocolVersion and approvalStatus through create', async ({ request }) => {
     const admin = await realLogin(request);
@@ -98,6 +100,7 @@ test.describe('protocol version/approvalStatus round-trip (#326)', () => {
         protocolName: `e2e protocol ${id}`,
         protocolVersion: '2.1',
         approvalStatus: 'rejected',
+        effectivePeriod: { start: '2026-01-01' },
       },
     });
     expect(createResponse.status()).toBe(201);

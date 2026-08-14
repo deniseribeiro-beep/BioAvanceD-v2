@@ -17,15 +17,37 @@ class ProtocolModel {
       errors.push('protocolName é obrigatório e deve ser string');
     }
 
+    const period = data.effectivePeriod;
+    const start = period && typeof period === 'object' ? new Date(period.start) : new Date(NaN);
+    const startValid = period && typeof period === 'object' && period.start !== undefined && !Number.isNaN(start.getTime());
+
+    if (!startValid) {
+      errors.push('effectivePeriod.start é obrigatório e deve ser uma data válida');
+    }
+
+    if (period && typeof period === 'object' && period.end !== undefined && period.end !== null) {
+      const end = new Date(period.end);
+      if (Number.isNaN(end.getTime())) {
+        errors.push('effectivePeriod.end deve ser uma data válida');
+      } else if (startValid && end < start) {
+        errors.push('effectivePeriod.end não pode ser anterior a effectivePeriod.start');
+      }
+    }
+
     return { isValid: errors.length === 0, errors };
   }
 
   static create(data) {
+    const period = data.effectivePeriod || {};
     return {
       protocolId: data.protocolId,
       protocolName: data.protocolName,
       protocolVersion: data.protocolVersion || null,
       approvalStatus: data.approvalStatus || 'approved',
+      effectivePeriod: {
+        start: period.start !== undefined ? new Date(period.start) : null,
+        end: period.end !== undefined && period.end !== null ? new Date(period.end) : null
+      },
       createdAt: new Date(),
       updatedAt: new Date()
     };

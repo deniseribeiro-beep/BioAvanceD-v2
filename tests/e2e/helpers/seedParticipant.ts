@@ -153,6 +153,7 @@ export async function seedStudy(studyId: string): Promise<void> {
     studyId,
     studyTitle: `RF004 e2e study ${studyId}`,
     studyStatus: 'active',
+    ethicsApprovalId: [`CAAE-${studyId}`],
     createdAt: new Date(),
   });
 }
@@ -163,6 +164,7 @@ export async function seedProtocol(protocolId: string): Promise<void> {
     protocolId,
     protocolName: `RF004 e2e protocol ${protocolId}`,
     approvalStatus: 'approved',
+    effectivePeriod: { start: new Date('2026-01-01'), end: null },
     createdAt: new Date(),
   });
 }
