@@ -1,3 +1,13 @@
+// RF005/RNF007 (#575): patientName/birthDate/identityDocument are civil
+// identity — they live only on ParticipantIdentity, never on Patient.
+// Single source of truth for Patient's canonical field shape (#345 — was
+// previously duplicated identically between validate() and create(), plus
+// a third, payload-level copy in paciente.controller.js#rejectCanonicalAliases
+// that now builds its own allow-list off this same list).
+const CANONICAL_FIELDS = [
+  'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos','studyId'
+];
+
 class ParticipantModel {
   static isValidEmail(email) {
     if (!email || typeof email !== 'string') return false;
@@ -20,11 +30,7 @@ class ParticipantModel {
         errors.push(`${field} é obrigatório`);
       }
     }
-    // RF005/RNF007 (#575): patientName/birthDate/identityDocument are civil
-    // identity — they live only on ParticipantIdentity, never on Patient.
-    const allowed = new Set([
-      'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos','studyId'
-    ]);
+    const allowed = new Set(CANONICAL_FIELDS);
     for (const key of Object.keys(data)) {
       if (!allowed.has(key)) errors.push(`Campo não canônico: ${key}`);
     }
@@ -34,11 +40,7 @@ class ParticipantModel {
   }
 
   static create(data = {}) {
-    // RF005/RNF007 (#575): patientName/birthDate/identityDocument are civil
-    // identity — they live only on ParticipantIdentity, never on Patient.
-    const allowed = new Set([
-      'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos','studyId'
-    ]);
+    const allowed = new Set(CANONICAL_FIELDS);
     const unexpectedFields = Object.keys(data).filter((key) => !allowed.has(key));
     if (unexpectedFields.length > 0) {
       const error = new Error('Payload contém campos não canônicos');
@@ -108,5 +110,7 @@ class ParticipantModel {
     return initials || null;
   }
 }
+
+ParticipantModel.CANONICAL_FIELDS = CANONICAL_FIELDS;
 
 module.exports = ParticipantModel;

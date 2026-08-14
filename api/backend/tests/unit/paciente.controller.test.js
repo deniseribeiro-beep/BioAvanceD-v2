@@ -57,10 +57,19 @@ describe('paciente.controller', () => {
 
     // RF021 AC#4 (#594): studyId must be allowed here in lockstep with
     // PatientModel's own allow-list (see patient.model.unit.test.js's
-    // equivalent case) — #345 is the tracked risk that these two
-    // duplicated lists drift out of sync.
+    // equivalent case).
     it('allows studyId', () => {
       expect(() => controller.rejectCanonicalAliases({ patientName: 'Foo', studyId: 'study-1' })).not.toThrow();
+    });
+
+    // #345: rejectCanonicalAliases now builds its allow-list off
+    // PatientModel.CANONICAL_FIELDS directly instead of a hand-duplicated
+    // copy — every Patient-document canonical field must be accepted here
+    // with no separate edit required. Proves the two can't drift again.
+    it('accepts every field in PatientModel.CANONICAL_FIELDS', () => {
+      const PatientModel = require('../../src/models/Patient');
+      const payload = Object.fromEntries(PatientModel.CANONICAL_FIELDS.map((field) => [field, 'x']));
+      expect(() => controller.rejectCanonicalAliases(payload)).not.toThrow();
     });
   });
 

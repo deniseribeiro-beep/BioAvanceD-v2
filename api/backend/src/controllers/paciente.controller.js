@@ -4,45 +4,22 @@ const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { revalidateSamplesByPatientID } = require('../services/sampleComplianceSync.service');
 const { getCollection } = require('../utils/collectionResolver');
+const PatientModel = require('../models/Patient');
+const { LEGACY_PATIENT_IDENTITY_FIELDS } = require('../utils/legacyPatientIdentityFields');
 
 /**
  * Controller para operações relacionadas a pacientes
  */
 class PacienteController {
   rejectCanonicalAliases(payload = {}) {
-    const allowed = new Set([
-      'participantId',
-      'patientName',
-      'birthDate',
-      'sex',
-      'email',
-      'phone',
-      'identityDocument',
-      'recordNumber',
-      'clinicalUnitId',
-      'clinicalUnit',
-      'unitAcronym',
-      'isDeceased',
-      'representativeName',
-      'representativeEmail',
-      'representativeIdentityDocument',
-      'representativePhone',
-      'consentTemplateId',
-      'status',
-      'consentToken',
-      'consentTokenCreatedAt',
-      'consentTokenExpiresAt',
-      'consentNotifiedAt',
-      'consentAcceptedAt',
-      'createdAt',
-      'updatedAt',
-      'anamneseGeral',
-      'dadosEspecificos',
-      // RF021 AC#4 (#594): must stay in sync with Patient.js's own
-      // allow-list — see #345, these two lists are duplicated and drift
-      // silently if only one is updated.
-      'studyId'
-    ]);
+    // #345: built off PatientModel's own canonical field list (the
+    // Patient-document shape) plus the civil-identity fields the payload
+    // still legitimately carries but that never land on the Patient
+    // document itself (RF005/RNF007, #575) — they're routed to
+    // ParticipantIdentity instead, see patient.service.js#createPatient.
+    // A new Patient-document field only needs adding in Patient.js now;
+    // this list picks it up automatically.
+    const allowed = new Set([...PatientModel.CANONICAL_FIELDS, ...LEGACY_PATIENT_IDENTITY_FIELDS]);
     const fields = Object.keys(payload).filter((field) => !allowed.has(field));
     if (fields.length > 0) {
       const error = new Error('Payload contém campos não canônicos');
