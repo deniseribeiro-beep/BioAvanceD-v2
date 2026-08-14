@@ -65,8 +65,6 @@ describe('PatientModel.normalizePhone', () => {
 describe('PatientModel.validate', () => {
   const validData = {
     participantId: 'P-001',
-    patientName: 'Maria Silva',
-    birthDate: '1990-06-15',
     sex: 'F',
     consentTemplateId: 'template-001',
   };
@@ -90,28 +88,22 @@ describe('PatientModel.validate', () => {
     expect(result.errors.some(e => e.includes('participantId'))).toBe(true);
   });
 
-  it('requires patientName', () => {
-    const result = PatientModel.validate({ ...validData, patientName: '' });
+  it('rejects patientName as non-canonical (civil identity lives on ParticipantIdentity)', () => {
+    const result = PatientModel.validate({ ...validData, patientName: 'Maria Silva' });
     expect(result.isValid).toBe(false);
-    expect(result.errors.some(e => e.includes('patientName'))).toBe(true);
+    expect(result.errors.some(e => e.includes('Campo não canônico: patientName'))).toBe(true);
   });
 
-  it('requires birthDate', () => {
-    const { birthDate: _, ...data } = validData;
-    const result = PatientModel.validate(data);
+  it('rejects birthDate as non-canonical (civil identity lives on ParticipantIdentity)', () => {
+    const result = PatientModel.validate({ ...validData, birthDate: '1990-06-15' });
     expect(result.isValid).toBe(false);
-    expect(result.errors.some(e => e.includes('birthDate'))).toBe(true);
+    expect(result.errors.some(e => e.includes('Campo não canônico: birthDate'))).toBe(true);
   });
 
-  it('rejects Date birthDate with invalid time', () => {
-    const result = PatientModel.validate({ ...validData, birthDate: new Date('invalid') });
+  it('rejects identityDocument as non-canonical (civil identity lives on ParticipantIdentity)', () => {
+    const result = PatientModel.validate({ ...validData, identityDocument: '12345678901' });
     expect(result.isValid).toBe(false);
-    expect(result.errors.some(e => e.includes('birthDate'))).toBe(true);
-  });
-
-  it('accepts Date instance for birthDate', () => {
-    const result = PatientModel.validate({ ...validData, birthDate: new Date('1990-06-15') });
-    expect(result.isValid).toBe(true);
+    expect(result.errors.some(e => e.includes('Campo não canônico: identityDocument'))).toBe(true);
   });
 
   it('requires sex', () => {
@@ -176,7 +168,6 @@ describe('PatientModel.validate', () => {
       ...validData,
       email: 'maria@example.com',
       phone: '11987654321',
-      identityDocument: '12345678901',
       recordNumber: '123',
       clinicalUnitId: 'unit-1',
       clinicalUnit: 'HC-FMUSP',
@@ -204,8 +195,6 @@ describe('PatientModel.validate', () => {
 describe('PatientModel.create', () => {
   const baseData = {
     participantId: 'P-001',
-    patientName: 'Maria Silva',
-    birthDate: '1990-06-15',
     sex: 'F',
     consentTemplateId: 'template-001',
     email: 'Maria@Example.COM',
@@ -232,16 +221,12 @@ describe('PatientModel.create', () => {
     expect(() => PatientModel.create(data)).toThrow('participantId é obrigatório');
   });
 
-  it('parses ISO birthDate string', () => {
-    const result = PatientModel.create(baseData);
-    expect(result.birthDate).toBeInstanceOf(Date);
-    expect(result.birthDate.getFullYear()).toBe(1990);
-  });
-
-  it('re-wraps a Date instance birthDate to an equivalent Date', () => {
-    const d = new Date('1990-06-15');
-    const result = PatientModel.create({ ...baseData, birthDate: d });
-    expect(result.birthDate).toEqual(d);
+  // RF005/RNF007 (#575): patientName/birthDate/identityDocument are civil
+  // identity — Patient rejects them outright, it never stores or parses
+  // them. See PatientModel.validate's equivalent non-canonical-field tests.
+  it('rejects patientName/birthDate/identityDocument as non-canonical', () => {
+    expect(() => PatientModel.create({ ...baseData, patientName: 'Maria Silva', birthDate: '1990-06-15', identityDocument: '12345678901' }))
+      .toThrow('Payload contém campos não canônicos');
   });
 
   it('normalizes email to lowercase/trimmed', () => {
@@ -269,11 +254,6 @@ describe('PatientModel.create', () => {
     expect(PatientModel.create(baseData).isDeceased).toBe(false);
   });
 
-  it('trims identityDocument to a string', () => {
-    const result = PatientModel.create({ ...baseData, identityDocument: ' 12345678901 ' });
-    expect(result.identityDocument).toBe('12345678901');
-  });
-
   it('normalizes representativePhone', () => {
     const result = PatientModel.create({ ...baseData, representativePhone: '(21) 91234-5678' });
     expect(result.representativePhone).toBe('21912345678');
@@ -296,7 +276,6 @@ describe('PatientModel.create', () => {
   it('defaults optional fields to null when absent', () => {
     const result = PatientModel.create(baseData);
     expect(result.recordNumber).toBeNull();
-    expect(result.identityDocument).toBeNull();
     expect(result.clinicalUnitId).toBeNull();
     expect(result.clinicalUnit).toBeNull();
     expect(result.unitAcronym).toBeNull();

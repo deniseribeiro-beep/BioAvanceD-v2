@@ -6,14 +6,19 @@ export interface Patient {
   participantId: string; // ID canônico do participante
   
   // 2. NOME - Caractere - Nome completo do paciente
-  patientName: string;
+  // RF005/RNF007 (#575): civil identity — segregated to ParticipantIdentity,
+  // never returned as a direct field on Patient. Optional here since it's
+  // only ever present via an authorized re-identification response.
+  patientName?: string;
 
   // Contato para envio do TCLE
   email?: string;
   phone?: string;
-  
+
   // 3. DATA_NASCIMENTO - Caractere - Data de nascimento (formato DD/MM/YYYY)
-  birthDate: string; // Alterado para string no formato DD/MM/YYYY
+  // RF005/RNF007 (#575): civil identity — segregated to ParticipantIdentity,
+  // see patientName above.
+  birthDate?: string; // Alterado para string no formato DD/MM/YYYY
   
   // 4. IDADE - Numérico - Idade em anos completos
   age?: number;

@@ -113,6 +113,17 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       expect(insertedDoc.phone).toBe('+5511988887777');
       expect(insertedDoc.sex).toBe('F');
       expect(insertedDoc.cpf).toBe('98765432100');
+
+      // RF005/RNF007 (#575): civil identity never lands on Patient.
+      expect(insertedDoc).not.toHaveProperty('patientName');
+      expect(insertedDoc).not.toHaveProperty('patientNameNormalized');
+      expect(insertedDoc).not.toHaveProperty('birthDate');
+      expect(insertedDoc).not.toHaveProperty('birthDateKey');
+      expect(insertedDoc).not.toHaveProperty('identityDocument');
+
+      const identityDoc = identitiesCollection.updateOne.mock.calls[0][1].$set;
+      expect(identityDoc.patientName).toBe('Novo Paciente');
+      expect(identityDoc.birthDate).toBeInstanceOf(Date);
     });
   });
 
@@ -168,23 +179,25 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
   });
 
   describe('Scenario 4: Name normalization (remove accents, case-insensitive)', () => {
-    it('deve normalizar nomes com acentuação', async () => {
+    it('deve casar contra ParticipantIdentity ignorando acentuação e caixa', async () => {
       const patterns = [
-        { input: 'José Peña', expected: 'jose pena' },
-        { input: 'ANDRÉ MÜLLER', expected: 'andre muller' },
-        { input: 'Francçois Côté', expected: 'franccois cote' },
+        { stored: 'José Peña', incoming: 'JOSE PENA' },
+        { stored: 'ANDRÉ MÜLLER', incoming: 'andre muller' },
+        { stored: 'Francçois Côté', incoming: 'FRANCCOIS COTE' },
       ];
 
       for (const pattern of patterns) {
-        identityCandidates([]);
-        patientsCollection.insertOne.mockResolvedValueOnce({ insertedId: '999f1f77bcf86cd799439999' });
+        identityCandidates([{ participantId: 'PID-NORM', patientName: pattern.stored, birthDate: new Date('1990-01-01') }]);
+        patientsCollection.findOne.mockResolvedValueOnce({ _id: 'x', participantId: 'PID-NORM' });
+        patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
 
         const result = await patientIdentityService.matchOrUpsertParticipant(db, {
-          patientName: pattern.input,
+          patientName: pattern.incoming,
           birthDate: '01/01/1990',
         });
 
-        expect(result.patient.patientNameNormalized).toBe(pattern.expected);
+        expect(result.created).toBe(false);
+        expect(result.patient.participantId).toBe('PID-NORM');
       }
     });
   });
@@ -226,6 +239,12 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
         sex: 'M',
         cpf: '12345678900',
       });
+
+      // RF005/RNF007 (#575): civil identity never lands on Patient, even
+      // when carried on `existing` from pre-#575 data.
+      expect(updateCall.$set).not.toHaveProperty('patientName');
+      expect(updateCall.$set).not.toHaveProperty('birthDate');
+      expect(updateCall.$set).not.toHaveProperty('identityDocument');
     });
   });
 });

@@ -71,12 +71,17 @@ class participantIdentityService {
       : null;
 
     if (existing) {
-      const update = {
+      // RF005/RNF007 (#575): patientName/birthDate/identityDocument (plus the
+      // patientNameNormalized/birthDateKey helper fields, which only ever
+      // existed to support matching against Patient — matching above already
+      // resolves via `identities`, so they're dead weight too) never land on
+      // Patient. Only non-identity fields get persisted there.
+      const identityValues = {
         patientName: patientName || existing.patientName,
-        patientNameNormalized: normalizedName || existing.patientNameNormalized,
         birthDate: birthDate || existing.birthDate,
-        birthDateKey: birthDate ? birthDate.toISOString().slice(0, 10) : existing.birthDateKey,
         identityDocument: identityDocument || existing.identityDocument || null,
+      };
+      const update = {
         email: email || existing.email || null,
         phone: phone || existing.phone || null,
         sex: sex || existing.sex || null,
@@ -88,9 +93,9 @@ class participantIdentityService {
         { participantId: matchedParticipantId },
         {
           $set: {
-            patientName: update.patientName,
-            birthDate: update.birthDate,
-            identityDocument: update.identityDocument,
+            patientName: identityValues.patientName,
+            birthDate: identityValues.birthDate,
+            identityDocument: identityValues.identityDocument,
             email: update.email,
             phone: update.phone,
             updatedAt: update.updatedAt,
@@ -98,17 +103,17 @@ class participantIdentityService {
         },
         { upsert: true }
       );
-      return { created: false, matchType: participantId ? 'participantId' : 'name+birthDate', patient: { ...existing, ...update, participantId: existing.participantId || participantId } };
+      return { created: false, matchType: participantId ? 'participantId' : 'name+birthDate', patient: { ...existing, ...update, ...identityValues, participantId: existing.participantId || participantId } };
     }
 
     const generatedParticipantId = participantId || await generateUniqueParticipantId(db);
+    const identityValues = {
+      patientName: patientName || 'PACIENTE SEM NOME',
+      birthDate: birthDate || null,
+      identityDocument: identityDocument || null,
+    };
     const toInsert = {
       participantId: generatedParticipantId,
-      patientName: patientName || 'PACIENTE SEM NOME',
-      patientNameNormalized: normalizedName || normalizeName(patientName || 'PACIENTE SEM NOME'),
-      birthDate: birthDate || null,
-      birthDateKey: birthDate ? birthDate.toISOString().slice(0, 10) : '',
-      identityDocument: identityDocument || null,
       email: email || null,
       phone: phone || null,
       sex: sex || null,
@@ -122,9 +127,9 @@ class participantIdentityService {
       {
         $set: {
           participantId: generatedParticipantId,
-          patientName: toInsert.patientName,
-          birthDate: toInsert.birthDate,
-          identityDocument: toInsert.identityDocument,
+          patientName: identityValues.patientName,
+          birthDate: identityValues.birthDate,
+          identityDocument: identityValues.identityDocument,
           email: toInsert.email,
           phone: toInsert.phone,
           updatedAt: toInsert.updatedAt,
@@ -132,7 +137,7 @@ class participantIdentityService {
       },
       { upsert: true }
     );
-    return { created: true, matchType: 'new', patient: { _id: result.insertedId, ...toInsert } };
+    return { created: true, matchType: 'new', patient: { _id: result.insertedId, ...toInsert, ...identityValues } };
   }
 }
 

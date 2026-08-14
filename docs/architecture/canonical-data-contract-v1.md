@@ -25,16 +25,16 @@ This document defines the canonical v1 runtime contract for BioAvanceD.
 ### Participant
 
 - `participantId`
-- `patientName` (segregated, see ParticipantIdentity below — not returned by
-  the `GET /api/patients/:id` participant resource as of #363)
-- `birthDate` (segregated, see ParticipantIdentity below — not returned by
-  the `GET /api/patients/:id` participant resource as of #363)
 - `sex`
 - `email`
 - `phone`
-- `identityDocument` (segregated, see ParticipantIdentity below — not
-  returned by the `GET /api/patients/:id` participant resource as of #363)
 - `recordNumber`
+
+Civil identity (`patientName`, `birthDate`, `identityDocument`) is not a
+`Participant`/`Patient` field at all — it lives exclusively on
+`ParticipantIdentity` (see below), per RF005/RNF007 and dictionary
+ELM-0076–0087/P1X-0348–0364. Removed from `Patient`'s schema, allowlist,
+and every write path in #575.
 - `isDeceased`
 - `clinicalUnitId` (migrating to Reference(Organization), per dictionary
   P1X-0356 — accepts an `organizationId` reference as of #351. A one-time
@@ -109,10 +109,19 @@ not-found cases both audited).
 `ParticipantIdentity`) and `PatientIdentityService.js`'s import-time
 name+birthDate matching now resolve civil identity via
 `ParticipantIdentity` instead of `Patient`'s own copy of the fields.
-`Patient` still carries the fields (not removed yet — that's #565) and
-they're kept in sync via dual-write, since 15+ other consumers
-(consent/intake, import/FHIR, audit/notification/export — #562-#564)
-still read them directly off `Patient`.
+
+**Landed in #565/#575:** the dual-write is gone. `Patient`'s schema,
+allowlist, and every write path (`createPatient`, `updatePatient`,
+`PatientIdentityService.js#matchOrUpsertParticipant`,
+`import.service.js#upsertPatient`, `import-lgpd.service.js`'s three
+patient/sample write paths) no longer accept or persist `patientName`/
+`birthDate`/`identityDocument` on `Patient` — `ParticipantIdentity` is
+the sole store. The two now-unused indexes
+(`patients_name_document_text_v1`, `patients_name_idx_v1`) are dropped.
+(`import.controller.js#importFhirBundle` and
+`fhir-import-staging.service.js#commitBatch` still bypass `PatientModel`
+via raw `insertOne`/`updateOne` — tracked separately as #570/#571, not
+covered by this removal.)
 
 **Landed in #562:** consent/intake paths now resolve civil identity via
 `ParticipantIdentity` instead of `Patient`: `consent.controller.js`'s

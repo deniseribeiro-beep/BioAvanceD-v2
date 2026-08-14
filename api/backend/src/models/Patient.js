@@ -14,20 +14,16 @@ class ParticipantModel {
 
   static validate(data = {}) {
     const errors = [];
-    const requiredText = ['participantId', 'patientName', 'sex', 'consentTemplateId'];
+    const requiredText = ['participantId', 'sex', 'consentTemplateId'];
     for (const field of requiredText) {
       if (!data[field] || typeof data[field] !== 'string' || String(data[field]).trim() === '') {
         errors.push(`${field} é obrigatório`);
       }
     }
-    const isValidBirthDate = data.birthDate instanceof Date
-      ? !Number.isNaN(data.birthDate.getTime())
-      : typeof data.birthDate === 'string' && data.birthDate.trim() !== '';
-    if (!isValidBirthDate) {
-      errors.push('birthDate é obrigatório');
-    }
+    // RF005/RNF007 (#575): patientName/birthDate/identityDocument are civil
+    // identity — they live only on ParticipantIdentity, never on Patient.
     const allowed = new Set([
-      'participantId','patientName','birthDate','sex','email','phone','identityDocument','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos'
+      'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos'
     ]);
     for (const key of Object.keys(data)) {
       if (!allowed.has(key)) errors.push(`Campo não canônico: ${key}`);
@@ -38,8 +34,10 @@ class ParticipantModel {
   }
 
   static create(data = {}) {
+    // RF005/RNF007 (#575): patientName/birthDate/identityDocument are civil
+    // identity — they live only on ParticipantIdentity, never on Patient.
     const allowed = new Set([
-      'participantId','patientName','birthDate','sex','email','phone','identityDocument','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos'
+      'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos'
     ]);
     const unexpectedFields = Object.keys(data).filter((key) => !allowed.has(key));
     if (unexpectedFields.length > 0) {
@@ -52,12 +50,9 @@ class ParticipantModel {
 
     const normalized = {
       participantId: String(data.participantId || '').trim(),
-      patientName: String(data.patientName || '').trim(),
-      birthDate: data.birthDate ? new Date(data.birthDate) : null,
       sex: String(data.sex || '').trim(),
       email: data.email ? String(data.email).trim().toLowerCase() : null,
       phone: this.normalizePhone(data.phone),
-      identityDocument: data.identityDocument ? String(data.identityDocument).trim() : null,
       recordNumber: data.recordNumber ? String(data.recordNumber).trim() : null,
       clinicalUnitId: data.clinicalUnitId || null,
       clinicalUnit: data.clinicalUnit || null,

@@ -7,6 +7,7 @@ const { generateUniqueParticipantId, sanitizePatientForLogs } = require('../util
 const { encryptValue, decryptValue } = require('../utils/fieldEncryption');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
+const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
 
 const indexedPatientCollections = new Set();
 
@@ -105,8 +106,6 @@ class PatientService {
           }
         }
       ],
-      [{ patientName: 'text', recordNumber: 'text', identityDocument: 'text' }, { name: 'patients_name_document_text_v1' }],
-      [{ patientName: 1 }, { name: 'patients_name_idx_v1' }],
       [{ recordNumber: 1 }, { name: 'patients_record_number_idx_v1' }]
     ];
 
@@ -115,6 +114,20 @@ class PatientService {
         await collection.createIndex(keys, options);
       } catch (error) {
         logger.warn(`Não foi possível criar índice ${options.name} em ${collectionName}: ${error.message}`);
+      }
+    }
+
+    // RF005/RNF007 (#575): patientName/identityDocument no longer live on
+    // Patient — drop the indexes built on them from already-deployed
+    // collections (no-op via IndexNotFound if never created).
+    const legacyIndexNames = ['patients_name_document_text_v1', 'patients_name_idx_v1'];
+    for (const indexName of legacyIndexNames) {
+      try {
+        await collection.dropIndex(indexName);
+      } catch (error) {
+        if (error?.codeName !== 'IndexNotFound') {
+          logger.warn(`Não foi possível remover índice legado ${indexName} em ${collectionName}: ${error.message}`);
+        }
       }
     }
 
@@ -461,7 +474,19 @@ class PatientService {
         patientData.consentTemplateId = consentTemplateId;
       }
 
-      const validation = PatientModel.validate(patientData);
+      // RF005/RNF007 (#575): patientName/birthDate were previously enforced
+      // as required by PatientModel.validate() (they were in its
+      // requiredText list). Now that they're civil identity — segregated to
+      // ParticipantIdentity, never a Patient field — validate() no longer
+      // checks them, so creation needs its own explicit check here.
+      if (!patientData.patientName || (typeof patientData.patientName === 'string' && patientData.patientName.trim() === '')) {
+        throw new Error('patientName é obrigatório');
+      }
+      if (!patientData.birthDate) {
+        throw new Error('birthDate é obrigatório');
+      }
+
+      const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
       if (!validation.isValid) {
         throw new Error(validation.errors.join(', '));
       }
@@ -514,16 +539,15 @@ class PatientService {
       patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
       const patientsCollection = await this.getPatientsCollection(db);
-      const patient = PatientModel.create(patientData);
+      const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
       const persistedPatient = this.encryptSensitivePatientFields(patient);
 
       const result = await patientsCollection.insertOne(persistedPatient);
 
-      // RF005/RNF007 (#363): mirror civil identity fields into the segregated
-      // ParticipantIdentity collection. Patient still carries them too for now
-      // (20+ existing consumers — search, notifications, exports — read them
-      // off the Patient doc; migrating those off is tracked separately) but the
-      // API surface (paciente.controller.js#buscar) no longer returns them.
+      // RF005/RNF007 (#575): patientName/birthDate/identityDocument are civil
+      // identity — they never land on Patient. ParticipantIdentity is the
+      // sole write target; patientData (not the stripped `patient`) still
+      // carries them here for that write.
       const identityCollection = await getCollection(db, 'participantIdentities');
       const identityDoc = participantIdentityService.encryptIdentityFields(
         ParticipantIdentityModel.create({ ...patientData, participantId })
@@ -814,6 +838,18 @@ class PatientService {
       // Atualiza updatedAt
       updateData.updatedAt = new Date();
 
+      // RF005/RNF007 (#575): patientName/birthDate/identityDocument are
+      // civil identity — capture them for the ParticipantIdentity sync
+      // below, then strip before the $set below so Patient never carries
+      // them.
+      const identityFieldsFromUpdate = {};
+      for (const field of ['patientName', 'birthDate', 'identityDocument']) {
+        if (Object.prototype.hasOwnProperty.call(updateData, field)) {
+          identityFieldsFromUpdate[field] = updateData[field];
+        }
+      }
+      updateData = omitLegacyIdentityFields(updateData);
+
       // Busca por participantId (string de 8 dígitos) ou _id (ObjectId)
       let query;
       if (typeof participantId === 'string' && participantId.length === 8 && /^\d{8}$/.test(participantId)) {
@@ -846,19 +882,19 @@ class PatientService {
       // these fields via updatePatient previously drifted the two records
       // apart silently.
       if (updatedPatient?.participantId && (
-        Object.prototype.hasOwnProperty.call(updateData, 'patientName') ||
-        Object.prototype.hasOwnProperty.call(updateData, 'birthDate') ||
-        Object.prototype.hasOwnProperty.call(updateData, 'identityDocument')
+        Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'patientName') ||
+        Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'birthDate') ||
+        Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'identityDocument')
       )) {
         const identityUpdate = { updatedAt: updateData.updatedAt };
-        if (Object.prototype.hasOwnProperty.call(updateData, 'patientName')) {
-          identityUpdate.patientName = updateData.patientName;
+        if (Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'patientName')) {
+          identityUpdate.patientName = identityFieldsFromUpdate.patientName;
         }
-        if (Object.prototype.hasOwnProperty.call(updateData, 'birthDate')) {
-          identityUpdate.birthDate = updateData.birthDate ? new Date(updateData.birthDate) : null;
+        if (Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'birthDate')) {
+          identityUpdate.birthDate = identityFieldsFromUpdate.birthDate ? new Date(identityFieldsFromUpdate.birthDate) : null;
         }
-        if (Object.prototype.hasOwnProperty.call(updateData, 'identityDocument')) {
-          identityUpdate.identityDocument = updateData.identityDocument;
+        if (Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'identityDocument')) {
+          identityUpdate.identityDocument = identityFieldsFromUpdate.identityDocument;
         }
 
         const identityCollection = await this.getIdentityCollection(db);

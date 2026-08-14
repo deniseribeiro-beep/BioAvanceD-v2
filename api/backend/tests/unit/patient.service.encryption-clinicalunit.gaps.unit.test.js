@@ -22,6 +22,7 @@ function makeFakeCollection(overrides = {}) {
     }),
     countDocuments: vi.fn().mockResolvedValue(0),
     createIndex: vi.fn().mockResolvedValue(undefined),
+    dropIndex: vi.fn().mockResolvedValue(undefined),
     ...overrides
   };
 }
@@ -137,7 +138,9 @@ describe('PatientService.getPatientsCollection', () => {
 
     expect(db.collection).toHaveBeenCalledWith('patients');
     expect(result).toBe(patientsCollection);
-    expect(patientsCollection.createIndex).toHaveBeenCalledTimes(4);
+    // RF005/RNF007 (#575): only 2 indexes get created now — the two
+    // patientName/identityDocument indexes are dropped, not created.
+    expect(patientsCollection.createIndex).toHaveBeenCalledTimes(2);
   });
 
   it('falls back to the literal "patients" name when the collection has no collectionName property', async () => {
@@ -148,6 +151,6 @@ describe('PatientService.getPatientsCollection', () => {
 
     expect(result).toBe(patientsCollection);
     // Falling back to the 'patients' literal still lets indexes be created normally.
-    expect(patientsCollection.createIndex).toHaveBeenCalledTimes(4);
+    expect(patientsCollection.createIndex).toHaveBeenCalledTimes(2);
   });
 });
