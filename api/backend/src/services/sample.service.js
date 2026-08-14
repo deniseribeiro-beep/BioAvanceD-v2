@@ -191,12 +191,23 @@ class SampleService {
         if (!study) {
           throw createSampleValidationError(`studyId ${sampleData.studyId} não encontrado`, 404);
         }
+        // RF021 AC#5 (#591): existence alone isn't enough — a Sample can't
+        // be registered against a study that isn't active.
+        if (study.studyStatus !== 'active') {
+          throw createSampleValidationError(`Estudo ${sampleData.studyId} não está ativo (status: ${study.studyStatus})`, 422);
+        }
       }
 
       if (sampleData.protocolId !== undefined && sampleData.protocolId !== null && sampleData.protocolId !== '') {
         const protocol = await db.collection('protocols').findOne({ protocolId: String(sampleData.protocolId) });
         if (!protocol) {
           throw createSampleValidationError(`protocolId ${sampleData.protocolId} não encontrado`, 404);
+        }
+        // RF021 AC#5 (#591): same status gate as study — a Sample can't be
+        // registered against a protocol that isn't approved (draft/retired
+        // block it).
+        if (protocol.approvalStatus !== 'approved') {
+          throw createSampleValidationError(`Protocolo ${sampleData.protocolId} não está aprovado (status: ${protocol.approvalStatus})`, 422);
         }
       }
 
