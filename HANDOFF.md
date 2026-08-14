@@ -1,117 +1,77 @@
 # HANDOFF
 
-**Written:** 2026-08-14, mid-session on `test/588-protocol-caae-validity-period`
-(branched off `feature/docker-e2e-backend-integration`). **Still inside a
-rabbit hole — this is not a session end, it's a checkpoint forced by the
-Stop hooks mid-task** (see `dyeallpies-skills-pack#308`, filed this
-session: the hooks can't tell a legitimate background-agent wait from a
-real stop).
+**Written:** 2026-08-14, end of `#588` iteration on
+`feature/docker-e2e-backend-integration`. **Still inside a rabbit hole —
+not a session end.**
 
 ## Rabbit-hole state: STILL INSIDE
 
-Dennis asked to find a candidate issue to dogfood the new `rabbit-hole`
-skill for the first time. Picked `#578` (RF021: CAAE/validity-period
-fields, protocol versioning, consent/study linkage, inactive-protocol
-enforcement — all missing), confirmed the ~15-19 point estimate (over
-the skill's ~10-point sitting budget) with Dennis via `AskUserQuestion`
-before opening anything.
+Dogfooding the new `rabbit-hole` skill for the first time. Seed `#578`
+(RF021, too big for one sitting — ~15-19 points against the skill's
+~10-point budget, confirmed with Dennis via `AskUserQuestion`).
 
 - **Tracker:** [`#587`](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/587)
-  — rabbit-hole tracker for seed `#578`.
-- **Split via `divide-and-conquer`** into 5 independently-actionable
-  issues (comment added to both `#587` and `#578` the moment they were
-  filed, per the skill's live-membership rule):
-  - `#588` — CAAE + validity-period fields (**in progress**, see below).
-  - `#589` — protocol-versioning mechanism design decision. Not started.
-  - `#590` — study↔consent↔participant linkage. Not started.
-  - `#591` — inactive-protocol enforcement. Depends on `#590` for the
-    consent-side portion; the `sample.service.js` portion is
-    independently landable. Not started.
-  - `#592` — real-backend e2e coverage for the enforcement path.
-    Depends on `#588`, `#590`, `#591`. Not started.
-- **Budget spent so far this sitting: 0 points** (nothing closed yet;
-  `#588` is medium-sized, 2-3 points, once it lands).
-- **Queue order:** `#588`/`#589`/`#590` in any order (independent),
-  then `#591`, then `#592`.
+  — split via `divide-and-conquer` into `#588`-`#592`.
+- **Budget spent so far this sitting: ~2-3 points** (`#588` closed,
+  medium-sized).
+- **Queue remaining:** `#589` (protocol-versioning design decision),
+  `#590` (study↔consent↔participant linkage) — either order, both
+  independent — then `#591` (inactive-protocol enforcement, depends on
+  `#590` for its consent-side portion), then `#592` (e2e coverage,
+  depends on `#588`✓/`#590`/`#591`).
 
-### `#588` — in progress, not yet implemented
+### `#588` — CLOSED this iteration
 
-Routed to `build-loop` (spec'd-but-missing capability). Per build-loop's
-ground-truth check against `docs/docs-7-27-2026/extracted/
-dict-02_DICIONARIO.md` (outranks `docs/architecture/` and, this time,
-outranks the parent issue `#578`'s own premise), **the field placement
-in `#588`'s original title is wrong and was corrected via a comment on
-`#588` before implementing:**
+Routed to `build-loop`. Ground-truth check against
+`dict-02_DICIONARIO.md` found the issue's own title/premise wrong —
+CAAE isn't a Protocol field, it's `Study.ethicsApprovalId` (ELM-0060);
+the validity-period field is `Protocol.effectivePeriod` (ELM-0072).
+Corrected via a comment on `#588` before implementing (don't re-litigate
+this if `#578`'s original wording resurfaces elsewhere in the tracker).
 
-- CAAE does **not** belong on `Protocol`. It's `ethicsApprovalId` on
-  **`Study`** (ELM-0060, dict-02_DICIONARIO.md:68 — "Identificador do
-  parecer/protocolo ético aplicável", example "CAAE/parecer", type
-  `Identifier`, cardinality `1..*`, Core/required). `StudyModel.js`
-  doesn't have it yet.
-- The validity-period field is `effectivePeriod` on **`Protocol`**
-  (ELM-0072, dict-02_DICIONARIO.md:80 — "Vigência do protocolo... período
-  em que a versão pode ser utilizada", type `Period`/ISO 8601,
-  cardinality `1..1`, Core/required). `ProtocolModel.js` doesn't have it
-  yet.
-- Separately, `ConsentTemplate`'s own `caae` field (P1X-0367,
-  dict-02_DICIONARIO.md:798) is a **different, already-implemented**
-  field (`api/backend/src/models/ConsentTemplate.js`) — not part of
-  `#588`'s remaining scope. Don't re-add it.
+Implemented: `StudyModel.ethicsApprovalId` (required, non-empty string
+array) and `ProtocolModel.effectivePeriod` (required `{start, end}`,
+`start` required valid date, `end` optional/open-ended, must not precede
+`start`). Both go through the shared `createMasterDataRouter` factory
+(`api/backend/src/interface/routes/master-data.routes.js`) — no route
+code needed changing, only the models. Unit coverage: 17/17 new tests in
+`api/backend/tests/unit/models/studyProtocolModels.test.js` (dedicated
+file — the existing `masterDataModels.test.js` table-driven pattern
+doesn't fit Study/Protocol's shape). Updated
+`tests/e2e/study-protocol-collection-crud.spec.ts` and
+`tests/e2e/helpers/seedParticipant.ts`'s `seedStudy`/`seedProtocol` so
+the new required fields don't break existing e2e fixtures (not run live
+this iteration — no Docker; native unit coverage was the proof bar per
+the build-loop overlay for a backend-internal model slice, not one of
+the milestone's own e2e specs).
 
-Research done (Explore agent, completed this session): both
-`StudyModel`/`ProtocolModel` are validated/created through one shared
-factory, `createMasterDataRouter` in
-`api/backend/src/interface/routes/master-data.routes.js`, wired for
-`/api/studies`/`/api/protocols` in `app.js` (~line 267-276). POST there
-calls `model.validate()`/`model.create()`; PUT does not validate. No
-existing unit test covers `StudyModel`/`ProtocolModel` directly
-(`tests/unit/models/masterDataModels.test.js` covers 4 other models, not
-these two); no integration test POSTs to `/api/studies`/`/api/protocols`.
-**`tests/e2e/study-protocol-collection-crud.spec.ts` (real-backend,
-`#320`/`#326`) will break** once these fields become required — its
-generic CRUD loop posts only `{idField, nameField}` today and expects
-`201`; it'll need updating to supply `ethicsApprovalId`/`effectivePeriod`
-in the same slice. No frontend create/update UI exists for
-Study/Protocol (checked, zero matches) — no frontend submit-payload risk.
-
-**Next action:** implement `StudyModel.ethicsApprovalId` (required,
-non-empty array of strings) and `ProtocolModel.effectivePeriod`
-(required object: `start` required valid date, `end` optional, `end >=
-start` when both present) in `Study.js`/`Protocol.js`, update
-`study-protocol-collection-crud.spec.ts`'s fixtures to supply both,
-write/run the failing-then-passing unit test first per build-loop, then
-follow `fix-bugs`' "Ending an iteration" mechanics (commit referencing
-`#588`, merge to `feature/docker-e2e-backend-integration`, close with
-merge hash, `wrap-up`, rotate this file again per rabbit-hole Step 4 —
-"still inside"/"exited" — before popping the next queue item).
+Merged: `6d484bed` / merge `28f93db8` on
+`feature/docker-e2e-backend-integration`. Closed with the merge hash
+noted on the issue. Branch `test/588-protocol-caae-validity-period`
+deleted locally and remotely after merge.
 
 ## Repo state
 
-- Currently on `test/588-protocol-caae-validity-period`, branched off
-  `feature/docker-e2e-backend-integration` at `f18dfca9`. Working tree
-  clean — no product code changed yet this branch.
-- `feature/docker-e2e-backend-integration` itself: pushed at `f18dfca9`
-  (this session added one housekeeping commit installing the
-  `rabbit-hole` skill — `.claude/.gitignore`/`.claude/skills-manifest.txt`
-  only, no product code). Everything from the prior handoff
-  (`d42fa72b`, `#582`/`#583`/`#584`) still applies unchanged. **Still not
-  merged to `main` — no PR opened**, unchanged from before.
-- Issues filed this session: `BioAvanceD-v2#587` (rabbit-hole tracker),
-  `#588`-`#592` (the split), `dyeallpies-skills-pack#308` (Stop-hook
-  checkpoint gap for backgrounded `Agent`-tool waits, found live during
-  this session's own use of the `Agent` tool).
-- New skill installed: `rabbit-hole`, junctioned from the pack, recorded
-  in `.claude/skills-manifest.txt`.
+- On `feature/docker-e2e-backend-integration`, pushed at `28f93db8`,
+  working tree clean. Carries this session's rabbit-hole-skill-install
+  commit (`f18dfca9`) and `#588`'s merge on top of the prior handoff's
+  `d42fa72b`. **Still not merged to `main` — no PR opened.**
+- Docker/CI gate hasn't run this session (native-only, per build-loop's
+  backend-internal-slice proof bar) — still owed at ship time per
+  `ship-integration-branch`, same standing note as every prior handoff.
+- Issues this session (cumulative): `#587` (tracker), `#588` (closed),
+  `#589`-`#592` (open, queued), `dyeallpies-skills-pack#308` (Stop-hook
+  checkpoint gap for backgrounded `Agent`-tool waits).
 
 ## Recommended next steps
 
-**Resume inside the rabbit hole** — this is not a fresh backlog pick.
-Continue `#588` per the "Next action" above, then proceed through the
-tracker `#587` queue (`#589`, `#590`, `#591`, `#592`), re-deriving
-membership before each pop per the skill's rule (a mid-run split could
-add another member). Stop and re-surface once the running point total
-would exceed the ~10-point sitting budget (Step 5) — likely partway
-through, not all 5 in one sitting.
+**Resume inside the rabbit hole** if continuing this sitting — pick
+`#589` or `#590` next (both independent, no ordering preference), route
+each through `work-issue`'s classification same as `#588` was. Re-derive
+tracker `#587`'s membership before popping (a mid-run split could add a
+member). Budget allows roughly one more medium item or a small one
+before the ~10-point sitting guidance is reached — Dennis should confirm
+whether to continue this sitting or pick it up later.
 
 Carried forward from prior handoffs, still relevant, not touched this
 session:
