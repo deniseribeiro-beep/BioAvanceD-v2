@@ -196,6 +196,49 @@ describe('PatientService.createPatient', () => {
     encryptSpy.mockRestore();
   });
 
+  it('links the patient to a study when a valid studyId is provided (RF021 AC#4, #594)', async () => {
+    const patientsCollection = makeFakeCollection();
+    const consentTemplatesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011', name: 'Template' })
+    });
+    const studiesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ studyId: 'study-1' })
+    });
+    const db = makeFakeDb({
+      patients: patientsCollection,
+      consent_templates: consentTemplatesCollection,
+      studies: studiesCollection
+    });
+
+    const result = await patientService.createPatient(db, validPatientData({ studyId: 'study-1' }), {
+      skipConsentNotification: true,
+      skipBiomarkerArtifacts: true
+    });
+
+    expect(studiesCollection.findOne).toHaveBeenCalledWith({ studyId: 'study-1' });
+    expect(result.studyId).toBe('study-1');
+  });
+
+  it('rejects creation when the provided studyId matches no study (RF021 AC#4, #594)', async () => {
+    const patientsCollection = makeFakeCollection();
+    const consentTemplatesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011', name: 'Template' })
+    });
+    const studiesCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    const db = makeFakeDb({
+      patients: patientsCollection,
+      consent_templates: consentTemplatesCollection,
+      studies: studiesCollection
+    });
+
+    await expect(
+      patientService.createPatient(db, validPatientData({ studyId: 'does-not-exist' }), {
+        skipConsentNotification: true,
+        skipBiomarkerArtifacts: true
+      })
+    ).rejects.toMatchObject({ message: expect.stringContaining('studyId does-not-exist não encontrado') });
+  });
+
   it('rejects creation when an identifier conflict (duplicate identityDocument) exists', async () => {
     // RF005/RNF007 (#575): identityDocument conflicts are checked against
     // ParticipantIdentity, not the Patient collection.

@@ -130,6 +130,17 @@ describe('PatientModel.validate', () => {
     expect(result.isValid).toBe(false);
   });
 
+  it('accepts studyId as canonical (RF021 AC#4, #594 — optional study linkage)', () => {
+    const result = PatientModel.validate({ ...validData, studyId: 'study-1' });
+    expect(result.isValid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('does not require studyId', () => {
+    const result = PatientModel.validate(validData);
+    expect(result.isValid).toBe(true);
+  });
+
   it('does not require email', () => {
     const result = PatientModel.validate(validData);
     expect(result.isValid).toBe(true);
@@ -287,6 +298,12 @@ describe('PatientModel.create', () => {
     expect(result.consentTokenExpiresAt).toBeNull();
     expect(result.consentNotifiedAt).toBeNull();
     expect(result.consentAcceptedAt).toBeNull();
+    expect(result.studyId).toBeNull();
+  });
+
+  it('passes through studyId when provided (RF021 AC#4, #594)', () => {
+    const result = PatientModel.create({ ...baseData, studyId: 'study-1' });
+    expect(result.studyId).toBe('study-1');
   });
 
   it('defaults anamneseGeral to null and dadosEspecificos to an empty array when absent', () => {

@@ -54,6 +54,14 @@ describe('paciente.controller', () => {
         expect.objectContaining({ statusCode: 422, code: 'NON_CANONICAL_FIELD', fields: ['legacyAlias'] })
       );
     });
+
+    // RF021 AC#4 (#594): studyId must be allowed here in lockstep with
+    // PatientModel's own allow-list (see patient.model.unit.test.js's
+    // equivalent case) — #345 is the tracked risk that these two
+    // duplicated lists drift out of sync.
+    it('allows studyId', () => {
+      expect(() => controller.rejectCanonicalAliases({ patientName: 'Foo', studyId: 'study-1' })).not.toThrow();
+    });
   });
 
   describe('sanitizePatientPayload', () => {
