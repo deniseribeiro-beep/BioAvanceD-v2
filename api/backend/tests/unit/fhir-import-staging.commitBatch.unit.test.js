@@ -86,15 +86,28 @@ describe('fhir-import-staging.service#commitBatch — ParticipantIdentity dual-w
 
     expect(result.committed).toBe(1);
 
+    // #571/#575: patientName/birthDate/identityDocument are civil identity
+    // — they land only on ParticipantIdentity, never on Patient (a
+    // non-canonical field there per PatientModel's allowlist).
     const patient = db.collections.patients.docs.find((doc) => doc.participantId === 'PART-563');
     expect(patient).toBeTruthy();
-    expect(patient.patientName).toBe('Maria Silva');
+    expect(patient.patientName).toBeUndefined();
+    expect(patient.cpf).toBeUndefined();
 
     const identity = db.collections.participantIdentities.docs.find((doc) => doc.participantId === 'PART-563');
     expect(identity).toBeTruthy();
     expect(identity.patientName).toBe('Maria Silva');
     expect(identity.identityDocument).toBe('12345678900');
     expect(identity.birthDate).toBeInstanceOf(Date);
+  });
+
+  it('#571: carries sex onto Patient when the FHIR resource provides Patient.gender', async () => {
+    db.collections.import_staging_records.docs[0].normalized.patientSex = 'F';
+
+    await fhirImportStagingService.commitBatch(db, batchId);
+
+    const patient = db.collections.patients.docs.find((doc) => doc.participantId === 'PART-563');
+    expect(patient.sex).toBe('F');
   });
 
   it('is idempotent: re-committing an already-committed batch does not duplicate the ParticipantIdentity record', async () => {

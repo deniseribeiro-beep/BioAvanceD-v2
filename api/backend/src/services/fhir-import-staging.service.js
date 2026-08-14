@@ -912,13 +912,21 @@ async function commitBatch(db, batchIdRaw) {
     const workflow = buildWorkflowSnapshot(record);
     const importedAt = new Date();
     const importedBy = String(batchInfo?.createdBy || record.createdBy || record.importedBy || '').trim() || null;
+    // #571: patientName/cpf used to be written here directly, but
+    // patientName/birthDate/identityDocument are civil identity — #575's
+    // atomic removal means they never land on Patient at all (PatientModel
+    // rejects them as non-canonical); the ParticipantIdentity dual-write
+    // right below is their sole write target. `sex` (FHIR Patient.gender,
+    // when present) is genuinely a canonical Patient field, unlike those
+    // two. `consentTemplateId`/`status` stay unset — a FHIR-committed
+    // Patient has no consent-template flow to draw them from (this import
+    // path gates on a signed FHIR Consent resource instead).
     await patients.updateOne(
       { participantId: normalized.participantId },
       {
         $setOnInsert: {
           participantId: normalized.participantId,
-          patientName: normalized.patientName,
-          cpf: normalized.patientDocument,
+          ...(normalized.patientSex ? { sex: normalized.patientSex } : {}),
           createdAt: new Date(),
         },
         $set: {
