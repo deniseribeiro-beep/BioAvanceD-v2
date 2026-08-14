@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import { realLogin } from './helpers/realAuth';
 import {
   createRealParticipant,
-  seedOperationalLocation,
+  seedStorageBoxLocation,
   closeSeedDb,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
@@ -29,14 +29,15 @@ function validSampleFields() {
 
 async function createRealSample(request: any, token: string): Promise<string> {
   const participant = await createRealParticipant(request, apiBaseURL!, token);
-  const locationID = await seedOperationalLocation();
+  const { boxId, positionCode } = await seedStorageBoxLocation();
 
   const create = await request.post(`${apiBaseURL}/api/samples`, {
     headers: { Authorization: `Bearer ${token}` },
     data: {
       participantId: participant.participantId,
       ...validSampleFields(),
-      locationID,
+      boxId,
+      positionCode,
     },
   });
   expect([201, 202]).toContain(create.status());
