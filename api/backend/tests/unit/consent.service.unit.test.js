@@ -1248,7 +1248,7 @@ describe('ConsentService.createPatientConsent', () => {
     const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
     const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
     const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
-    const studies = makeCollection({ findOne: vi.fn(async () => ({ studyId: 'study-1' })) });
+    const studies = makeCollection({ findOne: vi.fn(async () => ({ studyId: 'study-1', studyStatus: 'active' })) });
     const db = makeDb({ patients, consent_templates: templates, patientConsents: consents, studies });
 
     const result = await consentService.createPatientConsent(db, {
@@ -1278,6 +1278,23 @@ describe('ConsentService.createPatientConsent', () => {
         ...validSignature,
       })
     ).rejects.toThrow('studyId does-not-exist não encontrado');
+  });
+
+  it('rejects with 422 when the linked study is not active (RF021 AC#5, #596)', async () => {
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
+    const studies = makeCollection({ findOne: vi.fn(async () => ({ studyId: 'study-1', studyStatus: 'closed-to-accrual' })) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: makeCollection(), studies });
+
+    await expect(
+      consentService.createPatientConsent(db, {
+        participantId: '12345678',
+        consentTemplateId: templateId.toString(),
+        responses: { analytics: true },
+        studyId: 'study-1',
+        ...validSignature,
+      })
+    ).rejects.toMatchObject({ statusCode: 422 });
   });
 });
 
