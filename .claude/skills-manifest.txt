@@ -37,3 +37,4 @@ projects/bioavanced-v2/testing-conventions
 projects/bioavanced-v2/legacy
 # machine profile
 machines/dennis-windows
+rabbit-hole
