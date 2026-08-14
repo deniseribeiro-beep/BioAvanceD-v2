@@ -704,6 +704,17 @@ class ConsentService {
 
       this.validateResponsesAgainstTemplate(template, normalizedPayload.responses || {});
 
+      // RF021 AC#4 (#593): studyId is optional — not every consent is tied
+      // to a research study — but when provided, it must resolve to a real
+      // Study, same referential-integrity pattern as
+      // sample.service.js:187-192 for Sample.studyId.
+      if (normalizedPayload.studyId !== undefined && normalizedPayload.studyId !== null && normalizedPayload.studyId !== '') {
+        const study = await db.collection('studies').findOne({ studyId: String(normalizedPayload.studyId) });
+        if (!study) {
+          throw new Error(`studyId ${normalizedPayload.studyId} não encontrado`);
+        }
+      }
+
       const consentsCollection = await getCollection(db, 'consents');
       await consentsCollection.updateMany(
         { participantId, status: 'ACTIVE' },

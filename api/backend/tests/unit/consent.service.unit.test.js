@@ -1243,6 +1243,42 @@ describe('ConsentService.createPatientConsent', () => {
     expect(result._id).toBeDefined();
     expect(result.signatureHash).toBeDefined();
   });
+
+  it('links the consent to a study when a valid studyId is provided (RF021 AC#4, #593)', async () => {
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
+    const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
+    const studies = makeCollection({ findOne: vi.fn(async () => ({ studyId: 'study-1' })) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents, studies });
+
+    const result = await consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
+      responses: { analytics: true },
+      studyId: 'study-1',
+      ...validSignature,
+    });
+
+    expect(studies.findOne).toHaveBeenCalledWith({ studyId: 'study-1' });
+    expect(result.studyId).toBe('study-1');
+  });
+
+  it('rejects when the provided studyId matches no study (RF021 AC#4, #593)', async () => {
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
+    const studies = makeCollection({ findOne: vi.fn(async () => null) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: makeCollection(), studies });
+
+    await expect(
+      consentService.createPatientConsent(db, {
+        participantId: '12345678',
+        consentTemplateId: templateId.toString(),
+        responses: { analytics: true },
+        studyId: 'does-not-exist',
+        ...validSignature,
+      })
+    ).rejects.toThrow('studyId does-not-exist não encontrado');
+  });
 });
 
 describe('ConsentService.revokeConsent', () => {

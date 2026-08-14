@@ -145,6 +145,19 @@ describe('PatientConsentModel', () => {
       expect(result.isValid).toBe(false);
       expect(result.errors.length).toBeGreaterThanOrEqual(3);
     });
+
+    it('deve aceitar quando studyId está ausente (RF021 AC#4, #593 — opcional)', () => {
+      const result = PatientConsentModel.validate(validData);
+
+      expect(result.isValid).toBe(true);
+    });
+
+    it('deve rejeitar studyId não string', () => {
+      const result = PatientConsentModel.validate({ ...validData, studyId: 123 });
+
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('studyId deve ser string');
+    });
   });
 
   describe('create', () => {
@@ -168,6 +181,17 @@ describe('PatientConsentModel', () => {
       expect(record.signedAt).toBeInstanceOf(Date);
       expect(record.createdAt).toBeInstanceOf(Date);
       expect(record.updatedAt).toBeInstanceOf(Date);
+      expect(record.studyId).toBeNull();
+    });
+
+    it('deve armazenar studyId quando fornecido (RF021 AC#4, #593)', () => {
+      const record = PatientConsentModel.create({
+        participantId: 'p-1',
+        consentTemplateId: 'ct-1',
+        studyId: 'study-1',
+      });
+
+      expect(record.studyId).toBe('study-1');
     });
 
     it('deve usar valores fornecidos quando presentes', () => {
