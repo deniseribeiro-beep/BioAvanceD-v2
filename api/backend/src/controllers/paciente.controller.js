@@ -37,7 +37,11 @@ class PacienteController {
       'createdAt',
       'updatedAt',
       'anamneseGeral',
-      'dadosEspecificos'
+      'dadosEspecificos',
+      // RF021 AC#4 (#594): must stay in sync with Patient.js's own
+      // allow-list — see #345, these two lists are duplicated and drift
+      // silently if only one is updated.
+      'studyId'
     ]);
     const fields = Object.keys(payload).filter((field) => !allowed.has(field));
     if (fields.length > 0) {

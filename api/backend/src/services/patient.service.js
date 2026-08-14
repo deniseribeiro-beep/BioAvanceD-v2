@@ -474,6 +474,18 @@ class PatientService {
         patientData.consentTemplateId = consentTemplateId;
       }
 
+      // RF021 AC#4 (#594): studyId is optional — not every patient is
+      // enrolled in a research study — but when provided, it must resolve
+      // to a real Study, same referential-integrity pattern as
+      // sample.service.js:187-192 (Sample.studyId) and consent.service.js's
+      // createPatientConsent (#593, PatientConsent.studyId).
+      if (patientData.studyId !== undefined && patientData.studyId !== null && patientData.studyId !== '') {
+        const study = await db.collection('studies').findOne({ studyId: String(patientData.studyId) });
+        if (!study) {
+          throw new Error(`studyId ${patientData.studyId} não encontrado`);
+        }
+      }
+
       // RF005/RNF007 (#575): patientName/birthDate were previously enforced
       // as required by PatientModel.validate() (they were in its
       // requiredText list). Now that they're civil identity — segregated to

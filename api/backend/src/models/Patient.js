@@ -23,7 +23,7 @@ class ParticipantModel {
     // RF005/RNF007 (#575): patientName/birthDate/identityDocument are civil
     // identity — they live only on ParticipantIdentity, never on Patient.
     const allowed = new Set([
-      'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos'
+      'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos','studyId'
     ]);
     for (const key of Object.keys(data)) {
       if (!allowed.has(key)) errors.push(`Campo não canônico: ${key}`);
@@ -37,7 +37,7 @@ class ParticipantModel {
     // RF005/RNF007 (#575): patientName/birthDate/identityDocument are civil
     // identity — they live only on ParticipantIdentity, never on Patient.
     const allowed = new Set([
-      'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos'
+      'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos','studyId'
     ]);
     const unexpectedFields = Object.keys(data).filter((key) => !allowed.has(key));
     if (unexpectedFields.length > 0) {
@@ -72,7 +72,10 @@ class ParticipantModel {
       createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
       updatedAt: data.updatedAt ? new Date(data.updatedAt) : new Date(),
       anamneseGeral: data.anamneseGeral || null,
-      dadosEspecificos: data.dadosEspecificos || []
+      dadosEspecificos: data.dadosEspecificos || [],
+      // RF021 AC#4 (#594): optional study linkage, same pattern as
+      // Sample.js's studyId and PatientConsent.js's studyId (#593).
+      studyId: data.studyId || null
     };
     const validation = this.validate(normalized);
     if (!validation.isValid) {
