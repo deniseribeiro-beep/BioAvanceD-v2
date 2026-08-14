@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
+import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 
 // Real backend only — see specimen-quality-inventory.spec.ts for the same
 // skip rationale. Run via `npm run test:e2e:docker` against the compose
@@ -78,3 +79,44 @@ for (const { path, singular, idField, nameField } of entities) {
     });
   });
 }
+
+// #325 (RF020, narrowed — see issue comment: full MIABIS-institutional
+// scope split out to #576 since organization.routes.js has no PUT/DELETE
+// and Collection is Fase-1-only). Covers the organization operations that
+// actually exist today: create + list via /api/organizations.
+test.describe('organizations create+list (#325)', () => {
+  test('creates and lists an organization, and records it on the audit trail', async ({ request }) => {
+    const admin = await realLogin(request);
+    const officialName = `e2e org ${Date.now()}`;
+
+    const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
+
+    const createResponse = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { officialName, countryCode: 'BR', organizationType: 'biobank' },
+    });
+    expect(createResponse.status()).toBe(201);
+    const created = await createResponse.json();
+    expect(created.data.officialName).toBe(officialName);
+
+    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+
+    const listResponse = await request.get(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(listResponse.status()).toBe(200);
+    const list = await listResponse.json();
+    expect(list.data.some((item: Record<string, unknown>) => item.officialName === officialName)).toBe(true);
+  });
+
+  test('rejects creating an organization missing its required countryCode', async ({ request }) => {
+    const admin = await realLogin(request);
+
+    const response = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { officialName: `e2e org invalid ${Date.now()}` },
+    });
+
+    expect(response.status()).toBe(400);
+  });
+});
