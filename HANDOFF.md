@@ -66,12 +66,12 @@ again... without asking me questions") and drove it to completion.
   `fix/596-...`, `test/592-...`, `fix/592-storageservice-pinned-tests`)
   merged `--no-ff` and deleted locally; none were ever pushed to remote,
   so no remote cleanup needed.
-- **Docker test stack is still up** (`compose.test.yml`, brought up this
-  session for `#592`'s real-backend verification) — needs teardown.
-  `docker-workflow`'s Docker-on-by-default-per-iteration note for this
-  kind of loop applies regardless of who started the stack; tear it down
-  at session end (`clean-up` skill's docker domain) rather than leaving
-  it idle across sessions (the exact shape that produced pack `#160`).
+- **Docker test stack torn down** at session end (`compose.test.yml`,
+  brought up for `#592`'s real-backend verification): `docker compose
+  down`, session-tagged test images removed (`docker rmi`), build cache
+  pruned (`docker builder prune -af`, ~899MB reclaimed). Named test-stack
+  volumes (`bioavanced-test_*-data`) and the dev stack's own images left
+  untouched, per `docker-workflow`'s hygiene rules.
 - Backend unit suite: 593/593 across every file touching
   `storageLocation` (17 files, targeted sweep — full-suite run is
   reserved for the ship gate). Real-backend e2e: 41/41 across
