@@ -1,95 +1,89 @@
 # HANDOFF
 
-**Written:** 2026-08-14, end of session. A short `fix-bugs` pass: two
-issues picked deliberately as a pair (`#598`, `#597`) because both were
-gaps in `tests/e2e/helpers/seedParticipant.ts`'s fixture family — the
-same helpers the human showcase-video work earlier today (`e6df8fe6`)
-depends on — rather than an unrelated backlog grab-bag.
+**Written:** 2026-08-14, later same day. User asked to "pick a group of
+issues to work on without guidance" — picked two independent, well-scoped
+`bug`-labeled issues (`#595`, `#530`) from the open backlog, deliberately
+skipping the larger/owner-gated ones (`#585`, `#579`, `#570` — see
+"Recommended next steps").
 
 ## What happened this session
 
-1. Picked `deniseribeiro-beep/BioAvanceD-v2#598` and `#597` together
-   (both fixture drift in `tests/e2e/helpers/seedParticipant.ts`'s
-   family; `#598` was found *by* the prior session's showcase-video
-   work). Branched `fix/598-597-storage-fixture-drift` off
-   `feature/docker-e2e-backend-integration`.
-2. `#598`: `seedStorageBoxLocation()`'s freezer insert now sets
-   `status: 'OPERATIONAL'` (raw `insertOne` was bypassing
-   `StorageContainer.js`'s Mongoose default), matching `seedSensor.ts`'s
-   `seedFreezerContainer()`. Commit `091e203f`.
-3. `#597`: `scientific-data-access.spec.ts` now uses
-   `seedStorageBoxLocation()`/`boxId`+`positionCode` instead of the
-   already-removed `seedOperationalLocation()`/`locationID`, same
-   pattern `#592` used for `specimen-quality-inventory.spec.ts`. Commit
-   `6402526d`.
-4. **Docker turned on for this session** (user's explicit call, since
-   both fixes are only provable against the real backend) — brought up
-   `compose.test.yml`'s core services + `admin-bootstrap-test` via the
-   documented recipe. Verified both fixes for real: all 27 tests across
-   `scientific-data-access.spec.ts` + `specimen-quality-inventory.spec.ts`
-   passed, and a direct `GET /api/storage/freezers` check confirmed 21
-   `seedStorageBoxLocation()`-created freezers are now visible with
-   `status: 'OPERATIONAL'` (previously invisible to that endpoint).
-   Re-verified on the merged tree before pushing.
-5. Merged `fix/598-597-storage-fixture-drift` into
-   `feature/docker-e2e-backend-integration` (`3695055b`, `--no-ff`),
-   pushed, closed both issues with the fix commit hashes and verification
-   detail, deleted the fix branch (local + remote — remote delete
-   succeeded this time, no permission classifier block).
-6. Docker stack torn down cleanly: `compose.test.yml down` (containers +
-   network removed, `mongodb-test-data` named volume kept per hygiene),
-   this session's manually-tagged test images removed (`frontend-app-test`,
-   `worker-test`, `admin-bootstrap-test`, `backend-app-test`, `tsa-test`,
-   `witness-test`), build cache pruned ~875MB via `builder prune -af`.
-   Dev-stack (`bioavanced-*`) images and any named cache volumes
-   untouched.
-7. Filed **`DyeAllPies/dyeallpies-skills-pack#315`**: while waiting on
-   the backgrounded `docker compose up`, a `ToolSearch` call (loading a
-   deferred tool's schema — `TodoWrite`, then later `Monitor`) defeated
-   `session-cleanup-checkpoint.cjs`'s background-wait exemption
-   (`#293`/`#295`'s fix family) because `ToolSearch` isn't in
-   `isInertFollowUp`'s name allow-list. Recognized the premature
-   fire and deferred real cleanup until verification/merge/close were
-   actually done, rather than tearing the stack down mid-verification.
-   This is a skills-pack/hook-orchestration issue, not a BioAvanceD-v2
-   product finding — filed there, not here.
+1. Pushed a pending `.claude/assets-manifest.txt` bump (`9a11e9e1`,
+   predated this conversation — a skills-pack deploy artifact, not
+   product work) that was sitting ahead of `origin` at session start.
+2. **`#595`** (`reports.routes.js`'s `sampleAnalysis` preview always
+   nulled `patientID`, same bug class as the already-closed `#573`):
+   reproduced with a new test in `reports.routes.gaps.test.js`
+   (confirmed failing first), fixed with `sample.participantId` instead
+   of the nonexistent `sample.patientID` (`reports.routes.js` line 426).
+   Commit `12bbd331`, merged `--no-ff` into
+   `feature/docker-e2e-backend-integration` at `91557f4f`, re-verified
+   on the merged tree (61/61 across `reports.routes.gaps.test.js` +
+   `reports.api.test.js`), closed with the merge hash. `fix/595-*`
+   branch deleted local + remote (remote delete succeeded this time, no
+   permission-classifier block).
+3. **`#530`** (claimed `ci-pipeline.yml` never runs `dictionary:validate`,
+   letting `#529`-style catalog drift merge undetected) — traced before
+   fixing, per `fix-bugs`' "no silent dismissals" bar, and the central
+   claim didn't hold up: `dictionary:validate` **is** already wired in,
+   via `ci-pipeline.yml`'s "Run backend test suite" step running
+   `backend-unit-runner`, whose `compose.test.yml` command is `npm run
+   current-state:ci` (includes `dictionary:validate`, unmodified, no
+   skip flag) — confirmed by reading the script and running it locally
+   (929/929 passes). This step predates `#530` (present since `82f82808`,
+   2026-07-09).
+   - The **real** gap, which the user independently confirmed mid-session
+     ("we haven't really run CI on our branch... only Denise has on main
+     without the tests we've done"): `ci-pipeline.yml`'s trigger is
+     `push`/`pull_request` to `main` **only** — `feature/docker-e2e-backend-integration`
+     (where all our actual work lands) never triggers CI at all. That's
+     the real reason `#529`'s drift went undetected, not a missing step.
+   - Closed `#530` as not-reproducible-as-filed (comment has the full
+     trace). Filed **`#599`** with the correctly-scoped finding
+     (trigger-scope gap), explicitly framed as the repo owner's call —
+     widening a workflow trigger Denise owns isn't something to do
+     unilaterally, and it has real tradeoffs (CI minutes, whether every
+     `fix/`/`test/` branch push should also trigger the full
+     docker-compose stack, or just the integration branch).
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, clean, pushed, in sync
-  with `origin` at `3695055b`. No uncommitted changes.
-- `test/human-showcase-video` (prior session's showcase-video branch,
-  commit `e6df8fe6`) is **still separate, not merged, not touched this
-  session** — still ready to show Dennis / merge on his go, per the
-  prior handoff.
-- No Docker containers/images left running or lingering from this
-  session. `mongodb-test-data` and dev-stack named volumes persist, as
-  designed.
+  with `origin` at `91557f4f`. No uncommitted changes, no lingering
+  session branches (local or remote).
+- No Docker involved this session — both issues were fully resolvable
+  natively (vitest for `#595`; static tracing + a local script run for
+  `#530`).
 
 ## Recommended next steps
 
-Dennis didn't name a specific next task before this sitting — **none
-queued**. Candidates below are carried forward from the prior handoff,
-minus `#598`/`#597` (resolved this session) — not an instruction to pick
-any particular one:
+Nothing explicitly queued by the user beyond "pick a group" (done).
+Carried-forward candidates, unchanged by this session except where noted:
 
+- **`#599`** (new this session) — needs Denise's call on whether
+  `ci-pipeline.yml` should also trigger on
+  `feature/docker-e2e-backend-integration`, so our own branch gets CI
+  signal before a change ever reaches `main`. Not code-resolvable
+  without her input.
 - **`test/human-showcase-video`** — still awaiting Dennis's go to
   show/merge (unrelated to this session's work, just still open).
 - **`#336`** — still needs Dennis's call (fix vs. retire the legacy
-  `import.controller.js#importFhirBundle` endpoint); `#570`'s findings
-  are posted on its own thread, cross-referenced from `#336`.
+  `import.controller.js#importFhirBundle` endpoint). `#570` traced this
+  far beyond its original one-line-fix framing and concluded the real
+  fix depends on `#336`'s decision first — don't re-scope `#570` without
+  `#336` resolving.
 - **`#579`** (systemic `MongoTopologyClosedError` in shared e2e Mongo
   singleton helpers, blocking `#331`'s close) — still open, needs the
-  live Docker stack to reproduce/root-cause.
+  live Docker stack to reproduce/root-cause. Not picked this session
+  (too large to start blind, per the "pick a group" framing).
 - **`#331`** stays open pending `#579`.
-- `deniseribeiro-beep/BioAvanceD-v2#585` — repo-owner call on reviving or
-  retiring `playwright-runner`/`frontend-unit-runner`. Not
-  code-resolvable.
+- **`#585`** — repo-owner call on reviving (fix the confirmed InfluxDB
+  env-var gap) or retiring `playwright-runner`. Not picked this session
+  — the concrete sub-fix is real but gated on the revive-vs-retire
+  decision, so fixing it now risks wasted effort either way.
 - `deniseribeiro-beep/BioAvanceD-v2#586` — re-identification authorization
   follow-up for `toFhirPatient`, not urgent, no live caller yet.
-- Skills-pack `#297`/`#294` — still open, unchanged.
-- Skills-pack `#315` — new this session, the `ToolSearch` inert-followup
-  gap, see above.
+- Skills-pack `#297`/`#294`/`#315` — unchanged, not touched this session.
 - pack-repo `#279`/`#280`/`#281`/`#283`/`#248`/`#270`/`#286`/`#301`/
   `#309`/`#310`/`#311`/`#312`/`#313`/`#314` — unchanged, not checked
   this session.
