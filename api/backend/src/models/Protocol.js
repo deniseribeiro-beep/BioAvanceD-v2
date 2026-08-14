@@ -4,6 +4,16 @@
  * Não confundir com ExtractionProtocol.js (vocabulário controlado de métodos
  * de extração usado em Sample.extractionProtocol) — este é o protocolo
  * técnico/científico vinculado a um estudo (Sample.protocolId).
+ *
+ * protocolVersion (ELM-0071) is deliberately a plain controlled-string
+ * field, not a supersession chain — decided in #589 (RF021 AC#2). The
+ * dictionary defines no versionGroupId/previousProtocolId pair for
+ * Protocol the way it does for ConsentTemplate (P1X-0365/P1X-0366,
+ * ConsentTemplate.js); ELM-0071 itself is "Versão formal controlada"
+ * (SemVer/document control), matching FHIR PlanDefinition.version — a
+ * single current-version string, not a history mechanism. Don't add a
+ * versionGroupId/previousProtocolId pair here on the ConsentTemplate
+ * precedent without a matching dictionary entry authorizing it first.
  */
 class ProtocolModel {
   static validate(data) {
