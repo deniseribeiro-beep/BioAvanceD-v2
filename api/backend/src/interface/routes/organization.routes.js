@@ -44,6 +44,27 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
+router.get('/:id', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+
+    const collection = await getCollection(db, 'organizations');
+    const query = buildIdQuery(String(req.params.id));
+
+    const item = await collection.findOne(query);
+    if (!item) {
+      return res.status(404).json({ success: false, error: 'Organização não encontrada' });
+    }
+
+    return res.status(200).json({ success: true, data: item });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: 'Erro ao buscar organização', message: error.message });
+  }
+});
+
 router.post('/', authenticate, requirePermission('manageOrganizations'), async (req, res) => {
   try {
     const payload = {
