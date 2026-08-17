@@ -274,6 +274,264 @@ services:
         condition: service_healthy
     networks: [bioavanced-test]
 
+  reference-data-bootstrap-test:
+    # RF028 (#374): one-shot, idempotent HPO reference-data import — first
+    # of the 16 Fase 2 sources, mirrors compose.dev.yml's
+    # reference-data-bootstrap. Runs after foundation-bootstrap-test so
+    # Fase 1 schemas/collections are ready first (Plano Integrado Fase 2
+    # dependency), same ordering as the dev stack. Idempotent via the run's
+    # idempotencyKey lookup; repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:hpo"]
+    depends_on:
+      foundation-bootstrap-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-mondo-test:
+    # RF028 (#374): one-shot, idempotent MONDO reference-data import —
+    # second of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-test completes, matching the dev stack's
+    # documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:mondo"]
+    depends_on:
+      reference-data-bootstrap-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-orpha-test:
+    # RF028 (#374): one-shot, idempotent ORPHA reference-data import —
+    # third of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-mondo-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:orpha"]
+    depends_on:
+      reference-data-bootstrap-mondo-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-icd11-test:
+    # RF028 (#374): one-shot, idempotent ICD-11 reference-data import —
+    # fourth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-orpha-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:icd11"]
+    depends_on:
+      reference-data-bootstrap-orpha-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-icd10-test:
+    # RF028 (#374): one-shot, idempotent ICD-10 reference-data import —
+    # fifth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-icd11-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:icd10"]
+    depends_on:
+      reference-data-bootstrap-icd11-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-omim-test:
+    # RF028 (#374): one-shot, idempotent OMIM reference-data import —
+    # sixth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-icd10-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:omim"]
+    depends_on:
+      reference-data-bootstrap-icd10-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-hgnc-test:
+    # RF028 (#374): one-shot, idempotent HGNC reference-data import —
+    # seventh of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-omim-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:hgnc"]
+    depends_on:
+      reference-data-bootstrap-omim-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-loinc-test:
+    # RF028 (#374): one-shot, idempotent LOINC reference-data import —
+    # eighth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-hgnc-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:loinc"]
+    depends_on:
+      reference-data-bootstrap-hgnc-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-ucum-test:
+    # RF028 (#374): one-shot, idempotent UCUM reference-data import —
+    # ninth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-loinc-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:ucum"]
+    depends_on:
+      reference-data-bootstrap-loinc-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-dcb-test:
+    # RF028 (#374): one-shot, idempotent DCB reference-data import — tenth
+    # of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-ucum-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:dcb"]
+    depends_on:
+      reference-data-bootstrap-ucum-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-atc-test:
+    # RF028 (#374): one-shot, idempotent ATC reference-data import —
+    # eleventh of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-dcb-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:atc"]
+    depends_on:
+      reference-data-bootstrap-dcb-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-duo-test:
+    # RF028 (#374): one-shot, idempotent DUO reference-data import —
+    # twelfth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-atc-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:duo"]
+    depends_on:
+      reference-data-bootstrap-atc-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-uberon-test:
+    # RF028 (#374): one-shot, idempotent Uberon reference-data import —
+    # thirteenth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-duo-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:uberon"]
+    depends_on:
+      reference-data-bootstrap-duo-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-ncbitax-test:
+    # RF028 (#374): one-shot, idempotent NCBI Taxonomy reference-data
+    # import — fourteenth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-uberon-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:ncbitax"]
+    depends_on:
+      reference-data-bootstrap-uberon-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-cl-test:
+    # RF028 (#374): one-shot, idempotent Cell Ontology reference-data
+    # import — fifteenth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-ncbitax-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:cl"]
+    depends_on:
+      reference-data-bootstrap-ncbitax-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-edam-test:
+    # RF028 (#374): one-shot, idempotent EDAM reference-data import —
+    # sixteenth and final of the Fase 2 sources, closing out the chain.
+    # Runs after reference-data-bootstrap-cl-test completes, matching the
+    # dev stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:edam"]
+    depends_on:
+      reference-data-bootstrap-cl-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
   worker-test:
     build:
       context: ./api/backend
