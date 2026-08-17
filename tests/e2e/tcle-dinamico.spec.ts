@@ -34,7 +34,17 @@ test.describe('TCLE builder (/admin/tcle/new)', () => {
     let createdPayload: Record<string, unknown> | null = null;
     await page.route('**/api/e-consent/consent-templates', async (route) => {
       if (route.request().method() !== 'POST') {
-        return route.continue();
+        // TcleBuilderPage debounces a GET here (version-history lookup,
+        // keyed off the title field) on every keystroke — unmocked, it
+        // hits the real backend with mockLogin's unsigned token, 401s, and
+        // api.ts's global interceptor force-logs-out the session mid-test
+        // (same shape as #611).
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: [] }),
+        });
+        return;
       }
       createdPayload = route.request().postDataJSON();
       await route.fulfill({
