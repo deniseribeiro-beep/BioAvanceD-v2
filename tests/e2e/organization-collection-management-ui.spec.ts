@@ -61,28 +61,21 @@ test.describe('Organizations CRUD through the real UI (#606, #608)', () => {
       await expect(page.getByTestId('organization-form-submit')).not.toBeVisible();
       await expect(page.getByText(updatedName, { exact: true })).toBeVisible();
 
-      // organization.routes.js has no GET /:id (#609, found by this spec) —
-      // unlike collections/studies/protocols, fetching a single organization
-      // by id isn't possible; verify the update round-tripped via the list
-      // endpoint instead, same fallback #325's own coverage already uses.
-      const afterUpdateList = await request.get(`${apiBaseURL}/api/organizations`, {
+      const getResponse = await request.get(`${apiBaseURL}/api/organizations/${organizationId}`, {
         headers: { Authorization: `Bearer ${session.token}` },
       });
-      expect(afterUpdateList.ok()).toBeTruthy();
-      const listAfterUpdate = await afterUpdateList.json();
-      const fetched = listAfterUpdate.data.find((org: Record<string, unknown>) => org.organizationId === organizationId);
-      expect(fetched?.officialName).toBe(updatedName);
+      expect(getResponse.ok()).toBeTruthy();
+      const fetched = await getResponse.json();
+      expect(fetched.data.officialName).toBe(updatedName);
 
       page.once('dialog', (dialog) => dialog.accept());
       await page.getByTestId(`delete-organization-button-${organizationId}`).click();
       await expect(page.getByText(updatedName, { exact: true })).not.toBeVisible();
 
-      const afterDeleteList = await request.get(`${apiBaseURL}/api/organizations`, {
+      const afterDelete = await request.get(`${apiBaseURL}/api/organizations/${organizationId}`, {
         headers: { Authorization: `Bearer ${session.token}` },
       });
-      expect(afterDeleteList.ok()).toBeTruthy();
-      const listAfterDelete = await afterDeleteList.json();
-      expect(listAfterDelete.data.some((org: Record<string, unknown>) => org.organizationId === organizationId)).toBe(false);
+      expect(afterDelete.status()).toBe(404);
     } finally {
       // Safety net: if an assertion above threw before the UI delete ran,
       // don't leave the fixture in the persistent mongodb-test-data volume.

@@ -58,6 +58,47 @@ describe('GET /api/organizations', () => {
   });
 });
 
+describe('GET /api/organizations/:id', () => {
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('returns 401 without token', async () => {
+    const res = await request(app).get('/api/organizations/org-1');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 404 when the organization does not exist', async () => {
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+
+    const res = await request(app)
+      .get('/api/organizations/org-missing')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it('returns the organization for an authenticated user', async () => {
+    const existing = { organizationId: 'org-1', officialName: 'USF', countryCode: 'BR' };
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(existing) });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+
+    const res = await request(app)
+      .get('/api/organizations/org-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.organizationId).toBe('org-1');
+  });
+});
+
 describe('POST /api/organizations', () => {
   beforeEach(() => { givenSession(); });
   afterEach(() => { vi.restoreAllMocks(); });
