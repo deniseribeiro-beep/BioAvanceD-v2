@@ -1,128 +1,138 @@
 # HANDOFF
 
-**Written:** 2026-08-17, continuation session (twelfth update). User said
-"pick the next group of issues to resolve (try doing 5)," AFK but
-responded live mid-session for a few judgment calls. Divide-and-conquer
-authorized in advance; not needed — worked solo through the batch.
+**Written:** 2026-08-17, continuation session (thirteenth update). User
+said "pick the next group of issues to resolve, try 5," AFK for the
+whole session, Docker explicitly on. No divide-and-conquer needed —
+worked solo through the batch; deliberately declined to squeeze a 6th,
+riskier item in (see "Deliberately not picked up" below).
 
 ## Issues closed this session
 
-- **#570 + #336** (bundled): `import.controller.js#importFhirBundle`
-  (`POST /api/import/fhir`) removed entirely — a dead synchronous FHIR
-  write path with no live caller, and a direct violation of RF011
-  AC#6/AC#7 (`docs/docs-7-27-2026/extracted/requisitos-index.md`) which
-  requires FHIR imports to go through staging/quarantine and forbids
-  direct MongoDB/Neo4j writes from the FHIR conversion boundary. Removed
-  the route, controller function, its SPREC/quality helpers, and 10
-  unit tests; the staging pipeline (`/import/fhir/stage`→`/commit`) is
-  now the sole FHIR import path. Updated two stale doc references
-  (`canonical-data-contract-v1.md`, `E2E_TRACEABILITY_PLAN.md`).
-  Verified: import.controller suite 22/22, architecture suite 60/60,
-  backend lint clean. This was a genuine product-scope call (delete vs.
-  fix-in-place) — confirmed with the user live before proceeding; he
-  pointed at checking the newest-dated docs, which settled it via RF011.
-- **#554**: retitled #550 (already closed) from "...14 Fase 2 sources"
-  to "...16" — tracker-metadata-only fix, no repo change.
-- **#559**: rewrote `docs/architecture/reference-data-seeding.md`'s
-  stale "Large imports" section — it still described HPO as the only
-  operational Fase 2 importer and live-verify as pure follow-up scope;
-  both are done (#549's 16-source sweep, #557's live-verify build-out).
-  Verified every claim against current code
-  (`scripts/reference-imports/`, `liveVerifySources.js`'s own header)
-  before writing it.
-- **#489**: re-ran the exact reproduction shape (plain `vitest run`, no
-  `--coverage`, full repo) that reported 183 failed tests/89 failed
-  files on 2026-08-07. 2026-08-17 re-run: 365/365 files, 6847/6847
-  tests, zero failures. Recorded in `api/backend/COVERAGE_NOTES.md` as
-  a second non-reproducing instance of the #423 flake class, this time
-  confirmed independent of `--coverage`. Closed as confirmed
-  non-reproducing, same resolution pattern as #423.
+- **#577**: `E2E_TRACEABILITY_PLAN.md`'s Grouping-strategy table still
+  named `participant-consent-studies.spec.ts`, a proposed spec file
+  that was never created — RF004/RF005/RF010/RF020/RF021 landed in
+  topic-specific files instead. Updated the table row plus an
+  explanatory note with the real per-RF file mapping. Doc-only.
+- **#319**: `.env.test.example`'s `TEST_SUPPORT_SECRET` diverged from
+  `compose.test.yml`'s hardcoded `x-test-env` anchor value (every other
+  value in that file already mirrors the anchor literally). Aligned it.
+  Doc/config-only.
+- **#569**: `intakeWizard.js#buildSampleDocumentFromIntake` wrote a
+  denormalized plaintext civil-identity name (`participantName`)
+  directly onto every intake-created `Sample` document — no schema
+  declaration, so nothing stripped it on the raw-driver `insertOne`,
+  and it round-tripped unprojected through `listSamples`/`getSample`
+  with no gate/audit trail, bypassing the `reidentifyParticipant`-gated
+  flow (#560) entirely. Investigated first (grepped the whole backend +
+  frontend): no display/list/export consumer read it; the only other
+  reader, `MerkleService.generateSampleHash`, treats it as an optional
+  fallback input. Removed the write; added a regression assertion.
+  57/57 tests green, lint clean.
+- **#321**: confirmed `AllocateSampleUseCase`/`MoveSampleUseCase`/
+  `ReleaseSampleUseCase` are reachable from real routes
+  (`storage.routes.js` + `storageApi.ts`'s UI flow), not dead code.
+  Building the real-backend e2e proof surfaced a live bug:
+  `release-sample.controller.js` passed `{ sampleId }` to a use case
+  that reads `command.specimenId` — every real release call 400'd
+  immediately. Fixed inline (blocked the issue's own acceptance
+  criteria); the existing unit test had actually encoded the bug as
+  expected behavior, corrected it and added a dedicated regression test
+  mirroring #482's equivalent allocate-side fix. Added
+  `tests/e2e/sample-storage-lifecycle.spec.ts`: real-backend
+  create→move→release→re-allocate round trip against the actual
+  replica-set-backed `compose.test.yml` stack, asserting the audit
+  trail at each transactional step, plus a `STORAGE_COLLISION` negative
+  case. First run failed against a stale `backend-app-test` image
+  (builds from source, not bind-mounted — same shape as the known
+  `frontend-app-test` gotcha, just never confirmed for the backend);
+  passed 2/2 clean after a targeted `--build` rebuild. 83/83 related
+  unit tests green, lint clean.
+- **#378**: cross-checked the 3 gates the 2026-07-31 Foundation Data
+  Pipeline doc amendment added, against actual coverage. **F3-G10**
+  (specimen custody transactions) — satisfied, proven by #321 above.
+  **F2-G09** (multi-endpoint coverage manifest) — real gap in
+  principle but not currently triggered (none of the 16 operational
+  Fase 2 sources are multi-endpoint); the one live multi-endpoint path,
+  `syncFromOrphadata`, already has an open tracking issue (#115) —
+  commented there linking the fuller gate language instead of filing a
+  duplicate. **F3-G09** (reports/exports org scope) — real, unmet gap;
+  already fully tracked by #340+#341 (see below). Findings recorded
+  directly in `E2E_TRACEABILITY_PLAN.md` (the file that had flagged
+  this as "not done in this pass"). Doc-only.
 
-## #599 — fix written, then reverted on this branch pending milestone #2
+## Deliberately not picked up: #340/#341 (institutional-scope enforcement)
 
-`ci-pipeline.yml`'s trigger was widened to also fire on
-`feature/docker-e2e-backend-integration` (mirroring `main`), fixing "no
-CI signal on the integration branch" (#599's own suggested next step).
-Milestone "CI Integration for E2E Tests" is explicitly sequenced after
-milestone "Playwright E2E Tests" closes (still 2 open issues), per
-Dennis's 2026-07-27 note: "do not start wiring CI until #2 closes." He
-first asked to hold the push entirely, then — since the widen commit
-was earliest in a now-9-commit stack, blocking the rest of the session's
-work from shipping — asked to revert the trigger change instead and push
-everything else.
+`#348` (Sample/Patient real `Organization` reference wiring) closed
+since #340/#341 were filed, so both are now technically unblocked. Did
+**not** attempt #340 this session even though it fit the "try 5" slot:
+it's a genuinely novel authorization primitive (no existing scope-filter
+precedent anywhere in `rbac.js`), needs correct answers to real security
+edge cases no doc settles (does an org-less user see nothing or
+everything? is `hierarchyLevel 4`/Administrador the only bypass?
+403 vs 404 on out-of-scope direct access?), and spans 4 endpoints
+(sample+patient, list+detail) plus a real-backend proof. Shipping a
+guessed answer to those edge cases with no review — AFK, no live
+check-in available this session — risks either a data-leak-shaped hole
+or breaking legitimate access, and a half-wired version of it would give
+false confidence that org-scoping is enforced when it isn't everywhere
+yet (the "half-applied invariant lies" case, not a chunking candidate).
+Picked #378 instead — same backlog area, but investigation/doc-only, no
+new authorization surface. #340/#341 are ready for a session where
+Dennis can settle those edge-case calls up front, ideally in the same
+sitting since #341 explicitly depends on #340 landing first.
 
-**Net effect on the pushed tree: `ci-pipeline.yml`'s trigger is
-unchanged (main-only)**, same as before this session. History carries
-both the widen commit (`76d04826`) and a follow-up revert commit
-(`889e0b46`, "Hold #599...") rather than omitting the widen entirely —
-simpler and safer than rewriting already-drafted local history. Issue
-**#599 stays open**; re-apply the two-line trigger widen once Dennis
-clears it (milestone #2 closed), most simply by reverting `889e0b46`.
+## Other work this session
 
-## CI backlog organization (ad hoc mid-session ask)
-
-Created a new `ci` label. Tagged the three open issues that literally
-mention "CI" (#599, #284, #286) with it and linked all three to the
-"CI Integration for E2E Tests" milestone. No implementation — organization
-only, per explicit instruction not to let CI be implemented yet.
+- **Filed `DyeAllPies/dyeallpies-skills-pack#333`**: `backend-app-test`
+  (like `frontend-app-test`, #329) builds its Docker image from source,
+  not a bind mount — a stale image silently serves pre-fix backend code
+  with no error. Found via #321's first (failing) e2e run.
+- **Filed `DyeAllPies/dyeallpies-skills-pack#334`**: spec-inventory
+  addition for the new `sample-storage-lifecycle.spec.ts`.
+- Both filed as skills-pack issues rather than edited directly, per
+  skill-maintenance Rule 0 (this session isn't in the pack repo).
+- **Commented on #115** (still open): linked it as the tracking issue
+  for gate F2-G09, noting the full gate text is broader than #115's
+  original framing.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed to `origin` this
-  session (see #599 above for the trigger widen/revert pair in the
-  history). Working tree clean except the gitignored/junctioned
+- On `feature/docker-e2e-backend-integration`, pushed to `origin` after
+  every issue this session (5 separate merge+push cycles, not batched
+  at the end). Working tree clean except the gitignored/junctioned
   `.claude/skills/`.
-- Docker: not used this session (all checks were native vitest/lint/
-  architecture-test runs).
+- Docker: brought the `compose.test.yml` stack up once for #321's
+  real-backend e2e proof (core services + `admin-bootstrap-test`,
+  rebuilt `backend-app-test` once mid-slice), tore it down clean
+  (`docker compose down`, no `-v` — named volumes/fixtures untouched)
+  once the spec passed. `docker builder prune -af` run after (safe,
+  build-cache-only). **Left the ~20 pre-existing tagged test images
+  alone** (`bioavanced-test-*`, ~619MB each, mostly
+  `reference-data-bootstrap-*` variants from a prior session, not built
+  this session) — removing them wasn't this session's call to make
+  unilaterally; ask Dennis before a `docker rmi` sweep if disk space is
+  a concern.
 - Local branches for this session's work already deleted (merged +
-  issue closed): `fix/570-remove-dead-fhir-sync-import`,
-  `test/559-reference-data-seeding-docs`,
-  `test/489-vitest-jwt-regression-recheck`. `fix/599-ci-trigger-integration-branch`
-  and `fix/599-hold-ci-trigger-for-milestone` intentionally kept (both
-  merged, but #599 still open — see above).
-
-## Backlog branch cleanup (post-push, this session)
-
-After pushing, surveyed every local and remote branch for merge status
-against `feature/docker-e2e-backend-integration`. **Before deleting
-anything, checked commit authorship** (`git log -1 --format='%an'`) —
-this repo has two real contributors, `Denise Ribeiro` and `DieAllPies`,
-and the first remote-delete attempt would have caught several of her
-branches had `branch-guard.cjs` not incidentally blocked it on naming
-grounds first. Filed the process gap as
-`dyeallpies-skills-pack#332` (clean-up's branch domain has no
-authorship check).
-
-- **Deleted (26 local + 8 remote, all confirmed `DieAllPies`-authored
-  and already merged):** local `fix/476/477/481/485/513`,
-  `test/428/431/440/441/486/507-511`, `test/549-*` (10 reference-source
-  branches), `worktree-agent-<id>`; remote `fix/349/444/476/481/482/515/
-  536/541`.
-- **Left alone — confirmed Denise's own work, not ours to delete:**
-  remote `audit/intake-governance-i18n-orpha`, `canonical-cleanup`,
-  `chore/reference-seed-stack-and-ci`, `fix/project-issues-stabilization`,
-  `release/inpi-v1.1.0-rcs-gov`.
-- **Left alone — not merged (dangling, has real unmerged content):**
-  local `test/377-docs-on-main`, `test/human-showcase-video`; remote
-  `origin/agent/pipeline-data-modeling-docs`,
-  `origin/refactor/canonical-data-contracts`,
-  `origin/refactor/canonical-participant-flow`,
-  `origin/test/377-docs-on-main`.
-
-## Flagged, not acted on
-
-- **Dangling local branch `test/377-docs-on-main`**: not an ancestor of
-  either `feature/docker-e2e-backend-integration` or `main`. Carries
-  Denise's 2026-07-31 docs-batch material (manuscript/supplementary PDF
-  revisions, `docs/Modelagem/*`). Its originating issue #377 is closed,
-  but the still-open #379 ("decide whether the 7-31 revisions should
-  supersede the CMPB submission copies") is exactly the judgment call
-  that gates touching this — per `bioavanced-v2-conventions`' doc-drop
-  triage rules, don't merge or discard without Dennis/Denise's explicit
-  call first.
+  issue closed): `test/577-e2e-plan-grouping-table`,
+  `test/319-test-support-secret-drift`,
+  `fix/569-sample-participant-name-denormalization`,
+  `test/321-sample-storage-usecases-e2e`,
+  `test/378-foundation-pipeline-v2.1.1-gate-check`.
+  `fix/599-ci-trigger-integration-branch` and
+  `fix/599-hold-ci-trigger-for-milestone` still intentionally kept from
+  a prior session (both merged, #599 itself still open pending
+  milestone #2 — unrelated to this session, not touched).
 
 ## Recommended next steps
 
-None queued by the user. When milestone #2 (Playwright e2e) closes and
-#599's push is cleared, that's the natural point to also look at
-starting milestone #3 (#284, wiring Playwright into CI) — not before.
+None queued by the user. Natural candidates for a future session, in
+rough order:
+1. **#340 then #341** (institutional-scope enforcement) — see "Deliberately
+   not picked up" above; needs Dennis's input on the edge cases before
+   implementation starts, not a solo pickup.
+2. **#602** (`PERMISSION_CATALOG.allowedActions` is decorative-only) —
+   also a judgment call the filer explicitly flagged as "bigger than a
+   drive-by" (enforce per-verb vs. correct-as-metadata-only); left
+   untouched this session for the same reason as #340.
+3. `#367`'s coverage-reconciliation piece for `syncFromOrphadata`
+   (#115/F2-G09) — needs real Orphadata API context per #115's own text.
