@@ -980,8 +980,21 @@
     "view": "View"
   },
   "system": {
+    "organizations": {
+      "acronym": "Acronym",
+      "countryCode": "Country (ISO code)",
+      "deleteConfirm": "Are you sure you want to delete this organization?",
+      "editTitle": "Edit Organization",
+      "empty": "No organizations registered",
+      "new": "New Organization",
+      "newTitle": "New Organization",
+      "officialName": "Official Name",
+      "organizationType": "Type",
+      "website": "Website"
+    },
     "subtitle": "Integrated user and security settings management",
     "tabs": {
+      "organizations": "Organizations",
       "security": "Security",
       "users": "Users"
     },

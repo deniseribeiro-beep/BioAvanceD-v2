@@ -980,8 +980,21 @@
     "view": "Ver"
   },
   "system": {
+    "organizations": {
+      "acronym": "Sigla",
+      "countryCode": "País (código ISO)",
+      "deleteConfirm": "Tem certeza que deseja excluir esta organização?",
+      "editTitle": "Editar Organização",
+      "empty": "Nenhuma organização cadastrada",
+      "new": "Nova Organização",
+      "newTitle": "Nova Organização",
+      "officialName": "Nome Oficial",
+      "organizationType": "Tipo",
+      "website": "Website"
+    },
     "subtitle": "Gerenciamento integrado de usuários e configurações de segurança",
     "tabs": {
+      "organizations": "Organizações",
       "security": "Segurança",
       "users": "Usuários"
     },
