@@ -980,6 +980,29 @@
     "view": "Ver"
   },
   "system": {
+    "collections": {
+      "collectionId": "ID",
+      "collectionName": "Nombre",
+      "collectionStatus": "Estado",
+      "datasetTypes": "Tipos de Datos",
+      "deleteConfirm": "¿Está seguro de que desea eliminar esta colección?",
+      "diseaseScope": "Alcance de Enfermedades",
+      "editTitle": "Editar Colección",
+      "empty": "No hay colecciones registradas",
+      "exclusionCriteria": "Criterios de Exclusión",
+      "inclusionCriteriaCategories": "Criterios de Inclusión",
+      "miabisUseAccessConditions": "Condiciones de Uso y Acceso",
+      "new": "Nueva Colección",
+      "newTitle": "Nueva Colección",
+      "participantCount": "Número de Participantes",
+      "relatedPublications": "Publicaciones Relacionadas (DOI/PMID)",
+      "sampleCount": "Número de Muestras",
+      "sampleTypes": "Tipos de Muestra",
+      "statusActive": "Activa",
+      "statusInactive": "Inactiva",
+      "storageTemperatureCategories": "Categorías de Temperatura",
+      "tagFieldHelp": "Separe varios valores con \";\""
+    },
     "organizations": {
       "acronym": "Sigla",
       "countryCode": "País (código ISO)",
@@ -994,6 +1017,7 @@
     },
     "subtitle": "Gestión integrada de usuarios y configuración de seguridad",
     "tabs": {
+      "collections": "Colecciones",
       "organizations": "Organizaciones",
       "security": "Seguridad",
       "users": "Usuarios"

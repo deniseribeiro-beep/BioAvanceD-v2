@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { resolveOrganizationLabel, buildOrganizationSubmissionPayload } from './SystemManagementPage';
-import type { Organization } from '../types/models';
+import {
+  resolveOrganizationLabel,
+  buildOrganizationSubmissionPayload,
+  parseSemicolonTags,
+  formatSemicolonTags,
+  buildCollectionFormState,
+  buildCollectionSubmissionPayload,
+} from './SystemManagementPage';
+import type { Organization, Collection } from '../types/models';
 
 function makeOrganization(overrides: Partial<Organization> = {}): Organization {
   return {
@@ -77,5 +84,127 @@ describe('buildOrganizationSubmissionPayload', () => {
     expect(payload.acronym).toBe('HC');
     expect(payload.organizationType).toBe('Hospital');
     expect(payload.website).toBe('https://hc.example.org');
+  });
+});
+
+describe('parseSemicolonTags', () => {
+  it('#607: splits on ";", trims whitespace, and drops empty entries', () => {
+    expect(parseSemicolonTags('plasma; serum ;  tissue')).toEqual(['plasma', 'serum', 'tissue']);
+  });
+
+  it('#607: returns an empty array for an empty or whitespace-only string', () => {
+    expect(parseSemicolonTags('')).toEqual([]);
+    expect(parseSemicolonTags('   ')).toEqual([]);
+    expect(parseSemicolonTags(';;')).toEqual([]);
+  });
+});
+
+describe('formatSemicolonTags', () => {
+  it('#607: joins the given key from each item with "; "', () => {
+    expect(formatSemicolonTags([{ text: 'plasma' }, { text: 'serum' }], 'text')).toBe('plasma; serum');
+  });
+
+  it('#607: returns an empty string for undefined/non-array input', () => {
+    expect(formatSemicolonTags(undefined, 'text')).toBe('');
+    expect(formatSemicolonTags([], 'text')).toBe('');
+  });
+});
+
+function makeCollection(overrides: Partial<Collection> = {}): Collection {
+  return {
+    collectionId: 'col-1',
+    collectionName: 'Biobanco Central',
+    ...overrides,
+  };
+}
+
+describe('buildCollectionFormState', () => {
+  it('#607: defaults a new (null) collection to empty fields and active status', () => {
+    const state = buildCollectionFormState(null);
+    expect(state.collectionId).toBe('');
+    expect(state.collectionStatus).toBe('active');
+    expect(state.sampleTypesText).toBe('');
+  });
+
+  it('#607: formats an existing collection\'s CodeableConcept[]/Identifier[] fields back into semicolon text for editing', () => {
+    const collection = makeCollection({
+      sampleTypes: [{ text: 'plasma' }, { text: 'serum' }],
+      relatedPublications: [{ value: 'doi:10.1/xyz' }],
+      participantCount: 250,
+    });
+
+    const state = buildCollectionFormState(collection);
+
+    expect(state.sampleTypesText).toBe('plasma; serum');
+    expect(state.relatedPublicationsText).toBe('doi:10.1/xyz');
+    expect(state.participantCount).toBe('250');
+  });
+});
+
+describe('buildCollectionSubmissionPayload', () => {
+  it('#607: parses semicolon-separated text fields into ELM-0043..0049 CodeableConcept[] objects ({ text }) per dict-02_DICIONARIO.md', () => {
+    const state = buildCollectionFormState(null);
+    state.collectionId = 'col-2';
+    state.collectionName = 'Biobanco Regional';
+    state.sampleTypesText = 'plasma; serum; tissue';
+
+    const payload = buildCollectionSubmissionPayload(state);
+
+    expect(payload.sampleTypes).toEqual([{ text: 'plasma' }, { text: 'serum' }, { text: 'tissue' }]);
+  });
+
+  it('#607: parses relatedPublications into Identifier[] objects ({ value }), not { text } (ELM-0052 is Identifier[], not CodeableConcept[])', () => {
+    const state = buildCollectionFormState(null);
+    state.collectionId = 'col-2';
+    state.collectionName = 'Biobanco Regional';
+    state.relatedPublicationsText = 'doi:10.1/xyz; pmid:12345';
+
+    const payload = buildCollectionSubmissionPayload(state);
+
+    expect(payload.relatedPublications).toEqual([{ value: 'doi:10.1/xyz' }, { value: 'pmid:12345' }]);
+  });
+
+  it('#607: normalizes empty participantCount/sampleCount to null and non-empty to a number', () => {
+    const state = buildCollectionFormState(null);
+    state.collectionId = 'col-2';
+    state.collectionName = 'Biobanco Regional';
+    state.participantCount = '';
+    state.sampleCount = '1200';
+
+    const payload = buildCollectionSubmissionPayload(state);
+
+    expect(payload.participantCount).toBeNull();
+    expect(payload.sampleCount).toBe(1200);
+  });
+
+  it('#607: normalizes empty exclusionCriteria to null', () => {
+    const state = buildCollectionFormState(null);
+    state.collectionId = 'col-2';
+    state.collectionName = 'Biobanco Regional';
+    state.exclusionCriteria = '';
+
+    const payload = buildCollectionSubmissionPayload(state);
+
+    expect(payload.exclusionCriteria).toBeNull();
+  });
+
+  it('#607: round-trips an existing collection through buildCollectionFormState then back through buildCollectionSubmissionPayload unchanged', () => {
+    const collection = makeCollection({
+      collectionStatus: 'active',
+      sampleTypes: [{ text: 'plasma' }],
+      datasetTypes: [{ text: 'genomic' }],
+      participantCount: 10,
+      sampleCount: 20,
+      relatedPublications: [{ value: 'doi:10.1/xyz' }],
+    });
+
+    const payload = buildCollectionSubmissionPayload(buildCollectionFormState(collection));
+
+    expect(payload.collectionId).toBe('col-1');
+    expect(payload.sampleTypes).toEqual([{ text: 'plasma' }]);
+    expect(payload.datasetTypes).toEqual([{ text: 'genomic' }]);
+    expect(payload.participantCount).toBe(10);
+    expect(payload.sampleCount).toBe(20);
+    expect(payload.relatedPublications).toEqual([{ value: 'doi:10.1/xyz' }]);
   });
 });
