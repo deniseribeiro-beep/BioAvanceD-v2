@@ -980,6 +980,29 @@
     "view": "View"
   },
   "system": {
+    "collections": {
+      "collectionId": "ID",
+      "collectionName": "Name",
+      "collectionStatus": "Status",
+      "datasetTypes": "Dataset Types",
+      "deleteConfirm": "Are you sure you want to delete this collection?",
+      "diseaseScope": "Disease Scope",
+      "editTitle": "Edit Collection",
+      "empty": "No collections registered",
+      "exclusionCriteria": "Exclusion Criteria",
+      "inclusionCriteriaCategories": "Inclusion Criteria",
+      "miabisUseAccessConditions": "Use and Access Conditions",
+      "new": "New Collection",
+      "newTitle": "New Collection",
+      "participantCount": "Participant Count",
+      "relatedPublications": "Related Publications (DOI/PMID)",
+      "sampleCount": "Sample Count",
+      "sampleTypes": "Sample Types",
+      "statusActive": "Active",
+      "statusInactive": "Inactive",
+      "storageTemperatureCategories": "Storage Temperature Categories",
+      "tagFieldHelp": "Separate multiple values with \";\""
+    },
     "organizations": {
       "acronym": "Acronym",
       "countryCode": "Country (ISO code)",
@@ -994,6 +1017,7 @@
     },
     "subtitle": "Integrated user and security settings management",
     "tabs": {
+      "collections": "Collections",
       "organizations": "Organizations",
       "security": "Security",
       "users": "Users"
