@@ -264,6 +264,23 @@ describe('release-sample.controller', () => {
     });
   });
 
+  it('maps the wire-contract sampleId onto the use case command as specimenId (#321)', async () => {
+    const executeSpy = vi.spyOn(ReleaseSampleUseCase.prototype, 'execute')
+      .mockResolvedValue({ releasedFrom: { position: 'A1' } });
+    const req = {
+      app: { locals: { db: {} } },
+      params: { sampleId: 's1' },
+      headers: {}
+    };
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({
+      specimenId: 's1'
+    }));
+  });
+
   it('builds the actor from req.user/req.ip/req.headers using the primary fallbacks', async () => {
     const executeSpy = vi.spyOn(ReleaseSampleUseCase.prototype, 'execute')
       .mockResolvedValue({ releasedFrom: { position: 'A1' } });
@@ -279,7 +296,7 @@ describe('release-sample.controller', () => {
     await controller(req, res);
 
     expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({
-      sampleId: 's1',
+      specimenId: 's1',
       actor: {
         userId: 'user-1',
         userName: 'Alice',
