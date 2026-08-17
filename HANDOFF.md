@@ -1,102 +1,111 @@
 # HANDOFF
 
-**Written:** 2026-08-17, same-day continuation session (sixth update).
-User said "read handoff, go down a rabbit hole." Read the prior
-handoff, picked `#576` (the only next-step candidate not blocked on a
-decision only Dennis can make — every other listed candidate needed his
-call), sized it against the `rabbit-hole` skill's budget table,
-confirmed the "full breakdown" scope with the user via AskUserQuestion,
-then drove the queue.
+**Written:** 2026-08-17, same-day continuation session (seventh update).
+User said "read handoff, go down a rabbit hole." Picked `#576` (see the
+prior handoff for why), opened rabbit-hole tracker `#605`, split its
+remaining scope into `#606`/`#607`/`#608`, landed `#606` and `#607` in
+this sitting, then stopped at the pacing/environment checkpoint before
+`#608`.
 
 ## Still inside the rabbit hole
 
 **Tracker: `#605`** ("Rabbit-hole tracker: RF020 organizations/
-collections management UI, seed #576"). This session is not finished
-with it — resume here, don't make a fresh backlog pick.
+collections management UI, seed `#576`"). Resume here, don't make a
+fresh backlog pick.
 
 Known members:
-- [x] **`#606`** — Organizations CRUD management UI. **Closed this
-  session**, merge `d5e7c842` on `feature/docker-e2e-backend-integration`.
-- [ ] **`#607`** — Collections CRUD management UI. **Next in the queue,
-  unblocked.** Heavier than `#606` — several `Array<Record<string,
-  unknown>>`-typed MIABIS fields with no defined sub-shape yet (multi-
-  select tags vs. free-text-per-line vs. structured sub-form — needs
-  deciding as part of the issue, per its own body).
+- [x] **`#606`** — Organizations CRUD management UI. Closed, merge
+  `d5e7c842` on `feature/docker-e2e-backend-integration`.
+- [x] **`#607`** — Collections CRUD management UI. Closed, merge
+  `2f9770ce`. Resolved its own named open question (MIABIS array-field
+  sub-shape) per `dict-02_DICIONARIO.md`'s own example-value convention
+  (semicolon-separated free text → `CodeableConcept.text`/
+  `Identifier.value`).
 - [ ] **`#608`** — real-backend e2e coverage for the full RF020 UI flow.
-  Depends on `#606` (now satisfied) + `#607` (not yet). Still blocked.
+  **Unblocked** (both dependencies now landed) but **not started** —
+  stopped here deliberately, see below.
 
-Budget so far this sitting: ~4-5 points (tracker filing + split ~1,
-`#606` ~3) against the skill's ~10-point guidance — room to continue to
-`#607` in the same sitting if resumed soon; re-assess if picked up much
-later.
+**Why stopped here, not pushed into `#608`:** two independent reasons,
+either alone would justify it:
+1. **Docker is unavailable in this session's environment** —
+   `docker ps` failed with the named pipe not found (Docker Desktop not
+   just stopped, the pipe itself doesn't exist), not merely "not
+   started." `#608`'s own scope is real-backend Playwright e2e coverage
+   — it needs Docker.
+2. **Pacing**: this sitting is at ~7-8 points against the `rabbit-hole`
+   skill's ~10-point-per-sitting guidance (tracker+split ~1, `#606` ~3,
+   `#607` ~3-4). `#608` is itself an e2e-authoring slice (medium-large)
+   that would push at or past budget.
+
+Per the `rabbit-hole` skill's own framing, stopping mid-queue with an
+accurate report of what's left is the correct outcome here, not a
+shortfall — surface to the user, let them decide whether to continue
+this sitting (if Docker becomes available) or resume later.
 
 ## What happened this session
 
-**`#576`'s remaining scope** (management UI for organizations/
-collections — its own backend/service-layer slice had already landed in
-a prior session) was split via `divide-and-conquer`'s design-split
-playbook into `#606`/`#607`/`#608`, all added to tracker `#605` the
-moment they were filed. `#576` itself stays open as the originating
-issue per that playbook.
+**`#576`'s remaining scope** split via `divide-and-conquer` into
+`#606`/`#607`/`#608`, all tracked under `#605`, `#576` itself left open
+per the design-split playbook.
 
-**`#606` landed**: `SystemManagementPage.tsx` gained an "Organizações"
-tab (`OrganizationsSection` + `OrganizationForm`, table + create/edit
-Modal), mirroring `FacilityManagementPage.tsx`'s `SensorsSection`
-pattern — the closest existing "master-data admin" template.
-`useOrganizations.ts` gained `createOrganization`/`updateOrganization`/
-`deleteOrganization` wrappers. `buildOrganizationSubmissionPayload`
-(exported, pure) strips server-managed fields and normalizes empty
-optionals to `null`, unit-tested in `SystemManagementPage.test.tsx` (3
-new tests, 6/6 passing in that file). i18n keys added to all three
-locale files. Manually verified in a real browser via a throwaway
-mocked-auth Playwright smoke check (not committed — removed after use):
-tab renders, create/edit modals work, submit posts the correct payload.
+**`#606`** (landed prior update): Organizations CRUD UI —
+`SystemManagementPage.tsx`'s "Organizações" tab, `useOrganizations`
+create/update/delete wrappers, `buildOrganizationSubmissionPayload`.
 
-**Two findings filed on the skills-pack tracker** (not BioAvanceD-v2
-issues — these are about the workflow-skill pack itself):
-- `dyeallpies-skills-pack#326` — `bioavanced-v2-conventions` claims
-  `frontend/` has no test script; it actually has vitest + React
-  Testing Library installed (RTL itself unused — the real convention is
-  unit-testing pure functions extracted from page components, per
-  `NewUserPage.tsx`/`SystemManagementPage.tsx` precedent).
+**`#607`** (landed this update): Collections CRUD UI — "Coleções" tab,
+new `useCollections` hook, `buildCollectionSubmissionPayload`/
+`buildCollectionFormState`/`parseSemicolonTags`/`formatSemicolonTags`.
+`collectionId` is required and user-supplied at creation (unlike
+Organization's server-generated `organizationId`) — the ID input only
+shows when creating, matching `FacilityManagementPage.tsx`'s
+`SensorForm` precedent. 11 new vitest tests (17/17 in
+`SystemManagementPage.test.tsx`), `tsc --noEmit` clean, manually
+verified in a real browser via a throwaway (uncommitted) mocked-auth
+Playwright smoke check for both `#606` and `#607`.
+
+**Three findings filed on the skills-pack tracker** (workflow/hook
+issues, not BioAvanceD-v2 product issues):
+- `dyeallpies-skills-pack#326` — `bioavanced-v2-conventions` wrongly
+  claims `frontend/` has no test script (it has vitest + RTL, RTL
+  itself unused — real convention is testing pure functions extracted
+  from page components).
 - `dyeallpies-skills-pack#327` — `build-loop`'s BioAvanceD-v2 overlay
-  has no proof-bar guidance for a pure-frontend-UI slice (only covers
-  backend-internal slices and the milestone's own literal-Docker e2e
-  specs); documents what was improvised for `#606` (vitest unit test +
-  uncommitted manual Playwright smoke check) plus a Playwright
-  file-discovery gotcha (absolute-path spec args outside `testDir` fail
-  with "No tests found").
+  has no proof-bar guidance for a pure-frontend-UI slice; documents what
+  was improvised (vitest unit tests + uncommitted manual Playwright
+  smoke check) plus a Playwright file-discovery gotcha.
+- `dyeallpies-skills-pack#328` — `edit-branch-guard.cjs` didn't block a
+  live `Write` call on the protected integration branch (creating
+  `useCollections.ts` before branching for `#607`), despite the hook
+  firing correctly when the exact same scenario was reproduced manually
+  right after. Caught and fixed within the same session (branched
+  immediately, no wrong-branch history beyond the one file, which moved
+  cleanly on checkout) — filed as a hook-reliability gap, root cause
+  not yet identified.
 
-**No BioAvanceD-v2-side friction** — `wrap-up`'s core audit and shipping
-addendum both came back clean; diff stayed exactly in `#606`'s named
-scope, no lazy workarounds, no permission denials, no stale
-BioAvanceD-v2-specific instructions (the two stale-skill findings above
-are pack-repo issues, filed there, not worked around in this repo).
+**BioAvanceD-v2-side friction**: one near-miss (the `#328` hook-miss
+above) — the underlying branch-hygiene mistake was caught and corrected
+within a couple of tool calls, no lasting effect. Otherwise clean:
+`wrap-up`'s core audit and shipping addendum both came back clean for
+both `#606` and `#607`, diffs stayed exactly in each issue's named
+scope, no lazy workarounds.
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, clean except the
   gitignored/junctioned `.claude/skills/` (untracked, not part of this
-  session's diff). In sync with `origin` (pushed `d5e7c842`).
-- **Docker: unavailable in this session's environment** (`docker ps`
-  failed — Docker Desktop's named pipe not found, not merely "not
-  started"). Not used this session; `#606`'s own proof bar didn't need
-  it (see the skills-pack `#327` finding above for what was used
-  instead). `#608` (e2e coverage) will need Docker available when it's
-  picked up.
+  session's diff). In sync with `origin` (pushed `2f9770ce`).
+- **Docker: unavailable in this session's environment** (see above).
+  Not used this session; neither `#606` nor `#607` needed it. `#608`
+  will need it available when picked up.
 
 ## Recommended next steps
 
-**Resume the rabbit hole**: `#607` (Collections CRUD management UI) is
-next in tracker `#605`'s queue, unblocked, per this session's own
-explicit direction to drive it. Its own body already names the design
-decision it needs to make (MIABIS array-field sub-shape) before or
-during implementation.
+**Resume the rabbit hole**: `#608` (real-backend e2e coverage for the
+organizations/collections UI flow) is next in tracker `#605`'s queue,
+unblocked, per this session's own explicit direction to drive it —
+**but needs a session where Docker is actually available.**
 
-Other backlog candidates are unchanged from the prior handoff and still
-not queued (no new information on any of them this session):
-`#576` itself (stays open, tracking, not directly actionable — its
-remaining scope *is* `#607`/`#608`), `#602`, `#599`, `#585`, `#336`,
-`test/human-showcase-video` — all still blocked on Dennis's own call,
-per the prior handoff's reasoning (unchanged, not re-verified this
-session).
+Other backlog candidates unchanged from prior handoffs, still not
+queued, still blocked on Dennis's own call (not re-verified this
+session): `#576` itself (tracking only), `#602`, `#599`, `#585`,
+`#336`, `test/human-showcase-video`.
