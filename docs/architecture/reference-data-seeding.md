@@ -40,46 +40,54 @@ The essential seed is manual, idempotent, and never runs automatically at startu
 
 ## Large imports
 
-The large import scaffold (`scripts/reference-imports/import-large-reference-dataset.js`) is intentionally non-operational — it only validates arguments and prints a plan.
+The large import scaffold (`scripts/reference-imports/import-large-reference-dataset.js`) is a separate, still-intentionally-non-operational placeholder — it only validates arguments and prints a plan. It is not where the real Fase 2 work landed; see below.
 
-Deferred datasets (no operational importer yet):
+### RF028: all 16 Fase 2 sources have operational importers
 
-- ORPHA
-- CID / ICD
-- OMIM
-- MONDO
-- HGNC
-- LOINC
-- UCUM
-- medications / DCB / ATC
-- disease-phenotype relations
+As of #549's close (EDAM, the sixteenth and final source), every Fase 2
+source named in `docs-7-27-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md`
+§7.4's recommended order has its own operational importer script under
+`scripts/reference-imports/`: HPO (#367, the pilot), MONDO (#548), ORPHA,
+ICD-10, ICD-11, OMIM, HGNC, LOINC, UCUM, DCB, ATC, DUO, Uberon, NCBI
+Taxonomy, Cell Ontology, and EDAM (#549). Each follows the same
+`npm run reference:import:<source>` / `reference:import:<source>:dry-run`
+pair (e.g. `reference:import:hpo`) and lives in
+`src/reference-data/reference-imports/` (separate module from the
+essential seed), wired into `compose.dev.yml` as a chained
+`reference-data-bootstrap[-<source>]` one-shot service (runs after
+`foundation-bootstrap` completes, each source depending on the previous
+one in the chain).
 
-### RF028 first importer: HPO
-
-HPO is the first Fase 2 source with an operational importer (#367), per
-`docs-7-27-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md` §7.4's
-recommended Fase 2 order. It lives in
-`src/reference-data/reference-imports/` (separate module from the essential
-seed) and is invoked by `scripts/reference-imports/import-hpo-reference-dataset.js`
-(`npm run reference:import:hpo` / `reference:import:hpo:dry-run`), wired into
-`compose.dev.yml` as the `reference-data-bootstrap` one-shot service (runs
-after `foundation-bootstrap` completes).
-
-It writes to five new collections — `referenceDatasetReleases`,
+Each importer writes to the same five collections — `referenceDatasetReleases`,
 `referenceImportRuns`, `referenceImportIssues`, `terminologyConcepts`,
 `terminologyRelations` — modeled in `src/models/` per
 `dict-02_DICIONARIO.md`'s ReferenceDatasetRelease/ReferenceImportRun/
 ReferenceImportIssue/TerminologyConcept/TerminologyRelation rows.
 
-This first slice imports a small bundled fixture
-(`reference-imports/fixtures/hpo-sample.jsonl`), not a live HPO release
-download — dict-01_FONTES.md's SRC_HPO row lists the license as "verify at
-ingestion time" rather than a fixed value, and this repo keeps import
-scripts free of live network calls (`reference-import-boundary.arch.test.js`).
-Checkpoint/resume (#551) and quarantine recovery (#551) have since
-landed in `pipeline.js`/`quarantine.js`. Live download, real license
-verification, rollback, and Neo4j outbox projection are still follow-up
-scope, together with the remaining 15 Fase 2 sources.
+Every source imports from a small bundled fixture under
+`reference-imports/fixtures/`, not a live release download — this repo
+keeps `src/reference-data/reference-imports/` free of live network calls
+(`reference-import-boundary.arch.test.js`). Checkpoint/resume and
+quarantine recovery (#551) have landed in `pipeline.js`/`quarantine.js`,
+shared by all 16 sources. Rollback and Neo4j outbox projection remain
+follow-up scope.
+
+### Live download / license verification (#555/#556/#557)
+
+Live download and real license verification are no longer purely
+follow-up scope. `scripts/reference-imports/live-verify/` — deliberately
+separate from the fixture-only importers above, per the same
+`reference-import-boundary.arch.test.js` boundary — runs a
+`workflow_dispatch`-only verify job against each source's real upstream:
+`liveVerifySources.js` is now a 16-entry registry (all Fase 2 sources
+populated, closing out RF028's live-verify build-loop), and
+`verify-live-release.js` supports the different verification shapes those
+16 sources actually need (GitHub releases API, a stable direct-download
+URL, a redirect-to-latest-version page, a fixed-edition browse page, a
+REST info/version endpoint, a GitHub release with no attached assets, or
+`not-live-verifiable` for the two sources — OMIM, LOINC — whose upstream
+blocks automated requests entirely). See `liveVerifySources.js`'s own
+header comment for the per-`kind` rationale and confirmation dates.
 
 ## Runtime guarantees
 
