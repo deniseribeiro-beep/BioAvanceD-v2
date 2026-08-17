@@ -56,13 +56,42 @@ about to the full 29 RF + 32 RNF in the new doc.
 > `docs/docs-7-27-2026/extracted/requisitos-index.md` was already built
 > from the table rows, not the buggy prose, so it was already correct.
 > The 2026-07-31 drop also added 3 new gates to the Foundation Data
-> Pipeline plan not yet cross-checked against test coverage here:
-> `F2-G09` (reference-source endpoint/asset/partition coverage
-> reconciliation — directly relevant to RF028's importers, see #367),
-> `F3-G09` (reports/exports must derive org scope from active
-> assignments), `F3-G10` (specimen custody transactions need a real
-> MongoDB replica-set transaction with proven atomicity/rollback).
-> Tracked as **#378** — not done in this pass.
+> Pipeline plan, cross-checked against test coverage 2026-08-17 (#378):
+>
+> - **`F3-G10`** (specimen custody allocate/move/release must run in a
+>   real MongoDB replica-set transaction, proven atomicity/rollback) —
+>   **SATISFIED.** `compose.test.yml`'s `mongodb-test` has run a
+>   single-node replica set since #297 (RF006 AC#6), and
+>   `AllocateSampleUseCase`/`MoveSampleUseCase`/`ReleaseSampleUseCase`
+>   all route their state+audit writes through
+>   `MongoStorageRepository.withTransaction`. Provably exercised
+>   end-to-end against the real stack by `tests/e2e/sample-storage-
+>   lifecycle.spec.ts` (#321) — no spec drove any of the three use
+>   cases' `execute()` path before that.
+> - **`F2-G09`** (multi-endpoint/asset/partition sources need a
+>   coverage manifest — expected/obtained counts, justified exclusions,
+>   block promotion on unjustified partial coverage) — **real gap, but
+>   not currently triggered by any of the 16 operational Fase 2
+>   sources** (`api/backend/src/reference-data/reference-imports/`):
+>   each is a single canonical-file download, not multi-endpoint. The
+>   one live multi-endpoint import path in the repo,
+>   `terminologySync.service.js#syncFromOrphadata` (3 Orphadata
+>   endpoints, still wired to `terminologies.routes.js`), already has
+>   this exact silent-partial-coverage problem — tracked since before
+>   this gate existed as **#115** (narrower framing: "report which
+>   endpoint(s) were consulted," not the full manifest+block-on-
+>   unjustified-partial requirement). Left #115 open as the tracking
+>   issue rather than filing a duplicate; commented on it linking F2-G09.
+> - **`F3-G09`** (reports/exports must derive org scope from active
+>   assignments, applied to detail rows/indicators/aggregations/exports
+>   alike) — **real, currently-unmet gap.** `reports.routes.js` and
+>   `Dashboard.tsx` have zero organizational-scope filtering today.
+>   Already fully tracked: **#340** (foundation — scope-filter helper +
+>   sample/patient list+detail enforcement, unblocked now that its own
+>   dependency #348 closed) and **#341** (this gate's actual surface —
+>   reports+dashboards — explicitly depends on #340 landing first).
+>
+> Tracked as **#378**, closed 2026-08-17 against this note.
 
 **Gate / definition of done for this milestone** (mirrors the RF012
 audit-first pattern found in the use-case diagrams — see
