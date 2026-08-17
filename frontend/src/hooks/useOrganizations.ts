@@ -38,10 +38,44 @@ export function useOrganizations() {
     }
   };
 
+  const createOrganization = async (data: Partial<Organization>) => {
+    try {
+      const response = await organizationService.create(data);
+      const responseData: any = response.data;
+      await loadOrganizations();
+      return responseData?.data || responseData;
+    } catch (err: any) {
+      throw new Error(err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao criar organização');
+    }
+  };
+
+  const updateOrganization = async (id: string, data: Partial<Organization>) => {
+    try {
+      const response = await organizationService.update(id, data);
+      const responseData: any = response.data;
+      await loadOrganizations();
+      return responseData?.data || responseData;
+    } catch (err: any) {
+      throw new Error(err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao atualizar organização');
+    }
+  };
+
+  const deleteOrganization = async (id: string) => {
+    try {
+      await organizationService.delete(id);
+      await loadOrganizations();
+    } catch (err: any) {
+      throw new Error(err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao remover organização');
+    }
+  };
+
   return {
     organizations,
     loading,
     error,
     loadOrganizations,
+    createOrganization,
+    updateOrganization,
+    deleteOrganization,
   };
 }

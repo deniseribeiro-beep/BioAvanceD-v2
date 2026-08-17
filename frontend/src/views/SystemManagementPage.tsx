@@ -3,7 +3,9 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
-import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle } from 'lucide-react';
+import Modal from '../components/UI/Modal';
+import Input from '../components/UI/Input';
+import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle, Building2 } from 'lucide-react';
 import { useUsers } from '../hooks/useUsers';
 import { useOrganizations } from '../hooks/useOrganizations';
 import { useAuth } from '../contexts/AuthContext';
@@ -13,7 +15,7 @@ import { Organization } from '../types/models';
 import SecurityPage from './SecurityPage';
 import './SystemManagementPage.css';
 
-type TabType = 'users' | 'security';
+type TabType = 'users' | 'organizations' | 'security';
 
 /**
  * Resolve o organizationId de um User para o officialName da Organization
@@ -35,7 +37,7 @@ export default function SystemManagementPage() {
   const { t } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as TabType | null;
-  const validTabs: TabType[] = ['users', 'security'];
+  const validTabs: TabType[] = ['users', 'organizations', 'security'];
   const initialTab = (tabParam && validTabs.includes(tabParam)) ? tabParam : 'users';
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
 
@@ -47,6 +49,7 @@ export default function SystemManagementPage() {
 
   const tabs = [
     { id: 'users' as TabType, label: t('system.tabs.users', 'Usuários'), icon: UserCog },
+    { id: 'organizations' as TabType, label: t('system.tabs.organizations', 'Organizações'), icon: Building2 },
     { id: 'security' as TabType, label: t('system.tabs.security', 'Segurança'), icon: ShieldIcon },
   ];
 
@@ -81,6 +84,7 @@ export default function SystemManagementPage() {
 
       <div className="system-tab-content">
         {activeTab === 'users' && <UsersSection />}
+        {activeTab === 'organizations' && <OrganizationsSection />}
         {activeTab === 'security' && <SecuritySection />}
       </div>
     </div>
@@ -292,6 +296,222 @@ function UsersSection() {
         </Table>
       </Card>
     </>
+  );
+}
+
+/**
+ * Monta o payload de criação/edição de uma Organization a partir do
+ * estado do formulário — remove campos gerenciados pelo servidor
+ * (organizationId, normalizedName, _id) e normaliza campos opcionais
+ * vazios para null (o backend distingue "não informado" de string vazia).
+ */
+export function buildOrganizationSubmissionPayload(
+  formData: Partial<Organization>
+): Partial<Organization> {
+  const { organizationId, normalizedName, _id, ...rest } = formData;
+  return {
+    ...rest,
+    acronym: rest.acronym ? rest.acronym : null,
+    organizationType: rest.organizationType ? rest.organizationType : null,
+    website: rest.website ? rest.website : null,
+  };
+}
+
+// Seção de Organizações
+function OrganizationsSection() {
+  const { organizations, loading, error, createOrganization, updateOrganization, deleteOrganization } = useOrganizations();
+  const { t } = useLanguage();
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingOrganization, setEditingOrganization] = useState<Organization | null>(null);
+
+  return (
+    <>
+      <div className="section-header">
+        <Button
+          data-testid="new-organization-button"
+          onClick={() => {
+            setEditingOrganization(null);
+            setIsModalOpen(true);
+          }}
+        >
+          <Plus size={18} />
+          {t('system.organizations.new', 'Nova Organização')}
+        </Button>
+      </div>
+
+      {loading && <p>{t('common.loading')}</p>}
+      {error && <p style={{ color: 'var(--danger)' }}>{t('common.error')}: {error}</p>}
+
+      <Card>
+        <Table
+          data-testid="organizations-table"
+          headers={[
+            t('system.organizations.officialName', 'Nome Oficial'),
+            t('system.organizations.acronym', 'Sigla'),
+            t('system.organizations.organizationType', 'Tipo'),
+            t('system.organizations.countryCode', 'País'),
+            t('system.organizations.website', 'Website'),
+            t('common.actions'),
+          ]}
+        >
+          {Array.isArray(organizations) && organizations.length > 0 ? (
+            organizations.map((org) => (
+              <tr key={org.organizationId || org._id}>
+                <td>{org.officialName}</td>
+                <td>{org.acronym || '-'}</td>
+                <td>{org.organizationType || '-'}</td>
+                <td>{org.countryCode}</td>
+                <td>{org.website || '-'}</td>
+                <td>
+                  <div className="table-actions">
+                    <button
+                      data-testid={`edit-organization-button-${org.organizationId}`}
+                      className="action-button"
+                      onClick={() => {
+                        setEditingOrganization(org);
+                        setIsModalOpen(true);
+                      }}
+                      title={t('common.edit')}
+                    >
+                      <Edit size={16} />
+                    </button>
+                    <button
+                      data-testid={`delete-organization-button-${org.organizationId}`}
+                      className="action-button danger"
+                      onClick={async () => {
+                        if (confirm(t('system.organizations.deleteConfirm', 'Tem certeza que deseja excluir esta organização?'))) {
+                          try {
+                            await deleteOrganization(org.organizationId);
+                          } catch (err: any) {
+                            alert(err.message);
+                          }
+                        }
+                      }}
+                      title={t('common.delete')}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))
+          ) : (
+            <tr>
+              <td colSpan={6} style={{ textAlign: 'center', padding: '2rem' }}>
+                {loading ? t('common.loading') : t('system.organizations.empty', 'Nenhuma organização cadastrada')}
+              </td>
+            </tr>
+          )}
+        </Table>
+      </Card>
+
+      <Modal
+        isOpen={isModalOpen}
+        onClose={() => {
+          setIsModalOpen(false);
+          setEditingOrganization(null);
+        }}
+        title={editingOrganization
+          ? t('system.organizations.editTitle', 'Editar Organização')
+          : t('system.organizations.newTitle', 'Nova Organização')}
+      >
+        <OrganizationForm
+          organization={editingOrganization}
+          onSave={async (data) => {
+            try {
+              const payload = buildOrganizationSubmissionPayload(data);
+              if (editingOrganization) {
+                await updateOrganization(editingOrganization.organizationId, payload);
+              } else {
+                await createOrganization(payload);
+              }
+              setIsModalOpen(false);
+              setEditingOrganization(null);
+            } catch (err: any) {
+              alert(err.message);
+            }
+          }}
+          onCancel={() => {
+            setIsModalOpen(false);
+            setEditingOrganization(null);
+          }}
+        />
+      </Modal>
+    </>
+  );
+}
+
+function OrganizationForm({
+  organization,
+  onSave,
+  onCancel,
+}: {
+  organization: Organization | null;
+  onSave: (data: Partial<Organization>) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useLanguage();
+  const [formData, setFormData] = useState<Partial<Organization>>(
+    organization || {
+      officialName: '',
+      acronym: '',
+      organizationType: '',
+      countryCode: '',
+      website: '',
+    }
+  );
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSave(formData);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="form" data-testid="organization-form">
+      <div className="form-grid">
+        <Input
+          label={t('system.organizations.officialName', 'Nome Oficial')}
+          data-testid="organization-official-name-input"
+          value={formData.officialName || ''}
+          onChange={(e) => setFormData({ ...formData, officialName: e.target.value })}
+          required
+        />
+        <Input
+          label={t('system.organizations.acronym', 'Sigla')}
+          data-testid="organization-acronym-input"
+          value={formData.acronym || ''}
+          onChange={(e) => setFormData({ ...formData, acronym: e.target.value })}
+        />
+        <Input
+          label={t('system.organizations.organizationType', 'Tipo')}
+          data-testid="organization-type-input"
+          value={formData.organizationType || ''}
+          onChange={(e) => setFormData({ ...formData, organizationType: e.target.value })}
+        />
+        <Input
+          label={t('system.organizations.countryCode', 'País (código ISO)')}
+          data-testid="organization-country-code-input"
+          value={formData.countryCode || ''}
+          onChange={(e) => setFormData({ ...formData, countryCode: e.target.value.toUpperCase() })}
+          maxLength={2}
+          required
+        />
+        <Input
+          label={t('system.organizations.website', 'Website')}
+          data-testid="organization-website-input"
+          value={formData.website || ''}
+          onChange={(e) => setFormData({ ...formData, website: e.target.value })}
+        />
+      </div>
+      <div className="form-actions">
+        <Button type="button" variant="secondary" onClick={onCancel}>
+          {t('common.cancel')}
+        </Button>
+        <Button type="submit" data-testid="organization-form-submit">
+          {t('common.save')}
+        </Button>
+      </div>
+    </form>
   );
 }
 
