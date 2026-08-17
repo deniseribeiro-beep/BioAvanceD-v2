@@ -76,6 +76,42 @@ async function openPanelForSample(page: import('@playwright/test').Page, sample:
     await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ success: false }) });
   });
 
+  // SampleDetailsPage also mounts useResults()/useEquipment(), which fire
+  // real GET /results and GET /equipment on mount regardless of this test's
+  // own focus — unmocked, they hit the real backend with mockLogin's
+  // unsigned token, 401, and api.ts's response interceptor force-logs-out
+  // the session (redirect to /login), detaching whatever the test was about
+  // to click (#611).
+  await page.route('**/api/results**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, data: [] }) });
+  });
+
+  await page.route('**/api/equipment**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, data: [] }) });
+  });
+
+  // SampleDetailsPage also always mounts AnalysisUploadModal (visibility is
+  // an `isOpen` prop, not conditional rendering — the component, and its
+  // useAnalysisTypes() hook, mount regardless of whether the modal is
+  // shown), firing a real GET /analysis-types on mount too (#611).
+  await page.route('**/api/analysis-types**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, data: [] }) });
+  });
+
+  // InlineStorageMovementPanel also resolves current location via
+  // GET /storage/sample/:sampleId on mount (#495) — unmocked for whichever
+  // sample id the caller didn't set up its own route for, this 401s the
+  // same way /results and /equipment did above (#611). Default to "not
+  // stored" here; a caller-registered route for a specific sample id (e.g.
+  // the already-stored test below) is registered before this one runs and
+  // takes priority via route.fallback().
+  await page.route('**/api/storage/sample/*', async (route) => {
+    if (route.request().url().endsWith(`/api/storage/sample/${sample._id}`) && sample === STORED_SAMPLE) {
+      return route.fallback();
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: false }) });
+  });
+
   await mockStorageTree(page);
 
   await page.goto(`/samples/${sample._id}`);
