@@ -133,14 +133,5 @@ router.post('/upload',
   importController.import.bind(importController)
 );
 
-
-// Importação FHIR direta (JSON) com autenticação e autorização
-const { importFhirBundle } = require('../../controllers/import.controller');
-router.post('/fhir',
-  authenticate,
-  requirePermission('uploadFiles'),
-  importFhirBundle
-);
-
 module.exports = router;
 
