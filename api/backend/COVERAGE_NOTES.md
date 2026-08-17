@@ -162,6 +162,25 @@ practical rule: don't chase this with config changes; if the
 coverage-reconcile command shows secret-null failures again, re-run once
 before trusting the number.
 
+A fifth report (issue #489, filed 2026-08-07): a **plain** `vitest run`
+(no `--coverage`, no directory restriction) reported 183 failed tests
+across 89 files, same JWT/encryption-secret symptom shape, notably
+*without* `--coverage` involved — a wider/different trigger than the
+`--coverage`-only pattern #423 documented. Re-run 2026-08-17 with the
+exact same shape (`npx vitest run --reporter=verbose`, full repo, no
+`--coverage`, no directory scope): **365/365 files, 6847/6847 tests
+passed, zero failures.** The reported 89-file/183-test failure set did
+not reproduce (test count grew from 5982 to 6847 over the intervening 10
+days of work, consistent with normal test-suite growth, not with a
+narrower run). Recorded as a second non-reproducing instance of the same
+underlying flake class, this time without `--coverage` in the loop —
+strengthens the case that it's genuinely non-deterministic (likely still
+the `pool: 'forks'` + `isolate: true` cross-process behavior, just
+triggered by something broader than coverage instrumentation alone) and
+not fixable from a one-off report. Same practical rule as #423: if a full
+run shows secret-null failures again, re-run once before trusting the
+number, and note whether `--coverage` was involved this time.
+
 ## How to use this when picking a slice
 
 1. **Check whether a candidate file is on the excluded list above
