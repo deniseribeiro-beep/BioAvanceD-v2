@@ -518,6 +518,24 @@ export interface Organization {
   website?: string | null;
 }
 
+// RF020 / MIABIS Collection (ELM-0039..0052) — dict-02_DICIONARIO.md
+export interface Collection {
+  _id?: string; // MongoDB ID
+  collectionId: string;
+  collectionName: string;
+  collectionStatus?: string;
+  sampleTypes?: Array<Record<string, unknown>>;
+  datasetTypes?: Array<Record<string, unknown>>;
+  diseaseScope?: Array<Record<string, unknown>>;
+  inclusionCriteriaCategories?: Array<Record<string, unknown>>;
+  exclusionCriteria?: string | null;
+  miabisUseAccessConditions?: Array<Record<string, unknown>>;
+  storageTemperatureCategories?: Array<Record<string, unknown>>;
+  participantCount?: number | null;
+  sampleCount?: number | null;
+  relatedPublications?: Array<Record<string, unknown>>;
+}
+
 export interface User {
   _id?: string; // MongoDB ID
   userID?: string;
