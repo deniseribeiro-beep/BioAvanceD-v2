@@ -608,15 +608,18 @@ class PatientService {
   async getPatient(db, participantId) {
     try {
       const patientsCollection = await this.getPatientsCollection(db);
-      // Busca por participantId (string de 8 dígitos) ou _id (ObjectId)
+      // Busca por participantId (string de 8 dígitos), _id (ObjectId de 24
+      // caracteres hex) ou participantId de formato livre (#603 -- ex.:
+      // participantes importados via FHIR, cujo participantId é derivado do
+      // FHIR Patient.id e não segue nenhum dos dois formatos acima).
       let patient;
-      if (typeof participantId === 'string' && participantId.length === 8 && /^\d{8}$/.test(participantId)) {
-        // É um participantId de 8 dígitos
+      if (typeof participantId === 'string' && /^\d{8}$/.test(participantId)) {
         patient = await patientsCollection.findOne({ participantId });
-      } else {
-        // É um ObjectId
+      } else if (typeof participantId === 'string' && /^[0-9a-fA-F]{24}$/.test(participantId)) {
         const { ObjectId } = require('mongodb');
         patient = await patientsCollection.findOne({ _id: new ObjectId(participantId) });
+      } else {
+        patient = await patientsCollection.findOne({ participantId });
       }
       return this.decryptSensitivePatientFields(patient);
     } catch (error) {

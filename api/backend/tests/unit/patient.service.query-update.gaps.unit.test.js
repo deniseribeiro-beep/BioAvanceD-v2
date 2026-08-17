@@ -58,6 +58,25 @@ describe('PatientService.getPatient', () => {
     const callArg = patientsCollection.findOne.mock.calls[0][0];
     expect(callArg).toHaveProperty('_id');
   });
+
+  // #603: FHIR-imported participants get a non-numeric, non-24-hex
+  // participantId (fhir-import-staging.service.js commitBatch upserts
+  // Patient docs keyed on `{ participantId: normalized.participantId }`,
+  // not `_id`). Before the fix, this fell into the ObjectId branch and
+  // `new ObjectId(...)` threw synchronously instead of querying by
+  // participantId.
+  it('queries by participantId (not ObjectId) for a FHIR-style non-numeric id', async () => {
+    const fhirStyleId = 'rf011-debug-1234567890';
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ participantId: fhirStyleId })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.getPatient(db, fhirStyleId);
+
+    expect(patientsCollection.findOne).toHaveBeenCalledWith({ participantId: fhirStyleId });
+    expect(result.participantId).toBe(fhirStyleId);
+  });
 });
 
 describe('PatientService.listPatients', () => {
