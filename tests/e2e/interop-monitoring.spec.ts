@@ -16,6 +16,7 @@ import {
   findStagingRecordBySpecimenId,
   findCommittedSample,
   findCommittedPatient,
+  findCommittedParticipantIdentity,
   findFhirImportAuditLogs,
   removeFhirImportFixtures,
   closeFhirImportDb,
@@ -651,10 +652,13 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
       const commitBody = await commitResponse.json();
       expect(commitBody.committed).toBe(1);
 
-      // Criterion 2: Participant mapped from FHIR Patient.
+      // Criterion 2: Participant mapped from FHIR Patient. patientName is
+      // civil identity (#571/#575) — commitBatch never writes it onto the
+      // canonical Patient document, only onto the segregated
+      // ParticipantIdentity collection, so it's asserted there instead.
       await expect.poll(() => findCommittedPatient(patientId), { timeout: 10_000 }).not.toBeNull();
-      const committedPatient = await findCommittedPatient(patientId);
-      expect(committedPatient?.patientName).toContain('RF011 e2e patient');
+      const committedIdentity = await findCommittedParticipantIdentity(patientId);
+      expect(committedIdentity?.patientName).toContain('RF011 e2e patient');
 
       // Criteria 3, 5, 6: Specimen mapped, provenance recorded
       // (importBatchId/importedBy/importedAt), quarantine released once

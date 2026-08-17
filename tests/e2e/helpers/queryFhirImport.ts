@@ -44,6 +44,15 @@ export async function findCommittedPatient(participantId: string) {
   return db.collection('patients').findOne({ participantId });
 }
 
+// RF005/RNF007 (#571/#575): patientName is civil identity — commitBatch
+// never writes it onto the canonical Patient document; its sole write
+// target is this segregated collection (plaintext-additive pending #574's
+// ciphertext-only cutover, so no decryption needed here).
+export async function findCommittedParticipantIdentity(participantId: string) {
+  const db = await getDb();
+  return db.collection('participantIdentities').findOne({ participantId });
+}
+
 export async function findFhirImportAuditLogs(batchId: string) {
   const db = await getDb();
   // audit()'s batchId is stored as whatever type the caller passed —
@@ -59,5 +68,6 @@ export async function removeFhirImportFixtures(specimenId: string, participantId
   const db = await getDb();
   await db.collection('samples').deleteMany({ specimenId });
   await db.collection('patients').deleteMany({ participantId });
+  await db.collection('participantIdentities').deleteMany({ participantId });
   await db.collection('import_staging_records').deleteMany({ 'normalized.specimenId': specimenId });
 }
