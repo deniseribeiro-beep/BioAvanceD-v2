@@ -81,6 +81,34 @@ only, per explicit instruction not to let CI be implemented yet.
   and `fix/599-hold-ci-trigger-for-milestone` intentionally kept (both
   merged, but #599 still open — see above).
 
+## Backlog branch cleanup (post-push, this session)
+
+After pushing, surveyed every local and remote branch for merge status
+against `feature/docker-e2e-backend-integration`. **Before deleting
+anything, checked commit authorship** (`git log -1 --format='%an'`) —
+this repo has two real contributors, `Denise Ribeiro` and `DieAllPies`,
+and the first remote-delete attempt would have caught several of her
+branches had `branch-guard.cjs` not incidentally blocked it on naming
+grounds first. Filed the process gap as
+`dyeallpies-skills-pack#332` (clean-up's branch domain has no
+authorship check).
+
+- **Deleted (26 local + 8 remote, all confirmed `DieAllPies`-authored
+  and already merged):** local `fix/476/477/481/485/513`,
+  `test/428/431/440/441/486/507-511`, `test/549-*` (10 reference-source
+  branches), `worktree-agent-<id>`; remote `fix/349/444/476/481/482/515/
+  536/541`.
+- **Left alone — confirmed Denise's own work, not ours to delete:**
+  remote `audit/intake-governance-i18n-orpha`, `canonical-cleanup`,
+  `chore/reference-seed-stack-and-ci`, `fix/project-issues-stabilization`,
+  `release/inpi-v1.1.0-rcs-gov`.
+- **Left alone — not merged (dangling, has real unmerged content):**
+  local `test/377-docs-on-main`, `test/human-showcase-video`; remote
+  `origin/agent/pipeline-data-modeling-docs`,
+  `origin/refactor/canonical-data-contracts`,
+  `origin/refactor/canonical-participant-flow`,
+  `origin/test/377-docs-on-main`.
+
 ## Flagged, not acted on
 
 - **Dangling local branch `test/377-docs-on-main`**: not an ancestor of
