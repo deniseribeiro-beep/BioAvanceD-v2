@@ -38,27 +38,26 @@ authorized in advance; not needed — worked solo through the batch.
   confirmed independent of `--coverage`. Closed as confirmed
   non-reproducing, same resolution pattern as #423.
 
-## #599 — fixed, merged, but deliberately UNPUSHED
+## #599 — fix written, then reverted on this branch pending milestone #2
 
-`ci-pipeline.yml`'s trigger widened to also fire on
+`ci-pipeline.yml`'s trigger was widened to also fire on
 `feature/docker-e2e-backend-integration` (mirroring `main`), fixing "no
 CI signal on the integration branch" (#599's own suggested next step).
-**Committed and merged locally, but the user explicitly said "hold,
-don't push yet"** when reminded that milestone #3 ("CI Integration for
-E2E Tests") is sequenced after milestone #2 (Playwright e2e, still 2
-open issues) per his own 2026-07-27 note: "do not start wiring CI until
-#2 closes." Issue #599 itself is still **open** — do not close it until
-the push is cleared and it actually lands.
+Milestone "CI Integration for E2E Tests" is explicitly sequenced after
+milestone "Playwright E2E Tests" closes (still 2 open issues), per
+Dennis's 2026-07-27 note: "do not start wiring CI until #2 closes." He
+first asked to hold the push entirely, then — since the widen commit
+was earliest in a now-9-commit stack, blocking the rest of the session's
+work from shipping — asked to revert the trigger change instead and push
+everything else.
 
-**This blocks pushing the whole branch right now**: #599's two commits
-are the earliest of six local commits ahead of `origin` on
-`feature/docker-e2e-backend-integration` (linear history — everything
-else, including the now-closed #570/#559/#489 work, is stacked on top).
-Don't push until Dennis explicitly clears #599, or the widened trigger
-ships along with it. If he asks to ship the other four fixes sooner
-without #599, that needs a rebase/cherry-pick onto a fresh point off
-`origin/feature/docker-e2e-backend-integration` — ask him first, don't
-assume that's wanted.
+**Net effect on the pushed tree: `ci-pipeline.yml`'s trigger is
+unchanged (main-only)**, same as before this session. History carries
+both the widen commit (`76d04826`) and a follow-up revert commit
+(`889e0b46`, "Hold #599...") rather than omitting the widen entirely —
+simpler and safer than rewriting already-drafted local history. Issue
+**#599 stays open**; re-apply the two-line trigger widen once Dennis
+clears it (milestone #2 closed), most simply by reverting `889e0b46`.
 
 ## CI backlog organization (ad hoc mid-session ask)
 
