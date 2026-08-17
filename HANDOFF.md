@@ -1,80 +1,96 @@
 # HANDOFF
 
-**Written:** 2026-08-14, third session same day. User asked to "pick next
-group of issues" — routed via `work-issue` dispatch. `#600`/`#601`
-(filed last session) were the readiest candidates; tracing `#600` showed
-it was the same gap already tracked by `#371`/`#374`, so `#371` (the
-smaller, prerequisite half) was routed to `build-loop` and built this
-session. Docker was authorized ("Docker on") partway through, after an
-initial ask.
+**Written:** 2026-08-17, fresh session. User asked to "read handoff and
+pick the next sizable chunk of issues to resolve," Docker on. Routed via
+`work-issue` → `#374` (RF028's compose.test.yml wiring, unblocked by
+`#371` landing last session) → `divide-and-conquer` assessment (all 16
+importers use bundled local fixtures, no live network — judged doable
+whole rather than pre-split) → `build-loop`.
 
 ## What happened this session
 
-**`#371`** ("RF022 follow-up: cut compose.test.yml/CI over to the
-automatic bootstrap") **closed, landed and verified.** Added
-`foundation-bootstrap-test` to `compose.test.yml` — a one-shot service
-mirroring `compose.dev.yml`'s `foundation-bootstrap` (`npm run
-seed:essential`, triggered once `backend-app-test` is healthy). Also
-retired `current-state:ci`'s `seed:essential:dry-run` step (redundant
-now that the real seed runs automatically as part of stack startup) and
-updated two stale comments in `pipeline-continuity.spec.ts` that
-described the RF022 gap as still open.
+**`#374`** ("Cut compose.test.yml/CI over to the RF028 reference-data-
+bootstrap") — **partial progress, issue left open.**
 
-Verified against a fresh `compose.test.yml` stack (targeted `up -d
---wait` core services + `admin-bootstrap-test` + `foundation-bootstrap-
-test`, skipping `playwright-runner` — same recipe last session's `#579`
-trace used):
-- RF022's 2 tests (`pipeline-continuity.spec.ts`, "Foundation Data
-  Pipeline bootstrap" describe block): 2/2 passed, ~50ms.
-- `current-state:ci` (via `backend-unit-runner`): still exits 0 with the
-  dry-run step removed.
-- Full-file run: 19 failures remain, all RF028 (`#374`'s scope,
-  unaffected by this slice) — down from the original 19 = 2 RF022 + 17
-  RF028 `#600` traced.
+Landed: `compose.test.yml` now has the full 16-source
+`reference-data-bootstrap-test*` one-shot chain (HPO → MONDO → ORPHA →
+ICD-11 → ICD-10 → OMIM → HGNC → LOINC → UCUM → DCB → ATC → DUO → Uberon
+→ NCBI Taxonomy → Cell Ontology → EDAM), each `depends_on` the prior via
+`service_completed_successfully`, first one chained after
+`foundation-bootstrap-test` (#371). Mirrors `compose.dev.yml`'s
+already-working chain exactly. `docker compose config --quiet` validates
+cleanly (all `depends_on` references resolve, no cycles).
 
-Merge `45dbf5d8` on `feature/docker-e2e-backend-integration`, pushed.
-Progress comments left on `#600` (RF022 half resolved, RF028 half still
-open) and `#374` (its prerequisite landed, now unblocked, not started).
+Merge `11f27c71` on `feature/docker-e2e-backend-integration`, pushed.
+Fix branch `test/374-reference-data-bootstrap-test` deleted locally
+after merge.
 
-**Side finding, filed to the skills-pack tracker:**
-`dyeallpies-skills-pack#318` — `docker-workflow`'s BioAvanceD-v2 overlay
-documents `E2E_MONGO_URI=mongodb://localhost:27017` (no
-`?directConnection=true`) for manual host-side Playwright runs against
-`compose.test.yml`. Since `mongodb-test` runs as a single-node replica
-set (`#297`), the literal documented URI makes the driver attempt
-replica-set discovery via the internal `mongodb-test:27017` hostname,
-which the host can't reach — reproduced a full 30s hang followed by
-`MongoTopologyClosedError: Topology is closed`, the exact error `#579`
-investigated and closed as not-reproducible last session. Falling back
-to the query helper's own default (which already includes
-`?directConnection=true`) fixed it instantly. Flagged in the filed issue
-as a plausible actual root cause behind at least some of `#579`'s
-original (never-isolated) failures. Filed per Rule 0 (skill files only
-editable from a session in the skills-pack repo itself) — this is a
-BioAvanceD-v2-primary session, so it went to the tracker, not a direct
-edit.
+**Not verified against a live stack.** Three `docker compose up -d
+--wait <core services>` attempts all failed with `ports are not
+available ... 8086` — a Windows Hyper-V/WinNAT port-exclusion range
+(`7775–8274`, confirmed via `netsh interface ipv4 show
+excludedportrange protocol=tcp`) swallowing `influxdb-test`'s published
+port, unrelated to this session's compose edit. `wsl --shutdown`
+(user-authorized) did **not** clear it — Docker's engine came back
+briefly (reachable via `docker version`) with the exclusion range
+byte-identical, then went fully unreachable again
+(`dockerDesktopLinuxEngine` pipe not found) and stayed that way for the
+rest of the session. User is restarting Docker Desktop after this
+session ends; **image cleanup (5 tagged test images:
+`bioavanced-test-{witness,tsa,backend-app,frontend-app,worker}-test`,
+plus builder cache) is still pending** — couldn't reach the daemon to
+run it. Containers/network from the failed attempts were already torn
+down (`docker compose down --remove-orphans`, ran before the WSL
+restart) — nothing left running.
+
+**"Wire it into CI" bullet: not attempted, traced instead.**
+`ci-pipeline.yml`'s `current-state-validation` job never invokes
+Playwright/`playwright-runner` at all (independently confirmed by
+`dyeallpies-skills-pack#298`); whether it ever will is gated on the
+still-open `#585` (revive vs. retire `playwright-runner`). `#371`'s own
+precedent already shows "wire into CI" for this milestone's issues
+doesn't mean touching `ci-pipeline.yml` — it closed having only touched
+`compose.test.yml` + retired a redundant `current-state:ci` step.
+RF028 has no analogous dry-run step to retire at all.
+
+Progress comment left on `#374` with all of the above. Issue kept
+**open** pending a live-stack verification run (17 RF028 tests in
+`pipeline-continuity.spec.ts`).
+
+**Filed to the skills-pack tracker (both from this repo, per Rule 0 —
+skill files aren't editable from here):**
+- `dyeallpies-skills-pack#321` — new Windows Docker gotcha:
+  Hyper-V/WinNAT port-exclusion blocking a `compose.test.yml` published
+  port (8086), confirmed `wsl --shutdown` does *not* clear it (untested:
+  admin `net stop winnat && net start winnat`, or a reboot).
+- `dyeallpies-skills-pack#322` — `build-loop`'s BioAvanceD-v2 overlay
+  should note that this milestone's "wire it into CI" bullets aren't
+  actionable until `#585` resolves, so future RF-slice sessions don't
+  re-investigate the same dead end.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, clean, in sync with
-  `origin` (pushed `45dbf5d8`). Merged fix branch
-  `test/371-foundation-bootstrap-test` deleted locally after merge.
-- Docker: fully torn down at session end. `compose.test.yml` stack
-  brought down (no `-v` — named volumes, incl. `mongodb-test-data`,
-  kept). 9 session-tagged test images removed
-  (`bioavanced-test-backend-unit-runner` and friends, including the new
-  `bioavanced-test-foundation-bootstrap-test`). Builder cache pruned,
-  875.3MB reclaimed. No containers left running.
+- On `feature/docker-e2e-backend-integration`, clean except the
+  gitignored/junctioned `.claude/skills/` (untracked, not part of this
+  session's diff). In sync with `origin` (pushed `11f27c71`).
+- **Docker: engine currently unreachable** (see above) — user is
+  restarting Docker Desktop after this session. Once it's back, still
+  need: `docker rmi` the 5 tagged test images listed above, then
+  `docker builder prune -af`. No containers running, no named volumes
+  touched this session.
 
 ## Recommended next steps
 
 None queued — the user hasn't named what's next. Candidates visible in
 the backlog, not confirmed direction:
-- **`#374`** — RF028's half of the same gap (16-source
-  `reference-data-bootstrap-test` chain + CI wiring), now unblocked by
-  `#371` landing. Larger than `#371` (16 one-shot services to mirror,
-  each depending on the previous) — likely its own `divide-and-conquer`
-  call if picked up whole.
+- **`#374`** itself — needs a live-stack verification run once Docker
+  cooperates: bring up core services + `admin-bootstrap-test` +
+  `foundation-bootstrap-test` + the 16 `reference-data-bootstrap-test*`
+  services (targeted, per `docker-workflow`'s recipe — don't retry a
+  plain `up -d`), confirm all 17 RF028 tests in
+  `pipeline-continuity.spec.ts` pass, then close.
+- **Docker image cleanup** (see above) — small, mechanical, blocked only
+  on the engine being reachable again.
 - **`#601`** — RF011 commit-race finding (still needs an isolated
   confirmation run before anyone attempts a fix; test-bug vs.
   product-bug still open), untouched this session.
@@ -82,14 +98,15 @@ the backlog, not confirmed direction:
   (widen `ci-pipeline.yml`'s trigger to the integration branch); not
   mine to decide.
 - **`#585`** — still Dennis's call (revive vs. retire
-  `playwright-runner`), unchanged.
+  `playwright-runner`), unchanged — also now the blocker for #374's
+  CI-wiring bullet specifically (see above).
 - **`#336`** — still needs Dennis's call (fix vs. retire the legacy
   `import.controller.js#importFhirBundle` endpoint); `#570` stays
   parked on it, unchanged.
 - **`test/human-showcase-video`** — still awaiting Dennis's go to
   show/merge, unchanged.
-- Skills-pack `#297`/`#294`/`#315`/`#317`/`#318` (new this session) —
-  unchanged otherwise, not touched further.
+- Skills-pack `#297`/`#294`/`#315`/`#317`/`#318`/`#321`/`#322` — not
+  touched further this session beyond filing `#321`/`#322`.
 - pack-repo `#279`/`#280`/`#281`/`#283`/`#248`/`#270`/`#286`/`#301`/
   `#309`/`#310`/`#311`/`#312`/`#313`/`#314` — unchanged, not checked
   this session.
