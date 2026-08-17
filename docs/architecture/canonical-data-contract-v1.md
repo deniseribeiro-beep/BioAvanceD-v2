@@ -118,10 +118,14 @@ patient/sample write paths) no longer accept or persist `patientName`/
 `birthDate`/`identityDocument` on `Patient` — `ParticipantIdentity` is
 the sole store. The two now-unused indexes
 (`patients_name_document_text_v1`, `patients_name_idx_v1`) are dropped.
-(`import.controller.js#importFhirBundle` and
-`fhir-import-staging.service.js#commitBatch` still bypass `PatientModel`
-via raw `insertOne`/`updateOne` — tracked separately as #570/#571, not
-covered by this removal.)
+(`import.controller.js#importFhirBundle` — a dead synchronous FHIR
+import path with no live caller, and a direct violation of RF011 AC#7's
+"no direct writes to MongoDB/Neo4j from the FHIR conversion boundary" —
+was removed entirely in #570, rather than fixed in place.
+`fhir-import-staging.service.js#commitBatch`'s own bypass was fixed in
+#571/#575: its `Patient` upsert no longer writes `patientName`/`cpf`
+directly, deferring civil identity to the `ParticipantIdentity`
+dual-write below it.)
 
 **Landed in #562:** consent/intake paths now resolve civil identity via
 `ParticipantIdentity` instead of `Patient`: `consent.controller.js`'s
@@ -803,10 +807,10 @@ tracked together as `#525`, alongside a fourth, storage/custody-only
 finding (`batch-validation-engine.service.js`'s legacy `locationID`
 column mapping). `import.controller.js#importFhirBundle`'s own
 direct `rcs_score`/`final_grade`/`sprec` writes were also found in this
-pass, but that whole endpoint already has an open "is this dead code"
-question (`#336`, unresolved) predating #496 — no separate migration
-issue filed for it; #336 is the right place to resolve it once that
-question is settled.
+pass, but that whole endpoint's "is this dead code" question (`#336`)
+resolved as yes — no live caller, and a direct RF011 AC#7 violation
+(direct MongoDB writes from the FHIR conversion boundary) — so it was
+removed entirely in #570/#336 rather than migrated.
 
 ### SpecimenPreanalytics
 
