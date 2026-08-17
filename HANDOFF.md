@@ -68,16 +68,18 @@ only, per explicit instruction not to let CI be implemented yet.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, 6 commits ahead of
-  `origin` (all local, **not pushed** — see #599 above). Working tree
-  clean except the gitignored/junctioned `.claude/skills/`.
+- On `feature/docker-e2e-backend-integration`, pushed to `origin` this
+  session (see #599 above for the trigger widen/revert pair in the
+  history). Working tree clean except the gitignored/junctioned
+  `.claude/skills/`.
 - Docker: not used this session (all checks were native vitest/lint/
   architecture-test runs).
 - Local branches for this session's work already deleted (merged +
   issue closed): `fix/570-remove-dead-fhir-sync-import`,
   `test/559-reference-data-seeding-docs`,
   `test/489-vitest-jwt-regression-recheck`. `fix/599-ci-trigger-integration-branch`
-  intentionally kept (merged, but #599 still open).
+  and `fix/599-hold-ci-trigger-for-milestone` intentionally kept (both
+  merged, but #599 still open — see above).
 
 ## Flagged, not acted on
 
