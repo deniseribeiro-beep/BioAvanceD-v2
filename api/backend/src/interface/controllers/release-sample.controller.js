@@ -25,7 +25,7 @@ function createReleaseSampleController() {
       });
 
       const result = await useCase.execute({
-        sampleId,
+        specimenId: sampleId,
         actor: {
           userId: req.user?.id || req.user?._id?.toString() || req.user?.userID || null,
           userName: req.user?.name || req.user?.username || null,
