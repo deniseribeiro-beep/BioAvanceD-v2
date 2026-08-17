@@ -20,6 +20,7 @@ import {
   CidEntry,
   PhoneCodeEntry,
   Organization,
+  Collection,
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
 
@@ -514,6 +515,18 @@ export const userService = {
 // ========== ORGANIZATION SERVICES ==========
 export const organizationService = {
   getAll: () => api.get<Organization[]>('/organizations'),
+  create: (data: Partial<Organization>) => api.post<Organization>('/organizations', data),
+  update: (id: string, data: Partial<Organization>) => api.put<Organization>(`/organizations/${id}`, data),
+  delete: (id: string) => api.delete(`/organizations/${id}`),
+};
+
+// ========== COLLECTION SERVICES (RF020, MIABIS Collection) ==========
+export const collectionsService = {
+  getAll: () => api.get<Collection[]>('/collections'),
+  getById: (id: string) => api.get<Collection>(`/collections/${id}`),
+  create: (data: Partial<Collection>) => api.post<Collection>('/collections', data),
+  update: (id: string, data: Partial<Collection>) => api.put<Collection>(`/collections/${id}`, data),
+  delete: (id: string) => api.delete(`/collections/${id}`),
 };
 
 // ========== ACCESS SERVICES ==========

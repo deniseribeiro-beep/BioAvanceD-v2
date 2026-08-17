@@ -119,3 +119,131 @@ describe('POST /api/organizations', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('PUT /api/organizations/:id', () => {
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('returns 401 without token', async () => {
+    const res = await request(app).put('/api/organizations/org-1').send({ officialName: 'USF' });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for a role below Administrador', async () => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 3 }]),
+    });
+
+    const res = await request(app)
+      .put('/api/organizations/org-1')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ officialName: 'USF' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 404 when the organization does not exist', async () => {
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+
+    const res = await request(app)
+      .put('/api/organizations/org-missing')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ officialName: 'USF' });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('updates an organization for an Administrador', async () => {
+    const existing = { organizationId: 'org-1', officialName: 'USF', countryCode: 'BR' };
+    const updated = { ...existing, website: 'https://www.usf.edu.br' };
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(existing),
+      findOneAndUpdate: vi.fn().mockResolvedValue(updated),
+    });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+
+    const res = await request(app)
+      .put('/api/organizations/org-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ website: 'https://www.usf.edu.br' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.website).toBe('https://www.usf.edu.br');
+    expect(coll.findOneAndUpdate).toHaveBeenCalled();
+  });
+
+  it('returns 400 when the merged payload is invalid', async () => {
+    const existing = { organizationId: 'org-1', officialName: 'USF', countryCode: 'BR' };
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(existing) });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+
+    const res = await request(app)
+      .put('/api/organizations/org-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ countryCode: 'BRA' });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('DELETE /api/organizations/:id', () => {
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('returns 401 without token', async () => {
+    const res = await request(app).delete('/api/organizations/org-1');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for a role below Administrador', async () => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 3 }]),
+    });
+
+    const res = await request(app)
+      .delete('/api/organizations/org-1')
+      .set('Authorization', `Bearer ${makeToken(3)}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 404 when the organization does not exist', async () => {
+    const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }) });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+
+    const res = await request(app)
+      .delete('/api/organizations/org-missing')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it('deletes an organization for an Administrador', async () => {
+    const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+
+    const res = await request(app)
+      .delete('/api/organizations/org-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+});
