@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, useMemo, useCallback, u
 import { User } from '../types/models';
 import { authService } from '../services/api';
 import { hasRoleAccess, canRoleAccessRoute, getAccessTypeForRole, RoleName } from '../utils/rolePermissions';
-import { clearClientSession } from '../utils/sessionCleanup';
+import { clearClientSession, onClientLogout } from '../utils/sessionCleanup';
 
 interface AuthContextType {
   user: User | null;
@@ -238,6 +238,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('storage', handleStorageChange);
     };
   }, []); // Executa apenas uma vez na montagem
+
+  // api.ts's response interceptor dispatches this event on a forced logout
+  // (401 + failed refresh) — every other hook that reads auth-derived data
+  // (useUsers, useOrganizations, useResults, ...) already clears its own
+  // state on it via the same onClientLogout subscription; AuthContext is
+  // the actual source of truth for isAuthenticated/user/token that
+  // ProtectedRoute and LoginPage read, and needs to clear its own state
+  // the same way rather than relying solely on the page reload that
+  // currently accompanies every real-world call site of this event (#614).
+  useEffect(() => {
+    return onClientLogout(() => {
+      setUser(null);
+      setToken(null);
+    });
+  }, []);
 
   const login = useCallback(async (username: string, password: string, twoFactorCode?: string): Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean; user?: User } | void> => {
     try {
