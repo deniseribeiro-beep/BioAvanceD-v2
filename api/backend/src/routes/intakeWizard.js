@@ -149,11 +149,9 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
   const specimenStatus = requestedStatusRaw === 'available' ? 'available' : 'quarantined';
   const registrationDate = specimen.registeredAt || new Date().toISOString();
   const confirmedPatientID = normalizeString(matchedPatient?.participantId) || resolvePatientID(data);
-  const confirmedPatientName = normalizeString(matchedPatient?.patientName || data?.participant?.patientName);
 
   return {
     participantId: confirmedPatientID,
-    participantName: confirmedPatientName || null,
     patientObjectId: matchedPatient?._id || null,
     sampleType: normalizeString(specimen.sampleType || specimen.sprec?.sampleType || 'UNKNOWN'),
     sampleOrigin: normalizeString(specimen.sampleOrigin || specimen.sampleType || 'UNKNOWN'),

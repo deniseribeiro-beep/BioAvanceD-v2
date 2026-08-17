@@ -207,6 +207,11 @@ describe('intakeWizard routes', () => {
       expect(res.body.patientMatch.patientID).toBe('12345678');
       expect(res.body.qualityAssessment.score).toBe(80);
       expect(sampleServiceModule.createSample).toHaveBeenCalledTimes(1);
+      // #569: the sample document must never carry a denormalized civil-identity
+      // name -- it's unprotected plaintext PII with no gate, no audit trail, and
+      // no relationship to the reidentifyParticipant-gated flow (#560).
+      const persistedSample = sampleServiceModule.createSample.mock.calls[0][1];
+      expect(persistedSample).not.toHaveProperty('participantName');
       expect(updateOne).toHaveBeenCalledWith(
         { _id: 'patient-obj-1' },
         expect.objectContaining({
