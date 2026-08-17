@@ -128,7 +128,7 @@ already approved. Proposed file names follow the existing
 | Proposed spec file | Diagram package | RFs covered |
 |---|---|---|
 | `auth-access-security.spec.ts` | Acesso e segurança | RF001, RF002, RF003, RF014 |
-| `participant-consent-studies.spec.ts` | Participante, consentimento e estudos | RF004, RF005, RF010, RF020, RF021 |
+| *(no shared file — see note)* | Participante, consentimento e estudos | RF004, RF005, RF010, RF020, RF021 |
 | `specimen-quality-inventory.spec.ts` | Espécime/qualidade/inventário | RF004(shared), RF006, RF016, RF017, RF018, RF019, RF025, RF026 |
 | `interop-monitoring.spec.ts` | Interoperabilidade e monitoramento | RF009, RF011, RF015 |
 | `scientific-data-access.spec.ts` | Dados científicos e acesso | RF007, RF008, RF024, RF027 |
@@ -138,6 +138,14 @@ already approved. Proposed file names follow the existing
 diagrams it's the one use case every other group `«include»`s, so it's
 a **shared assertion helper** (`tests/e2e/helpers/assertAuditEvent.ts`,
 to be built) called from every spec above, not a standalone journey.
+
+**`participant-consent-studies.spec.ts` (proposed above for RF004,
+RF005, RF010, RF020, RF021) was never created — coverage for that group
+landed in topic-specific files instead** (#577): RF005 →
+`tests/e2e/intake-wizard.spec.ts`, RF010 →
+`tests/e2e/tcle-dinamico.spec.ts`, RF020/RF021 →
+`tests/e2e/study-protocol-collection-crud.spec.ts`. See the per-RF
+matrix below for each RF's current status and actual file.
 
 ## Full RF traceability matrix
 
