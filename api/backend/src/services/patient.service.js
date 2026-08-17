@@ -872,15 +872,20 @@ class PatientService {
       }
       updateData = omitLegacyIdentityFields(updateData);
 
-      // Busca por participantId (string de 8 dígitos) ou _id (ObjectId)
+      // Busca por participantId (string de 8 dígitos), _id (ObjectId de 24
+      // caracteres hex) ou participantId de formato livre (#604 -- mesmo
+      // padrão do #603 em getPatient(): participantes importados via FHIR,
+      // cujo participantId não segue nenhum dos dois formatos acima).
       let query;
       if (typeof participantId === 'string' && participantId.length === 8 && /^\d{8}$/.test(participantId)) {
         // É um participantId de 8 dígitos
         query = { participantId };
-      } else {
+      } else if (typeof participantId === 'string' && /^[0-9a-fA-F]{24}$/.test(participantId)) {
         // É um ObjectId
         const { ObjectId } = require('mongodb');
         query = { _id: new ObjectId(participantId) };
+      } else {
+        query = { participantId };
       }
 
       const result = await patientsCollection.updateOne(
@@ -1053,17 +1058,22 @@ class PatientService {
     try {
       const patientsCollection = await this.getPatientsCollection(db);
       
-      // Busca por participantId (string de 8 dígitos) ou _id (ObjectId)
+      // Busca por participantId (string de 8 dígitos), _id (ObjectId de 24
+      // caracteres hex) ou participantId de formato livre (#604 -- mesmo
+      // padrão do #603 em getPatient(): participantes importados via FHIR,
+      // cujo participantId não segue nenhum dos dois formatos acima).
       let query;
       if (typeof participantId === 'string' && participantId.length === 8 && /^\d{8}$/.test(participantId)) {
         // É um participantId de 8 dígitos
         query = { participantId };
-      } else {
+      } else if (typeof participantId === 'string' && /^[0-9a-fA-F]{24}$/.test(participantId)) {
         // É um ObjectId
         const { ObjectId } = require('mongodb');
         query = { _id: new ObjectId(participantId) };
+      } else {
+        query = { participantId };
       }
-      
+
       const result = await patientsCollection.deleteOne(query);
       
       // Log sanitizado

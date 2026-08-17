@@ -254,6 +254,24 @@ describe('PatientService.updatePatient error/query branches', () => {
     const updateQuery = patientsCollection.updateOne.mock.calls[0][0];
     expect(updateQuery).toEqual({ participantId: '12345678' });
   });
+
+  // #604: same fix pattern as #603 (getPatient) — FHIR-imported participants
+  // get a non-numeric, non-24-hex participantId. Before the fix this fell
+  // into updatePatient's ObjectId branch and `new ObjectId(...)` threw
+  // synchronously instead of querying by participantId.
+  it('queries by participantId (not ObjectId) for a FHIR-style non-numeric id', async () => {
+    const fhirStyleId = 'rf011-debug-1234567890';
+    const patientsCollection = makeFakeCollection({
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+      findOne: vi.fn().mockResolvedValue({ participantId: fhirStyleId })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await patientService.updatePatient(db, fhirStyleId, { patientName: 'Nova' });
+
+    const updateQuery = patientsCollection.updateOne.mock.calls[0][0];
+    expect(updateQuery).toEqual({ participantId: fhirStyleId });
+  });
 });
 
 describe('PatientService.validateConsentToken', () => {
@@ -528,6 +546,23 @@ describe('PatientService.deletePatient', () => {
 
     const callArg = patientsCollection.deleteOne.mock.calls[0][0];
     expect(callArg).toHaveProperty('_id');
+  });
+
+  // #604: same fix pattern as #603 (getPatient) — FHIR-imported participants
+  // get a non-numeric, non-24-hex participantId. Before the fix this fell
+  // into deletePatient's ObjectId branch and `new ObjectId(...)` threw
+  // synchronously instead of querying by participantId.
+  it('queries by participantId (not ObjectId) for a FHIR-style non-numeric id', async () => {
+    const fhirStyleId = 'rf011-debug-1234567890';
+    const patientsCollection = makeFakeCollection({
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.deletePatient(db, fhirStyleId);
+
+    expect(patientsCollection.deleteOne).toHaveBeenCalledWith({ participantId: fhirStyleId });
+    expect(result).toBe(true);
   });
 
   it('returns false when no document was deleted', async () => {
