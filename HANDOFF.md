@@ -1,84 +1,102 @@
 # HANDOFF
 
-**Written:** 2026-08-17, same-day continuation session (fifth update).
-User said "read handoff, pick next group of issues to resolve." Read the
-prior handoff, picked `#604` (the top-ranked candidate it had already
-surfaced: small, well-scoped, fix pattern already known from `#603`),
-routed it through `work-issue` → `fix-bugs`, resolved it.
+**Written:** 2026-08-17, same-day continuation session (sixth update).
+User said "read handoff, go down a rabbit hole." Read the prior
+handoff, picked `#576` (the only next-step candidate not blocked on a
+decision only Dennis can make — every other listed candidate needed his
+call), sized it against the `rabbit-hole` skill's budget table,
+confirmed the "full breakdown" scope with the user via AskUserQuestion,
+then drove the queue.
+
+## Still inside the rabbit hole
+
+**Tracker: `#605`** ("Rabbit-hole tracker: RF020 organizations/
+collections management UI, seed #576"). This session is not finished
+with it — resume here, don't make a fresh backlog pick.
+
+Known members:
+- [x] **`#606`** — Organizations CRUD management UI. **Closed this
+  session**, merge `d5e7c842` on `feature/docker-e2e-backend-integration`.
+- [ ] **`#607`** — Collections CRUD management UI. **Next in the queue,
+  unblocked.** Heavier than `#606` — several `Array<Record<string,
+  unknown>>`-typed MIABIS fields with no defined sub-shape yet (multi-
+  select tags vs. free-text-per-line vs. structured sub-form — needs
+  deciding as part of the issue, per its own body).
+- [ ] **`#608`** — real-backend e2e coverage for the full RF020 UI flow.
+  Depends on `#606` (now satisfied) + `#607` (not yet). Still blocked.
+
+Budget so far this sitting: ~4-5 points (tracker filing + split ~1,
+`#606` ~3) against the skill's ~10-point guidance — room to continue to
+`#607` in the same sitting if resumed soon; re-assess if picked up much
+later.
 
 ## What happened this session
 
-**`#604`** ("`updatePatient()`/`deletePatient()` share `getPatient()`'s
-pre-`#603` id-shape bug for non-8-digit, non-ObjectId `participantId`s")
-— **closed, real fix landed.** Both functions
-(`api/backend/src/services/patient.service.js`, query construction
-around what's now lines 875-888 and 1056-1069) had the exact same
-two-branch bug `#603` fixed in `getPatient()`: any `participantId` that
-wasn't an 8-digit numeric string was assumed to be a Mongo ObjectId and
-passed to `new ObjectId(participantId)` unconditionally, throwing
-synchronously (500) for FHIR-imported participants.
+**`#576`'s remaining scope** (management UI for organizations/
+collections — its own backend/service-layer slice had already landed in
+a prior session) was split via `divide-and-conquer`'s design-split
+playbook into `#606`/`#607`/`#608`, all added to tracker `#605` the
+moment they were filed. `#576` itself stays open as the originating
+issue per that playbook.
 
-Fix (branch `fix/604-updatepatient-deletepatient-fhir-style-id`, commit
-`ef20f2a3`, merged `d6326eea` on `feature/docker-e2e-backend-integration`,
-branch deleted both sides, remote delete succeeded with no classifier
-denial this time): applied `#603`'s exact fix pattern to both functions
-— only 24-hex-char strings are now treated as ObjectId-shaped; anything
-else non-8-digit falls back to a `participantId` field query.
+**`#606` landed**: `SystemManagementPage.tsx` gained an "Organizações"
+tab (`OrganizationsSection` + `OrganizationForm`, table + create/edit
+Modal), mirroring `FacilityManagementPage.tsx`'s `SensorsSection`
+pattern — the closest existing "master-data admin" template.
+`useOrganizations.ts` gained `createOrganization`/`updateOrganization`/
+`deleteOrganization` wrappers. `buildOrganizationSubmissionPayload`
+(exported, pure) strips server-managed fields and normalizes empty
+optionals to `null`, unit-tested in `SystemManagementPage.test.tsx` (3
+new tests, 6/6 passing in that file). i18n keys added to all three
+locale files. Manually verified in a real browser via a throwaway
+mocked-auth Playwright smoke check (not committed — removed after use):
+tab renders, create/edit modals work, submit posts the correct payload.
 
-Reproduced first: added a FHIR-style-id regression test to each of
-`updatePatient`'s and `deletePatient`'s describe blocks in
-`patient.service.query-update.gaps.unit.test.js` (mirroring `#603`'s own
-test), confirmed both failed against pre-fix code with the identical
-`BSONError` from the issue, then fixed. The three *other* pinned tests
-the issue named (`patient.service.gaps2.unit.test.js`,
-`patient.service.gaps3.unit.test.js`) turned out to already use real
-24-hex `ObjectId().toString()` values, not FHIR-style ids — those stay
-in the ObjectId branch under the fix and needed no changes (verified
-green, not just assumed). Verified on the merged tree: targeted suite
-(`patient.service.query-update.gaps` + `gaps2` + `gaps3` +
-`paciente.controller`, 147 tests) green.
+**Two findings filed on the skills-pack tracker** (not BioAvanceD-v2
+issues — these are about the workflow-skill pack itself):
+- `dyeallpies-skills-pack#326` — `bioavanced-v2-conventions` claims
+  `frontend/` has no test script; it actually has vitest + React
+  Testing Library installed (RTL itself unused — the real convention is
+  unit-testing pure functions extracted from page components, per
+  `NewUserPage.tsx`/`SystemManagementPage.tsx` precedent).
+- `dyeallpies-skills-pack#327` — `build-loop`'s BioAvanceD-v2 overlay
+  has no proof-bar guidance for a pure-frontend-UI slice (only covers
+  backend-internal slices and the milestone's own literal-Docker e2e
+  specs); documents what was improvised for `#606` (vitest unit test +
+  uncommitted manual Playwright smoke check) plus a Playwright
+  file-discovery gotcha (absolute-path spec args outside `testDir` fail
+  with "No tests found").
 
-**No workflow friction this session** — `wrap-up`'s core audit and
-shipping addendum both came back clean; diff stayed exactly in the two
-files `#604` named, no lazy workarounds, no permission denials (remote
-branch deletion succeeded, unlike most prior sessions), no stale
-instructions, no sub-point left on a closed issue without its own
-tracking. No new issues filed this session (the fix was self-contained).
+**No BioAvanceD-v2-side friction** — `wrap-up`'s core audit and shipping
+addendum both came back clean; diff stayed exactly in `#606`'s named
+scope, no lazy workarounds, no permission denials, no stale
+BioAvanceD-v2-specific instructions (the two stale-skill findings above
+are pack-repo issues, filed there, not worked around in this repo).
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, clean except the
   gitignored/junctioned `.claude/skills/` (untracked, not part of this
-  session's diff). In sync with `origin` (pushed `d6326eea`).
-- **Docker: not used this session** (native vitest only — the fix was
-  provable with mocked-collection unit tests, no live stack needed). No
-  containers running as of end of session.
+  session's diff). In sync with `origin` (pushed `d5e7c842`).
+- **Docker: unavailable in this session's environment** (`docker ps`
+  failed — Docker Desktop's named pipe not found, not merely "not
+  started"). Not used this session; `#606`'s own proof bar didn't need
+  it (see the skills-pack `#327` finding above for what was used
+  instead). `#608` (e2e coverage) will need Docker available when it's
+  picked up.
 
 ## Recommended next steps
 
-None queued — the user hasn't named what's next. Candidates visible in
-the backlog, not confirmed direction (unchanged from last session except
-`#604` is now done):
-- **`#576`** — the UI slice: create/edit/delete forms for organizations
-  and collections. No existing "master-data admin" UI pattern exists
-  anywhere in the frontend to extend — genuinely new UI surface, likely
-  its own `build-loop` iteration(s).
-- **`#602`** — RBAC catalog `allowedActions` decorative-metadata gap;
-  needs a design call on whether to enforce per-verb or correct/drop the
-  metadata.
-- **`#599`** — explicitly flagged in its own body as a repo-owner call
-  (widen `ci-pipeline.yml`'s trigger to the integration branch); not
-  mine to decide.
-- **`#585`** — still Dennis's call (revive vs. retire
-  `playwright-runner`); sole blocker for "wire RF028 into CI" (the piece
-  `#374` deliberately left out, mirroring `#371`).
-- **`#336`** — still needs Dennis's call (fix vs. retire the legacy
-  `import.controller.js#importFhirBundle` endpoint); `#570` stays
-  parked on it, unchanged.
-- **`test/human-showcase-video`** — still awaiting Dennis's go to
-  show/merge, unchanged.
-- Skills-pack — per a prior session's instruction, pack issues were
-  resolved as of two sessions ago; not re-checked this session.
-- pack-repo `#279`/`#280`/`#281`/`#283`/`#248`/`#270`/`#286`/`#301`/
-  `#309`/`#310`/`#311`/`#312`/`#313`/`#314` — unchanged, not checked
-  this session.
+**Resume the rabbit hole**: `#607` (Collections CRUD management UI) is
+next in tracker `#605`'s queue, unblocked, per this session's own
+explicit direction to drive it. Its own body already names the design
+decision it needs to make (MIABIS array-field sub-shape) before or
+during implementation.
+
+Other backlog candidates are unchanged from the prior handoff and still
+not queued (no new information on any of them this session):
+`#576` itself (stays open, tracking, not directly actionable — its
+remaining scope *is* `#607`/`#608`), `#602`, `#599`, `#585`, `#336`,
+`test/human-showcase-video` — all still blocked on Dennis's own call,
+per the prior handoff's reasoning (unchanged, not re-verified this
+session).
