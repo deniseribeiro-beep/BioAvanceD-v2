@@ -6,12 +6,10 @@ on:
   push:
     branches:
       - main
-      - feature/docker-e2e-backend-integration
 
   pull_request:
     branches:
       - main
-      - feature/docker-e2e-backend-integration
 
 permissions:
   contents: read
