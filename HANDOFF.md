@@ -1,98 +1,98 @@
 # HANDOFF
 
-**Written:** 2026-08-18, continuation session (fourteenth update). User
-said "let's get 340 and 341" (institutional-scope enforcement). Ended up
-shipping only the prerequisite this session — see below for why, and
-what's actually next.
+**Written:** 2026-08-18, continuation session (fifteenth update). User said
+"go down a rabbit hole with 340 341 616 617 602" — **still inside the
+rabbit hole**, tracker **#618** ("organization-scope enforcement + RBAC
+gaps (seeds #340, #341, #616, #617, #602)"). One item landed this
+sitting; four remain queued plus one filed mid-work.
 
-## What happened this session
+## Rabbit hole state
 
-Investigating #340/#341 surfaced that wiring org-scope enforcement wasn't
-a two-issue job: `UserRoleAssignment` already has dormant
-`scopeType`/`scopeId` fields (dict-02 P1X-0228/0229) designed for exactly
-this, but every assignment was hardcoded `scopeType: 'global'` — nothing
-read it back. Confirmed four product decisions with Dennis (org-less
-user → hard 403; only Administrador/hierarchyLevel-4 bypasses scoping,
-`auditor` stays scoped; out-of-scope existing record → 403 not 404;
-scope source is `UserRoleAssignment.scopeType`/`scopeId` via an explicit
-org param threaded from the same user create/edit request, not
-auto-derived). That last decision made the wiring itself a genuine
-architectural change per `divide-and-conquer`'s design-split playbook —
-split it out as **#615** (confirmed with Dennis before filing), landed it
-solo this session, and #340/#341 are now the next iterations, unstarted.
+- **Tracker:** #618, open. Working order per the tracker body: #340 →
+  #341 → #616 → #617 → #602 (#341 depends on #340 anyway).
+- **Landed this sitting:** #340.
+- **Still queued:** #341, #616, #617, #602, plus **#619** (filed mid-work
+  on #340, added to the tracker).
+- Budget note from the tracker's own sizing estimate: #340+#341 both
+  large, #602 needs its own design call before a fix shape exists — this
+  was expected to span multiple sittings from the start.
 
 ## Issue closed this session
 
-- **#615** ("Wire UserRoleAssignment.scopeType/scopeId for
-  organization-scoped role assignments"): `rbac-assignment.service.js`'s
-  `grantRoleForAccessType`/`changeUserRole`/`grantAdditionalRole`/
-  `backfillUserRoleAssignments` now resolve real `scopeType`/`scopeId`
-  via a shared `resolveScopeForRole` helper (hierarchyLevel-4 bypass,
-  everyone else org-scoped). New `updateAssignmentScope` (org-only edits,
-  no revoke/re-grant — avoids silently dropping an `auditor` grant) and
-  `resolveUserOrganizationScope` (the resolver #340/#341 will consume,
-  returns `{ scope: 'global'|'organization'|'unassigned'|'none',
-  organizationIds }`). Wired `auth.service.js#registerUser` and
-  `user.routes.js`'s `PUT /:id` (including the org-changed-but-role-
-  didn't path) to thread `organizationId` through — no new UI needed,
-  `NewUserPage.tsx` already had the org selector. New
-  `migrateRoleAssignmentScopes.js` backfills pre-existing assignments.
-  52/52 targeted tests green (29 unit + 8 unit + 3 + 12 integration, all
-  mocked-Mongo per the build-loop overlay's backend-internal-slice proof
-  bar — no live-Mongo tier in this repo, Docker not needed for this
-  slice). Lint (syntax check) clean. Merged `b84ecefb` on
-  `feature/docker-e2e-backend-integration`, pushed, closed.
-  **No enforcement-visible behavior change** — nothing reads
-  `scopeType`/`scopeId` for authorization yet; that's #340/#341.
+- **#340** ("RF003 AC#3: enforce institutionalScope on sample/patient
+  list+detail endpoints"): new `requireOrganizationScope` middleware
+  (`rbac.js`) resolves via `rbac-assignment.service.js#resolveUserOrganizationScope`
+  (landed by #615) and gates `GET /api/samples`, `GET /api/samples/:id`,
+  `GET /api/patients`, `GET /api/patients/operational`, `GET
+  /api/patients/:id`. Three new helpers on `rbac-assignment.service.js`
+  (`isOrganizationScopeUsable`, `applyOrganizationScopeFilter`,
+  `isRecordInOrganizationScope`) do the actual query-filter/record-check
+  work. Org-scoped callers see only records whose
+  `collectionSite`/`clinicalUnitId` is one of their scoped organizations;
+  org-less callers hard-403; an out-of-scope existing record 403s (not
+  404s), matching `sample-file.controller.js`'s existing precedent;
+  Administrador (hierarchyLevel 4) bypasses via `'global'` scope. Matches
+  the four edge-case product decisions confirmed with Dennis 2026-08-18
+  (recorded on #340's own earlier comments).
 
-## Other work this session
+  `buildRbacCollections` (shared test factory,
+  `tests/factories/rbac.factory.js`) now synthesizes
+  `scopeType`/`scopeId` on its accessType-derived assignment (default
+  `'test-org-default'` org for non-Administrador users) so every other
+  caller across the suite keeps resolving a usable scope — this is a
+  change to shared test infrastructure well beyond #340's own files,
+  needed because the new real enforcement broke 4 pre-existing tests in
+  `patients.expanded.api.test.js` (one fixture patient needed a matching
+  `clinicalUnitId` added).
 
-- Commented on #340 and #341 recording the four confirmed edge-case
-  decisions and the new `Depends on: #615` (now landed — resolver is
-  available).
-- **Filed #616**: pre-existing bug found during investigation —
-  `PUT /api/users/:id` silently drops a user's additive `auditor` role
-  when `accessType` changes without the same request also resending
-  `auditorRole`. Matters more now since #615's resolver depends on
-  assignment state being accurate. Not fixed this session (changes
-  existing route behavior, outside #615's stated no-behavior-change
-  scope).
-- **Filed #617**: `organizationId` (and now `scopeId`) accepted on user
-  create/edit with no referential check against a real `Organization`
-  document — fails safe (scopes to nothing, not something wrong) but is
-  a silent data-quality/support-debugging gap. Lower priority than #616.
+  377 targeted unit+integration tests green; full backend suite
+  (367 files / 6900 tests) green. No live-Mongo tier in this repo — the
+  proof bar for this backend-internal slice is mocked-Mongo
+  query-matching, same precedent as #615 (see build-loop's local-env
+  overlay). Merged `9312d9a2` on `feature/docker-e2e-backend-integration`,
+  pushed, closed.
+
+## Filed this session
+
+- **#619**: sample/patient *sub-resource* and mutation routes (label,
+  movements, files, `PUT /:id`, `DELETE /:id`, `GET /search`,
+  `/:id/observations`, `/:id/consent/resend`, `/:id/reidentify`, etc.)
+  aren't covered by #340's enforcement — only the list+detail endpoints
+  named in #340's own AC are. Fix shape sketched in the issue (same
+  `requireOrganizationScope` + `isRecordInOrganizationScope` pattern).
+  Added to tracker #618.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed after #615 landed.
+- On `feature/docker-e2e-backend-integration`, pushed after #340 landed.
   Working tree clean except the gitignored/junctioned `.claude/skills/`.
-  Local branch `test/615-scope-assignment-org-wiring` still exists
-  (merged, not yet deleted — safe to delete, just didn't get to it before
-  ending the session).
-- No Docker stack was brought up this session — #615 is a backend-
+  Local branch `test/340-sample-patient-org-scope-enforcement` still
+  exists (merged, not yet deleted — safe to delete).
+- No Docker stack was brought up this session — #340 is a backend-
   internal slice, proof bar was mocked-Mongo tests per the build-loop
   overlay, not literal Docker/live DB.
-- `migrateRoleAssignmentScopes.js` is written and unit-tested but has
-  **not been run against any real database** (dev or otherwise) — same
-  as its `migrateUserOrganizations.js` precedent, it's a one-time ops
-  script meant to run once #340/#341's enforcement is about to go live,
-  not automatically as part of landing #615.
+- `migrateRoleAssignmentScopes.js` (from #615) is still unrun against any
+  real database — remains a one-time ops script for whenever #340/#341's
+  enforcement is about to go live in a real environment, not needed for
+  either issue's own test proof.
 
 ## Recommended next steps
 
-User's explicit next target, in order:
-1. **#340** (sample/patient list+detail org-scope enforcement) — the
-   product decisions are already settled (see #615/#340's comments);
-   this is now a build-loop slice wiring `resolveUserOrganizationScope`
-   into `sample.service.js#listSamples`/`patient.service.js#listPatients`
-   and the two detail/get-by-id endpoints, plus running
-   `migrateRoleAssignmentScopes.js` against whichever DB the proof runs
-   against before the enforcement test can pass.
-2. **#341** (reports/dashboards org-scope enforcement) — depends on #340
-   landing first per its own `Depends on:` line; scopes
-   `reports.routes.js`'s `buildSampleQuery`/`buildPreviewData`.
-
-Not user-requested but worth a look when convenient (found this session,
-not blocking #340/#341):
-3. **#616** — auditor-role-drop bug, small and unambiguous once picked up.
-4. **#617** — organizationId referential-validation gap, lower priority.
+Continuing the rabbit hole (tracker #618), in order:
+1. **#341** (reports/dashboards org-scope enforcement) — now unblocked
+   (#340 landed). Hardest sub-piece: `Reports.js` has no organization
+   concept at all, needs a design call on how a report's scope is
+   derived (likely from the org-scope of the samples/patients it
+   aggregates) before implementation — confirm with Dennis before
+   building rather than guessing.
+2. **#616** — auditor-role-drop bug, already fully scoped with a
+   recommended fix shape in the issue body.
+3. **#617** — organizationId referential-validation gap, fix shape
+   already sketched (mirror `sample.service.js`'s `collectionSite`
+   check).
+4. **#602** — `PERMISSION_CATALOG.allowedActions` decorative-only gap.
+   Explicitly flagged in its own body as needing a product/design call
+   before a fix shape exists — check in with Dennis when picked up rather
+   than guessing a shape.
+5. **#619** — sub-resource/mutation route org-scope gap found during
+   #340. Not user-requested originally but now a tracker member.
