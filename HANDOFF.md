@@ -1,19 +1,19 @@
 # HANDOFF
 
-**Written:** 2026-08-18, continuation session (twenty-second update). Very
-long sitting: user continued past the advisory budget three times
+**Written:** 2026-08-18, continuation session (twenty-third update). Very
+long sitting: user continued past the advisory budget four times
 (confirmed via explicit choices each time, not silent overrun). **Still
 inside the rabbit hole**, tracker **#618** ("organization-scope enforcement
-+ RBAC gaps"). Six items landed this sitting (#616, #617, #619, #620,
-#622, #623); #621 surfaced and explicitly deferred (still open) pending
-Dennis's design input.
++ RBAC gaps"). Seven items landed this sitting (#616, #617, #619, #620,
+#622, #623, #624); #621 surfaced and explicitly deferred (still open)
+pending Dennis's design input.
 
 ## Rabbit hole state
 
 - **Tracker:** #618, open. Original working order: #340 → #341 → #616 →
   #617 → #602 (#340/#341 landed a prior sitting).
 - **Landed this sitting:** #616, #617, #619 (narrowed scope), #620, #622,
-  #623.
+  #623, #624.
 - **Deferred this sitting (still open, not a fix):** #621 — surfaced via
   AskUserQuestion, confirmed it genuinely needs Dennis's design call (no
   organization reference exists anywhere for Result/Sensor/Equipment/
@@ -21,10 +21,10 @@ Dennis's design input.
   for now. Comment posted on #621 documenting the two design options
   surfaced (join Result via its Sample's collectionSite vs. a broader
   per-entity Organization-reference design).
-- **Still queued:** #602, #621 (deferred), #624, #625, #626, #627.
+- **Still queued:** #602, #621 (deferred), #625, #626, #627.
 - **Budget note:** this sitting ran far past the ~10-point advisory
-  allowance — 6 landed items across a very long session, with the
-  stopping point surfaced to the user three times via AskUserQuestion and
+  allowance — 7 landed items across a very long session, with the
+  stopping point surfaced to the user four times via AskUserQuestion and
   explicitly overridden every time. Strongly recommend a fresh sitting's
   budget before picking up more; if resuming immediately, at minimum
   re-confirm with the user rather than assuming continued appetite.
@@ -49,16 +49,19 @@ Dennis's design input.
   Mongo writes) — filed as #627.
 - **#623**: sample mutation routes (withdraw, return, PUT, DELETE) now
   enforce organization scope — fetch the sample via `sampleService.getSample`
-  before the mutation runs, 403 on out-of-scope, mirroring #340/#619's
-  precedent but gating the mutation itself. Merged `1c168230` at
+  before the mutation runs, 403 on out-of-scope. Merged `1c168230` at
   `21220f10`.
+- **#624**: sample `miabis-compliance`/`compliance-graph` routes now
+  enforce organization scope — each makes its own separate `getSample`
+  call purely for the 403 check, since neither validator exposes the raw
+  sample document. Merged `5b0ea923` at `e1f63a19`.
 
 ## Filed this session
 
 - **BioAvanceD-v2#623-#626**: split off #619 — see the #618 tracker's
-  comment thread for full descriptions (sample mutation routes — now
-  closed as #623 above — compliance/graph routes, sample-file.controller.js's
-  file family, and the entire patient-side half).
+  comment thread for full descriptions. #623 and #624 are now closed (see
+  above); #625 (sample-file.controller.js's file family) and #626
+  (the entire patient-side half) remain open.
 - **BioAvanceD-v2#627**: `migrateRoleAssignmentScopes.js` bypasses
   `rbac-assignment.service.js` entirely (raw Mongo writes), so #622's new
   validation doesn't cover it. Low severity — script is one-time and
@@ -72,14 +75,14 @@ Dennis's design input.
 - **dyeallpies-skills-pack#337** (not a BioAvanceD-v2 issue): a recurring
   reproduce-order slip in `fix-bugs` (product fix written before the
   failing test) — happened for #617 and #619, did NOT happen for #620,
-  #622, or #623 (all three correctly reproduce-first after the pattern
-  was internalized). Filed with a suggested wording fix.
+  #622, #623, or #624 (all four correctly reproduce-first after the
+  pattern was internalized). Filed with a suggested wording fix.
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed after every item
   this session landed (`142f02628`, `edb88624`, `00c0349e`, `3cd82baf`,
-  `e9c08479`, `21220f10`). Working tree clean except the
+  `e9c08479`, `21220f10`, `e1f63a19`). Working tree clean except the
   gitignored/junctioned `.claude/skills/`. No stale local branches — every
   fix/test branch this session deleted local + remote after merging.
 - No Docker stack was brought up this session — all fixes are
@@ -91,16 +94,14 @@ Dennis's design input.
 
 No single next pick named by the user for a future sitting — recompute
 budget fresh. Candidates, roughly in order of readiness:
-1. **#624** — sample compliance/graph routes org-scope (small-medium,
-   needs a quick investigation first — does `validateMiabisCompliance`/
-   `SampleGraphValidator` already fetch the sample, or does the route need
-   its own separate `getSample` call for the scope check).
-2. **#627** — migrateRoleAssignmentScopes.js validation gap (small, script
+1. **#627** — migrateRoleAssignmentScopes.js validation gap (small, script
    is one-time/unrun so not urgent).
-3. **#625** — sample-file.controller.js org-scope (medium, needs a design
-   call on which layer owns the check).
-4. **#626** — patient-side org-scope (large — likely needs its own split
-   like #619 did).
-5. **#602** — needs Dennis's design call before a fix shape exists.
-6. **#621** — needs Dennis's design call (deferred this session, two
+2. **#625** — sample-file.controller.js org-scope (medium, needs a design
+   call on which layer owns the check — the controller has no
+   rbac-assignment.service.js dependency at all currently).
+3. **#626** — patient-side org-scope (large — likely needs its own split
+   like #619 did, given it bundles sub-resource + mutation + search
+   routes across two files).
+4. **#602** — needs Dennis's design call before a fix shape exists.
+5. **#621** — needs Dennis's design call (deferred this session, two
    options already surfaced in its comment thread).
