@@ -13,6 +13,9 @@ const {
   revokeAdditionalRole,
   updateAssignmentScope,
   resolveUserOrganizationScope,
+  isOrganizationScopeUsable,
+  applyOrganizationScopeFilter,
+  isRecordInOrganizationScope,
 } = require('../../src/services/rbac-assignment.service');
 const { createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
@@ -376,5 +379,59 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
     const byUser = Object.fromEntries(result.map((a) => [a.userAccountId, a]));
     expect(byUser.u1.scopeId).toBe('org-1');
     expect(byUser.u2.scopeId).toBe('org-2');
+  });
+
+  describe('#340: organization-scope query helpers', () => {
+    describe('isOrganizationScopeUsable', () => {
+      it('is true for global and organization scopes', () => {
+        expect(isOrganizationScopeUsable({ scope: 'global', organizationIds: [] })).toBe(true);
+        expect(isOrganizationScopeUsable({ scope: 'organization', organizationIds: ['org-1'] })).toBe(true);
+      });
+
+      it('is false for none and unassigned scopes', () => {
+        expect(isOrganizationScopeUsable({ scope: 'none', organizationIds: [] })).toBe(false);
+        expect(isOrganizationScopeUsable({ scope: 'unassigned', organizationIds: [] })).toBe(false);
+      });
+    });
+
+    describe('applyOrganizationScopeFilter', () => {
+      it('merges an $in filter on fieldName for an organization scope', () => {
+        const query = { specimenStatus: 'available' };
+        const result = applyOrganizationScopeFilter(query, { scope: 'organization', organizationIds: ['org-1', 'org-2'] }, 'collectionSite');
+
+        expect(result).toBe(query);
+        expect(query).toEqual({ specimenStatus: 'available', collectionSite: { $in: ['org-1', 'org-2'] } });
+      });
+
+      it('is a no-op for a global scope', () => {
+        const query = { specimenStatus: 'available' };
+        applyOrganizationScopeFilter(query, { scope: 'global', organizationIds: [] }, 'collectionSite');
+
+        expect(query).toEqual({ specimenStatus: 'available' });
+      });
+    });
+
+    describe('isRecordInOrganizationScope', () => {
+      it('is true for a global scope regardless of the record', () => {
+        expect(isRecordInOrganizationScope({ collectionSite: 'org-9' }, { scope: 'global', organizationIds: [] }, 'collectionSite')).toBe(true);
+        expect(isRecordInOrganizationScope({}, { scope: 'global', organizationIds: [] }, 'collectionSite')).toBe(true);
+      });
+
+      it('is true when the record field is one of the scoped organizations', () => {
+        const scope = { scope: 'organization', organizationIds: ['org-1', 'org-2'] };
+        expect(isRecordInOrganizationScope({ collectionSite: 'org-2' }, scope, 'collectionSite')).toBe(true);
+      });
+
+      it('is false when the record field is a different organization', () => {
+        const scope = { scope: 'organization', organizationIds: ['org-1'] };
+        expect(isRecordInOrganizationScope({ collectionSite: 'org-9' }, scope, 'collectionSite')).toBe(false);
+      });
+
+      it('is false when the record has no value in fieldName (never assigned an organization)', () => {
+        const scope = { scope: 'organization', organizationIds: ['org-1'] };
+        expect(isRecordInOrganizationScope({ collectionSite: null }, scope, 'collectionSite')).toBe(false);
+        expect(isRecordInOrganizationScope({}, scope, 'collectionSite')).toBe(false);
+      });
+    });
   });
 });

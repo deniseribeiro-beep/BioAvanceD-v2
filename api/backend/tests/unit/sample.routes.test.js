@@ -33,6 +33,10 @@ const routePath = require.resolve('../../src/interface/routes/sample.routes.js')
 // always calls through to whatever the current test configured.
 let currentAuth = defaultAuth;
 let currentRequirePermission = () => (req, res, next) => next();
+let currentRequireOrganizationScope = (req, res, next) => {
+  req.organizationScope = { scope: 'global', organizationIds: [] };
+  next();
+};
 let currentEnforceCommercialConsent = () => (req, res, next) => next();
 let currentValidateMiabisCompliance = () => Promise.resolve({ compliant: true });
 let currentRegisterSampleUseCaseExecute = () => Promise.resolve();
@@ -50,6 +54,7 @@ authModule.authenticate = (req, res, next) => currentAuth(req, res, next);
 
 const rbacModule = require(rbacPath);
 rbacModule.requirePermission = (...args) => currentRequirePermission(...args);
+rbacModule.requireOrganizationScope = (req, res, next) => currentRequireOrganizationScope(req, res, next);
 
 const consentEnforcementModule = require(consentEnforcementPath);
 consentEnforcementModule.enforceCommercialConsent = (...args) => currentEnforceCommercialConsent(...args);
@@ -116,10 +121,15 @@ function loadRoute({
   validateSampleCompliance,
   authImpl,
   requirePermissionImpl,
+  requireOrganizationScopeImpl,
   enforceCommercialConsentImpl,
 } = {}) {
   currentAuth = authImpl || defaultAuth;
   currentRequirePermission = requirePermissionImpl || (() => (req, res, next) => next());
+  currentRequireOrganizationScope = requireOrganizationScopeImpl || ((req, res, next) => {
+    req.organizationScope = { scope: 'global', organizationIds: [] };
+    next();
+  });
   currentEnforceCommercialConsent = enforceCommercialConsentImpl || (() => (req, res, next) => next());
   currentValidateMiabisCompliance = validateMiabisCompliance || (() => Promise.resolve({ compliant: true }));
   currentRegisterSampleUseCaseExecute = registerSampleUseCaseExecute || (() => Promise.resolve());
@@ -1315,6 +1325,40 @@ describe('sample.routes', () => {
       expect(res.body.data[0].resolvedStorageLocation).toBeNull();
       expect(res.body.data[0].currentSpecimenPreanalytics).toBeNull();
     });
+
+    // #340 (RF003 AC#3): org-scope enforcement gate — requireOrganizationScope
+    // runs before the handler and its resolved scope flows into listSamples'
+    // filters.
+    it('returns 403 when requireOrganizationScope denies (org-less caller)', async () => {
+      const listSamples = vi.fn();
+      const { router } = loadRoute({
+        sampleServiceOverrides: { listSamples },
+        requireOrganizationScopeImpl: (req, res) => res.status(403).json({ success: false, error: 'Sem organização atribuída' }),
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples');
+
+      expect(res.status).toBe(403);
+      expect(listSamples).not.toHaveBeenCalled();
+    });
+
+    it('passes req.organizationScope through to listSamples filters', async () => {
+      const listSamples = vi.fn().mockResolvedValue({ samples: [], total: 0 });
+      const organizationScope = { scope: 'organization', organizationIds: ['org-1'] };
+      const { router } = loadRoute({
+        sampleServiceOverrides: { listSamples },
+        requireOrganizationScopeImpl: (req, res, next) => { req.organizationScope = organizationScope; next(); },
+      });
+      const emptyCollection = { findOne: vi.fn().mockResolvedValue(null), countDocuments: vi.fn().mockResolvedValue(0) };
+      const db = { collection: () => emptyCollection };
+      const app = buildApp(router, db);
+
+      const res = await request(app).get('/api/samples');
+
+      expect(res.status).toBe(200);
+      expect(listSamples).toHaveBeenCalledWith(db, expect.objectContaining({ organizationScope }));
+    });
   });
 
   describe('GET /:id', () => {
@@ -1347,6 +1391,35 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual({ _id: '1', patientID: 'P1' });
+    });
+
+    // #340: an existing sample outside the caller's organization scope
+    // 403s rather than 404s, matching sample-file.controller.js's
+    // out-of-scope precedent.
+    it('returns 403 when the sample belongs to a different organization', async () => {
+      const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-9' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSample },
+        requireOrganizationScopeImpl: (req, res, next) => { req.organizationScope = { scope: 'organization', organizationIds: ['org-1'] }; next(); },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/000000000000000000000000');
+
+      expect(res.status).toBe(403);
+    });
+
+    it('returns 200 when the sample belongs to one of the scoped organizations', async () => {
+      const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-1' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSample },
+        requireOrganizationScopeImpl: (req, res, next) => { req.organizationScope = { scope: 'organization', organizationIds: ['org-1'] }; next(); },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/000000000000000000000000');
+
+      expect(res.status).toBe(200);
     });
 
     it('returns 500 when the service throws', async () => {

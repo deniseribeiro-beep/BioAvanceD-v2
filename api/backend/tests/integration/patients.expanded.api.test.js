@@ -395,6 +395,10 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         patientName: 'Paciente QA',
         cpf: '12345678901',
         birthDate: '1990-01-20',
+        // #340: must match buildRbacCollections' default scopeId so the
+        // coordinator's org-scope check (requireOrganizationScope) doesn't
+        // 403 this unrelated retrieval-shape assertion.
+        clinicalUnitId: 'test-org-default',
       };
 
       const patientsCollection = {

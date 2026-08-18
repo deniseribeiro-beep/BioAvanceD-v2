@@ -4,6 +4,8 @@ const router = express.Router();
 const { validateMiabisCompliance } = require('../../services/miabisValidator.service');
 const SampleGraphValidator = require('../../services/SampleGraphValidator');
 const { authenticate } = require('../../infrastructure/middleware/auth');
+const { requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
+const { isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
 // GET /api/samples/:id/miabis-compliance - MIABIS compliance check for a sample
 router.get('/:id/miabis-compliance', authenticate, async (req, res) => {
@@ -338,7 +340,7 @@ router.post('/',
   }
 );
 
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -357,7 +359,8 @@ router.get('/', authenticate, async (req, res) => {
       patientID: req.query.patientID,
       sampleType: req.query.sampleType,
       limit: parseInt(req.query.limit) || 50,
-      skip: parseInt(req.query.skip) || 0
+      skip: parseInt(req.query.skip) || 0,
+      organizationScope: req.organizationScope
     };
 
     const result = await sampleService.listSamples(db, filters);
@@ -503,7 +506,7 @@ router.get('/:id/label', authenticate, async (req, res) => {
   }
 });
 
-router.get('/:id', authenticate, async (req, res) => {
+router.get('/:id', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -515,6 +518,18 @@ router.get('/:id', authenticate, async (req, res) => {
 
     const { ObjectId } = require('mongodb');
     const sample = await sampleService.getSample(db, new ObjectId(req.params.id));
+
+    // #340: an existing sample outside the caller's organization scope
+    // 403s rather than 404s, matching sample-file.controller.js's
+    // out-of-scope precedent — direct access, not a discoverability leak
+    // via a different error code, but not a silent pass-through either.
+    if (sample && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
+      });
+    }
 
     if (!sample) {
       // Registra tentativa de busca de amostra inexistente

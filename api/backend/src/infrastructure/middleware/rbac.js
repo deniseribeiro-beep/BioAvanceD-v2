@@ -10,7 +10,12 @@
  */
 
 const logger = require('../../utils/logger');
-const { resolveUserHierarchyLevel, userHasPermission } = require('../../services/rbac-assignment.service');
+const {
+  resolveUserHierarchyLevel,
+  userHasPermission,
+  resolveUserOrganizationScope,
+  isOrganizationScopeUsable,
+} = require('../../services/rbac-assignment.service');
 const { PERMISSION_CATALOG } = require('../../services/rbac-catalog-seed.service');
 
 function getDb(req) {
@@ -134,8 +139,52 @@ const requirePermission = (permission) => {
   };
 };
 
+/**
+ * #340 (RF003 AC#3): resolves the caller's organization scope
+ * (rbac-assignment.service#resolveUserOrganizationScope) and attaches it as
+ * req.organizationScope for the route to filter/check against. Org-less
+ * users ('none'/'unassigned' scope) get a hard 403 here rather than an
+ * empty list — the product decision confirmed 2026-08-18. Administrador
+ * (hierarchyLevel 4) resolves to 'global' and is left unfiltered by the
+ * route, same bypass every other RBAC gate in this file gives it.
+ */
+const requireOrganizationScope = async (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      error: 'Não autenticado',
+      message: 'É necessário fazer login'
+    });
+  }
+
+  const db = getDb(req);
+  if (!db) {
+    logger.error('requireOrganizationScope: req.app.locals.db indisponível');
+    return res.status(500).json({
+      success: false,
+      error: 'Erro interno',
+      message: 'Erro ao verificar escopo organizacional'
+    });
+  }
+
+  const scope = await resolveUserOrganizationScope(db, req.user.userID);
+
+  if (!isOrganizationScopeUsable(scope)) {
+    logger.warn(`Acesso negado por escopo organizacional: usuário ${req.user.userID} sem organização atribuída (scope=${scope.scope})`);
+    return res.status(403).json({
+      success: false,
+      error: 'Sem organização atribuída',
+      message: 'Seu usuário não possui organização atribuída para acessar este recurso'
+    });
+  }
+
+  req.organizationScope = scope;
+  next();
+};
+
 module.exports = {
   requireRole,
   requirePermission,
+  requireOrganizationScope,
   permissions
 };

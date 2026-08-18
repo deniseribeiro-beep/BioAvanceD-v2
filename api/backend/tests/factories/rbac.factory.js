@@ -72,21 +72,35 @@ const ROLE_ID_BY_ACCESS_TYPE = Object.fromEntries(
 );
 
 /**
- * `users`: array of `{ userAccountId, accessType, roleCodes }` — one active
- * UserRoleAssignment is synthesized per entry for the legacy
+ * `users`: array of `{ userAccountId, accessType, roleCodes, organizationId }`
+ * — one active UserRoleAssignment is synthesized per entry for the legacy
  * accessType-derived role, plus one more per entry in `roleCodes` (#429:
  * additive roles like `auditor`, granted alongside the accessType role, not
  * instead of it — omit `accessType` to grant only the additive role(s)).
+ *
+ * #340: the accessType-derived assignment also carries scopeType/scopeId
+ * (dormant fields #615 wired up), mirroring rbac-assignment.service.js's
+ * real resolveScopeForRole — hierarchyLevel-4 (accessType 4, Administrador)
+ * gets 'global', every other accessType gets 'organization' with scopeId
+ * defaulted to 'test-org-default' unless `organizationId` is given. The
+ * default keeps every pre-existing call site (most of which don't care about
+ * org-scope at all) resolving a *usable* scope through
+ * requireOrganizationScope — callers testing org-scope enforcement itself
+ * pass `organizationId` per user to control which organization each one
+ * belongs to.
  */
 function buildRbacCollections(users = []) {
-  const assignments = users.flatMap(({ userAccountId, accessType, roleCodes = [] }) => {
+  const assignments = users.flatMap(({ userAccountId, accessType, roleCodes = [], organizationId }) => {
     const docs = [];
     if (accessType != null) {
+      const isBypass = Number(accessType) === 4;
       docs.push({
         userAccountId: String(userAccountId),
         roleId: ROLE_ID_BY_ACCESS_TYPE[Number(accessType)],
         assignmentStatus: 'active',
         validUntil: null,
+        scopeType: isBypass ? 'global' : 'organization',
+        scopeId: isBypass ? null : String(organizationId ?? 'test-org-default'),
       });
     }
     for (const roleCode of roleCodes) {

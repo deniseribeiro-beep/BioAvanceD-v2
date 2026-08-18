@@ -3,13 +3,13 @@ const router = express.Router();
 const patientController = require('../../controllers/paciente.controller');
 const consentController = require('../../controllers/consent.controller');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 
 // RF005 - Cadastro de paciente (Coordenador, Administrador)
 router.post('/', authenticate, requirePermission('createPatient'), patientController.cadastrar.bind(patientController));
 
 // Listar pacientes
-router.get('/', authenticate, patientController.listar.bind(patientController));
+router.get('/', authenticate, requireOrganizationScope, patientController.listar.bind(patientController));
 
 // Buscar pacientes (busca flexível)
 router.get('/search', authenticate, patientController.search.bind(patientController));
@@ -25,7 +25,7 @@ router.get('/:id/observations', authenticate, patientController.listBiomarkerObs
 router.post('/:id/observations', authenticate, requirePermission('createPatient'), patientController.createBiomarkerObservation.bind(patientController));
 
 // Buscar paciente por ID
-router.get('/:id', authenticate, patientController.buscar.bind(patientController));
+router.get('/:id', authenticate, requireOrganizationScope, patientController.buscar.bind(patientController));
 
 // Reidentificação autorizada e auditada (RNF007 AC#4/AC#5, Administrador)
 router.post('/:id/reidentify', authenticate, requirePermission('reidentifyParticipant'), patientController.reidentify.bind(patientController));
@@ -43,7 +43,7 @@ router.post('/validate-id', authenticate, patientController.validateID.bind(pati
 router.post('/find-for-edit', authenticate, requirePermission('createPatient'), patientController.findForEdit.bind(patientController));
 
 // Rota para módulo operacional - lista apenas IDs (sem dados sensíveis)
-router.get('/operational', authenticate, patientController.listar.bind(patientController));
+router.get('/operational', authenticate, requireOrganizationScope, patientController.listar.bind(patientController));
 
 module.exports = router;
 

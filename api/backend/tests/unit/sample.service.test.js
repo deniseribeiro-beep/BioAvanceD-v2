@@ -1008,6 +1008,35 @@ describe('sample.service', () => {
 
       await expect(sampleService.listSamples(db, {})).rejects.toThrow('mongo down');
     });
+
+    // #340: org-scoped caller sees only samples whose collectionSite is one
+    // of their scoped organizations.
+    it('restricts the query to collectionSite $in organizationIds for an organization scope', async () => {
+      const db = makeDb();
+      await sampleService.listSamples(db, {
+        organizationScope: { scope: 'organization', organizationIds: ['org-1', 'org-2'] }
+      });
+
+      expect(db.collections.samples.find).toHaveBeenCalledWith({
+        collectionSite: { $in: ['org-1', 'org-2'] }
+      });
+    });
+
+    it('does not filter the query for a global scope (Administrador bypass)', async () => {
+      const db = makeDb();
+      await sampleService.listSamples(db, {
+        organizationScope: { scope: 'global', organizationIds: [] }
+      });
+
+      expect(db.collections.samples.find).toHaveBeenCalledWith({});
+    });
+
+    it('does not filter the query when no organizationScope is passed', async () => {
+      const db = makeDb();
+      await sampleService.listSamples(db, {});
+
+      expect(db.collections.samples.find).toHaveBeenCalledWith({});
+    });
   });
 
   // -------------------------------------------------------------------

@@ -184,14 +184,24 @@ class PacienteController {
           skip: parseInt(req.query.skip) || 0
         };
 
+        // #340 (RF003 AC#3): org-scoped caller sees only patients whose
+        // clinicalUnitId is one of their scoped organizations. This branch
+        // builds its own raw query (doesn't go through patientService), so
+        // the filter is applied here rather than inside listPatients.
+        const { applyOrganizationScopeFilter } = require('../services/rbac-assignment.service');
+        const scopeQuery = {};
+        if (req.organizationScope) {
+          applyOrganizationScopeFilter(scopeQuery, req.organizationScope, 'clinicalUnitId');
+        }
+
         const patientsCollection = await getCollection(db, 'patients');
         const patients = await patientsCollection
-          .find({}, { projection: { participantId: 1, status: 1, consentNotifiedAt: 1, consentTokenExpiresAt: 1, _id: 0 } })
+          .find(scopeQuery, { projection: { participantId: 1, status: 1, consentNotifiedAt: 1, consentTokenExpiresAt: 1, _id: 0 } })
           .limit(filters.limit)
           .skip(filters.skip)
           .toArray();
 
-        const total = await patientsCollection.countDocuments({});
+        const total = await patientsCollection.countDocuments(scopeQuery);
 
         // Registra log de consulta (módulo operacional - apenas IDs + status)
         const auditLogger = require('../utils/auditLogger');
@@ -222,7 +232,8 @@ class PacienteController {
           patientName: req.query.patientName,
           clinicalUnit: req.query.clinicalUnit,
           limit: parseInt(req.query.limit) || 50,
-          skip: parseInt(req.query.skip) || 0
+          skip: parseInt(req.query.skip) || 0,
+          organizationScope: req.organizationScope
         };
 
         const result = await patientService.listPatients(db, filters);
@@ -291,6 +302,20 @@ class PacienteController {
         return res.status(404).json({
           success: false,
           error: 'Paciente não encontrado'
+        });
+      }
+
+      // #340: an existing patient outside the caller's organization scope
+      // 403s rather than 404s (out-of-scope direct access, not a
+      // discoverability leak via a different error code), matching
+      // sample-file.controller.js's existing precedent and this route's
+      // own sibling check in sample.routes.js.
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (!isRecordInOrganizationScope(patient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
         });
       }
 
