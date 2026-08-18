@@ -447,7 +447,11 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     });
 
     it('Given: paciente existente e payload de atualização válido | When: submete | Then: retorna 200 e atualiza registro', async () => {
-      const patient = { patientID: '12345678', patientName: 'Paciente Antigo' };
+      // #626: clinicalUnitId must match the coordinator's scoped
+      // organization (buildRbacCollections defaults non-Administrador
+      // accessTypes to scopeId 'test-org-default') or the new org-scope
+      // check 403s before the update ever runs.
+      const patient = { patientID: '12345678', patientName: 'Paciente Antigo', clinicalUnitId: 'test-org-default' };
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValue(patient),
         updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
@@ -465,7 +469,8 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     });
 
     it('Given: atualização que geraria duplicidade de CPF | When: submete | Then: retorna 409', async () => {
-      const patient = { participantId: '12345678', identityDocument: '11111111111' };
+      // #626: clinicalUnitId must match the coordinator's scoped organization.
+      const patient = { participantId: '12345678', identityDocument: '11111111111', clinicalUnitId: 'test-org-default' };
       const existingWithNewCpf = { participantId: '87654321', identityDocument: '99999999999' };
 
       const patientsCollection = {
@@ -499,7 +504,8 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     });
 
     it('Given: paciente sem amostras vinculadas | When: submete DELETE | Then: retorna 200 e remove registro', async () => {
-      const patient = { patientID: '12345678', patientName: 'Paciente QA' };
+      // #626: clinicalUnitId must match the coordinator's scoped organization.
+      const patient = { patientID: '12345678', patientName: 'Paciente QA', clinicalUnitId: 'test-org-default' };
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValue(patient),
         deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
@@ -523,7 +529,8 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     });
 
     it('Given: paciente COM amostras vinculadas | When: tenta deletar | Then: retorna 409 (conflito)', async () => {
-      const patient = { patientID: '12345678' };
+      // #626: clinicalUnitId must match the coordinator's scoped organization.
+      const patient = { patientID: '12345678', clinicalUnitId: 'test-org-default' };
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValue(patient),
         deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }),
@@ -559,7 +566,8 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     });
 
     it('Given: paciente com consentimento pendente | When: requisita reenvio | Then: retorna 200 e enfileira notificação', async () => {
-      const patient = { patientID: '12345678', status: 'PENDING_CONSENT', _id: 'obj-1' };
+      // #626: clinicalUnitId must match the coordinator's scoped organization.
+      const patient = { patientID: '12345678', status: 'PENDING_CONSENT', _id: 'obj-1', clinicalUnitId: 'test-org-default' };
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValue(patient),
         updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
@@ -581,7 +589,8 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     });
 
     it('Given: paciente já com consentimento ACEITO | When: tenta reenviar | Then: retorna 422 (inválido)', async () => {
-      const patient = { patientID: '12345678', status: 'ACCEPTED' };
+      // #626: clinicalUnitId must match the coordinator's scoped organization.
+      const patient = { patientID: '12345678', status: 'ACCEPTED', clinicalUnitId: 'test-org-default' };
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValue(patient),
       };

@@ -421,6 +421,18 @@ class PacienteController {
         });
       }
 
+      // #626: same out-of-scope 403 pattern as buscar — reidentification
+      // is a mutation-adjacent, audited flow, so an out-of-scope caller
+      // is denied before any identity data is resolved.
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (!isRecordInOrganizationScope(patient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
       const participantIdentityService = require('../services/participantIdentity.service');
       const identity = await participantIdentityService.getIdentityByParticipantId(db, patient.participantId);
 
@@ -495,6 +507,19 @@ class PacienteController {
         });
       }
 
+      // #626: same post-fetch out-of-scope 403 pattern as buscar/reidentify
+      // — a nonexistent patient falls through to resendConsentNotification's
+      // own error handling below, unaffected.
+      const existingPatient = await patientService.getPatient(db, participantId);
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (existingPatient && !isRecordInOrganizationScope(existingPatient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
       const result = await patientService.resendConsentNotification(db, participantId);
       await revalidateSamplesByPatientID(db, participantId);
 
@@ -534,7 +559,20 @@ class PacienteController {
           message: 'O ID do paciente é imutável por questões de LGPD'
         });
       }
-      
+
+      // #626: mirrors sample.routes.js's PUT /:id out-of-scope 403
+      // pattern — the scope check runs before the mutation, not just
+      // before a read.
+      const existingPatient = await patientService.getPatient(db, id);
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (existingPatient && !isRecordInOrganizationScope(existingPatient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
       const updatePayload = this.sanitizePatientPayload(req.body);
       this.validateDeceasedRepresentative(updatePayload);
 
@@ -600,6 +638,20 @@ class PacienteController {
 
       const { id } = req.params;
       const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
+
+      // #626: mirrors sample.routes.js's DELETE /:id out-of-scope 403
+      // pattern — the scope check runs before the mutation, not just
+      // before a read.
+      const existingPatient = await patientService.getPatient(db, id);
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (existingPatient && !isRecordInOrganizationScope(existingPatient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
       const result = await patientService.deletePatient(db, id);
 
       if (!result) {
@@ -829,7 +881,7 @@ class PacienteController {
         });
       }
 
-      const result = await patientService.searchPatients(db, searchTerm);
+      const result = await patientService.searchPatients(db, searchTerm, req.organizationScope);
 
       // Registra log de busca (sanitizado)
       const auditLogger = require('../utils/auditLogger');
@@ -885,6 +937,19 @@ class PacienteController {
         return res.status(400).json({
           success: false,
           error: 'participantId inválido. Deve ter 8 dígitos numéricos'
+        });
+      }
+
+      // #626: mirrors buscar's out-of-scope 403 pattern. A nonexistent
+      // patient (getPatient resolves null) is left to whatever downstream
+      // 404/empty-result behavior listPatientObservations already has.
+      const existingPatient = await patientService.getPatient(db, participantId);
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (existingPatient && !isRecordInOrganizationScope(existingPatient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
         });
       }
 
@@ -947,6 +1012,18 @@ class PacienteController {
         return res.status(400).json({
           success: false,
           error: 'participantId inválido. Deve ter 8 dígitos numéricos'
+        });
+      }
+
+      // #626: same out-of-scope 403 pattern as listBiomarkerObservations
+      // — a mutation, so checked before the write.
+      const existingPatient = await patientService.getPatient(db, participantId);
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (existingPatient && !isRecordInOrganizationScope(existingPatient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
         });
       }
 

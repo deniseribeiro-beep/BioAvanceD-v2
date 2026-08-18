@@ -97,11 +97,15 @@ describe('paciente.controller clinicalUnit allowlist stays Organization-referenc
 
   it('atualizar() forwards the sanitized clinicalUnitId to patientService.updatePatient unchanged', async () => {
     vi.spyOn(patientService, 'updatePatient').mockResolvedValue({ participantId: '12345678' });
+    // #626: atualizar() now pre-fetches the existing patient for its
+    // org-scope check before updating.
+    vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
     const samplesCollection = { find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) };
     const req = createReq({
       app: { locals: { db: { collection: vi.fn().mockReturnValue(samplesCollection) } } },
       params: { id: '12345678' },
-      body: { clinicalUnitId: ' org-1 ' }
+      body: { clinicalUnitId: ' org-1 ' },
+      organizationScope: { scope: 'global', organizationIds: [] }
     });
     const res = createRes();
 
