@@ -584,15 +584,17 @@ async function buildPreviewData(db, rawType, filters = {}) {
   }
 
   if (isWithdrawalHistory) {
-    const collection = resolveCollection(db, ['withdrawals', 'withdrawalHistory']);
+    // #620: 'withdrawals'/'withdrawalHistory' is never written by any write
+    // path — the real withdrawal record lives in the sample movement
+    // ledger (sample.service.js#withdrawSample writes type: 'withdraw'),
+    // the same source GET /:id/movements already surfaces per-sample.
+    const collection = resolveCollection(db, ['sample_movements', 'sampleMovements']);
     const dateRange = buildDateQuery(filters);
     const query = dateRange
-      ? {
-          $or: [{ withdrawalDate: dateRange }, { createdAt: dateRange }],
-        }
-      : {};
+      ? { type: 'withdraw', createdAt: dateRange }
+      : { type: 'withdraw' };
 
-    const withdrawals = await collection.find(query).sort({ withdrawalDate: -1, createdAt: -1 }).limit(100).toArray();
+    const withdrawals = await collection.find(query).sort({ createdAt: -1 }).limit(100).toArray();
     const total = await collection.countDocuments(query);
     return { total, withdrawals, previewLimited: total > 100 };
   }
