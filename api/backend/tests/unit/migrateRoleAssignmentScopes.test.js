@@ -43,7 +43,7 @@ function loadScriptWithoutFakeMongo() {
   return require('../../src/scripts/migrateRoleAssignmentScopes');
 }
 
-function fakeDb({ users = [], roles = [], assignments = [] }) {
+function fakeDb({ users = [], roles = [], assignments = [], organizations }) {
   const usersFindOne = vi.fn(async (query) => users.find((u) => String(u._id) === String(query._id)) || null);
   const usersCollection = { findOne: usersFindOne };
 
@@ -56,13 +56,23 @@ function fakeDb({ users = [], roles = [], assignments = [] }) {
   const assignmentsUpdateOne = vi.fn().mockResolvedValue({ acknowledged: true });
   const assignmentsCollection = { find: assignmentsFind, updateOne: assignmentsUpdateOne };
 
+  // #627: default resolves any organizationId lookup as found, so
+  // pre-existing tests passing a fabricated organizationId (e.g. 'org-1')
+  // keep working — pass `organizations: []` to exercise the not-found path.
+  const organizationsFindOne = vi.fn(async (query) => {
+    if (!organizations) return { organizationId: query.organizationId };
+    return organizations.find((o) => o.organizationId === query.organizationId) || null;
+  });
+  const organizationsCollection = { findOne: organizationsFindOne };
+
   const collection = vi.fn((name) => {
     if (name === 'users') return usersCollection;
     if (name === 'roles') return rolesCollection;
+    if (name === 'organizations') return organizationsCollection;
     return assignmentsCollection; // 'userRoleAssignments'
   });
 
-  return { collection, usersFindOne, rolesFind, assignmentsFind, assignmentsUpdateOne };
+  return { collection, usersFindOne, rolesFind, assignmentsFind, assignmentsUpdateOne, organizationsFindOne };
 }
 
 const coordinatorRole = { roleId: 'role-coord', roleCode: 'coordinator', hierarchyLevel: 3 };
@@ -118,7 +128,7 @@ describe('scripts/migrateRoleAssignmentScopes', () => {
     try {
       const result = await mod.migrateRoleAssignmentScopes();
 
-      expect(result).toEqual({ assignmentsUpdated: 1, assignmentsWithNullScope: 0, usersNotFound: 0 });
+      expect(result).toEqual({ assignmentsUpdated: 1, assignmentsWithNullScope: 0, assignmentsWithInvalidOrganizationId: 0, usersNotFound: 0 });
       expect(dbApi.assignmentsUpdateOne).toHaveBeenCalledWith(
         { assignmentId: 'a1' },
         { $set: { scopeType: 'organization', scopeId: 'org-1' } },
@@ -164,7 +174,33 @@ describe('scripts/migrateRoleAssignmentScopes', () => {
     try {
       const result = await mod.migrateRoleAssignmentScopes();
 
-      expect(result).toEqual({ assignmentsUpdated: 1, assignmentsWithNullScope: 1, usersNotFound: 0 });
+      expect(result).toEqual({ assignmentsUpdated: 1, assignmentsWithNullScope: 1, assignmentsWithInvalidOrganizationId: 0, usersNotFound: 0 });
+      expect(dbApi.assignmentsUpdateOne).toHaveBeenCalledWith(
+        { assignmentId: 'a1' },
+        { $set: { scopeType: 'organization', scopeId: null } },
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  // #627: mirrors #617/#622's organizationId referential check — this
+  // script writes scopeId via raw Mongo, bypassing rbac-assignment.service.js
+  // entirely, so it needs its own inline validation against `organizations`.
+  it('organizationId do usuário não resolve a uma Organization real: grava scopeId null e conta em assignmentsWithInvalidOrganizationId', async () => {
+    process.env.MONGODB_URI = 'mongodb://primary-host/db';
+
+    const users = [{ _id: 'user-1', organizationId: 'org-inexistente' }];
+    const assignments = [{ assignmentId: 'a1', userAccountId: 'user-1', roleId: 'role-coord', scopeType: 'global' }];
+    const dbApi = fakeDb({ users, roles: [coordinatorRole], assignments, organizations: [] });
+    const connect = vi.fn().mockResolvedValue(undefined);
+    const db = vi.fn().mockReturnValue({ collection: dbApi.collection });
+
+    const { mod, restore } = loadScriptWithFakeMongo({ connect, db });
+    try {
+      const result = await mod.migrateRoleAssignmentScopes();
+
+      expect(result).toEqual({ assignmentsUpdated: 1, assignmentsWithNullScope: 1, assignmentsWithInvalidOrganizationId: 1, usersNotFound: 0 });
       expect(dbApi.assignmentsUpdateOne).toHaveBeenCalledWith(
         { assignmentId: 'a1' },
         { $set: { scopeType: 'organization', scopeId: null } },
@@ -186,7 +222,7 @@ describe('scripts/migrateRoleAssignmentScopes', () => {
     try {
       const result = await mod.migrateRoleAssignmentScopes();
 
-      expect(result).toEqual({ assignmentsUpdated: 0, assignmentsWithNullScope: 0, usersNotFound: 1 });
+      expect(result).toEqual({ assignmentsUpdated: 0, assignmentsWithNullScope: 0, assignmentsWithInvalidOrganizationId: 0, usersNotFound: 1 });
       expect(dbApi.assignmentsUpdateOne).not.toHaveBeenCalled();
     } finally {
       restore();
@@ -204,7 +240,7 @@ describe('scripts/migrateRoleAssignmentScopes', () => {
     try {
       const result = await mod.migrateRoleAssignmentScopes();
 
-      expect(result).toEqual({ assignmentsUpdated: 0, assignmentsWithNullScope: 0, usersNotFound: 0 });
+      expect(result).toEqual({ assignmentsUpdated: 0, assignmentsWithNullScope: 0, assignmentsWithInvalidOrganizationId: 0, usersNotFound: 0 });
       expect(dbApi.assignmentsUpdateOne).not.toHaveBeenCalled();
     } finally {
       restore();
