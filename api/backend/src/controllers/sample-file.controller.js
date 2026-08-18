@@ -7,6 +7,7 @@ const { ObjectId } = require('mongodb');
 const SampleFileModel = require('../models/SampleFile');
 const { getUserAnonId } = require('../utils/userAnonymization');
 const keyRegistry = require('../config/keyRegistry');
+const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
 
 const FILE_ENCRYPTION_ALGORITHM = 'aes-256-gcm';
 
@@ -194,6 +195,24 @@ class SampleFileController {
         });
       }
 
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
+      // req.organizationScope is only absent when requireOrganizationScope
+      // wasn't run ahead of this handler (never true in production).
+      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+        if (fs.existsSync(file.path)) {
+          try {
+            fs.unlinkSync(file.path);
+          } catch (unlinkError) {
+            logger.error('Erro ao remover arquivo após validação de escopo:', unlinkError.message);
+          }
+        }
+        return res.status(403).json({
+          success: false,
+          error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+          message: 'Esta amostra pertence a outra organização'
+        });
+      }
+
       // Obtém ID anonimizado do uploader (LGPD)
       const uploaderAnonId = await getUserAnonId(req.user, db);
 
@@ -366,6 +385,15 @@ class SampleFileController {
         });
       }
 
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
+      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+        return res.status(403).json({
+          success: false,
+          error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+          message: 'Esta amostra pertence a outra organização'
+        });
+      }
+
       // Busca arquivos da amostra
       const sampleFilesCollection = db.collection('sample_files');
       const specimenIdString = sample._id.toString();
@@ -471,6 +499,26 @@ class SampleFileController {
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotBelongToSample') : 'Arquivo não pertence a esta amostra'
         });
+      }
+
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
+      // downloadFile doesn't otherwise need the Sample document itself, so
+      // fetch it only for this check; a lookup failure (bad ObjectId, or
+      // the sample no longer exists) is treated as "can't determine
+      // scope" and doesn't block the download on its own.
+      if (req.organizationScope) {
+        const samplesCollection = db.collection('samples');
+        let sampleForScope = null;
+        try {
+          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
+        } catch (_) {}
+        if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+          return res.status(403).json({
+            success: false,
+            error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+            message: 'Esta amostra pertence a outra organização'
+          });
+        }
       }
 
       // Verifica se o arquivo existe no sistema de arquivos
@@ -584,6 +632,25 @@ class SampleFileController {
         });
       }
 
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern —
+      // checked before the mutation, not just before a read. See
+      // downloadFile's identical check for why the lookup is scoped to
+      // just this check and tolerant of a failed/missing lookup.
+      if (req.organizationScope) {
+        const samplesCollection = db.collection('samples');
+        let sampleForScope = null;
+        try {
+          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
+        } catch (_) {}
+        if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+          return res.status(403).json({
+            success: false,
+            error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+            message: 'Esta amostra pertence a outra organização'
+          });
+        }
+      }
+
       // Remove arquivo físico do sistema de arquivos
       if (fs.existsSync(fileRecord.storagePath)) {
         try {
@@ -682,6 +749,15 @@ class SampleFileController {
         });
       }
 
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
+      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+        return res.status(403).json({
+          success: false,
+          error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+          message: 'Esta amostra pertence a outra organização'
+        });
+      }
+
       // LGPD: Usa apenas participantId anonimizado (8 dígitos)
       const participantId = String(sample.participantId || '');
 
@@ -774,6 +850,15 @@ class SampleFileController {
         });
       }
 
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
+      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+        return res.status(403).json({
+          success: false,
+          error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+          message: 'Esta amostra pertence a outra organização'
+        });
+      }
+
       // LGPD: Usa apenas participantId anonimizado (8 dígitos)
       const participantId = String(sample.participantId || '');
 
@@ -862,6 +947,15 @@ class SampleFileController {
         return res.status(404).json({
           success: false,
           error: req.t ? req.t('samples.sampleNotFound') : 'Amostra não encontrada'
+        });
+      }
+
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
+      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+        return res.status(403).json({
+          success: false,
+          error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+          message: 'Esta amostra pertence a outra organização'
         });
       }
 

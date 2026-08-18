@@ -1298,10 +1298,16 @@ router.get('/:id/quarantine-actions', authenticate, requireOrganizationScope, as
 // RF007 - Upload de Arquivos de Análise
 const sampleFileController = require('../../controllers/sample-file.controller');
 
+// #625: requireOrganizationScope on all 7 routes below, mirroring the
+// rest of this file's org-scope precedent — the actual per-record 403
+// check runs inside sample-file.controller.js itself (post-fetch), same
+// split as patient.routes.js/paciente.controller.js (#626).
+
 // Upload de arquivo - Apenas Admin e Coordenador
 router.post('/:specimenId/files/upload',
   authenticate,
   requirePermission('uploadSampleFiles'),
+  requireOrganizationScope,
   sampleFileController.uploadMiddleware(),
   sampleFileController.uploadFile.bind(sampleFileController)
 );
@@ -1309,12 +1315,14 @@ router.post('/:specimenId/files/upload',
 // Lista arquivos - Todos os perfis autenticados
 router.get('/:specimenId/files',
   authenticate,
+  requireOrganizationScope,
   sampleFileController.listFiles.bind(sampleFileController)
 );
 
 // Download de arquivo - Todos os perfis autenticados
 router.get('/:specimenId/files/:fileID/download',
   authenticate,
+  requireOrganizationScope,
   sampleFileController.downloadFile.bind(sampleFileController)
 );
 
@@ -1322,6 +1330,7 @@ router.get('/:specimenId/files/:fileID/download',
 router.delete('/:specimenId/files/:fileID',
   authenticate,
   requirePermission('deleteSampleFiles'),
+  requireOrganizationScope,
   sampleFileController.deleteFile.bind(sampleFileController)
 );
 
@@ -1329,6 +1338,7 @@ router.delete('/:specimenId/files/:fileID',
 // HL7 v2.x
 router.get('/:specimenId/files/:fileID/export/hl7',
   authenticate,
+  requireOrganizationScope,
   enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportHL7v2.bind(sampleFileController)
 );
@@ -1336,6 +1346,7 @@ router.get('/:specimenId/files/:fileID/export/hl7',
 // FHIR R4 JSON
 router.get('/:specimenId/files/:fileID/export/fhir',
   authenticate,
+  requireOrganizationScope,
   enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportFHIR.bind(sampleFileController)
 );
@@ -1343,6 +1354,7 @@ router.get('/:specimenId/files/:fileID/export/fhir',
 // CDA XML
 router.get('/:specimenId/files/:fileID/export/cda',
   authenticate,
+  requireOrganizationScope,
   enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportCDA.bind(sampleFileController)
 );

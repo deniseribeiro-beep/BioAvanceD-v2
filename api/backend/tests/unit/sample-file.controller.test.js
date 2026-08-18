@@ -205,6 +205,31 @@ describe('sample-file.controller', () => {
       expect(unlinkSpy).toHaveBeenCalledWith('/tmp/file.xyz');
     });
 
+    // #625: an existing sample outside the caller's organization scope
+    // 403s before the file is persisted, and cleans up the uploaded temp
+    // file same as the other pre-persist rejection paths above.
+    it('returns 403 and cleans up file when the sample belongs to a different organization', async () => {
+      const specimenId = new ObjectId().toString();
+      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const db = createDb({
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId },
+        file: { path: '/tmp/file.csv', originalname: 'file.csv', size: 100 },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+      await controller.uploadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(unlinkSpy).toHaveBeenCalledWith('/tmp/file.csv');
+    });
+
     it('returns 400 and cleans up file when validation fails', async () => {
       const specimenId = new ObjectId().toString();
       const sample = { _id: new ObjectId(specimenId) };
@@ -365,6 +390,26 @@ describe('sample-file.controller', () => {
       expect(res.status).toHaveBeenCalledWith(404);
     });
 
+    // #625: an existing sample outside the caller's organization scope
+    // 403s before files are listed.
+    it('returns 403 when the sample belongs to a different organization', async () => {
+      const specimenId = new ObjectId().toString();
+      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const db = createDb({
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      };
+      const res = createRes();
+
+      await controller.listFiles(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
     it('returns sanitized files without storagePath', async () => {
       const specimenId = new ObjectId().toString();
       const sample = { _id: new ObjectId(specimenId) };
@@ -497,6 +542,55 @@ describe('sample-file.controller', () => {
       await controller.downloadFile(req, res);
 
       expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    // #625: an existing sample outside the caller's organization scope
+    // 403s before the file is served.
+    it('returns 403 when the sample belongs to a different organization', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      };
+      const res = createRes();
+
+      await controller.downloadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    // #625: a lookup failure resolving the sample for the scope check
+    // (e.g. it no longer exists) doesn't itself block the download —
+    // only a confirmed out-of-scope match does.
+    it('proceeds to serve the file when the sample lookup for the scope check returns nothing', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(null) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('a.csv content'));
+
+      await controller.downloadFile(req, res);
+
+      expect(res.status).not.toHaveBeenCalledWith(403);
+      expect(res.send).toHaveBeenCalled();
     });
 
     it('happy path (unencrypted record): reads the stored plaintext and sends it via res.send', async () => {
@@ -691,6 +785,31 @@ describe('sample-file.controller', () => {
       expect(res.status).toHaveBeenCalledWith(403);
     });
 
+    // #625: an existing sample outside the caller's organization scope
+    // 403s before the file is deleted.
+    it('returns 403 when the sample belongs to a different organization', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord), deleteOne },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      };
+      const res = createRes();
+
+      await controller.deleteFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(deleteOne).not.toHaveBeenCalled();
+    });
+
     it('happy path: removes file from disk and db, returns 200', async () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
@@ -747,6 +866,29 @@ describe('sample-file.controller', () => {
       await controller.exportHL7v2(req, res);
 
       expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    // #625: an existing sample outside the caller's organization scope
+    // 403s before the export is generated.
+    it('returns 403 when the sample belongs to a different organization', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv' };
+      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      };
+      const res = createRes();
+
+      await controller.exportHL7v2(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
     });
 
     it('logs the export when req.user is present', async () => {
@@ -895,6 +1037,29 @@ describe('sample-file.controller', () => {
       expect(res.status).toHaveBeenCalledWith(404);
     });
 
+    // #625: an existing sample outside the caller's organization scope
+    // 403s before the export is generated.
+    it('returns 403 when the sample belongs to a different organization', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv' };
+      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      };
+      const res = createRes();
+
+      await controller.exportFHIR(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
     it('logs the export when req.user is present', async () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
@@ -984,6 +1149,29 @@ describe('sample-file.controller', () => {
       await controller.exportCDA(req, res);
 
       expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    // #625: an existing sample outside the caller's organization scope
+    // 403s before the export is generated.
+    it('returns 403 when the sample belongs to a different organization', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv' };
+      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      };
+      const res = createRes();
+
+      await controller.exportCDA(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
     });
 
     it('happy path: generates CDA document and sets headers', async () => {
