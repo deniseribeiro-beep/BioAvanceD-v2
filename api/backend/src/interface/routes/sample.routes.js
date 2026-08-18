@@ -454,7 +454,7 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
   }
 });
 
-router.get('/:id/label', authenticate, async (req, res) => {
+router.get('/:id/label', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -480,6 +480,17 @@ router.get('/:id/label', authenticate, async (req, res) => {
       return res.status(404).json({
         success: false,
         error: 'Amostra não encontrada'
+      });
+    }
+
+    // #619: mirrors #340's GET /:id out-of-scope 403 — a sub-resource
+    // route for an existing sample outside the caller's organization scope
+    // must not leak the label either.
+    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
       });
     }
 
@@ -943,13 +954,23 @@ router.get('/by-barcode/:barcode/symbology-assets', authenticate, async (req, re
 });
 
 // Buscar arquivos de analise de uma amostra
-router.get('/:id/results', authenticate, async (req, res) => {
+router.get('/:id/results', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({
         success: false,
         error: 'Banco de dados não disponível'
+      });
+    }
+
+    // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
+    const sampleForScope = await sampleService.getSample(db, req.params.id);
+    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
       });
     }
 
@@ -1048,13 +1069,23 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample'), as
 });
 
 // Obter movimentações de uma amostra
-router.get('/:id/movements', authenticate, async (req, res) => {
+router.get('/:id/movements', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({
         success: false,
         error: 'Banco de dados não disponível'
+      });
+    }
+
+    // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
+    const sampleForScope = await sampleService.getSample(db, req.params.id);
+    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
       });
     }
 
@@ -1077,13 +1108,23 @@ router.get('/:id/movements', authenticate, async (req, res) => {
 // dict-07/dict-08 (#383) - RCS certificado como entidade separada e
 // referenciada por specimenId (não duplicada em Sample). Snapshots
 // versionados, mais recente primeiro.
-router.get('/:id/rcs-assessments', authenticate, async (req, res) => {
+router.get('/:id/rcs-assessments', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({
         success: false,
         error: 'Banco de dados não disponível'
+      });
+    }
+
+    // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
+    const sampleForScope = await sampleService.getSample(db, req.params.id);
+    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
       });
     }
 
@@ -1107,13 +1148,23 @@ router.get('/:id/rcs-assessments', authenticate, async (req, res) => {
 // separada e referenciada por specimenId (não duplicada em Sample).
 // Snapshots versionados, mais recente primeiro — mirrors #383's
 // RcsAssessment/GET /:id/rcs-assessments pattern.
-router.get('/:id/sprec-profiles', authenticate, async (req, res) => {
+router.get('/:id/sprec-profiles', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({
         success: false,
         error: 'Banco de dados não disponível'
+      });
+    }
+
+    // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
+    const sampleForScope = await sampleService.getSample(db, req.params.id);
+    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
       });
     }
 
@@ -1137,13 +1188,23 @@ router.get('/:id/sprec-profiles', authenticate, async (req, res) => {
 // referenciada por specimenIds (não duplicada em Sample). Histórico
 // versionado, mais recente primeiro — mirrors #383's RcsAssessment/
 // GET /:id/rcs-assessments pattern.
-router.get('/:id/quarantine-actions', authenticate, async (req, res) => {
+router.get('/:id/quarantine-actions', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({
         success: false,
         error: 'Banco de dados não disponível'
+      });
+    }
+
+    // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
+    const sampleForScope = await sampleService.getSample(db, req.params.id);
+    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
       });
     }
 
