@@ -1,51 +1,61 @@
 # HANDOFF
 
-**Written:** 2026-08-18, continuation session (twentieth update). User chose
-to keep going with #620/#621/#622 after #616/#617/#619 already landed —
-**still inside the rabbit hole**, tracker **#618** ("organization-scope
-enforcement + RBAC gaps"). Four items landed this sitting so far (#616,
-#617, #619, #620); #621 next.
+**Written:** 2026-08-18, continuation session (twenty-first update). Long
+sitting: user continued past the advisory budget twice (confirmed via
+explicit choices, not silent overrun). **Still inside the rabbit hole**,
+tracker **#618** ("organization-scope enforcement + RBAC gaps"). Five items
+landed this sitting (#616, #617, #619, #620, #622); #621 surfaced and
+explicitly deferred (still open) pending Dennis's design input.
 
 ## Rabbit hole state
 
 - **Tracker:** #618, open. Original working order: #340 → #341 → #616 →
-  #617 → #602 (#340/#341 landed a prior sitting). #619 was split
-  mid-sitting (see prior handoff entries in git history for the split
-  rationale); #620 picked up next per the user's continuation choice.
-- **Landed this sitting:** #616, #617, #619 (narrowed scope), #620.
-- **Still queued:** #602, #621, #622, #623, #624, #625, #626.
-- **Budget note:** this sitting has now run well past the ~10-point
-  advisory allowance across 4 landed items plus a nontrivial split. #621
-  is next per the user's explicit choice; recompute budget again after
-  it lands.
+  #617 → #602 (#340/#341 landed a prior sitting).
+- **Landed this sitting:** #616, #617, #619 (narrowed scope), #620, #622.
+- **Deferred this sitting (still open, not a fix):** #621 — surfaced via
+  AskUserQuestion, confirmed it genuinely needs Dennis's design call (no
+  organization reference exists anywhere for Result/Sensor/Equipment/
+  Temperature or the saved-Report document itself), user chose to skip it
+  for now. Comment posted on #621 documenting the two design options
+  surfaced (join Result via its Sample's collectionSite vs. a broader
+  per-entity Organization-reference design).
+- **Still queued:** #602, #621 (deferred), #623, #624, #625, #626, #627.
+- **Budget note:** this sitting ran far past the ~10-point advisory
+  allowance — 5 landed items across a very long session, with the
+  stopping point surfaced to the user twice via AskUserQuestion and
+  explicitly overridden both times. Strongly recommend a fresh sitting's
+  budget before picking up more; if resuming immediately, at minimum
+  re-confirm with the user rather than assuming continued appetite.
 
 ## Issues closed this session
 
-- **#616**: `changeUserRole` now preserves additive role assignments
-  (e.g. `auditor`) when `accessType` changes. Merged `142f02628`.
-- **#617**: `organizationId` on user create/edit now validated against
-  the `organizations` collection. Merged `82986a0c` at `edb88624`.
-- **#619** (narrowed): sample sub-resource read routes now enforce
+- **#616**: `changeUserRole` preserves additive role assignments (e.g.
+  `auditor`) when `accessType` changes. Merged `142f02628`.
+- **#617**: `organizationId` on user create/edit validated against the
+  `organizations` collection. Merged `82986a0c` at `edb88624`.
+- **#619** (narrowed): sample sub-resource read routes enforce
   organization scope. Merged `4090c0be` at `00c0349e`. Split into 4
-  follow-ups: #623, #624, #625, #626 (all on the #618 tracker).
-- **#620**: `reports.routes.js`'s `withdrawalhistory` report type read a
-  `withdrawals`/`withdrawalHistory` collection nothing ever writes to —
-  confirmed via repo-wide grep it's dead as a data source, but confirmed
-  via frontend grep (`report.constants.js`, `ReportQueryPage.tsx`, i18n)
-  that the report type itself is live and user-selectable, so no
-  owner check-in was needed (reachability-tracing rule dissolved the
-  "needs Dennis" framing the issue suggested). Repointed at the real
-  source: `sample_movements`' `type: 'withdraw'` entries (the ledger
-  write from `sample.service.js#withdrawSample`), same source
-  `GET /:id/movements` already surfaces per-sample. Un-weakened 2
-  pre-existing tests pinned to the old broken query shape, added 2 new.
-  76 targeted tests green. Merged `bdb285dd` at `3cd82baf`, closed.
+  follow-ups (#623-#626).
+- **#620**: `withdrawalhistory` report type now reads the real sample
+  movement ledger instead of a dead collection. Merged `bdb285dd` at
+  `3cd82baf`.
+- **#622**: `organizationId` now validated inside
+  `rbac-assignment.service.js` itself (`validateOrganizationId`, used by
+  `resolveScopeForRole` + `updateAssignmentScope`), closing the gap for
+  `createFirstAdmin.js`/`backfillUserRoleAssignments`. Merged `c1efb700`
+  at `e9c08479`. `migrateRoleAssignmentScopes.js` remains uncovered (raw
+  Mongo writes) — filed as #627.
 
 ## Filed this session
 
-- **BioAvanceD-v2#622, #623, #624, #625, #626**: all split off #617/#619,
-  added to the #618 tracker — see prior handoff entries (git history) or
-  the #618 tracker's own comment thread for full descriptions.
+- **BioAvanceD-v2#623-#626**: split off #619 — see the #618 tracker's
+  comment thread for full descriptions (sample mutation routes,
+  compliance/graph routes, sample-file.controller.js's file family, and
+  the entire patient-side half).
+- **BioAvanceD-v2#627**: `migrateRoleAssignmentScopes.js` bypasses
+  `rbac-assignment.service.js` entirely (raw Mongo writes), so #622's new
+  validation doesn't cover it. Low severity — script is one-time and
+  still unrun. Added to #618.
 - **dyeallpies-skills-pack#336** (not a BioAvanceD-v2 issue):
   `edit-branch-guard.cjs` fired correctly once this session but then
   silently let several Edit calls through on the protected branch later
@@ -54,35 +64,36 @@ enforcement + RBAC gaps"). Four items landed this sitting so far (#616,
   hook.**
 - **dyeallpies-skills-pack#337** (not a BioAvanceD-v2 issue): a recurring
   reproduce-order slip in `fix-bugs` (product fix written before the
-  failing test) — happened for #617 and #619, did NOT happen for #620
-  (correctly reproduce-first). Filed with a suggested wording fix.
+  failing test) — happened for #617 and #619, did NOT happen for #620 or
+  #622 (both correctly reproduce-first). Filed with a suggested wording
+  fix.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed after #616, #617,
-  #619, and #620 all landed (`142f02628`, `edb88624`, `00c0349e`,
-  `3cd82baf`). Working tree clean except the gitignored/junctioned
+- On `feature/docker-e2e-backend-integration`, pushed after every item
+  this session landed (`142f02628`, `edb88624`, `00c0349e`, `3cd82baf`,
+  `e9c08479`). Working tree clean except the gitignored/junctioned
   `.claude/skills/`. No stale local branches — every fix/test branch this
   session deleted local + remote after merging.
 - No Docker stack was brought up this session — all fixes are
   backend-internal, proof bar was mocked-Mongo/mocked-Express tests.
 - `migrateRoleAssignmentScopes.js` (from #615) is still unrun against any
-  real database — unrelated to this session's work, unchanged.
+  real database — now also tracked as having a validation gap (#627).
 
 ## Recommended next steps
 
-User explicitly chose to continue with #621 next (then #622) in this same
-sitting, despite the budget note above. After those:
-1. **#621** — non-sample-rooted org-scope gap (temperature/sensor/
-   equipment/results/logs report types, saved-report listing, GET
-   /api/results). In progress / next pick.
-2. **#622** — `rbac-assignment.service.js` validation gap (small).
-3. **#623** — sample mutation routes org-scope (medium, fix shape already
+No single next pick named by the user for a future sitting — recompute
+budget fresh. Candidates, roughly in order of readiness:
+1. **#623** — sample mutation routes org-scope (medium, fix shape already
    sketched).
-4. **#624** — sample compliance/graph routes org-scope (small-medium,
+2. **#624** — sample compliance/graph routes org-scope (small-medium,
    needs a quick investigation first).
-5. **#625** — sample-file.controller.js org-scope (medium, needs a
-   design call on which layer owns the check).
-6. **#626** — patient-side org-scope (large — likely needs its own split
+3. **#627** — migrateRoleAssignmentScopes.js validation gap (small, script
+   is one-time/unrun so not urgent).
+4. **#625** — sample-file.controller.js org-scope (medium, needs a design
+   call on which layer owns the check).
+5. **#626** — patient-side org-scope (large — likely needs its own split
    like #619 did).
-7. **#602** — needs Dennis's design call before a fix shape exists.
+6. **#602** — needs Dennis's design call before a fix shape exists.
+7. **#621** — needs Dennis's design call (deferred this session, two
+   options already surfaced in its comment thread).
