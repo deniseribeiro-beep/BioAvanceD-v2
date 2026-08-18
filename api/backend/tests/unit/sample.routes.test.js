@@ -1188,7 +1188,8 @@ describe('sample.routes', () => {
   describe('GET /:id/miabis-compliance', () => {
     it('returns 200 with the compliance report', async () => {
       const validateMiabisCompliance = vi.fn().mockResolvedValue({ compliant: true, missing: [] });
-      const { router } = loadRoute({ validateMiabisCompliance });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ validateMiabisCompliance, sampleServiceOverrides: { getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/s1/miabis-compliance');
@@ -1200,7 +1201,8 @@ describe('sample.routes', () => {
 
     it('returns 500 when the validator throws', async () => {
       const validateMiabisCompliance = vi.fn().mockRejectedValue(new Error('boom'));
-      const { router } = loadRoute({ validateMiabisCompliance });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ validateMiabisCompliance, sampleServiceOverrides: { getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/s1/miabis-compliance');
@@ -1219,6 +1221,26 @@ describe('sample.routes', () => {
       expect(res.status).toBe(503);
       expect(validateMiabisCompliance).not.toHaveBeenCalled();
     });
+
+    // #624: mirrors #340/#619/#623's out-of-scope 403 pattern.
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const validateMiabisCompliance = vi.fn();
+      const getSample = vi.fn().mockResolvedValue({ _id: 's1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        validateMiabisCompliance,
+        sampleServiceOverrides: { getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/miabis-compliance');
+
+      expect(res.status).toBe(403);
+      expect(validateMiabisCompliance).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /:id/compliance-graph', () => {
@@ -1233,7 +1255,8 @@ describe('sample.routes', () => {
 
     it('returns 200 with the validator report', async () => {
       const validateSampleCompliance = vi.fn().mockResolvedValue({ ok: true });
-      const { router } = loadRoute({ validateSampleCompliance });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ validateSampleCompliance, sampleServiceOverrides: { getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/s1/compliance-graph');
@@ -1244,12 +1267,33 @@ describe('sample.routes', () => {
 
     it('returns 400 when the validator throws', async () => {
       const validateSampleCompliance = vi.fn().mockRejectedValue(new Error('bad graph'));
-      const { router } = loadRoute({ validateSampleCompliance });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ validateSampleCompliance, sampleServiceOverrides: { getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/s1/compliance-graph');
 
       expect(res.status).toBe(400);
+    });
+
+    // #624: mirrors #340/#619/#623's out-of-scope 403 pattern.
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const validateSampleCompliance = vi.fn();
+      const getSample = vi.fn().mockResolvedValue({ _id: 's1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        validateSampleCompliance,
+        sampleServiceOverrides: { getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/compliance-graph');
+
+      expect(res.status).toBe(403);
+      expect(validateSampleCompliance).not.toHaveBeenCalled();
     });
   });
 
