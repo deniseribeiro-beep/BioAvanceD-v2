@@ -173,6 +173,7 @@ class AuthService {
         userAccountId: result.insertedId.toString(),
         accessType: resolvedAccessType,
         grantedBy,
+        organizationId: user.organizationId ?? null,
       });
 
       // Gera e salva identificador anonimizado para LGPD

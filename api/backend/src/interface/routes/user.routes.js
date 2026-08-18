@@ -365,6 +365,15 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       });
     }
     
+    // #615: organizationId used for RBAC scoping below — already normalized
+    // above (lines 280-287). Falls back to the user's current org when not
+    // provided on this request, so accessType/auditorRole changes below keep
+    // the assignment scoped to whatever org the user already had.
+    const organizationIdProvided = req.body.organizationId !== undefined;
+    const effectiveOrganizationId = organizationIdProvided
+      ? req.body.organizationId
+      : (targetUser.organizationId ?? null);
+
     // Detecta mudanças críticas
     const changes = {};
     if (requestedAccessType && requestedAccessType !== targetUser.accessType) {
@@ -379,6 +388,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
         userAccountId: targetUser._id.toString(),
         accessType: requestedAccessType,
         changedBy: req.user?.userID,
+        organizationId: effectiveOrganizationId,
       });
     }
     if (requestedAuditorRole !== undefined) {
@@ -388,6 +398,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
           userAccountId: targetUser._id.toString(),
           roleCode: 'auditor',
           grantedBy: req.user?.userID,
+          organizationId: effectiveOrganizationId,
         });
       } else {
         await revokeAdditionalRole(db, {
@@ -397,6 +408,22 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
         });
       }
       changes.auditorRole = Boolean(requestedAuditorRole);
+    }
+    // #615: org-only edit (no accessType/auditorRole change this request)
+    // still needs to resync the existing assignment's scopeId — otherwise a
+    // user whose organization changes keeps stale scope until their role is
+    // separately touched. Idempotent against the branches above (redundant
+    // $set to the same scopeId is harmless), so this runs unconditionally on
+    // any real organizationId change rather than tracking what the branches
+    // above already handled.
+    if (organizationIdProvided && req.body.organizationId !== (targetUser.organizationId ?? null)) {
+      const { updateAssignmentScope } = require('../../services/rbac-assignment.service');
+      await updateAssignmentScope(db, {
+        userAccountId: targetUser._id.toString(),
+        organizationId: req.body.organizationId,
+        updatedBy: req.user?.userID,
+      });
+      changes.organizationId = { from: targetUser.organizationId ?? null, to: req.body.organizationId ?? null };
     }
     if (req.body.status && req.body.status !== targetUser.status) {
       changes.status = { from: targetUser.status, to: req.body.status };

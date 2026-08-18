@@ -11,6 +11,8 @@ const {
   findUserAccountIdsByRoleCodes,
   grantAdditionalRole,
   revokeAdditionalRole,
+  updateAssignmentScope,
+  resolveUserOrganizationScope,
 } = require('../../src/services/rbac-assignment.service');
 const { createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
@@ -72,7 +74,8 @@ function buildDb({ users = [], roles = [], permissionDocs = [], assignments = []
 const coordinatorRole = { roleId: 'role-coord', roleCode: 'coordinator', hierarchyLevel: 3, roleStatus: 'active', permissionIds: ['perm-createUser'] };
 const technicianRole = { roleId: 'role-tech', roleCode: 'technician', hierarchyLevel: 2, roleStatus: 'active', permissionIds: [] };
 const auditorRole = { roleId: 'role-auditor', roleCode: 'auditor', hierarchyLevel: null, roleStatus: 'active', permissionIds: ['perm-viewAuditLogs'] };
-const roles = [coordinatorRole, technicianRole, auditorRole];
+const administratorRole = { roleId: 'role-admin', roleCode: 'administrator', hierarchyLevel: 4, roleStatus: 'active', permissionIds: [] };
+const roles = [coordinatorRole, technicianRole, auditorRole, administratorRole];
 
 describe('rbac-assignment.service (#421)', () => {
   it('grantRoleForAccessType cria uma assignment ativa para o roleCode correspondente', async () => {
@@ -267,5 +270,111 @@ describe('rbac-assignment.service additive roles (#429)', () => {
 
     expect(revoked).toEqual([]);
     expect(assignments.find((a) => a.assignmentId === 'a1').assignmentStatus).toBe('active');
+  });
+});
+
+describe('rbac-assignment.service organization scoping (#615)', () => {
+  it('grantRoleForAccessType com organizationId cria assignment scopeType organization/scopeId correto', async () => {
+    const db = buildDb({ roles, assignments: [] });
+
+    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: 'admin1', organizationId: 'org-1' });
+
+    expect(doc.scopeType).toBe('organization');
+    expect(doc.scopeId).toBe('org-1');
+  });
+
+  it('grantRoleForAccessType sem organizationId cria assignment scopeType organization/scopeId null', async () => {
+    const db = buildDb({ roles, assignments: [] });
+
+    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: 'admin1' });
+
+    expect(doc.scopeType).toBe('organization');
+    expect(doc.scopeId).toBeNull();
+  });
+
+  it('grantRoleForAccessType para Administrador é sempre scopeType global, mesmo com organizationId informado', async () => {
+    const db = buildDb({ roles, assignments: [] });
+
+    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 4, grantedBy: 'admin1', organizationId: 'org-1' });
+
+    expect(doc.scopeType).toBe('global');
+    expect(doc.scopeId).toBeNull();
+  });
+
+  it('grantAdditionalRole para auditor é scopeType organization (auditor nunca faz bypass)', async () => {
+    const assignments = [{ assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', assignmentStatus: 'active', validUntil: null }];
+    const db = buildDb({ roles, assignments });
+
+    const doc = await grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: 'admin1', organizationId: 'org-1' });
+
+    expect(doc.scopeType).toBe('organization');
+    expect(doc.scopeId).toBe('org-1');
+  });
+
+  it('updateAssignmentScope atualiza apenas assignments organization-scoped, preservando global', async () => {
+    const assignments = [
+      { assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', scopeType: 'organization', scopeId: 'org-1', assignmentStatus: 'active', validUntil: null },
+      { assignmentId: 'a2', userAccountId: 'u1', roleId: 'role-admin', scopeType: 'global', scopeId: null, assignmentStatus: 'active', validUntil: null },
+    ];
+    const db = buildDb({ roles, assignments });
+
+    const updated = await updateAssignmentScope(db, { userAccountId: 'u1', organizationId: 'org-2', updatedBy: 'admin1' });
+
+    expect(updated).toEqual(['a1']);
+    expect(assignments.find((a) => a.assignmentId === 'a1').scopeId).toBe('org-2');
+    expect(assignments.find((a) => a.assignmentId === 'a2').scopeType).toBe('global');
+    expect(assignments.find((a) => a.assignmentId === 'a2').scopeId).toBeNull();
+  });
+
+  it('updateAssignmentScope com organizationId null limpa o scopeId (usuário volta a estar sem organização)', async () => {
+    const assignments = [
+      { assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', scopeType: 'organization', scopeId: 'org-1', assignmentStatus: 'active', validUntil: null },
+    ];
+    const db = buildDb({ roles, assignments });
+
+    await updateAssignmentScope(db, { userAccountId: 'u1', organizationId: null, updatedBy: 'admin1' });
+
+    expect(assignments.find((a) => a.assignmentId === 'a1').scopeId).toBeNull();
+  });
+
+  it('resolveUserOrganizationScope retorna global quando há assignment ativa de Administrador', async () => {
+    const assignments = [{ assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-admin', scopeType: 'global', scopeId: null, assignmentStatus: 'active', validUntil: null }];
+    const db = buildDb({ roles, assignments });
+
+    expect(await resolveUserOrganizationScope(db, 'u1')).toEqual({ scope: 'global', organizationIds: [] });
+  });
+
+  it('resolveUserOrganizationScope retorna organization com os scopeIds das assignments ativas', async () => {
+    const assignments = [{ assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', scopeType: 'organization', scopeId: 'org-1', assignmentStatus: 'active', validUntil: null }];
+    const db = buildDb({ roles, assignments });
+
+    expect(await resolveUserOrganizationScope(db, 'u1')).toEqual({ scope: 'organization', organizationIds: ['org-1'] });
+  });
+
+  it('resolveUserOrganizationScope retorna unassigned quando a assignment organization-scoped tem scopeId nulo', async () => {
+    const assignments = [{ assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', scopeType: 'organization', scopeId: null, assignmentStatus: 'active', validUntil: null }];
+    const db = buildDb({ roles, assignments });
+
+    expect(await resolveUserOrganizationScope(db, 'u1')).toEqual({ scope: 'unassigned', organizationIds: [] });
+  });
+
+  it('resolveUserOrganizationScope retorna none quando o usuário não tem nenhuma assignment ativa', async () => {
+    const db = buildDb({ roles, assignments: [] });
+
+    expect(await resolveUserOrganizationScope(db, 'u1')).toEqual({ scope: 'none', organizationIds: [] });
+  });
+
+  it('backfillUserRoleAssignments usa organizationId do usuário, com fallback para organizationIds[0]', async () => {
+    const users = [
+      { _id: { toString: () => 'u1' }, accessType: 3, organizationId: 'org-1' },
+      { _id: { toString: () => 'u2' }, accessType: 2, organizationId: null, organizationIds: ['org-2', 'org-3'] },
+    ];
+    const db = buildDb({ users, roles, assignments: [] });
+
+    const result = await backfillUserRoleAssignments(db);
+
+    const byUser = Object.fromEntries(result.map((a) => [a.userAccountId, a]));
+    expect(byUser.u1.scopeId).toBe('org-1');
+    expect(byUser.u2.scopeId).toBe('org-2');
   });
 });

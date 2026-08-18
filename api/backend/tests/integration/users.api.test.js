@@ -107,4 +107,32 @@ describe('RF003 - POST /api/users/register', () => {
     expect(String(response.body.message || '').toLowerCase()).toContain('já cadastrado');
     expect(insertOne).not.toHaveBeenCalled();
   });
+
+  it('#615: cria a UserRoleAssignment com scopeType/scopeId a partir do organizationId do payload', async () => {
+    // Given
+    const usersCollection = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(null),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'new-user-1' }),
+      updateOne: vi.fn(),
+    });
+    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]);
+    app.locals.db = createDbMock({ users: usersCollection, ...rbacCollections });
+
+    // When
+    const response = await whenRegisterUser(
+      buildUserRegistrationPayload({
+        name: 'Usuário Escopo',
+        email: 'escopo.qa@example.com',
+        username: 'escopo.qa',
+        accessType: 2,
+        organizationId: 'org-1',
+      })
+    );
+
+    // Then
+    expect(response.status).toBe(201);
+    expect(rbacCollections.userRoleAssignments.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ scopeType: 'organization', scopeId: 'org-1' })
+    );
+  });
 });
