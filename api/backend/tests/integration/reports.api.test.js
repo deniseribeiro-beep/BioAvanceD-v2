@@ -442,8 +442,11 @@ describe('Reports API integration', () => {
       expect(capturedQueries.temperature.$and[0].$or).toBeDefined();
     });
 
+    // #620: withdrawalhistory reads from sample_movements (type: 'withdraw'
+    // ledger entries, sample.service.js#withdrawSample) — the 'withdrawals'
+    // collection this test previously mocked is never written anywhere.
     it('historico de retirada: aplica intervalo de datas e ordena', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ withdrawals: [{ withdrawalDate: new Date('2026-01-05') }] });
+      const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
@@ -452,7 +455,7 @@ describe('Reports API integration', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.data.total).toBe(1);
-      expect(capturedQueries.withdrawals.$or[0].withdrawalDate.$gte).toEqual(new Date('2026-01-01'));
+      expect(capturedQueries.sample_movements.createdAt.$gte).toEqual(new Date('2026-01-01'));
     });
 
     it('rede extracelular: filtra amostras por linkedProject/sampleOrigin com regex', async () => {

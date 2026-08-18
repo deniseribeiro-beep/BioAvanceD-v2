@@ -468,8 +468,11 @@ describe('reports.routes.js gaps', () => {
   });
 
   describe('buildDateQuery: apenas um limite informado', () => {
+    // #620: withdrawalhistory reads from sample_movements (type: 'withdraw')
+    // now, not the never-written 'withdrawals' collection — see the
+    // dedicated describe block below for the full fix coverage.
     it('apenas startDate aplica somente $gte', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ withdrawals: [{ withdrawalDate: new Date('2026-01-05') }] });
+      const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
@@ -477,11 +480,11 @@ describe('reports.routes.js gaps', () => {
         .send({ filters: { startDate: '2026-01-01' } });
 
       expect(response.status).toBe(200);
-      expect(capturedQueries.withdrawals.$or[0].withdrawalDate).toEqual({ $gte: new Date('2026-01-01') });
+      expect(capturedQueries.sample_movements.createdAt).toEqual({ $gte: new Date('2026-01-01') });
     });
 
     it('apenas endDate aplica somente $lte', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ withdrawals: [{ withdrawalDate: new Date('2026-01-05') }] });
+      const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
@@ -489,8 +492,8 @@ describe('reports.routes.js gaps', () => {
         .send({ filters: { endDate: '2026-01-31' } });
 
       expect(response.status).toBe(200);
-      expect(capturedQueries.withdrawals.$or[0].withdrawalDate.$gte).toBeUndefined();
-      expect(capturedQueries.withdrawals.$or[0].withdrawalDate.$lte).toBeDefined();
+      expect(capturedQueries.sample_movements.createdAt.$gte).toBeUndefined();
+      expect(capturedQueries.sample_movements.createdAt.$lte).toBeDefined();
     });
   });
 
@@ -617,14 +620,43 @@ describe('reports.routes.js gaps', () => {
     expect(capturedQueries.samples.$or).toBeDefined();
   });
 
-  it('withdrawalhistory: sem filtros de data usa query vazia', async () => {
-    const { db, capturedQueries } = buildCollectionDb({ withdrawals: [{ withdrawalDate: new Date('2026-01-05') }] });
+  it('withdrawalhistory: sem filtros de data filtra apenas por type: withdraw', async () => {
+    const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
     const testApp = appWithDb(db);
 
     const response = await request(testApp).post('/api/reports/withdrawal%20history/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
-    expect(capturedQueries.withdrawals).toEqual({});
+    expect(capturedQueries.sample_movements).toEqual({ type: 'withdraw' });
+  });
+
+  describe('#620: withdrawalhistory lê do ledger de movimentações, não da coleção "withdrawals" (nunca escrita)', () => {
+    it('retorna apenas movimentações type: withdraw, ignorando outras (return/adjust/move)', async () => {
+      const { db, capturedQueries } = buildCollectionDb({
+        sample_movements: [
+          { type: 'withdraw', specimenId: 'SP1', quantity: 5, createdAt: new Date('2026-01-05') },
+        ],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/withdrawal%20history/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.total).toBe(1);
+      expect(response.body.data.withdrawals).toEqual([
+        { type: 'withdraw', specimenId: 'SP1', quantity: 5, createdAt: new Date('2026-01-05').toISOString() },
+      ]);
+      expect(capturedQueries.sample_movements).toEqual({ type: 'withdraw' });
+    });
+
+    it('nunca consulta a coleção "withdrawals" (dead collection, #620)', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
+      const testApp = appWithDb(db);
+
+      await request(testApp).post('/api/reports/withdrawal%20history/preview').send({ filters: {} });
+
+      expect(capturedQueries.withdrawals).toBeUndefined();
+    });
   });
 
   it('generate: usa reportID 1 quando não há relatórios anteriores', async () => {
