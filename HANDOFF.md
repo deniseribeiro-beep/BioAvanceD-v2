@@ -1,78 +1,79 @@
 # HANDOFF
 
-**Written:** 2026-08-18, fresh sitting (twenty-seventh update, budget
-reset to zero for this sitting). **Still inside the rabbit hole**,
-tracker **#618** ("organization-scope enforcement + RBAC gaps"). User
-requested a specific pickup order this sitting: **#621 -> #602 -> #626
--> #625**. #621, #602, and #626 all landed; **#625 next (last in the
-requested order)**.
+**Written:** 2026-08-18, fresh sitting (twenty-eighth update). **Still
+inside the rabbit hole**, tracker **#618** ("organization-scope
+enforcement + RBAC gaps"). Dennis's requested pickup order this sitting
+— **#621 -> #602 -> #626 -> #625** — is now fully complete; all four
+landed/resolved. No further item named for a next sitting.
 
 ## Rabbit hole state
 
 - **Tracker:** #618, open.
-- **Landed this sitting:** #621 (partial), #602 (split), #626 (fully
-  resolved).
-- **Filed this sitting:** #628, #629, #630, #631 (all still open, lower
-  priority than the user's named order).
-- **Still queued, in the user's stated order:** #625 (last one).
-- **Also open in the hole:** #628, #629, #630, #631.
+- **Landed this sitting:** #621 (partial, Result report-type scoped),
+  #602 (split into #630/#631), #626 (fully resolved), #625 (fully
+  resolved — last in the requested order).
+- **Filed this sitting:** #628 (bug), #629 (enhancement), #630
+  (foundational), #631 (depends on #630). All four still open, none
+  requested for pickup yet.
+- **Still queued:** none in the user's named order — it's complete.
+  #628/#629/#630/#631 remain open as lower-priority tracker members;
+  recompute against the tracker fresh (per rabbit-hole skill's budget/
+  re-scoping guidance) before picking any of them up.
 
 ## Issue closed this sitting (most recent)
 
-- **#626**: `patient.routes.js`/`paciente.controller.js` sub-resource,
-  mutation, and search routes now enforce organization scope —
-  `GET/POST /:id/observations`, `PUT /:id`, `DELETE /:id`,
-  `POST /:id/consent/resend`, `POST /:id/reidentify` all use the
-  `requireOrganizationScope` + `isRecordInOrganizationScope` (post-fetch,
-  403 on mismatch) pattern against `clinicalUnitId`, mirroring
-  `sample.routes.js`'s already-fixed sub-resource routes. `GET /search`
-  got a query-level fix instead — `applyOrganizationScopeFilter` merged
-  into `patient.service.js#searchPatients`' own `$or` query (a separate
-  code path from `listPatients`, which already had this). Six
-  pre-existing tests in `patients.expanded.api.test.js` needed a
-  `clinicalUnitId: 'test-org-default'` fixture fix (the coordinator test
-  user resolves an `'organization'` scope by default via
-  `buildRbacCollections`, so patient fixtures with no `clinicalUnitId`
-  now correctly 403 as out-of-scope — matches the same-shape fixture
-  fix #619/#623/#624 needed on the sample side). Several
-  `paciente.controller.test.js` tests needed a
-  `patientService.getPatient` mock added since the controller now
-  pre-fetches for the scope check. Merged `4dbe9a88`, pushed. Full
-  native suite green (6930/6930) after merge.
-- See prior HANDOFF entries in git history for #621/#602's own closing
-  detail (this rotation only tracks state changes since #602's landing,
-  per the "overwrite, don't accumulate" rule — search `git log -- HANDOFF.md`
-  if the earlier detail is needed).
+- **#625**: `sample.routes.js`'s `/:specimenId/files/*` family
+  (`sample-file.controller.js`) now enforces organization scope across
+  all 7 routes (upload, list, download, delete, export/hl7, export/fhir,
+  export/cda). Layering decision mirrored #626's split from earlier this
+  same sitting rather than re-deriving: `requireOrganizationScope`
+  middleware at the route-registration layer, the actual post-fetch
+  `isRecordInOrganizationScope` check (against `Sample.collectionSite`)
+  inside each controller handler. `downloadFile`/`deleteFile` didn't
+  previously fetch the `Sample` document at all — both now do, solely
+  for the scope check; a failed/missing lookup doesn't block the request
+  on its own. Merged `3efa2312`, pushed. Full native suite green
+  (6938/6938) after merge.
+- See prior HANDOFF entries in git history (`git log -- HANDOFF.md`) for
+  #621/#602/#626's own closing detail — this rotation only tracks state
+  changes since #626's landing, per the "overwrite, don't accumulate"
+  rule.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed through `4dbe9a88`.
+- On `feature/docker-e2e-backend-integration`, pushed through `3efa2312`.
   Working tree clean except the gitignored/junctioned `.claude/skills/`.
-  No stale local branches this sitting — `fix/621-...` and `fix/626-...`
-  both merged and deleted immediately after landing.
-- Full native unit+integration suite run twice this sitting (once after
-  #621, once after #626): both green, no unrelated regressions.
-- No Docker stack brought up this sitting.
+  No stale local branches — every fix branch this sitting merged and
+  deleted immediately after landing (`fix/621-...`, `fix/626-...`,
+  `fix/625-...`; #602 needed no branch, no code change).
+- Full native unit+integration suite run three times this sitting (after
+  #621, after #626, after #625): all green, no unrelated regressions
+  found or introduced.
+- No Docker stack brought up this sitting — all fixes are
+  backend-internal, mocked-Mongo/mocked-Express proof bar only. One
+  Playwright e2e spec (`scientific-data-access.spec.ts`) touches the
+  files-family routes #625 changed, but authenticates as Administrador
+  (global scope, unaffected by the new check) and requires the Docker
+  compose stack to run at all — not exercised this sitting, worth a
+  quick check at the next Docker/CI gate if picked up.
 
 ## Recommended next steps
 
-**#625 next** (last in the user's stated order): `sample.routes.js`'s
-`/:specimenId/files/*` family (`sample-file.controller.js`) doesn't
-enforce org-scope. Per the issue body, this needs a design decision on
-*which layer* owns the check — the controller currently has zero
-`rbac-assignment.service.js` dependency, so it's either (a) add
-`requireOrganizationScope` + a per-handler scope check inside
-`sample-file.controller.js` itself, or (b) add shared middleware at the
-`sample.routes.js` route-registration layer ahead of the controller
-delegation. This reads as an implementation-style call more than a
-product/data-model question `docs/` would settle (unlike #621/#602) —
-check `docs/architecture/` briefly for any stated layering convention
-before treating it as needing Dennis's input, but expect this one may
-just need a judgment call made and stated in the close comment, per
-`bioavanced-v2-conventions`' "check docs first" habit this sitting has
-been applying successfully.
+No specific issue named by the user for a future sitting — the
+requested order (#621/#602/#626/#625) is fully done. Candidates from the
+tracker, roughly in readiness order:
+1. **#630** — audit + correct `PERMISSION_CATALOG`'s `allowedActions`
+   for all 17 permission codes/107 call sites. Foundational, no behavior
+   change, mechanical — the most "ready" of the four.
+2. **#631** — depends on #630; the actual per-verb enforcement change.
+   Likely needs its own `divide-and-conquer` split once started (two
+   implementation-shape options already sketched in its body).
+3. **#628** — `Result.sampleID` inconsistent-shape bug; #621's fix
+   already works around it defensively, so this is lower urgency than it
+   sounds, but still a real gap for other Result joins.
+4. **#629** — Sensor/Equipment/Temperature/saved-Report org-scope; needs
+   Dennis's design call (confirmed not docs-answerable this sitting).
 
-After #625, no further items are in the user's named order — recompute
-against the tracker's remaining members (#628/#629/#630/#631) fresh,
-per the rabbit-hole skill's budget/re-scoping guidance, before continuing
-further in this or a future sitting.
+Recompute the sitting's budget fresh before picking any of these up —
+this sitting's spend doesn't carry over, per the rabbit-hole skill's own
+guidance.
