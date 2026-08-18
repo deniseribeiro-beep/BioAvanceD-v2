@@ -855,6 +855,22 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(500);
     });
+
+    // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const findOne = vi.fn().mockResolvedValue({ sampleID: 42, collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, { collection: () => ({ findOne }) });
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/label');
+
+      expect(res.status).toBe(403);
+    });
   });
 
   describe('GET /search/by-term', () => {
@@ -966,7 +982,8 @@ describe('sample.routes', () => {
 
     it('returns movements on success', async () => {
       const getSampleMovements = vi.fn().mockResolvedValue([{ movementID: 'm1' }]);
-      const { router } = loadRoute({ sampleServiceOverrides: { getSampleMovements } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { getSampleMovements, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/s1/movements');
@@ -977,12 +994,32 @@ describe('sample.routes', () => {
 
     it('returns 500 when the service throws', async () => {
       const getSampleMovements = vi.fn().mockRejectedValue(new Error('db down'));
-      const { router } = loadRoute({ sampleServiceOverrides: { getSampleMovements } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { getSampleMovements, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/s1/movements');
 
       expect(res.status).toBe(500);
+    });
+
+    // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const getSampleMovements = vi.fn().mockResolvedValue([{ movementID: 'm1' }]);
+      const getSample = vi.fn().mockResolvedValue({ _id: 's1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSampleMovements, getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/movements');
+
+      expect(res.status).toBe(403);
+      expect(getSampleMovements).not.toHaveBeenCalled();
     });
   });
 
@@ -998,7 +1035,8 @@ describe('sample.routes', () => {
 
     it('returns versioned RCS snapshots on success', async () => {
       const getRcsAssessments = vi.fn().mockResolvedValue([{ rcsScore: 92, finalGrade: 'A' }]);
-      const { router } = loadRoute({ sampleServiceOverrides: { getRcsAssessments } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { getRcsAssessments, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/s1/rcs-assessments');
@@ -1010,12 +1048,32 @@ describe('sample.routes', () => {
 
     it('returns 500 when the service throws', async () => {
       const getRcsAssessments = vi.fn().mockRejectedValue(new Error('db down'));
-      const { router } = loadRoute({ sampleServiceOverrides: { getRcsAssessments } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { getRcsAssessments, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/s1/rcs-assessments');
 
       expect(res.status).toBe(500);
+    });
+
+    // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const getRcsAssessments = vi.fn().mockResolvedValue([{ rcsScore: 92, finalGrade: 'A' }]);
+      const getSample = vi.fn().mockResolvedValue({ _id: 's1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getRcsAssessments, getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/rcs-assessments');
+
+      expect(res.status).toBe(403);
+      expect(getRcsAssessments).not.toHaveBeenCalled();
     });
   });
 
@@ -1031,7 +1089,8 @@ describe('sample.routes', () => {
 
     it('returns versioned quarantine actions on success', async () => {
       const getQuarantineActions = vi.fn().mockResolvedValue([{ quarantineActionId: 'q1', actionStatus: 'active' }]);
-      const { router } = loadRoute({ sampleServiceOverrides: { getQuarantineActions } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { getQuarantineActions, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/s1/quarantine-actions');
@@ -1043,12 +1102,32 @@ describe('sample.routes', () => {
 
     it('returns 500 when the service throws', async () => {
       const getQuarantineActions = vi.fn().mockRejectedValue(new Error('db down'));
-      const { router } = loadRoute({ sampleServiceOverrides: { getQuarantineActions } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { getQuarantineActions, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/s1/quarantine-actions');
 
       expect(res.status).toBe(500);
+    });
+
+    // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const getQuarantineActions = vi.fn().mockResolvedValue([{ quarantineActionId: 'q1', actionStatus: 'active' }]);
+      const getSample = vi.fn().mockResolvedValue({ _id: 's1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getQuarantineActions, getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/quarantine-actions');
+
+      expect(res.status).toBe(403);
+      expect(getQuarantineActions).not.toHaveBeenCalled();
     });
   });
 
@@ -1064,7 +1143,8 @@ describe('sample.routes', () => {
 
     it('returns versioned SPREC snapshots on success', async () => {
       const getSprecProfiles = vi.fn().mockResolvedValue([{ matrixType: 'fluid', sampleType: 'BLD' }]);
-      const { router } = loadRoute({ sampleServiceOverrides: { getSprecProfiles } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { getSprecProfiles, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/s1/sprec-profiles');
@@ -1076,12 +1156,32 @@ describe('sample.routes', () => {
 
     it('returns 500 when the service throws', async () => {
       const getSprecProfiles = vi.fn().mockRejectedValue(new Error('db down'));
-      const { router } = loadRoute({ sampleServiceOverrides: { getSprecProfiles } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { getSprecProfiles, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/s1/sprec-profiles');
 
       expect(res.status).toBe(500);
+    });
+
+    // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const getSprecProfiles = vi.fn().mockResolvedValue([{ matrixType: 'fluid', sampleType: 'BLD' }]);
+      const getSample = vi.fn().mockResolvedValue({ _id: 's1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSprecProfiles, getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/sprec-profiles');
+
+      expect(res.status).toBe(403);
+      expect(getSprecProfiles).not.toHaveBeenCalled();
     });
   });
 
@@ -1726,7 +1826,8 @@ describe('sample.routes', () => {
 
     it('returns 200 with the results and logs the query', async () => {
       const getSampleResults = vi.fn().mockResolvedValue([{ fileID: 'f1' }]);
-      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { getSampleResults } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { getSampleResults, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/000000000000000000000000/results');
@@ -1738,12 +1839,32 @@ describe('sample.routes', () => {
 
     it('returns 500 when the service throws', async () => {
       const getSampleResults = vi.fn().mockRejectedValue(new Error('boom'));
-      const { router } = loadRoute({ sampleServiceOverrides: { getSampleResults } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { getSampleResults, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/000000000000000000000000/results');
 
       expect(res.status).toBe(500);
+    });
+
+    // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const getSampleResults = vi.fn().mockResolvedValue([{ fileID: 'f1' }]);
+      const getSample = vi.fn().mockResolvedValue({ _id: 's1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSampleResults, getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/results');
+
+      expect(res.status).toBe(403);
+      expect(getSampleResults).not.toHaveBeenCalled();
     });
   });
 
