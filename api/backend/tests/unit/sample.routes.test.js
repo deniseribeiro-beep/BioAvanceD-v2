@@ -1545,7 +1545,8 @@ describe('sample.routes', () => {
 
     it('returns 404 when the sample does not exist', async () => {
       const updateSample = vi.fn().mockResolvedValue(null);
-      const { router } = loadRoute({ sampleServiceOverrides: { updateSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).put('/api/samples/000000000000000000000000').send({ quantity: 1 });
@@ -1555,7 +1556,8 @@ describe('sample.routes', () => {
 
     it('returns 200 and logs the update on success', async () => {
       const updateSample = vi.fn().mockResolvedValue({ _id: '1', quantity: 1 });
-      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { updateSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).put('/api/samples/000000000000000000000000').send({ quantity: 1 });
@@ -1566,7 +1568,8 @@ describe('sample.routes', () => {
 
     it('returns 400 when the service throws', async () => {
       const updateSample = vi.fn().mockRejectedValue(new Error('invalid'));
-      const { router } = loadRoute({ sampleServiceOverrides: { updateSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).put('/api/samples/000000000000000000000000').send({ quantity: 1 });
@@ -1576,7 +1579,8 @@ describe('sample.routes', () => {
 
     it('logs a sample_release audit entry when consentStatus is SIGNED', async () => {
       const updateSample = vi.fn().mockResolvedValue({ _id: '1', consentStatus: 'SIGNED' });
-      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { updateSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app)
@@ -1594,7 +1598,8 @@ describe('sample.routes', () => {
 
     it('logs a sample_release audit entry when specimenStatus is available (case-insensitive)', async () => {
       const updateSample = vi.fn().mockResolvedValue({ _id: '1' });
-      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { updateSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app)
@@ -1609,7 +1614,8 @@ describe('sample.routes', () => {
 
     it('logs a sample_release audit entry when specimenStatus is available, with null payload fallbacks', async () => {
       const updateSample = vi.fn().mockResolvedValue({ _id: '1' });
-      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { updateSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app)
@@ -1623,6 +1629,25 @@ describe('sample.routes', () => {
           payload: expect.objectContaining({ consentStatus: null, quarantineReason: null }),
         })
       );
+    });
+
+    // #623: mirrors #340/#619's out-of-scope 403 pattern for this mutation route.
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const updateSample = vi.fn();
+      const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { updateSample, getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).put('/api/samples/000000000000000000000000').send({ quantity: 1 });
+
+      expect(res.status).toBe(403);
+      expect(updateSample).not.toHaveBeenCalled();
     });
   });
 
@@ -1638,7 +1663,8 @@ describe('sample.routes', () => {
 
     it('returns 404 when the sample does not exist', async () => {
       const deleteSample = vi.fn().mockResolvedValue(null);
-      const { router } = loadRoute({ sampleServiceOverrides: { deleteSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { deleteSample, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).delete('/api/samples/000000000000000000000000');
@@ -1648,7 +1674,8 @@ describe('sample.routes', () => {
 
     it('returns 200 and logs the deletion on success', async () => {
       const deleteSample = vi.fn().mockResolvedValue(true);
-      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { deleteSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { deleteSample, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).delete('/api/samples/000000000000000000000000');
@@ -1659,12 +1686,32 @@ describe('sample.routes', () => {
 
     it('returns 400 when the service throws', async () => {
       const deleteSample = vi.fn().mockRejectedValue(new Error('cannot delete'));
-      const { router } = loadRoute({ sampleServiceOverrides: { deleteSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { deleteSample, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).delete('/api/samples/000000000000000000000000');
 
       expect(res.status).toBe(400);
+    });
+
+    // #623: mirrors #340/#619's out-of-scope 403 pattern for this mutation route.
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const deleteSample = vi.fn();
+      const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { deleteSample, getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).delete('/api/samples/000000000000000000000000');
+
+      expect(res.status).toBe(403);
+      expect(deleteSample).not.toHaveBeenCalled();
     });
   });
 
@@ -1680,7 +1727,8 @@ describe('sample.routes', () => {
 
     it('returns 200 and logs a high-severity audit entry on success', async () => {
       const withdrawSample = vi.fn().mockResolvedValue({ withdrawnQuantity: 2, remainingQuantity: 3, movementID: 'm1' });
-      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { withdrawSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { withdrawSample, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app)
@@ -1694,7 +1742,8 @@ describe('sample.routes', () => {
 
     it('returns 400 when consent validation rejects the request', async () => {
       const consentValidatorValidateAccess = vi.fn().mockRejectedValue(new Error('no consent'));
-      const { router } = loadRoute({ consentValidatorValidateAccess });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ consentValidatorValidateAccess, sampleServiceOverrides: { getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).post('/api/samples/000000000000000000000000/withdraw').send({});
@@ -1704,12 +1753,13 @@ describe('sample.routes', () => {
 
     it('resolves the audit actor from _id/username/role and the x-forwarded-for header, with a req.t fallback message', async () => {
       const withdrawSample = vi.fn().mockResolvedValue({ withdrawnQuantity: 1, remainingQuantity: 1, movementID: 'm3' });
+      const getSample = vi.fn().mockResolvedValue(null);
       const authImpl = (req, res, next) => {
         req.user = { _id: { toString: () => 'u9' }, username: 'alt-user', role: 'Coordenador' };
         req.t = () => undefined;
         next();
       };
-      const { router } = loadRoute({ sampleServiceOverrides: { withdrawSample }, authImpl });
+      const { router } = loadRoute({ sampleServiceOverrides: { withdrawSample, getSample }, authImpl });
       const app = buildApp(router, {}, { stripReqIp: true });
 
       const res = await request(app)
@@ -1729,7 +1779,8 @@ describe('sample.routes', () => {
 
     it('falls back to req.connection.remoteAddress when req.ip and the x-forwarded-for header are both unavailable', async () => {
       const withdrawSample = vi.fn().mockResolvedValue({ withdrawnQuantity: 1, remainingQuantity: 1, movementID: 'm5' });
-      const { router } = loadRoute({ sampleServiceOverrides: { withdrawSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { withdrawSample, getSample } });
       const app = buildApp(router, {}, { stripReqIp: true });
 
       await request(app)
@@ -1738,6 +1789,25 @@ describe('sample.routes', () => {
 
       const auditInfo = withdrawSample.mock.calls[0][3];
       expect(auditInfo.ipAddress).toBeTruthy();
+    });
+
+    // #623: mirrors #340/#619's out-of-scope 403 pattern for this mutation route.
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const withdrawSample = vi.fn();
+      const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { withdrawSample, getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples/000000000000000000000000/withdraw').send({});
+
+      expect(res.status).toBe(403);
+      expect(withdrawSample).not.toHaveBeenCalled();
     });
   });
 
@@ -1753,7 +1823,8 @@ describe('sample.routes', () => {
 
     it('returns 200 and logs a high-severity audit entry on success', async () => {
       const returnSample = vi.fn().mockResolvedValue({ returnedQuantity: 1, condition: 'OK', newAvailableQuantity: 4, movementID: 'm2' });
-      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { returnSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { returnSample, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app)
@@ -1767,7 +1838,8 @@ describe('sample.routes', () => {
 
     it('returns 400 when the service throws', async () => {
       const returnSample = vi.fn().mockRejectedValue(new Error('boom'));
-      const { router } = loadRoute({ sampleServiceOverrides: { returnSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { returnSample, getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).post('/api/samples/000000000000000000000000/return').send({});
@@ -1777,12 +1849,13 @@ describe('sample.routes', () => {
 
     it('resolves the audit actor role from req.user.role and the x-forwarded-for header, with a req.t fallback message', async () => {
       const returnSample = vi.fn().mockResolvedValue({ returnedQuantity: 1, condition: 'OK', newAvailableQuantity: 1, movementID: 'm4' });
+      const getSample = vi.fn().mockResolvedValue(null);
       const authImpl = (req, res, next) => {
         req.user = { id: 'u1', name: 'Tester', role: 'Coordenador' };
         req.t = () => undefined;
         next();
       };
-      const { router } = loadRoute({ sampleServiceOverrides: { returnSample }, authImpl });
+      const { router } = loadRoute({ sampleServiceOverrides: { returnSample, getSample }, authImpl });
       const app = buildApp(router, {}, { stripReqIp: true });
 
       const res = await request(app)
@@ -1802,7 +1875,8 @@ describe('sample.routes', () => {
 
     it('falls back to req.connection.remoteAddress when req.ip and the x-forwarded-for header are both unavailable', async () => {
       const returnSample = vi.fn().mockResolvedValue({ returnedQuantity: 1, condition: 'OK', newAvailableQuantity: 1, movementID: 'm6' });
-      const { router } = loadRoute({ sampleServiceOverrides: { returnSample } });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { returnSample, getSample } });
       const app = buildApp(router, {}, { stripReqIp: true });
 
       await request(app)
@@ -1811,6 +1885,25 @@ describe('sample.routes', () => {
 
       const auditInfo = returnSample.mock.calls[0][3];
       expect(auditInfo.ipAddress).toBeTruthy();
+    });
+
+    // #623: mirrors #340/#619's out-of-scope 403 pattern for this mutation route.
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const returnSample = vi.fn();
+      const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { returnSample, getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples/000000000000000000000000/return').send({});
+
+      expect(res.status).toBe(403);
+      expect(returnSample).not.toHaveBeenCalled();
     });
   });
 

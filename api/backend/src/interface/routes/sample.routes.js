@@ -594,6 +594,7 @@ router.get('/:id', authenticate, requireOrganizationScope, async (req, res) => {
 router.post('/:id/withdraw',
   authenticate,
   requirePermission('withdrawSample'),
+  requireOrganizationScope,
   async (req, res) => {
     try {
       const db = req.app.locals.db;
@@ -601,6 +602,17 @@ router.post('/:id/withdraw',
         return res.status(503).json({
           success: false,
           error: 'Banco de dados não disponível'
+        });
+      }
+
+      // #623: mirrors #340/#619's out-of-scope 403 pattern — the scope
+      // check runs before the mutation, not just before a read.
+      const sampleForScope = await sampleService.getSample(db, req.params.id);
+      if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Esta amostra pertence a outra organização'
         });
       }
 
@@ -665,13 +677,24 @@ router.post('/:id/withdraw',
 );
 
 // Atualizar amostra
-router.put('/:id', authenticate, requirePermission('editSample'), async (req, res) => {
+router.put('/:id', authenticate, requirePermission('editSample'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({
         success: false,
         error: 'Banco de dados não disponível'
+      });
+    }
+
+    // #623: mirrors #340/#619's out-of-scope 403 pattern — the scope
+    // check runs before the mutation, not just before a read.
+    const sampleForScope = await sampleService.getSample(db, req.params.id);
+    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
       });
     }
 
@@ -737,13 +760,24 @@ router.put('/:id', authenticate, requirePermission('editSample'), async (req, re
 });
 
 // Deletar amostra
-router.delete('/:id', authenticate, requirePermission('deleteSample'), async (req, res) => {
+router.delete('/:id', authenticate, requirePermission('deleteSample'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({
         success: false,
         error: 'Banco de dados não disponível'
+      });
+    }
+
+    // #623: mirrors #340/#619's out-of-scope 403 pattern — the scope
+    // check runs before the mutation, not just before a read.
+    const sampleForScope = await sampleService.getSample(db, req.params.id);
+    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
       });
     }
 
@@ -1007,7 +1041,7 @@ router.get('/:id/results', authenticate, requireOrganizationScope, async (req, r
 });
 
 // Retornar amostra
-router.post('/:id/return', authenticate, requirePermission('withdrawSample'), async (req, res) => {
+router.post('/:id/return', authenticate, requirePermission('withdrawSample'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1017,8 +1051,19 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample'), as
       });
     }
 
+    // #623: mirrors #340/#619's out-of-scope 403 pattern — the scope
+    // check runs before the mutation, not just before a read.
+    const sampleForScope = await sampleService.getSample(db, req.params.id);
+    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
+      });
+    }
+
     const { ObjectId } = require('mongodb');
-    
+
     // Preparar informações de auditoria
     const auditInfo = {
       userId: req.user?.id || req.user?._id?.toString(),
