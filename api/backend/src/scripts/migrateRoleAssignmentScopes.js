@@ -42,6 +42,7 @@ async function migrateRoleAssignmentScopes() {
     const usersCollection = db.collection('users');
     const rolesCollection = db.collection(CANONICAL_COLLECTIONS.roles);
     const assignmentsCollection = db.collection(CANONICAL_COLLECTIONS.userRoleAssignments);
+    const organizationsCollection = db.collection(CANONICAL_COLLECTIONS.organizations);
 
     const roleDocs = await rolesCollection.find({}).toArray();
     const nonAdminRoleIds = roleDocs.filter((role) => Number(role.hierarchyLevel) !== 4).map((role) => role.roleId);
@@ -58,6 +59,7 @@ async function migrateRoleAssignmentScopes() {
 
     let assignmentsUpdated = 0;
     let assignmentsWithNullScope = 0;
+    let assignmentsWithInvalidOrganizationId = 0;
     let usersNotFound = 0;
 
     for (const assignment of candidates) {
@@ -76,9 +78,23 @@ async function migrateRoleAssignmentScopes() {
         continue;
       }
 
-      const scopeId = user.organizationId
+      let scopeId = user.organizationId
         || (Array.isArray(user.organizationIds) ? user.organizationIds[0] : null)
         || null;
+
+      // #627: this script writes scopeId via raw Mongo, bypassing
+      // rbac-assignment.service.js's #622 validateOrganizationId check
+      // entirely — same referential check inlined here so a stale/typo'd
+      // organizationId on the user doc doesn't get carried into scopeId.
+      if (scopeId) {
+        const organization = await organizationsCollection.findOne({ organizationId: scopeId });
+        if (!organization) {
+          console.log(`Assignment ${assignment.assignmentId}: organizationId ${scopeId} não corresponde a uma Organization real, gravando scopeId null.`);
+          assignmentsWithInvalidOrganizationId += 1;
+          scopeId = null;
+        }
+      }
+
       if (!scopeId) {
         assignmentsWithNullScope += 1;
       }
@@ -91,9 +107,9 @@ async function migrateRoleAssignmentScopes() {
       console.log(`Assignment ${assignment.assignmentId} (usuário ${rawUserAccountId}): scopeType=organization, scopeId=${scopeId}`);
     }
 
-    console.log(`\nMigração concluída! ${assignmentsUpdated} assignments atualizadas, ${assignmentsWithNullScope} sem organizationId resolvível, ${usersNotFound} usuários não encontrados.`);
+    console.log(`\nMigração concluída! ${assignmentsUpdated} assignments atualizadas, ${assignmentsWithNullScope} sem organizationId resolvível (${assignmentsWithInvalidOrganizationId} por organizationId inválido), ${usersNotFound} usuários não encontrados.`);
 
-    return { assignmentsUpdated, assignmentsWithNullScope, usersNotFound };
+    return { assignmentsUpdated, assignmentsWithNullScope, assignmentsWithInvalidOrganizationId, usersNotFound };
   } catch (error) {
     console.error('Erro na migração:', error);
     throw error;
