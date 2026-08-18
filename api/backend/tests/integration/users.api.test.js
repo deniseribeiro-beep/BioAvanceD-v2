@@ -116,7 +116,10 @@ describe('RF003 - POST /api/users/register', () => {
       updateOne: vi.fn(),
     });
     const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]);
-    app.locals.db = createDbMock({ users: usersCollection, ...rbacCollections });
+    const organizationsCollection = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }),
+    });
+    app.locals.db = createDbMock({ users: usersCollection, organizations: organizationsCollection, ...rbacCollections });
 
     // When
     const response = await whenRegisterUser(
@@ -134,5 +137,36 @@ describe('RF003 - POST /api/users/register', () => {
     expect(rbacCollections.userRoleAssignments.insertOne).toHaveBeenCalledWith(
       expect.objectContaining({ scopeType: 'organization', scopeId: 'org-1' })
     );
+  });
+
+  it('#617: rejeita organizationId que não resolve a uma Organization real', async () => {
+    // Given
+    const usersCollection = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(null),
+      insertOne: vi.fn(),
+      updateOne: vi.fn(),
+    });
+    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]);
+    const organizationsCollection = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(null),
+    });
+    app.locals.db = createDbMock({ users: usersCollection, organizations: organizationsCollection, ...rbacCollections });
+
+    // When
+    const response = await whenRegisterUser(
+      buildUserRegistrationPayload({
+        name: 'Usuário Org Inválida',
+        email: 'org-invalida.qa@example.com',
+        username: 'org.invalida.qa',
+        accessType: 2,
+        organizationId: 'org-inexistente',
+      })
+    );
+
+    // Then
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(String(response.body.message || '')).toContain('org-inexistente');
+    expect(usersCollection.insertOne).not.toHaveBeenCalled();
   });
 });

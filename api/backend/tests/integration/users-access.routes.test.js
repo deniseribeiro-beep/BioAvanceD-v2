@@ -115,6 +115,7 @@ describe('Users and Access routes', () => {
   let usersCollection;
   let accessCollection;
   let logsCollection;
+  let organizationsCollection;
   let db;
 
   beforeEach(() => {
@@ -138,6 +139,18 @@ describe('Users and Access routes', () => {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'log-1' }),
     };
 
+    // #617: organizationId is now validated against a real Organization at
+    // write time — default resolves any lookup as found so pre-existing
+    // tests passing a fabricated organizationId (e.g. 'org-old'/'org-new')
+    // keep working; only the dedicated #617 tests override this to null.
+    organizationsCollection = {
+      find: vi.fn(),
+      findOne: vi.fn().mockResolvedValue({ organizationId: 'default-org' }),
+      insertOne: vi.fn(),
+      updateOne: vi.fn(),
+      deleteOne: vi.fn(),
+    };
+
     const rbacCollections = buildRbacCollections([
       { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
       { userAccountId: '507f1f77bcf86cd799439012', accessType: 2 },
@@ -148,6 +161,7 @@ describe('Users and Access routes', () => {
         if (name === 'users') return usersCollection;
         if (name === 'access') return accessCollection;
         if (name === 'logs') return logsCollection;
+        if (name === 'organizations') return organizationsCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return {
           find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
@@ -215,6 +229,30 @@ describe('Users and Access routes', () => {
     expect(req.body.status).toBe('active');
     expect(req.body.phone).toBe('11998765432');
     expect(req.body.organizationId).toBeNull();
+  });
+
+  it('#617: POST /api/users/register rejeita organizationId que não resolve a uma Organization real', async () => {
+    const handler = getHandler(userRoutes, 'post', '/register');
+    organizationsCollection.findOne.mockResolvedValueOnce(null);
+    const req = createRequest({
+      body: {
+        name: 'Novo Usuário',
+        email: 'new@example.com',
+        username: 'newuser',
+        password: 'Senha@123',
+        accessType: 2,
+        organizationId: 'org-inexistente',
+      },
+    });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.payload.success).toBe(false);
+    expect(String(res.payload.message || '')).toContain('org-inexistente');
+    expect(organizationsCollection.findOne).toHaveBeenCalledWith({ organizationId: 'org-inexistente' });
   });
 
   it('POST /api/users/register deve negar usuário sem permissão', async () => {
@@ -344,6 +382,49 @@ describe('Users and Access routes', () => {
     expect(setPayload).not.toHaveProperty('accessType');
     expect(setPayload).not.toHaveProperty('roleName');
     expect(res.payload.data.roleName).toBe('Administrador');
+  });
+
+  it('#617: PUT /api/users/:id rejeita organizationId que não resolve a uma Organization real', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-3b',
+      name: 'Alvo Org Inválida',
+      email: 'alvo-org-invalida@bioavanced.com.br',
+      username: 'alvoorginvalida',
+      status: 'active',
+      accessType: 2,
+    };
+    usersCollection.findOne.mockResolvedValueOnce(targetUser);
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-3b', accessType: 2 },
+    ]);
+    const invalidOrgCollection = {
+      findOne: vi.fn().mockResolvedValue(null),
+    };
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (name === 'organizations') return invalidOrgCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-3b' },
+      body: { organizationId: 'org-inexistente' },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.payload.success).toBe(false);
+    expect(String(res.payload.message || '')).toContain('org-inexistente');
+    expect(usersCollection.updateOne).not.toHaveBeenCalled();
   });
 
   // #429: PUT /:id's `auditorRole` flag grants/revokes the additive
