@@ -74,6 +74,16 @@ router.post('/register',
         }
       }
 
+      // #617: quando informado, organizationId deve resolver a uma
+      // Organization real já cadastrada — mesma checagem que
+      // sample.service.js já faz para collectionSite (ELM-0128).
+      if (req.body.organizationId) {
+        const organization = await db.collection('organizations').findOne({ organizationId: String(req.body.organizationId) });
+        if (!organization) {
+          throw new Error(`organizationId ${req.body.organizationId} não encontrado`);
+        }
+      }
+
       const user = await authService.registerUser(db, req.body, req.user?.userID);
 
       // Registra log de criação de usuário
@@ -283,6 +293,16 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
         req.body.organizationId = req.body.organizationId.trim() || null;
       } else if (req.body.organizationId === '') {
         req.body.organizationId = null;
+      }
+    }
+
+    // #617: quando informado, organizationId deve resolver a uma
+    // Organization real já cadastrada — mesma checagem que
+    // sample.service.js já faz para collectionSite (ELM-0128).
+    if (req.body.organizationId) {
+      const organization = await db.collection('organizations').findOne({ organizationId: String(req.body.organizationId) });
+      if (!organization) {
+        throw new Error(`organizationId ${req.body.organizationId} não encontrado`);
       }
     }
 
