@@ -495,6 +495,7 @@ describe('paciente.controller', () => {
 
     it('resends notification and revalidates samples', async () => {
       vi.spyOn(patientService, 'resendConsentNotification').mockResolvedValue({ sent: true });
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       const { freshController, spy } = reloadControllerWithFreshCompliancySpy();
       const req = createReq({ params: { id: '12345678' } });
       const res = createRes();
@@ -505,7 +506,25 @@ describe('paciente.controller', () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
+    // #626: an existing patient outside the caller's organization scope
+    // 403s before the notification is resent.
+    it('returns 403 when the patient belongs to a different organization', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' });
+      const resendSpy = vi.spyOn(patientService, 'resendConsentNotification').mockResolvedValue({ sent: true });
+      const req = createReq({
+        params: { id: '12345678' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.resendConsentNotification(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(resendSpy).not.toHaveBeenCalled();
+    });
+
     it('returns 400 on service error', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       vi.spyOn(patientService, 'resendConsentNotification').mockRejectedValue(new Error('boom'));
       const req = createReq({ params: { id: '12345678' } });
       const res = createRes();
@@ -537,6 +556,7 @@ describe('paciente.controller', () => {
 
     it('updates patient and revalidates samples', async () => {
       vi.spyOn(patientService, 'updatePatient').mockResolvedValue({ participantId: '12345678' });
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       const { freshController, spy } = reloadControllerWithFreshCompliancySpy();
       const req = createReq({ params: { id: '12345678' }, body: { patientName: 'Foo' } });
       const res = createRes();
@@ -551,6 +571,7 @@ describe('paciente.controller', () => {
       const error = new Error('boom');
       error.statusCode = 422;
       vi.spyOn(patientService, 'updatePatient').mockRejectedValue(error);
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       const logErrorSpy = vi.spyOn(auditLogger, 'logError').mockResolvedValue();
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       const req = createReq({ params: { id: '12345678' }, body: {}, user: { id: 'u1' } });
@@ -564,6 +585,7 @@ describe('paciente.controller', () => {
 
     it('logs audit entry when req.user is set on success', async () => {
       vi.spyOn(patientService, 'updatePatient').mockResolvedValue({ participantId: '12345678' });
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       const { freshController, spy: complianceSpy } = reloadControllerWithFreshCompliancySpy();
       const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue();
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
@@ -581,12 +603,31 @@ describe('paciente.controller', () => {
       const error = new Error('boom');
       error.status = 418;
       vi.spyOn(patientService, 'updatePatient').mockRejectedValue(error);
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       const req = createReq({ params: { id: '12345678' }, body: {} });
       const res = createRes();
 
       await controller.atualizar(req, res);
 
       expect(res.status).toHaveBeenCalledWith(418);
+    });
+
+    // #626: an existing patient outside the caller's organization scope
+    // 403s before the mutation runs.
+    it('returns 403 when the patient belongs to a different organization', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' });
+      const updateSpy = vi.spyOn(patientService, 'updatePatient').mockResolvedValue({ participantId: '12345678' });
+      const req = createReq({
+        params: { id: '12345678' },
+        body: {},
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.atualizar(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(updateSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -601,6 +642,7 @@ describe('paciente.controller', () => {
     });
 
     it('returns 404 when patient not found', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       vi.spyOn(patientService, 'deletePatient').mockResolvedValue(null);
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
@@ -613,6 +655,7 @@ describe('paciente.controller', () => {
     });
 
     it('deletes patient successfully', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       vi.spyOn(patientService, 'deletePatient').mockResolvedValue(true);
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
@@ -624,7 +667,25 @@ describe('paciente.controller', () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
+    // #626: an existing patient outside the caller's organization scope
+    // 403s before the mutation runs.
+    it('returns 403 when the patient belongs to a different organization', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' });
+      const deleteSpy = vi.spyOn(patientService, 'deletePatient').mockResolvedValue(true);
+      const req = createReq({
+        params: { id: '12345678' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.deletar(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(deleteSpy).not.toHaveBeenCalled();
+    });
+
     it('returns 500 on service error', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       vi.spyOn(patientService, 'deletePatient').mockRejectedValue(new Error('boom'));
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'logError').mockResolvedValue();
@@ -789,7 +850,7 @@ describe('paciente.controller', () => {
 
       await controller.search(req, res);
 
-      expect(patientService.searchPatients).toHaveBeenCalledWith(req.app.locals.db, 'Foo');
+      expect(patientService.searchPatients).toHaveBeenCalledWith(req.app.locals.db, 'Foo', req.organizationScope);
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
@@ -866,6 +927,7 @@ describe('paciente.controller', () => {
     });
 
     it('returns 500 on service error', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       vi.spyOn(biomarkerObservationService, 'listPatientObservations').mockRejectedValue(new Error('boom'));
       const req = createReq({ params: { id: '12345678' } });
       const res = createRes();
@@ -873,6 +935,23 @@ describe('paciente.controller', () => {
       await controller.listBiomarkerObservations(req, res);
 
       expect(res.status).toHaveBeenCalledWith(500);
+    });
+
+    // #626: an existing patient outside the caller's organization scope
+    // 403s before observations are read.
+    it('returns 403 when the patient belongs to a different organization', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' });
+      const listSpy = vi.spyOn(biomarkerObservationService, 'listPatientObservations').mockResolvedValue({ observations: [], total: 0, limit: 50, skip: 0 });
+      const req = createReq({
+        params: { id: '12345678' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.listBiomarkerObservations(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(listSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -895,7 +974,26 @@ describe('paciente.controller', () => {
       expect(res.status).toHaveBeenCalledWith(400);
     });
 
+    // #626: an existing patient outside the caller's organization scope
+    // 403s before the observation is created.
+    it('returns 403 when the patient belongs to a different organization', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' });
+      const createSpy = vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({ _id: 'obs1' });
+      const req = createReq({
+        params: { id: '12345678' },
+        body: { biomarkerType: 'X', value: 1 },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.createBiomarkerObservation(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(createSpy).not.toHaveBeenCalled();
+    });
+
     it('creates observation with defaulted fields', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({ _id: 'obs1' });
       const req = createReq({ params: { id: '12345678' }, body: { biomarkerType: 'X', value: 1 } });
       const res = createRes();
@@ -912,6 +1010,7 @@ describe('paciente.controller', () => {
     it('returns error statusCode from service failure', async () => {
       const error = new Error('boom');
       error.statusCode = 409;
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       vi.spyOn(biomarkerObservationService, 'createObservation').mockRejectedValue(error);
       const req = createReq({ params: { id: '12345678' }, body: {} });
       const res = createRes();
@@ -922,6 +1021,7 @@ describe('paciente.controller', () => {
     });
 
     it('defaults to 400 when error has no statusCode', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       vi.spyOn(biomarkerObservationService, 'createObservation').mockRejectedValue(new Error('boom'));
       const req = createReq({ params: { id: '12345678' }, body: {} });
       const res = createRes();
@@ -932,6 +1032,7 @@ describe('paciente.controller', () => {
     });
 
     it('builds a specimen reference from specimenId when specimen is not provided', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
       vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({ _id: 'obs1' });
       const req = createReq({ params: { id: '12345678' }, body: { biomarkerType: 'X', value: 1, specimenId: ' spec-1 ' } });
       const res = createRes();

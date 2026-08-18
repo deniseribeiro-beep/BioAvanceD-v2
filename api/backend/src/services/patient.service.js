@@ -678,7 +678,7 @@ class PatientService {
    * Busca pacientes por múltiplos critérios (exceto nome e histórico clínico)
    * Permite busca por: participantId, recordNumber, birthDate, clinicalUnit, unitAcronym, icdCode, etc.
    */
-  async searchPatients(db, searchTerm) {
+  async searchPatients(db, searchTerm, organizationScope = null) {
     try {
       const patientsCollection = await this.getPatientsCollection(db);
       
@@ -768,6 +768,13 @@ class PatientService {
       // Se não há critérios, retorna vazio
       if (query.$or.length === 0) {
         return { patients: [], total: 0 };
+      }
+
+      // #626 (RF003 AC#3): org-scoped caller only searches within their
+      // scoped clinicalUnitId(s) — a separate code path from listPatients,
+      // so filtered here rather than reusing that method's own query.
+      if (organizationScope) {
+        applyOrganizationScopeFilter(query, organizationScope, 'clinicalUnitId');
       }
 
       const patients = await patientsCollection.find(query).limit(50).toArray();
