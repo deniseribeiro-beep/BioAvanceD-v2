@@ -7,8 +7,10 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 const { isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
+const sampleService = require('../../services/sample.service');
+
 // GET /api/samples/:id/miabis-compliance - MIABIS compliance check for a sample
-router.get('/:id/miabis-compliance', authenticate, async (req, res) => {
+router.get('/:id/miabis-compliance', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const sampleId = req.params.id;
     const db = req.app.locals.db;
@@ -18,6 +20,19 @@ router.get('/:id/miabis-compliance', authenticate, async (req, res) => {
         error: 'Banco de dados não disponível'
       });
     }
+
+    // #624: mirrors #340/#619/#623's out-of-scope 403 pattern — a separate
+    // getSample call purely for the scope check, since validateMiabisCompliance
+    // doesn't expose the raw sample document.
+    const sampleForScope = await sampleService.getSample(db, sampleId);
+    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
+      });
+    }
+
     const result = await validateMiabisCompliance(sampleId, db);
     return res.status(200).json(result);
   } catch (error) {
@@ -29,13 +44,25 @@ router.get('/:id/miabis-compliance', authenticate, async (req, res) => {
   }
 });
 
-router.get('/:id/compliance-graph', authenticate, async (req, res) => {
+router.get('/:id/compliance-graph', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({
         success: false,
         error: 'Banco de dados não disponível'
+      });
+    }
+
+    // #624: mirrors #340/#619/#623's out-of-scope 403 pattern — a separate
+    // getSample call purely for the scope check, since
+    // SampleGraphValidator doesn't expose the raw sample document.
+    const sampleForScope = await sampleService.getSample(db, req.params.id);
+    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
       });
     }
 
@@ -55,7 +82,6 @@ router.get('/:id/compliance-graph', authenticate, async (req, res) => {
     });
   }
 });
-const sampleService = require('../../services/sample.service');
 const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCase');
 const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
 const { getCollection } = require('../../utils/collectionResolver');
