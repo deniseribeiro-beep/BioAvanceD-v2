@@ -123,6 +123,21 @@ describe('rbac-assignment.service (#421)', () => {
     expect(active[0].roleId).toBe('role-coord');
   });
 
+  it('#616: changeUserRole preserva uma assignment additiva ativa (auditor) ao trocar o accessType', async () => {
+    const assignments = [
+      { assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', assignmentStatus: 'active', validUntil: null },
+      { assignmentId: 'a2', userAccountId: 'u1', roleId: 'role-auditor', assignmentStatus: 'active', validUntil: null },
+    ];
+    const db = buildDb({ roles, assignments });
+
+    await changeUserRole(db, { userAccountId: 'u1', accessType: 3, changedBy: 'admin1' });
+
+    const auditorAssignment = assignments.find((a) => a.assignmentId === 'a2');
+    expect(auditorAssignment.assignmentStatus).toBe('active');
+    const active = assignments.filter((a) => a.userAccountId === 'u1' && a.assignmentStatus === 'active');
+    expect(active.map((a) => a.roleId).sort()).toEqual(['role-auditor', 'role-coord'].sort());
+  });
+
   it('backfillUserRoleAssignments concede uma assignment por usuário existente a partir do accessType', async () => {
     const users = [
       { _id: { toString: () => 'u1' }, accessType: 3 },
