@@ -687,6 +687,7 @@ describe('reports.routes.js gaps', () => {
       ['samplesbypatient', '/api/reports/samplesbypatient/preview'],
       ['sampleanalysis', '/api/reports/sampleanalysis/preview'],
       ['tissueoriginhistory', '/api/reports/tissueoriginhistory/preview'],
+      ['resultado', '/api/reports/resultado/preview'],
     ])('%s: 403 quando o usuário não tem nenhuma organização atribuída', async (_label, path) => {
       const { db } = buildCollectionDb(NO_ASSIGNMENT_RBAC);
       const testApp = appWithDb(db);
@@ -700,7 +701,6 @@ describe('reports.routes.js gaps', () => {
       ['temperatura', '/api/reports/temperatura/preview'],
       ['sensor', '/api/reports/sensor/preview'],
       ['equipamento', '/api/reports/equipamento/preview'],
-      ['resultado', '/api/reports/resultado/preview'],
     ])('%s: continua 200 sem organização atribuída (tipo não escopado)', async (_label, path) => {
       const { db } = buildCollectionDb(NO_ASSIGNMENT_RBAC);
       const testApp = appWithDb(db);
@@ -754,6 +754,36 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(capturedQueries.samples).toEqual({});
+    });
+
+    // #621: Result has no organization reference of its own — scope is
+    // derived by joining through its linked Sample's collectionSite.
+    // Result.sampleID has stored either the Sample's Mongo _id (current
+    // write path, result.routes.js POST /upload) or its specimenId (older
+    // data / SampleDetailsPage.tsx's own defensive frontend lookup), so
+    // the join checks both.
+    it('resultado: filtra por amostras da organização via join sampleID -> Sample._id/specimenId', async () => {
+      const { db, capturedQueries } = buildCollectionDb({
+        ...ORG_SCOPED_RBAC,
+        samples: [{ _id: 'sample-1', specimenId: 'SPX-1', collectionSite: 'org-1' }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/resultado/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.samples).toEqual({ collectionSite: { $in: ['org-1'] } });
+      expect(capturedQueries.results).toEqual({ sampleID: { $in: ['sample-1', 'SPX-1'] } });
+    });
+
+    it('resultado: Administrador (scope global) não recebe filtro de sampleID', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ results: [{ sampleID: 'sample-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/resultado/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.results).toEqual({});
     });
   });
 });

@@ -289,21 +289,26 @@ async function buildPreviewData(db, rawType, filters = {}) {
     normalizedType === 'extracellularnetwork' ||
     typeIncludes(type, ['rede extracelular', 'extracellular network']);
 
+  const isResult = typeIncludes(type, ['resultado', 'result']);
+
   // #341 (RF003 AC#3): only report types rooted in the samples/patients
-  // collections carry an organization reference (collectionSite/
-  // clinicalUnitId) to scope by — confirmed with Dennis 2026-08-18.
-  // Temperature/sensor/equipment/result/access-log/withdrawal-history
-  // report types have no organization concept anywhere yet and are
-  // deliberately left unscoped (see the follow-up filed alongside this
-  // issue). An org-less caller only hard-403s when requesting one of the
-  // scoped types below, not universally — resolveUserOrganizationScope is
-  // deliberately only called (a real DB round-trip) when the type actually
-  // needs it, not on every report request regardless of type.
+  // collections (plus, per #621, Result — scoped via a join through its
+  // linked Sample's collectionSite) carry an organization reference to
+  // scope by — confirmed with Dennis 2026-08-18. Temperature/sensor/
+  // equipment/access-log/withdrawal-history report types, and saved
+  // Report documents themselves, have no organization concept anywhere
+  // yet and are deliberately left unscoped (see the follow-up filed
+  // alongside this issue, #621). An org-less caller only hard-403s when
+  // requesting one of the scoped types below, not universally —
+  // resolveUserOrganizationScope is deliberately only called (a real DB
+  // round-trip) when the type actually needs it, not on every report
+  // request regardless of type.
   const isScopedReportType =
     isSamplesByPatient ||
     isSampleAnalysis ||
     isTissueOriginHistory ||
     isExtracellularNetwork ||
+    isResult ||
     typeIncludes(type, ['paciente', 'patient']) ||
     typeIncludes(type, ['amostra', 'sample']);
 
@@ -576,10 +581,28 @@ async function buildPreviewData(db, rawType, filters = {}) {
     return { total, equipment, previewLimited: total > 100 };
   }
 
-  if (typeIncludes(type, ['resultado', 'result'])) {
+  if (isResult) {
     const collection = resolveCollection(db, ['results']);
-    const results = await collection.find({}).limit(100).toArray();
-    const total = await collection.countDocuments({});
+    let query = {};
+    if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
+      // #621: Result has no organization reference of its own — derive
+      // scope via a join through its linked Sample's collectionSite.
+      // Result.sampleID has stored either the Sample's Mongo _id (current
+      // write path, result.routes.js POST /upload) or its specimenId
+      // (older data), matching SampleDetailsPage.tsx's own defensive
+      // frontend join — check both so neither shape is silently dropped.
+      const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+      const scopedSamples = await samplesCollection
+        .find({ collectionSite: { $in: filters.organizationScope.organizationIds } })
+        .toArray();
+      const scopedSampleKeys = scopedSamples
+        .flatMap((sample) => [sample._id, sample.specimenId])
+        .filter((value) => value !== undefined && value !== null)
+        .map((value) => String(value));
+      query = { sampleID: { $in: scopedSampleKeys } };
+    }
+    const results = await collection.find(query).limit(100).toArray();
+    const total = await collection.countDocuments(query);
     return { total, results, previewLimited: total > 100 };
   }
 
