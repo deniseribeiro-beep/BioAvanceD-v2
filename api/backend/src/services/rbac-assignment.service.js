@@ -202,18 +202,33 @@ async function backfillUserRoleAssignments(db) {
 }
 
 /**
- * Revokes every current active assignment for `userAccountId` and grants the
- * one matching `accessType` — used when an admin edits a user's accessType
- * (`PUT /api/users/:id`), since enforcement now reads UserRoleAssignment
- * exclusively and a stale active assignment would keep the user's old
- * permissions in effect.
+ * Revokes `userAccountId`'s active accessType-derived (primary) assignment
+ * and grants the one matching the new `accessType` — used when an admin
+ * edits a user's accessType (`PUT /api/users/:id`), since enforcement now
+ * reads UserRoleAssignment exclusively and a stale active assignment would
+ * keep the user's old permissions in effect.
+ *
+ * #616: only revokes assignments whose roleCode is one of
+ * `ROLE_CODE_BY_ACCESS_TYPE`'s values — an additive role (e.g. `auditor`,
+ * #429) is left untouched, since it isn't accessType-derived and this
+ * caller has no basis to decide it should be dropped just because
+ * accessType changed.
  */
 async function changeUserRole(db, { userAccountId, accessType, changedBy, organizationId = null }) {
   const assignments = await getCollection(db, 'userRoleAssignments');
   const activeDocs = await getActiveAssignments(db, userAccountId);
 
+  const roles = await getCollection(db, 'roles');
+  const primaryRoleCodes = new Set(Object.values(ROLE_CODE_BY_ACCESS_TYPE));
+  const roleIds = [...new Set(activeDocs.map((doc) => doc.roleId))];
+  const roleDocs = roleIds.length ? await roles.find({ roleId: { $in: roleIds } }).toArray() : [];
+  const primaryRoleIds = new Set(
+    roleDocs.filter((role) => primaryRoleCodes.has(role.roleCode)).map((role) => role.roleId)
+  );
+  const docsToRevoke = activeDocs.filter((doc) => primaryRoleIds.has(doc.roleId));
+
   const now = new Date();
-  for (const doc of activeDocs) {
+  for (const doc of docsToRevoke) {
     await assignments.updateOne(
       { assignmentId: doc.assignmentId },
       { $set: { assignmentStatus: 'revoked', revokedBy: String(changedBy || 'system'), revokedAt: now, revocationReason: 'role_changed' } }
