@@ -112,17 +112,38 @@ async function findUserAccountIdsByRoleCodes(db, roleCodes) {
 }
 
 /**
+ * #622: shared organizationId referential check for every RBAC path that
+ * writes a UserRoleAssignment.scopeId — mirrors #617's route-level check
+ * (user.routes.js) but applied here so ops-script callers that bypass those
+ * routes (createFirstAdmin.js, backfillUserRoleAssignments) can't write an
+ * unvalidated scopeId either. Normalizes the same way the routes do (trim,
+ * empty string -> null) before validating a truthy value against the
+ * `organizations` collection.
+ */
+async function validateOrganizationId(db, organizationId) {
+  const normalized = organizationId == null ? null : (String(organizationId).trim() || null);
+  if (normalized == null) return null;
+
+  const organizations = await getCollection(db, 'organizations');
+  const organization = await organizations.findOne({ organizationId: normalized });
+  if (!organization) {
+    throw new Error(`organizationId ${normalized} não encontrado`);
+  }
+  return normalized;
+}
+
+/**
  * #615: resolves the scopeType/scopeId a new assignment should carry —
  * Administrador (hierarchyLevel 4) is the only bypass role and always gets
  * `global`; every other role (including additive ones like `auditor`, whose
  * roleDoc has no hierarchyLevel) is scoped to the given organizationId. The
  * single place this rule lives, so grant paths can't drift from each other.
  */
-function resolveScopeForRole(roleDoc, organizationId) {
+async function resolveScopeForRole(db, roleDoc, organizationId) {
   if (Number(roleDoc.hierarchyLevel) === 4) {
     return { scopeType: 'global', scopeId: null };
   }
-  const scopeId = organizationId == null ? null : (String(organizationId).trim() || null);
+  const scopeId = await validateOrganizationId(db, organizationId);
   return { scopeType: 'organization', scopeId };
 }
 
@@ -156,7 +177,7 @@ async function grantRoleForAccessType(db, { userAccountId, accessType, grantedBy
   // an already-assigned user/role would have it silently discarded.
   if (existing) return existing;
 
-  const { scopeType, scopeId } = resolveScopeForRole(roleDoc, organizationId);
+  const { scopeType, scopeId } = await resolveScopeForRole(db, roleDoc, organizationId);
   const doc = UserRoleAssignmentModel.create({
     userAccountId: String(userAccountId),
     roleId: roleDoc.roleId,
@@ -260,7 +281,7 @@ async function grantAdditionalRole(db, { userAccountId, roleCode, grantedBy, org
   });
   if (existing) return existing;
 
-  const { scopeType, scopeId } = resolveScopeForRole(roleDoc, organizationId);
+  const { scopeType, scopeId } = await resolveScopeForRole(db, roleDoc, organizationId);
   const doc = UserRoleAssignmentModel.create({
     userAccountId: String(userAccountId),
     roleId: roleDoc.roleId,
@@ -309,7 +330,7 @@ async function revokeAdditionalRole(db, { userAccountId, roleCode, revokedBy }) 
 async function updateAssignmentScope(db, { userAccountId, organizationId }) {
   const assignments = await getCollection(db, 'userRoleAssignments');
   const activeDocs = await getActiveAssignments(db, userAccountId);
-  const scopeId = organizationId == null ? null : (String(organizationId).trim() || null);
+  const scopeId = await validateOrganizationId(db, organizationId);
 
   const updatedAssignmentIds = [];
   for (const doc of activeDocs) {
