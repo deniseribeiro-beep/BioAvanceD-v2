@@ -1,106 +1,90 @@
 # HANDOFF
 
-**Written:** 2026-08-18, continuation session (twenty-fourth update).
-Exceptionally long sitting: user continued past the advisory budget five
-times (confirmed via explicit choices each time via `AskUserQuestion`, not
-silent overrun). **Still inside the rabbit hole**, tracker **#618**
-("organization-scope enforcement + RBAC gaps"). Eight items landed this
-sitting (#616, #617, #619, #620, #622, #623, #624, #627); #621 surfaced
-and explicitly deferred (still open) pending Dennis's design input.
+**Written:** 2026-08-18, fresh sitting (twenty-fifth update, budget reset
+to zero for this sitting per the prior sitting's own recommendation).
+**Still inside the rabbit hole**, tracker **#618** ("organization-scope
+enforcement + RBAC gaps"). User requested a specific pickup order this
+sitting: **#621 -> #602 -> #626 -> #625**. #621 landed (partial); #602
+next.
 
 ## Rabbit hole state
 
-- **Tracker:** #618, open. Original working order: #340 → #341 → #616 →
-  #617 → #602 (#340/#341 landed a prior sitting).
-- **Landed this sitting:** #616, #617, #619 (narrowed scope), #620, #622,
-  #623, #624, #627.
-- **Deferred this sitting (still open, not a fix):** #621 — surfaced via
-  AskUserQuestion, confirmed it genuinely needs Dennis's design call (no
-  organization reference exists anywhere for Result/Sensor/Equipment/
-  Temperature or the saved-Report document itself), user chose to skip it
-  for now. Comment posted on #621 documenting the two design options
-  surfaced (join Result via its Sample's collectionSite vs. a broader
-  per-entity Organization-reference design).
-- **Still queued:** #602, #621 (deferred), #625, #626.
-- **Budget note:** this sitting ran far past the ~10-point advisory
-  allowance — 8 landed items across an exceptionally long session, with
-  the stopping point surfaced to the user five times via AskUserQuestion
-  and explicitly overridden every time. The mechanism worked as designed
-  (advisory, user retains control) — not a process failure, just an
-  unusually productive/long sitting. Strongly recommend a fresh sitting's
-  budget before picking up more; if resuming immediately, at minimum
-  re-confirm with the user rather than assuming continued appetite.
+- **Tracker:** #618, open.
+- **Landed this sitting:** #621 (partial — Result report-type org-scope
+  resolved; rest split to #629).
+- **Filed this sitting:** #628 (bug: `Result.sampleID` stores
+  inconsistent shapes depending on write path), #629 (enhancement:
+  Sensor/Equipment/Temperature report types + saved Report documents
+  still unscoped, needs a design call).
+- **Still queued, in the user's stated order:** #602, #626, #625.
+- **Also open in the hole (not in this sitting's requested order, lower
+  priority):** #629 (just filed), #628 (bug, filed this sitting — not
+  itself an org-scope item, but filed against the same tracker's
+  investigation).
 
-## Issues closed this session
+## Issue closed this sitting
 
-- **#616**: `changeUserRole` preserves additive role assignments (e.g.
-  `auditor`) when `accessType` changes. Merged `142f02628`.
-- **#617**: `organizationId` on user create/edit validated against the
-  `organizations` collection. Merged `82986a0c` at `edb88624`.
-- **#619** (narrowed): sample sub-resource read routes enforce
-  organization scope. Merged `4090c0be` at `00c0349e`. Split into 4
-  follow-ups (#623-#626).
-- **#620**: `withdrawalhistory` report type now reads the real sample
-  movement ledger instead of a dead collection. Merged `bdb285dd` at
-  `3cd82baf`.
-- **#622**: `organizationId` now validated inside
-  `rbac-assignment.service.js` itself (`validateOrganizationId`, used by
-  `resolveScopeForRole` + `updateAssignmentScope`), closing the gap for
-  `createFirstAdmin.js`/`backfillUserRoleAssignments`. Merged `c1efb700`
-  at `e9c08479`. `migrateRoleAssignmentScopes.js` remained uncovered (raw
-  Mongo writes) — filed as #627, now also closed (see below).
-- **#623**: sample mutation routes (withdraw, return, PUT, DELETE) now
-  enforce organization scope. Merged `1c168230` at `21220f10`.
-- **#624**: sample `miabis-compliance`/`compliance-graph` routes now
-  enforce organization scope. Merged `5b0ea923` at `e1f63a19`.
-- **#627**: `migrateRoleAssignmentScopes.js` now validates `organizationId`
-  against the `organizations` collection before writing `scopeId` — inlined
-  the check directly in the script (raw Mongo, no
-  `rbac-assignment.service.js` dependency), falling back to `scopeId: null`
-  on a mismatch and counting it separately
-  (`assignmentsWithInvalidOrganizationId`). Merged `b041a066` at
-  `05c73cf5`.
+- **#621** (partial): `reports.routes.js`'s `resultado`/`result` report
+  type now enforces organization scope by joining through the linked
+  Sample's `collectionSite` — `Result.sampleID` references a Sample via
+  either its Mongo `_id` or `specimenId` (inconsistent, see #628), so the
+  join checks both, mirroring `SampleDetailsPage.tsx`'s own defensive
+  frontend lookup. An org-less caller now 403s on this report type like
+  the other sample/patient-rooted types. Merged `ac34bab6`
+  (`fix/621-result-report-type-org-scope` ->
+  `feature/docker-e2e-backend-integration`), pushed. Sensor/Equipment/
+  Temperature/saved-Report scoping split to **#629** (none of those
+  entities have any org-bearing reference anywhere, confirmed via a docs
+  check against dict-02/requisitos-index/F3-G09 — genuinely needs a
+  design call, not docs-answerable).
 
-## Filed this session
+## Filed this sitting
 
-- **BioAvanceD-v2#623-#627**: all now closed (see above) except #625/#626,
-  still open. Split off #619/#622 — see the #618 tracker's comment thread
-  for full descriptions. #625 = sample-file.controller.js's file family;
-  #626 = the entire patient-side half of #619's original scope.
-- **dyeallpies-skills-pack#336** (not a BioAvanceD-v2 issue):
-  `edit-branch-guard.cjs` fired correctly once this session but then
-  silently let several Edit calls through on the protected branch later
-  in the same session. **Heads up: verify `git branch --show-current`
-  before the first Edit of each new pick, don't rely solely on the
-  hook.**
-- **dyeallpies-skills-pack#337** (not a BioAvanceD-v2 issue): a recurring
-  reproduce-order slip in `fix-bugs` (product fix written before the
-  failing test) — happened for #617 and #619, did NOT happen for #620,
-  #622, #623, #624, or #627 (five in a row correctly reproduce-first once
-  the pattern was internalized). Filed with a suggested wording fix.
+- **BioAvanceD-v2#628** (bug, open): `Result.sampleID` stores either the
+  Sample's Mongo `_id` or its `specimenId` depending on write path
+  (`result.routes.js` `POST /upload` vs `POST /`) — #621's fix works
+  around it defensively but every other Result join has the same latent
+  gap. Also flags that the pre-existing `sampleanalysis` report type's
+  own Result join (`reports.routes.js` ~line 464) reads a `sample.sampleID`
+  field that doesn't exist on the canonical `Sample` model at all — likely
+  a silently-broken join, worth checking.
+- **BioAvanceD-v2#629** (enhancement, open): the un-fixable remainder of
+  #621 — Sensor/Equipment/Temperature report types and saved Report
+  documents have no organization-bearing reference anywhere, confirmed
+  via docs (not doc-answerable), needs Dennis's design call same as the
+  now-closed #621 originally did.
+- **dyeallpies-skills-pack#338** (not a BioAvanceD-v2 issue):
+  `bioavanced-v2-legacy`'s doc-authority pointer only mentions
+  `docs/architecture/`/`docs/inventory/`, not the newer, higher-authority
+  `docs/docs-7-27-2026/extracted/` that `bioavanced-v2-conventions` already
+  points to (since 2026-08-04, issue #205) — stale cross-reference between
+  two skills in the same pack. Also carries a concrete confirmed case: the
+  legacy models actually in code (Result/Sensor/Equipment/Temperature/
+  Reports) have no corresponding entity in the canonical dict-02 dictionary
+  at all.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed after every item
-  this session landed (`142f02628`, `edb88624`, `00c0349e`, `3cd82baf`,
-  `e9c08479`, `21220f10`, `e1f63a19`, `05c73cf5`). Working tree clean
-  except the gitignored/junctioned `.claude/skills/`. No stale local
-  branches — every fix/test branch this session deleted local + remote
-  after merging.
-- No Docker stack was brought up this session — all fixes are
-  backend-internal, proof bar was mocked-Mongo/mocked-Express tests.
+- On `feature/docker-e2e-backend-integration`, pushed after #621's merge
+  (`ac34bab6`). Working tree clean except the gitignored/junctioned
+  `.claude/skills/`. `fix/621-result-report-type-org-scope` merged and
+  can be deleted (not yet deleted this sitting — do so before ending the
+  session if no other work needs it).
+- Full native unit suite run once this sitting (not per-iteration
+  policy, just extra caution given the shared `reports.routes.js` file):
+  6183/6183 passed, plus both `reports.routes.gaps.test.js` and
+  `reports.api.test.js` (78 tests) green on the merged result.
+- No Docker stack brought up this sitting — backend-internal, mocked-Mongo
+  proof bar only.
 
 ## Recommended next steps
 
-No single next pick named by the user for a future sitting — recompute
-budget fresh (from zero — this session's spend doesn't carry over).
-Candidates, roughly in order of readiness:
-1. **#625** — sample-file.controller.js org-scope (medium, needs a design
-   call on which layer owns the check — the controller has no
-   rbac-assignment.service.js dependency at all currently).
-2. **#626** — patient-side org-scope (large — likely needs its own split
-   like #619 did, given it bundles sub-resource + mutation + search
-   routes across two files).
-3. **#602** — needs Dennis's design call before a fix shape exists.
-4. **#621** — needs Dennis's design call (deferred this session, two
-   options already surfaced in its comment thread).
+User explicitly named the order: **#602 next**, then **#626**, then
+**#625**. Per the user's own instruction this sitting: for any of these
+needing a design call, check `docs/` before treating it as needing
+Dennis's input (worked for #621's Result slice; #602 in particular is
+flagged in its own body as needing a product/design call on whether
+`allowedActions` becomes enforced per-verb or gets corrected/dropped as
+documentation-only — check `docs/docs-7-27-2026/extracted/` and
+`docs/architecture/` for anything on RBAC permission-catalog semantics
+before escalating).
