@@ -9,6 +9,7 @@ const logger = require('../../utils/logger');
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
 const { getCollection } = require('../../utils/collectionResolver');
+const { resolveUserOrganizationScope, isOrganizationScopeUsable } = require('../../services/rbac-assignment.service');
 
 function normalizeReport(report) {
   return {
@@ -219,6 +220,13 @@ async function buildSampleQuery(db, filters = {}) {
     conditions.push({ specimenStatus: releaseStatusToSpecimenStatus(releaseStatus) });
   }
 
+  // #341 (RF003 AC#3): org-scoped caller's sample-rooted report queries
+  // only see samples whose collectionSite is one of their scoped
+  // organizations, same field/pattern #340 wired into listSamples.
+  if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
+    conditions.push({ collectionSite: { $in: filters.organizationScope.organizationIds } });
+  }
+
   return conditions.length > 0 ? { $and: conditions } : {};
 }
 
@@ -246,6 +254,11 @@ async function getMatchingPatientIds(samplesCollection, sampleQuery) {
 }
 
 async function buildPreviewData(db, rawType, filters = {}) {
+  // #341: local copy — this function may attach organizationScope below;
+  // the /generate route persists its own `filters` object verbatim onto
+  // the stored Report document afterward, so mutating the caller's object
+  // in place would leak resolved org IDs into that stored snapshot.
+  filters = { ...filters };
   const type = decodeURIComponent(rawType || '').toLowerCase();
   const normalizedType = normalizeTypeValue(rawType);
   const isSamplesByPatient =
@@ -275,6 +288,34 @@ async function buildPreviewData(db, rawType, filters = {}) {
   const isExtracellularNetwork =
     normalizedType === 'extracellularnetwork' ||
     typeIncludes(type, ['rede extracelular', 'extracellular network']);
+
+  // #341 (RF003 AC#3): only report types rooted in the samples/patients
+  // collections carry an organization reference (collectionSite/
+  // clinicalUnitId) to scope by — confirmed with Dennis 2026-08-18.
+  // Temperature/sensor/equipment/result/access-log/withdrawal-history
+  // report types have no organization concept anywhere yet and are
+  // deliberately left unscoped (see the follow-up filed alongside this
+  // issue). An org-less caller only hard-403s when requesting one of the
+  // scoped types below, not universally — resolveUserOrganizationScope is
+  // deliberately only called (a real DB round-trip) when the type actually
+  // needs it, not on every report request regardless of type.
+  const isScopedReportType =
+    isSamplesByPatient ||
+    isSampleAnalysis ||
+    isTissueOriginHistory ||
+    isExtracellularNetwork ||
+    typeIncludes(type, ['paciente', 'patient']) ||
+    typeIncludes(type, ['amostra', 'sample']);
+
+  if (isScopedReportType) {
+    const organizationScope = await resolveUserOrganizationScope(db, filters.userAccountId);
+    if (!isOrganizationScopeUsable(organizationScope)) {
+      const scopeError = new Error('Sem organização atribuída');
+      scopeError.statusCode = 403;
+      throw scopeError;
+    }
+    filters.organizationScope = organizationScope;
+  }
 
   if (isSamplesByPatient) {
     const patientsCollection = resolveCollection(db, ['patients', 'pacientes']);
@@ -308,6 +349,16 @@ async function buildPreviewData(db, rawType, filters = {}) {
 
     if (matchingPatientIds.length > 0) {
       patientQueryParts.push({ participantId: { $in: matchingPatientIds } });
+    }
+
+    // #341: patientQueryParts is otherwise empty when no keyword/orphaCode
+    // filter is given and no sample matched — filtering only through
+    // matchingPatientIds (itself derived from the now-scoped sampleQuery)
+    // isn't enough on its own, since an empty matchingPatientIds leaves
+    // patientQuery unfiltered ({}), which would leak every organization's
+    // patients. Filter the patients collection directly too.
+    if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
+      patientQueryParts.push({ clinicalUnitId: { $in: filters.organizationScope.organizationIds } });
     }
 
     const patientQuery = patientQueryParts.length > 0 ? { $and: patientQueryParts } : {};
@@ -388,6 +439,13 @@ async function buildPreviewData(db, rawType, filters = {}) {
       patientQueryParts.push({ participantId: { $in: matchingPatientIds } });
     }
 
+    // #341: same direct-filter necessity as the samplesByPatient branch
+    // above — matchingPatientIds alone doesn't guarantee patientQuery
+    // stays restricted when it's empty.
+    if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
+      patientQueryParts.push({ clinicalUnitId: { $in: filters.organizationScope.organizationIds } });
+    }
+
     const query = patientQueryParts.length > 0 ? { $and: patientQueryParts } : {};
     const patients = await collection.find(query).limit(50).toArray();
     const total = await collection.countDocuments(query);
@@ -397,7 +455,11 @@ async function buildPreviewData(db, rawType, filters = {}) {
   if (isSampleAnalysis) {
     const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
     const resultsCollection = resolveCollection(db, ['results']);
-    const samples = await samplesCollection.find({}).limit(100).toArray();
+    const sampleAnalysisQuery =
+      filters.organizationScope && filters.organizationScope.scope === 'organization'
+        ? { collectionSite: { $in: filters.organizationScope.organizationIds } }
+        : {};
+    const samples = await samplesCollection.find(sampleAnalysisQuery).limit(100).toArray();
 
     const sampleIds = samples.map((sample) => sample.sampleID).filter((sampleID) => sampleID !== undefined && sampleID !== null);
     const results = sampleIds.length
@@ -537,7 +599,7 @@ async function buildPreviewData(db, rawType, filters = {}) {
 
   if (isTissueOriginHistory || isExtracellularNetwork) {
     const collection = resolveCollection(db, ['samples', 'amostras']);
-    const query = isExtracellularNetwork
+    const baseQuery = isExtracellularNetwork
       ? {
           $or: [
             { linkedProject: { $regex: 'extracel', $options: 'i' } },
@@ -547,6 +609,10 @@ async function buildPreviewData(db, rawType, filters = {}) {
       : {
           $or: [{ sampleOrigin: { $exists: true, $ne: null } }, { linkedProject: { $exists: true, $ne: null } }],
         };
+    const query =
+      filters.organizationScope && filters.organizationScope.scope === 'organization'
+        ? { $and: [baseQuery, { collectionSite: { $in: filters.organizationScope.organizationIds } }] }
+        : baseQuery;
 
     const samples = await collection.find(query).sort({ registrationDate: -1, createdAt: -1 }).limit(100).toArray();
     const total = await collection.countDocuments(query);
@@ -655,7 +721,7 @@ router.post('/generate', authenticate, requirePermission('viewReports'), async (
     }
 
     const reportsCollection = db.collection('reports');
-    const previewData = await buildPreviewData(db, reportType, filters);
+    const previewData = await buildPreviewData(db, reportType, { ...filters, userAccountId: req.user?.userID || req.user?._id });
     const reportID = await nextReportId(reportsCollection);
 
     const report = ReportsModel.create({
@@ -671,6 +737,9 @@ router.post('/generate', authenticate, requirePermission('viewReports'), async (
     const result = await reportsCollection.insertOne(report);
     return res.status(201).json(normalizeReport({ _id: result.insertedId, ...report }));
   } catch (error) {
+    if (error.statusCode === 403) {
+      return res.status(403).json({ error: 'Acesso negado', message: error.message });
+    }
     logger.error('Erro ao gerar relatório:', error.message || error);
     return res.status(500).json({ error: 'Erro ao gerar relatório', message: error.message });
   }
@@ -728,7 +797,7 @@ router.post('/:type/preview', authenticate, requirePermission('viewReports'), as
       return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
     }
 
-    const previewData = await buildPreviewData(db, req.params.type, req.body?.filters || {});
+    const previewData = await buildPreviewData(db, req.params.type, { ...(req.body?.filters || {}), userAccountId: req.user?.userID || req.user?._id });
     return res.status(200).json({
       success: true,
       reportType: req.params.type,
@@ -736,6 +805,9 @@ router.post('/:type/preview', authenticate, requirePermission('viewReports'), as
       data: previewData,
     });
   } catch (error) {
+    if (error.statusCode === 403) {
+      return res.status(403).json({ success: false, error: 'Acesso negado', message: error.message });
+    }
     logger.error('Erro ao gerar pré-visualização de relatório:', error.message || error);
     return res.status(500).json({ success: false, error: 'Erro ao gerar pré-visualização', message: error.message });
   }
@@ -748,13 +820,16 @@ router.get('/:type/export', authenticate, requirePermission('viewReports'), asyn
       return res.status(503).json({ error: 'Banco de dados não disponível' });
     }
 
-    const previewData = await buildPreviewData(db, req.params.type, req.query || {});
+    const previewData = await buildPreviewData(db, req.params.type, { ...(req.query || {}), userAccountId: req.user?.userID || req.user?._id });
     const csv = toCsvRows(previewData);
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename=report_${Date.now()}.csv`);
     return res.status(200).send(csv);
   } catch (error) {
+    if (error.statusCode === 403) {
+      return res.status(403).json({ error: 'Acesso negado', message: error.message });
+    }
     logger.error('Erro ao exportar relatório CSV:', error.message || error);
     return res.status(500).json({ error: 'Erro ao exportar relatório CSV', message: error.message });
   }
@@ -767,9 +842,12 @@ router.get('/:type/export/pdf', authenticate, requirePermission('viewReports'), 
       return res.status(503).json({ error: 'Banco de dados não disponível' });
     }
 
-    const previewData = await buildPreviewData(db, req.params.type, req.query || {});
+    const previewData = await buildPreviewData(db, req.params.type, { ...(req.query || {}), userAccountId: req.user?.userID || req.user?._id });
     return res.status(200).json({ success: true, format: 'pdf', data: previewData });
   } catch (error) {
+    if (error.statusCode === 403) {
+      return res.status(403).json({ error: 'Acesso negado', message: error.message });
+    }
     logger.error('Erro ao exportar relatório PDF:', error.message || error);
     return res.status(500).json({ error: 'Erro ao exportar relatório PDF', message: error.message });
   }

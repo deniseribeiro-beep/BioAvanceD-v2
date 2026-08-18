@@ -94,12 +94,23 @@ function buildDb(seedReports = []) {
   return { db, reports, reportsCollection };
 }
 
+// #341: see the identical helper's comment in reports.routes.gaps.test.js
+// — resolveUserOrganizationScope needs userRoleAssignments/roles data for
+// req.user.userID ('user-1') to resolve anything other than 'none'.
+// Default to an Administrador/'global' scope so this file's pre-existing
+// tests (none about org-scope) keep their prior unfiltered behavior.
+const DEFAULT_RBAC_COLLECTIONS = {
+  userRoleAssignments: [{ userAccountId: 'user-1', roleId: 'role-admin', assignmentStatus: 'active', validUntil: null, scopeType: 'global', scopeId: null }],
+  roles: [{ roleId: 'role-admin', hierarchyLevel: 4 }],
+};
+
 function buildCollectionDb(collections = {}) {
   const capturedQueries = {};
+  const mergedCollections = { ...DEFAULT_RBAC_COLLECTIONS, ...collections };
 
   const db = {
     collection(name) {
-      const docs = collections[name] || [];
+      const docs = mergedCollections[name] || [];
       return {
         find(query = {}) {
           capturedQueries[name] = query;
