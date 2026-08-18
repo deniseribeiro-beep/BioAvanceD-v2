@@ -29,10 +29,19 @@ function matchesQuery(doc, query = {}) {
   });
 }
 
-function buildDb({ users = [], roles = [], permissionDocs = [], assignments = [] } = {}) {
+function buildDb({ users = [], roles = [], permissionDocs = [], assignments = [], organizations } = {}) {
   const usersCollection = createCollectionMock({
     findOne: vi.fn(async (query = {}) => users.find((u) => matchesQuery(u, query)) || null),
     find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue(users) })),
+  });
+  // #622: default resolves any organizationId lookup as found, so
+  // pre-existing tests passing a fabricated organizationId (e.g. 'org-1')
+  // keep working — pass `organizations: []` to exercise the not-found path.
+  const organizationsCollection = createCollectionMock({
+    findOne: vi.fn(async (query = {}) => {
+      if (!organizations) return { organizationId: query.organizationId };
+      return organizations.find((o) => matchesQuery(o, query)) || null;
+    }),
   });
   const rolesCollection = createCollectionMock({
     findOne: vi.fn(async (query = {}) => roles.find((r) => matchesQuery(r, query)) || null),
@@ -69,6 +78,7 @@ function buildDb({ users = [], roles = [], permissionDocs = [], assignments = []
       if (name === 'roles') return rolesCollection;
       if (name === 'permissions') return permissionsCollection;
       if (name === 'userRoleAssignments') return assignmentsCollection;
+      if (name === 'organizations') return organizationsCollection;
       return createCollectionMock();
     },
   };
@@ -353,6 +363,47 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
     await updateAssignmentScope(db, { userAccountId: 'u1', organizationId: null, updatedBy: 'admin1' });
 
     expect(assignments.find((a) => a.assignmentId === 'a1').scopeId).toBeNull();
+  });
+
+  // #622: mirrors #617's route-level organizationId referential check, but
+  // inside rbac-assignment.service.js itself so ops-script callers that
+  // bypass the routes (createFirstAdmin.js, backfillUserRoleAssignments)
+  // can't write an unvalidated scopeId either.
+  it('grantRoleForAccessType rejeita organizationId que não resolve a uma Organization real', async () => {
+    const db = buildDb({ roles, assignments: [], organizations: [] });
+
+    await expect(
+      grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: 'admin1', organizationId: 'org-inexistente' })
+    ).rejects.toThrow(/organizationId/);
+  });
+
+  it('grantAdditionalRole rejeita organizationId que não resolve a uma Organization real', async () => {
+    const assignments = [{ assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', assignmentStatus: 'active', validUntil: null }];
+    const db = buildDb({ roles, assignments, organizations: [] });
+
+    await expect(
+      grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: 'admin1', organizationId: 'org-inexistente' })
+    ).rejects.toThrow(/organizationId/);
+  });
+
+  it('updateAssignmentScope rejeita organizationId que não resolve a uma Organization real', async () => {
+    const assignments = [
+      { assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', scopeType: 'organization', scopeId: 'org-1', assignmentStatus: 'active', validUntil: null },
+    ];
+    const db = buildDb({ roles, assignments, organizations: [] });
+
+    await expect(
+      updateAssignmentScope(db, { userAccountId: 'u1', organizationId: 'org-inexistente', updatedBy: 'admin1' })
+    ).rejects.toThrow(/organizationId/);
+    expect(assignments.find((a) => a.assignmentId === 'a1').scopeId).toBe('org-1');
+  });
+
+  it('grantRoleForAccessType para Administrador ignora a checagem de organizationId (bypass global, mesmo com valor inválido)', async () => {
+    const db = buildDb({ roles, assignments: [], organizations: [] });
+
+    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 4, grantedBy: 'admin1', organizationId: 'org-inexistente' });
+
+    expect(doc.scopeType).toBe('global');
   });
 
   it('resolveUserOrganizationScope retorna global quando há assignment ativa de Administrador', async () => {
