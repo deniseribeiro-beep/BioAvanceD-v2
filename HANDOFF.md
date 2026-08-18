@@ -1,17 +1,19 @@
 # HANDOFF
 
-**Written:** 2026-08-18, continuation session (twenty-first update). Long
-sitting: user continued past the advisory budget twice (confirmed via
-explicit choices, not silent overrun). **Still inside the rabbit hole**,
-tracker **#618** ("organization-scope enforcement + RBAC gaps"). Five items
-landed this sitting (#616, #617, #619, #620, #622); #621 surfaced and
-explicitly deferred (still open) pending Dennis's design input.
+**Written:** 2026-08-18, continuation session (twenty-second update). Very
+long sitting: user continued past the advisory budget three times
+(confirmed via explicit choices each time, not silent overrun). **Still
+inside the rabbit hole**, tracker **#618** ("organization-scope enforcement
++ RBAC gaps"). Six items landed this sitting (#616, #617, #619, #620,
+#622, #623); #621 surfaced and explicitly deferred (still open) pending
+Dennis's design input.
 
 ## Rabbit hole state
 
 - **Tracker:** #618, open. Original working order: #340 → #341 → #616 →
   #617 → #602 (#340/#341 landed a prior sitting).
-- **Landed this sitting:** #616, #617, #619 (narrowed scope), #620, #622.
+- **Landed this sitting:** #616, #617, #619 (narrowed scope), #620, #622,
+  #623.
 - **Deferred this sitting (still open, not a fix):** #621 — surfaced via
   AskUserQuestion, confirmed it genuinely needs Dennis's design call (no
   organization reference exists anywhere for Result/Sensor/Equipment/
@@ -19,11 +21,11 @@ explicitly deferred (still open) pending Dennis's design input.
   for now. Comment posted on #621 documenting the two design options
   surfaced (join Result via its Sample's collectionSite vs. a broader
   per-entity Organization-reference design).
-- **Still queued:** #602, #621 (deferred), #623, #624, #625, #626, #627.
+- **Still queued:** #602, #621 (deferred), #624, #625, #626, #627.
 - **Budget note:** this sitting ran far past the ~10-point advisory
-  allowance — 5 landed items across a very long session, with the
-  stopping point surfaced to the user twice via AskUserQuestion and
-  explicitly overridden both times. Strongly recommend a fresh sitting's
+  allowance — 6 landed items across a very long session, with the
+  stopping point surfaced to the user three times via AskUserQuestion and
+  explicitly overridden every time. Strongly recommend a fresh sitting's
   budget before picking up more; if resuming immediately, at minimum
   re-confirm with the user rather than assuming continued appetite.
 
@@ -45,13 +47,18 @@ explicitly deferred (still open) pending Dennis's design input.
   `createFirstAdmin.js`/`backfillUserRoleAssignments`. Merged `c1efb700`
   at `e9c08479`. `migrateRoleAssignmentScopes.js` remains uncovered (raw
   Mongo writes) — filed as #627.
+- **#623**: sample mutation routes (withdraw, return, PUT, DELETE) now
+  enforce organization scope — fetch the sample via `sampleService.getSample`
+  before the mutation runs, 403 on out-of-scope, mirroring #340/#619's
+  precedent but gating the mutation itself. Merged `1c168230` at
+  `21220f10`.
 
 ## Filed this session
 
 - **BioAvanceD-v2#623-#626**: split off #619 — see the #618 tracker's
-  comment thread for full descriptions (sample mutation routes,
-  compliance/graph routes, sample-file.controller.js's file family, and
-  the entire patient-side half).
+  comment thread for full descriptions (sample mutation routes — now
+  closed as #623 above — compliance/graph routes, sample-file.controller.js's
+  file family, and the entire patient-side half).
 - **BioAvanceD-v2#627**: `migrateRoleAssignmentScopes.js` bypasses
   `rbac-assignment.service.js` entirely (raw Mongo writes), so #622's new
   validation doesn't cover it. Low severity — script is one-time and
@@ -64,17 +71,17 @@ explicitly deferred (still open) pending Dennis's design input.
   hook.**
 - **dyeallpies-skills-pack#337** (not a BioAvanceD-v2 issue): a recurring
   reproduce-order slip in `fix-bugs` (product fix written before the
-  failing test) — happened for #617 and #619, did NOT happen for #620 or
-  #622 (both correctly reproduce-first). Filed with a suggested wording
-  fix.
+  failing test) — happened for #617 and #619, did NOT happen for #620,
+  #622, or #623 (all three correctly reproduce-first after the pattern
+  was internalized). Filed with a suggested wording fix.
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed after every item
   this session landed (`142f02628`, `edb88624`, `00c0349e`, `3cd82baf`,
-  `e9c08479`). Working tree clean except the gitignored/junctioned
-  `.claude/skills/`. No stale local branches — every fix/test branch this
-  session deleted local + remote after merging.
+  `e9c08479`, `21220f10`). Working tree clean except the
+  gitignored/junctioned `.claude/skills/`. No stale local branches — every
+  fix/test branch this session deleted local + remote after merging.
 - No Docker stack was brought up this session — all fixes are
   backend-internal, proof bar was mocked-Mongo/mocked-Express tests.
 - `migrateRoleAssignmentScopes.js` (from #615) is still unrun against any
@@ -84,16 +91,16 @@ explicitly deferred (still open) pending Dennis's design input.
 
 No single next pick named by the user for a future sitting — recompute
 budget fresh. Candidates, roughly in order of readiness:
-1. **#623** — sample mutation routes org-scope (medium, fix shape already
-   sketched).
-2. **#624** — sample compliance/graph routes org-scope (small-medium,
-   needs a quick investigation first).
-3. **#627** — migrateRoleAssignmentScopes.js validation gap (small, script
+1. **#624** — sample compliance/graph routes org-scope (small-medium,
+   needs a quick investigation first — does `validateMiabisCompliance`/
+   `SampleGraphValidator` already fetch the sample, or does the route need
+   its own separate `getSample` call for the scope check).
+2. **#627** — migrateRoleAssignmentScopes.js validation gap (small, script
    is one-time/unrun so not urgent).
-4. **#625** — sample-file.controller.js org-scope (medium, needs a design
+3. **#625** — sample-file.controller.js org-scope (medium, needs a design
    call on which layer owns the check).
-5. **#626** — patient-side org-scope (large — likely needs its own split
+4. **#626** — patient-side org-scope (large — likely needs its own split
    like #619 did).
-6. **#602** — needs Dennis's design call before a fix shape exists.
-7. **#621** — needs Dennis's design call (deferred this session, two
+5. **#602** — needs Dennis's design call before a fix shape exists.
+6. **#621** — needs Dennis's design call (deferred this session, two
    options already surfaced in its comment thread).
