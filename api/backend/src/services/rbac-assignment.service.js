@@ -342,6 +342,45 @@ async function resolveUserOrganizationScope(db, userAccountId) {
   return { scope: 'organization', organizationIds };
 }
 
+/**
+ * #340: true when scopeResult (from resolveUserOrganizationScope) lets the
+ * caller proceed at all. 'none'/'unassigned' must become a hard 403 ("no
+ * organization assigned") per the product decision confirmed 2026-08-18 —
+ * callers check this before querying/filtering anything.
+ */
+function isOrganizationScopeUsable(scopeResult) {
+  return scopeResult.scope === 'global' || scopeResult.scope === 'organization';
+}
+
+/**
+ * #340: merges scopeResult into a Mongo list query, restricting fieldName
+ * (e.g. Sample.collectionSite, Patient.clinicalUnitId) to the caller's
+ * scoped organizations. No-op for 'global' scope (Administrador bypass —
+ * every organization is visible). Caller must have already rejected an
+ * unusable scope via isOrganizationScopeUsable.
+ */
+function applyOrganizationScopeFilter(query, scopeResult, fieldName) {
+  if (scopeResult.scope === 'organization') {
+    query[fieldName] = { $in: scopeResult.organizationIds };
+  }
+  return query;
+}
+
+/**
+ * #340: true when an already-fetched record's organization reference field
+ * is within scopeResult's allowed organizations (or scope is 'global').
+ * For detail/get-by-id endpoints, which check post-fetch rather than filter
+ * a query — an out-of-scope existing record 403s rather than 404s, matching
+ * sample-file.controller.js's existing precedent. A record with no value in
+ * fieldName (never assigned an organization) is out of scope for anyone
+ * who isn't 'global'.
+ */
+function isRecordInOrganizationScope(record, scopeResult, fieldName) {
+  if (scopeResult.scope === 'global') return true;
+  const value = record && record[fieldName];
+  return Boolean(value) && scopeResult.organizationIds.includes(value);
+}
+
 module.exports = {
   ROLE_CODE_BY_ACCESS_TYPE,
   getActiveAssignments,
@@ -359,4 +398,7 @@ module.exports = {
   revokeAdditionalRole,
   updateAssignmentScope,
   resolveUserOrganizationScope,
+  isOrganizationScopeUsable,
+  applyOrganizationScopeFilter,
+  isRecordInOrganizationScope,
 };

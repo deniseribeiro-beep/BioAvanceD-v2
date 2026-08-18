@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { requireRole, requirePermission, permissions } = require('../../src/infrastructure/middleware/rbac');
+const { requireRole, requirePermission, requireOrganizationScope, permissions } = require('../../src/infrastructure/middleware/rbac');
 const auditLogger = require('../../src/utils/auditLogger');
 const { createCollectionMock } = require('../factories/db.factory');
 
@@ -241,5 +241,78 @@ describe('RBAC middleware (#421 - UserRoleAssignment -> Role -> Permission)', ()
       action: 'FORBIDDEN',
       resourceType: 'Access'
     }));
+  });
+
+  // #340 (RF003 AC#3): org-scope enforcement gate for sample/patient
+  // list+detail endpoints. Product decisions confirmed 2026-08-18: an
+  // org-less user hard-403s (not empty-list), only a hierarchyLevel-4
+  // (Administrador) assignment bypasses scoping.
+  describe('requireOrganizationScope', () => {
+    const adminRole = { roleId: 'role-admin', roleCode: 'administrador', hierarchyLevel: 4, roleStatus: 'active' };
+
+    it('deve negar acesso sem usuário autenticado', async () => {
+      await requireOrganizationScope(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('deve retornar 500 quando db indisponível', async () => {
+      req.user = { userID: 'u1' };
+
+      await requireOrganizationScope(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('deve negar com 403 quando o usuário não tem nenhuma assignment ativa (scope none)', async () => {
+      req.user = { userID: 'u1' };
+      req.app.locals.db = buildRbacDb({});
+
+      await requireOrganizationScope(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('deve negar com 403 quando a assignment organization-scoped não tem scopeId (unassigned)', async () => {
+      req.user = { userID: 'u1' };
+      req.app.locals.db = buildRbacDb({
+        roles: [coordinatorRole],
+        assignments: [{ userAccountId: 'u1', roleId: 'role-coordinator', scopeType: 'organization', scopeId: null, assignmentStatus: 'active', validUntil: null }],
+      });
+
+      await requireOrganizationScope(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('deve seguir adiante com scope global para Administrador (hierarchyLevel 4)', async () => {
+      req.user = { userID: 'u1' };
+      req.app.locals.db = buildRbacDb({
+        roles: [adminRole],
+        assignments: [{ userAccountId: 'u1', roleId: 'role-admin', scopeType: 'global', scopeId: null, assignmentStatus: 'active', validUntil: null }],
+      });
+
+      await requireOrganizationScope(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(req.organizationScope).toEqual({ scope: 'global', organizationIds: [] });
+    });
+
+    it('deve seguir adiante com scope organization e anexar organizationIds em req.organizationScope', async () => {
+      req.user = { userID: 'u1' };
+      req.app.locals.db = buildRbacDb({
+        roles: [coordinatorRole],
+        assignments: [{ userAccountId: 'u1', roleId: 'role-coordinator', scopeType: 'organization', scopeId: 'org-1', assignmentStatus: 'active', validUntil: null }],
+      });
+
+      await requireOrganizationScope(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(req.organizationScope).toEqual({ scope: 'organization', organizationIds: ['org-1'] });
+    });
   });
 });

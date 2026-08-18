@@ -8,6 +8,7 @@ const { encryptValue, decryptValue } = require('../utils/fieldEncryption');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
 const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
+const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 
 const indexedPatientCollections = new Set();
 
@@ -645,6 +646,14 @@ class PatientService {
 
       if (filters.clinicalUnit) {
         query.clinicalUnit = filters.clinicalUnit;
+      }
+
+      // #340 (RF003 AC#3): org-scoped caller sees only patients whose
+      // clinicalUnitId is one of their scoped organizations. No-op for a
+      // 'global' (Administrador) scope. Caller must resolve+attach
+      // organizationScope via rbac.js's requireOrganizationScope first.
+      if (filters.organizationScope) {
+        applyOrganizationScopeFilter(query, filters.organizationScope, 'clinicalUnitId');
       }
 
       const limit = filters.limit || 50;

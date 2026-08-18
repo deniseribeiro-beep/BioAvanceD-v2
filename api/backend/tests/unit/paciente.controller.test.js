@@ -39,6 +39,12 @@ function createReq(overrides = {}) {
     query: {},
     body: {},
     t: (key) => key,
+    // #340: in production this is attached by rbac.js's
+    // requireOrganizationScope middleware before the controller runs.
+    // These tests call the controller directly, bypassing middleware, so
+    // default to an unrestricted (Administrador-equivalent) scope — tests
+    // exercising org-scope enforcement itself override this explicitly.
+    organizationScope: { scope: 'global', organizationIds: [] },
     ...overrides
   };
 }
@@ -320,6 +326,49 @@ describe('paciente.controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(500);
     });
+
+    // #340: the operational branch builds its own raw query directly
+    // against patientsCollection (doesn't go through patientService), so
+    // the org-scope filter has to be applied here rather than inside
+    // listPatients.
+    it('restricts the operational-module raw query to clinicalUnitId $in organizationIds for an organization scope', async () => {
+      const patientsCollection = {
+        find: vi.fn().mockReturnValue({
+          limit: vi.fn().mockReturnThis(),
+          skip: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue([])
+        }),
+        countDocuments: vi.fn().mockResolvedValue(0)
+      };
+      const db = createDbMock({ patients: patientsCollection });
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const req = createReq({
+        app: { locals: { db } },
+        user: { accessType: 1, userID: 'operational-user' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.listar(req, res);
+
+      expect(patientsCollection.find).toHaveBeenCalledWith({ clinicalUnitId: { $in: ['org-1'] } }, expect.anything());
+      expect(patientsCollection.countDocuments).toHaveBeenCalledWith({ clinicalUnitId: { $in: ['org-1'] } });
+    });
+
+    it('passes organizationScope through to patientService.listPatients for the cadastro branch', async () => {
+      vi.spyOn(patientService, 'listPatients').mockResolvedValue({ patients: [], total: 0 });
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const db = createDbMock({ ...buildRbacCollections([{ userAccountId: 'cadastro-user', accessType: 4 }]) });
+      const organizationScope = { scope: 'organization', organizationIds: ['org-1'] };
+      const req = createReq({ app: { locals: { db } }, user: { accessType: 4, userID: 'cadastro-user' }, organizationScope });
+      const res = createRes();
+
+      await controller.listar(req, res);
+
+      expect(patientService.listPatients).toHaveBeenCalledWith(db, expect.objectContaining({ organizationScope }));
+    });
   });
 
   describe('buscar', () => {
@@ -385,6 +434,43 @@ describe('paciente.controller', () => {
       await controller.buscar(req, res);
 
       expect(res.status).toHaveBeenCalledWith(500);
+    });
+
+    // #340: an existing patient outside the caller's organization scope
+    // 403s rather than 404s (out-of-scope direct access is distinguishable
+    // from a nonexistent record only by the response code the frontend
+    // never relies on for that distinction), matching
+    // sample.routes.js's GET /:id sibling check.
+    it('returns 403 when the patient belongs to a different organization', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' });
+      const req = createReq({
+        params: { id: '12345678' },
+        user: { accessType: 4, userID: 'cadastro-user' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.buscar(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it('returns 200 when the patient belongs to one of the scoped organizations', async () => {
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-1' });
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const db = createDbMock({ ...buildRbacCollections([{ userAccountId: 'cadastro-user', accessType: 4 }]) });
+      const req = createReq({
+        app: { locals: { db } },
+        params: { id: '12345678' },
+        user: { accessType: 4, userID: 'cadastro-user' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.buscar(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
     });
   });
 

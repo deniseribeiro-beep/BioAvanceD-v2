@@ -16,6 +16,7 @@ const rcsAssessmentService = require('./rcs-assessment.service');
 const qualityDomain = require('./quality-domain.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const quarantineActionService = require('./quarantine-action.service');
+const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
@@ -613,6 +614,14 @@ class SampleService {
 
       if (filters.sampleType) {
         query.sampleType = filters.sampleType;
+      }
+
+      // #340 (RF003 AC#3): org-scoped caller sees only samples whose
+      // collectionSite is one of their scoped organizations. No-op for a
+      // 'global' (Administrador) scope. Caller must resolve+attach
+      // organizationScope via rbac.js's requireOrganizationScope first.
+      if (filters.organizationScope) {
+        applyOrganizationScopeFilter(query, filters.organizationScope, 'collectionSite');
       }
 
       const limit = filters.limit || 50;
