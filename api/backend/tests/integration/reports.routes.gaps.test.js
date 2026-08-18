@@ -18,12 +18,27 @@ function setCachedModule(modulePath, exportsObject) {
   };
 }
 
+// #341: resolveUserOrganizationScope (rbac-assignment.service.js, real
+// module — not stubbed like auth/rbac above) needs userRoleAssignments/
+// roles data for req.user.userID ('user-1', set by this file's own
+// `authenticate` stub) to resolve anything other than 'none'. Default to
+// an Administrador/'global'-scope assignment so every pre-existing test in
+// this file (none of which are about org-scope) keeps its prior
+// unfiltered/unblocked behavior — a test caller passes its own
+// `userRoleAssignments`/`roles` entries to exercise organization-scoped or
+// org-less behavior specifically.
+const DEFAULT_RBAC_COLLECTIONS = {
+  userRoleAssignments: [{ userAccountId: 'user-1', roleId: 'role-admin', assignmentStatus: 'active', validUntil: null, scopeType: 'global', scopeId: null }],
+  roles: [{ roleId: 'role-admin', hierarchyLevel: 4 }],
+};
+
 function buildCollectionDb(collections = {}) {
   const capturedQueries = {};
+  const mergedCollections = { ...DEFAULT_RBAC_COLLECTIONS, ...collections };
 
   const db = {
     collection(name) {
-      const docs = collections[name] || [];
+      const docs = mergedCollections[name] || [];
       return {
         find(query = {}) {
           capturedQueries[name] = query;
@@ -422,6 +437,15 @@ describe('reports.routes.js gaps', () => {
           if (name === 'samples' || name === 'amostras') {
             return { distinct: async () => [] };
           }
+          // #341: resolveUserOrganizationScope needs these two to resolve
+          // 'global' (not 'none') for req.user.userID 'user-1' — see the
+          // DEFAULT_RBAC_COLLECTIONS comment above.
+          if (name === 'userRoleAssignments') {
+            return { find: () => ({ toArray: async () => DEFAULT_RBAC_COLLECTIONS.userRoleAssignments }) };
+          }
+          if (name === 'roles') {
+            return { find: () => ({ toArray: async () => DEFAULT_RBAC_COLLECTIONS.roles }) };
+          }
           return { find: () => ({ toArray: async () => [] }), async countDocuments() { return 0; } };
         },
       };
@@ -611,5 +635,93 @@ describe('reports.routes.js gaps', () => {
 
     expect(response.status).toBe(201);
     expect(response.body.reportID).toBe(1);
+  });
+
+  // #341 (RF003 AC#3): org-scope enforcement on the report types rooted in
+  // samples/patients. Only these types resolve organizationScope at all —
+  // an org-less/unusable-scope caller still gets 200 for a non-sample-
+  // rooted type (temperature, sensor, ...), matching the product decision
+  // that those entities have no organization concept yet.
+  describe('org-scope enforcement (#341)', () => {
+    const NO_ASSIGNMENT_RBAC = { userRoleAssignments: [], roles: [] };
+    const ORG_SCOPED_RBAC = {
+      userRoleAssignments: [{ userAccountId: 'user-1', roleId: 'role-coord', assignmentStatus: 'active', validUntil: null, scopeType: 'organization', scopeId: 'org-1' }],
+      roles: [{ roleId: 'role-coord', hierarchyLevel: 3 }],
+    };
+
+    it.each([
+      ['amostra', '/api/reports/amostra/preview'],
+      ['paciente', '/api/reports/paciente/preview'],
+      ['samplesbypatient', '/api/reports/samplesbypatient/preview'],
+      ['sampleanalysis', '/api/reports/sampleanalysis/preview'],
+      ['tissueoriginhistory', '/api/reports/tissueoriginhistory/preview'],
+    ])('%s: 403 quando o usuário não tem nenhuma organização atribuída', async (_label, path) => {
+      const { db } = buildCollectionDb(NO_ASSIGNMENT_RBAC);
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post(path).send({ filters: {} });
+
+      expect(response.status).toBe(403);
+    });
+
+    it.each([
+      ['temperatura', '/api/reports/temperatura/preview'],
+      ['sensor', '/api/reports/sensor/preview'],
+      ['equipamento', '/api/reports/equipamento/preview'],
+      ['resultado', '/api/reports/resultado/preview'],
+    ])('%s: continua 200 sem organização atribuída (tipo não escopado)', async (_label, path) => {
+      const { db } = buildCollectionDb(NO_ASSIGNMENT_RBAC);
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post(path).send({ filters: {} });
+
+      expect(response.status).toBe(200);
+    });
+
+    it('amostra: filtra a query por collectionSite para um usuário organization-scoped', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ sampleID: 'S1', collectionSite: 'org-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/amostra/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.samples.$and).toEqual(
+        expect.arrayContaining([{ collectionSite: { $in: ['org-1'] } }])
+      );
+    });
+
+    it('paciente: filtra diretamente por clinicalUnitId mesmo sem keyword/orphaCode/matchingPatientIds', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, patients: [{ patientID: 'P1', clinicalUnitId: 'org-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/paciente/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.patients.$and).toEqual(
+        expect.arrayContaining([{ clinicalUnitId: { $in: ['org-1'] } }])
+      );
+    });
+
+    it('tissueoriginhistory: combina o filtro de origem com collectionSite via $and', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ sampleID: 'S1', sampleOrigin: 'Fígado', collectionSite: 'org-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/tissueoriginhistory/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.samples.$and).toEqual(
+        expect.arrayContaining([{ collectionSite: { $in: ['org-1'] } }])
+      );
+    });
+
+    it('amostra: Administrador (scope global) não recebe filtro de collectionSite', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/amostra/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.samples).toEqual({});
+    });
   });
 });
