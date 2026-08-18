@@ -2,6 +2,31 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createRequire } from 'module';
 const require2 = createRequire(import.meta.url);
 const { buildRbacCollections } = require2('../factories/rbac.factory');
+const { createCollectionMock } = require2('../factories/db.factory');
+
+function matchesAssignmentQuery(doc, query = {}) {
+  return Object.entries(query).every(([key, cond]) => {
+    if (cond && typeof cond === 'object' && '$in' in cond) return cond.$in.includes(doc[key]);
+    return doc[key] === cond;
+  });
+}
+
+// #615: a mutable userRoleAssignments mock seeded with explicit
+// scopeType/scopeId docs — buildRbacCollections' synthesized assignments
+// don't set scopeType at all, so it can't exercise updateAssignmentScope's
+// `doc.scopeType !== 'organization'` branch.
+function queryableAssignmentsMock(docs) {
+  return createCollectionMock({
+    findOne: vi.fn(async (query = {}) => docs.find((d) => matchesAssignmentQuery(d, query)) || null),
+    find: vi.fn((query = {}) => ({ toArray: vi.fn().mockResolvedValue(docs.filter((d) => matchesAssignmentQuery(d, query))) })),
+    insertOne: vi.fn(async (doc) => { docs.push(doc); return { insertedId: doc.assignmentId }; }),
+    updateOne: vi.fn(async (filter, update) => {
+      const doc = docs.find((d) => matchesAssignmentQuery(d, filter));
+      if (doc && update.$set) Object.assign(doc, update.$set);
+      return { matchedCount: doc ? 1 : 0, modifiedCount: doc ? 1 : 0 };
+    }),
+  });
+}
 
 const authServiceMock = vi.hoisted(() => ({
   registerUser: vi.fn(async (_db, body) => ({
@@ -368,6 +393,152 @@ describe('Users and Access routes', () => {
     expect(rbacCollections.userRoleAssignments.insertOne).toHaveBeenCalledWith(
       expect.objectContaining({ userAccountId: 'user-target-4', roleId: 'role-auditor', assignmentStatus: 'active' })
     );
+  });
+
+  // #615: accessType and organizationId change together -> changeUserRole's
+  // revoke+re-grant must scope the new assignment to the new organizationId.
+  it('PUT /api/users/:id com accessType e organizationId alterados escopa a nova assignment ao novo organizationId', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-5',
+      name: 'Alvo Escopo',
+      email: 'alvo-escopo@bioavanced.com.br',
+      username: 'alvoescopo',
+      status: 'active',
+      accessType: 2,
+      organizationId: 'org-old',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce({ ...targetUser, accessType: 3, organizationId: 'org-new' });
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([]);
+    const assignmentDocs = [
+      { assignmentId: 'assign-5', userAccountId: 'user-target-5', roleId: 'role-technician', scopeType: 'organization', scopeId: 'org-old', assignmentStatus: 'active', validUntil: null },
+    ];
+    const assignmentsMock = queryableAssignmentsMock(assignmentDocs);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (name === 'roles') return rbacCollections.roles;
+        if (name === 'permissions') return rbacCollections.permissions;
+        if (name === 'userRoleAssignments') return assignmentsMock;
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-5' },
+      body: { accessType: 3, organizationId: 'org-new' },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const newAssignment = assignmentDocs.find((a) => a.assignmentStatus === 'active' && a.roleId === 'role-coordinator');
+    expect(newAssignment).toBeTruthy();
+    expect(newAssignment.scopeType).toBe('organization');
+    expect(newAssignment.scopeId).toBe('org-new');
+    expect(assignmentDocs.find((a) => a.assignmentId === 'assign-5').assignmentStatus).toBe('revoked');
+  });
+
+  // #615: organizationId changes but accessType doesn't -> updateAssignmentScope
+  // resyncs the existing assignment's scopeId in place, no revoke/re-grant.
+  it('PUT /api/users/:id com apenas organizationId alterado atualiza o scopeId da assignment existente sem revogar', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-6',
+      name: 'Alvo Org',
+      email: 'alvo-org@bioavanced.com.br',
+      username: 'alvoorg',
+      status: 'active',
+      accessType: 2,
+      organizationId: 'org-old',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce({ ...targetUser, organizationId: 'org-new' });
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([]);
+    const assignmentDocs = [
+      { assignmentId: 'assign-6', userAccountId: 'user-target-6', roleId: 'role-technician', scopeType: 'organization', scopeId: 'org-old', assignmentStatus: 'active', validUntil: null },
+    ];
+    const assignmentsMock = queryableAssignmentsMock(assignmentDocs);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (name === 'roles') return rbacCollections.roles;
+        if (name === 'permissions') return rbacCollections.permissions;
+        if (name === 'userRoleAssignments') return assignmentsMock;
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-6' },
+      body: { organizationId: 'org-new' },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(assignmentDocs).toHaveLength(1); // no revoke/re-grant -- same assignment, updated in place
+    const assignment = assignmentDocs[0];
+    expect(assignment.assignmentId).toBe('assign-6');
+    expect(assignment.assignmentStatus).toBe('active');
+    expect(assignment.scopeId).toBe('org-new');
+  });
+
+  // #615: organizationId cleared to empty (route normalizes '' -> null) ->
+  // scopeId goes null, the state #340/#341's resolver reads as 'unassigned'.
+  it('PUT /api/users/:id com organizationId limpo zera o scopeId da assignment existente', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-7',
+      name: 'Alvo Limpo',
+      email: 'alvo-limpo@bioavanced.com.br',
+      username: 'alvolimpo',
+      status: 'active',
+      accessType: 2,
+      organizationId: 'org-old',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce({ ...targetUser, organizationId: null });
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([]);
+    const assignmentDocs = [
+      { assignmentId: 'assign-7', userAccountId: 'user-target-7', roleId: 'role-technician', scopeType: 'organization', scopeId: 'org-old', assignmentStatus: 'active', validUntil: null },
+    ];
+    const assignmentsMock = queryableAssignmentsMock(assignmentDocs);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (name === 'roles') return rbacCollections.roles;
+        if (name === 'permissions') return rbacCollections.permissions;
+        if (name === 'userRoleAssignments') return assignmentsMock;
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-7' },
+      body: { organizationId: '' },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(assignmentDocs[0].scopeId).toBeNull();
   });
 
   it('GET /api/access deve listar acessos', async () => {
