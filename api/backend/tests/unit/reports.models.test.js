@@ -32,6 +32,21 @@ describe('ReportsModel', () => {
     expect(created.updatedAt).toBeInstanceOf(Date);
   });
 
+  // #637: no organizationIds provided defaults to [] (unstamped/legacy),
+  // hidden from organization-scoped views per F3-G09 -- same precedent
+  // Sensor/Equipment/Temperature's own organizationId:null default set.
+  it('padroniza organizationIds para array vazio quando não informado', () => {
+    const created = ReportsModel.create({ reportType: 'samples' });
+
+    expect(created.organizationIds).toEqual([]);
+  });
+
+  it('mantém organizationIds informado', () => {
+    const created = ReportsModel.create({ reportType: 'samples', organizationIds: ['org-1', 'org-2'] });
+
+    expect(created.organizationIds).toEqual(['org-1', 'org-2']);
+  });
+
   it('valida tipos de relatório suportados', () => {
     expect(ReportsModel.validateReportType('patients')).toBe(true);
     expect(ReportsModel.validateReportType('audit')).toBe(true);

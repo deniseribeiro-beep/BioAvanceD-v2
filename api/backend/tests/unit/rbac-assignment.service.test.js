@@ -498,6 +498,31 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
         expect(isRecordInOrganizationScope({ collectionSite: null }, scope, 'collectionSite')).toBe(false);
         expect(isRecordInOrganizationScope({}, scope, 'collectionSite')).toBe(false);
       });
+
+      // #637: Report.organizationIds is an array field (a single report can
+      // span multiple scoped organizations, unlike collectionSite/
+      // organizationId's single-org fields) -- an overlap check, not
+      // strict equality/membership against a scalar.
+      describe('array-valued record field (#637)', () => {
+        it('is true when any element of the record field array overlaps the scoped organizations', () => {
+          const scope = { scope: 'organization', organizationIds: ['org-1', 'org-2'] };
+          expect(isRecordInOrganizationScope({ organizationIds: ['org-9', 'org-2'] }, scope, 'organizationIds')).toBe(true);
+        });
+
+        it('is false when no element of the record field array overlaps the scoped organizations', () => {
+          const scope = { scope: 'organization', organizationIds: ['org-1'] };
+          expect(isRecordInOrganizationScope({ organizationIds: ['org-9'] }, scope, 'organizationIds')).toBe(false);
+        });
+
+        it('is false when the record field is an empty array (unstamped/legacy)', () => {
+          const scope = { scope: 'organization', organizationIds: ['org-1'] };
+          expect(isRecordInOrganizationScope({ organizationIds: [] }, scope, 'organizationIds')).toBe(false);
+        });
+
+        it('is true for a global scope regardless of the array field', () => {
+          expect(isRecordInOrganizationScope({ organizationIds: [] }, { scope: 'global', organizationIds: [] }, 'organizationIds')).toBe(true);
+        });
+      });
     });
   });
 });

@@ -410,10 +410,20 @@ function applyOrganizationScopeFilter(query, scopeResult, fieldName) {
  * sample-file.controller.js's existing precedent. A record with no value in
  * fieldName (never assigned an organization) is out of scope for anyone
  * who isn't 'global'.
+ *
+ * #637: fieldName can also be an array field (e.g. Report.organizationIds —
+ * a single report can span multiple scoped organizations, unlike every
+ * other entity's single-org field) — checked as an overlap against
+ * scopeResult.organizationIds rather than membership of a scalar. An empty
+ * array (unstamped/legacy) behaves the same as a missing scalar: out of
+ * scope for anyone who isn't 'global'.
  */
 function isRecordInOrganizationScope(record, scopeResult, fieldName) {
   if (scopeResult.scope === 'global') return true;
   const value = record && record[fieldName];
+  if (Array.isArray(value)) {
+    return value.some((v) => scopeResult.organizationIds.includes(v));
+  }
   return Boolean(value) && scopeResult.organizationIds.includes(value);
 }
 
