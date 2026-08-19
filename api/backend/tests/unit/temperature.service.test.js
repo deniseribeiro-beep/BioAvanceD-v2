@@ -106,6 +106,54 @@ describe('temperatureService.createTemperatureReading', () => {
     expect(arg.temperatureValue).toBe(3.5);
   });
 
+  // #636: organizationId, when provided, must resolve to a real
+  // Organization -- same write-time validation shape #634/#635 used.
+  it('throws a 404 when organizationId does not resolve to a real Organization', async () => {
+    const organizations = { findOne: vi.fn().mockResolvedValue(null) };
+    const insertOne = vi.fn();
+    const db = makeDb({ temperatures: { insertOne }, organizations });
+
+    const err = await temperatureService.createTemperatureReading(db, {
+      sensorId: 's1',
+      temperatureValue: 5,
+      organizationId: 'org-inexistente'
+    }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain('org-inexistente');
+    expect(err.statusCode).toBe(404);
+    expect(organizations.findOne).toHaveBeenCalledWith({ organizationId: 'org-inexistente' });
+    expect(insertOne).not.toHaveBeenCalled();
+  });
+
+  it('creates a reading with organizationId when it resolves to a real Organization', async () => {
+    const organizations = { findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }) };
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'abc123' });
+    const db = makeDb({ temperatures: { insertOne }, organizations });
+    vi.spyOn(influxTelemetryWriteRepository, 'enqueueTemperatureReading').mockImplementation(() => {});
+
+    const result = await temperatureService.createTemperatureReading(db, {
+      sensorId: 's1',
+      temperatureValue: 5,
+      organizationId: 'org-1'
+    });
+
+    expect(result.organizationId).toBe('org-1');
+  });
+
+  it('leaves organizationId null when not provided (no backfill, unscoped/legacy by default)', async () => {
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'abc123' });
+    const db = makeDb({ temperatures: { insertOne } });
+    vi.spyOn(influxTelemetryWriteRepository, 'enqueueTemperatureReading').mockImplementation(() => {});
+
+    const result = await temperatureService.createTemperatureReading(db, {
+      sensorId: 's1',
+      temperatureValue: 5
+    });
+
+    expect(result.organizationId).toBeNull();
+  });
+
   it('propagates (rejects) when insertOne throws, and logs the error', async () => {
     const insertOne = vi.fn().mockRejectedValue(new Error('mongo down'));
     const db = makeDb({ temperatures: { insertOne } });
@@ -270,6 +318,35 @@ describe('temperatureService.getTemperatureHistory', () => {
       { $or: [{ sensorId: 'sensor-9' }, { sensorID: 'sensor-9' }] },
       { $or: [{ timestamp: { $gte: new Date(start) } }, { dateTime: { $gte: new Date(start) } }] }
     ]);
+  });
+
+  // #636 (F3-G09): an organization-scoped caller must only see readings
+  // whose organizationId is one of their scoped organizations -- a null
+  // organizationId (unscoped/legacy reading) must not be exposed.
+  it('applies an organizationId $in filter for an organization-scoped caller', async () => {
+    const findOne = vi.fn().mockResolvedValue(null);
+    const chain = makeFindChain([]);
+    const find = vi.fn().mockReturnValue(chain);
+    const countDocuments = vi.fn().mockResolvedValue(0);
+    const db = makeDb({ temperatures: { findOne, find, countDocuments } });
+
+    await temperatureService.getTemperatureHistory(db, {
+      organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+    });
+
+    expect(find).toHaveBeenCalledWith({ organizationId: { $in: ['org-1'] } });
+  });
+
+  it('does not filter by organizationId for a global-scope caller (Administrador)', async () => {
+    const findOne = vi.fn().mockResolvedValue(null);
+    const chain = makeFindChain([]);
+    const find = vi.fn().mockReturnValue(chain);
+    const countDocuments = vi.fn().mockResolvedValue(0);
+    const db = makeDb({ temperatures: { findOne, find, countDocuments } });
+
+    await temperatureService.getTemperatureHistory(db, { organizationScope: { scope: 'global' } });
+
+    expect(find).toHaveBeenCalledWith({});
   });
 
   it('passes custom limit and skip through, and uses countDocuments for total', async () => {

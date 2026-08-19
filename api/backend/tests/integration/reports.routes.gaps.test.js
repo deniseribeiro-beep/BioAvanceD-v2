@@ -713,6 +713,7 @@ describe('reports.routes.js gaps', () => {
       ['resultado', '/api/reports/resultado/preview'],
       ['sensor', '/api/reports/sensor/preview'],
       ['equipamento', '/api/reports/equipamento/preview'],
+      ['temperatura', '/api/reports/temperatura/preview'],
     ])('%s: 403 quando o usuário não tem nenhuma organização atribuída', async (_label, path) => {
       const { db } = buildCollectionDb(NO_ASSIGNMENT_RBAC);
       const testApp = appWithDb(db);
@@ -722,16 +723,12 @@ describe('reports.routes.js gaps', () => {
       expect(response.status).toBe(403);
     });
 
-    it.each([
-      ['temperatura', '/api/reports/temperatura/preview'],
-    ])('%s: continua 200 sem organização atribuída (tipo não escopado)', async (_label, path) => {
-      const { db } = buildCollectionDb(NO_ASSIGNMENT_RBAC);
-      const testApp = appWithDb(db);
-
-      const response = await request(testApp).post(path).send({ filters: {} });
-
-      expect(response.status).toBe(200);
-    });
+    // #636: every entity-rooted report type this repo currently scopes
+    // (sample/patient-rooted, Result, Sensor, Equipment, Temperature) is
+    // now covered by the it.each above -- no "deliberately unscoped"
+    // types remain in this file's own coverage (access-log/withdrawal-
+    // history are unscoped by design but tested separately elsewhere,
+    // see the #620 describe block below).
 
     it('amostra: filtra a query por collectionSite para um usuário organization-scoped', async () => {
       const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ sampleID: 'S1', collectionSite: 'org-1' }] });
@@ -763,6 +760,16 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(capturedQueries.equipment).toEqual({ organizationId: { $in: ['org-1'] } });
+    });
+
+    it('temperatura: filtra a query por organizationId para um usuário organization-scoped', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, temperature: [{ sensorId: 'S1', organizationId: 'org-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/temperatura/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.temperature).toEqual({ $and: [{ organizationId: { $in: ['org-1'] } }] });
     });
 
     it('paciente: filtra diretamente por clinicalUnitId mesmo sem keyword/orphaCode/matchingPatientIds', async () => {
