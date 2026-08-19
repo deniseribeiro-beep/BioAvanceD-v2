@@ -9,6 +9,7 @@ const { validateParticipantId } = require('../utils/patientAnonymization');
 const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
 const { GraphProjectionService } = require('./graphProjection.service');
+const participantIdentityService = require('./participantIdentity.service');
 
 const ajv = new Ajv({ allErrors: true, strict: false, removeAdditional: 'failing' });
 addFormats(ajv);
@@ -489,10 +490,12 @@ class ConsentService {
         const notificationService = require('./notification.service');
         const identityCollection = await getCollection(db, 'participantIdentities');
         for (const patient of pendingPatients) {
-          // RF005/RNF007 (#561/#564): patientName resolved via
+          // RF005/RNF007 (#561/#564/#574): patientName resolved via
           // ParticipantIdentity instead of read directly off the Patient
-          // document.
-          const identity = await identityCollection.findOne({ participantId: patient.participantId });
+          // document. decryptIdentity falls back to the ciphertext sibling
+          // once the plaintext field is dropped (#566).
+          const rawIdentity = await identityCollection.findOne({ participantId: patient.participantId });
+          const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
           const patientWithIdentity = identity ? { ...patient, patientName: identity.patientName } : patient;
 
           // Generate new consent token for each patient

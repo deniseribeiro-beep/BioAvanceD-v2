@@ -195,6 +195,31 @@ describe('eConsent.routes GET /validate/:token', () => {
     });
   });
 
+  it('resolves patientName/birthDate/identityDocument from a ciphertext-only ParticipantIdentity record (RF005/RNF007 #574)', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patient = { participantId: '12345678', name: 'Jane Doe', email: 'jane@example.com' };
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      patientName: 'Jane Doe',
+      birthDate: new Date('1990-01-20'),
+      identityDocument: '11144477735'
+    });
+    const ciphertextOnlyIdentity = { ...encrypted, patientName: null, birthDate: null, identityDocument: null };
+    const db = buildPatientDb({ patient, identity: ciphertextOnlyIdentity });
+    const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [] };
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app).get(`/e-consent/validate/${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.patient.patientName).toBe('Jane Doe');
+    expect(res.body.patient.identityDocument).toBe('11144477735');
+    expect(new Date(res.body.patient.birthDate).toISOString()).toBe(new Date('1990-01-20').toISOString());
+  });
+
   it('returns the raw patient unchanged when no ParticipantIdentity record exists yet', async () => {
     const patient = { participantId: '12345678', name: 'Jane Doe' };
     const db = buildPatientDb({ patient, identity: null });

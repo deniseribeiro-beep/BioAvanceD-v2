@@ -1,5 +1,6 @@
 const consentService = require('../services/consent.service');
 const patientService = require('../services/patient.service');
+const participantIdentityService = require('../services/participantIdentity.service');
 const logger = require('../utils/logger');
 
 class ConsentController {
@@ -26,15 +27,22 @@ class ConsentController {
           consentTemplateId: policyId
         }).project({ participantId: 1, email: 1, clinicalUnit: 1, consentNotifiedAt: 1 }).toArray();
 
-        // RF005/RNF007 (#562): patientName is civil identity — resolved via
-        // ParticipantIdentity, not read directly off Patient.
+        // RF005/RNF007 (#562/#574): patientName is civil identity — resolved via
+        // ParticipantIdentity, not read directly off Patient. Decrypted via
+        // decryptIdentity so this keeps working once the plaintext field is
+        // dropped in favor of the ciphertext-only sibling (#566).
         const identitiesCollection = db.collection('participantIdentities');
         const participantIds = pendingPatients.map((patient) => patient.participantId).filter(Boolean);
         const identities = participantIds.length > 0
           ? await identitiesCollection.find({ participantId: { $in: participantIds } })
-            .project({ participantId: 1, patientName: 1 }).toArray()
+            .project({ participantId: 1, patientName: 1, patientNameEncrypted: 1 }).toArray()
           : [];
-        const nameByParticipantId = new Map(identities.map((identity) => [identity.participantId, identity.patientName]));
+        const nameByParticipantId = new Map(
+          identities.map((identity) => {
+            const decrypted = participantIdentityService.decryptIdentity(identity);
+            return [decrypted.participantId, decrypted.patientName];
+          })
+        );
         const patientsWithNames = pendingPatients.map((patient) => ({
           ...patient,
           patientName: nameByParticipantId.get(patient.participantId) || null,
