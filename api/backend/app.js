@@ -279,6 +279,16 @@ app.use("/api/protocols", createMasterDataRouter({
   idField: "protocolId",
   model: require("./src/models/Protocol")
 }));
+app.use("/api/assays", createMasterDataRouter({
+  collectionName: "assays",
+  idField: "assayId",
+  model: require("./src/models/Assay")
+}));
+app.use("/api/datasets", createMasterDataRouter({
+  collectionName: "datasets",
+  idField: "datasetId",
+  model: require("./src/models/Dataset")
+}));
 app.use("/api/collections", createMasterDataRouter({
   collectionName: "collections",
   idField: "collectionId",
