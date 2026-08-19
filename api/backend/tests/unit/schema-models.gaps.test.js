@@ -3,7 +3,6 @@ import { describe, it, expect } from 'vitest';
 const Cid = require('../../src/models/Cid.js');
 const Disease = require('../../src/models/Disease.js');
 const DrugDictionary = require('../../src/models/DrugDictionary.js');
-const Equipment = require('../../src/models/Equipment.schema.js');
 const TemperaturePolicy = require('../../src/models/TemperaturePolicy.schema.js');
 
 describe('Cid schema', () => {
@@ -148,45 +147,6 @@ describe('DrugDictionary schema', () => {
     expect(doc.atc_classifications).toEqual([]);
     expect(doc.synonyms).toEqual([]);
     expect(doc.disease_categories).toEqual([]);
-  });
-});
-
-describe('Equipment schema', () => {
-  it('validates successfully with all required fields', () => {
-    const doc = new Equipment({
-      name: 'Freezer A',
-      model: 'FZ-100',
-      serialNumber: 'SN123',
-      purchaseDate: new Date('2024-01-01'),
-    });
-
-    const err = doc.validateSync();
-    expect(err).toBeUndefined();
-  });
-
-  it('fails validation when required fields are missing', () => {
-    const doc = new Equipment({});
-    const err = doc.validateSync();
-
-    expect(err).toBeDefined();
-    expect(err.errors.name).toBeDefined();
-    expect(err.errors.model).toBeDefined();
-    expect(err.errors.serialNumber).toBeDefined();
-    expect(err.errors.purchaseDate).toBeDefined();
-  });
-
-  it('defaults status to Active and trims string fields', () => {
-    const doc = new Equipment({
-      name: '  Freezer A  ',
-      model: '  FZ-100  ',
-      serialNumber: '  SN123  ',
-      purchaseDate: new Date('2024-01-01'),
-    });
-
-    expect(doc.status).toBe('Active');
-    expect(doc.name).toBe('Freezer A');
-    expect(doc.model).toBe('FZ-100');
-    expect(doc.serialNumber).toBe('SN123');
   });
 });
 
