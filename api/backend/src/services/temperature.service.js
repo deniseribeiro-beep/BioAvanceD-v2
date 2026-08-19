@@ -3,6 +3,25 @@ const PolicyModel = require('../models/Policy');
 const logger = require('../utils/logger');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
 const notificationServiceV2 = require('./NotificationService');
+const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
+
+function createTemperatureValidationError(message, statusCode = 422) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+// #636: mirrors sample.service.js's/sensor.service.js's own organizationId
+// validation -- when provided, it must resolve to a real Organization.
+async function assertOrganizationIdResolves(db, organizationId) {
+  if (organizationId === undefined || organizationId === null || organizationId === '') {
+    return;
+  }
+  const organization = await db.collection('organizations').findOne({ organizationId: String(organizationId) });
+  if (!organization) {
+    throw createTemperatureValidationError(`organizationId ${organizationId} não encontrado`, 404);
+  }
+}
 
 /**
  * Service de Temperatura
@@ -15,6 +34,7 @@ class TemperatureService {
       if (!validation.isValid) {
         throw new Error(validation.errors.join(', '));
       }
+      await assertOrganizationIdResolves(db, temperatureData.organizationId);
 
       const temperaturesCollection = db.collection('temperatures');
       const temperature = TemperatureModel.create(temperatureData);
@@ -141,6 +161,14 @@ class TemperatureService {
             { dateTime: dateQuery }
           ];
         }
+      }
+
+      // #636 (F3-G09): org-scoped caller sees only readings whose
+      // organizationId is one of their scoped organizations. No-op for a
+      // 'global' (Administrador) scope. Caller must resolve+attach
+      // organizationScope via rbac.js's requireOrganizationScope first.
+      if (filters.organizationScope) {
+        applyOrganizationScopeFilter(query, filters.organizationScope, 'organizationId');
       }
 
       const limit = filters.limit || 1000;

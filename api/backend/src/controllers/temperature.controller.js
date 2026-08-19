@@ -1,6 +1,7 @@
 const temperatureService = require('../services/temperature.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
+const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
 
 /**
  * Controller de Temperatura
@@ -44,6 +45,14 @@ class TemperatureController {
       });
     } catch (error) {
       logger.error('Erro ao registrar temperatura:', error.message);
+      // #636: organizationId lookup failures throw statusCode:404.
+      if (error.statusCode === 404) {
+        return res.status(404).json({
+          success: false,
+          error: error.message,
+          message: error.message
+        });
+      }
       return res.status(400).json({
         success: false,
         error: 'Erro ao registrar temperatura',
@@ -70,7 +79,8 @@ class TemperatureController {
         startDate: req.query.startDate,
         endDate: req.query.endDate,
         limit: parseInt(req.query.limit) || 1000,
-        skip: parseInt(req.query.skip) || 0
+        skip: parseInt(req.query.skip) || 0,
+        organizationScope: req.organizationScope
       };
 
       const result = await temperatureService.getTemperatureHistory(db, filters);
@@ -131,7 +141,8 @@ class TemperatureController {
       const filters = {
         sensorId: req.query.sensorId,
         limit: parseInt(req.query.limit) || 100,
-        skip: parseInt(req.query.skip) || 0
+        skip: parseInt(req.query.skip) || 0,
+        organizationScope: req.organizationScope
       };
 
       const result = await temperatureService.getTemperatureHistory(db, filters);
@@ -168,6 +179,17 @@ class TemperatureController {
         return res.status(404).json({
           success: false,
           error: 'Leitura não encontrada'
+        });
+      }
+
+      // #636 (F3-G09): mirrors sensor.controller.js's own out-of-scope
+      // 403 pattern -- a null organizationId (unscoped/legacy reading) is
+      // out of scope for anyone but a global caller.
+      if (req.organizationScope && !isRecordInOrganizationScope(reading, req.organizationScope, 'organizationId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Esta leitura pertence a outra organização'
         });
       }
 
@@ -210,7 +232,8 @@ class TemperatureController {
 
       const result = await temperatureService.getTemperatureHistory(db, {
         ...filters,
-        limit: 1000
+        limit: 1000,
+        organizationScope: req.organizationScope
       });
 
       // Retorna os dados no formato esperado

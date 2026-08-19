@@ -55,6 +55,19 @@ describe('temperature.controller.createReading', () => {
       message: 'invalid payload',
     });
   });
+
+  // #636: organizationId lookup failures throw statusCode:404.
+  it('returns 404 when creation throws a statusCode:404 error (organizationId not found)', async () => {
+    const notFound = new Error('organizationId org-x não encontrado');
+    notFound.statusCode = 404;
+    vi.spyOn(temperatureService, 'createTemperatureReading').mockRejectedValue(notFound);
+    const req = { app: { locals: { db: {} } }, body: { organizationId: 'org-x' } };
+    const res = buildRes();
+
+    await temperatureController.createReading(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
 });
 
 describe('temperature.controller.getHistory', () => {
@@ -98,6 +111,21 @@ describe('temperature.controller.getHistory', () => {
       error: 'Erro ao buscar histórico',
       message: 'boom',
     });
+  });
+
+  // #636: req.organizationScope must reach the service to filter/gate.
+  it('passes req.organizationScope through to getTemperatureHistory', async () => {
+    vi.spyOn(temperatureService, 'getTemperatureHistory').mockResolvedValue({ items: [] });
+    const scope = { scope: 'organization', organizationIds: ['org-1'] };
+    const req = { app: { locals: { db: {} } }, query: {}, organizationScope: scope };
+    const res = buildRes();
+
+    await temperatureController.getHistory(req, res);
+
+    expect(temperatureService.getTemperatureHistory).toHaveBeenCalledWith(
+      req.app.locals.db,
+      expect.objectContaining({ organizationScope: scope })
+    );
   });
 });
 
@@ -177,6 +205,20 @@ describe('temperature.controller.getAll', () => {
       message: 'boom',
     });
   });
+
+  it('passes req.organizationScope through to getTemperatureHistory', async () => {
+    vi.spyOn(temperatureService, 'getTemperatureHistory').mockResolvedValue({ items: [] });
+    const scope = { scope: 'organization', organizationIds: ['org-1'] };
+    const req = { app: { locals: { db: {} } }, query: {}, organizationScope: scope };
+    const res = buildRes();
+
+    await temperatureController.getAll(req, res);
+
+    expect(temperatureService.getTemperatureHistory).toHaveBeenCalledWith(
+      req.app.locals.db,
+      expect.objectContaining({ organizationScope: scope })
+    );
+  });
 });
 
 describe('temperature.controller.getById', () => {
@@ -224,6 +266,43 @@ describe('temperature.controller.getById', () => {
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json.mock.calls[0][0].success).toBe(false);
     expect(res.json.mock.calls[0][0].error).toBe('Erro ao buscar leitura');
+  });
+
+  // #636 (F3-G09): mirrors sensor.controller.js's own out-of-scope 403
+  // pattern -- an org-scoped caller fetching a reading outside their
+  // scoped organizations (including organizationId:null, unscoped/
+  // legacy) gets 403, not the reading's data.
+  it('returns 403 when the reading is outside the caller organizationScope', async () => {
+    const fakeReading = { _id: '507f1f77bcf86cd799439011', organizationId: 'org-other' };
+    const findOne = vi.fn().mockResolvedValue(fakeReading);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const req = {
+      app: { locals: { db } },
+      params: { id: '507f1f77bcf86cd799439011' },
+      organizationScope: { scope: 'organization', organizationIds: ['org-1'] },
+    };
+    const res = buildRes();
+
+    await temperatureController.getById(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('returns the reading when it is within the caller organizationScope', async () => {
+    const fakeReading = { _id: '507f1f77bcf86cd799439011', organizationId: 'org-1' };
+    const findOne = vi.fn().mockResolvedValue(fakeReading);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const req = {
+      app: { locals: { db } },
+      params: { id: '507f1f77bcf86cd799439011' },
+      organizationScope: { scope: 'organization', organizationIds: ['org-1'] },
+    };
+    const res = buildRes();
+
+    await temperatureController.getById(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: fakeReading });
   });
 });
 
@@ -288,5 +367,19 @@ describe('temperature.controller.getControl', () => {
       message: 'boom',
     });
     expect(req.t).toHaveBeenCalledWith('errors.serverError');
+  });
+
+  it('passes req.organizationScope through to getTemperatureHistory', async () => {
+    vi.spyOn(temperatureService, 'getTemperatureHistory').mockResolvedValue({ temperatures: [] });
+    const scope = { scope: 'organization', organizationIds: ['org-1'] };
+    const req = { app: { locals: { db: {} } }, query: {}, organizationScope: scope };
+    const res = buildRes();
+
+    await temperatureController.getControl(req, res);
+
+    expect(temperatureService.getTemperatureHistory).toHaveBeenCalledWith(
+      req.app.locals.db,
+      expect.objectContaining({ organizationScope: scope })
+    );
   });
 });

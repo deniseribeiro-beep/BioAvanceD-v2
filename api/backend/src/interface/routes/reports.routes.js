@@ -291,26 +291,26 @@ async function buildPreviewData(db, rawType, filters = {}) {
 
   const isResult = typeIncludes(type, ['resultado', 'result']);
 
-  // #634/#635: Sensor.organizationId and Equipment.organizationId now
-  // exist (split from #621/#629) — both report types moved from the
-  // unscoped bucket below into the scoped one. Temperature stays
-  // unscoped until #636 lands.
+  // #634/#635/#636: Sensor/Equipment/Temperature.organizationId now all
+  // exist (split from #621/#629) — every one moved from the unscoped
+  // bucket below into the scoped one.
   const isSensorReportType = typeIncludes(type, ['sensor']);
   const isEquipmentReportType = typeIncludes(type, ['equipamento', 'equipment']);
+  const isTemperatureReportType = typeIncludes(type, ['temperatura', 'temperature']);
 
   // #341 (RF003 AC#3): only report types rooted in the samples/patients
   // collections (plus, per #621, Result — scoped via a join through its
-  // linked Sample's collectionSite; per #634/#635, Sensor/Equipment —
-  // scoped directly by their own organizationId) carry an organization
-  // reference to scope by — confirmed with Dennis 2026-08-18. Temperature/
-  // access-log/withdrawal-history report types, and saved Report
-  // documents themselves, have no organization concept anywhere yet and
-  // are deliberately left unscoped (see the follow-up filed alongside
-  // this issue, #621, and its #629/#634-#637 split). An org-less caller
-  // only hard-403s when requesting one of the scoped types below, not
-  // universally — resolveUserOrganizationScope is deliberately only
-  // called (a real DB round-trip) when the type actually needs it, not on
-  // every report request regardless of type.
+  // linked Sample's collectionSite; per #634/#635/#636, Sensor/Equipment/
+  // Temperature — scoped directly by their own organizationId) carry an
+  // organization reference to scope by — confirmed with Dennis
+  // 2026-08-18. access-log/withdrawal-history report types, and saved
+  // Report documents themselves, have no organization concept anywhere
+  // yet and are deliberately left unscoped (see the follow-up filed
+  // alongside this issue, #621, and its #629/#634-#637 split). An
+  // org-less caller only hard-403s when requesting one of the scoped
+  // types below, not universally — resolveUserOrganizationScope is
+  // deliberately only called (a real DB round-trip) when the type
+  // actually needs it, not on every report request regardless of type.
   const isScopedReportType =
     isSamplesByPatient ||
     isSampleAnalysis ||
@@ -319,6 +319,7 @@ async function buildPreviewData(db, rawType, filters = {}) {
     isResult ||
     isSensorReportType ||
     isEquipmentReportType ||
+    isTemperatureReportType ||
     typeIncludes(type, ['paciente', 'patient']) ||
     typeIncludes(type, ['amostra', 'sample']);
 
@@ -532,7 +533,7 @@ async function buildPreviewData(db, rawType, filters = {}) {
     return { total, samples, previewLimited: total > 100 };
   }
 
-  if (typeIncludes(type, ['temperatura', 'temperature'])) {
+  if (isTemperatureReportType) {
     const collection = resolveCollection(db, ['temperature', 'temperatures']);
     const dateRange = buildDateQuery(filters);
     const queryParts = [];
@@ -549,6 +550,12 @@ async function buildPreviewData(db, rawType, filters = {}) {
           { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
         ],
       });
+    }
+
+    // #636 (F3-G09): org-scoped caller sees only readings whose
+    // organizationId is one of their scoped organizations.
+    if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
+      queryParts.push({ organizationId: { $in: filters.organizationScope.organizationIds } });
     }
 
     const query = queryParts.length > 0 ? { $and: queryParts } : {};
