@@ -7,6 +7,7 @@ import fs from 'fs';
 const require2 = createRequire(import.meta.url);
 const importService = require2('../../src/services/import.service');
 const notificationService = require2('../../src/services/notification.service');
+const participantIdentityService = require2('../../src/services/participantIdentity.service');
 
 const tmpFiles = [];
 
@@ -140,6 +141,46 @@ describe('ImportService.importPatients (JSON)', () => {
       patientName: 'Maria Silva',
       identityDocument: '12345678900',
     });
+  });
+
+  it('dedups via identityDocumentHash (RF005/RNF007 #574), matching a record with no plaintext-queryable identityDocument left', async () => {
+    const filePath = writeTmpFile('hash-match.json', JSON.stringify(validPatient()));
+    const expectedHash = participantIdentityService.computeBlindIndex('identityDocument', '12345678900');
+    let capturedQuery = null;
+    const patientsCollection = {
+      inserted: [],
+      updates: [],
+      findOne: async () => ({ _id: 'existing-1', participantId: '10203040', birthDate: '1985-05-20' }),
+      insertOne: async (doc) => { patientsCollection.inserted.push(doc); return { insertedId: 'generated-id' }; },
+      updateOne: async (query, update) => { patientsCollection.updates.push({ query, update }); return { modifiedCount: 1 }; },
+    };
+    const identitiesCollection = {
+      inserted: [],
+      updates: [],
+      findOne: async (query) => {
+        capturedQuery = query;
+        // Only the identityDocumentHash branch of the $or matches -- no
+        // record has a plaintext identityDocument to match on anymore.
+        const hashCondition = query.$or?.find((c) => c.identityDocumentHash);
+        return hashCondition?.identityDocumentHash === expectedHash
+          ? { participantId: '10203040', identityDocumentHash: expectedHash }
+          : null;
+      },
+      insertOne: async (doc) => { identitiesCollection.inserted.push(doc); return { insertedId: 'generated-id' }; },
+      updateOne: async (query, update) => { identitiesCollection.updates.push({ query, update }); return { modifiedCount: 1 }; },
+    };
+
+    const result = await importService.importPatients(
+      makeDb({ patients: patientsCollection, participantIdentities: identitiesCollection }),
+      { path: filePath, originalname: 'hash-match.json' }
+    );
+
+    expect(result.success).toBe(1);
+    expect(capturedQuery.$or).toEqual(
+      expect.arrayContaining([{ identityDocumentHash: expectedHash }])
+    );
+    expect(patientsCollection.updates).toHaveLength(1);
+    expect(patientsCollection.updates[0].update.$set.participantId).toBe('10203040');
   });
 
   it('records a merge error when birthDate conflicts with the existing record, without touching ParticipantIdentity', async () => {

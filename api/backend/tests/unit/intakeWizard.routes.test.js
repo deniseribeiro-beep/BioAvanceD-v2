@@ -957,8 +957,42 @@ function defaultStorageContainersFindOne({ _id }) {
 
       expect(res.status).toBe(200);
       expect(res.body.matched).toBe(true);
+      // RF005/RNF007 (#574): the day-range condition is now one branch of an
+      // $or alongside birthDateHash, not the top-level query.
       expect(identityFind).toHaveBeenCalledWith(
-        expect.objectContaining({ birthDate: expect.objectContaining({ $gte: expect.any(Date), $lt: expect.any(Date) }) })
+        expect.objectContaining({
+          $or: expect.arrayContaining([
+            expect.objectContaining({ birthDate: expect.objectContaining({ $gte: expect.any(Date), $lt: expect.any(Date) }) }),
+          ]),
+        })
+      );
+    });
+
+    it('matches by birthDateHash (RF005/RNF007 #574) when the candidate has no plaintext-queryable birthDate range hit needed', async () => {
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      const birthDate = new Date(2000, 1, 1);
+      const expectedHash = participantIdentityService.computeBlindIndex('birthDate', birthDate);
+      const encrypted = participantIdentityService.encryptIdentityFields({
+        participantId: '87654321',
+        patientName: 'João Ção',
+        birthDate,
+      });
+      const { getCollectionImpl, identityFind } = makeIdentityCollectionRouter({
+        identityCandidates: [{ ...encrypted, patientName: null, birthDate: null }],
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .get('/api/intake-wizard/patient-match')
+        .query({ patientName: 'João Ção', birthDate: '01/02/2000' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.matched).toBe(true);
+      expect(identityFind).toHaveBeenCalledWith(
+        expect.objectContaining({
+          $or: expect.arrayContaining([{ birthDateHash: expectedHash }]),
+        })
       );
     });
 

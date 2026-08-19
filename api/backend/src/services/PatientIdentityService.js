@@ -1,5 +1,9 @@
 const { getCollection } = require('../utils/collectionResolver');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
+// Named distinctly from this file's own `participantIdentityService` class
+// below (a pre-existing, unrelated same-name collision between the two
+// files -- see participantIdentity.service.js's own top-of-file comment).
+const identityCryptoService = require('./participantIdentity.service');
 
 function normalizeString(value) {
   return String(value || '').trim();
@@ -59,8 +63,21 @@ class participantIdentityService {
     if (!matchedParticipantId) {
       const startOfDay = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
       const endOfDay = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), startOfDay.getDate() + 1);
-      const candidates = await identities.find({ birthDate: { $gte: startOfDay, $lt: endOfDay } }).toArray();
-      const matchedIdentity = candidates.find((candidate) => normalizeName(candidate.patientName) === normalizedName);
+      // RF005/RNF007 (#574): birthDateHash lets this narrow-by-day-of-birth
+      // match without a plaintext range query once birthDate is eventually
+      // dropped; the range condition stays as a fallback for records
+      // written before the hash sibling existed.
+      const birthDateHash = identityCryptoService.computeBlindIndex('birthDate', birthDate);
+      const dateOrConditions = birthDateHash
+        ? [{ birthDateHash }, { birthDate: { $gte: startOfDay, $lt: endOfDay } }]
+        : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
+      const candidates = await identities.find({ $or: dateOrConditions }).toArray();
+      const matchedIdentity = candidates.find((rawCandidate) => {
+        // patientName is civil identity -- decrypt before comparing so this
+        // keeps matching once the plaintext field is eventually dropped.
+        const candidate = identityCryptoService.decryptIdentity(rawCandidate);
+        return normalizeName(candidate.patientName) === normalizedName;
+      });
       if (matchedIdentity) {
         matchedParticipantId = matchedIdentity.participantId;
       }

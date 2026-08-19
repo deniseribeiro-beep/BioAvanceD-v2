@@ -1,5 +1,5 @@
 const { getCollection } = require('../utils/collectionResolver');
-const { encryptValue, decryptValue } = require('../utils/fieldEncryption');
+const { encryptValue, decryptValue, hmacBlindIndex } = require('../utils/fieldEncryption');
 
 // RF005/RNF007 (#560): read access to ParticipantIdentity, the segregated
 // civil-identity collection created by #363. Kept separate from
@@ -50,7 +50,57 @@ class ParticipantIdentityService {
       doc.encryptionKeyVersion = keyVersion;
     }
 
+    // RF005/RNF007 (#574): blind-index siblings for the two fields queried
+    // by exact/range match elsewhere (identityDocument dedup, birthDate
+    // day-range matching) -- ciphertext itself can't be queried, so these
+    // let consumers query without touching plaintext going forward.
+    const hashFieldMap = this.getHashFieldMap();
+    for (const [plainField, hashField] of Object.entries(hashFieldMap)) {
+      if (!Object.prototype.hasOwnProperty.call(doc, plainField) || doc[plainField] === null || doc[plainField] === undefined || doc[plainField] === '') {
+        continue;
+      }
+
+      const hash = this.computeBlindIndex(plainField, doc[plainField]);
+      if (hash) {
+        doc[hashField] = hash;
+      }
+    }
+
     return doc;
+  }
+
+  getHashFieldMap() {
+    return {
+      identityDocument: 'identityDocumentHash',
+      birthDate: 'birthDateHash'
+    };
+  }
+
+  // Normalizes a raw value into the exact string that gets hashed, so the
+  // same input always produces the same blind-index value at write time and
+  // at query time. birthDate normalizes to the local calendar date
+  // (YYYY-MM-DD) to match the existing day-range query semantics these
+  // fields replace -- not a UTC ISO slice, which could shift the date near
+  // local midnight.
+  normalizeForHash(field, value) {
+    if (value === null || value === undefined || value === '') return null;
+
+    if (field === 'birthDate') {
+      const date = value instanceof Date ? value : new Date(value);
+      if (Number.isNaN(date.getTime())) return null;
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    return String(value).trim();
+  }
+
+  computeBlindIndex(field, value) {
+    const normalized = this.normalizeForHash(field, value);
+    if (normalized === null) return null;
+    return hmacBlindIndex(normalized);
   }
 
   decryptIdentity(identity) {
