@@ -48,7 +48,10 @@ function givenSession() {
   vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'sess-1' });
 }
 
-const FAKE_EQ = { _id: '507f1f77bcf86cd799439011', equipmentID: 'EQ-001', name: 'Freezer A', type: 'Storage', status: 'Active' };
+// #635: organizationId matches buildRbacCollections' default scopeId for a
+// non-Administrador assignment ('test-org-default') so this fixture stays
+// visible to the org-scoped callers most tests in this file use.
+const FAKE_EQ = { _id: '507f1f77bcf86cd799439011', equipmentID: 'EQ-001', name: 'Freezer A', type: 'Storage', status: 'Active', organizationId: 'test-org-default' };
 
 beforeEach(() => { givenSession(); });
 afterEach(() => { vi.restoreAllMocks(); });
@@ -67,6 +70,40 @@ describe('GET /api/equipment', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  // #635: proves requireOrganizationScope is actually wired into this
+  // route -- an org-scopeType assignment with no scopeId (unassigned) is
+  // unusable and hard-403s, isolated from requirePermission (this route
+  // has none) by using an accessType that's otherwise fully allowed.
+  it('returns 403 for a caller whose org assignment has no scopeId (unassigned)', async () => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: userIdFor(2), accessType: 2, organizationId: '' }]),
+      equipment: createCollectionMock(),
+    });
+
+    const res = await request(app).get('/api/equipment').set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('filters the query by organizationId for an organization-scoped caller', async () => {
+    const find = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) });
+    const coll = createCollectionMock({ find });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, equipment: coll });
+
+    await request(app).get('/api/equipment').set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(find).toHaveBeenCalledWith({ organizationId: { $in: ['test-org-default'] } });
+  });
+
+  it('does not filter by organizationId for a global-scope caller (Administrador)', async () => {
+    const find = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) });
+    const coll = createCollectionMock({ find });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, equipment: coll });
+
+    await request(app).get('/api/equipment').set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(find).toHaveBeenCalledWith({});
   });
 });
 
@@ -111,6 +148,20 @@ describe('GET /api/equipment/:id', () => {
       .set('Authorization', `Bearer ${makeToken(2)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+
+  // #635 (F3-G09): mirrors sensor.controller.js's own out-of-scope 403
+  // pattern -- an org-scoped caller fetching equipment outside their
+  // scoped organizations (including organizationId:null, unscoped/
+  // legacy) gets 403, not the equipment's data.
+  it('returns 403 when the equipment is outside the caller organizationScope', async () => {
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ ...FAKE_EQ, organizationId: 'org-other' }) });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
+
+    const res = await request(app)
+      .get('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(403);
   });
 });
 
@@ -159,6 +210,20 @@ describe('PUT /api/equipment/:id', () => {
       .set('Authorization', `Bearer ${makeToken(2)}`)
       .send({ status: 'Maintenance' });
     expect(res.status).toBe(403);
+  });
+
+  it('returns 404 when updateData.organizationId does not resolve to a real Organization', async () => {
+    const organizations = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
+    const equipment = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_EQ), updateOne: vi.fn() });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, equipment, organizations });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ organizationId: 'org-inexistente' });
+
+    expect(res.status).toBe(404);
+    expect(equipment.updateOne).not.toHaveBeenCalled();
   });
 
   it('updates equipment for admin', async () => {
@@ -262,6 +327,40 @@ describe('POST /api/equipment validation and duplicate-ID paths', () => {
     expect(res.status).toBe(201);
     const insertedDoc = insertOne.mock.calls[0][0];
     expect(insertedDoc.purchaseDate).toBeInstanceOf(Date);
+  });
+
+  // #635: organizationId, when provided, must resolve to a real
+  // Organization -- same write-time validation shape #634 gave Sensor.
+  it('returns 404 when organizationId does not resolve to a real Organization', async () => {
+    const organizations = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
+    const equipment = createCollectionMock();
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, equipment, organizations });
+
+    const res = await request(app)
+      .post('/api/equipment')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ equipmentDescription: 'desc', organizationId: 'org-inexistente' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.message).toContain('org-inexistente');
+    expect(equipment.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('creates equipment with organizationId when it resolves to a real Organization', async () => {
+    const organizations = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }) });
+    const equipment = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(null),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439014' }),
+    });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, equipment, organizations });
+
+    const res = await request(app)
+      .post('/api/equipment')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ equipmentDescription: 'desc', equipmentID: 55, organizationId: 'org-1' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.organizationId).toBe('org-1');
   });
 
   it('returns 500 when the collection throws during insertOne (infra failure, not a validation error)', async () => {

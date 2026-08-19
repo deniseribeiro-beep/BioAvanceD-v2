@@ -77,6 +77,11 @@ class EquipmentModel {
       type: data.type || 'Other', // Padrão: Other
       status: data.status || 'Active', // Padrão: Active
       purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : null,
+      // #635: Organization.organizationId (UUID string), not a Mongo ref --
+      // same shape as Sample.collectionSite/Patient.clinicalUnitId/
+      // Sensor.organizationId (#634). No backfill for pre-existing
+      // equipment (null = unscoped/legacy).
+      organizationId: data.organizationId || null,
       createdAt: new Date(),
       updatedAt: new Date()
     };

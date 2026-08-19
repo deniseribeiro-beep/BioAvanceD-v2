@@ -490,6 +490,7 @@ export interface Equipment {
   type?: 'Freezer' | 'Analytical' | 'Storage' | 'Processing' | 'Other'; // Tipo de equipamento
   status?: 'Calibrado' | 'Maintenance' | 'Active' | 'Inactive' | 'Needs Calibration'; // Status do equipamento
   purchaseDate?: Date | string;
+  organizationId?: string | null; // Organization.organizationId (UUID) -- sem backfill, null = não escopado/legado (#635)
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }

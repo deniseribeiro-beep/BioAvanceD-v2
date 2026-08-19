@@ -393,6 +393,8 @@ function EquipmentForm({
   onSave: (data: Partial<Equipment>) => void;
   onCancel: () => void;
 }) {
+  const { organizations } = useOrganizations();
+
   const [formData, setFormData] = useState<Partial<Equipment>>(() => {
     if (equipment) {
       return {
@@ -400,6 +402,7 @@ function EquipmentForm({
         model: equipment.model || '',
         serialNumber: equipment.serialNumber || '',
         purchaseDate: equipment.purchaseDate ? new Date(equipment.purchaseDate) : undefined,
+        organizationId: equipment.organizationId || null,
       };
     }
     return {
@@ -407,6 +410,7 @@ function EquipmentForm({
       model: '',
       serialNumber: '',
       purchaseDate: undefined,
+      organizationId: null,
     };
   });
 
@@ -418,6 +422,7 @@ function EquipmentForm({
         model: equipment.model || '',
         serialNumber: equipment.serialNumber || '',
         purchaseDate: equipment.purchaseDate ? new Date(equipment.purchaseDate) : undefined,
+        organizationId: equipment.organizationId || null,
       });
     } else {
       setFormData({
@@ -425,6 +430,7 @@ function EquipmentForm({
         model: '',
         serialNumber: '',
         purchaseDate: undefined,
+        organizationId: null,
       });
     }
   }, [equipment]);
@@ -480,6 +486,28 @@ function EquipmentForm({
             })
           }
         />
+        <div className="form-grid-full">
+          <label className="input-label" htmlFor="equipmentOrganizationSelect">Organização</label>
+          <select
+            id="equipmentOrganizationSelect"
+            data-testid="equipment-organization-select"
+            className="input"
+            value={formData.organizationId || ''}
+            onChange={(e) =>
+              setFormData({
+                ...formData,
+                organizationId: e.target.value || null,
+              })
+            }
+          >
+            <option value="">Selecione uma organização</option>
+            {organizations.map((org) => (
+              <option key={org.organizationId} value={org.organizationId}>
+                {org.officialName}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       <div className="form-actions">
         <Button data-testid="equipment-cancel-button" type="button" variant="secondary" onClick={onCancel}>Cancelar</Button>
