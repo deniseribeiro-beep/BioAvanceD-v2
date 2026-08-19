@@ -279,11 +279,13 @@ app.use("/api/protocols", createMasterDataRouter({
   idField: "protocolId",
   model: require("./src/models/Protocol")
 }));
+app.use("/api/assays/:assayId/files", require("./src/interface/routes/assay-file.routes"));
 app.use("/api/assays", createMasterDataRouter({
   collectionName: "assays",
   idField: "assayId",
   model: require("./src/models/Assay")
 }));
+app.use("/api/datasets/:datasetId/files", require("./src/interface/routes/dataset-file.routes"));
 app.use("/api/datasets", createMasterDataRouter({
   collectionName: "datasets",
   idField: "datasetId",
