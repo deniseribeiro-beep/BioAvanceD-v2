@@ -3,6 +3,12 @@ require('dotenv').config();
 module.exports = {
   NODE_ENV: process.env.NODE_ENV || 'development',
   TEST_ENVIRONMENT: process.env.TEST_ENVIRONMENT === 'true' || process.env.TEST_ENVIRONMENT === '1',
+  // #359 / RNF008.6: authLimiter's relaxed budget must be an explicit,
+  // isolated opt-in, not inferred from NODE_ENV (a generic environment
+  // indicator every non-production run shares, including one where
+  // NODE_ENV was simply left unset). Only the real Docker dev stack's
+  // compose file sets this.
+  AUTH_RATE_LIMIT_RELAXED: process.env.AUTH_RATE_LIMIT_RELAXED === 'true' || process.env.AUTH_RATE_LIMIT_RELAXED === '1',
   PORT: process.env.PORT || 3000,
 
   // Mongo

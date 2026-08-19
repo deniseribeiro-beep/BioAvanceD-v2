@@ -207,11 +207,16 @@ const globalLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 60 * 1000,
-  // Strict brute-force budget in production; the real Docker dev stack
-  // (compose.yml + compose.dev.yml, NODE_ENV=development) and any other
-  // non-production run need enough headroom that a real-backend e2e spec
-  // file doing several logins/2FA calls per minute doesn't 429 (#350).
-  max: isDev ? 100 : 10,
+  // Strict brute-force budget everywhere by default. The real Docker dev
+  // stack (compose.yml + compose.dev.yml) needs enough headroom that a
+  // real-backend e2e spec file doing several logins/2FA calls per minute
+  // doesn't 429 (#350) -- but per RNF008.6, that relaxation can't be
+  // inferred from NODE_ENV/isDev (a generic indicator every non-production
+  // run shares, including a staging deploy that just left NODE_ENV unset).
+  // It requires the explicit, isolated AUTH_RATE_LIMIT_RELAXED opt-in that
+  // only that compose file's environment sets (#359), and even then never
+  // applies in production.
+  max: (env.AUTH_RATE_LIMIT_RELAXED && env.NODE_ENV !== "production") ? 100 : 10,
   message: "Muitas requisições para autenticação. Tente novamente mais tarde.",
   standardHeaders: true,
   legacyHeaders: false,
