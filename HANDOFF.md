@@ -4,70 +4,69 @@
 rabbit hole**, tracker **#618** ("organization-scope enforcement + RBAC
 gaps"). Dennis asked this sitting to pick up all six remaining open
 tracker members in one sitting: **#632 -> #633 -> #634 -> #635 -> #636
--> #637**. **#632, #633, #634 are done** (3 of 6). Running budget is now
-at/near the rabbit-hole skill's ~10-point sitting guideline (see below)
--- surfacing to Dennis before picking up #635 rather than silently
-continuing past it, per the skill's own advisory-pacing framing.
+-> #637**. **#632, #633, #634, #635 are done** (4 of 6). Running budget
+is now well past the rabbit-hole skill's ~10-point sitting guideline
+(~14 points spent) -- flagged to Dennis after #634, who explicitly chose
+to continue all the way through #637 rather than pause. Continuing per
+that instruction, not stopping again for budget alone.
 
 ## Rabbit hole state
 
 - **Tracker:** #618, open.
-- **Landed this sitting:** #632 (manageBackup/resetMFA RBAC enforcement),
-  #633 (reports.routes.js sampleanalysis specimenId fix), #634
-  (Sensor.organizationId -- field, service validation, route/controller
-  org-scope wiring, reports.routes.js scoping, frontend picker).
-- **Queue remaining, in the user's stated order:** #635 (next), #636,
-  #637 -- same organizationId-wiring shape as #634 (Equipment/
-  Temperature/Report), no open design calls left per prior research.
+- **Landed this sitting:** #632 (manageBackup/resetMFA RBAC
+  enforcement), #633 (reports.routes.js sampleanalysis specimenId fix),
+  #634 (Sensor.organizationId), #635 (Equipment.organizationId).
+- **Queue remaining, in the user's stated order:** #636 (next), #637 --
+  same organizationId-wiring shape, no open design calls left per prior
+  research (backfill/visibility decisions already recorded on both).
   Re-derive tracker #618's membership fresh before each pick per the
   rabbit-hole skill's open-ended rule.
-- **Budget so far this sitting:** #632 ~3 (medium), #633 ~1 (small),
-  #634 ~5 (large -- ended up touching model+service+controller+routes+
-  reports.routes.js+frontend+7 test files) = **~9 of the ~10-point
-  guideline**. #635 is the same shape as #634 (likely another ~4-5
-  points on its own) -- the next pop would clearly push past budget.
-  Per the rabbit-hole skill: this is the point to surface and let the
-  user decide whether to continue this sitting or resume later, not a
-  hard stop. Report this to Dennis before starting #635.
-- **Filed this sitting:** none yet.
-- **One open process note from #634** (see its own close comment): the
-  frontend `SensorForm` organization-picker change was verified via
-  `tsc --noEmit` + exact mirroring of `NewUserPage.tsx`'s already-working
-  picker, not a live-browser manual check -- a time/budget tradeoff, not
-  a known problem. Worth a quick look at the end-of-loop Docker gate;
-  the existing `sensor-registration.spec.ts` e2e spec already covers the
-  Novo Sensor form and is structurally unaffected (new field optional,
-  not interacted with by that spec).
+- **Budget so far this sitting:** #632 ~3, #633 ~1, #634 ~5, #635 ~5 =
+  **~14 of the ~10-point guideline**, already over. User explicitly
+  chose "continue all the way through #637" when asked after #634 --
+  treat that as standing authorization for the rest of this sitting,
+  not a fresh checkpoint. #636/#637 are each likely another ~3-5 points.
+- **Filed this sitting:** **#638** (found during #635) --
+  `Equipment.schema.js`, a Mongoose model for the `equipment` collection,
+  has zero real callers anywhere in the backend (only its own test file
+  requires it) -- the live write/read path uses the raw MongoDB driver +
+  a plain validator (`Equipment.js`) instead. Needs the owner's call:
+  dead code (delete) or unfinished wiring (connect it). Not itself part
+  of tracker #618's own scope, but found while working #635 and
+  commented onto #618's thread.
+- **One open process note carried from #634/#635** (see their own close
+  comments): both sessions' frontend organization-picker changes
+  (`SensorForm`, `EquipmentForm`) were verified via `tsc --noEmit` +
+  exact mirroring of `NewUserPage.tsx`'s already-working picker, not a
+  live-browser manual check -- a time/budget tradeoff, not a known
+  problem. Worth a quick look at the end-of-loop Docker gate.
 
 ## Issues closed this sitting (most recent first)
 
-- **#634**: fixed and merged (`832e6c74`, merge `2de96f42`). Sensor.js
-  gets `organizationId` (optional, no backfill). sensor.service.js
-  validates it at write time (404 if unresolvable) and filters
-  `listSensors` by org scope. sensor.routes.js wires
-  `requireOrganizationScope` into list/get; sensor.controller.js 403s an
-  out-of-scope `get` (including `organizationId: null`). reports.routes.js's
-  `sensor` report type moved from the unscoped bucket to the scoped one
-  (`equipamento`/`temperatura` stay unscoped until #635/#636). Frontend
-  `SensorForm` gets an organization picker. Every behavior change
-  reproduced with a failing-first test before implementing.
-- **#633**: fixed and merged (`5116584d`, merge `0b7686b2`). See its own
-  close comment or the prior HANDOFF rotation.
-- **#632**: fixed and merged (`da13f65d`, merge `e906b145`). See its own
+- **#635**: fixed and merged (`3505e23c`, merge `452ff902`). Equipment
+  gets `organizationId` (optional, no backfill) on `Equipment.js` (the
+  plain validator `equipment.routes.js` actually writes through --
+  `Equipment.schema.js`, the Mongoose model the issue's own body named,
+  turned out to be dead code, see #638). `equipment.routes.js` validates
+  it at write time (404 if unresolvable), wires `requireOrganizationScope`
+  into list/get, filters list by org scope, 403s an out-of-scope `get`.
+  `reports.routes.js`'s `equipamento` report type moved from unscoped to
+  scoped. Frontend `EquipmentForm` gets an organization picker.
+- **#634**: fixed and merged (`832e6c74`, merge `2de96f42`). See its own
   close comment.
+- **#633**: fixed and merged (`5116584d`, merge `0b7686b2`).
+- **#632**: fixed and merged (`da13f65d`, merge `e906b145`).
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed through `2de96f42`.
+- On `feature/docker-e2e-backend-integration`, pushed through `452ff902`.
   Working tree clean except the gitignored/junctioned `.claude/skills/`.
-  All three fix branches merged and deleted (local + remote) immediately
+  All four fix branches merged and deleted (local + remote) immediately
   after landing.
 - Targeted suites only this sitting (per the conventions skill's
-  end-loaded gate order) -- all green across every touched file this
-  sitting (backend: 162 sensor/reports-related tests on #634 alone;
-  frontend: `tsc --noEmit` clean). **Full native suite not re-run this
-  sitting yet** -- run it once at the end of the queue, per the gate
-  order, not per item.
+  end-loaded gate order) -- all green across every touched file. **Full
+  native suite not re-run this sitting yet** -- run it once at the end
+  of the queue, per the gate order, not per item.
 - **#628's migration script (`backfillResultSpecimenIds.js`) still has
   not been run against any real environment** (carried over from before
   this sitting).
@@ -76,10 +75,12 @@ continuing past it, per the skill's own advisory-pacing framing.
 
 ## Recommended next steps
 
-**Budget checkpoint reached** -- report this to Dennis before continuing.
-If he says continue: **#635** next (Equipment.organizationId, same shape
-as #634 but Equipment.schema.js is the live Mongoose model, unlike
-Sensor's plain validator -- check whether that changes the field-add
-mechanics), then #636 -> #637. If the sitting pauses here, a fresh
-session should re-read this file, confirm tracker #618's open members
-via `gh issue list`, and resume with #635.
+Continue the queue per Dennis's standing "go through #637" instruction:
+**#636** next (Temperature.organizationId -- same shape as #634/#635,
+backfill decision already recorded as "none" per prior research; check
+whether Temperature has a service layer or writes directly like
+Equipment did), then **#637** (Report.organizationId -- different shape,
+stamp-at-generation-time + hide-unscoped-legacy-reports, not a CRUD
+form). If the sitting gets cut off here, a fresh session should re-read
+this file, confirm tracker #618's open members via `gh issue list`, and
+resume with #636.
