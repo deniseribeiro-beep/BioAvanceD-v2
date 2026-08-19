@@ -8,7 +8,6 @@ const { SampleModel } = require('../../models/Sample');
 const logger = require('../../utils/logger');
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
-const { getCollection } = require('../../utils/collectionResolver');
 const { resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
 
 function normalizeReport(report) {
@@ -230,18 +229,6 @@ async function buildSampleQuery(db, filters = {}) {
   return conditions.length > 0 ? { $and: conditions } : {};
 }
 
-// RF005/RNF007 (#561/#564): patientName search resolves via
-// ParticipantIdentity instead of a direct Patient-document query, same
-// pattern as patient.service.js#listPatients.
-async function resolveParticipantIdsByNameKeyword(db, keyword) {
-  if (!keyword) return [];
-  const identityCollection = getCollection(db, 'participantIdentities');
-  const matches = await identityCollection
-    .find({ patientName: { $regex: String(keyword), $options: 'i' } })
-    .toArray();
-  return matches.map((identity) => identity.participantId).filter(Boolean);
-}
-
 async function getMatchingPatientIds(samplesCollection, sampleQuery) {
   if (!sampleQuery || Object.keys(sampleQuery).length === 0) {
     return [];
@@ -340,14 +327,16 @@ async function buildPreviewData(db, rawType, filters = {}) {
     const matchingPatientIds = await getMatchingPatientIds(samplesCollection, sampleQuery);
 
     const patientQueryParts = [];
+    // RF005/RNF007 (#574): keyword search no longer resolves against
+    // ParticipantIdentity.patientName (civil identity) -- RF008's own
+    // filter list doesn't include name search, RNF002 AC#2 forbids the
+    // full-collection decrypt-and-scan a substring search over encrypted
+    // patientName would require, and RNF007 AC#4 requires reports to
+    // omit/pseudonymize direct identifiers by default. The keyword filter
+    // still matches the pseudonymized participantId itself, which isn't
+    // civil identity.
     if (filters.keyword) {
-      const matchingParticipantIds = await resolveParticipantIdsByNameKeyword(db, filters.keyword);
-      patientQueryParts.push({
-        $or: [
-        { participantId: { $in: matchingParticipantIds } },
-        { participantId: { $regex: String(filters.keyword), $options: 'i' } },
-        ],
-      });
+      patientQueryParts.push({ participantId: { $regex: String(filters.keyword), $options: 'i' } });
     }
 
     const orphaCode = normalizeFilterText(filters.orphaCode || filters.orpha || filters.disease);
@@ -428,14 +417,12 @@ async function buildPreviewData(db, rawType, filters = {}) {
     const matchingPatientIds = await getMatchingPatientIds(samplesCollection, sampleQuery);
 
     const patientQueryParts = [];
+    // RF005/RNF007 (#574): keyword search no longer resolves against
+    // ParticipantIdentity.patientName (civil identity) -- see this file's
+    // isSamplesByPatient branch above for the full rationale. The keyword
+    // filter still matches the pseudonymized participantId itself.
     if (filters.keyword) {
-      const matchingParticipantIds = await resolveParticipantIdsByNameKeyword(db, filters.keyword);
-      patientQueryParts.push({
-        $or: [
-          { participantId: { $in: matchingParticipantIds } },
-          { participantId: { $regex: String(filters.keyword), $options: 'i' } },
-        ],
-      });
+      patientQueryParts.push({ participantId: { $regex: String(filters.keyword), $options: 'i' } });
     }
 
     const orphaCode = normalizeFilterText(filters.orphaCode || filters.orpha || filters.disease);

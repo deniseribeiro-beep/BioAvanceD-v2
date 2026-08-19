@@ -323,26 +323,27 @@ describe('reports.routes.js gaps', () => {
     expect(response.body.data.previewLimited).toBe(false);
   });
 
-  // RF005/RNF007 (#561/#564): keyword search resolves patientName via
-  // ParticipantIdentity instead of a direct Patient-document query —
-  // resolved participantIds must flow into the patients query's $or leg.
-  it('paciente: keyword search resolves matching participantIds via ParticipantIdentity', async () => {
+  // RF005/RNF007 (#574): keyword search no longer resolves against
+  // ParticipantIdentity.patientName (civil identity) — dropped per #574's
+  // resolution (RF008's filter list doesn't include name search, RNF002
+  // AC#2 forbids the full-collection scan a substring search over
+  // encrypted patientName would require, RNF007 AC#4 requires reports to
+  // omit/pseudonymize direct identifiers by default). Only the
+  // pseudonymized participantId itself is still keyword-searchable.
+  it('paciente: keyword search matches participantId only, no ParticipantIdentity lookup', async () => {
     const { db, capturedQueries } = buildCollectionDb({
       patients: [{ participantId: 'P1' }],
       participantIdentities: [{ participantId: 'P1', patientName: 'Ana' }],
     });
     const testApp = appWithDb(db);
 
-    const response = await request(testApp).post('/api/reports/paciente/preview').send({ filters: { keyword: 'Ana' } });
+    const response = await request(testApp).post('/api/reports/paciente/preview').send({ filters: { keyword: 'P1' } });
 
     expect(response.status).toBe(200);
-    expect(capturedQueries.participantIdentities).toEqual({ patientName: { $regex: 'Ana', $options: 'i' } });
-    // #573: the patients-collection $or leg queries participantId (the
-    // canonical field — Patient documents never had `patientID`), not a
-    // second, non-existent field.
+    expect(capturedQueries.participantIdentities).toBeUndefined();
     expect(capturedQueries.patients.$and).toEqual(
       expect.arrayContaining([
-        { $or: [{ participantId: { $in: ['P1'] } }, { participantId: { $regex: 'Ana', $options: 'i' } }] },
+        { participantId: { $regex: 'P1', $options: 'i' } },
       ])
     );
   });
