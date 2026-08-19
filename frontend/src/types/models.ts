@@ -686,6 +686,7 @@ export interface Sensor {
   policyID?: number; // Padronizado para Number (consistente com Policy)
   macAddress?: string; // Opcional: presente => backend vincula um SensorMetadata (ver #311)
   storageContainer?: string; // ID do StorageContainer (freezer) vinculado ao SensorMetadata
+  organizationId?: string | null; // Organization.organizationId (UUID) -- sem backfill, null = não escopado/legado (#634)
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }

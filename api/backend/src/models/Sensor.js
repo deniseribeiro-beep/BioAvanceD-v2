@@ -35,6 +35,10 @@ class SensorModel {
       locationId: data.locationId || data.locationID || null, // String conforme dicionário
       policyId: data.policyId || data.policyID || null, // String conforme dicionário
       macAddress: data.macAddress || null,
+      // #634: Organization.organizationId (UUID string), not a Mongo ref --
+      // same shape as Sample.collectionSite/Patient.clinicalUnitId. No
+      // backfill for pre-existing sensors (null = unscoped/legacy).
+      organizationId: data.organizationId || null,
       createdAt: new Date(),
       updatedAt: new Date()
     };

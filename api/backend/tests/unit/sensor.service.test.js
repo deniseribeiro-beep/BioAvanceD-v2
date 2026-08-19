@@ -49,6 +49,52 @@ describe('sensor.service (non-quarantine paths)', () => {
       expect(result.maintenanceStatus).toBe('operational');
     });
 
+    // #634: organizationId, when provided, must resolve to a real
+    // Organization -- same write-time validation shape as
+    // sample.service.js's createSample#collectionSite check.
+    it('throws a 404 when organizationId does not resolve to a real Organization', async () => {
+      const { db } = makeDb();
+      const organizationsCollection = { findOne: vi.fn().mockResolvedValue(null) };
+      const sensorsCollection = { insertOne: vi.fn() };
+      db.collection = vi.fn((name) => (name === 'organizations' ? organizationsCollection : sensorsCollection));
+
+      const err = await sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        organizationId: 'org-inexistente'
+      }).catch((e) => e);
+
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toContain('org-inexistente');
+      expect(err.statusCode).toBe(404);
+      expect(organizationsCollection.findOne).toHaveBeenCalledWith({ organizationId: 'org-inexistente' });
+      expect(sensorsCollection.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('creates a sensor with organizationId when it resolves to a real Organization', async () => {
+      const { db } = makeDb();
+      const organizationsCollection = { findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }) };
+      const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
+      db.collection = vi.fn((name) => (name === 'organizations' ? organizationsCollection : sensorsCollection));
+
+      const result = await sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        organizationId: 'org-1'
+      });
+
+      expect(result.organizationId).toBe('org-1');
+    });
+
+    it('leaves organizationId null when not provided (no backfill, unscoped/legacy by default)', async () => {
+      const { db, collection } = makeDb();
+      collection.insertOne.mockResolvedValue({ insertedId: 'abc123' });
+
+      const result = await sensorService.createSensor(db, { sensorId: 'S-1', sensorType: 'temperature' });
+
+      expect(result.organizationId).toBeNull();
+    });
+
     it('does not touch sensorMetadata when no macAddress is provided (back-compat)', async () => {
       const { db, collection } = makeDb();
       collection.insertOne.mockResolvedValue({ insertedId: 'abc123' });
@@ -184,6 +230,33 @@ describe('sensor.service (non-quarantine paths)', () => {
       expect(result.limit).toBe(10);
       expect(result.skip).toBe(20);
     });
+
+    // #634 (F3-G09): an organization-scoped caller must only see sensors
+    // whose organizationId is one of their scoped organizations -- a null
+    // organizationId (unscoped/legacy sensor) must not be exposed.
+    it('applies an organizationId $in filter for an organization-scoped caller', async () => {
+      const { db, collection } = makeDb();
+      const chain = makeFindChain([]);
+      collection.find = chain.find;
+      collection.countDocuments.mockResolvedValue(0);
+
+      await sensorService.listSensors(db, {
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+
+      expect(chain.find).toHaveBeenCalledWith({ organizationId: { $in: ['org-1'] } });
+    });
+
+    it('does not filter by organizationId for a global-scope caller (Administrador)', async () => {
+      const { db, collection } = makeDb();
+      const chain = makeFindChain([]);
+      collection.find = chain.find;
+      collection.countDocuments.mockResolvedValue(0);
+
+      await sensorService.listSensors(db, { organizationScope: { scope: 'global' } });
+
+      expect(chain.find).toHaveBeenCalledWith({});
+    });
   });
 
   describe('updateSensor (non-quarantine path)', () => {
@@ -210,6 +283,20 @@ describe('sensor.service (non-quarantine paths)', () => {
 
       await expect(sensorService.updateSensor(db, 'S-1', { status: 'maintenance' }))
         .rejects.toThrow('Sensor não encontrado');
+    });
+
+    it('throws a 404 when updateData.organizationId does not resolve to a real Organization', async () => {
+      const { db } = makeDb();
+      const organizationsCollection = { findOne: vi.fn().mockResolvedValue(null) };
+      const sensorsCollection = { findOne: vi.fn().mockResolvedValue({ sensorId: 'S-1' }), updateOne: vi.fn() };
+      db.collection = vi.fn((name) => (name === 'organizations' ? organizationsCollection : sensorsCollection));
+
+      const err = await sensorService.updateSensor(db, 'S-1', { organizationId: 'org-inexistente' }).catch((e) => e);
+
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toContain('org-inexistente');
+      expect(err.statusCode).toBe(404);
+      expect(sensorsCollection.updateOne).not.toHaveBeenCalled();
     });
 
     it('updates via updateOne (no transaction) and returns triggered:false when not a quarantine status', async () => {

@@ -14,6 +14,7 @@ import { useEquipment } from '../hooks/useEquipment';
 import { useTemperature } from '../hooks/useTemperature';
 import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
+import { useOrganizations } from '../hooks/useOrganizations';
 import { validateReading, validateTemperatureUnit, generateAlert, validateThresholds } from '../utils/validations';
 import { CryoBoxGrid } from '../components/CryoBoxGrid';
 import { storageApi } from '../services/storageApi';
@@ -1003,6 +1004,7 @@ function SensorForm({
   onCancel: () => void;
 }) {
   const { policies } = usePolicies();
+  const { organizations } = useOrganizations();
   const [freezers, setFreezers] = useState<{ _id: string; name: string; containerID?: number }[]>([]);
 
   useEffect(() => {
@@ -1029,6 +1031,7 @@ function SensorForm({
       policyID: undefined,
       macAddress: '',
       storageContainer: undefined,
+      organizationId: null,
     }
   );
 
@@ -1195,6 +1198,28 @@ function SensorForm({
             {freezers.map((freezer) => (
               <option key={freezer._id} value={freezer._id}>
                 {freezer.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="form-grid-full">
+          <label className="input-label" htmlFor="sensorOrganizationSelect">Organização</label>
+          <select
+            id="sensorOrganizationSelect"
+            data-testid="sensor-organization-select"
+            className="input"
+            value={formData.organizationId || ''}
+            onChange={(e) =>
+              setFormData({
+                ...formData,
+                organizationId: e.target.value || null,
+              })
+            }
+          >
+            <option value="">Selecione uma organização</option>
+            {organizations.map((org) => (
+              <option key={org.organizationId} value={org.organizationId}>
+                {org.officialName}
               </option>
             ))}
           </select>

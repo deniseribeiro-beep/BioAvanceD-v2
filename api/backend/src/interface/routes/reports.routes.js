@@ -291,24 +291,32 @@ async function buildPreviewData(db, rawType, filters = {}) {
 
   const isResult = typeIncludes(type, ['resultado', 'result']);
 
+  // #634: Sensor.organizationId now exists (split from #621/#629) — the
+  // sensor report type moved from the unscoped bucket below into the
+  // scoped one. Equipment/Temperature report types stay unscoped until
+  // their own #635/#636 land.
+  const isSensorReportType = typeIncludes(type, ['sensor']);
+
   // #341 (RF003 AC#3): only report types rooted in the samples/patients
   // collections (plus, per #621, Result — scoped via a join through its
-  // linked Sample's collectionSite) carry an organization reference to
-  // scope by — confirmed with Dennis 2026-08-18. Temperature/sensor/
-  // equipment/access-log/withdrawal-history report types, and saved
-  // Report documents themselves, have no organization concept anywhere
-  // yet and are deliberately left unscoped (see the follow-up filed
-  // alongside this issue, #621). An org-less caller only hard-403s when
-  // requesting one of the scoped types below, not universally —
-  // resolveUserOrganizationScope is deliberately only called (a real DB
-  // round-trip) when the type actually needs it, not on every report
-  // request regardless of type.
+  // linked Sample's collectionSite; per #634, Sensor — scoped directly by
+  // its own organizationId) carry an organization reference to scope by —
+  // confirmed with Dennis 2026-08-18. Temperature/equipment/access-log/
+  // withdrawal-history report types, and saved Report documents
+  // themselves, have no organization concept anywhere yet and are
+  // deliberately left unscoped (see the follow-up filed alongside this
+  // issue, #621, and its #629/#634-#637 split). An org-less caller only
+  // hard-403s when requesting one of the scoped types below, not
+  // universally — resolveUserOrganizationScope is deliberately only
+  // called (a real DB round-trip) when the type actually needs it, not on
+  // every report request regardless of type.
   const isScopedReportType =
     isSamplesByPatient ||
     isSampleAnalysis ||
     isTissueOriginHistory ||
     isExtracellularNetwork ||
     isResult ||
+    isSensorReportType ||
     typeIncludes(type, ['paciente', 'patient']) ||
     typeIncludes(type, ['amostra', 'sample']);
 
@@ -570,10 +578,14 @@ async function buildPreviewData(db, rawType, filters = {}) {
     };
   }
 
-  if (typeIncludes(type, ['sensor'])) {
+  if (isSensorReportType) {
     const collection = resolveCollection(db, ['sensors']);
-    const sensors = await collection.find({}).limit(100).toArray();
-    const total = await collection.countDocuments({});
+    const query =
+      filters.organizationScope && filters.organizationScope.scope === 'organization'
+        ? { organizationId: { $in: filters.organizationScope.organizationIds } }
+        : {};
+    const sensors = await collection.find(query).limit(100).toArray();
+    const total = await collection.countDocuments(query);
     return { total, sensors, previewLimited: total > 100 };
   }
 

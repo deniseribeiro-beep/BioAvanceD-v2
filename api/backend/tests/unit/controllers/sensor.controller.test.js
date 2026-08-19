@@ -135,6 +135,26 @@ describe('sensor.controller', () => {
       });
       expect(loggerErrorMock).toHaveBeenCalledWith('Erro ao criar sensor:', 'boom');
     });
+
+    // #634: sensorService.createSensor throws a statusCode:404 error when
+    // organizationId doesn't resolve to a real Organization -- surface it
+    // as 404, not the default 400.
+    it('returns 404 when creation throws a statusCode:404 error (organizationId not found)', async () => {
+      const notFound = new Error('organizationId org-x não encontrado');
+      notFound.statusCode = 404;
+      createSensorMock.mockRejectedValue(notFound);
+      const req = createRequest({ body: { organizationId: 'org-x' } });
+      const res = createResponse();
+
+      await sensorController.create(req, res);
+
+      expect(res.statusCode).toBe(404);
+      expect(res.body).toEqual({
+        success: false,
+        error: 'organizationId org-x não encontrado',
+        message: 'organizationId org-x não encontrado',
+      });
+    });
   });
 
   describe('list', () => {
@@ -208,6 +228,20 @@ describe('sensor.controller', () => {
         message: 'list failed',
       });
     });
+
+    // #634: req.organizationScope (attached by rbac.js's
+    // requireOrganizationScope, wired into the route ahead of this
+    // handler) must reach sensorService.listSensors as a filter.
+    it('passes req.organizationScope through to listSensors', async () => {
+      listSensorsMock.mockResolvedValue({ sensors: [] });
+      const scope = { scope: 'organization', organizationIds: ['org-1'] };
+      const req = createRequest({ organizationScope: scope });
+      const res = createResponse();
+
+      await sensorController.list(req, res);
+
+      expect(listSensorsMock).toHaveBeenCalledWith(req.app.locals.db, expect.objectContaining({ organizationScope: scope }));
+    });
   });
 
   describe('get', () => {
@@ -262,6 +296,40 @@ describe('sensor.controller', () => {
         error: 'Erro ao buscar sensor',
         message: 'get failed',
       });
+    });
+
+    // #634 (F3-G09): mirrors sample-file.controller.js's own
+    // out-of-scope 403 pattern -- an org-scoped caller fetching a sensor
+    // outside their scoped organizations (including organizationId:null,
+    // unscoped/legacy) gets 403, not the sensor's data.
+    it('returns 403 when the sensor is outside the caller organizationScope', async () => {
+      const sensor = { id: 's1', organizationId: 'org-other' };
+      getSensorMock.mockResolvedValue(sensor);
+      const req = createRequest({
+        params: { id: 's1' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] },
+      });
+      const res = createResponse();
+
+      await sensorController.get(req, res);
+
+      expect(res.statusCode).toBe(403);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('returns the sensor when it is within the caller organizationScope', async () => {
+      const sensor = { id: 's1', organizationId: 'org-1' };
+      getSensorMock.mockResolvedValue(sensor);
+      const req = createRequest({
+        params: { id: 's1' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] },
+      });
+      const res = createResponse();
+
+      await sensorController.get(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toEqual({ success: true, data: sensor });
     });
   });
 
@@ -382,6 +450,18 @@ describe('sensor.controller', () => {
         error: 'Erro ao atualizar sensor',
         message: 'update failed',
       });
+    });
+
+    it('returns 404 when update throws a statusCode:404 error (organizationId not found)', async () => {
+      const notFound = new Error('organizationId org-x não encontrado');
+      notFound.statusCode = 404;
+      updateSensorMock.mockRejectedValue(notFound);
+      const req = createRequest({ params: { id: 's1' }, body: { organizationId: 'org-x' } });
+      const res = createResponse();
+
+      await sensorController.update(req, res);
+
+      expect(res.statusCode).toBe(404);
     });
   });
 

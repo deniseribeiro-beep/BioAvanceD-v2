@@ -2,6 +2,25 @@ const { ObjectId } = require('mongodb');
 const SensorModel = require('../models/Sensor');
 const logger = require('../utils/logger');
 const defaultQuarantineService = require('./equipment-sensor-quarantine.service');
+const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
+
+function createSensorValidationError(message, statusCode = 422) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+// #634: mirrors sample.service.js's own collectionSite validation --
+// when organizationId is provided, it must resolve to a real Organization.
+async function assertOrganizationIdResolves(db, organizationId) {
+  if (organizationId === undefined || organizationId === null || organizationId === '') {
+    return;
+  }
+  const organization = await db.collection('organizations').findOne({ organizationId: String(organizationId) });
+  if (!organization) {
+    throw createSensorValidationError(`organizationId ${organizationId} não encontrado`, 404);
+  }
+}
 
 /**
  * Service de Sensores
@@ -22,6 +41,7 @@ class SensorService {
       if (!validation.isValid) {
         throw new Error(validation.errors.join(', '));
       }
+      await assertOrganizationIdResolves(db, sensorData.organizationId);
 
       const sensorsCollection = db.collection('sensors');
       const sensor = SensorModel.create(sensorData);
@@ -122,6 +142,14 @@ class SensorService {
         query.maintenanceStatus = filters.maintenanceStatus;
       }
 
+      // #634 (F3-G09): org-scoped caller sees only sensors whose
+      // organizationId is one of their scoped organizations. No-op for a
+      // 'global' (Administrador) scope. Caller must resolve+attach
+      // organizationScope via rbac.js's requireOrganizationScope first.
+      if (filters.organizationScope) {
+        applyOrganizationScopeFilter(query, filters.organizationScope, 'organizationId');
+      }
+
       const limit = filters.limit || 50;
       const skip = filters.skip || 0;
 
@@ -142,6 +170,8 @@ class SensorService {
 
   async updateSensor(db, sensorId, updateData) {
     try {
+      await assertOrganizationIdResolves(db, updateData && updateData.organizationId);
+
       const sensorsCollection = db.collection('sensors');
       const query = { $or: [{ sensorId }, { sensorID: sensorId }, { _id: sensorId }] };
       const normalizedUpdateData = { ...(updateData || {}) };
