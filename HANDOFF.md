@@ -44,14 +44,13 @@ Merge commits, in order: `e906b145` (#632), `0b7686b2` (#633),
   the gitignored/junctioned `.claude/skills/`. All six fix branches
   merged and deleted (local + remote) immediately after landing.
 - **Full native suite run once at the end of this sitting's loop, per
-  the gate order**: backend `npx vitest run tests/unit tests/integration
-  tests/compliance --coverage --reporter=dot` was still running in the
-  background when this file was written -- **check its result before
-  trusting this sitting is fully green end-to-end**; every *targeted*
-  suite for every touched file passed during the sitting itself (293+
-  tests across the #634-#637 shared-helper change alone). Backend
-  `npm run test:architecture`: 60/60 green. Frontend `npx tsc --noEmit`:
-  clean. Frontend `npm run test:unit`: 87/87 green.
+  the gate order -- confirmed green.** Backend
+  `npx vitest run tests/unit tests/integration tests/compliance
+  --coverage --reporter=dot`: exit code 0, no failures, 94.36%
+  statement / 88.03% branch / 93.42% function / 94.59% line coverage.
+  Backend `npm run test:architecture`: 60/60 green. Frontend
+  `npx tsc --noEmit`: clean. Frontend `npm run test:unit`: 87/87 green.
+  This sitting's work is verified end-to-end on native tooling.
 - **Docker/CI gate not run this sitting** -- per the conventions skill's
   end-loaded gate order, that's `ship-integration-branch`'s job, a
   separate step Dennis hasn't asked for yet. The branch has NOT been
