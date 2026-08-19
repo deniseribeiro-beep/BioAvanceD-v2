@@ -619,7 +619,7 @@ router.get('/:id', authenticate, requireOrganizationScope, async (req, res) => {
 // RF006 - Retirada de Amostra
 router.post('/:id/withdraw',
   authenticate,
-  requirePermission('withdrawSample'),
+  requirePermission('withdrawSample', 'UPDATE'),
   requireOrganizationScope,
   async (req, res) => {
     try {
@@ -1067,7 +1067,7 @@ router.get('/:id/results', authenticate, requireOrganizationScope, async (req, r
 });
 
 // Retornar amostra
-router.post('/:id/return', authenticate, requirePermission('withdrawSample'), requireOrganizationScope, async (req, res) => {
+router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UPDATE'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
