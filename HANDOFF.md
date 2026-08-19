@@ -1,26 +1,27 @@
 # HANDOFF
 
-**Written:** 2026-08-19, fresh sitting (twenty-ninth update). **Still
-inside the rabbit hole**, tracker **#618** ("organization-scope
-enforcement + RBAC gaps"). This sitting is resolving the off-shoot
-issues filed last sitting, in readiness order **#630 -> #631 -> #628 ->
-#629**. #630 is done; #631/#628/#629 remain queued for this same
-sitting (not yet started as of this write).
+**Written:** 2026-08-19, fresh sitting (thirtieth update). **Still inside
+the rabbit hole**, tracker **#618** ("organization-scope enforcement +
+RBAC gaps"). This sitting is resolving the off-shoot issues filed last
+sitting, in readiness order **#630 -> #631 -> #628 -> #629**. #630 and
+#631 are both done; #628 and #629 remain queued for this same sitting
+(not yet started as of this write).
 
 ## Rabbit hole state
 
 - **Tracker:** #618, open.
-- **Landed this sitting:** #630 (fully resolved).
-- **Filed this sitting:** #632 (enhancement — found while auditing #630:
-  `manageBackup`/`manageSystem`/`resetMFA` permission codes are
-  seeded/granted but never checked by `requirePermission()` anywhere;
-  routes hardcode `requireRole(4)`/`isAdministrator` instead). Added to
-  tracker #618's thread immediately on filing, per the rabbit-hole
-  skill's own rule.
-- **Still queued, this sitting's own order:** #631 (depends on #630,
-  now unblocked), #628, #629 — Dennis's answers on all three are below,
-  gathered before #630 started so the next pickup doesn't need to
-  re-ask.
+- **Landed this sitting:** #630 (fully resolved), #631 (fully resolved,
+  depended on #630).
+- **Filed this sitting:** #632 (enhancement — `manageBackup`/
+  `manageSystem`/`resetMFA` permission codes are seeded/granted but never
+  checked by `requirePermission()` anywhere; routes hardcode
+  `requireRole(4)`/`isAdministrator` instead). Added to tracker #618's
+  thread on filing. Also filed **dyeallpies-skills-pack#339** (not part
+  of this tracker — a skills-pack hook finding, see "Process note" below)
+  for the record; no action needed on it from a BioAvanceD-v2 session.
+- **Still queued, this sitting's own order:** #628, #629 — Dennis's
+  design-call answers on both are below, gathered before #630 started so
+  the next pickup doesn't need to re-ask.
 - **#632 not yet in the requested order** — filed mid-sitting, lower
   priority than the four originally queued; recompute against the
   tracker before picking it up, per the rabbit-hole skill's own
@@ -28,14 +29,6 @@ sitting (not yet started as of this write).
 
 ## Design decisions Dennis already gave this sitting (don't re-ask)
 
-- **#631 (per-verb enforcement mechanism):** auto-derive the action from
-  `req.method` (GET->READ, POST->CREATE, PUT/PATCH->UPDATE,
-  DELETE->DELETE), explicit override param only where that mapping
-  doesn't fit (EXPORT/APPROVE/RELEASE-flavored routes) — the
-  issue's own recommended, lower-risk shape; Dennis said to check docs
-  for a stronger signal, none found (dict-02/the 7-31 doc refresh don't
-  dictate the *enforcement mechanism*, only that `allowedActions` is
-  canonical Core data), so this is the confirmed direction.
 - **#628 (`Result.sampleID` canonical shape):** Dennis said to check
   docs. `docs/architecture/canonical-data-contract-v1.md`'s "Legacy
   Fields Prohibited" list explicitly bans `sampleID`/`sampleId` as a
@@ -77,53 +70,70 @@ the 3 new gates (F2-G09, F3-G09, F3-G10) and the confirmation that
 `dict-02`'s dictionary itself is unchanged (byte-identical) between
 batches.
 
+## Process note: verify branch protection before every product-file edit
+
+`edit-branch-guard.cjs` (blocks direct Edit/Write on `main`/
+`feature/docker-e2e-backend-integration`) fired correctly for #630's
+first edit attempt, then failed to fire for #631's first edit attempt —
+same session, same protected branch, no intervening branch change,
+confirmed via `git branch --show-current` immediately after that the
+edit had landed directly on the protected branch. Recovered cleanly
+(`git checkout -b fix/631-...` after the fact, diff carried over, no
+work lost), but don't rely on the hook alone next time — **run
+`git branch --show-current` before the first product-file Edit of each
+issue this sitting**, as a manual backstop, until
+dyeallpies-skills-pack#339 (filed this sitting, plausible fail-open bug
+in the hook's git-command error handling) is resolved upstream.
+
 ## Issue closed this sitting (most recent)
 
-- **#630**: audited all 107 `requirePermission()` call sites across the
-  17 permission codes in `src/interface/routes/` against
-  `PERMISSION_CATALOG.allowedActions` (`rbac-catalog-seed.service.js`).
-  7 codes were stale — `viewReports`, `createSample`, `viewTemperature`,
-  `uploadFiles`, `createUser`, `createPatient`, `manageOrganizations` —
-  several (`viewTemperature`, `createPatient`, `createUser`) grant full
-  CRUD in practice despite a single narrow-sounding claimed action. 10
-  codes were already correct. Methodology: HTTP verb -> action by
-  default (GET->READ/POST->CREATE/PUT->UPDATE/DELETE->DELETE), two
-  overrides — an `/export*` path segment -> EXPORT, and a POST to
-  `/:id/<verb>` (action on an existing resource) -> UPDATE unless the
-  verb is itself generative of a new sub-resource (adding a
-  note/observation/reading), which stays CREATE. No behavior change —
-  `requirePermission()` still ignores `allowedActions`; #631 is the
-  actual enforcement mechanism and was unblocked by this landing.
-  Regression test added (`rbac-catalog-seed.service.test.js`, 17 new
-  `it.each` cases asserting the corrected value per code). Merged
-  `6ec47ff8`, pushed. Targeted suite green (rbac-catalog-seed, rbac,
-  permission.model: 46/46) — full native suite not re-run this sitting
-  yet (single small, low-risk data-only change; will run before the
-  sitting's own close-out or at the next Docker/CI gate).
+- **#631**: `requirePermission(code, explicitAction?)` now checks the
+  caller's action — derived from `req.method` by default (GET->READ,
+  POST->CREATE, PUT/PATCH->UPDATE, DELETE->DELETE), or the explicit
+  second arg when a route passes one — against
+  `PERMISSION_CATALOG[code].allowedActions` (#630's now-corrected
+  catalog), not just whether the caller holds the permission code at
+  all. Verified programmatically (small script cross-referencing every
+  `requirePermission()` call site's HTTP verb against its code's
+  corrected allowedActions) that the default derivation matches all 107
+  call sites except 4: `sample.routes.js`'s `POST /:id/withdraw` and
+  `POST /:id/return`, `user.routes.js`'s `POST /record-withdrawal` (all
+  three `withdrawSample`, explicit override `'UPDATE'`, not the naive
+  `CREATE`), and `patient.routes.js`'s `POST /:id/reidentify`
+  (`reidentifyParticipant`, override `'READ'`). Without these overrides
+  the naive default would have 403'd real working traffic on those 4
+  routes. New tests in `rbac.test.js` cover default-derived-action-pass,
+  an unoverridden narrow-action code correctly denying, and an explicit
+  override passing despite the method not matching; existing cases
+  updated to set `req.method` (bare test req objects had none before).
+  Merged `19a95a7f`, pushed. Targeted suite green (rbac,
+  rbac-catalog-seed, sample.routes, participantIdentity.reidentify:
+  181/181) — full native suite not re-run this sitting yet; run before
+  the sitting's own close-out or at the next Docker/CI gate.
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed through
-  `6ec47ff8`. Working tree clean except the gitignored/junctioned
-  `.claude/skills/`. No stale local branches — `fix/630-...` merged and
-  deleted immediately after landing.
-- No Docker stack brought up this sitting — #630 is backend-internal,
-  native/mocked-Mongo proof bar only.
+  `19a95a7f`. Working tree clean except the gitignored/junctioned
+  `.claude/skills/`. No stale local branches — `fix/630-...` and
+  `fix/631-...` both merged and deleted immediately after landing.
+- No Docker stack brought up this sitting — #630/#631 are
+  backend-internal, native/mocked-Mongo proof bar only.
 
 ## Recommended next steps
 
-Continue this same sitting's queue: **#631 -> #628 -> #629**, in that
-order, per Dennis's request to resolve all four off-shoot issues. Design
-decisions for all three are already gathered above — don't re-ask.
-Recompute the sitting's budget fresh before each pickup per the
-rabbit-hole skill's own pacing guidance; #630 alone ran large (mechanical
-but wide blast radius, 107 call sites) — #631 depends on it and is
-flagged in its own body as likely needing a `divide-and-conquer` split,
-#628 turned out bigger than originally scoped once cross-checked against
-docs, and #629 is explicitly flagged as likely spanning beyond one
-sitting. If the running total is at or over budget after #631, surface
-to Dennis before continuing into #628/#629 rather than pushing through
-silently.
+Continue this same sitting's queue: **#628 -> #629**, in that order, per
+Dennis's request to resolve all four off-shoot issues. Design decisions
+for both are already gathered above — don't re-ask, but do confirm the
+#628 backfill question with Dennis before writing any migration script
+(docs didn't answer that specific sub-question). Recompute the sitting's
+budget fresh before each pickup per the rabbit-hole skill's own pacing
+guidance — #628 turned out bigger than originally scoped once
+cross-checked against docs (a field rename, not just a value fix), and
+#629 is explicitly flagged as likely spanning beyond one sitting
+(schema change across Sensor/Equipment/Temperature + Report). If the
+running total is at or over budget after #628, surface to Dennis before
+continuing into #629 rather than pushing through silently.
 
 #632 (new, unenforced `manageBackup`/`manageSystem`/`resetMFA`) is not
 part of the requested order — pick it up only after the four originally
