@@ -1,135 +1,143 @@
 # HANDOFF
 
-**Written:** 2026-08-19, later same day as the prior rotation (docs-first
-sweep of the open backlog, prompted by Dennis's steer to check whether
-the `docs/docs-7-31-2026/` batch resolves any old issues). **#282, #359,
-and #379 all closed** -- one pure docs-confirmation close, one real
-security-relevant code fix upgraded from "ask Dennis" to "the docs
-already answer it," and one direct decision from Dennis acted on
-immediately.
+**Written:** 2026-08-19, same day as the prior rotation (docs-first
+sweep). This sitting: Dennis asked to "pick all open RNF007 and RF007
+issues" -- driven as an `issue-loop` queue sweep. **#567, #574, #283,
+and #334 all closed**, plus two new issues filed (#640 security-relevant
+finding, #641 divide-and-conquer split) and one pack issue (#342).
 
 ## What landed this sitting
 
-- **#282** (RF030 referenced but never defined in the RF table): closed,
-  no code/doc change needed. `docs/docs-7-31-2026/1-Requisitos-...md`
-  (v3.0.1) already fixes the prose bug upstream -- explicitly states "não
-  existe RF030" and corrects the Fase-3 matrix to say RF029. Confirmed
-  this is the newest doc batch (no `docs-8-*` folder exists yet).
-- **#359** (authLimiter's `isDev`-gated 100/min budget, filed after #350
-  as "record a decision"): turned out **not** to need Dennis's sign-off
-  -- `docs/docs-7-31-2026/1-Requisitos-...md`'s RNF008 point 6 (Crítica
-  priority, present unchanged since the 7-27 batch) explicitly forbids
-  relaxing rate limits/auth controls via NODE_ENV or a generic
-  environment indicator. The old `isDev ? 100 : 10` gate
-  (`isDev = NODE_ENV !== "production"`) violated this directly, since
-  `NODE_ENV` defaults to `'development'` whenever unset at all
-  (`api/backend/src/config/env.js`) -- any deploy that simply omitted
-  `NODE_ENV`, not just the real Docker dev stack, got the relaxed
-  budget. Fixed: replaced the gate with an explicit
-  `AUTH_RATE_LIMIT_RELAXED` opt-in that only `compose.dev.yml`'s
-  `.env.docker` sets (added to both `.env.docker.example` and the local
-  `.env.docker`), locked out entirely in production regardless of the
-  flag. Rewrote the pinned `#350` regression tests
-  (`api/backend/tests/integration/auth-rate-limiter.test.js`) to cover
-  all three cases -- `NODE_ENV=development` alone now stays strict (new
-  regression test), the explicit opt-in restores the relaxed behavior,
-  production stays strict even with the opt-in set. 3/3 green, plus
-  `test:architecture` 60/60 green, run on both the fix branch and the
-  merged integration branch. Branch `fix/359-authlimiter-node-env-gate`,
-  commit `44e54687`.
-- **#379** (whether the 7-31 manuscript/supplementary PDF revisions
-  should supersede the submitted CMPB copies): Dennis's explicit call
-  this sitting was **yes, supersede**. Replaced
-  `docs/research/cmpb-submission/manuscript/Manuscript.pdf` and
-  `supplementary/Supplementary File {1,2}...pdf` with the
-  SHA-256-confirmed-different revisions from
-  `docs/docs-7-31-2026/manuscript/`. Deliberately left untouched:
-  `submission/CMPB-S-26-05153.pdf` (the actual journal-submitted
-  package -- a historical record, not a working copy), `Supplementary
-  File 3...pdf` (no 7-31 revision exists for it), and the `.tex` sources
-  (no revised LaTeX was in the 7-31 drop, only compiled PDFs -- so the
-  `.tex` sources and their PDFs are now out of sync; not treated as a
-  gap needing its own issue since there's nothing to reconcile against
-  until a revised `.tex` shows up). Branch
-  `test/379-cmpb-submission-supersede`, commit `dba26d8c`.
-
-All three merge commits landed on `feature/docker-e2e-backend-integration`
-(pushed through `919f6ecf`), both source branches deleted locally (never
-pushed remotely). All three issues closed with comments citing the
-evidence/decision and commit/test results.
-
-## Docs sweep -- what's still genuinely open (checked, not resolvable now)
-
-- **#567** (Administrador-only role scope for `reidentifyParticipant`):
-  checked RNF007 -- it only says "authorized, audited, tied to legitimate
-  purpose," no role-granularity guidance. Still genuinely Dennis/Denise's
-  call; no new information from this sweep, so no new comment posted
-  (nothing changed since the issue's last comment).
-- **#283** (`canonical-data-contract-v1.md` stale against the
-  segregated `ParticipantIdentity` model): the new manuscript spec
-  (`docs/docs-7-31-2026/manuscript/2.2-...Polyglot_Persistence_Data_Model.docx`)
-  is a strong source to finally fix this, but the target file is 1142
-  lines against a 26-domain/79-entity spec -- scoped out of this sitting
-  as a dedicated-session task, not a quick-group item. Worth picking up
-  next if continuing the docs-driven thread.
-- **#115** (`syncFromOrphadata` partial-coverage risk): re-confirmed
-  still correctly deferred to the canonical terminology data-modeling
-  phase per Denise's own prior comment on the issue -- not re-touched
-  this sitting, no new information.
+- **#567** (RNF007 AC#5 follow-up -- `reidentifyParticipant`'s
+  Administrador-only scope and free-text `reason` field): closed, no
+  code change. Asked Dennis directly; he said check docs first. A bounded
+  Explore agent confirmed RNF007 AC#5 (`docs/docs-7-31-2026/1-Requisitos-...md`,
+  lines 901-917) doesn't mandate a narrower role or a reason taxonomy --
+  per Dennis's steer, current implementation stands. Recorded the
+  reasoning in the issue comment.
+- **#574** (RF005/RNF007 -- cut ParticipantIdentity's civil-identity
+  fields over to ciphertext-only): closed, 3 slices, each merged/pushed
+  separately.
+  1. Mechanical consumers (`consent.controller.js`, `eConsent.js`,
+     `consent.service.js`, `sample.service.js`) now decrypt via
+     `participantIdentity.service.js#decryptIdentity` instead of reading
+     plaintext directly. Commit `6d2c981e`.
+  2. Added `identityDocumentHash`/`birthDateHash` blind-index siblings
+     (HMAC-SHA256, `fieldEncryption.js#hmacBlindIndex`), wired into
+     `encryptIdentityFields` (benefits every writer automatically).
+     Repointed `import.service.js`, `intakeWizard.js`,
+     `PatientIdentityService.js` to query hash-first with a plaintext
+     `$or` fallback for pre-existing records. Commit `e2c4dfa5`.
+  3. `reports.routes.js`'s `patientName` keyword search: researched docs
+     (RNF002 AC#2 forbids full-collection scans at 100k-record scale,
+     RF008's filter list excludes name search, RNF007 AC#4 requires
+     pseudonymization-by-default), presented findings to Dennis with
+     three options -- his call: **removed the feature entirely**
+     (`participantId`-only search remains). Commit `d954b628`.
+  - All 3 slices merged to `feature/docker-e2e-backend-integration`,
+    pushed through `7430471d` / `d94d061b` / `0dcee94d`.
+- **#283** (canonical-data-contract-v1.md stale against ParticipantIdentity
+  segregation): closed. Re-checked fresh rather than trusting the prior
+  "dedicated-session task" deferral -- the original complaint (patientName/
+  birthDate/identityDocument listed as direct Participant fields) was
+  already fixed by #560-#575's own doc-sync discipline. What was still
+  stale: the doc's ciphertext-cutover status paragraph described #574's
+  *pre-work* state. Rewrote it to reflect current reality. Scoped to the
+  ParticipantIdentity section only, not a full audit against the
+  26-domain/79-entity manuscript spec. Commit `406f030c`, merged/pushed
+  at `77bd191c`.
+- **#334** (RF007 remainder: assayId/datasetId linkage + file-replace
+  audit): closed, file-replace half landed, linkage half split to #641.
+  - Added `SampleFileController#replaceFile` (`PUT
+    /api/samples/:specimenId/files/:fileID/replace`, RF007 AC#7's
+    missing "substituição" audit verb) -- re-runs the checksum/encryption
+    pipeline, validates before removing the previous physical file, audits
+    via `action: 'file_replace'`. 88/88 native tests. Commit `70756d04`.
+  - **Docker verification** (Dennis's call, brought the stack up this
+    sitting): running the real RF007 e2e spec caught a genuine bug native
+    tests couldn't see -- `requirePermission`'s PUT->UPDATE default action
+    mapping didn't match `uploadSampleFiles`'s CREATE-only
+    `allowedActions`, 403ing every real request. Fixed per the
+    established `#631` pattern (explicit `'CREATE'` action override).
+    Extended `tests/e2e/scientific-data-access.spec.ts` with a
+    replace-and-audit test, 4/4 passing against `compose.test.yml`.
+    Commit `bfb2fde6`. Merged/pushed at `96dc6513`.
+  - assayId/datasetId linkage split to **#641** (new issue): confirmed
+    `Study`/`Protocol` models already exist and are reusable, no `Assay`/
+    `Dataset` model exists yet, full dictionary field scope written up
+    (ELM-0286-0297, ELM-0416-0423) so a future session doesn't re-derive
+    it. Genuinely needs its own design call (AC#6 requires files to link
+    to specimenId **or** assayId/studyId/datasetId, which implies a
+    routing-shape decision beyond just adding fields).
 
 ## Other findings this sitting
 
-- **Filed `dyeallpies-skills-pack#341`**: `resolve-issue`'s local-env/
-  step has no `bioavanced-v2.md` overlay, so nothing in its own flow
-  points a session at `bioavanced-v2-conventions`' branch-before-edit
-  rule before the first edit. Concretely bit this sitting -- used `cp`
-  (Bash, not caught by the `edit-branch-guard` hook, which only watches
-  Edit/Write/NotebookEdit) to modify `docs/research/cmpb-submission/`
-  files directly on `feature/docker-e2e-backend-integration` for #379,
-  before ever loading `bioavanced-v2-conventions` and discovering the
-  branch-per-issue rule. Caught before committing (`git stash` + branch
-  + `stash pop`), no bad outcome, but it's the same near-miss shape
-  `bioavanced-v2-conventions` already documents from 2026-07-09 (issue
-  #125). Suggested fix filed on the pack issue: add the missing
-  local-env overlay file.
+- **Filed #640** (security-relevant, BioAvanceD-v2): `PatientIdentityService.js#matchOrUpsertParticipant`'s
+  identity writes bypass `encryptIdentityFields` entirely -- records
+  created/updated through the intake-wizard match/upsert path get no
+  ciphertext/hash siblings at all, unlike every other writer. Found
+  while tracing #574's slice 2 read consumers. Not fixed inline (doesn't
+  block #574's own AC), filed immediately per the security-finding rule.
+- **Filed #641** (BioAvanceD-v2): the assayId/datasetId linkage split
+  from #334, see above.
+- **Filed dyeallpies-skills-pack#342**: the docs-first-before-
+  `AskUserQuestion` fix from pack#340 lives in `resolve-issue`'s text,
+  but this session called `AskUserQuestion` on #567's two sub-questions
+  *before* invoking `resolve-issue` (or any workflow skill) at all --
+  during initial ad hoc issue-discovery triage, prompted by "pick all
+  open RNF007/RF007 issues." A third recorded occurrence of the same
+  failure shape (2 in #340, this one) -- flagged as needing a mechanical
+  fix (a PreToolUse-style guard), not just prose, given prose has now
+  been re-skipped three times.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed through `919f6ecf`
-  (the #359 and #379 merges) plus this HANDOFF rotation still to commit.
+- On `feature/docker-e2e-backend-integration`, pushed through `96dc6513`.
   Working tree clean except the gitignored/junctioned `.claude/skills/`.
-- **Only targeted native tests run this sitting** -- #359's fix got
-  `auth-rate-limiter.test.js` (3/3) + `test:architecture` (60/60), run
-  twice (fix branch, then merged integration branch); #282 and #379 were
-  docs/binary-file changes with no applicable native test. Per the
-  conventions skill's gate order, this is the correct per-iteration
-  tier, not a shortcut.
-  - **The full native suite (`--coverage` backend run, frontend
-    `typecheck:full`, etc.) has NOT been re-run since two HANDOFFs ago**
-    -- now three small-to-medium commits stale on top of that last
-    confirmed-green full-suite run.
-- **Docker/CI gate not run this sitting** -- same as always, that's
-  `ship-integration-branch`'s job, not asked for yet. No PR to `main`
-  exists.
-- **#628's migration script (`backfillResultSpecimenIds.js`) still has
-  not been run against any real environment** -- older than this
-  sitting, still outstanding, unrelated to this sitting's work.
+- All 5 session branches (3x `test/574-*`, `test/283-*`, `test/334-*`)
+  merged, deleted locally (never pushed remotely) -- see `clean-up`'s
+  branch-domain check, single-author verified per commit.
+- **Docker**: `compose.test.yml` was brought up this sitting (Dennis's
+  explicit call, to prove #334's file-replace endpoint against the real
+  backend) and torn down at session end (`compose.test.yml down`,
+  Dennis's call, queue was empty). `backend-app-test`'s session-rebuilt
+  image removed, build cache pruned (~888MB). Named volumes
+  (`mongodb-test-data` etc.) persist for next time. Pre-existing images
+  from prior sessions (frontend-app-test, the 15 `reference-data-bootstrap-*`
+  images, etc.) left untouched -- not this session's to judge.
+- **Only targeted native tests + one real-backend e2e spec run this
+  sitting** -- no full-suite/`--coverage` backend run, no frontend
+  `typecheck:full`. Per the conventions skill's gate order, this is the
+  correct per-iteration tier; the full suite is `ship-integration-branch`'s
+  job, not asked for yet. No PR to `main` exists.
+- **#628's migration script (`backfillResultSpecimenIds.js`)** still not
+  run against any real environment -- older than this sitting, unrelated,
+  still outstanding.
 - Stale local+remote branch `fix/599-ci-trigger-integration-branch`
   (unrelated, still-open issue #599) still noted in passing, never
   touched.
+
+## Docs sweep carryover (from the prior rotation, still accurate)
+
+- **#115** (`syncFromOrphadata` partial-coverage risk): still correctly
+  deferred to the canonical terminology data-modeling phase per Denise's
+  own prior comment -- not re-touched this sitting.
 
 ## Recommended next steps
 
 None queued -- Dennis didn't name a next issue this sitting. If picking
 this repo back up:
 1. Re-check the open backlog fresh (`gh issue list --state open`) --
-   #567/#283/#115 above are the ones already triaged and confirmed
-   still-blocked/deferred; everything else hasn't been re-looked-at
-   this sitting.
-2. #283 (`canonical-data-contract-v1.md` staleness) is the most
-   concretely scoped next docs-driven task if continuing that thread --
-   the source manuscript doc is already identified, just needs the
-   dedicated-session time.
-3. Consider a full native-suite re-run before treating the branch as
-   verified-green end-to-end, since only targeted tests ran on top of
-   the last full-suite confirmation two HANDOFFs ago.
+   this sitting's docs-driven RNF007/RF007 sweep is now fully closed
+   out; nothing else was triaged this sitting.
+2. **#641** (Assay/Dataset entities + generalized scientific-file
+   linkage) is the most concretely scoped next build-loop-shaped task if
+   continuing the RF007 thread -- field scope, existing-model reuse, and
+   the routing-shape design question are all written up on the issue.
+3. **#640** (PatientIdentityService encryption gap) is a small, clearly
+   scoped security-relevant fix -- route both `$set` blocks in
+   `matchOrUpsertParticipant` through `encryptIdentityFields`, mirroring
+   `import.service.js`'s precedent.
+4. Consider a full native-suite re-run before treating the branch as
+   verified-green end-to-end -- this sitting only ran targeted tests plus
+   one real-backend e2e spec, not the full suite.
