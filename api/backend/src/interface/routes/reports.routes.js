@@ -466,13 +466,10 @@ async function buildPreviewData(db, rawType, filters = {}) {
         : {};
     const samples = await samplesCollection.find(sampleAnalysisQuery).limit(100).toArray();
 
-    // #628: Result's own reference field is specimenId (Result.js,
-    // result.routes.js). `sample.sampleID` here is a separate,
-    // pre-existing bug -- that field doesn't exist on the canonical
-    // Sample model at all (only `specimenId`) -- filed as #633, out of
-    // #628's own scope; this join stays non-functional until #633
-    // lands, same as before this change.
-    const sampleIds = samples.map((sample) => sample.sampleID).filter((sampleID) => sampleID !== undefined && sampleID !== null);
+    // #633: `sample.sampleID` doesn't exist on the canonical Sample
+    // model (only `specimenId` does) -- this join reads specimenId, the
+    // same field Result.specimenId references (Result.js, #628).
+    const sampleIds = samples.map((sample) => sample.specimenId).filter((specimenId) => specimenId !== undefined && specimenId !== null);
     const results = sampleIds.length
       ? await resultsCollection.find({ specimenId: { $in: sampleIds } }).toArray()
       : [];
@@ -490,10 +487,10 @@ async function buildPreviewData(db, rawType, filters = {}) {
     }, {});
 
     const analysis = samples.map((sample) => {
-      const key = String(sample.sampleID || '');
+      const key = String(sample.specimenId || '');
       const sampleResults = groupedResults[key] || [];
       return {
-        sampleID: sample.sampleID || sample._id,
+        sampleID: sample.specimenId || sample._id,
         barcode: sample.barcode || null,
         sampleType: sample.sampleType || null,
         patientID: sample.participantId || null,

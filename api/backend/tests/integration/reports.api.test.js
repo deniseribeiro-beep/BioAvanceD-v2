@@ -473,8 +473,8 @@ describe('Reports API integration', () => {
     it('sampleanalysis: agrupa amostras com/sem resultados (issue #78)', async () => {
       const { db } = buildCollectionDb({
         samples: [
-          { sampleID: 'S1', barcode: 'B1' },
-          { sampleID: 'S2', barcode: 'B2' },
+          { specimenId: 'S1', barcode: 'B1' },
+          { specimenId: 'S2', barcode: 'B2' },
         ],
         results: [{ specimenId: 'S1' }],
       });
@@ -498,8 +498,8 @@ describe('Reports API integration', () => {
     it('sampleanalysis: deriva status de specimenStatus, ignorando currentStatus/status legados', async () => {
       const { db } = buildCollectionDb({
         samples: [
-          { sampleID: 'S1', specimenStatus: 'depleted', currentStatus: 'Available', status: 'AVAILABLE' },
-          { sampleID: 'S2', currentStatus: 'Available', status: 'AVAILABLE' },
+          { specimenId: 'S1', specimenStatus: 'depleted', currentStatus: 'Available', status: 'AVAILABLE' },
+          { specimenId: 'S2', currentStatus: 'Available', status: 'AVAILABLE' },
         ],
       });
       const testApp = appWithDb(db);
