@@ -31,7 +31,7 @@ router.post('/:id/observations', authenticate, requirePermission('createPatient'
 router.get('/:id', authenticate, requireOrganizationScope, patientController.buscar.bind(patientController));
 
 // Reidentificação autorizada e auditada (RNF007 AC#4/AC#5, Administrador)
-router.post('/:id/reidentify', authenticate, requirePermission('reidentifyParticipant'), requireOrganizationScope, patientController.reidentify.bind(patientController));
+router.post('/:id/reidentify', authenticate, requirePermission('reidentifyParticipant', 'READ'), requireOrganizationScope, patientController.reidentify.bind(patientController));
 
 // Atualizar paciente
 router.put('/:id', authenticate, requirePermission('createPatient'), requireOrganizationScope, patientController.atualizar.bind(patientController));

@@ -696,7 +696,7 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
   }
 });
 
-router.post('/record-withdrawal', authenticate, requirePermission('withdrawSample'), async (req, res) => {
+router.post('/record-withdrawal', authenticate, requirePermission('withdrawSample', 'UPDATE'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {

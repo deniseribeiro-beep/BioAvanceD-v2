@@ -71,9 +71,56 @@ const permissions = Object.fromEntries(
 );
 
 /**
- * Middleware para verificar permissão específica
+ * #631: default HTTP-verb -> dict-02 action mapping, used when a route
+ * doesn't pass an explicit action to `requirePermission`. Deliberately
+ * the lowest-risk shape (#630's own audit note): this covers every call
+ * site whose derived action is already within its permissionCode's
+ * (now #630-corrected) allowedActions, which is the overwhelming
+ * majority. Only a route where the default would derive an action
+ * outside its code's allowedActions needs the explicit override.
  */
-const requirePermission = (permission) => {
+const METHOD_TO_ACTION = {
+  GET: 'READ',
+  HEAD: 'READ',
+  POST: 'CREATE',
+  PUT: 'UPDATE',
+  PATCH: 'UPDATE',
+  DELETE: 'DELETE',
+};
+
+function logForbiddenAttempt(db, req, message) {
+  setImmediate(async () => {
+    try {
+      if (db) {
+        const auditLogger = require('../../utils/auditLogger');
+        auditLogger.init(db);
+        await auditLogger.log({
+          action: 'FORBIDDEN',
+          resourceType: 'Access',
+          status: 'error',
+          severity: 'warning',
+          message,
+          req: req,
+          module: 'Segurança'
+        });
+      }
+    } catch (error) {
+      // Não bloqueia se houver erro no log
+    }
+  });
+}
+
+/**
+ * Middleware para verificar permissão específica.
+ *
+ * #631: also enforces `PERMISSION_CATALOG[permission].allowedActions` —
+ * the action is `explicitAction` when the route passes one, otherwise
+ * derived from `req.method` via `METHOD_TO_ACTION`. A route whose real
+ * action doesn't match its HTTP verb (e.g. a POST that reads/updates an
+ * existing resource rather than creating one) must pass `explicitAction`
+ * explicitly; see #630's audit for which call sites need it.
+ */
+const requirePermission = (permission, explicitAction) => {
   return async (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({
@@ -106,28 +153,19 @@ const requirePermission = (permission) => {
 
     if (!hasPermission) {
       logger.warn(`Permissão negada: ${permission} para usuário ${req.user.userID}`);
-
-      // Registra tentativa de acesso negado
-      setImmediate(async () => {
-        try {
-          if (db) {
-            const auditLogger = require('../../utils/auditLogger');
-            auditLogger.init(db);
-            await auditLogger.log({
-              action: 'FORBIDDEN',
-              resourceType: 'Access',
-              status: 'error',
-              severity: 'warning',
-              message: `Tentativa de acesso negado: ${permission}`,
-              req: req,
-              module: 'Segurança'
-            });
-          }
-        } catch (error) {
-          // Não bloqueia se houver erro no log
-        }
+      logForbiddenAttempt(db, req, `Tentativa de acesso negado: ${permission}`);
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Você não tem permissão para esta ação'
       });
+    }
 
+    const action = explicitAction || METHOD_TO_ACTION[req.method];
+    const allowedActions = PERMISSION_CATALOG[permission].allowedActions;
+    if (!action || !allowedActions.includes(action)) {
+      logger.warn(`Ação não permitida: ${action || req.method} para permissão ${permission} (usuário ${req.user.userID})`);
+      logForbiddenAttempt(db, req, `Ação não permitida: ${action || req.method} para permissão ${permission}`);
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',

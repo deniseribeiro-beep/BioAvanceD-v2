@@ -88,7 +88,11 @@ describe('RBAC middleware (#421 - UserRoleAssignment -> Role -> Permission)', ()
   let next;
 
   beforeEach(() => {
-    req = { user: null, app: { locals: {} } };
+    // #631: requirePermission now derives an action from req.method when
+    // no explicit override is passed — default to POST (createUser's
+    // allowedActions cover all four actions post-#630, so any method
+    // works for the tests below that don't care about the action check).
+    req = { user: null, app: { locals: {} }, method: 'POST' };
     res = createRes();
     next = vi.fn();
   });
@@ -241,6 +245,68 @@ describe('RBAC middleware (#421 - UserRoleAssignment -> Role -> Permission)', ()
       action: 'FORBIDDEN',
       resourceType: 'Access'
     }));
+  });
+
+  // #631: requirePermission also enforces PERMISSION_CATALOG's
+  // allowedActions, per-verb -- action derived from req.method by
+  // default, or the explicit second arg when a route passes one (see
+  // #630's audit for which call sites need the override).
+  describe('requirePermission — enforcement per allowedActions (#631)', () => {
+    const withdrawRole = {
+      roleId: 'role-withdraw',
+      roleCode: 'technician',
+      hierarchyLevel: 2,
+      roleStatus: 'active',
+      permissionIds: ['perm-withdrawSample'],
+    };
+    const withdrawPermissionDocs = [
+      { permissionId: 'perm-withdrawSample', permissionCode: 'withdrawSample' },
+    ];
+
+    it('permite GET viewReports — ação READ derivada do método, sem override', async () => {
+      req.user = { userID: 'u1' };
+      req.method = 'GET';
+      req.app.locals.db = buildRbacDb({
+        roles: [externalRole],
+        permissionDocs,
+        assignments: [activeAssignment('u1', 'role-external')],
+      });
+
+      await requirePermission('viewReports')(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+    });
+
+    it('nega POST withdrawSample sem override — CREATE derivado do método não está em allowedActions (["UPDATE"])', async () => {
+      req.user = { userID: 'u1' };
+      req.method = 'POST';
+      req.app.locals.db = buildRbacDb({
+        roles: [withdrawRole],
+        permissionDocs: withdrawPermissionDocs,
+        assignments: [activeAssignment('u1', 'role-withdraw')],
+      });
+
+      await requirePermission('withdrawSample')(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('permite POST withdrawSample com override explícito UPDATE, mesmo o método sendo POST', async () => {
+      req.user = { userID: 'u1' };
+      req.method = 'POST';
+      req.app.locals.db = buildRbacDb({
+        roles: [withdrawRole],
+        permissionDocs: withdrawPermissionDocs,
+        assignments: [activeAssignment('u1', 'role-withdraw')],
+      });
+
+      await requirePermission('withdrawSample', 'UPDATE')(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+    });
   });
 
   // #340 (RF003 AC#3): org-scope enforcement gate for sample/patient
