@@ -340,13 +340,34 @@ describe('reports.routes.js gaps', () => {
     );
   });
 
-  it('sampleanalysis: amostras sem sampleID são ignoradas no agrupamento de resultados', async () => {
+  // #633: Sample documents only ever have `specimenId` (the canonical
+  // field) — `sampleID` doesn't exist on the real model. This fixture
+  // deliberately has no `sampleID` at all, matching a real Sample
+  // document shape, to prove the join actually works rather than
+  // relying on a mock that happens to carry the buggy field name.
+  it('sampleanalysis: amostra com specimenId e resultado correspondente mostra hasResults true', async () => {
+    const { db } = buildCollectionDb({
+      samples: [{ specimenId: 'SPEC-1', barcode: 'B1' }],
+      results: [{ specimenId: 'SPEC-1' }],
+    });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp).post('/api/reports/sampleanalysis/preview').send({ filters: {} });
+
+    expect(response.status).toBe(200);
+    const row = response.body.data.analysis.find((item) => item.barcode === 'B1');
+    expect(row.hasResults).toBe(true);
+    expect(row.resultCount).toBe(1);
+    expect(row.sampleID).toBe('SPEC-1');
+  });
+
+  it('sampleanalysis: amostras sem specimenId são ignoradas no agrupamento de resultados', async () => {
     const { db } = buildCollectionDb({
       samples: [
-        { sampleID: 'S1', barcode: 'B1' },
-        { sampleID: null, barcode: 'B2' },
+        { specimenId: 'SPEC-1', barcode: 'B1' },
+        { specimenId: null, barcode: 'B2' },
       ],
-      results: [{ specimenId: 'S1' }],
+      results: [{ specimenId: 'SPEC-1' }],
     });
     const testApp = appWithDb(db);
 
@@ -362,7 +383,7 @@ describe('reports.routes.js gaps', () => {
   // always output null.
   it('sampleanalysis: linha de análise resolve patientID a partir de participantId', async () => {
     const { db } = buildCollectionDb({
-      samples: [{ sampleID: 'S1', barcode: 'B1', participantId: 'P1' }],
+      samples: [{ specimenId: 'SPEC-1', barcode: 'B1', participantId: 'P1' }],
       results: [],
     });
     const testApp = appWithDb(db);
@@ -370,7 +391,7 @@ describe('reports.routes.js gaps', () => {
     const response = await request(testApp).post('/api/reports/sampleanalysis/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
-    expect(response.body.data.analysis.find((item) => item.sampleID === 'S1').patientID).toBe('P1');
+    expect(response.body.data.analysis.find((item) => item.sampleID === 'SPEC-1').patientID).toBe('P1');
   });
 
   it('temperatura: sem filtros de data nem alerta crítico usa query vazia e modo report', async () => {
@@ -551,8 +572,8 @@ describe('reports.routes.js gaps', () => {
 
   it('sampleanalysis: resultado sem specimenId é ignorado no agrupamento', async () => {
     const { db } = buildCollectionDb({
-      samples: [{ sampleID: 'S1', barcode: 'B1' }],
-      results: [{ specimenId: 'S1' }, { specimenId: null }],
+      samples: [{ specimenId: 'SPEC-1', barcode: 'B1' }],
+      results: [{ specimenId: 'SPEC-1' }, { specimenId: null }],
     });
     const testApp = appWithDb(db);
 
