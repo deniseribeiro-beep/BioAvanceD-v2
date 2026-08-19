@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const consentController = require('../../../src/controllers/consent.controller');
 const consentService = require('../../../src/services/consent.service');
 const patientService = require('../../../src/services/patient.service');
+const participantIdentityService = require('../../../src/services/participantIdentity.service');
 const auditLogger = require('../../../src/utils/auditLogger');
 
 function createRes() {
@@ -83,6 +84,33 @@ describe('ConsentController.getPendingPatientsForPolicy', () => {
     expect(identitiesFind).toHaveBeenCalledWith({ participantId: { $in: ['p1'] } });
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({ success: true, data: [{ participantId: 'p1', patientName: 'Paciente QA' }] });
+  });
+
+  it('resolves patientName from ciphertext-only ParticipantIdentity records, no plaintext present (RF005/RNF007 #574)', async () => {
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: 'p1',
+      patientName: 'Paciente Cifrado'
+    });
+    const ciphertextOnlyIdentity = { ...encrypted, patientName: null };
+
+    const patientsToArray = vi.fn().mockResolvedValue([{ participantId: 'p1' }]);
+    const patientsProject = vi.fn().mockReturnValue({ toArray: patientsToArray });
+    const patientsFind = vi.fn().mockReturnValue({ project: patientsProject });
+
+    const identitiesToArray = vi.fn().mockResolvedValue([ciphertextOnlyIdentity]);
+    const identitiesProject = vi.fn().mockReturnValue({ toArray: identitiesToArray });
+    const identitiesFind = vi.fn().mockReturnValue({ project: identitiesProject });
+
+    const collection = vi.fn((name) =>
+      name === 'participantIdentities' ? { find: identitiesFind } : { find: patientsFind }
+    );
+    const req = createReq({ params: { id: 'policy1' }, app: { locals: { db: { collection } } } });
+    const res = createRes();
+
+    await consentController.getPendingPatientsForPolicy(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: [{ participantId: 'p1', patientName: 'Paciente Cifrado' }] });
   });
 
   it('skips the ParticipantIdentity lookup when no pending patients are found', async () => {

@@ -17,6 +17,7 @@ const qualityDomain = require('./quality-domain.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const quarantineActionService = require('./quarantine-action.service');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
+const participantIdentityService = require('./participantIdentity.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
@@ -778,11 +779,13 @@ class SampleService {
       if (sample.participantId) {
         participant = await patientsCollection.findOne({ participantId: sample.participantId });
         if (participant) {
-          // RF005/RNF007 (#561/#564): patientName resolved via
+          // RF005/RNF007 (#561/#564/#574): patientName resolved via
           // ParticipantIdentity instead of read directly off the Patient
-          // document.
+          // document. decryptIdentity falls back to the ciphertext sibling
+          // once the plaintext field is dropped (#566).
           const identityCollection = await getCollection(db, 'participantIdentities');
-          const identity = await identityCollection.findOne({ participantId: sample.participantId });
+          const rawIdentity = await identityCollection.findOne({ participantId: sample.participantId });
+          const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
           const anonymizeName = (name) => {
             if (!name) return '***';
             const parts = name.trim().split(' ');

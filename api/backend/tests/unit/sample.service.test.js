@@ -1247,6 +1247,31 @@ describe('sample.service', () => {
 
       await expect(sampleService.getSampleByBarcode(db, 'BR-1')).rejects.toThrow('mongo down');
     });
+
+    it('resolves patientName from a ciphertext-only ParticipantIdentity record (RF005/RNF007 #574)', async () => {
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      const encrypted = participantIdentityService.encryptIdentityFields({
+        participantId: '12345678',
+        patientName: 'Maria Silva'
+      });
+      const ciphertextOnlyIdentity = { ...encrypted, patientName: null };
+
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValueOnce({
+        _id: 's1',
+        barcode: 'BR-1',
+        participantId: '12345678'
+      });
+      db.collections.patients.findOne.mockResolvedValue({
+        participantId: '12345678',
+        recordNumber: 'RN1'
+      });
+      db.collection('participantIdentities').findOne.mockResolvedValue(ciphertextOnlyIdentity);
+
+      const { participant } = await sampleService.getSampleByBarcode(db, 'BR-1');
+      expect(participant.patientName).toBe('M. S.');
+      expect(participant.participantId).toBe('12345678');
+    });
   });
 
   // -------------------------------------------------------------------

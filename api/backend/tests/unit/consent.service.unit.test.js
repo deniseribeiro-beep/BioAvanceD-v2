@@ -697,6 +697,54 @@ describe('ConsentService.createPolicy', () => {
     vi.restoreAllMocks();
   });
 
+  it('resolves patientName from a ciphertext-only ParticipantIdentity record when notifying pending patients (RF005/RNF007 #574)', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '10203040',
+      patientName: 'Maria Cifrada'
+    });
+    const ciphertextOnlyIdentity = { ...encrypted, patientName: null };
+
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const pendingPatient = { _id: new ObjectId(), participantId: '10203040', status: 'PENDING_CONSENT' };
+    const patients = makeCollection({
+      find: vi.fn(() => makeCursor([pendingPatient])),
+      updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
+    });
+    const participantIdentities = makeCollection({
+      findOne: vi.fn(async ({ participantId }) => (participantId === '10203040' ? ciphertextOnlyIdentity : null)),
+    });
+    const db = makeDb({ consent_templates: templates, patients, participantIdentities });
+
+    vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
+      token: 'tok-123',
+      createdAt: new Date(),
+      expiresAt: new Date(),
+    });
+    vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://example.com/consent/tok-123');
+    vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+    const payload = {
+      title: 'Policy',
+      htmlContent: '<p>content</p>',
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validTo: '2026-12-31T23:59:59.000Z',
+      granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
+    };
+
+    await consentService.createPolicy(db, payload);
+
+    expect(notificationService.enqueueConsentNotification).toHaveBeenCalledWith(
+      { ...pendingPatient, patientName: 'Maria Cifrada' },
+      'https://example.com/consent/tok-123'
+    );
+
+    vi.restoreAllMocks();
+  });
+
   it('rejects when validTo is earlier than validFrom', async () => {
     const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
     const db = makeDb({ consent_templates: templates });

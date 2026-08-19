@@ -6,6 +6,7 @@ const notificationService = require('../services/notification.service');
 const { authenticate } = require('../infrastructure/middleware/auth');
 const { requireRole, requirePermission } = require('../infrastructure/middleware/rbac');
 const consentController = require('../controllers/consent.controller');
+const participantIdentityService = require('../services/participantIdentity.service');
 const CONSENT_SECRET = String(process.env.CONSENT_SECRET || '').trim();
 const CONSENT_EXPIRATION = 60 * 60 * 2; // 2h
 
@@ -42,10 +43,12 @@ router.get('/validate/:token', async (req, res) => {
     const patient = await db.collection('patients').findOne({ participantId: payload.participantId });
     if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
 
-    // RF005/RNF007 (#562): patientName/birthDate/identityDocument are civil
+    // RF005/RNF007 (#562/#574): patientName/birthDate/identityDocument are civil
     // identity — resolved via ParticipantIdentity, not trusted from Patient's
-    // own (soon to be removed) copy of the fields.
-    const identity = await db.collection('participantIdentities').findOne({ participantId: payload.participantId });
+    // own (soon to be removed) copy of the fields. decryptIdentity falls back
+    // to the ciphertext sibling once the plaintext field is dropped (#566).
+    const rawIdentity = await db.collection('participantIdentities').findOne({ participantId: payload.participantId });
+    const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
     const patientWithIdentity = identity
       ? {
         ...patient,
