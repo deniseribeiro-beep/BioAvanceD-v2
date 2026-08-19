@@ -1,64 +1,49 @@
 # HANDOFF
 
-**Written:** 2026-08-19, fresh sitting (thirtieth update). **Still inside
-the rabbit hole**, tracker **#618** ("organization-scope enforcement +
-RBAC gaps"). This sitting is resolving the off-shoot issues filed last
-sitting, in readiness order **#630 -> #631 -> #628 -> #629**. #630 and
-#631 are both done; #628 and #629 remain queued for this same sitting
-(not yet started as of this write).
+**Written:** 2026-08-19, fresh sitting (thirty-first update). **Still
+inside the rabbit hole**, tracker **#618** ("organization-scope
+enforcement + RBAC gaps"). This sitting is resolving the off-shoot
+issues filed last sitting, in readiness order **#630 -> #631 -> #628 ->
+#629**. #630, #631, and #628 are all done; **#629 is the last item in
+the requested order and has not been started yet** — this sitting is
+well over its own pacing budget (three "large" items landed back to
+back: #630/#631/#628 each ran 5 points against a ~10-point-per-sitting
+guideline) and #629 is itself flagged as likely spanning beyond one
+sitting on its own, so the next pickup should check in with Dennis
+before diving in rather than assuming "keep going" still applies
+unprompted.
 
 ## Rabbit hole state
 
 - **Tracker:** #618, open.
-- **Landed this sitting:** #630 (fully resolved), #631 (fully resolved,
-  depended on #630).
-- **Filed this sitting:** #632 (enhancement — `manageBackup`/
-  `manageSystem`/`resetMFA` permission codes are seeded/granted but never
-  checked by `requirePermission()` anywhere; routes hardcode
-  `requireRole(4)`/`isAdministrator` instead). Added to tracker #618's
-  thread on filing. Also filed **dyeallpies-skills-pack#339** (not part
-  of this tracker — a skills-pack hook finding, see "Process note" below)
-  for the record; no action needed on it from a BioAvanceD-v2 session.
-- **Still queued, this sitting's own order:** #628, #629 — Dennis's
-  design-call answers on both are below, gathered before #630 started so
-  the next pickup doesn't need to re-ask.
-- **#632 not yet in the requested order** — filed mid-sitting, lower
-  priority than the four originally queued; recompute against the
-  tracker before picking it up, per the rabbit-hole skill's own
-  guidance.
+- **Landed this sitting:** #630, #631, #628 — all fully resolved.
+- **Filed this sitting:** #632 (unenforced manageBackup/manageSystem/
+  resetMFA permission codes, found during #630), #633 (reports.routes.js
+  reads a nonexistent Sample.sampleID field, found during #628). Both
+  added to tracker #618's thread on filing. Also filed
+  **dyeallpies-skills-pack#339** (not part of this tracker — a
+  skills-pack hook finding: `edit-branch-guard.cjs` let one Edit through
+  on a protected branch without blocking, found between #630 and #631;
+  see that issue for detail, no action needed from a BioAvanceD-v2
+  session).
+- **Still queued, this sitting's own order:** #629 only. Dennis's design
+  call is already gathered below — don't re-ask.
+- **#632/#633 not yet in the requested order** — filed mid-sitting,
+  lower priority than the four originally queued; recompute against the
+  tracker before picking either up.
 
-## Design decisions Dennis already gave this sitting (don't re-ask)
+## Design decision Dennis already gave this sitting (don't re-ask)
 
-- **#628 (`Result.sampleID` canonical shape):** Dennis said to check
-  docs. `docs/architecture/canonical-data-contract-v1.md`'s "Legacy
-  Fields Prohibited" list explicitly bans `sampleID`/`sampleId` as a
-  field name anywhere in the canonical model (global naming convention,
-  not scoped to one entity) — pointing at renaming the field to
-  `specimenId` (storing `Specimen.specimenId`, the business identifier)
-  rather than just normalizing the *value* under the existing
-  `sampleID` name as the issue's own body originally suggested. Note:
-  `Result` itself has no entry in dict-02 (grepped, no match) — it's
-  outside the canonical dictionary's own entity list, so this is the
-  naming-convention section applying, not an entity-specific dict-02
-  rule. This makes #628 bigger than originally scoped (a field rename +
-  every read/write site, not just the write-path value fix) —
-  reconfirm with `divide-and-conquer` when picked up.
-- **#628 (backfill existing Result documents?):** Dennis said to check
-  docs; none found that answer this specific operational question
-  (fix-forward vs. migrate) — still an open call to make when #628 is
-  actually picked up, probably worth a quick confirm with Dennis at
-  that point rather than assuming either way given it touches
-  production-shaped data.
 - **#629 (Sensor/Equipment/Temperature/Report org-scope boundary):**
-  Dennis chose "wire in real org references" (schema change) over
-  "stop here for now." Matches the newly-found **F3-G09** gate (from
-  the 2026-07-31 doc refresh, `docs/docs-7-31-2026/CHANGELOG-2026-07-31.md`
-  + `3-Plano_Integrado_Foundation_Data_Pipeline.md`): "reports/exports
-  must derive organizational scope from active assignments and prevent
-  cross-org/collection/study leakage" — this is now an explicit CI-gate
-  requirement, not just this rabbit hole's own initiative. The issue's
-  own body already flags this will likely need its own
-  `divide-and-conquer` split once started.
+  Dennis chose "wire in real org references" (schema change) over "stop
+  here for now." Matches the **F3-G09** gate (2026-07-31 doc refresh,
+  `docs/docs-7-31-2026/CHANGELOG-2026-07-31.md` +
+  `3-Plano_Integrado_Foundation_Data_Pipeline.md`): "reports/exports must
+  derive organizational scope from active assignments and prevent
+  cross-org/collection/study leakage" — an explicit CI-gate requirement,
+  not just this rabbit hole's own initiative. The issue's own body
+  already flags this will likely need its own `divide-and-conquer` split
+  once started — treat that as confirmed, not a fresh judgment call.
 
 ## Docs note for future pickups
 
@@ -73,68 +58,61 @@ batches.
 ## Process note: verify branch protection before every product-file edit
 
 `edit-branch-guard.cjs` (blocks direct Edit/Write on `main`/
-`feature/docker-e2e-backend-integration`) fired correctly for #630's
-first edit attempt, then failed to fire for #631's first edit attempt —
-same session, same protected branch, no intervening branch change,
-confirmed via `git branch --show-current` immediately after that the
-edit had landed directly on the protected branch. Recovered cleanly
-(`git checkout -b fix/631-...` after the fact, diff carried over, no
-work lost), but don't rely on the hook alone next time — **run
-`git branch --show-current` before the first product-file Edit of each
-issue this sitting**, as a manual backstop, until
-dyeallpies-skills-pack#339 (filed this sitting, plausible fail-open bug
-in the hook's git-command error handling) is resolved upstream.
+`feature/docker-e2e-backend-integration`) fired correctly for #630's and
+#628's first edit attempts, but failed to fire once for #631's (same
+session, same protected branch, no intervening branch change — filed as
+dyeallpies-skills-pack#339, plausible fail-open bug in the hook's git-
+command error handling). Recovered cleanly both times it mattered; no
+work was lost. Keep running `git branch --show-current` before the first
+product-file Edit of each issue as a manual backstop until that's
+resolved upstream.
 
 ## Issue closed this sitting (most recent)
 
-- **#631**: `requirePermission(code, explicitAction?)` now checks the
-  caller's action — derived from `req.method` by default (GET->READ,
-  POST->CREATE, PUT/PATCH->UPDATE, DELETE->DELETE), or the explicit
-  second arg when a route passes one — against
-  `PERMISSION_CATALOG[code].allowedActions` (#630's now-corrected
-  catalog), not just whether the caller holds the permission code at
-  all. Verified programmatically (small script cross-referencing every
-  `requirePermission()` call site's HTTP verb against its code's
-  corrected allowedActions) that the default derivation matches all 107
-  call sites except 4: `sample.routes.js`'s `POST /:id/withdraw` and
-  `POST /:id/return`, `user.routes.js`'s `POST /record-withdrawal` (all
-  three `withdrawSample`, explicit override `'UPDATE'`, not the naive
-  `CREATE`), and `patient.routes.js`'s `POST /:id/reidentify`
-  (`reidentifyParticipant`, override `'READ'`). Without these overrides
-  the naive default would have 403'd real working traffic on those 4
-  routes. New tests in `rbac.test.js` cover default-derived-action-pass,
-  an unoverridden narrow-action code correctly denying, and an explicit
-  override passing despite the method not matching; existing cases
-  updated to set `req.method` (bare test req objects had none before).
-  Merged `19a95a7f`, pushed. Targeted suite green (rbac,
-  rbac-catalog-seed, sample.routes, participantIdentity.reidentify:
-  181/181) — full native suite not re-run this sitting yet; run before
-  the sitting's own close-out or at the next Docker/CI gate.
+- **#628**: `Result.sampleID` renamed to `specimenId` across every write
+  path (`Result.js`, `result.routes.js`'s `POST /upload`/`POST /`/
+  `PUT /:id/link-sample`, all now resolving via a real Sample lookup
+  instead of trusting the caller directly — `POST /` previously did no
+  lookup at all), every read/join (`reports.routes.js`'s two report
+  types, `result-worker.js`'s CSV import, which already used
+  `specimenId` — a third pre-existing shape the original issue didn't
+  know about), and the frontend (`types/models.ts`,
+  `SampleDetailsPage.tsx`, `ResultsPage.tsx`, `AnalysisUploadModal.tsx`,
+  `api.ts`, `useResults.ts`; `sampleHelpers.ts`'s two dead sampleID-based
+  functions removed). `PUT /:id`'s generic `$set` now strips
+  `specimenId`/`sampleID`/`sampleId` so a caller can't overwrite the
+  reference outside `link-sample`'s own validated path — a latent
+  hardening gap found while auditing, fixed inline (same write-path-
+  integrity class as the issue itself). New idempotent backfill
+  (`result-specimenid-backfill.service.js` +
+  `src/scripts/backfillResultSpecimenIds.js`) migrates existing Result
+  documents (Dennis confirmed: migrate, not fix-forward-only) — **not
+  yet run against any real environment**, run it as part of deploying
+  this change. Merged `07009bce`, pushed. Targeted suite green
+  (backend 444/444, frontend `tsc --noEmit` clean + targeted tests).
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed through
-  `19a95a7f`. Working tree clean except the gitignored/junctioned
-  `.claude/skills/`. No stale local branches — `fix/630-...` and
-  `fix/631-...` both merged and deleted immediately after landing.
-- No Docker stack brought up this sitting — #630/#631 are
-  backend-internal, native/mocked-Mongo proof bar only.
+  `07009bce`. Working tree clean except the gitignored/junctioned
+  `.claude/skills/`. No stale local branches — all three fix branches
+  this sitting (`fix/630-...`, `fix/631-...`, `fix/628-...`) merged and
+  deleted immediately after landing.
+- No Docker stack brought up this sitting — all three landed fixes are
+  backend-internal/frontend-typecheck, native proof bar only. The #628
+  backfill script specifically needs a real (or at least Docker-compose)
+  MongoDB to actually run against — flagged above, not exercised yet.
 
 ## Recommended next steps
 
-Continue this same sitting's queue: **#628 -> #629**, in that order, per
-Dennis's request to resolve all four off-shoot issues. Design decisions
-for both are already gathered above — don't re-ask, but do confirm the
-#628 backfill question with Dennis before writing any migration script
-(docs didn't answer that specific sub-question). Recompute the sitting's
-budget fresh before each pickup per the rabbit-hole skill's own pacing
-guidance — #628 turned out bigger than originally scoped once
-cross-checked against docs (a field rename, not just a value fix), and
-#629 is explicitly flagged as likely spanning beyond one sitting
-(schema change across Sensor/Equipment/Temperature + Report). If the
-running total is at or over budget after #628, surface to Dennis before
-continuing into #629 rather than pushing through silently.
+**Check in with Dennis before starting #629** — this sitting is already
+over its own pacing budget and #629 is independently flagged as likely
+spanning beyond one sitting (a real schema change across
+Sensor/Equipment/Temperature + Report, explicitly recommended to need
+its own `divide-and-conquer` split). His design call ("wire in real org
+references") is already gathered above, so the check-in is about
+sequencing/continuing, not re-litigating scope.
 
-#632 (new, unenforced `manageBackup`/`manageSystem`/`resetMFA`) is not
-part of the requested order — pick it up only after the four originally
-queued, or if Dennis re-prioritizes.
+#632/#633 (both new, both smaller than #629) are candidates if Dennis
+wants a smaller item to close out the sitting instead of starting #629's
+larger scope.
