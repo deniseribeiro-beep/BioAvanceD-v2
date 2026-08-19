@@ -11,8 +11,58 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const backupService = require('../../src/services/backup.service');
-const { createDbMock } = require('../factories/db.factory');
+const { createDbMock, createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const { PERMISSION_CATALOG } = require('../../src/services/rbac-catalog-seed.service');
+
+// #632: requireRole(4) grants access to *any* hierarchyLevel-4 role,
+// regardless of whether that role was actually granted the manageBackup
+// permission — the permission catalog entry has zero enforcement power.
+// This mock reproduces a hierarchyLevel-4 role that was never granted
+// manageBackup, to prove requirePermission('manageBackup') (unlike
+// requireRole(4)) correctly denies it.
+function matchesQuery(doc, query = {}) {
+  return Object.entries(query).every(([key, cond]) => {
+    if (cond && typeof cond === 'object' && '$in' in cond) {
+      return cond.$in.includes(doc[key]);
+    }
+    return doc[key] === cond;
+  });
+}
+function queryableCollectionMock(docs) {
+  return createCollectionMock({
+    findOne: vi.fn(async (query = {}) => docs.find((d) => matchesQuery(d, query)) || null),
+    find: vi.fn((query = {}) => ({
+      toArray: vi.fn().mockResolvedValue(docs.filter((d) => matchesQuery(d, query))),
+    })),
+  });
+}
+function buildPartialAdminCollections() {
+  const permissionDocs = Object.entries(PERMISSION_CATALOG).map(([permissionCode, entry]) => ({
+    permissionId: `perm-${permissionCode}`,
+    permissionCode,
+    ...entry,
+  }));
+  const partialAdminPermissionIds = Object.keys(PERMISSION_CATALOG)
+    .filter((code) => code !== 'manageBackup' && code !== 'resetMFA')
+    .map((code) => `perm-${code}`);
+  return {
+    roles: queryableCollectionMock([
+      { roleId: 'role-partial-admin', roleCode: 'partial_admin', hierarchyLevel: 4, roleStatus: 'active', permissionIds: partialAdminPermissionIds },
+    ]),
+    permissions: queryableCollectionMock(permissionDocs),
+    userRoleAssignments: queryableCollectionMock([
+      { userAccountId: 'qa-partial-admin', roleId: 'role-partial-admin', assignmentStatus: 'active', validUntil: null },
+    ]),
+  };
+}
+function partialAdminToken() {
+  return jwt.sign(
+    { userID: 'qa-partial-admin', accessType: 4, roleName: 'Administrador', name: 'QA Partial Admin', mfaVerified: true },
+    process.env.JWT_SECRET,
+    { expiresIn: '1h' }
+  );
+}
 
 // #421: enforcement resolves permissions via UserRoleAssignment -> Role ->
 // Permission, keyed by userID — not accessType off the JWT directly. Give
@@ -40,6 +90,20 @@ beforeEach(() => {
   });
 });
 afterEach(() => { vi.restoreAllMocks(); });
+
+describe('manageBackup permission enforcement (#632)', () => {
+  it('denies a hierarchyLevel-4 role that was never granted manageBackup', async () => {
+    app.locals.db = createDbMock(buildPartialAdminCollections());
+    vi.spyOn(backupService, 'runBackup').mockResolvedValue({ success: true, path: '/backups/2026-06-30', size: 1024 });
+
+    const res = await request(app)
+      .post('/api/backup/perform')
+      .set('Authorization', `Bearer ${partialAdminToken()}`);
+
+    expect(res.status).toBe(403);
+    expect(backupService.runBackup).not.toHaveBeenCalled();
+  });
+});
 
 describe('POST /api/backup/perform', () => {
   it('returns 401 without token', async () => {

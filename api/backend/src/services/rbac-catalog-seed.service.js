@@ -95,7 +95,11 @@ const PERMISSION_CATALOG = {
   createPatient: { resourceType: 'Patient', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Criar paciente' },
   uploadSampleFiles: { resourceType: 'SampleFile', allowedActions: ['CREATE'], displayName: 'Enviar arquivos da amostra' },
   deleteSampleFiles: { resourceType: 'SampleFile', allowedActions: ['DELETE'], displayName: 'Excluir arquivos da amostra' },
-  manageBackup: { resourceType: 'System', allowedActions: ['UPDATE'], displayName: 'Gerenciar backup' },
+  // #632: broadened from ['UPDATE'] to cover backup.routes.js's real
+  // operations (POST /perform -> CREATE, GET /list -> READ, POST
+  // /restore/:fileName -> UPDATE) now that the route enforces this code
+  // directly instead of a hardcoded requireRole(4).
+  manageBackup: { resourceType: 'System', allowedActions: ['CREATE', 'READ', 'UPDATE'], displayName: 'Gerenciar backup' },
   manageSystem: { resourceType: 'System', allowedActions: ['UPDATE'], displayName: 'Gerenciar sistema' },
   resetMFA: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Redefinir MFA' },
   manageTemperature: { resourceType: 'Temperature', allowedActions: ['UPDATE'], displayName: 'Gerenciar incidentes de temperatura' },

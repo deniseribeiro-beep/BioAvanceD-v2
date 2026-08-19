@@ -170,3 +170,70 @@ describe('RF003 - POST /api/users/register', () => {
     expect(usersCollection.insertOne).not.toHaveBeenCalled();
   });
 });
+
+describe('resetMFA permission enforcement (#632)', () => {
+  const { PERMISSION_CATALOG } = require('../../src/services/rbac-catalog-seed.service');
+
+  function matchesQuery(doc, query = {}) {
+    return Object.entries(query).every(([key, cond]) => {
+      if (cond && typeof cond === 'object' && '$in' in cond) return cond.$in.includes(doc[key]);
+      return doc[key] === cond;
+    });
+  }
+  function queryableCollectionMock(docs) {
+    return createCollectionMock({
+      findOne: vi.fn(async (query = {}) => docs.find((d) => matchesQuery(d, query)) || null),
+      find: vi.fn((query = {}) => ({ toArray: vi.fn().mockResolvedValue(docs.filter((d) => matchesQuery(d, query))) })),
+    });
+  }
+  // #632: today's hand-rolled `isAdministrator()` check gates strictly on
+  // roleCode === 'administrator' — it ignores the RBAC Permission catalog
+  // entirely, so a non-administrator role explicitly granted `resetMFA`
+  // (the same additive-role shape #429's `auditor` already uses for
+  // `viewAuditLogs`) is wrongly denied. requirePermission('resetMFA')
+  // must allow it.
+  function buildMfaOperatorCollections() {
+    const permissionDocs = Object.entries(PERMISSION_CATALOG).map(([permissionCode, entry]) => ({
+      permissionId: `perm-${permissionCode}`,
+      permissionCode,
+      ...entry,
+    }));
+    return {
+      roles: queryableCollectionMock([
+        { roleId: 'role-mfa-operator', roleCode: 'mfa_operator', hierarchyLevel: null, roleStatus: 'active', permissionIds: ['perm-resetMFA'] },
+      ]),
+      permissions: queryableCollectionMock(permissionDocs),
+      userRoleAssignments: queryableCollectionMock([
+        { userAccountId: 'qa-mfa-operator', roleId: 'role-mfa-operator', assignmentStatus: 'active', validUntil: null },
+      ]),
+    };
+  }
+  function mfaOperatorToken() {
+    return jwt.sign(
+      { userID: 'qa-mfa-operator', accessType: 2, roleName: 'Técnico', name: 'QA MFA Operator', mfaVerified: true },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+  }
+
+  beforeEach(() => {
+    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'session-1' } });
+    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-1' });
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('allows a non-administrator role explicitly granted resetMFA', async () => {
+    const usersCollection = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: 'user-target-1', accessType: 2, roleName: 'Técnico', mfaEnabled: true }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    });
+    app.locals.db = createDbMock({ users: usersCollection, ...buildMfaOperatorCollections() });
+
+    const response = await request(app)
+      .post('/api/users/user-target-1/reset-mfa')
+      .set('Authorization', `Bearer ${mfaOperatorToken()}`);
+
+    expect(response.status).toBe(200);
+    expect(usersCollection.updateOne).toHaveBeenCalled();
+  });
+});

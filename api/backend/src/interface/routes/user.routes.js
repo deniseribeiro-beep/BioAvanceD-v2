@@ -832,8 +832,8 @@ router.get('/logs', authenticate, async (req, res) => {
   }
 });
 
-// Reset MFA - apenas para administradores
-router.post('/:id/reset-mfa', authenticate, async (req, res) => {
+// Reset MFA - apenas usuários com a permissão resetMFA
+router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDATE'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -843,20 +843,10 @@ router.post('/:id/reset-mfa', authenticate, async (req, res) => {
       });
     }
 
-    // Verifica se o usuário atual é administrador
-    // #426: resolve via UserRoleAssignment -> Role, não accessType/roleName
-    // direto no documento.
+    // #426/#632: alvo resolvido via UserRoleAssignment -> Role, não
+    // accessType/roleName direto no documento.
     const { isAdministrator } = require('../../services/rbac-assignment.service');
     const usersCollection = db.collection('users');
-
-    const isCurrentUserAdmin = await isAdministrator(db, req.user.userID);
-    if (!isCurrentUserAdmin) {
-      return res.status(403).json({
-        success: false,
-        error: req.t('users.resetMFAAccessDenied'),
-        message: req.t('users.resetMFAAccessDeniedMessage')
-      });
-    }
 
     // Busca o usuário alvo
     const userFilter = buildUserFilterById(req.params.id);
