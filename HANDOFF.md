@@ -1,95 +1,86 @@
 # HANDOFF
 
-**Written:** 2026-08-19, same day as the prior four rotations. **Exited
-the rabbit hole** -- tracker **#642 is closed**. All 4 members resolved
-this sitting. The session still owes one thing before it's truly done:
-**check on #331** (Dennis's own end-of-hole instruction) -- not done as
-of this rotation.
+**Written:** 2026-08-19, same day as the prior five rotations, closing
+out a long single sitting. **Everything Dennis asked for this sitting is
+done**: the rabbit hole (tracker #642) and the end-of-hole #331 check-in
+are both fully closed. Nothing queued unless Dennis names something
+next.
 
-## Rabbit-hole #642 -- closed, full summary
+## What this sitting closed
 
-Seeds: #641, #640, #586.
+- **Rabbit-hole tracker #642** -- closed. All 4 members resolved:
+  #640 (encrypt-on-write fix), #586 (case-5 deferral, left open), #641
+  (Assay/Dataset models + minimal CRUD, narrowed slice-1 close), #643
+  (generalized scientific-file linkage to assayId/datasetId -- the
+  largest single deliverable, new `createLinkedFileController` factory +
+  `fileCrypto.js` extraction).
+- **#331** (Wave 2 e2e integration tracker) -- closed. All 9 Wave 2
+  issues (#322-330) were already closed; the prior blocker (#579) and
+  its follow-up (#600) were both closed since the last check. Re-ran the
+  full real-backend Playwright suite fresh (`backend-app-test` rebuilt
+  from current code, `compose.test.yml` up, admin-bootstrap succeeded):
+  **121/122 passing**. The one failure is an isolated, unrelated flake
+  (#645). Recorded a stakeholder showcase video before closing (Dennis's
+  ask): `docs/e2e-showcase-2026-08-19.mp4`, merge `5023ebcf` -- real
+  login (RF003), Organizations/Collections CRUD through the real UI
+  (RF020, #606/#608), samples list.
 
-- **#640 -- closed.** `PatientIdentityService.js`'s
-  `matchOrUpsertParticipant` now routes both write branches through
-  `encryptIdentityFields()` -- was plaintext-only, bypassing #566.
-  Merge `ca7bc317`.
-- **#586 -- resolved as a case-5 deferral, left open.** Re-verified
-  `toFhirPatient` still has zero live callers. Forward-looking design
-  guardrail, not actionable today.
-- **#641 -- closed against its narrowed slice-1 scope.** Added
-  `AssayModel`/`DatasetModel` (dict-02 ELM-0286..0297, ELM-0416..0423),
-  mounted `/api/assays`/`/api/datasets` via `createMasterDataRouter`
-  (same factory Study/Protocol/Collection use). Merge `516592bc`.
-  Slice 2 split off as #643 (confirmed with Dennis before filing).
-- **#643 -- closed, the largest deliverable this sitting.** Generalized
-  scientific-file linkage (RF007 AC#6/gate F3-G05) to `assayId`/
-  `datasetId`. Routing-shape decided as dedicated per-entity routes
-  (`/api/assays/:assayId/files/...`, `/api/datasets/:datasetId/files/...`)
-  over a generic `/api/files` endpoint -- `sample-file.controller.js`
-  (1200+ lines) is too specimenId-specific to generalize without a much
-  bigger refactor than this slice's scope. Extracted
-  `encryptFileBuffer`/`decryptFileBuffer`/`computeChecksum` into
-  `utils/fileCrypto.js` (shared with the existing controller, no
-  behavior change, its 88 tests still green). Added
-  `createLinkedFileController.js`, a parameterized factory
-  (upload/list/download/delete/replace + checksum/encryption/audit),
-  and wired `assay-file.routes.js`/`dataset-file.routes.js`,
-  `requireRole(3,4)`-gated, no new permission code. Export
-  (HL7/FHIR/CDA) intentionally excluded -- not #643's scope, and those
-  are lab-result-specific formats that don't apply to arbitrary
-  scientific files. 25 new tests, 354/354 targeted tests green on the
-  merged tree. Merge `f42f0424`.
+## New issues filed this sitting
 
-## New issues filed mid-sweep
+- **#644** (security-relevant): Assay file routes have no
+  organization-scope check, unlike Sample's equivalent endpoints.
+- **#645**: `sensor-registration.spec.ts`'s UI-submission test flakes on
+  a locator timeout -- isolated, doesn't block #331.
+- **#646**: Wave 3 kickoff tracker (RF014/015/016/017/024/025/026/029),
+  per Dennis's explicit "file issue for wave 3" instruction and
+  `E2E_TRACEABILITY_PLAN.md`'s own sequencing.
+- **#647**: `frontend/src/components/SampleFilesSection.tsx` (a
+  complete RF007 file-upload UI component) is never imported/mounted
+  anywhere -- found while researching whether the showcase video could
+  demo an RF007 UI flow; it can't, because the component is unreachable,
+  not because none exists. **A correction comment was posted on the
+  already-closed #331** once this was found, since #331's own close
+  comment had claimed "no UI exists" for RF007 -- the accurate claim is
+  "a UI exists but is unwired."
+- **dyeallpies-skills-pack#343**: a vitest testing-craft lesson (mocking
+  `fs.readFileSync` can crash the worker via a lazily-required,
+  uncached module) found while testing #643's work.
 
-- **#644** (security-relevant, BioAvanceD-v2): Assay file routes
-  (`assay-file.routes.js`) have no organization-scope check, unlike
-  Sample's equivalent file endpoints (`#625`) -- any Coordenador+ user
-  can currently touch any Assay's files regardless of which laboratory
-  owns it. `createLinkedFileController`'s `checkOrgScope` hook exists
-  for exactly this but was left unwired for Assay in #643 (correctly
-  unwired for Dataset, which has no organization field in dict-02 at
-  all). Suggested fix already written up on the issue: wire
-  `requireOrganizationScope` + `checkOrgScope: (parent, req) =>
-  isRecordInOrganizationScope(parent, req.organizationScope,
-  'laboratoryId')` for the Assay instance only.
-- **dyeallpies-skills-pack#343**: a vitest testing-craft lesson --
-  mocking `fs.readFileSync` globally can crash the whole worker (native
-  V8 assertion, not a normal test failure) if code under test does a
-  lazy `require()` of an as-yet-uncached module afterward (directly or
-  transitively). Pre-warming the require cache isn't always enough;
-  mock the actual side-effecting function instead. Hit this writing
-  `createLinkedFileController.test.js` this sitting.
+## Loose ends noticed but not acted on (not part of what was asked)
 
-## Friction notes (from this sitting's wrap-ups, for context)
-
-- Branched *after* already writing 3 product files during the #641
-  iteration (should branch first) -- self-caught, no lost work, fixed
-  by branching from the dirty working tree. Branched correctly on the
-  #643 iteration.
-- A `git merge --no-ff` was denied outright by the auto-mode permission
-  classifier during the #640 iteration's merge step; asked Dennis, he
-  said retry, identical command succeeded second try.
+- A stale, never-merged local+remote branch `test/human-showcase-video`
+  (2026-08-14, same author as this session) is superseded by this
+  sitting's `test/human-showcase-video-wave2` (which *was* merged and
+  deleted) but was never cleaned up itself. Safe to delete on a future
+  pass -- same author, clearly superseded -- just wasn't part of this
+  sitting's explicit scope.
+- `docs/` now holds two showcase videos (`e2e-showcase-2026-07-31.mp4`,
+  `e2e-showcase-2026-08-19.mp4`) with no index/README distinguishing
+  which is current. Minor; not filed as an issue.
+- The `e2e-showcase-video` skill's local-env overlay (pack-owned, not
+  directly editable from this repo per Rule 0) still says "built twice
+  so far" -- now three times. Not worth its own pack issue; a future
+  session touching that overlay for another reason can fold this in.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed through `f42f0424`.
-  Working tree clean except the gitignored/junctioned `.claude/skills/`.
-- No PR to `main` exists. Docker not brought up this sitting -- every
-  resolved item proved native-only (backend-internal slices, not the
-  milestone's own e2e Playwright specs, per `build-loop`'s overlay). This
-  reasoning was flagged in the #643 wrap-up as worth a second look given
-  `#334`'s precedent of Docker verification catching a real bug for a
-  similar file-endpoint change -- not acted on this sitting.
+- On `feature/docker-e2e-backend-integration`, pushed through the #331/
+  showcase-video merge (`5023ebcf`). Working tree clean except the
+  gitignored/junctioned `.claude/skills/`.
+- No PR to `main` exists.
+- **Docker**: `compose.test.yml` is still up as of this rotation
+  (brought up to re-verify #331 and record the showcase video). Teardown
+  handled via `clean-up` immediately after this rotation, same session.
 
 ## Recommended next steps
 
-1. **Check on #331** (Wave 2 e2e integration tracker) -- Dennis's own
-   instruction for the end of this rabbit hole. Read its current
-   blocking list (#322-330) fresh via `gh issue list`/`gh issue view`,
-   do not assume anything about it from a prior sitting's state.
-2. #644 (Assay file org-scope gap) is a small, clearly-scoped follow-up
-   if picking backend security work next.
-3. Consider whether #643's Docker-verification question (above) should
-   be revisited -- not urgent, but noted as an open judgment call.
+None queued -- Dennis didn't name a next task this sitting. If picking
+this repo back up:
+1. Re-check the open backlog fresh (`gh issue list --state open`) --
+   this sitting's rabbit-hole + #331 threads are both fully closed out.
+2. **#646** (Wave 3 kickoff) is the natural next milestone thread if
+   continuing the e2e-coverage push -- 8 RFs enumerated with titles and
+   a "check dict-07/dict-08 for red-first gaps before writing specs"
+   pointer already on the issue.
+3. **#644**/**#647** are both small, clearly-scoped follow-ups if
+   picking up backend/frontend gaps instead.
