@@ -109,23 +109,12 @@ export function useTemperature() {
     }
   };
 
-  const createTemperature = async (data: Partial<Temperature>) => {
-    try {
-      const response = await temperatureService.create(data);
-      setTemperatures([response.data, ...temperatures]);
-      return response.data;
-    } catch (err: unknown) {
-      throw new Error(extractErrorMessage(err, 'Erro ao criar leitura de temperatura'));
-    }
-  };
-
   return {
     temperatures,
     loading,
     error,
     loadTemperatures,
     viewControl,
-    createTemperature,
   };
 }
 
