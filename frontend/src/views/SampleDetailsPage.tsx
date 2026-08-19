@@ -274,13 +274,14 @@ export default function SampleDetailsPage() {
     return statusOptions.find((option) => option.value === derived)?.label || derived;
   }, [sample?.specimenStatus, statusOptions]);
 
+  // #628: Result.specimenId is now the sole canonical shape (every write
+  // path writes it, existing documents backfilled) — a direct match, not
+  // the multi-key Set this used while the field was still stale.
   const sampleResults = useMemo(() => {
     if (!sample) return [];
-    const sampleKeys = new Set([
-      String(sample._id || ''),
-    String((sample as any).specimenId || sample.sampleID || '')
-    ]);
-    return results.filter(result => sampleKeys.has(String(result.sampleID)));
+    const specimenId = String((sample as any).specimenId || '');
+    if (!specimenId) return [];
+    return results.filter(result => String((result as any).specimenId) === specimenId);
   }, [results, sample]);
 
   const getResultEquipmentLabel = (equipmentID?: number, equipmentName?: string) => {

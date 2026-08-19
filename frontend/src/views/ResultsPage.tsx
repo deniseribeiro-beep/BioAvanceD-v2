@@ -242,7 +242,7 @@ export default function ResultsPage() {
                     : result.equipmentName || t('results.notLinked', 'Não vinculado')}
                 </td>
                 <td>
-                  <span className="sample-tag">{t('results.sampleFallback', 'Amostra #{id}').replace('{id}', String(result.sampleID))}</span>
+                  <span className="sample-tag">{t('results.sampleFallback', 'Amostra #{id}').replace('{id}', String(result.specimenId))}</span>
                 </td>
                 <td>
                   <div className="table-actions">

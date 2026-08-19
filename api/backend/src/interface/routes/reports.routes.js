@@ -466,13 +466,19 @@ async function buildPreviewData(db, rawType, filters = {}) {
         : {};
     const samples = await samplesCollection.find(sampleAnalysisQuery).limit(100).toArray();
 
+    // #628: Result's own reference field is specimenId (Result.js,
+    // result.routes.js). `sample.sampleID` here is a separate,
+    // pre-existing bug -- that field doesn't exist on the canonical
+    // Sample model at all (only `specimenId`) -- filed as #633, out of
+    // #628's own scope; this join stays non-functional until #633
+    // lands, same as before this change.
     const sampleIds = samples.map((sample) => sample.sampleID).filter((sampleID) => sampleID !== undefined && sampleID !== null);
     const results = sampleIds.length
-      ? await resultsCollection.find({ sampleID: { $in: sampleIds } }).toArray()
+      ? await resultsCollection.find({ specimenId: { $in: sampleIds } }).toArray()
       : [];
 
     const groupedResults = results.reduce((acc, result) => {
-      const key = String(result.sampleID || '');
+      const key = String(result.specimenId || '');
       if (!key) {
         return acc;
       }
@@ -587,19 +593,19 @@ async function buildPreviewData(db, rawType, filters = {}) {
     if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
       // #621: Result has no organization reference of its own — derive
       // scope via a join through its linked Sample's collectionSite.
-      // Result.sampleID has stored either the Sample's Mongo _id (current
-      // write path, result.routes.js POST /upload) or its specimenId
-      // (older data), matching SampleDetailsPage.tsx's own defensive
-      // frontend join — check both so neither shape is silently dropped.
+      // #628: Result.specimenId is now the sole canonical shape (every
+      // write path writes it, and the #628 migration backfilled existing
+      // documents) — a single-shape match, not the dual _id/specimenId
+      // check #621 originally needed while the field was still stale.
       const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
       const scopedSamples = await samplesCollection
         .find({ collectionSite: { $in: filters.organizationScope.organizationIds } })
         .toArray();
-      const scopedSampleKeys = scopedSamples
-        .flatMap((sample) => [sample._id, sample.specimenId])
+      const scopedSpecimenIds = scopedSamples
+        .map((sample) => sample.specimenId)
         .filter((value) => value !== undefined && value !== null)
         .map((value) => String(value));
-      query = { sampleID: { $in: scopedSampleKeys } };
+      query = { specimenId: { $in: scopedSpecimenIds } };
     }
     const results = await collection.find(query).limit(100).toArray();
     const total = await collection.countDocuments(query);

@@ -337,8 +337,8 @@ export const resultService = {
       headers: { 'Content-Type': 'multipart/form-data' }
     }),
   create: (data: Partial<Result>) => api.post<Result>('/results', data),
-  linkSample: (id: number, sampleID: number) => 
-    api.put<Result>(`/results/${id}/link-sample`, { sampleID }), // Implementa Result.linkSample()
+  linkSample: (id: number, specimenId: string) =>
+    api.put<Result>(`/results/${id}/link-sample`, { specimenId }), // Implementa Result.linkSample()
   update: (id: number, data: Partial<Result>) => api.put<Result>(`/results/${id}`, data),
   delete: (id: number) => api.delete(`/results/${id}`),
   download: async (id: number | string) => {

@@ -25,8 +25,16 @@ class ResultModel {
   static validate(data) {
     const errors = [];
 
-    if (!data.sampleID) {
-      errors.push('sampleID é obrigatório');
+    // #628: canonical field is specimenId (Specimen.specimenId, the
+    // business identifier) — `sampleID`/`sampleId` are on the naming
+    // convention's Legacy Fields Prohibited list
+    // (docs/architecture/canonical-data-contract-v1.md). Result has no
+    // RF/ELM entry of its own in requisitos-index.md/dict-02 (grepped,
+    // no match — it predates the canonical dictionary), so the
+    // repo-wide naming convention is the applicable rule here, not an
+    // entity-specific requirement.
+    if (!data.specimenId) {
+      errors.push('specimenId é obrigatório');
     }
 
     if (!data.fileType || !['PDF', 'ZIP', 'CSV', 'RAW'].includes(data.fileType)) {
@@ -46,7 +54,7 @@ class ResultModel {
   static create(data) {
     return {
       resultID: data.resultID ?? null, // Int conforme dicionário
-      sampleID: data.sampleID, // Referência à amostra
+      specimenId: data.specimenId, // Referência à amostra (Specimen.specimenId, #628)
       fileType: data.fileType,
       resultFilePath: data.resultFilePath,
       filePath: data.filePath ?? data.resultFilePath,

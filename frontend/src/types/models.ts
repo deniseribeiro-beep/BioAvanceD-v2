@@ -386,7 +386,7 @@ export interface Result {
   analysisType?: string;
   method?: string;
   responsibleResearcher?: string;
-  sampleID: number; // Obrigatório - deve estar vinculado a uma amostra
+  specimenId: string; // Obrigatório - Specimen.specimenId da amostra vinculada (#628)
   equipmentID?: number; // Associação Result → Equipment
   equipmentName?: string;
   importJobID?: string; // Vincula resultado com job de importação

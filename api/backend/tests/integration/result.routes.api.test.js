@@ -42,10 +42,17 @@ function givenSession() {
 
 const SAMPLE_OID = new ObjectId().toString();
 const RESULT_OID = new ObjectId().toString();
+// #628: Result.specimenId stores the referenced Sample's own canonical
+// specimenId (a business identifier, not a Mongo _id) — SAMPLE_OID is
+// still used as the wire-request identifier in most tests below (the
+// resolution logic accepts an _id, a specimenId, or a legacy numeric
+// sampleID), but the persisted/returned Result document's own field is
+// this separate value.
+const SPECIMEN_ID = 'SPX-628-1';
 
 const FAKE_RESULT = {
   _id: RESULT_OID,
-  sampleID: SAMPLE_OID,
+  specimenId: SPECIMEN_ID,
   fileType: 'PDF',
   resultFilePath: '/tmp/whatever.pdf',
   filePath: '/tmp/whatever.pdf',
@@ -220,7 +227,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(1)}`)
-      .field('sampleID', SAMPLE_OID);
+      .field('specimenId', SAMPLE_OID);
     expect(res.status).toBe(403);
   });
 
@@ -229,7 +236,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
     expect(res.status).toBe(503);
@@ -238,9 +245,15 @@ describe('POST /api/results/upload', () => {
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
-  it('falls back to a numeric sampleID lookup when the value is not a valid ObjectId', async () => {
-    const sampleDoc = { _id: new ObjectId(), sampleID: 42 };
-    const findOneSpy = vi.fn().mockResolvedValue(sampleDoc);
+  it('falls back to the legacy numeric sampleID lookup when _id and specimenId both miss', async () => {
+    // #628: three-tier resolution -- _id, then specimenId, then the
+    // legacy numeric Sample.sampleID -- only the third tier's query
+    // actually matches here, proving the fallback itself works rather
+    // than an earlier tier accidentally short-circuiting it.
+    const sampleDoc = { _id: new ObjectId(), specimenId: SPECIMEN_ID, sampleID: 42 };
+    const findOneSpy = vi.fn().mockImplementation(async (query) => (
+      Object.prototype.hasOwnProperty.call(query, 'sampleID') ? sampleDoc : null
+    ));
     const amostrasColl = createCollectionMock({ findOne: findOneSpy });
     const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
@@ -249,18 +262,20 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', '42')
+      .field('specimenId', '42')
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
     expect(res.status).toBe(201);
+    expect(findOneSpy).toHaveBeenCalledWith({ specimenId: '42' });
     expect(findOneSpy).toHaveBeenCalledWith({ sampleID: 42 });
+    expect(res.body.data.specimenId).toBe(SPECIMEN_ID);
 
     const resultDir = path.join(__dirname, '../../src/storage/results', '42');
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
   it('returns 400 and cleans up the temp file when the insert throws', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     const insertOne = vi.fn().mockRejectedValue(new Error('insert failed'));
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
@@ -269,7 +284,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
     expect(res.status).toBe(400);
@@ -279,8 +294,8 @@ describe('POST /api/results/upload', () => {
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
-  it('resolves sampleID from the parsed multipart body when checking commercial consent', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+  it('resolves specimenId from the parsed multipart body when checking commercial consent', async () => {
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     const spy = vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -288,12 +303,12 @@ describe('POST /api/results/upload', () => {
     await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
     // resultUpload (multer) now runs before enforceCommercialConsent, so
-    // req.body.sampleID is populated from the multipart stream by the time
-    // consent validation resolves it.
+    // req.body.specimenId is populated from the multipart stream by the
+    // time consent validation resolves it.
     expect(spy).toHaveBeenCalledWith(SAMPLE_OID, 'uso_comercial');
 
     const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
@@ -307,7 +322,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
     expect(res.status).toBe(403);
@@ -321,7 +336,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID);
+      .field('specimenId', SAMPLE_OID);
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Arquivo não fornecido');
@@ -335,7 +350,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
     expect(res.status).toBe(404);
@@ -347,7 +362,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('returns 400 for an invalid analysis method', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -355,7 +370,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .field('method', 'Método Inexistente')
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
@@ -366,8 +381,8 @@ describe('POST /api/results/upload', () => {
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
-  it('creates the result on success and stores the file under storage/results/<sampleID>', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+  it('creates the result on success, storing the sample\'s own specimenId, and stores the file under storage/results/<specimenId-as-sent>', async () => {
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
     const resultsColl = createCollectionMock({ insertOne });
@@ -377,13 +392,17 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .field('description', 'a description')
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
     expect(res.status).toBe(201);
     expect(res.body.success).toBe(true);
     expect(res.body.data.fileType).toBe('PDF');
+    // #628: the persisted/returned specimenId is always the resolved
+    // Sample's own field -- never the raw wire value (SAMPLE_OID here is
+    // a Mongo _id, not the sample's specimenId).
+    expect(res.body.data.specimenId).toBe(SPECIMEN_ID);
     expect(insertOne).toHaveBeenCalledTimes(1);
 
     const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
@@ -392,7 +411,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('accepts .zip, .csv, and .raw as valid result file extensions', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
 
@@ -403,7 +422,7 @@ describe('POST /api/results/upload', () => {
       const res = await request(app)
         .post('/api/results/upload')
         .set('Authorization', `Bearer ${makeToken(2)}`)
-        .field('sampleID', SAMPLE_OID)
+        .field('specimenId', SAMPLE_OID)
         .attach('file', Buffer.from('content'), `test.${ext}`);
 
       expect(res.status).toBe(201);
@@ -415,7 +434,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('stores equipmentID as a number when provided', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
@@ -424,7 +443,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .field('equipmentID', '7')
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
@@ -435,7 +454,7 @@ describe('POST /api/results/upload', () => {
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
-  it('rejects the upload (multer storage error) when sampleID is missing but a file is attached', async () => {
+  it('rejects the upload (multer storage error) when specimenId is missing but a file is attached', async () => {
     app.locals.db = createDbMock({});
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
 
@@ -444,7 +463,7 @@ describe('POST /api/results/upload', () => {
       .set('Authorization', `Bearer ${makeToken(2)}`)
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
-    // multer's diskStorage.destination calls cb(new Error('sampleID é
+    // multer's diskStorage.destination calls cb(new Error('specimenId é
     // obrigatório')) before any directory is created; that becomes an
     // unhandled error passed to next(), same fallback as the fileFilter
     // rejection case above.
@@ -460,7 +479,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
     expect(res.status).toBe(404);
@@ -472,7 +491,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('invalid-method cleanup skips unlink when the temp file no longer exists on disk', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -481,7 +500,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .field('method', 'Método Inexistente')
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
@@ -494,7 +513,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('insert-failure cleanup skips unlink when the temp file no longer exists on disk', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     const insertOne = vi.fn().mockRejectedValue(new Error('insert failed'));
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
@@ -504,7 +523,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
     expect(res.status).toBe(400);
@@ -516,7 +535,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('logs (does not throw) when the catch-block cleanup unlink itself fails', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     const insertOne = vi.fn().mockRejectedValue(new Error('insert failed'));
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
@@ -526,7 +545,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
     expect(res.status).toBe(400);
@@ -538,7 +557,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('rejects the upload (multer storage error) when the destination directory cannot be created', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -547,7 +566,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
     // resultStorage.destination's own try/catch turns the mkdirSync throw
@@ -560,7 +579,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('rejects the upload (multer storage error) when the unique filename cannot be generated', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -577,7 +596,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
     // resultStorage.filename's own try/catch turns the crypto.randomBytes
@@ -590,7 +609,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('rejects unsupported file extensions with a 400 from multer fileFilter', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -598,7 +617,7 @@ describe('POST /api/results/upload', () => {
     const res = await request(app)
       .post('/api/results/upload')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .field('sampleID', SAMPLE_OID)
+      .field('specimenId', SAMPLE_OID)
       .attach('file', Buffer.from('hello'), 'test.exe');
 
     // multer's fileFilter calls cb(new Error(...), false) which becomes an
@@ -622,48 +641,65 @@ describe('POST /api/results', () => {
     const res = await request(app)
       .post('/api/results')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ sampleID: SAMPLE_OID, fileType: 'PDF', resultFilePath: '/x.pdf' });
+      .send({ specimenId: SAMPLE_OID, fileType: 'PDF', resultFilePath: '/x.pdf' });
     expect(res.status).toBe(403);
   });
 
-  it('returns 403 when consent validation rejects (sampleID resolved from JSON body)', async () => {
+  it('returns 403 when consent validation rejects (specimenId resolved from JSON body)', async () => {
     app.locals.db = createDbMock({});
     const spy = vi.spyOn(consentValidator, 'validateAccess').mockRejectedValue(new Error('sem consentimento'));
 
     const res = await request(app)
       .post('/api/results')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ sampleID: SAMPLE_OID, fileType: 'PDF', resultFilePath: '/x.pdf' });
+      .send({ specimenId: SAMPLE_OID, fileType: 'PDF', resultFilePath: '/x.pdf' });
 
     expect(res.status).toBe(403);
     expect(spy).toHaveBeenCalledWith(SAMPLE_OID, 'uso_comercial');
   });
 
   it('returns 400 for invalid payload (missing fileType/resultFilePath)', async () => {
-    app.locals.db = createDbMock({});
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID }) });
+    app.locals.db = createDbMock({ amostras: amostrasColl });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
 
     const res = await request(app)
       .post('/api/results')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ sampleID: SAMPLE_OID });
+      .send({ specimenId: SAMPLE_OID });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Dados inválidos');
   });
 
-  it('creates a result record on success', async () => {
-    const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
-    app.locals.db = createDbMock({ results: createCollectionMock({ insertOne }) });
+  it('returns 404 when the referenced sample does not exist', async () => {
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
+    app.locals.db = createDbMock({ amostras: amostrasColl });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
 
     const res = await request(app)
       .post('/api/results')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ sampleID: SAMPLE_OID, fileType: 'PDF', resultFilePath: '/x.pdf' });
+      .send({ specimenId: SAMPLE_OID, fileType: 'PDF', resultFilePath: '/x.pdf' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Amostra não encontrada');
+  });
+
+  it('creates a result record on success, storing the sample\'s own specimenId', async () => {
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID }) });
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+
+    const res = await request(app)
+      .post('/api/results')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ specimenId: SAMPLE_OID, fileType: 'PDF', resultFilePath: '/x.pdf' });
 
     expect(res.status).toBe(201);
     expect(res.body.success).toBe(true);
+    expect(res.body.data.specimenId).toBe(SPECIMEN_ID);
     expect(insertOne).toHaveBeenCalledTimes(1);
   });
 
@@ -672,19 +708,20 @@ describe('POST /api/results', () => {
     const res = await request(app)
       .post('/api/results')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ sampleID: SAMPLE_OID, fileType: 'PDF', resultFilePath: '/x.pdf' });
+      .send({ specimenId: SAMPLE_OID, fileType: 'PDF', resultFilePath: '/x.pdf' });
     expect(res.status).toBe(503);
   });
 
   it('returns 400 when the insert throws', async () => {
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID }) });
     const insertOne = vi.fn().mockRejectedValue(new Error('insert failed'));
-    app.locals.db = createDbMock({ results: createCollectionMock({ insertOne }) });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
 
     const res = await request(app)
       .post('/api/results')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ sampleID: SAMPLE_OID, fileType: 'PDF', resultFilePath: '/x.pdf' });
+      .send({ specimenId: SAMPLE_OID, fileType: 'PDF', resultFilePath: '/x.pdf' });
 
     expect(res.status).toBe(400);
     expect(res.body.message).toBe('insert failed');
@@ -731,6 +768,27 @@ describe('PUT /api/results/:id', () => {
     expect(res.body.success).toBe(true);
   });
 
+  // #628: specimenId is a reference resolved from a real Sample lookup
+  // (POST /upload, POST /, PUT /:id/link-sample) -- this generic update
+  // must not let a caller overwrite it (or its legacy aliases) via a
+  // plain $set; use PUT /:id/link-sample to change the linked sample.
+  it('strips specimenId/sampleID/sampleId from the body before $set, even when the caller sends them', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const resultsColl = createCollectionMock({ updateOne });
+    app.locals.db = createDbMock({ results: resultsColl });
+
+    const res = await request(app)
+      .put(`/api/results/${RESULT_OID}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ description: 'new', specimenId: 'attacker-supplied', sampleID: 'also-attacker-supplied', sampleId: 'still-attacker-supplied' });
+
+    expect(res.status).toBe(200);
+    expect(updateOne).toHaveBeenCalledWith(
+      { _id: expect.any(ObjectId) },
+      { $set: { description: 'new', updatedAt: expect.any(Date) } }
+    );
+  });
+
   it('returns 503 when db is unavailable', async () => {
     app.locals.db = null;
     const res = await request(app)
@@ -765,43 +823,63 @@ describe('PUT /api/results/:id/link-sample', () => {
     const res = await request(app)
       .put(`/api/results/${RESULT_OID}/link-sample`)
       .set('Authorization', `Bearer ${makeToken(1)}`)
-      .send({ sampleID: SAMPLE_OID });
+      .send({ specimenId: SAMPLE_OID });
     expect(res.status).toBe(403);
   });
 
-  it('returns 400 when sampleID is missing', async () => {
+  it('returns 400 when specimenId is missing', async () => {
     app.locals.db = createDbMock({});
     const res = await request(app)
       .put(`/api/results/${RESULT_OID}/link-sample`)
       .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({});
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe('sampleID é obrigatório');
+    expect(res.body.error).toBe('specimenId é obrigatório');
   });
 
-  it('returns 404 when no document matches', async () => {
-    const resultsColl = createCollectionMock({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 }) });
-    app.locals.db = createDbMock({ results: resultsColl });
+  it('returns 404 when the referenced sample does not exist', async () => {
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
 
     const res = await request(app)
       .put(`/api/results/${RESULT_OID}/link-sample`)
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ sampleID: SAMPLE_OID });
+      .send({ specimenId: SAMPLE_OID });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Amostra não encontrada');
+  });
+
+  it('returns 404 when no result document matches', async () => {
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID }) });
+    const resultsColl = createCollectionMock({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 }) });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: resultsColl });
+
+    const res = await request(app)
+      .put(`/api/results/${RESULT_OID}/link-sample`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ specimenId: SAMPLE_OID });
 
     expect(res.status).toBe(404);
   });
 
-  it('links the sample on success', async () => {
-    const resultsColl = createCollectionMock({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
-    app.locals.db = createDbMock({ results: resultsColl });
+  it('links the sample on success, storing the sample\'s own specimenId', async () => {
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID }) });
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    const resultsColl = createCollectionMock({ updateOne });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: resultsColl });
 
     const res = await request(app)
       .put(`/api/results/${RESULT_OID}/link-sample`)
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ sampleID: SAMPLE_OID });
+      .send({ specimenId: SAMPLE_OID });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+    expect(updateOne).toHaveBeenCalledWith(
+      { _id: expect.any(ObjectId) },
+      { $set: { specimenId: SPECIMEN_ID, updatedAt: expect.any(Date) } }
+    );
   });
 
   it('returns 503 when db is unavailable', async () => {
@@ -809,18 +887,19 @@ describe('PUT /api/results/:id/link-sample', () => {
     const res = await request(app)
       .put(`/api/results/${RESULT_OID}/link-sample`)
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ sampleID: SAMPLE_OID });
+      .send({ specimenId: SAMPLE_OID });
     expect(res.status).toBe(503);
   });
 
   it('returns 400 when the update throws', async () => {
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID }) });
     const resultsColl = createCollectionMock({ updateOne: vi.fn().mockRejectedValue(new Error('link failed')) });
-    app.locals.db = createDbMock({ results: resultsColl });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: resultsColl });
 
     const res = await request(app)
       .put(`/api/results/${RESULT_OID}/link-sample`)
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ sampleID: SAMPLE_OID });
+      .send({ specimenId: SAMPLE_OID });
 
     expect(res.status).toBe(400);
     expect(res.body.message).toBe('link failed');

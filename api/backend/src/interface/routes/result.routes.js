@@ -22,12 +22,12 @@ const getResultFileType = (fileName) => {
 const resultStorage = multer.diskStorage({
   destination: async (req, file, cb) => {
     try {
-      const { sampleID } = req.body;
-      if (!sampleID) {
-        return cb(new Error('sampleID é obrigatório'), null);
+      const { specimenId } = req.body;
+      if (!specimenId) {
+        return cb(new Error('specimenId é obrigatório'), null);
       }
 
-      const resultDir = path.join(__dirname, '../../storage/results', String(sampleID));
+      const resultDir = path.join(__dirname, '../../storage/results', String(specimenId));
       if (!fs.existsSync(resultDir)) {
         fs.mkdirSync(resultDir, { recursive: true });
       }
@@ -104,11 +104,11 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpload.single('file'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.sampleID }), async (req, res) => {
+router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpload.single('file'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.specimenId }), async (req, res) => {
   try {
     const db = req.app.locals.db;
 
-    const { sampleID, description, method, responsibleResearcher, equipmentID, equipmentName, analysisType } = req.body;
+    const { specimenId, description, method, responsibleResearcher, equipmentID, equipmentName, analysisType } = req.body;
     const file = req.file;
 
     if (!file) {
@@ -118,13 +118,23 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpl
       });
     }
 
+    // #628: resolve the referenced Sample first, then store its own
+    // specimenId (business identifier) on the Result -- never the
+    // caller-supplied identifier verbatim, whatever shape it's in.
+    // Tries _id, then the canonical specimenId, then the legacy numeric
+    // sampleID -- same three-tier resolution consent.validator.js's
+    // validateAccess already uses for the same kind of caller-supplied id.
     const samplesCollection = db.collection('amostras');
-    let sample;
-    try {
-      const { ObjectId } = require('mongodb');
-      sample = await samplesCollection.findOne({ _id: new ObjectId(sampleID) });
-    } catch (idError) {
-      sample = await samplesCollection.findOne({ sampleID: Number(sampleID) });
+    const { ObjectId } = require('mongodb');
+    let sample = null;
+    if (ObjectId.isValid(String(specimenId))) {
+      sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
+    }
+    if (!sample) {
+      sample = await samplesCollection.findOne({ specimenId: String(specimenId) });
+    }
+    if (!sample) {
+      sample = await samplesCollection.findOne({ sampleID: Number(specimenId) });
     }
 
     if (!sample) {
@@ -160,7 +170,7 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpl
 
     const resultsCollection = db.collection('results');
     const resultPayload = {
-      sampleID: sample._id.toString(),
+      specimenId: sample.specimenId,
       fileType,
       resultFilePath: file.path,
       filePath: file.path,
@@ -199,7 +209,7 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpl
         status: 'success',
         severity: 'info',
         message: 'Arquivo de analise criado via upload',
-        payload: { sampleID: result.sampleID || null },
+        payload: { specimenId: result.specimenId || null },
         req: req,
         module: 'Arquivos de Analise'
       });
@@ -354,11 +364,35 @@ router.get('/:id/download', authenticate, async (req, res) => {
   }
 });
 
-router.post('/', authenticate, requirePermission('createResult'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.sampleID }), async (req, res) => {
+router.post('/', authenticate, requirePermission('createResult'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.specimenId }), async (req, res) => {
   try {
     const db = req.app.locals.db;
 
-    const validation = ResultModel.validate(req.body);
+    // #628: resolve the referenced Sample first, same three-tier
+    // resolution POST /upload uses -- never trust the caller-supplied
+    // specimenId verbatim, whatever shape it's in.
+    const { ObjectId } = require('mongodb');
+    const samplesCollection = db.collection('amostras');
+    let sample = null;
+    if (ObjectId.isValid(String(req.body?.specimenId))) {
+      sample = await samplesCollection.findOne({ _id: new ObjectId(req.body.specimenId) });
+    }
+    if (!sample) {
+      sample = await samplesCollection.findOne({ specimenId: String(req.body?.specimenId || '') });
+    }
+    if (!sample) {
+      sample = await samplesCollection.findOne({ sampleID: Number(req.body?.specimenId) });
+    }
+    if (!sample) {
+      return res.status(404).json({
+        success: false,
+        error: 'Amostra não encontrada'
+      });
+    }
+
+    const resultData = { ...req.body, specimenId: sample.specimenId };
+
+    const validation = ResultModel.validate(resultData);
     if (!validation.isValid) {
       return res.status(400).json({
         success: false,
@@ -368,7 +402,7 @@ router.post('/', authenticate, requirePermission('createResult'), enforceCommerc
     }
 
     const resultsCollection = db.collection('results');
-    const result = ResultModel.create(req.body);
+    const result = ResultModel.create(resultData);
 
     const insertResult = await resultsCollection.insertOne(result);
 
@@ -383,7 +417,7 @@ router.post('/', authenticate, requirePermission('createResult'), enforceCommerc
         status: 'success',
         severity: 'info',
         message: 'Arquivo de analise criado',
-        payload: { sampleID: result.sampleID || null },
+        payload: { specimenId: result.specimenId || null },
         req: req,
         module: 'Arquivos de Analise'
       });
@@ -410,11 +444,17 @@ router.put('/:id', authenticate, requirePermission('editResult'), async (req, re
 
     const { ObjectId } = require('mongodb');
     const resultsCollection = db.collection('results');
-    req.body.updatedAt = new Date();
+    // #628: specimenId is a reference resolved from a real Sample lookup
+    // (see POST /upload, POST /, PUT /:id/link-sample) -- a generic $set
+    // must not let a caller overwrite it with an arbitrary unvalidated
+    // value. Use PUT /:id/link-sample to change which sample a result is
+    // linked to.
+    const { specimenId: _ignoredSpecimenId, sampleID: _ignoredSampleID, sampleId: _ignoredSampleId, ...updateFields } = req.body;
+    updateFields.updatedAt = new Date();
 
     const result = await resultsCollection.updateOne(
       { _id: new ObjectId(req.params.id) },
-      { $set: req.body }
+      { $set: updateFields }
     );
 
     if (result.matchedCount === 0) {
@@ -458,20 +498,41 @@ router.put('/:id/link-sample', authenticate, requirePermission('editResult'), as
   try {
     const db = req.app.locals.db;
 
-    const { sampleID } = req.body;
-    if (!sampleID) {
+    const { specimenId } = req.body;
+    if (!specimenId) {
       return res.status(400).json({
         success: false,
-        error: 'sampleID é obrigatório'
+        error: 'specimenId é obrigatório'
       });
     }
 
+    // #628: resolve the referenced Sample first, same three-tier
+    // resolution the create paths use -- never trust the caller-supplied
+    // specimenId verbatim, whatever shape it's in.
     const { ObjectId } = require('mongodb');
+    const samplesCollection = db.collection('amostras');
+    let sample = null;
+    if (ObjectId.isValid(String(specimenId))) {
+      sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
+    }
+    if (!sample) {
+      sample = await samplesCollection.findOne({ specimenId: String(specimenId) });
+    }
+    if (!sample) {
+      sample = await samplesCollection.findOne({ sampleID: Number(specimenId) });
+    }
+    if (!sample) {
+      return res.status(404).json({
+        success: false,
+        error: 'Amostra não encontrada'
+      });
+    }
+
     const resultsCollection = db.collection('results');
 
     const result = await resultsCollection.updateOne(
       { _id: new ObjectId(req.params.id) },
-      { $set: { sampleID, updatedAt: new Date() } }
+      { $set: { specimenId: sample.specimenId, updatedAt: new Date() } }
     );
 
     if (result.matchedCount === 0) {
@@ -491,8 +552,8 @@ router.put('/:id/link-sample', authenticate, requirePermission('editResult'), as
         resourceId: req.params.id,
         status: 'success',
         severity: 'info',
-        message: `Arquivo de analise vinculado à amostra: ${sampleID}`,
-        payload: { sampleID },
+        message: `Arquivo de analise vinculado à amostra: ${sample.specimenId}`,
+        payload: { specimenId: sample.specimenId },
         req: req,
         module: 'Arquivos de Analise'
       });

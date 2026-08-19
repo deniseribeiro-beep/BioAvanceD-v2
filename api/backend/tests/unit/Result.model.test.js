@@ -36,7 +36,7 @@ describe('ResultModel', () => {
   describe('validate()', () => {
     it('returns isValid true and no errors for a fully valid payload', () => {
       const result = ResultModel.validate({
-        sampleID: 'S1',
+        specimenId: 'SPX-1',
         fileType: 'PDF',
         resultFilePath: '/files/result.pdf'
       });
@@ -47,7 +47,7 @@ describe('ResultModel', () => {
     it('accepts every valid fileType enum value', () => {
       for (const fileType of ['PDF', 'ZIP', 'CSV', 'RAW']) {
         const result = ResultModel.validate({
-          sampleID: 'S1',
+          specimenId: 'SPX-1',
           fileType,
           resultFilePath: '/files/result'
         });
@@ -55,19 +55,19 @@ describe('ResultModel', () => {
       }
     });
 
-    it('flags missing sampleID', () => {
+    it('flags missing specimenId', () => {
       const result = ResultModel.validate({
         fileType: 'PDF',
         resultFilePath: '/files/result.pdf'
       });
 
       expect(result.isValid).toBe(false);
-      expect(result.errors).toContain('sampleID é obrigatório');
+      expect(result.errors).toContain('specimenId é obrigatório');
     });
 
     it('flags missing fileType', () => {
       const result = ResultModel.validate({
-        sampleID: 'S1',
+        specimenId: 'SPX-1',
         resultFilePath: '/files/result.pdf'
       });
 
@@ -79,7 +79,7 @@ describe('ResultModel', () => {
 
     it('flags invalid (non-enum) fileType', () => {
       const result = ResultModel.validate({
-        sampleID: 'S1',
+        specimenId: 'SPX-1',
         fileType: 'DOCX',
         resultFilePath: '/files/result.pdf'
       });
@@ -92,7 +92,7 @@ describe('ResultModel', () => {
 
     it('flags missing resultFilePath', () => {
       const result = ResultModel.validate({
-        sampleID: 'S1',
+        specimenId: 'SPX-1',
         fileType: 'PDF'
       });
 
@@ -102,7 +102,7 @@ describe('ResultModel', () => {
 
     it('flags non-string resultFilePath', () => {
       const result = ResultModel.validate({
-        sampleID: 'S1',
+        specimenId: 'SPX-1',
         fileType: 'PDF',
         resultFilePath: 12345
       });
@@ -116,7 +116,7 @@ describe('ResultModel', () => {
 
       expect(result.isValid).toBe(false);
       expect(result.errors).toHaveLength(3);
-      expect(result.errors).toContain('sampleID é obrigatório');
+      expect(result.errors).toContain('specimenId é obrigatório');
       expect(result.errors).toContain(
         'fileType é obrigatório e deve ser: PDF, ZIP, CSV ou RAW (Enum conforme dicionário)'
       );
@@ -129,7 +129,7 @@ describe('ResultModel', () => {
       const uploadedAt = new Date('2020-01-01T00:00:00.000Z');
       const input = {
         resultID: 42,
-        sampleID: 'S1',
+        specimenId: 'SPX-1',
         fileType: 'PDF',
         resultFilePath: '/files/result.pdf',
         filePath: '/other/path.pdf',
@@ -146,7 +146,7 @@ describe('ResultModel', () => {
       const created = ResultModel.create(input);
 
       expect(created.resultID).toBe(42);
-      expect(created.sampleID).toBe('S1');
+      expect(created.specimenId).toBe('SPX-1');
       expect(created.fileType).toBe('PDF');
       expect(created.resultFilePath).toBe('/files/result.pdf');
       expect(created.filePath).toBe('/other/path.pdf');
@@ -162,7 +162,7 @@ describe('ResultModel', () => {
 
     it('falls back filePath to resultFilePath when filePath is absent', () => {
       const created = ResultModel.create({
-        sampleID: 'S1',
+        specimenId: 'SPX-1',
         fileType: 'PDF',
         resultFilePath: '/files/result.pdf'
       });
@@ -172,7 +172,7 @@ describe('ResultModel', () => {
 
     it('defaults resultID to null when absent', () => {
       const created = ResultModel.create({
-        sampleID: 'S1',
+        specimenId: 'SPX-1',
         fileType: 'PDF',
         resultFilePath: '/files/result.pdf'
       });
@@ -182,7 +182,7 @@ describe('ResultModel', () => {
 
     it('defaults optional descriptive fields to null when absent', () => {
       const created = ResultModel.create({
-        sampleID: 'S1',
+        specimenId: 'SPX-1',
         fileType: 'PDF',
         resultFilePath: '/files/result.pdf'
       });
@@ -199,7 +199,7 @@ describe('ResultModel', () => {
     it('preserves falsy-but-valid values instead of coercing to null (#55)', () => {
       const created = ResultModel.create({
         resultID: 0,
-        sampleID: 'S1',
+        specimenId: 'SPX-1',
         fileType: 'PDF',
         resultFilePath: '/files/result.pdf',
         equipmentID: 0,
@@ -215,7 +215,7 @@ describe('ResultModel', () => {
 
     it('defaults uploadedAt to a Date instance when not provided', () => {
       const created = ResultModel.create({
-        sampleID: 'S1',
+        specimenId: 'SPX-1',
         fileType: 'PDF',
         resultFilePath: '/files/result.pdf'
       });
@@ -225,7 +225,7 @@ describe('ResultModel', () => {
 
     it('sets createdAt and updatedAt as Date instances', () => {
       const created = ResultModel.create({
-        sampleID: 'S1',
+        specimenId: 'SPX-1',
         fileType: 'PDF',
         resultFilePath: '/files/result.pdf'
       });
