@@ -703,6 +703,218 @@ class SampleFileController {
   }
 
   /**
+   * Substitui o conteúdo de um arquivo de análise existente.
+   * PUT /api/samples/:specimenId/files/:fileID/replace
+   * Permissão: Admin (4) ou Coordenador (3) apenas — mesma política de
+   * upload/delete.
+   * RF007 AC#7 - "substituição" é a auditoria que faltava ao lado de
+   * upload/acesso/remoção lógica (#334).
+   */
+  async replaceFile(req, res) {
+    const cleanupUploadedFile = () => {
+      if (req.file && fs.existsSync(req.file.path)) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (unlinkError) {
+          logger.error('Erro ao remover arquivo temporário:', unlinkError.message);
+        }
+      }
+    };
+
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: req.t ? req.t('errors.databaseUnavailable') : 'Banco de dados não disponível'
+        });
+      }
+
+      const { specimenId, fileID } = req.params;
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.fileRequired') : 'Arquivo não fornecido'
+        });
+      }
+
+      const sampleFilesCollection = db.collection('sample_files');
+      let fileRecord;
+      try {
+        fileRecord = await sampleFilesCollection.findOne({ _id: new ObjectId(fileID) });
+      } catch (idError) {
+        cleanupUploadedFile();
+        return res.status(400).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.invalidFileID') : 'ID de arquivo inválido'
+        });
+      }
+
+      if (!fileRecord) {
+        cleanupUploadedFile();
+        return res.status(404).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'
+        });
+      }
+
+      // Verifica se o arquivo pertence à amostra correta
+      const specimenIdString = typeof specimenId === 'string' && ObjectId.isValid(specimenId)
+        ? new ObjectId(specimenId).toString()
+        : String(specimenId);
+
+      if (fileRecord.specimenId !== specimenIdString) {
+        cleanupUploadedFile();
+        return res.status(403).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.fileNotBelongToSample') : 'Arquivo não pertence a esta amostra'
+        });
+      }
+
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern —
+      // checked before the mutation, same as deleteFile.
+      if (req.organizationScope) {
+        const samplesCollection = db.collection('samples');
+        let sampleForScope = null;
+        try {
+          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
+        } catch (_) {}
+        if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+          cleanupUploadedFile();
+          return res.status(403).json({
+            success: false,
+            error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+            message: 'Esta amostra pertence a outra organização'
+          });
+        }
+      }
+
+      const fileType = SampleFileModel.getFileTypeFromExtension(file.originalname);
+      if (!fileType) {
+        cleanupUploadedFile();
+        return res.status(400).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.invalidFileType') : 'Tipo de arquivo inválido'
+        });
+      }
+
+      // Mesmo tratamento de checksum/cifra do upload (RF007 AC#3/AC#4,
+      // RNF029) aplicado ao novo conteúdo.
+      const plaintext = fs.readFileSync(file.path);
+      const checksum = computeChecksum(plaintext);
+      const encryption = encryptFileBuffer(plaintext);
+      if (encryption) {
+        fs.writeFileSync(file.path, encryption.ciphertext);
+      }
+      const storageUri = `objstore://samples/${specimenIdString}/files/${path.basename(file.path)}`;
+
+      const updatedFields = {
+        fileName: file.originalname,
+        fileType,
+        fileSize: file.size,
+        storagePath: file.path,
+        storageUri,
+        checksum,
+        checksumAlgorithm: 'sha256',
+        encryptionAlgorithm: encryption ? encryption.algorithm : null,
+        encryptionKeyId: encryption ? encryption.keyId : null,
+        encryptionIv: encryption ? encryption.iv : null,
+        encryptionTag: encryption ? encryption.tag : null,
+        updatedAt: new Date()
+      };
+
+      const validation = SampleFileModel.validate({
+        ...fileRecord,
+        ...updatedFields,
+        sampleID: fileRecord.sampleID || fileRecord.specimenId
+      });
+      if (!validation.isValid) {
+        cleanupUploadedFile();
+        return res.status(400).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.validationError') : 'Erro de validação',
+          details: validation.errors
+        });
+      }
+
+      // Remove o arquivo físico anterior só depois que o novo já está
+      // validado e gravado em disco, para que uma falha na substituição
+      // nunca deixe zero cópias no sistema de arquivos.
+      const previousStoragePath = fileRecord.storagePath;
+      if (previousStoragePath && previousStoragePath !== file.path && fs.existsSync(previousStoragePath)) {
+        try {
+          fs.unlinkSync(previousStoragePath);
+        } catch (unlinkError) {
+          logger.error('Erro ao remover arquivo anterior após substituição:', unlinkError.message);
+        }
+      }
+
+      await sampleFilesCollection.updateOne({ _id: fileRecord._id }, { $set: updatedFields });
+
+      // RF007 AC#7 - substituição é auditada, ao lado de upload/acesso/
+      // remoção lógica.
+      if (req.user) {
+        const auditLogger = require('../utils/auditLogger');
+        auditLogger.init(db);
+        await auditLogger.log({
+          action: 'file_replace',
+          resourceType: 'SampleFile',
+          resourceId: fileRecord._id.toString(),
+          status: 'success',
+          severity: 'medium',
+          message: `Substituição de arquivo de análise: ${fileRecord.fileName} -> ${file.originalname}`,
+          payload: {
+            previousFileName: fileRecord.fileName,
+            previousChecksum: fileRecord.checksum,
+            fileName: file.originalname,
+            fileSize: file.size,
+            fileType,
+            specimenId: specimenIdString,
+            checksum,
+            checksumAlgorithm: 'sha256'
+            // Não inclui dados sensíveis
+          },
+          req: req,
+          module: 'Amostras'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: req.t ? req.t('sampleFiles.replaceSuccess') : 'Arquivo substituído com sucesso',
+        data: {
+          _id: fileRecord._id,
+          specimenId: specimenIdString,
+          fileName: updatedFields.fileName,
+          fileType: updatedFields.fileType,
+          fileSize: updatedFields.fileSize,
+          uploaderAnonId: fileRecord.uploaderAnonId,
+          uploadDate: fileRecord.uploadDate,
+          uri: updatedFields.storageUri,
+          checksum: updatedFields.checksum,
+          checksumAlgorithm: updatedFields.checksumAlgorithm,
+          encryption: {
+            encrypted: Boolean(updatedFields.encryptionAlgorithm),
+            algorithm: updatedFields.encryptionAlgorithm
+          },
+          accessPolicy: fileRecord.accessPolicy
+          // storagePath não é retornado por segurança
+        }
+      });
+    } catch (error) {
+      logger.error('Erro ao substituir arquivo:', error.message);
+      cleanupUploadedFile();
+      return res.status(400).json({
+        success: false,
+        error: req.t ? req.t('sampleFiles.replaceError') : 'Erro ao substituir arquivo',
+        message: error.message
+      });
+    }
+  }
+
+  /**
    * Exporta arquivo em formato HL7 v2.x
    * GET /api/samples/:specimenId/files/:fileID/export/hl7
    */

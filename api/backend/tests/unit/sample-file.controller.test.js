@@ -832,6 +832,329 @@ describe('sample-file.controller', () => {
     });
   });
 
+  // RF007 AC#7 (#334): "substituição" is the audited verb that was
+  // missing alongside upload/access/logical-removal.
+  describe('replaceFile', () => {
+    it('returns 503 when db is missing', async () => {
+      const req = { app: { locals: {} }, params: { specimenId: '1', fileID: '2' }, file: { path: '/tmp/new.csv' } };
+      const res = createRes();
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+    });
+
+    it('returns 400 when no file is provided', async () => {
+      const db = createDb();
+      const req = { app: { locals: { db } }, params: { specimenId: '1', fileID: '2' }, file: null };
+      const res = createRes();
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    it('returns 400 and cleans up the uploaded file when fileID is invalid ObjectId', async () => {
+      const db = createDb();
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId: '1', fileID: 'not-an-id' },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 50 }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(unlinkSpy).toHaveBeenCalledWith('/tmp/new.csv');
+    });
+
+    it('returns 404 when file record not found', async () => {
+      const fileID = new ObjectId().toString();
+      const db = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(null) } });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId: '1', fileID },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 50 }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    it('returns 403 when the file does not belong to the sample', async () => {
+      const fileID = new ObjectId().toString();
+      const otherSampleID = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId: otherSampleID, storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const db = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) } });
+      const wrongSampleID = new ObjectId().toString();
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId: wrongSampleID, fileID },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 50 }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it('returns 403 when the sample belongs to a different organization', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const updateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 50 },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(updateOne).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 and cleans up the uploaded file when the new file has an invalid type', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'old.csv', storagePath: '/x/old.csv' };
+      const db = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) } });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        file: { path: '/tmp/new.bin', originalname: 'new.bin', size: 50 }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+      vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue(null);
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(unlinkSpy).toHaveBeenCalledWith('/tmp/new.bin');
+    });
+
+    it('happy path: writes new content, removes the previous physical file, updates the record, returns 200', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = {
+        _id: new ObjectId(fileID),
+        specimenId,
+        fileName: 'old.csv',
+        storagePath: '/x/old.csv',
+        checksum: 'old-checksum',
+        uploaderAnonId: 'anon-1',
+        uploadDate: new Date('2026-01-01'),
+        accessPolicy: { view: 'authenticated', manage: ['admin', 'coordinator'] }
+      };
+      const updateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 200 },
+        user: null
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+      vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
+      vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+
+      await controller.replaceFile(req, res);
+
+      expect(unlinkSpy).toHaveBeenCalledWith('/x/old.csv');
+      expect(updateOne).toHaveBeenCalledWith(
+        { _id: fileRecord._id },
+        { $set: expect.objectContaining({ fileName: 'new.csv', fileSize: 200 }) }
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+      const body = res.json.mock.calls[0][0];
+      expect(body.success).toBe(true);
+      expect(body.data.fileName).toBe('new.csv');
+      expect(body.data.checksum).toMatch(/^[a-f0-9]{64}$/);
+      expect(body.data.checksum).not.toBe('old-checksum');
+      // Fields carried over from the original record, unaffected by replace.
+      expect(body.data.uploaderAnonId).toBe('anon-1');
+    });
+
+    it('happy path with req.user: audits the replace with the previous file identity in the payload', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = {
+        _id: new ObjectId(fileID),
+        specimenId,
+        fileName: 'old.csv',
+        storagePath: '/x/old.csv',
+        checksum: 'old-checksum'
+      };
+      const updateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 200 },
+        user: { id: 'u1' }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+      vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
+      vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+      const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'file_replace',
+          resourceId: fileRecord._id.toString(),
+          payload: expect.objectContaining({ previousFileName: 'old.csv', previousChecksum: 'old-checksum', fileName: 'new.csv' })
+        })
+      );
+    });
+
+    it('continues the replace when unlinking the previous physical file fails', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'old.csv', storagePath: '/x/old.csv', checksum: 'old-checksum' };
+      const updateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 200 },
+        user: null
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {
+        throw new Error('locked');
+      });
+      vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
+      vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+
+      await controller.replaceFile(req, res);
+
+      expect(updateOne).toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('does not delete the previous file when its path matches the new upload path', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'old.csv', storagePath: '/tmp/new.csv', checksum: 'old-checksum' };
+      const updateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 200 },
+        user: null
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+      vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
+      vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+
+      await controller.replaceFile(req, res);
+
+      expect(unlinkSpy).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('returns 400 and cleans up the uploaded file when validation fails', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'old.csv', storagePath: '/x/old.csv' };
+      const db = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) } });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 200 }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+      vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
+      vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: false, errors: ['bad'] });
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(unlinkSpy).toHaveBeenCalledWith('/tmp/new.csv');
+    });
+
+    it('returns 400 when an unexpected error is thrown, and swallows a failed cleanup unlink', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'old.csv', storagePath: '/x/old.csv' };
+      const db = createDb({
+        sample_files: {
+          findOne: vi.fn().mockResolvedValue(fileRecord),
+          updateOne: vi.fn().mockRejectedValue(new Error('db down'))
+        }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 200 }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {
+        throw new Error('locked');
+      });
+      vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
+      vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+  });
+
   describe('exportHL7v2', () => {
     it('returns 503 when db is unavailable', async () => {
       const req = { app: { locals: { db: null } }, params: { specimenId: 's1', fileID: 'f1' } };

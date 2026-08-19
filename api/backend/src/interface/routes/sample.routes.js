@@ -1298,7 +1298,7 @@ router.get('/:id/quarantine-actions', authenticate, requireOrganizationScope, as
 // RF007 - Upload de Arquivos de Análise
 const sampleFileController = require('../../controllers/sample-file.controller');
 
-// #625: requireOrganizationScope on all 7 routes below, mirroring the
+// #625: requireOrganizationScope on all 8 routes below, mirroring the
 // rest of this file's org-scope precedent — the actual per-record 403
 // check runs inside sample-file.controller.js itself (post-fetch), same
 // split as patient.routes.js/paciente.controller.js (#626).
@@ -1332,6 +1332,18 @@ router.delete('/:specimenId/files/:fileID',
   requirePermission('deleteSampleFiles'),
   requireOrganizationScope,
   sampleFileController.deleteFile.bind(sampleFileController)
+);
+
+// Substituir arquivo - Apenas Admin e Coordenador (RF007 AC#7, #334)
+// #631: explicit 'CREATE' action -- uploadSampleFiles's catalog entry
+// only allows CREATE, but this route's PUT verb defaults to UPDATE via
+// METHOD_TO_ACTION; a replace is a new-content write, same as upload.
+router.put('/:specimenId/files/:fileID/replace',
+  authenticate,
+  requirePermission('uploadSampleFiles', 'CREATE'),
+  requireOrganizationScope,
+  sampleFileController.uploadMiddleware(),
+  sampleFileController.replaceFile.bind(sampleFileController)
 );
 
 // Exportação HL7 - Todos os perfis autenticados podem exportar (não contém dados sensíveis, apenas patientID anonimizado)

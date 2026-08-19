@@ -113,6 +113,69 @@ test.describe('Scientific files (RF007) — real backend', () => {
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, listWatch);
   });
 
+  test('replaces a scientific file, recomputing checksum/encryption and auditing the substitution (AC#7, #334)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const sampleID = await createRealSample(request, admin.token);
+
+    const originalContent = Buffer.from('RF007 e2e original file content — before replace');
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        file: {
+          name: 'original.csv',
+          mimeType: 'text/csv',
+          buffer: originalContent,
+        },
+      },
+    });
+    expect(upload.status()).toBe(201);
+    const uploadBody = await upload.json();
+    const fileID = uploadBody.data._id;
+    const originalChecksum = uploadBody.data.checksum;
+
+    const replacementContent = Buffer.from('RF007 e2e replacement file content — after replace, different bytes');
+    const expectedNewChecksum = crypto.createHash('sha256').update(replacementContent).digest('hex');
+
+    const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
+
+    const replace = await request.put(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/replace`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        file: {
+          name: 'replacement.csv',
+          mimeType: 'text/csv',
+          buffer: replacementContent,
+        },
+      },
+    });
+
+    expect(replace.status()).toBe(200);
+    const replaceBody = await replace.json();
+    expect(replaceBody.data._id).toBe(fileID);
+    expect(replaceBody.data.fileName).toBe('replacement.csv');
+    expect(replaceBody.data.checksum).toBe(expectedNewChecksum);
+    expect(replaceBody.data.checksum).not.toBe(originalChecksum);
+    expect(replaceBody.data.encryption.encrypted).toBe(true);
+    expect(replaceBody.data.uri).toMatch(/^objstore:\/\/samples\//);
+
+    // AC#7 - substituição is audited, same as upload/access/removal.
+    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+
+    // Round-trip proof: downloading now serves the NEW content, decrypted
+    // correctly — proves the replace genuinely swapped the on-disk
+    // ciphertext, not just the DB metadata.
+    const download = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/download`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(download.status()).toBe(200);
+    const downloadedBytes = await download.body();
+    expect(downloadedBytes.equals(replacementContent)).toBe(true);
+    const downloadedChecksum = crypto.createHash('sha256').update(downloadedBytes).digest('hex');
+    expect(downloadedChecksum).toBe(expectedNewChecksum);
+  });
+
   test('rejects a disallowed file format (AC#1)', async ({ request }) => {
     const admin = await realLogin(request);
     const sampleID = await createRealSample(request, admin.token);
