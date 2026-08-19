@@ -98,6 +98,10 @@ class participantIdentityService {
         birthDate: birthDate || existing.birthDate,
         identityDocument: identityDocument || existing.identityDocument || null,
       };
+      // #640: route through encryptIdentityFields so this write gets the same
+      // ciphertext/hash siblings every other participantIdentities writer
+      // produces (#566/#574), not plaintext-only.
+      const encryptedIdentityValues = identityCryptoService.encryptIdentityFields(identityValues);
       const update = {
         email: email || existing.email || null,
         phone: phone || existing.phone || null,
@@ -110,9 +114,7 @@ class participantIdentityService {
         { participantId: matchedParticipantId },
         {
           $set: {
-            patientName: identityValues.patientName,
-            birthDate: identityValues.birthDate,
-            identityDocument: identityValues.identityDocument,
+            ...encryptedIdentityValues,
             email: update.email,
             phone: update.phone,
             updatedAt: update.updatedAt,
@@ -129,6 +131,8 @@ class participantIdentityService {
       birthDate: birthDate || null,
       identityDocument: identityDocument || null,
     };
+    // #640: same rationale as the update branch above.
+    const encryptedIdentityValues = identityCryptoService.encryptIdentityFields(identityValues);
     const toInsert = {
       participantId: generatedParticipantId,
       email: email || null,
@@ -144,9 +148,7 @@ class participantIdentityService {
       {
         $set: {
           participantId: generatedParticipantId,
-          patientName: identityValues.patientName,
-          birthDate: identityValues.birthDate,
-          identityDocument: identityValues.identityDocument,
+          ...encryptedIdentityValues,
           email: toInsert.email,
           phone: toInsert.phone,
           updatedAt: toInsert.updatedAt,
