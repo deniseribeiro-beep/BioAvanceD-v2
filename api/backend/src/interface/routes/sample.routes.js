@@ -1335,9 +1335,12 @@ router.delete('/:specimenId/files/:fileID',
 );
 
 // Substituir arquivo - Apenas Admin e Coordenador (RF007 AC#7, #334)
+// #631: explicit 'CREATE' action -- uploadSampleFiles's catalog entry
+// only allows CREATE, but this route's PUT verb defaults to UPDATE via
+// METHOD_TO_ACTION; a replace is a new-content write, same as upload.
 router.put('/:specimenId/files/:fileID/replace',
   authenticate,
-  requirePermission('uploadSampleFiles'),
+  requirePermission('uploadSampleFiles', 'CREATE'),
   requireOrganizationScope,
   sampleFileController.uploadMiddleware(),
   sampleFileController.replaceFile.bind(sampleFileController)
