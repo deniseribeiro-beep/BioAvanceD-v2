@@ -68,23 +68,38 @@ const ADDITIONAL_ROLES_SEED = [
   },
 ];
 
+/**
+ * #630: `allowedActions` below was audited against every real
+ * `requirePermission(code)` call site in `src/interface/routes/` (17
+ * codes, 107 call sites) rather than trusted as-is — several codes were
+ * badly stale (e.g. `manageOrganizations` claimed only `UPDATE` while
+ * `organization.routes.js` has gated `POST`/`DELETE` under it since
+ * #576). Per-call-site action was derived from HTTP verb (GET->READ,
+ * POST->CREATE, PUT/PATCH->UPDATE, DELETE->DELETE), with two overrides
+ * where that default is plainly wrong: an `/export*` path segment maps
+ * to EXPORT regardless of verb, and a POST to `/:id/<verb>` (an action
+ * on an existing resource, not a new one) maps to UPDATE unless the verb
+ * is itself clearly generative of a new sub-resource (e.g. adding a
+ * note/observation/reading), which stays CREATE. No behavior change —
+ * `requirePermission()` still ignores `allowedActions`; see #631.
+ */
 const PERMISSION_CATALOG = {
-  viewReports: { resourceType: 'Report', allowedActions: ['READ'], displayName: 'Visualizar relatórios' },
-  createSample: { resourceType: 'Sample', allowedActions: ['CREATE'], displayName: 'Criar amostra' },
+  viewReports: { resourceType: 'Report', allowedActions: ['CREATE', 'READ', 'DELETE', 'EXPORT'], displayName: 'Visualizar relatórios' },
+  createSample: { resourceType: 'Sample', allowedActions: ['CREATE', 'READ'], displayName: 'Criar amostra' },
   withdrawSample: { resourceType: 'Sample', allowedActions: ['UPDATE'], displayName: 'Retirar amostra' },
-  viewTemperature: { resourceType: 'Temperature', allowedActions: ['READ'], displayName: 'Visualizar temperatura' },
-  uploadFiles: { resourceType: 'SampleFile', allowedActions: ['CREATE'], displayName: 'Enviar arquivos' },
-  createUser: { resourceType: 'User', allowedActions: ['CREATE'], displayName: 'Criar usuário' },
+  viewTemperature: { resourceType: 'Temperature', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Visualizar temperatura' },
+  uploadFiles: { resourceType: 'SampleFile', allowedActions: ['CREATE', 'READ', 'UPDATE'], displayName: 'Enviar arquivos' },
+  createUser: { resourceType: 'User', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Criar usuário' },
   editSample: { resourceType: 'Sample', allowedActions: ['UPDATE'], displayName: 'Editar amostra' },
   deleteSample: { resourceType: 'Sample', allowedActions: ['DELETE'], displayName: 'Excluir amostra' },
-  createPatient: { resourceType: 'Patient', allowedActions: ['CREATE'], displayName: 'Criar paciente' },
+  createPatient: { resourceType: 'Patient', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Criar paciente' },
   uploadSampleFiles: { resourceType: 'SampleFile', allowedActions: ['CREATE'], displayName: 'Enviar arquivos da amostra' },
   deleteSampleFiles: { resourceType: 'SampleFile', allowedActions: ['DELETE'], displayName: 'Excluir arquivos da amostra' },
   manageBackup: { resourceType: 'System', allowedActions: ['UPDATE'], displayName: 'Gerenciar backup' },
   manageSystem: { resourceType: 'System', allowedActions: ['UPDATE'], displayName: 'Gerenciar sistema' },
   resetMFA: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Redefinir MFA' },
   manageTemperature: { resourceType: 'Temperature', allowedActions: ['UPDATE'], displayName: 'Gerenciar incidentes de temperatura' },
-  manageOrganizations: { resourceType: 'Organization', allowedActions: ['UPDATE'], displayName: 'Gerenciar organizações' },
+  manageOrganizations: { resourceType: 'Organization', allowedActions: ['CREATE', 'UPDATE', 'DELETE'], displayName: 'Gerenciar organizações' },
   viewAuditLogs: { resourceType: 'AuditLog', allowedActions: ['READ'], displayName: 'Visualizar trilhas de auditoria' },
   createResult: { resourceType: 'Result', allowedActions: ['CREATE'], displayName: 'Criar arquivo de análise' },
   editResult: { resourceType: 'Result', allowedActions: ['UPDATE'], displayName: 'Editar arquivo de análise' },

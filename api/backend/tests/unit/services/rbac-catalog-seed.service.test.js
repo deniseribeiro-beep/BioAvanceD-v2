@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { seedRolesAndPermissions } = require('../../../src/services/rbac-catalog-seed.service');
+const { seedRolesAndPermissions, PERMISSION_CATALOG } = require('../../../src/services/rbac-catalog-seed.service');
 
 /**
  * Real query-matching fake (findOne exact-match, insertOne), not a canned
@@ -96,5 +96,34 @@ describe('rbac-catalog-seed.service', () => {
     const firstAdminId = first.roles.find((r) => r.roleCode === 'administrator').roleId;
     const secondAdminId = second.roles.find((r) => r.roleCode === 'administrator').roleId;
     expect(secondAdminId).toBe(firstAdminId);
+  });
+
+  // #630: allowedActions audited against every real requirePermission()
+  // call site in src/interface/routes/ — these are the corrected sets,
+  // not the original stale ones (e.g. manageOrganizations used to claim
+  // only UPDATE while organization.routes.js also gates POST/DELETE
+  // under it).
+  describe('PERMISSION_CATALOG allowedActions (#630 audit)', () => {
+    it.each([
+      ['viewReports', ['CREATE', 'READ', 'DELETE', 'EXPORT']],
+      ['createSample', ['CREATE', 'READ']],
+      ['withdrawSample', ['UPDATE']],
+      ['viewTemperature', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
+      ['uploadFiles', ['CREATE', 'READ', 'UPDATE']],
+      ['createUser', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
+      ['editSample', ['UPDATE']],
+      ['deleteSample', ['DELETE']],
+      ['createPatient', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
+      ['uploadSampleFiles', ['CREATE']],
+      ['deleteSampleFiles', ['DELETE']],
+      ['manageTemperature', ['UPDATE']],
+      ['manageOrganizations', ['CREATE', 'UPDATE', 'DELETE']],
+      ['createResult', ['CREATE']],
+      ['editResult', ['UPDATE']],
+      ['deleteResult', ['DELETE']],
+      ['reidentifyParticipant', ['READ']],
+    ])('%s allows exactly %j', (permissionCode, expectedActions) => {
+      expect(PERMISSION_CATALOG[permissionCode].allowedActions).toEqual(expectedActions);
+    });
   });
 });
