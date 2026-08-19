@@ -693,8 +693,10 @@ describe('reports.routes.js gaps', () => {
   // #341 (RF003 AC#3): org-scope enforcement on the report types rooted in
   // samples/patients. Only these types resolve organizationScope at all —
   // an org-less/unusable-scope caller still gets 200 for a non-sample-
-  // rooted type (temperature, sensor, ...), matching the product decision
-  // that those entities have no organization concept yet.
+  // rooted type (temperature, equipamento, ...), matching the product
+  // decision that those entities have no organization concept yet.
+  // #634: `sensor` moved out of the unscoped bucket now that
+  // Sensor.organizationId exists — see reports.routes.js's own comment.
   describe('org-scope enforcement (#341)', () => {
     const NO_ASSIGNMENT_RBAC = { userRoleAssignments: [], roles: [] };
     const ORG_SCOPED_RBAC = {
@@ -709,6 +711,7 @@ describe('reports.routes.js gaps', () => {
       ['sampleanalysis', '/api/reports/sampleanalysis/preview'],
       ['tissueoriginhistory', '/api/reports/tissueoriginhistory/preview'],
       ['resultado', '/api/reports/resultado/preview'],
+      ['sensor', '/api/reports/sensor/preview'],
     ])('%s: 403 quando o usuário não tem nenhuma organização atribuída', async (_label, path) => {
       const { db } = buildCollectionDb(NO_ASSIGNMENT_RBAC);
       const testApp = appWithDb(db);
@@ -720,7 +723,6 @@ describe('reports.routes.js gaps', () => {
 
     it.each([
       ['temperatura', '/api/reports/temperatura/preview'],
-      ['sensor', '/api/reports/sensor/preview'],
       ['equipamento', '/api/reports/equipamento/preview'],
     ])('%s: continua 200 sem organização atribuída (tipo não escopado)', async (_label, path) => {
       const { db } = buildCollectionDb(NO_ASSIGNMENT_RBAC);
@@ -741,6 +743,16 @@ describe('reports.routes.js gaps', () => {
       expect(capturedQueries.samples.$and).toEqual(
         expect.arrayContaining([{ collectionSite: { $in: ['org-1'] } }])
       );
+    });
+
+    it('sensor: filtra a query por organizationId para um usuário organization-scoped', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, sensors: [{ sensorId: 'S1', organizationId: 'org-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/sensor/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.sensors).toEqual({ organizationId: { $in: ['org-1'] } });
     });
 
     it('paciente: filtra diretamente por clinicalUnitId mesmo sem keyword/orphaCode/matchingPatientIds', async () => {

@@ -1,6 +1,7 @@
 const sensorService = require('../services/sensor.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
+const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
 
 /**
  * Controller de Sensores
@@ -41,6 +42,14 @@ class SensorController {
       });
     } catch (error) {
       logger.error('Erro ao criar sensor:', error.message);
+      // #634: organizationId lookup failures throw statusCode:404.
+      if (error.statusCode === 404) {
+        return res.status(404).json({
+          success: false,
+          error: error.message,
+          message: error.message
+        });
+      }
       return res.status(400).json({
         success: false,
         error: 'Erro ao criar sensor',
@@ -63,7 +72,8 @@ class SensorController {
         locationId: req.query.locationId || req.query.locationID,
         maintenanceStatus: req.query.maintenanceStatus,
         limit: parseInt(req.query.limit) || 50,
-        skip: parseInt(req.query.skip) || 0
+        skip: parseInt(req.query.skip) || 0,
+        organizationScope: req.organizationScope
       };
 
       const result = await sensorService.listSensors(db, filters);
@@ -127,6 +137,17 @@ class SensorController {
         return res.status(404).json({
           success: false,
           error: 'Sensor não encontrado'
+        });
+      }
+
+      // #634 (F3-G09): mirrors sample-file.controller.js's own
+      // out-of-scope 403 pattern -- a null organizationId (unscoped/
+      // legacy sensor) is out of scope for anyone but a global caller.
+      if (req.organizationScope && !isRecordInOrganizationScope(sensor, req.organizationScope, 'organizationId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este sensor pertence a outra organização'
         });
       }
 
@@ -242,6 +263,14 @@ class SensorController {
       });
     } catch (error) {
       logger.error('Erro ao atualizar sensor:', error.message);
+      // #634: organizationId lookup failures throw statusCode:404.
+      if (error.statusCode === 404) {
+        return res.status(404).json({
+          success: false,
+          error: error.message,
+          message: error.message
+        });
+      }
       return res.status(400).json({
         success: false,
         error: 'Erro ao atualizar sensor',

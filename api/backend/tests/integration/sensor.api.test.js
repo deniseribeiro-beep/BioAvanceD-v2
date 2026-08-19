@@ -24,7 +24,10 @@ function givenSession() {
   vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-1' });
 }
 
-const FAKE_SENSOR = { _id: '507f1f77bcf86cd799439011', sensorId: 'S-001', type: 'temperature', status: 'online' };
+// #634: organizationId matches buildRbacCollections' default scopeId for a
+// non-Administrador assignment ('test-org-default') so this fixture stays
+// visible to the org-scoped Técnico callers most tests in this file use.
+const FAKE_SENSOR = { _id: '507f1f77bcf86cd799439011', sensorId: 'S-001', type: 'temperature', status: 'online', organizationId: 'test-org-default' };
 
 beforeEach(() => {
   givenSession();
@@ -59,6 +62,23 @@ describe('GET /api/sensors', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+
+  // #634: proves requireOrganizationScope is actually wired into this
+  // route (a controller-level unit test can't prove routing). The caller
+  // keeps viewTemperature (via its role) but has an 'unassigned' org
+  // scope (an organization-scopeType assignment with no scopeId) --
+  // isolates the 403 to requireOrganizationScope, not requirePermission.
+  it('returns 403 for a caller whose org assignment has no scopeId (unassigned)', async () => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-tecnico-2', accessType: 2, organizationId: '' }])
+    });
+
+    const res = await request(app)
+      .get('/api/sensors')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(403);
   });
 });
 
