@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requireRole } = require('../../infrastructure/middleware/rbac');
+const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const backupService = require('../../services/backup.service');
 const logger = require('../../utils/logger');
 
@@ -15,7 +15,9 @@ function getDirSizeSync(targetPath) {
 }
 
 router.use(authenticate);
-router.use(requireRole(4));
+// #632: was requireRole(4) — enforced only hierarchyLevel, ignoring
+// whether the caller's role was actually granted manageBackup.
+router.use(requirePermission('manageBackup'));
 
 router.post('/perform', async (_req, res) => {
   try {
