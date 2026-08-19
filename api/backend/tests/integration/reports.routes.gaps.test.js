@@ -712,6 +712,7 @@ describe('reports.routes.js gaps', () => {
       ['tissueoriginhistory', '/api/reports/tissueoriginhistory/preview'],
       ['resultado', '/api/reports/resultado/preview'],
       ['sensor', '/api/reports/sensor/preview'],
+      ['equipamento', '/api/reports/equipamento/preview'],
     ])('%s: 403 quando o usuário não tem nenhuma organização atribuída', async (_label, path) => {
       const { db } = buildCollectionDb(NO_ASSIGNMENT_RBAC);
       const testApp = appWithDb(db);
@@ -723,7 +724,6 @@ describe('reports.routes.js gaps', () => {
 
     it.each([
       ['temperatura', '/api/reports/temperatura/preview'],
-      ['equipamento', '/api/reports/equipamento/preview'],
     ])('%s: continua 200 sem organização atribuída (tipo não escopado)', async (_label, path) => {
       const { db } = buildCollectionDb(NO_ASSIGNMENT_RBAC);
       const testApp = appWithDb(db);
@@ -753,6 +753,16 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(capturedQueries.sensors).toEqual({ organizationId: { $in: ['org-1'] } });
+    });
+
+    it('equipamento: filtra a query por organizationId para um usuário organization-scoped', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, equipment: [{ equipmentID: 1, organizationId: 'org-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/equipamento/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.equipment).toEqual({ organizationId: { $in: ['org-1'] } });
     });
 
     it('paciente: filtra diretamente por clinicalUnitId mesmo sem keyword/orphaCode/matchingPatientIds', async () => {

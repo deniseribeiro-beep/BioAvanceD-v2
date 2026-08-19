@@ -1,19 +1,41 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
 const EquipmentModel = require('../../models/Equipment');
 const { generateUniqueEquipmentID } = require('../../utils/equipmentIDGenerator');
 const defaultQuarantineService = require('../../services/equipment-sensor-quarantine.service');
+const { applyOrganizationScopeFilter, isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
+
+function createEquipmentValidationError(message, statusCode = 422) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+// #635: mirrors sample.service.js's/sensor.service.js's own organizationId
+// validation -- when provided, it must resolve to a real Organization.
+async function assertOrganizationIdResolves(db, organizationId) {
+  if (organizationId === undefined || organizationId === null || organizationId === '') {
+    return;
+  }
+  const organization = await db.collection('organizations').findOne({ organizationId: String(organizationId) });
+  if (!organization) {
+    throw createEquipmentValidationError(`organizationId ${organizationId} não encontrado`, 404);
+  }
+}
 
 // CRUD de Equipamentos
-router.get('/', authenticate, async (req, res) => {
+// #635: requireOrganizationScope filters/gates by the caller's own
+// organizationId scope -- see the query build below and GET /:id.
+router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
     const equipmentCollection = db.collection('equipment');
-    const equipment = await equipmentCollection.find({}).toArray();
+    const query = applyOrganizationScopeFilter({}, req.organizationScope, 'organizationId');
+    const equipment = await equipmentCollection.find(query).toArray();
 
     // Registra log de consulta
     const auditLogger = require('../../utils/auditLogger');
@@ -88,7 +110,7 @@ router.get('/analytical', authenticate, async (req, res) => {
   }
 });
 
-router.get('/:id', authenticate, async (req, res) => {
+router.get('/:id', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -128,6 +150,17 @@ router.get('/:id', authenticate, async (req, res) => {
       return res.status(404).json({
         success: false,
         error: 'Equipamento não encontrado'
+      });
+    }
+
+    // #635 (F3-G09): mirrors sensor.controller.js's own out-of-scope 403
+    // pattern -- a null organizationId (unscoped/legacy equipment) is out
+    // of scope for anyone but a global caller.
+    if (req.organizationScope && !isRecordInOrganizationScope(equipment, req.organizationScope, 'organizationId')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Este equipamento pertence a outra organização'
       });
     }
 
@@ -172,12 +205,14 @@ router.post('/', authenticate, requirePermission('createPatient'), async (req, r
       });
     }
 
+    await assertOrganizationIdResolves(db, req.body.organizationId);
+
     // Prepara os dados, convertendo purchaseDate se necessário
     const equipmentData = { ...req.body };
     if (equipmentData.purchaseDate) {
       equipmentData.purchaseDate = new Date(equipmentData.purchaseDate);
     }
-    
+
     // Gera equipmentID automaticamente se não fornecido
     if (!equipmentData.equipmentID) {
       equipmentData.equipmentID = await generateUniqueEquipmentID(db, 'equipment');
@@ -222,6 +257,14 @@ router.post('/', authenticate, requirePermission('createPatient'), async (req, r
     });
   } catch (error) {
     logger.error('Erro ao criar equipamento:', error.message);
+    // #635: organizationId lookup failures throw statusCode:404.
+    if (error.statusCode === 404) {
+      return res.status(404).json({
+        success: false,
+        error: error.message,
+        message: error.message
+      });
+    }
     return res.status(500).json({
       success: false,
       error: 'Erro ao criar equipamento',
@@ -234,6 +277,8 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
   try {
     const quarantineService = req.app?.locals?.quarantineService || defaultQuarantineService;
     const db = req.app.locals.db;
+
+    await assertOrganizationIdResolves(db, req.body.organizationId);
 
     const { ObjectId } = require('mongodb');
     const equipmentCollection = db.collection('equipment');
@@ -410,6 +455,14 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
     });
   } catch (error) {
     logger.error('Erro ao atualizar equipamento:', error.message);
+    // #635: organizationId lookup failures throw statusCode:404.
+    if (error.statusCode === 404) {
+      return res.status(404).json({
+        success: false,
+        error: error.message,
+        message: error.message
+      });
+    }
     return res.status(400).json({
       success: false,
       error: 'Erro ao atualizar equipamento',
