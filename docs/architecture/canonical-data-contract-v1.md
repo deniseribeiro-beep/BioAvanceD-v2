@@ -160,21 +160,37 @@ collection's plaintext keep working unchanged. `participantIdentity.service.js#g
 `decryptIdentity`, preferring ciphertext when present and falling back to
 plaintext for pre-#566 records.
 
-**Not yet landed (follow-up tracked separately):** cutting the plaintext
-over to ciphertext-only (dropping `patientName`/`birthDate`/`identityDocument`
-as directly-stored values) needs every remaining reader repointed onto
-`participantIdentity.service.js`'s decrypt path first — mechanical for
-most (`consent.controller.js`, `eConsent.js`, `consent.service.js`,
-`sample.service.js`: single `findOne` + decrypt), but two consumers query
-these fields at the MongoDB level in ways ciphertext can't support directly
-(`import.service.js`'s exact-match `identityDocument` dedup,
-`intakeWizard.js`'s and `PatientIdentityService.js`'s `birthDate`
-day-range + `patientName` matching) and need a blind-index/hash sibling
-field, not just a decrypt-after-fetch; `reports.routes.js`'s `patientName`
-`$regex` keyword search can't be blind-indexed at all and needs its own
-redesign. Also outstanding: `#563`-`#564`'s consumer groups still
-read/write these fields directly on `Patient`, and the final backfill/
-removal (#565, depends on #560-#564 all landing).
+**Landed in #574:** every remaining plaintext reader is repointed.
+Mechanical consumers (`consent.controller.js`, `eConsent.js`,
+`consent.service.js`, `sample.service.js`) now decrypt via
+`participantIdentity.service.js#decryptIdentity` instead of reading
+plaintext directly — a no-op today (plaintext still present) but correct
+once the plaintext is eventually dropped. The two consumers that query
+these fields at the MongoDB level (`import.service.js`'s exact-match
+`identityDocument` dedup; `intakeWizard.js`'s and
+`PatientIdentityService.js`'s `birthDate` day-range + `patientName`
+matching) now query deterministic `identityDocumentHash`/`birthDateHash`
+blind-index siblings first (HMAC-SHA256 via `fieldEncryption.js#hmacBlindIndex`,
+keyed with the active encryption key; written by `encryptIdentityFields`
+alongside the ciphertext), falling back to the original plaintext
+condition via `$or` for records written before the hash sibling existed
+— additive, no backfill migration required for this slice.
+`reports.routes.js`'s `patientName` `$regex` keyword search — which
+can't be blind-indexed (substring search isn't hashable) and would have
+needed a full-collection decrypt-and-scan RNF002 AC#2 forbids at the
+stated 100k-record reference scale — was removed entirely rather than
+redesigned: RF008's own reports filter list never included name search,
+and RNF007 AC#4 requires reports to omit/pseudonymize direct identifiers
+by default. The keyword filter still matches the pseudonymized
+`participantId` field directly, unaffected.
+
+**Not yet landed:** cutting the plaintext fields over to ciphertext-only
+(dropping `patientName`/`birthDate`/`identityDocument` as directly-stored
+values) needs a one-time backfill populating the hash/ciphertext siblings
+on every pre-#566/#574 record first — mirroring #565's precedent for
+`Patient`'s own legacy-field removal — since #574's decrypt/hash-fallback
+logic still depends on at least one of plaintext or ciphertext+hash being
+present on every record it reads. Not yet filed as its own issue.
 
 ### Specimen
 
