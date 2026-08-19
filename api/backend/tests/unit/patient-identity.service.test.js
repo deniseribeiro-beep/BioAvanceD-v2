@@ -238,6 +238,52 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
     });
   });
 
+  describe('RF005/RNF007 (#640): encrypts identity fields on write', () => {
+    it('writes ciphertext/hash siblings when updating an existing identity', async () => {
+      const existingPatient = {
+        _id: '507f1f77bcf86cd799439011',
+        participantId: '33333333',
+        patientName: 'Ana Costa',
+        birthDate: new Date('1988-02-10'),
+      };
+
+      patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
+      patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
+
+      await patientIdentityService.matchOrUpsertParticipant(db, {
+        participantId: '33333333',
+        patientName: 'Ana Costa',
+        birthDate: '10/02/1988',
+        identityDocument: '111.222.333-44',
+      });
+
+      const identitySet = identitiesCollection.updateOne.mock.calls[0][1].$set;
+      expect(identitySet.patientNameEncrypted).toBeTruthy();
+      expect(identitySet.birthDateEncrypted).toBeTruthy();
+      expect(identitySet.identityDocumentEncrypted).toBeTruthy();
+      expect(identitySet.identityDocumentHash).toBeTruthy();
+      expect(identitySet.birthDateHash).toBeTruthy();
+    });
+
+    it('writes ciphertext/hash siblings when inserting a new identity', async () => {
+      identityCandidates([]);
+      patientsCollection.insertOne.mockResolvedValueOnce({ insertedId: '888f1f77bcf86cd799439888' });
+
+      await patientIdentityService.matchOrUpsertParticipant(db, {
+        patientName: 'Bruno Rocha',
+        birthDate: '05/06/1975',
+        identityDocument: '555.666.777-88',
+      });
+
+      const identitySet = identitiesCollection.updateOne.mock.calls[0][1].$set;
+      expect(identitySet.patientNameEncrypted).toBeTruthy();
+      expect(identitySet.birthDateEncrypted).toBeTruthy();
+      expect(identitySet.identityDocumentEncrypted).toBeTruthy();
+      expect(identitySet.identityDocumentHash).toBeTruthy();
+      expect(identitySet.birthDateHash).toBeTruthy();
+    });
+  });
+
   describe('Error handling', () => {
     it('deve lançar erro se não houver participantId e nem (patientName + birthDate)', async () => {
       await expect(
