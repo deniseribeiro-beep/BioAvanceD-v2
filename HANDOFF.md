@@ -68,9 +68,15 @@ next.
   showcase-video merge (`5023ebcf`). Working tree clean except the
   gitignored/junctioned `.claude/skills/`.
 - No PR to `main` exists.
-- **Docker**: `compose.test.yml` is still up as of this rotation
-  (brought up to re-verify #331 and record the showcase video). Teardown
-  handled via `clean-up` immediately after this rotation, same session.
+- **Docker**: `compose.test.yml` (brought up to re-verify #331 and
+  record the showcase video) was torn down at the end of this sitting
+  (Dennis's confirmation, queue was empty) -- `docker compose down`, no
+  `-v`, so `mongodb-test-data` and other named volumes persist for next
+  time. The session-rebuilt `backend-app-test` image was removed and
+  `docker builder prune -af` reclaimed 876.4MB. Pre-existing images
+  (the `reference-data-bootstrap-*` family, etc.) were left untouched,
+  per this repo's own established precedent that they aren't a given
+  session's to judge.
 
 ## Recommended next steps
 
