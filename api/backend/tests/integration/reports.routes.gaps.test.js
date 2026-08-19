@@ -66,6 +66,13 @@ function buildCollectionDb(collections = {}) {
           docs.push(inserted);
           return { insertedId: inserted._id };
         },
+        // #637: GET /api/reports/:id (and any other single-record lookup)
+        // needs findOne -- simple equality match, same semantics as find's
+        // own query shape above (this file's mocks don't need $in here).
+        async findOne(query = {}) {
+          capturedQueries[`${name}.findOne`] = query;
+          return docs.find((doc) => Object.entries(query).every(([key, value]) => doc[key] === value)) || null;
+        },
       };
     },
   };
@@ -834,6 +841,133 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(capturedQueries.results).toEqual({});
+    });
+  });
+
+  // #637: saved Report documents get their own organizationIds (an array
+  // -- a single report can span multiple scoped organizations, unlike
+  // every other entity's single-org field, since a caller can hold more
+  // than one active organization-scoped assignment at once), stamped at
+  // generation time from the requesting user's own resolved scope. No
+  // backfill for reports generated before this field existed -- they get
+  // organizationIds: [] and are hidden from organization-scoped viewers,
+  // same F3-G09 treatment #634/#635/#636 already gave Sensor/Equipment/
+  // Temperature's own organizationId: null.
+  describe('Report.organizationIds (#637)', () => {
+    const NO_ASSIGNMENT_RBAC = { userRoleAssignments: [], roles: [] };
+    const ORG_SCOPED_RBAC = {
+      userRoleAssignments: [{ userAccountId: 'user-1', roleId: 'role-coord', assignmentStatus: 'active', validUntil: null, scopeType: 'organization', scopeId: 'org-1' }],
+      roles: [{ roleId: 'role-coord', hierarchyLevel: 3 }],
+    };
+    // #637: a caller with two active organization-scoped assignments
+    // (e.g. their primary role plus an additively-granted role scoped to
+    // a different organization, per #429/grantAdditionalRole) resolves
+    // to multiple organizationIds even though they aren't Administrador.
+    const MULTI_ORG_SCOPED_RBAC = {
+      userRoleAssignments: [
+        { userAccountId: 'user-1', roleId: 'role-coord', assignmentStatus: 'active', validUntil: null, scopeType: 'organization', scopeId: 'org-1' },
+        { userAccountId: 'user-1', roleId: 'role-auditor', assignmentStatus: 'active', validUntil: null, scopeType: 'organization', scopeId: 'org-2' },
+      ],
+      roles: [
+        { roleId: 'role-coord', hierarchyLevel: 3 },
+        { roleId: 'role-auditor', hierarchyLevel: null },
+      ],
+    };
+
+    it('generate: estampa organizationIds a partir do escopo do usuário (organization-scoped)', async () => {
+      const { db } = buildCollectionDb(ORG_SCOPED_RBAC);
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'audit' });
+
+      expect(response.status).toBe(201);
+      expect(response.body.organizationIds).toEqual(['org-1']);
+    });
+
+    it('generate: estampa todas as organizationIds do usuário quando há múltiplas assignments organization-scoped', async () => {
+      const { db } = buildCollectionDb(MULTI_ORG_SCOPED_RBAC);
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'audit' });
+
+      expect(response.status).toBe(201);
+      expect(response.body.organizationIds.sort()).toEqual(['org-1', 'org-2']);
+    });
+
+    it('generate: estampa organizationIds vazio para Administrador (scope global)', async () => {
+      const { db } = buildCollectionDb({});
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'audit' });
+
+      expect(response.status).toBe(201);
+      expect(response.body.organizationIds).toEqual([]);
+    });
+
+    it('GET /api/reports: 403 quando o usuário não tem nenhuma organização atribuída', async () => {
+      const { db } = buildCollectionDb(NO_ASSIGNMENT_RBAC);
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports');
+
+      expect(response.status).toBe(403);
+    });
+
+    it('GET /api/reports: filtra por organizationIds para um usuário organization-scoped', async () => {
+      const { db, capturedQueries } = buildCollectionDb({
+        ...ORG_SCOPED_RBAC,
+        reports: [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports');
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.reports).toEqual({ organizationIds: { $in: ['org-1'] } });
+    });
+
+    it('GET /api/reports: Administrador (scope global) não recebe filtro', async () => {
+      const { db, capturedQueries } = buildCollectionDb({});
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports');
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.reports).toEqual({});
+    });
+
+    it('GET /api/reports/:id: 403 quando o usuário não tem nenhuma organização atribuída', async () => {
+      const { db } = buildCollectionDb(NO_ASSIGNMENT_RBAC);
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/1');
+
+      expect(response.status).toBe(403);
+    });
+
+    it('GET /api/reports/:id: 403 quando o relatório pertence a outra organização (inclui organizationIds: [] legado)', async () => {
+      const { db } = buildCollectionDb({
+        ...ORG_SCOPED_RBAC,
+        reports: [{ reportID: 1, reportType: 'audit', organizationIds: ['org-9'] }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/1');
+
+      expect(response.status).toBe(403);
+    });
+
+    it('GET /api/reports/:id: 200 quando o relatório está no escopo do usuário', async () => {
+      const { db } = buildCollectionDb({
+        ...ORG_SCOPED_RBAC,
+        reports: [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/1');
+
+      expect(response.status).toBe(200);
+      expect(response.body.reportID).toBe(1);
     });
   });
 });

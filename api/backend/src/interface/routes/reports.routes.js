@@ -9,7 +9,7 @@ const logger = require('../../utils/logger');
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
 const { getCollection } = require('../../utils/collectionResolver');
-const { resolveUserOrganizationScope, isOrganizationScopeUsable } = require('../../services/rbac-assignment.service');
+const { resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
 
 function normalizeReport(report) {
   return {
@@ -723,7 +723,17 @@ router.get('/', authenticate, requirePermission('viewReports'), async (req, res)
       return res.status(503).json({ error: 'Banco de dados não disponível' });
     }
 
-    const reports = await db.collection('reports').find({}).sort({ generatedAt: -1, createdAt: -1 }).toArray();
+    // #637: mirrors the same inline hard-403/filter pattern buildPreviewData
+    // already uses for scoped report types -- not requireOrganizationScope
+    // middleware, since this router resolves org scope by hand throughout
+    // (see buildPreviewData's own isScopedReportType block).
+    const organizationScope = await resolveUserOrganizationScope(db, req.user?.userID || req.user?._id);
+    if (!isOrganizationScopeUsable(organizationScope)) {
+      return res.status(403).json({ error: 'Sem organização atribuída', message: 'Seu usuário não possui organização atribuída para acessar este recurso' });
+    }
+    const query = applyOrganizationScopeFilter({}, organizationScope, 'organizationIds');
+
+    const reports = await db.collection('reports').find(query).sort({ generatedAt: -1, createdAt: -1 }).toArray();
     return res.status(200).json(reports.map(normalizeReport));
   } catch (error) {
     logger.error('Erro ao listar relatórios:', error.message || error);
@@ -736,6 +746,12 @@ router.get('/:id', authenticate, requirePermission('viewReports'), async (req, r
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({ error: 'Banco de dados não disponível' });
+    }
+
+    // #637: see GET /'s identical inline pattern.
+    const organizationScope = await resolveUserOrganizationScope(db, req.user?.userID || req.user?._id);
+    if (!isOrganizationScopeUsable(organizationScope)) {
+      return res.status(403).json({ error: 'Sem organização atribuída', message: 'Seu usuário não possui organização atribuída para acessar este recurso' });
     }
 
     const { id } = req.params;
@@ -752,6 +768,14 @@ router.get('/:id', authenticate, requirePermission('viewReports'), async (req, r
 
     if (!report) {
       return res.status(404).json({ error: 'Relatório não encontrado' });
+    }
+
+    // #637 (F3-G09): mirrors sensor.controller.js's own out-of-scope 403
+    // pattern -- a report with organizationIds outside the caller's scope
+    // (including [] -- unstamped/legacy) is out of scope for anyone who
+    // isn't 'global'.
+    if (!isRecordInOrganizationScope(report, organizationScope, 'organizationIds')) {
+      return res.status(403).json({ error: 'Acesso negado', message: 'Este relatório pertence a outra organização' });
     }
 
     return res.status(200).json(normalizeReport(report));
@@ -777,6 +801,18 @@ router.post('/generate', authenticate, requirePermission('viewReports'), async (
     const previewData = await buildPreviewData(db, reportType, { ...filters, userAccountId: req.user?.userID || req.user?._id });
     const reportID = await nextReportId(reportsCollection);
 
+    // #637: stamp the requesting user's own resolved organization scope
+    // onto the saved Report document -- [] for a global (Administrador)
+    // caller (their own report may span every organization, so it isn't
+    // safe to expose to any single org-scoped viewer either). A separate,
+    // independent resolution from buildPreviewData's own internal one
+    // (which only runs for scoped report types and doesn't return its
+    // result) -- generation itself stays permissive for unscoped types,
+    // same as before; buildPreviewData's own hard-403 already covers an
+    // unusable scope requesting one of the scoped types.
+    const organizationScope = await resolveUserOrganizationScope(db, req.user?.userID || req.user?._id);
+    const organizationIds = organizationScope.scope === 'organization' ? organizationScope.organizationIds : [];
+
     const report = ReportsModel.create({
       reportID,
       reportType,
@@ -785,6 +821,7 @@ router.post('/generate', authenticate, requirePermission('viewReports'), async (
       status: 'completed',
       generatedAt: new Date(),
       reportData: JSON.stringify(previewData),
+      organizationIds,
     });
 
     const result = await reportsCollection.insertOne(report);

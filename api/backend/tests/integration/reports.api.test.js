@@ -70,9 +70,32 @@ function buildDb(seedReports = []) {
     },
   };
 
+  // #637: resolveUserOrganizationScope needs userRoleAssignments/roles data
+  // for req.user.userID ('user-1', this file's stubbed authenticate) to
+  // resolve anything other than 'none' -- default to Administrador/'global'
+  // so this file's pre-existing tests (none about org-scope) keep their
+  // prior unfiltered behavior, same convention buildCollectionDb below
+  // already uses.
+  const rbacCollections = {
+    userRoleAssignments: [{ userAccountId: 'user-1', roleId: 'role-admin', assignmentStatus: 'active', validUntil: null, scopeType: 'global', scopeId: null }],
+    roles: [{ roleId: 'role-admin', hierarchyLevel: 4 }],
+  };
+
   const db = {
     collection(name) {
       if (name === 'reports') return reportsCollection;
+      if (rbacCollections[name]) {
+        const docs = rbacCollections[name];
+        return {
+          find(query = {}) {
+            const matches = (doc) => Object.entries(query).every(([key, cond]) => {
+              if (cond && typeof cond === 'object' && '$in' in cond) return cond.$in.includes(doc[key]);
+              return doc[key] === cond;
+            });
+            return { toArray: async () => docs.filter(matches) };
+          },
+        };
+      }
       return {
         find() {
           return {
