@@ -476,7 +476,7 @@ describe('Reports API integration', () => {
           { sampleID: 'S1', barcode: 'B1' },
           { sampleID: 'S2', barcode: 'B2' },
         ],
-        results: [{ sampleID: 'S1' }],
+        results: [{ specimenId: 'S1' }],
       });
       const testApp = appWithDb(db);
 

@@ -41,9 +41,9 @@ export function useResults(importJobID?: string) {
     }
   };
 
-  const linkSample = async (resultID: number, sampleID: number) => {
+  const linkSample = async (resultID: number, specimenId: string) => {
     try {
-      const response = await resultService.linkSample(resultID, sampleID);
+      const response = await resultService.linkSample(resultID, specimenId);
       setResults(results.map((r) => (r.resultID === resultID ? response.data : r)));
       return response.data;
     } catch (err: any) {

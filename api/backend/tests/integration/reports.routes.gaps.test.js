@@ -346,7 +346,7 @@ describe('reports.routes.js gaps', () => {
         { sampleID: 'S1', barcode: 'B1' },
         { sampleID: null, barcode: 'B2' },
       ],
-      results: [{ sampleID: 'S1' }],
+      results: [{ specimenId: 'S1' }],
     });
     const testApp = appWithDb(db);
 
@@ -549,10 +549,10 @@ describe('reports.routes.js gaps', () => {
     expect(response.body.data.total).toBe(1);
   });
 
-  it('sampleanalysis: resultado sem sampleID é ignorado no agrupamento', async () => {
+  it('sampleanalysis: resultado sem specimenId é ignorado no agrupamento', async () => {
     const { db } = buildCollectionDb({
       samples: [{ sampleID: 'S1', barcode: 'B1' }],
-      results: [{ sampleID: 'S1' }, { sampleID: null }],
+      results: [{ specimenId: 'S1' }, { specimenId: null }],
     });
     const testApp = appWithDb(db);
 
@@ -758,11 +758,11 @@ describe('reports.routes.js gaps', () => {
 
     // #621: Result has no organization reference of its own — scope is
     // derived by joining through its linked Sample's collectionSite.
-    // Result.sampleID has stored either the Sample's Mongo _id (current
-    // write path, result.routes.js POST /upload) or its specimenId (older
-    // data / SampleDetailsPage.tsx's own defensive frontend lookup), so
-    // the join checks both.
-    it('resultado: filtra por amostras da organização via join sampleID -> Sample._id/specimenId', async () => {
+    // #628: Result.specimenId is now the sole canonical shape (every
+    // write path writes it, existing documents backfilled), so the join
+    // matches on specimenId alone — not the dual _id/specimenId check
+    // #621 originally needed while the field was still stale.
+    it('resultado: filtra por amostras da organização via join specimenId -> Sample.specimenId', async () => {
       const { db, capturedQueries } = buildCollectionDb({
         ...ORG_SCOPED_RBAC,
         samples: [{ _id: 'sample-1', specimenId: 'SPX-1', collectionSite: 'org-1' }],
@@ -773,11 +773,11 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(capturedQueries.samples).toEqual({ collectionSite: { $in: ['org-1'] } });
-      expect(capturedQueries.results).toEqual({ sampleID: { $in: ['sample-1', 'SPX-1'] } });
+      expect(capturedQueries.results).toEqual({ specimenId: { $in: ['SPX-1'] } });
     });
 
-    it('resultado: Administrador (scope global) não recebe filtro de sampleID', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ results: [{ sampleID: 'sample-1' }] });
+    it('resultado: Administrador (scope global) não recebe filtro de specimenId', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ results: [{ specimenId: 'SPX-1' }] });
       const testApp = appWithDb(db);
 
       const response = await request(testApp).post('/api/reports/resultado/preview').send({ filters: {} });

@@ -177,7 +177,10 @@ export default function AnalysisUploadModal({
       const formData = new FormData();
       formData.append('file', file);
       formData.append('analysisType', analysisType);
-      formData.append('sampleID', resolvedSampleId);
+      // #628: backend's wire contract for this field is now specimenId
+      // (result.routes.js resolves it against a real Sample lookup,
+      // accepting an _id, a specimenId, or the legacy numeric sampleID).
+      formData.append('specimenId', resolvedSampleId);
       formData.append('method', method.trim());
       formData.append('responsibleResearcher', researcher.trim());
       formData.append('description', description.trim());

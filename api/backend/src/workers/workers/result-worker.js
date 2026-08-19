@@ -251,8 +251,12 @@ class ResultWorker {
       }
 
       // Cria resultado
+      // #628: specimenId must be the Specimen's own canonical business
+      // identifier -- never a Mongo _id fallback, which would reintroduce
+      // the exact stored-shape inconsistency this field's dedicated fix
+      // exists to remove.
       const resultData = {
-        specimenId: sample.specimenId || sample._id,
+        specimenId: sample.specimenId,
         testName: row.testName || row.test || 'Unknown Test',
         testCode: row.testCode || row.code || 'UNKNOWN',
         resultValue: row.resultValue || row.value || null,
