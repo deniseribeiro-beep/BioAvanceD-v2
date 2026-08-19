@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const patientIdentityService = require('../services/PatientIdentityService');
+const participantIdentityService = require('../services/participantIdentity.service');
 const { generateSampleHash } = require('../services/MerkleService');
 const { getCollection } = require('../utils/collectionResolver');
 const auditLogger = require('../utils/auditLogger');
@@ -657,8 +658,19 @@ router.get('/patient-match', async (req, res) => {
     if (!identity && patientNameNormalized && birthDate) {
       const startOfDay = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
       const endOfDay = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), startOfDay.getDate() + 1);
-      const candidates = await identityCollection.find({ birthDate: { $gte: startOfDay, $lt: endOfDay } }).toArray();
-      identity = candidates.find((candidate) => {
+      // RF005/RNF007 (#574): birthDateHash lets this narrow-by-day-of-birth
+      // match without a plaintext range query once birthDate is eventually
+      // dropped; the range condition stays as a fallback for records
+      // written before the hash sibling existed.
+      const birthDateHash = participantIdentityService.computeBlindIndex('birthDate', birthDate);
+      const dateOrConditions = birthDateHash
+        ? [{ birthDateHash }, { birthDate: { $gte: startOfDay, $lt: endOfDay } }]
+        : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
+      const candidates = await identityCollection.find({ $or: dateOrConditions }).toArray();
+      identity = candidates.find((rawCandidate) => {
+        // patientName is civil identity -- decrypt before comparing so this
+        // keeps matching once the plaintext field is eventually dropped.
+        const candidate = participantIdentityService.decryptIdentity(rawCandidate);
         const candidateNormalized = normalizeString(candidate.patientName)
           .normalize('NFD')
           .replace(/[\u0300-\u036f]/g, '')

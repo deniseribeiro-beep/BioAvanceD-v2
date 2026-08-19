@@ -29,6 +29,41 @@ describe('ParticipantIdentityService.getEncryptedFieldMap', () => {
   });
 });
 
+describe('ParticipantIdentityService.getHashFieldMap', () => {
+  it('returns map for the two fields queried by exact/range match (RF005/RNF007, #574)', () => {
+    expect(participantIdentityService.getHashFieldMap()).toEqual({
+      identityDocument: 'identityDocumentHash',
+      birthDate: 'birthDateHash'
+    });
+  });
+});
+
+describe('ParticipantIdentityService.computeBlindIndex', () => {
+  it('is deterministic for the same identityDocument regardless of surrounding whitespace', () => {
+    const a = participantIdentityService.computeBlindIndex('identityDocument', '11144477735');
+    const b = participantIdentityService.computeBlindIndex('identityDocument', '  11144477735  ');
+    expect(a).toBe(b);
+  });
+
+  it('is deterministic for the same birthDate calendar day regardless of time-of-day', () => {
+    const a = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20, 3, 15));
+    const b = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20, 23, 59));
+    expect(a).toBe(b);
+  });
+
+  it('differs across different calendar days', () => {
+    const a = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20));
+    const b = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 21));
+    expect(a).not.toBe(b);
+  });
+
+  it('returns null for null/undefined/empty', () => {
+    expect(participantIdentityService.computeBlindIndex('identityDocument', null)).toBeNull();
+    expect(participantIdentityService.computeBlindIndex('identityDocument', undefined)).toBeNull();
+    expect(participantIdentityService.computeBlindIndex('identityDocument', '')).toBeNull();
+  });
+});
+
 describe('ParticipantIdentityService.encryptIdentityFields', () => {
   it('encrypts patientName/birthDate/identityDocument at rest without dropping the plaintext (dual-write, #566 is additive-only)', () => {
     const fields = {
@@ -55,6 +90,10 @@ describe('ParticipantIdentityService.encryptIdentityFields', () => {
     // dict-02 P1X-0362: encryptionKeyVersion records the key used, for
     // auditable rotation.
     expect(result.encryptionKeyVersion).toBe('test-key-1');
+
+    // RF005/RNF007 (#574): blind-index siblings for the two queried fields.
+    expect(result.identityDocumentHash).toBe(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
+    expect(result.birthDateHash).toBe(participantIdentityService.computeBlindIndex('birthDate', new Date('1990-01-20')));
   });
 
   it('does not mutate the input object', () => {

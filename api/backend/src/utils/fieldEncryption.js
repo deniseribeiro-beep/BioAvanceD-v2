@@ -76,7 +76,27 @@ function decryptValue(payload) {
   return null;
 }
 
+// RF005/RNF007 (#574): deterministic blind index for fields ciphertext can't
+// be queried on directly (Mongo can't $eq/$gte-range against AES-GCM output).
+// Keyed with the same active encryption key so index values are only
+// reproducible by holders of that key, but exact-match only by design --
+// this is not a substitute for encryptValue's semantic confidentiality.
+function hmacBlindIndex(value) {
+  const key = keyRegistry.getActiveKey();
+  if (!key) {
+    logger.warn('[SECURITY][AES256] ENCRYPTION_KEY ausente. Índice cego não gerado.');
+    return null;
+  }
+
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  return crypto.createHmac('sha256', key).update(String(value)).digest('hex');
+}
+
 module.exports = {
   encryptValue,
-  decryptValue
+  decryptValue,
+  hmacBlindIndex
 };

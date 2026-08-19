@@ -4,7 +4,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 process.env.ENCRYPTION_KEY = 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXQ='; // 32 bytes base64
 process.env.ENCRYPTION_KEY_ID = 'test-key-1';
 
-const { encryptValue, decryptValue } = require('../../src/utils/fieldEncryption');
+const { encryptValue, decryptValue, hmacBlindIndex } = require('../../src/utils/fieldEncryption');
 
 describe('encryptValue', () => {
   it('returns null for null input', () => {
@@ -88,5 +88,31 @@ describe('decryptValue', () => {
     const encrypted = encryptValue('my-secret');
     encrypted.data = 'AAAA'; // tampered
     expect(decryptValue(encrypted)).toBeNull();
+  });
+});
+
+// RF005/RNF007 (#574): deterministic blind index for ParticipantIdentity
+// fields that need exact/range queries without touching ciphertext.
+describe('hmacBlindIndex', () => {
+  it('returns null for null/undefined/empty input', () => {
+    expect(hmacBlindIndex(null)).toBeNull();
+    expect(hmacBlindIndex(undefined)).toBeNull();
+    expect(hmacBlindIndex('')).toBeNull();
+  });
+
+  it('is deterministic for the same input', () => {
+    expect(hmacBlindIndex('12345678900')).toBe(hmacBlindIndex('12345678900'));
+  });
+
+  it('produces different output for different input', () => {
+    expect(hmacBlindIndex('12345678900')).not.toBe(hmacBlindIndex('98765432100'));
+  });
+
+  it('does not contain the plaintext value', () => {
+    expect(hmacBlindIndex('12345678900')).not.toContain('12345678900');
+  });
+
+  it('returns a hex string', () => {
+    expect(hmacBlindIndex('some-value')).toMatch(/^[0-9a-f]+$/);
   });
 });

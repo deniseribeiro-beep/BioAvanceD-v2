@@ -317,7 +317,15 @@ class ImportService {
         let existing = null;
         if (patientData.identityDocument) {
           const identityCollection = getCollection(db, 'participantIdentities');
-          const existingIdentity = await identityCollection.findOne({ identityDocument: patientData.identityDocument });
+          // RF005/RNF007 (#574): identityDocumentHash lets this dedup match
+          // without querying the plaintext field once it's eventually
+          // dropped; the plaintext branch stays as a fallback for records
+          // written before the hash sibling existed.
+          const identityDocumentHash = participantIdentityService.computeBlindIndex('identityDocument', patientData.identityDocument);
+          const orConditions = identityDocumentHash
+            ? [{ identityDocumentHash }, { identityDocument: patientData.identityDocument }]
+            : [{ identityDocument: patientData.identityDocument }];
+          const existingIdentity = await identityCollection.findOne({ $or: orConditions });
           if (existingIdentity) {
             existing = await patientsCollection.findOne({ participantId: existingIdentity.participantId });
           }

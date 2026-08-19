@@ -127,6 +127,42 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
     });
   });
 
+  describe('RF005/RNF007 (#574): matches a ciphertext-only ParticipantIdentity candidate', () => {
+    it('decrypts patientName before comparing, and queries via $or including birthDateHash', async () => {
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      // Local-time components (not an ISO date-only string, which parses as
+      // UTC and could shift a day depending on the test runner's timezone)
+      // -- matches parseBirthDate's own DD/MM/YYYY -> new Date(y, m, d) path.
+      const birthDate = new Date(1990, 4, 15);
+      const encrypted = participantIdentityService.encryptIdentityFields({
+        participantId: '87654321',
+        patientName: 'João Silva Santos',
+        birthDate,
+      });
+      const ciphertextOnlyCandidate = { ...encrypted, patientName: null, birthDate: null };
+
+      let capturedFindQuery = null;
+      identitiesCollection.find = vi.fn((query) => {
+        capturedFindQuery = query;
+        return { toArray: vi.fn().mockResolvedValue([ciphertextOnlyCandidate]) };
+      });
+      patientsCollection.findOne.mockResolvedValueOnce({ _id: 'x', participantId: '87654321' });
+      patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
+
+      const result = await patientIdentityService.matchOrUpsertParticipant(db, {
+        patientName: 'Joao Silva Santos',
+        birthDate: '15/05/1990',
+      });
+
+      expect(result.created).toBe(false);
+      expect(result.patient.participantId).toBe('87654321');
+      const expectedHash = participantIdentityService.computeBlindIndex('birthDate', birthDate);
+      expect(capturedFindQuery.$or).toEqual(
+        expect.arrayContaining([{ birthDateHash: expectedHash }])
+      );
+    });
+  });
+
   describe('Scenario 3: Duplicate patient detection across samples', () => {
     it('Cenário: Tentar cadastrar dois pacientes com mesmo nome e data, IDs diferentes - deve retornar existente', async () => {
       const existingPatient = {
