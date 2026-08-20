@@ -112,16 +112,16 @@ retries beyond the one test-assertion correction already covered above.
 - No PR to `main` exists.
 - **`.env.docker` (local, gitignored) has `ENABLE_TEST_SUPPORT_ROUTES=true`**
   -- needed under #675's registration gate.
-- **Docker: up**, left running deliberately (Dennis's explicit choice
-  earlier this sitting). `compose.test.yml` test stack,
-  `backend-app-test` rebuilt once this sitting (for the governança
-  slice; #685's fix was verified natively only -- no rebuild needed,
-  the bug/fix was purely about Node's own unhandled-rejection behavior,
-  not something Docker verification adds proof for). `playwright-runner`
-  not running. Reuse for the next pick, but **rebuild
-  `backend-app-test`/`frontend-app-test` with `--build` again if the
-  next iteration touches backend/frontend source and needs a
-  real-backend e2e proof.**
+- **Docker: down.** `compose.test.yml` test stack was up for most of
+  this sitting (rebuilt once, for the governança slice's real-backend
+  proof) and torn down at Dennis's explicit request at the end of the
+  sitting (`docker compose --env-file .env.docker -f compose.test.yml
+  down`, no `-v` -- named volumes/`mongodb-test-data` untouched, confirmed
+  no `bioavanced-test-*` containers remain). The next iteration that
+  needs real-backend e2e proof brings the stack back up fresh via the
+  recipe in this skill pack's `docker-workflow` overlay
+  (`docker compose --env-file .env.test.example -f compose.test.yml up -d
+  --wait <services>` + the separate `admin-bootstrap-test` step).
 - This sitting's branches (`test/650-disposition-action-notification`,
   `fix/685-notification-dispatch-catch`) both merged and deleted
   locally, never pushed remotely.
