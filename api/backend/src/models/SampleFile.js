@@ -1,3 +1,28 @@
+// RF007 AC#5 ("Registrar URI, formato, tamanho...")/#679: dict-02_DICIONARIO.md's
+// DataFile entity types two controlled vocabularies -- fileRole (ELM-0317,
+// pipeline stage) and fileFormat (ELM-0319, EDAM/MIME-coded) -- that RF007's
+// real upload path never populated, leaving canonical.v1.file's own fields
+// unvalidated/optional (#679's own investigation). fileFormat maps
+// deterministically from the existing closed fileType enum (both describe
+// the same technical container format, just different vocabularies -- RAW
+// has no specific MIME registration, so it falls back to the generic binary
+// type). fileRole is a genuinely different axis (processing-pipeline stage,
+// not container format) with no reliable derivation from fileType -- it's
+// an explicit optional upload input here, defaulting to dict-02's own
+// stated example value 'raw' (a freshly-uploaded analysis file's natural
+// stage).
+const FILE_ROLES = ['raw', 'intermediate', 'processed', 'derived', 'report', 'manifest'];
+
+const FILE_FORMAT_BY_TYPE = {
+  RAW: 'application/octet-stream',
+  ZIP: 'application/zip',
+  CSV: 'text/csv',
+  XLS: 'application/vnd.ms-excel',
+  XLSX: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  PDF: 'application/pdf',
+  TXT: 'text/plain'
+};
+
 /**
  * Modelo de validação e estrutura para SampleFile (Arquivos de Análise de Amostra)
  * RF007 - Upload de Arquivos de Análise
@@ -34,6 +59,13 @@ class SampleFileModel {
       errors.push(`fileType deve ser um dos: ${allowedTypes.join(', ')}`);
     }
 
+    // dict-02 ELM-0317 (DataFile.fileRole) -- optional here (defaults to
+    // 'raw' in create()), but when a caller does supply one it must be a
+    // real pipeline-stage value, not an arbitrary string.
+    if (data.fileRole !== undefined && data.fileRole !== null && !FILE_ROLES.includes(data.fileRole)) {
+      errors.push(`fileRole deve ser um dos: ${FILE_ROLES.join(', ')}`);
+    }
+
     return {
       isValid: errors.length === 0,
       errors
@@ -46,6 +78,8 @@ class SampleFileModel {
       specimenId: data.specimenId || data.sampleID, // referência usada por listFiles/downloadFile/deleteFile
       fileName: data.fileName, // Nome original do arquivo
       fileType: data.fileType.toUpperCase(), // Tipo: RAW, ZIP, CSV, XLS, XLSX, PDF, TXT
+      fileRole: data.fileRole || 'raw', // dict-02 ELM-0317 -- papel no pipeline
+      fileFormat: data.fileFormat || SampleFileModel.getFileFormatFromType(data.fileType), // dict-02 ELM-0319 -- MIME/EDAM
       fileSize: data.fileSize, // Tamanho em bytes
       storagePath: data.storagePath, // Caminho no sistema de arquivos (não exposto ao frontend)
       storageUri: data.storageUri || null, // RF007 - URI estável de Object Storage
@@ -124,6 +158,17 @@ class SampleFileModel {
   }
 
   /**
+   * dict-02 ELM-0319 (DataFile.fileFormat) -- deriva o formato MIME/EDAM
+   * do fileType técnico já validado. Sem correspondência conhecida, cai no
+   * tipo binário genérico em vez de retornar null (todo fileType permitido
+   * tem um mapeamento definido acima).
+   */
+  static getFileFormatFromType(fileType) {
+    const key = typeof fileType === 'string' ? fileType.toUpperCase() : '';
+    return FILE_FORMAT_BY_TYPE[key] || 'application/octet-stream';
+  }
+
+  /**
    * Valida extensão de arquivo
    */
   static isValidExtension(fileName) {
@@ -132,6 +177,8 @@ class SampleFileModel {
     return allowedExtensions.some(allowed => ext === allowed.replace('.', ''));
   }
 }
+
+SampleFileModel.FILE_ROLES = FILE_ROLES;
 
 module.exports = SampleFileModel;
 

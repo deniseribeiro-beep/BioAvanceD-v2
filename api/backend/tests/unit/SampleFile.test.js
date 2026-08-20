@@ -107,6 +107,26 @@ describe('SampleFileModel.validate', () => {
     // sampleID, fileName, fileType, storagePath, fileSize all missing
     expect(errors.length).toBe(5);
   });
+
+  it('accepts a valid fileRole (dict-02 ELM-0317)', () => {
+    const { isValid, errors } = SampleFileModel.validate({ ...validData, fileRole: 'processed' });
+    expect(isValid).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('rejects an unsupported fileRole', () => {
+    const { isValid, errors } = SampleFileModel.validate({ ...validData, fileRole: 'bogus' });
+    expect(isValid).toBe(false);
+    expect(errors).toContain(
+      'fileRole deve ser um dos: raw, intermediate, processed, derived, report, manifest'
+    );
+  });
+
+  it('does not require fileRole (omitting it is valid, unlike fileType)', () => {
+    const { isValid, errors } = SampleFileModel.validate(validData);
+    expect(isValid).toBe(true);
+    expect(errors).toEqual([]);
+  });
 });
 
 describe('SampleFileModel.create', () => {
@@ -263,6 +283,26 @@ describe('SampleFileModel.create', () => {
     expect(result.processingDateTime).toBeNull();
     expect(result.analysisDateTime).toBeNull();
   });
+
+  it('defaults fileRole to "raw" (dict-02 ELM-0317 example value) when not provided', () => {
+    const result = SampleFileModel.create(baseInput);
+    expect(result.fileRole).toBe('raw');
+  });
+
+  it('passes through an explicit fileRole', () => {
+    const result = SampleFileModel.create({ ...baseInput, fileRole: 'derived' });
+    expect(result.fileRole).toBe('derived');
+  });
+
+  it('derives fileFormat from fileType when not provided', () => {
+    const result = SampleFileModel.create(baseInput);
+    expect(result.fileFormat).toBe('text/csv');
+  });
+
+  it('passes through an explicit fileFormat instead of deriving one', () => {
+    const result = SampleFileModel.create({ ...baseInput, fileFormat: 'text/csv; charset=utf-8' });
+    expect(result.fileFormat).toBe('text/csv; charset=utf-8');
+  });
 });
 
 describe('SampleFileModel.isValidFileType', () => {
@@ -322,6 +362,42 @@ describe('SampleFileModel.getFileTypeFromExtension', () => {
   it('does not throw for an empty filename', () => {
     expect(() => SampleFileModel.getFileTypeFromExtension('')).not.toThrow();
     expect(SampleFileModel.getFileTypeFromExtension('')).toBeNull();
+  });
+});
+
+describe('SampleFileModel.getFileFormatFromType', () => {
+  it('maps every supported fileType to a distinct MIME format', () => {
+    expect(SampleFileModel.getFileFormatFromType('RAW')).toBe('application/octet-stream');
+    expect(SampleFileModel.getFileFormatFromType('ZIP')).toBe('application/zip');
+    expect(SampleFileModel.getFileFormatFromType('CSV')).toBe('text/csv');
+    expect(SampleFileModel.getFileFormatFromType('XLS')).toBe('application/vnd.ms-excel');
+    expect(SampleFileModel.getFileFormatFromType('XLSX')).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    expect(SampleFileModel.getFileFormatFromType('PDF')).toBe('application/pdf');
+    expect(SampleFileModel.getFileFormatFromType('TXT')).toBe('text/plain');
+  });
+
+  it('is case-insensitive', () => {
+    expect(SampleFileModel.getFileFormatFromType('csv')).toBe('text/csv');
+  });
+
+  it('falls back to the generic binary type for an unknown fileType instead of throwing', () => {
+    expect(SampleFileModel.getFileFormatFromType('DOC')).toBe('application/octet-stream');
+    expect(SampleFileModel.getFileFormatFromType(undefined)).toBe('application/octet-stream');
+  });
+});
+
+describe('SampleFileModel.FILE_ROLES', () => {
+  it('exposes the dict-02 ELM-0317 pipeline-stage vocabulary', () => {
+    expect(SampleFileModel.FILE_ROLES).toEqual([
+      'raw',
+      'intermediate',
+      'processed',
+      'derived',
+      'report',
+      'manifest'
+    ]);
   });
 });
 
