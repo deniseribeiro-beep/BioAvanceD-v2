@@ -111,12 +111,17 @@ gate's detection window is too narrow generically, not
   `.claude/skills/` and the pre-existing untracked
   `api/backend/storage/assays/` (neither this sitting's doing).
 - No PR to `main` exists.
-- **Docker**: `compose.test.yml` is up — all 12 core services healthy,
-  `backend-app-test` rebuilt to pick up the RF024 code and re-verified
-  (3/3 new e2e passing). RBAC catalog re-seeded against the running
-  stack (22 permissions, 5 roles) so `manageAccessRequests` is live.
-  Not torn down; check `docker ps` before assuming either state if
-  picking this up fresh.
+- **Docker**: `backend-app-test` was rebuilt to pick up the RF024 code
+  and re-verified (3/3 new e2e passing) before the stack came down.
+  RBAC catalog was re-seeded against it (22 permissions, 5 roles) so
+  `manageAccessRequests` is live in the image, but that seed lived in
+  Mongo, not the image — **torn down at end of session** (`compose down`,
+  named volumes preserved, this sitting's own `clean-up` decision since
+  it had been inherited already-running from the prior rotation with
+  nothing queued needing it up). A fresh session needs its own
+  `docker compose ... up -d --wait <services>` bring-up (per
+  `docker-workflow`'s BioAvanceD-v2 overlay recipe) and its own RBAC
+  reseed before any `manageAccessRequests`-gated route will authorize.
 - Two pre-existing dangling local branches, still untouched:
   `test/377-docs-on-main`, `test/human-showcase-video`. Neither merged
   anywhere. (The slice branch this sitting used,
