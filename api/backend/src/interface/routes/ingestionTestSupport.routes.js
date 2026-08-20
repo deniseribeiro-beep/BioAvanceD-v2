@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const auditLogger = require('../../utils/auditLogger');
 const { ingestRecord } = require('../../ingestion/ingestionGateway');
+const { testSupportRoutesEnabled, requireTestSupportSecret } = require('../../utils/testSupportGate');
 
 // Test-support only, same rationale/shape as iot.routes.js's
 // requireTestSupportSecret routes (#307): RF029 slice 1/6 (#669) is the
@@ -11,17 +12,11 @@ const { ingestRecord } = require('../../ingestion/ingestionGateway');
 // ingestRecord() (real Mongo reads/writes, no faked behavior) on demand,
 // purely so pipeline-continuity.spec.ts can exercise it as one of RF029's
 // milestone e2e specs (E2E_TRACEABILITY_PLAN.md maps RF029 to that file).
-// Gated out of production so it's never a reachable control surface there.
-function requireTestSupportSecret(req, res, next) {
-  const expected = process.env.TEST_SUPPORT_SECRET;
-  const provided = req.get('x-test-support-secret');
-  if (!expected || provided !== expected) {
-    return res.status(403).json({ success: false, error: 'Não autorizado' });
-  }
-  next();
-}
-
-if (process.env.NODE_ENV !== 'production') {
+// Registration requires testSupportRoutesEnabled()'s two independent
+// signals (#675 hardening -- see utils/testSupportGate.js), on top of the
+// per-request requireTestSupportSecret check, so it's never a reachable
+// control surface outside a deliberately opted-in environment.
+if (testSupportRoutesEnabled()) {
   router.post('/probe', requireTestSupportSecret, async (req, res) => {
     const db = req.app.locals.db;
     if (!db) {
