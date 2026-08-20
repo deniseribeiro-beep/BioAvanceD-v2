@@ -265,6 +265,21 @@ export async function seedProtocol(protocolId: string, options: { approvalStatus
   });
 }
 
+/**
+ * RF029 slice 4/6 (#672) fixture: seeds a bare `samples` doc with just a
+ * `specimenId`, the same minimal-raw-insert shape as seedStudy/seedProtocol
+ * above -- the ingestion gateway's assertReferencesExist only needs the id
+ * to resolve via findOne, not a fully-formed specimen through the real
+ * create-sample flow.
+ */
+export async function seedRawSpecimen(specimenId: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('samples').insertOne({
+    specimenId,
+    createdAt: new Date(),
+  });
+}
+
 export async function seedCollectionEntity(collectionId: string): Promise<void> {
   const db = await getDb();
   await db.collection('collections').insertOne({
