@@ -17,6 +17,7 @@ import {
   findIngestionIdempotencyKey,
   closeIngestionDb,
 } from './helpers/queryIngestion';
+import { seedSensorWithPolicy, closeSeedSensorDb } from './helpers/seedSensor';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -594,6 +595,112 @@ test.describe('Ingestion gateway — participants, consents, specimens, clinical
       entityType: 'ClinicalData',
       schemaId: 'canonical.v1.clinicalData',
       payload: { unknownField: 'x' },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'CONTRACT_VIOLATION')).toBe(true);
+  });
+});
+
+// RF029 slice 3/6 (#671): wires telemetry through slice 1's gateway, same
+// probe-only pattern slice 2 established (no new production ingestion
+// routes — RF009's real POST /api/iot/telemetry stays untouched). AC#7
+// ("telemetria de alta frequência no InfluxDB") is not re-proven here: it's
+// already covered by interop-monitoring.spec.ts's "persists a valid reading
+// to InfluxDB, tagged by sensorId" case, which posts to that same real
+// endpoint and reads the point back from a real InfluxDB bucket — this
+// block only proves the new envelope/contract/reference machinery around
+// telemetry payloads, per AC#1-3/AC#5.
+test.describe('Ingestion gateway — telemetry (RF029 slice 3/6) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+  });
+
+  function provenance() {
+    return {
+      sourceSystem: 'urn:system:pipeline-continuity-e2e',
+      createdBy: 'Actor/e2e-suite',
+      retrievedAt: new Date().toISOString(),
+      purpose: 'e2e_proof',
+    };
+  }
+
+  test('a telemetry payload referencing a real sensor and device is accepted', async ({ request }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Telemetry',
+      schemaId: 'canonical.v1.telemetry',
+      payload: {
+        sensorId: sensor.sensorId,
+        equipmentId: sensor.deviceId,
+        metricType: 'temperature',
+        timestamp: new Date().toISOString(),
+        value: 4.5,
+        unit: 'Cel',
+      },
+      provenance: provenance(),
+      references: [
+        { collection: 'sensorMetadata', field: 'sensorId', value: sensor.sensorId, label: 'sensorId' },
+        { collection: 'devices', field: 'deviceId', value: sensor.deviceId, label: 'equipmentId' },
+      ],
+    });
+
+    expect(outcome.status).toBe('accepted');
+    expect(outcome.violations).toEqual([]);
+  });
+
+  // RF009's real POST /api/iot/telemetry body shape -- {sensorId,
+  // temperature, timestamp} -- uses `temperature` where the canonical
+  // contract requires an explicit `value`. Same alias-discipline slice 2's
+  // specimen test proved for sampleID -> specimenId, applied to telemetry's
+  // own legacy field name.
+  test('a telemetry payload using the legacy `temperature` field instead of canonical `value` is quarantined', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Telemetry',
+      schemaId: 'canonical.v1.telemetry',
+      aliasMap: { value: ['temperature'] },
+      payload: { sensorId: sensor.sensorId, temperature: 4.5, timestamp: new Date().toISOString() },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(
+      outcome.violations.some((v: { code: string; field: string }) => v.code === 'NON_CANONICAL_FIELD' && v.field === 'temperature')
+    ).toBe(true);
+  });
+
+  test('a telemetry payload referencing a nonexistent sensor is quarantined', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Telemetry',
+      schemaId: 'canonical.v1.telemetry',
+      payload: {
+        sensorId: 'rf029-e2e-nonexistent-sensor',
+        metricType: 'temperature',
+        timestamp: new Date().toISOString(),
+        value: 4.5,
+        unit: 'Cel',
+      },
+      provenance: provenance(),
+      references: [
+        { collection: 'sensorMetadata', field: 'sensorId', value: 'rf029-e2e-nonexistent-sensor', label: 'sensorId' },
+      ],
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'REFERENCE_NOT_FOUND')).toBe(true);
+  });
+
+  test('a telemetry payload with an unknown field is quarantined', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Telemetry',
+      schemaId: 'canonical.v1.telemetry',
+      payload: { sensorId: 'irrelevant-for-this-test', unknownField: 'x' },
       provenance: provenance(),
     });
 
