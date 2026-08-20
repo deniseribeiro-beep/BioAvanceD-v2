@@ -7,6 +7,7 @@ const TemperatureModel = require('../../src/models/Temperature');
 const logger = require('../../src/utils/logger');
 const influxTelemetryWriteRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
 const notificationServiceV2 = require('../../src/services/NotificationService');
+const notificationDispatchService = require('../../src/services/notificationDispatch.service');
 const temperatureService = require('../../src/services/temperature.service');
 
 afterEach(() => {
@@ -216,6 +217,7 @@ describe('temperatureService.checkPolicyAndAlert', () => {
     const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert1' });
     const db = makeDb({ policies: { findOne }, alerts: { insertOne } });
     const notifySpy = vi.spyOn(notificationServiceV2, 'sendCriticalTempAlert').mockResolvedValue(undefined);
+    const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
 
     await temperatureService.checkPolicyAndAlert(db, {
       policyId: 'p1',
@@ -233,6 +235,31 @@ describe('temperatureService.checkPolicyAndAlert', () => {
     expect(alertDoc.status).toBe('active');
 
     expect(notifySpy).toHaveBeenCalledWith('sample-1', 99);
+
+    // #646 Wave 3 (RF015/RNF026) - the rule-driven notification engine is
+    // also fired from this real critical-alert trigger, alongside (not
+    // instead of) the legacy sendCriticalTempAlert call above.
+    expect(dispatchSpy).toHaveBeenCalledWith(db, {
+      eventType: 'environmental_excursion',
+      sourceEventType: 'TemperatureAlert',
+      sourceEventId: 'alert1',
+      payload: { sensorId: 'sensor-a', temperatureValue: 99, minThreshold: 0, maxThreshold: 10 }
+    });
+  });
+
+  it('does not let a rejected notification dispatch break the alert flow (fire-and-forget)', async () => {
+    const policy = { minThreshold: 0, maxThreshold: 10 };
+    const findOne = vi.fn().mockResolvedValue(policy);
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert1' });
+    const db = makeDb({ policies: { findOne }, alerts: { insertOne } });
+    vi.spyOn(notificationServiceV2, 'sendCriticalTempAlert').mockResolvedValue(undefined);
+    vi.spyOn(notificationDispatchService, 'dispatchNotification').mockRejectedValue(new Error('no active rule collection'));
+
+    await expect(
+      temperatureService.checkPolicyAndAlert(db, { policyId: 'p1', sensorId: 'sensor-a', temperatureValue: 99 })
+    ).resolves.toBeUndefined();
+
+    expect(insertOne).toHaveBeenCalledTimes(1);
   });
 
   it('swallows internal errors (e.g. policiesCollection.findOne rejecting) and resolves', async () => {

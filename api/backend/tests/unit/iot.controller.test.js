@@ -13,6 +13,7 @@ const {
   sendIncidentAlertEmailMock,
   temperatureIncidentCreateMock,
   quarantineByColdChainIncidentMock,
+  dispatchNotificationMock,
 } = vi.hoisted(() => ({
   saveTelemetryPointMock: vi.fn(),
   sendCriticalAlertEmailMock: vi.fn(),
@@ -23,6 +24,7 @@ const {
   sendIncidentAlertEmailMock: vi.fn(),
   temperatureIncidentCreateMock: vi.fn(),
   quarantineByColdChainIncidentMock: vi.fn(),
+  dispatchNotificationMock: vi.fn(),
 }));
 
 vi.mock('resend', () => ({
@@ -57,6 +59,7 @@ vi.mock('../../src/services/equipment-sensor-quarantine.service', () => ({
   default: { quarantineByColdChainIncident: quarantineByColdChainIncidentMock },
   quarantineByColdChainIncident: quarantineByColdChainIncidentMock,
 }));
+
 
 function createResponse() {
   return {
@@ -186,6 +189,7 @@ describe('iot.controller', () => {
     });
     quarantineByColdChainIncidentMock.mockResolvedValue({ triggered: false });
     sendIncidentAlertEmailMock.mockResolvedValue(true);
+    dispatchNotificationMock.mockResolvedValue(null);
 
     const telemetryPath = require.resolve('../../src/services/saveTelemetryPoint.js');
     const alertPath = require.resolve('../../src/services/sendCriticalAlertEmail.js');
@@ -194,6 +198,7 @@ describe('iot.controller', () => {
     const sendIncidentAlertEmailPath = require.resolve('../../src/services/sendIncidentAlertEmail.js');
     const temperatureIncidentPath = require.resolve('../../src/models/TemperatureIncident.js');
     const quarantineServicePath = require.resolve('../../src/services/equipment-sensor-quarantine.service.js');
+    const notificationDispatchPath = require.resolve('../../src/services/notificationDispatch.service.js');
     const controllerPath = require.resolve('../../src/controllers/iot.controller.js');
 
     delete require.cache[controllerPath];
@@ -238,6 +243,12 @@ describe('iot.controller', () => {
       filename: quarantineServicePath,
       loaded: true,
       exports: { quarantineByColdChainIncident: quarantineByColdChainIncidentMock },
+    };
+    require.cache[notificationDispatchPath] = {
+      id: notificationDispatchPath,
+      filename: notificationDispatchPath,
+      loaded: true,
+      exports: { dispatchNotification: dispatchNotificationMock },
     };
 
     const controllerModule = require('../../src/controllers/iot.controller.js');
@@ -284,6 +295,20 @@ describe('iot.controller', () => {
     expect(res.body).toEqual({ success: true, accepted: true });
     expect(saveTelemetryPointMock).toHaveBeenCalled();
     expect(connectMongoDBMock).toHaveBeenCalled();
+
+    // #646 Wave 3 (RF015/RNF026) - upsertEnvironmentalExcursion also fires
+    // the rule-driven notification engine, alongside the legacy
+    // sendCriticalAlertEmail call this file already covers below.
+    await vi.waitFor(() => {
+      expect(dispatchNotificationMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          eventType: 'environmental_excursion',
+          sourceEventType: 'EnvironmentalExcursion',
+          payload: expect.objectContaining({ sensorId: 'sensor-1', temperatureValue: 12.5 }),
+        })
+      );
+    });
   }, 15000);
 
   it('não dispara alerta quando não há política de temperatura para o sensor', async () => {

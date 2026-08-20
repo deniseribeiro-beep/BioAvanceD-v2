@@ -3,6 +3,7 @@ const PolicyModel = require('../models/Policy');
 const logger = require('../utils/logger');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
 const notificationServiceV2 = require('./NotificationService');
+const notificationDispatchService = require('./notificationDispatch.service');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 
 function createTemperatureValidationError(message, statusCode = 422) {
@@ -94,7 +95,7 @@ class TemperatureService {
       if (!isValid) {
         // Gera alerta
         const alertsCollection = db.collection('alerts');
-        await alertsCollection.insertOne({
+        const alertInsert = await alertsCollection.insertOne({
           sensorId: temperature.sensorId || temperature.sensorID,
           policyId: policyId,
           temperatureValue: temperature.temperatureValue,
@@ -118,6 +119,25 @@ class TemperatureService {
           temperature.temperatureValue
         ).catch((error) => {
           logger.error('[NOTIFICATION] Falha ao disparar alerta crítico:', error.message || error);
+        });
+
+        // #646 Wave 3 (RF015/RNF026): fire-and-forget, same shape as the
+        // legacy sendCriticalTempAlert call above -- a missing/misconfigured
+        // NotificationRule (or a downed email provider) must never block or
+        // delay the alert being recorded. No-ops cleanly when no active
+        // NotificationRule exists for 'environmental_excursion' yet.
+        void notificationDispatchService.dispatchNotification(db, {
+          eventType: 'environmental_excursion',
+          sourceEventType: 'TemperatureAlert',
+          sourceEventId: alertInsert.insertedId,
+          payload: {
+            sensorId: temperature.sensorId || temperature.sensorID,
+            temperatureValue: temperature.temperatureValue,
+            minThreshold,
+            maxThreshold
+          }
+        }).catch((error) => {
+          logger.error('[NOTIFICATION_DISPATCH] Falha ao disparar notificação baseada em regra:', error.message || error);
         });
       }
     } catch (error) {

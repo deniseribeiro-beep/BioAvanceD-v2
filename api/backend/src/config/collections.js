@@ -27,7 +27,9 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   roles: env.COLL_ROLES || 'roles',
   permissions: env.COLL_PERMISSIONS || 'permissions',
   userRoleAssignments: env.COLL_USER_ROLE_ASSIGNMENTS || 'userRoleAssignments',
-  retentionPolicies: env.COLL_RETENTION_POLICIES || 'retentionPolicies'
+  retentionPolicies: env.COLL_RETENTION_POLICIES || 'retentionPolicies',
+  notificationRules: env.COLL_NOTIFICATION_RULES || 'notificationRules',
+  notifications: env.COLL_NOTIFICATIONS || 'notifications'
 });
 
 module.exports = {

@@ -733,3 +733,144 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
     }
   });
 });
+
+// Wave 3 kickoff (#646). RF015's 7 acceptance criteria (requisitos-index.md)
+// and RNF026 (latência/confiabilidade de alertas críticos) are proven here
+// against the real trigger #298 already exercises above: an out-of-range
+// telemetry reading opening/widening a real EnvironmentalExcursion. No
+// NotificationRule exists for 'environmental_excursion' until this describe
+// block creates one -- every earlier real-backend run in this suite that
+// triggered an excursion (including #298's own tests above) no-opped
+// through the dispatch engine harmlessly (dispatchNotification's own
+// no-active-rule short-circuit), so creating the rule here doesn't
+// retroactively affect anything already proven.
+test.describe('Alertas e notificações (RF015) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+  });
+
+  test('a real environmental excursion creates a rule-driven, versioned, event-linked notification within SLA (criteria 1,2,3,6,7)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const ruleRes = await request.post(`${apiBaseURL}/api/notification-rules`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        eventType: 'environmental_excursion',
+        channels: ['in_app'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: ['sensorId', 'temperatureValue'],
+        maxDeliveryMinutes: 2,
+      },
+    });
+    expect(ruleRes.ok(), await ruleRes.text()).toBeTruthy();
+    const rule = (await ruleRes.json()).data;
+
+    const sensor = await seedSensorWithPolicy(2, 8);
+    const telemetryRes = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      data: { sensorId: sensor.sensorId, temperature: 25, timestamp: new Date().toISOString() },
+    });
+    expect(telemetryRes.status()).toBe(200);
+
+    await expect
+      .poll(async () => findEnvironmentalExcursion(sensor.deviceId), { timeout: 15_000 })
+      .toBeTruthy();
+    const excursion = await findEnvironmentalExcursion(sensor.deviceId);
+
+    const findNotification = async () => {
+      const res = await request.get(
+        `${apiBaseURL}/api/notifications?eventType=environmental_excursion&limit=50`,
+        { headers: { Authorization: `Bearer ${admin.token}` } }
+      );
+      if (!res.ok()) return null;
+      const body = await res.json();
+      return (body.data || []).find((n: any) => n.sourceEventId === String(excursion._id)) || null;
+    };
+
+    await expect.poll(findNotification, { timeout: 15_000 }).toBeTruthy();
+    const notification = await findNotification();
+
+    // Criterion 1 - created from the versioned rule.
+    expect(notification.ruleId).toBe(rule._id);
+    expect(notification.ruleVersion).toBe(rule.version);
+    // Criterion 2 - delivered via an enabled channel.
+    expect(notification.status).toBe('delivered');
+    expect(notification.deliveredChannel).toBe('in_app');
+    // Criterion 3 - the attempt is recorded (channel, timestamp, result).
+    expect(notification.attempts).toEqual([
+      expect.objectContaining({ channel: 'in_app', result: 'success' }),
+    ]);
+    // Criterion 6 - linked to the originating event.
+    expect(notification.sourceEventType).toBe('EnvironmentalExcursion');
+    expect(notification.sourceEventId).toBe(String(excursion._id));
+    expect(notification.payload).toEqual({ sensorId: sensor.sensorId, temperatureValue: 25 });
+    // Criterion 7 / RNF026 AC#1 - delivered well within the SLA window (the
+    // rule's own maxDeliveryMinutes, itself inside RNF026's 2-minute p95).
+    expect(notification.withinSla).toBe(true);
+    expect(notification.deliveryDurationMs).toBeLessThan(2 * 60000);
+
+    // Criterion 3 "confirmação" - an explicit read receipt.
+    const confirmRes = await request.put(`${apiBaseURL}/api/notifications/${notification._id}/confirm`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(confirmRes.ok(), await confirmRes.text()).toBeTruthy();
+    expect((await confirmRes.json()).data.confirmedAt).toBeTruthy();
+  });
+
+  test('escalates to the fallback channel when the primary channel has no resolvable recipients (criterion 4)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    // coordinator resolves to zero recipients in this stack's seed data
+    // (only an Administrador bootstrap user exists) -- a real failure, not
+    // a simulated one, same technique notificationDispatch.service.test.js
+    // uses natively.
+    const ruleRes = await request.post(`${apiBaseURL}/api/notification-rules`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        eventType: 'environmental_excursion',
+        channels: ['email'],
+        recipientRoleCodes: ['coordinator'],
+        sensitiveFieldsAllowlist: ['sensorId'],
+        maxDeliveryMinutes: 2,
+        escalation: { enabled: true, afterFailures: 1, channel: 'in_app' },
+      },
+    });
+    expect(ruleRes.ok(), await ruleRes.text()).toBeTruthy();
+    const rule = (await ruleRes.json()).data;
+    expect(rule.version).not.toBe('v1'); // versions the prior test's rule, doesn't overwrite it
+
+    const sensor = await seedSensorWithPolicy(2, 8);
+    await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      data: { sensorId: sensor.sensorId, temperature: 30, timestamp: new Date().toISOString() },
+    });
+
+    await expect
+      .poll(async () => findEnvironmentalExcursion(sensor.deviceId), { timeout: 15_000 })
+      .toBeTruthy();
+    const excursion = await findEnvironmentalExcursion(sensor.deviceId);
+
+    const findNotification = async () => {
+      const res = await request.get(
+        `${apiBaseURL}/api/notifications?eventType=environmental_excursion&limit=50`,
+        { headers: { Authorization: `Bearer ${admin.token}` } }
+      );
+      if (!res.ok()) return null;
+      const body = await res.json();
+      return (body.data || []).find((n: any) => n.sourceEventId === String(excursion._id)) || null;
+    };
+
+    await expect.poll(findNotification, { timeout: 15_000 }).toBeTruthy();
+    const notification = await findNotification();
+
+    expect(notification.escalated).toBe(true);
+    expect(notification.status).toBe('delivered');
+    expect(notification.deliveredChannel).toBe('in_app');
+    expect(notification.attempts).toEqual([
+      expect.objectContaining({ channel: 'email', result: 'failure', reason: 'no_recipients', escalation: false }),
+      expect.objectContaining({ channel: 'in_app', result: 'success', escalation: true }),
+    ]);
+  });
+});
