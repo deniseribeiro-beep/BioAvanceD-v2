@@ -176,6 +176,44 @@ class MongoStorageRepository {
   }
 
   /**
+   * #657: same live parent_id-walk fallback #654 introduced for
+   * findStorageHierarchyForBox, reused by getSampleStorageLocation/
+   * resolveStorageLocationsForSamples so they build the same path string
+   * and typed fullHierarchy shape StoragePath.createFromBox would have
+   * produced, instead of falling through to 'N/A'/null for every real box.
+   * @param {ObjectId} boxObjId
+   * @param {import('mongodb').ClientSession} [session]
+   * @returns {Promise<{path: string, fullHierarchy: object}|null>}
+   */
+  async resolveLiveStoragePath(boxObjId, session) {
+    const storageBoxesCollection = this.db.collection('storageBoxes');
+    const box = await storageBoxesCollection.findOne({ _id: boxObjId }, { session });
+    if (!box) return null;
+
+    const ancestors = await this.resolveAncestorContainersLive(box.parent_id, session);
+    let rack = null;
+    let shelf = null;
+    let freezer = null;
+    for (const container of ancestors) {
+      if (container.containerType === 'RACK') rack = container;
+      else if (container.containerType === 'SHELF') shelf = container;
+      else if (container.containerType === 'FREEZER') freezer = container;
+    }
+
+    if (!rack || !shelf || !freezer) return null;
+
+    return {
+      path: `${freezer.name}/${shelf.name}/${rack.name}/${box.name}`,
+      fullHierarchy: {
+        freezerId: freezer._id,
+        shelfId: shelf._id,
+        rackId: rack._id,
+        boxId: box._id
+      }
+    };
+  }
+
+  /**
    * dict-02 StorageAssignment (ELM-0167-0178, P1X-0072/0073): open a new
    * placement-history record for a specimen's physical stay at a position.
    * @param {{ specimenId: string, boxId: ObjectId, positionCode: string }} input
@@ -838,6 +876,7 @@ class MongoStorageRepository {
 
     const boxObjId = this.toObjectId(sample.storageLocation.boxId);
     const storagePath = await storagePathsCollection.findOne({ boxId: boxObjId });
+    const liveResolution = storagePath ? null : await this.resolveLiveStoragePath(boxObjId);
 
     return {
       found: true,
@@ -851,7 +890,7 @@ class MongoStorageRepository {
         },
         locationID: sample.storageLocation.locationID || null,
         readable: sample.storageLocation.readable || null,
-        path: storagePath?.path || 'N/A',
+        path: storagePath?.path || liveResolution?.path || 'N/A',
         fullHierarchy: storagePath
           ? {
               freezerId: storagePath.freezerId,
@@ -859,7 +898,7 @@ class MongoStorageRepository {
               rackId: storagePath.rackId,
               boxId: storagePath.boxId
             }
-          : null
+          : (liveResolution ? liveResolution.fullHierarchy : null)
       }
     };
   }
@@ -888,6 +927,17 @@ class MongoStorageRepository {
       : [];
     const pathByBoxId = new Map(paths.map((path) => [String(path.boxId), path]));
 
+    // #657: same live parent_id-walk fallback getSampleStorageLocation uses,
+    // deduped by boxId so samples sharing a box (same page) trigger only one
+    // live resolution instead of one per sample.
+    const missingBoxIds = boxIds.filter((boxId) => !pathByBoxId.has(String(boxId)));
+    const liveByBoxId = new Map();
+    for (const boxId of missingBoxIds) {
+      const key = String(boxId);
+      if (liveByBoxId.has(key)) continue;
+      liveByBoxId.set(key, await this.resolveLiveStoragePath(boxId));
+    }
+
     const result = new Map();
     for (const sample of samples) {
       const key = String(sample._id);
@@ -896,7 +946,9 @@ class MongoStorageRepository {
         continue;
       }
 
-      const storagePath = pathByBoxId.get(String(sample.storageLocation.boxId)) || null;
+      const boxKey = String(sample.storageLocation.boxId);
+      const storagePath = pathByBoxId.get(boxKey) || null;
+      const liveResolution = storagePath ? null : liveByBoxId.get(boxKey);
       result.set(key, {
         specimenId: sample._id,
         barcode: sample.barcode,
@@ -907,7 +959,7 @@ class MongoStorageRepository {
         },
         locationID: sample.storageLocation.locationID || null,
         readable: sample.storageLocation.readable || null,
-        path: storagePath?.path || 'N/A',
+        path: storagePath?.path || liveResolution?.path || 'N/A',
         fullHierarchy: storagePath
           ? {
               freezerId: storagePath.freezerId,
@@ -915,7 +967,7 @@ class MongoStorageRepository {
               rackId: storagePath.rackId,
               boxId: storagePath.boxId
             }
-          : null
+          : (liveResolution ? liveResolution.fullHierarchy : null)
       });
     }
 
