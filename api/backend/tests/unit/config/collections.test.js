@@ -45,7 +45,9 @@ const DEFAULTS = {
   notificationRules: 'notificationRules',
   notifications: 'notifications',
   labelGenerations: 'labelGenerations',
-  accessRequests: 'accessRequests'
+  accessRequests: 'accessRequests',
+  reagentLots: 'reagentLots',
+  nonconformances: 'nonconformances'
 };
 
 const ORIGINAL_ENV = { ...process.env };
@@ -126,7 +128,11 @@ describe('config/collections', () => {
       notificationRules: 'notificationRules',
       notifications: 'notifications',
       labelGenerations: 'labelGenerations',
-      accessRequests: 'accessRequests'
+      accessRequests: 'accessRequests',
+      // COLL_REAGENT_LOTS/COLL_NONCONFORMANCES aren't in ENV_KEYS/read by
+      // env.js either, same hardcoded-default reasoning as cids/etc. above.
+      reagentLots: 'reagentLots',
+      nonconformances: 'nonconformances'
     });
   });
 
