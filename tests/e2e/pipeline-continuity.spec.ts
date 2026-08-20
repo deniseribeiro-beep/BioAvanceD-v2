@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
-import { createRealParticipant, seedRawSpecimen, closeSeedDb } from './helpers/seedParticipant';
+import { createRealParticipant, seedRawSpecimen, seedStudy, closeSeedDb } from './helpers/seedParticipant';
 import { waitForEthicalConsentStatus, waitForTerminologyConceptNode, waitForTerminologyRelation, closeNeo4jDriver } from './helpers/queryNeo4j';
 import {
   countEssentialReferenceDocs,
@@ -805,6 +805,136 @@ test.describe('Ingestion gateway — files (RF029 slice 4/6) — real backend', 
       entityType: 'File',
       schemaId: 'canonical.v1.file',
       payload: { fileId: 'irrelevant-for-this-test', unknownField: 'x' },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'CONTRACT_VIOLATION')).toBe(true);
+  });
+});
+
+// RF029 slice 5/6 (#673): wires Assay/Dataset through slice 1's gateway,
+// same probe-only pattern slices 2-4 established (no new production
+// ingestion routes — the existing /api/assays and /api/datasets
+// master-data routes, createMasterDataRouter, stay untouched). #664
+// (Assay's specimen/protocol/operator/laboratory/reagentLot/equipment
+// links are format-only, no referential-integrity check on the real
+// route) stays open and unaddressed here — this block only proves the
+// gateway's own generic reference-checking machinery works for a
+// studyId, via the one reference this slice's fixtures can cheaply seed
+// (the existing seedStudy helper); it does not close #664's broader gap
+// across all six of Assay's own link fields, and does not touch
+// createMasterDataRouter at all, per #664's own "bigger than one slice"
+// scope note.
+test.describe('Ingestion gateway — datasets, assays (RF029 slice 5/6) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  function provenance() {
+    return {
+      sourceSystem: 'urn:system:pipeline-continuity-e2e',
+      createdBy: 'Actor/e2e-suite',
+      retrievedAt: new Date().toISOString(),
+      purpose: 'e2e_proof',
+    };
+  }
+
+  test('an assay payload referencing a real study is accepted', async ({ request }) => {
+    const studyId = `rf029-e2e-study-${Date.now()}`;
+    await seedStudy(studyId);
+
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Assay',
+      schemaId: 'canonical.v1.assay',
+      payload: {
+        studyId,
+        specimenIds: [`rf029-e2e-specimen-${Date.now()}`],
+        assayType: 'RNA sequencing',
+        protocolId: `rf029-e2e-protocol-${Date.now()}`,
+        operatorId: `rf029-e2e-operator-${Date.now()}`,
+        laboratoryId: `rf029-e2e-lab-${Date.now()}`,
+        assayDateTime: new Date().toISOString(),
+        intendedUse: 'RNA-seq discovery',
+      },
+      provenance: provenance(),
+      references: [{ collection: 'studies', field: 'studyId', value: studyId, label: 'studyId' }],
+    });
+
+    expect(outcome.status).toBe('accepted');
+    expect(outcome.violations).toEqual([]);
+  });
+
+  test('an assay payload referencing a nonexistent study is quarantined', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Assay',
+      schemaId: 'canonical.v1.assay',
+      payload: {
+        studyId: 'rf029-e2e-nonexistent-study',
+        specimenIds: [`rf029-e2e-specimen-${Date.now()}`],
+        assayType: 'RNA sequencing',
+        protocolId: `rf029-e2e-protocol-${Date.now()}`,
+        operatorId: `rf029-e2e-operator-${Date.now()}`,
+        laboratoryId: `rf029-e2e-lab-${Date.now()}`,
+        assayDateTime: new Date().toISOString(),
+        intendedUse: 'RNA-seq discovery',
+      },
+      provenance: provenance(),
+      references: [{ collection: 'studies', field: 'studyId', value: 'rf029-e2e-nonexistent-study', label: 'studyId' }],
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'REFERENCE_NOT_FOUND')).toBe(true);
+  });
+
+  test('an assay payload with an empty specimenIds array is quarantined', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Assay',
+      schemaId: 'canonical.v1.assay',
+      payload: {
+        studyId: 'irrelevant-for-this-test',
+        specimenIds: [],
+        assayType: 'RNA sequencing',
+        protocolId: 'irrelevant-for-this-test',
+        operatorId: 'irrelevant-for-this-test',
+        laboratoryId: 'irrelevant-for-this-test',
+        assayDateTime: new Date().toISOString(),
+        intendedUse: 'RNA-seq discovery',
+      },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'CONTRACT_VIOLATION')).toBe(true);
+  });
+
+  test('a dataset payload with the required fields is accepted, no reference needed', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Dataset',
+      schemaId: 'canonical.v1.dataset',
+      payload: {
+        datasetTitle: `RF029 e2e dataset ${Date.now()}`,
+        datasetVersion: '1.0.0',
+        creators: [{ name: 'RF029 e2e suite' }],
+        license: 'CC BY 4.0',
+      },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('accepted');
+    expect(outcome.violations).toEqual([]);
+  });
+
+  test('a dataset payload with an empty creators array is quarantined', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Dataset',
+      schemaId: 'canonical.v1.dataset',
+      payload: {
+        datasetTitle: `RF029 e2e dataset ${Date.now()}`,
+        datasetVersion: '1.0.0',
+        creators: [],
+        license: 'CC BY 4.0',
+      },
       provenance: provenance(),
     });
 

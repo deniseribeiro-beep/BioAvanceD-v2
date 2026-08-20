@@ -183,6 +183,66 @@ const fileSchema = {
   required: ['fileId', 'fileUri', 'checksum', 'fileSizeBytes']
 };
 
+// RF029 slice 5/6 (#673): Assay per dict-02_DICIONARIO.md ELM-0286..0297
+// ("Ensaios e experimentos") -- Assay.js's own header already cites this
+// exact ELM range, so this schema mirrors AssayModel.validate()'s real
+// required set field-for-field rather than dict-02's 1..1 markings alone:
+// `assayId` is deliberately NOT required here (unlike participantSchema's
+// participantId) because AssayModel.validate() itself never checks it --
+// assayId is purely server-generated (randomUUID() in create()), never
+// read from input, so requiring it in the contract would diverge from
+// what the real validator actually enforces. `reagentLotIds`/
+// `equipmentIds` (RF025 additions, no dict-02 field of their own) and
+// `controls` all stay optional, matching the real model's own defaults.
+const assaySchema = {
+  $id: 'canonical.v1.assay',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    assayId: { type: 'string', minLength: 1 },
+    studyId: { type: 'string', minLength: 1 },
+    specimenIds: { type: 'array', items: { type: 'string' }, minItems: 1 },
+    assayType: { type: 'string', minLength: 1 },
+    omicsDomain: { type: 'string' },
+    protocolId: { type: 'string' },
+    operatorId: { type: 'string' },
+    laboratoryId: { type: 'string' },
+    assayDateTime: { type: 'string' },
+    assayBatchId: { type: 'string' },
+    controls: { type: 'array' },
+    reagentLotIds: { type: 'array', items: { type: 'string' } },
+    equipmentIds: { type: 'array', items: { type: 'string' } },
+    intendedUse: { type: 'string', minLength: 1 }
+  },
+  required: ['studyId', 'specimenIds', 'assayType', 'protocolId', 'operatorId', 'laboratoryId', 'assayDateTime', 'intendedUse']
+};
+
+// RF029 slice 5/6 (#673): Dataset per dict-02_DICIONARIO.md ELM-0416..0423
+// ("FAIR e publicação") -- same "mirror the real model's own validate(),
+// not just dict-02 cardinality" reasoning as assaySchema above.
+// DatasetModel.validate() never checks datasetId either (also purely
+// server-generated) -- not required here for the same reason.
+// `distributionFiles`/`roCrateManifest` stay optional: DatasetModel's own
+// header notes distributionFiles can't be populated before the
+// scientific-file linkage routing lands, so an empty/absent array is the
+// real system's own normal state, not a gap this slice introduces.
+const datasetSchema = {
+  $id: 'canonical.v1.dataset',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    datasetId: { type: 'string', minLength: 1 },
+    datasetTitle: { type: 'string', minLength: 1 },
+    datasetVersion: { type: 'string', minLength: 1 },
+    creators: { type: 'array', minItems: 1 },
+    doi: { type: 'string' },
+    license: { type: 'string', minLength: 1 },
+    distributionFiles: { type: 'array' },
+    roCrateManifest: { type: 'string' }
+  },
+  required: ['datasetTitle', 'datasetVersion', 'creators', 'license']
+};
+
 const intakeSchema = {
   $id: 'canonical.v1.intake',
   type: 'object',
@@ -228,7 +288,7 @@ const intakeSchema = {
   required: ['participant', 'consent', 'specimen', 'clinical', 'biomarkers']
 };
 
-for (const schema of [participantSchema, specimenSchema, consentSchema, clinicalDataSchema, telemetrySchema, fileSchema, intakeSchema]) {
+for (const schema of [participantSchema, specimenSchema, consentSchema, clinicalDataSchema, telemetrySchema, fileSchema, assaySchema, datasetSchema, intakeSchema]) {
   ajv.addSchema(schema);
 }
 
@@ -251,6 +311,8 @@ module.exports = {
     clinicalDataSchema,
     telemetrySchema,
     fileSchema,
+    assaySchema,
+    datasetSchema,
     intakeSchema
   }
 };
