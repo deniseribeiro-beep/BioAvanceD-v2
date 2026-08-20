@@ -49,7 +49,9 @@ const DEFAULTS = {
   reagentLots: 'reagentLots',
   nonconformances: 'nonconformances',
   legalHolds: 'legalHolds',
-  dispositionActions: 'dispositionActions'
+  dispositionActions: 'dispositionActions',
+  ingestionIdempotencyKeys: 'ingestionIdempotencyKeys',
+  ingestionQuarantineRecords: 'ingestionQuarantineRecords'
 };
 
 const ORIGINAL_ENV = { ...process.env };
@@ -137,7 +139,11 @@ describe('config/collections', () => {
       reagentLots: 'reagentLots',
       nonconformances: 'nonconformances',
       legalHolds: 'legalHolds',
-      dispositionActions: 'dispositionActions'
+      dispositionActions: 'dispositionActions',
+      // COLL_INGESTION_IDEMPOTENCY_KEYS/COLL_INGESTION_QUARANTINE_RECORDS
+      // aren't in ENV_KEYS/read by env.js either, same reasoning.
+      ingestionIdempotencyKeys: 'ingestionIdempotencyKeys',
+      ingestionQuarantineRecords: 'ingestionQuarantineRecords'
     });
   });
 
