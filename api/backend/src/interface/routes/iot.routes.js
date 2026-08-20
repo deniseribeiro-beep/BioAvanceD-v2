@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const iotController = require('../../controllers/iot.controller');
+const { testSupportRoutesEnabled, requireTestSupportSecret } = require('../../utils/testSupportGate');
 
 router.post('/telemetry', iotController.ingestTelemetry);
 
@@ -20,21 +21,14 @@ router.post('/telemetry', iotController.ingestTelemetry);
 // disconnected, so every runCycle() call re-pays that ~60s retry cost —
 // unrelated to and far slower than the missing-reading check itself,
 // which doesn't touch Neo4j at all).
-// Defense in depth for the test-support routes below (#307): the NODE_ENV
-// gate is the only thing keeping them unmounted in production, so they also
-// require a shared secret via header — fails closed if TEST_SUPPORT_SECRET
-// isn't configured, since an unset secret must never be treated as "no auth
-// required".
-function requireTestSupportSecret(req, res, next) {
-  const expected = process.env.TEST_SUPPORT_SECRET;
-  const provided = req.get('x-test-support-secret');
-  if (!expected || provided !== expected) {
-    return res.status(403).json({ success: false, error: 'Não autorizado' });
-  }
-  next();
-}
-
-if (process.env.NODE_ENV !== 'production') {
+// Defense in depth for the test-support routes below (#307, hardened by
+// #675): registration itself requires testSupportRoutesEnabled()'s two
+// independent signals (not production AND explicitly opted in), and each
+// request additionally requires the shared secret via header --
+// requireTestSupportSecret fails closed if TEST_SUPPORT_SECRET isn't
+// configured, since an unset secret must never be treated as "no auth
+// required". See utils/testSupportGate.js for the shared implementation.
+if (testSupportRoutesEnabled()) {
   router.post('/telemetry-monitor/run-cycle', requireTestSupportSecret, async (req, res) => {
     const telemetryMonitor = req.app.locals.telemetryMonitor;
     if (!telemetryMonitor) {

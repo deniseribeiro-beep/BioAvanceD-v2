@@ -38,6 +38,11 @@ x-test-env: &test-env
   BOOTSTRAP_ADMIN_USERNAME: admin
   BOOTSTRAP_ADMIN_TEMP_PASSWORD: Admin@123
   TEST_SUPPORT_SECRET: e2e-test-support-secret
+  # #675: test-support routes also require this explicit opt-in to be
+  # registered at all, on top of NODE_ENV/TEST_SUPPORT_SECRET above --
+  # see utils/testSupportGate.js. This stack is exactly the "controlled
+  # suite" the flag exists for.
+  ENABLE_TEST_SUPPORT_ROUTES: "true"
 
 services:
   mongodb-test:

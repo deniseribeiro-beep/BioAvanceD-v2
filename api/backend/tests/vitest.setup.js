@@ -12,6 +12,13 @@ process.env.USER_ANON_SALT = process.env.USER_ANON_SALT || 'test-user-anon-salt'
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || 'https://localhost:5173';
 process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
 process.env.ENCRYPTION_KEY_ID = process.env.ENCRYPTION_KEY_ID || 'vitest-key-001';
+// #675: test-support routes (iot.routes.js, ingestionTestSupport.routes.js)
+// now require this explicit opt-in to even be registered, on top of
+// NODE_ENV !== 'production' -- the native vitest suite is exactly the kind
+// of controlled, non-production environment the flag exists to allow, and
+// iot.api.test.js's test-support describe block needs the routes actually
+// registered at module-load time to exercise them at all.
+process.env.ENABLE_TEST_SUPPORT_ROUTES = process.env.ENABLE_TEST_SUPPORT_ROUTES || 'true';
 
 function createMockSession() {
   return {
