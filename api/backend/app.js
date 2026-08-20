@@ -308,6 +308,8 @@ app.use("/api/temperature", require("./src/interface/routes/temperature.routes")
 app.use("/api/incidents", require("./src/interface/routes/incident.routes"));
 app.use("/api/e-consent", require("./src/routes/eConsent.js"));
 app.use("/api/retention-policies", require("./src/routes/retentionPolicy.js"));
+app.use("/api/notification-rules", require("./src/routes/notificationRule.js"));
+app.use("/api/notifications", require("./src/routes/notification.js"));
 app.use("/api/intake-wizard", require("./src/interface/routes/intakeWizard.routes"));
 app.use("/api/terminologies", require("./src/interface/routes/terminologies.routes"));
 app.use("/api/users", require("./src/interface/routes/user.routes"));

@@ -1,0 +1,98 @@
+import { describe, it, expect } from 'vitest';
+
+const NotificationRuleModel = require('../../src/models/NotificationRule');
+
+const VALID_PAYLOAD = {
+  eventType: 'environmental_excursion',
+  channels: ['in_app'],
+  recipientRoleCodes: ['administrator'],
+  sensitiveFieldsAllowlist: ['sensorId', 'temperatureValue'],
+  maxDeliveryMinutes: 2,
+  version: 'v1',
+};
+
+describe('NotificationRuleModel', () => {
+  it('valida um payload completo', () => {
+    const result = NotificationRuleModel.validate(VALID_PAYLOAD);
+    expect(result.isValid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('rejeita payload vazio com todos os campos obrigatórios apontados', () => {
+    const result = NotificationRuleModel.validate({});
+    expect(result.isValid).toBe(false);
+    expect(result.errors).toEqual(expect.arrayContaining([
+      'eventType é obrigatório e deve ser um código de texto válido',
+      'channels é obrigatório e deve ser um array não vazio',
+      'recipientRoleCodes é obrigatório e deve ser um array não vazio',
+      'maxDeliveryMinutes é obrigatório e deve ser um número positivo',
+      'version é obrigatório e deve ser um texto válido',
+    ]));
+  });
+
+  it('rejeita um canal fora do conjunto permitido', () => {
+    const result = NotificationRuleModel.validate({ ...VALID_PAYLOAD, channels: ['sms'] });
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some((e) => e.includes('channels[0]'))).toBe(true);
+  });
+
+  it('rejeita maxDeliveryMinutes não positivo', () => {
+    expect(NotificationRuleModel.validate({ ...VALID_PAYLOAD, maxDeliveryMinutes: 0 }).isValid).toBe(false);
+    expect(NotificationRuleModel.validate({ ...VALID_PAYLOAD, maxDeliveryMinutes: -5 }).isValid).toBe(false);
+  });
+
+  it('aceita sensitiveFieldsAllowlist vazia (nenhum dado do payload sai na mensagem)', () => {
+    const result = NotificationRuleModel.validate({ ...VALID_PAYLOAD, sensitiveFieldsAllowlist: [] });
+    expect(result.isValid).toBe(true);
+  });
+
+  describe('escalation', () => {
+    it('aceita escalation desabilitado sem exigir channel/afterFailures', () => {
+      const result = NotificationRuleModel.validate({ ...VALID_PAYLOAD, escalation: { enabled: false } });
+      expect(result.isValid).toBe(true);
+    });
+
+    it('rejeita escalation habilitado com channel fora do conjunto permitido', () => {
+      const result = NotificationRuleModel.validate({
+        ...VALID_PAYLOAD,
+        escalation: { enabled: true, channel: 'sms', afterFailures: 1 },
+      });
+      expect(result.isValid).toBe(false);
+      expect(result.errors.some((e) => e.includes('escalation.channel'))).toBe(true);
+    });
+
+    it('rejeita escalation habilitado com afterFailures não inteiro/positivo', () => {
+      const result = NotificationRuleModel.validate({
+        ...VALID_PAYLOAD,
+        escalation: { enabled: true, channel: 'in_app', afterFailures: 0 },
+      });
+      expect(result.isValid).toBe(false);
+      expect(result.errors.some((e) => e.includes('escalation.afterFailures'))).toBe(true);
+    });
+  });
+
+  describe('create', () => {
+    it('normaliza escalation.enabled=false para o objeto padrão, mesmo se channel/afterFailures vierem preenchidos', () => {
+      const rule = NotificationRuleModel.create({
+        ...VALID_PAYLOAD,
+        escalation: { enabled: false, channel: 'email', afterFailures: 3 },
+      });
+      expect(rule.escalation).toEqual({ enabled: false, afterFailures: null, channel: null });
+    });
+
+    it('preserva escalation habilitado tal como informado', () => {
+      const rule = NotificationRuleModel.create({
+        ...VALID_PAYLOAD,
+        escalation: { enabled: true, channel: 'in_app', afterFailures: 1 },
+      });
+      expect(rule.escalation).toEqual({ enabled: true, afterFailures: 1, channel: 'in_app' });
+    });
+
+    it('defaults active to true and copies arrays defensively', () => {
+      const rule = NotificationRuleModel.create(VALID_PAYLOAD);
+      expect(rule.active).toBe(true);
+      rule.channels.push('email');
+      expect(VALID_PAYLOAD.channels).toEqual(['in_app']);
+    });
+  });
+});

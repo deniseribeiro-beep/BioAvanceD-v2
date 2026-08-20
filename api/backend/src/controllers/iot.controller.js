@@ -16,6 +16,7 @@ const { sendCriticalAlertEmail } = require('../services/sendCriticalAlertEmail')
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
 const EnvironmentalExcursionModel = require('../models/EnvironmentalExcursion');
 const coldChainQuarantineService = require('../services/equipment-sensor-quarantine.service');
+const notificationDispatchService = require('../services/notificationDispatch.service');
 
 const sensorPolicyCache = new Map();
 const SENSOR_POLICY_CACHE_TTL_MS = 60 * 1000;
@@ -132,6 +133,7 @@ async function upsertEnvironmentalExcursion(policyData, temperaturePolicy, norma
     excursionStatus: { $in: ['open', 'under_assessment'] }
   });
 
+  let excursionId;
   if (existingExcursion) {
     await ExcursionCollection.updateOne({ _id: existingExcursion._id }, {
       $set: {
@@ -141,20 +143,37 @@ async function upsertEnvironmentalExcursion(policyData, temperaturePolicy, norma
         updatedAt: new Date()
       }
     });
-    return;
+    excursionId = existingExcursion._id;
+  } else {
+    const excursion = EnvironmentalExcursionModel.create({
+      equipmentId: deviceId,
+      startDateTime: normalizedTimestamp,
+      minimumValue: normalizedTemperature,
+      maximumValue: normalizedTemperature,
+      excursionStatus: 'open',
+      triggeringPolicyId: String(temperaturePolicy._id || temperaturePolicy.id || ''),
+      originalReading: normalizedTemperature,
+      quarantineActionId: quarantine?.triggered ? quarantine.incidentId : null
+    });
+    const insertResult = await ExcursionCollection.insertOne(excursion);
+    excursionId = insertResult.insertedId;
   }
 
-  const excursion = EnvironmentalExcursionModel.create({
-    equipmentId: deviceId,
-    startDateTime: normalizedTimestamp,
-    minimumValue: normalizedTemperature,
-    maximumValue: normalizedTemperature,
-    excursionStatus: 'open',
-    triggeringPolicyId: String(temperaturePolicy._id || temperaturePolicy.id || ''),
-    originalReading: normalizedTemperature,
-    quarantineActionId: quarantine?.triggered ? quarantine.incidentId : null
+  // #646 Wave 3 (RF015/RNF026) - fire-and-forget, same shape as
+  // sendCriticalAlertEmail below: a missing/misconfigured NotificationRule
+  // must never block or delay the excursion record itself.
+  void notificationDispatchService.dispatchNotification(db, {
+    eventType: 'environmental_excursion',
+    sourceEventType: 'EnvironmentalExcursion',
+    sourceEventId: excursionId,
+    payload: {
+      sensorId: normalizedSensorId,
+      temperatureValue: normalizedTemperature,
+      deviceId
+    }
+  }).catch((error) => {
+    logger.error('[NOTIFICATION_DISPATCH] Falha ao disparar notificação baseada em regra:', error.message || error);
   });
-  await ExcursionCollection.insertOne(excursion);
 }
 
 async function ingestTelemetry(req, res) {
