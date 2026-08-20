@@ -1,132 +1,132 @@
 # HANDOFF
 
-**Written:** 2026-08-20. Picked up right after the prior rotation's "two
-findings big enough to stop and check in" note (#654 storagePaths,
-#655 label-route split — that rotation explicitly deferred sequencing
-to Dennis rather than picking one). This sitting resolved both, found
-and fixed a real regression along the way, and filed six follow-ups.
+**Written:** 2026-08-20. Picked up right after the prior rotation's close
+(#654/#655/#653 landed, one regression caught). Dennis asked to continue
+straight to RF024 (#646 Wave 3's next unstarted item) rather than address
+the prior rotation's six follow-ups first. This sitting built and shipped
+RF024 end-to-end and filed five more follow-ups.
 
-## #654 (storagePaths never written) — fixed, merge `988317bf`/`de504a23`
+## RF024 (Solicitações de acesso e distribuição) — shipped, merge `7ca99900`/`adbc1bd9`
 
-Docs settled the fix direction before any question was asked:
-`docs/architecture/legacy-location-migration-mapping.md` names
-`StoragePath.js` as the canonical target's "materialized
-freezer→shelf→rack→box path" — confirming populate-on-write over
-delete-the-collection. But tracing the actual write side found there's
-**no live production endpoint that creates a StorageBox/StorageContainer
-at all** — the only writers are a now-moot backfill script and
-test-only raw-insert seed helpers. So the real fix made the *readers*
-(`checkLocationBlocked`, `findStorageHierarchyForBox`) self-sufficient
-instead: a new `resolveAncestorContainersLive` walks
-`storageContainers.parent_id` live whenever no `StoragePath` document
-exists, which is every real box today. Also transparently handles the
-optional `DRAWER` level (#458) that `StoragePath`'s own schema has no
-field for.
+Unlike RF014-017 (mostly wiring up pre-existing code), **zero code existed
+for this RF at all** — dict-07/dict-08 don't flag it because it falls
+outside those tables' curated domain list, not because it was partially
+built. New `AccessRequest` entity (dict-02 ELM-0388..0395), built as a
+plain validate/create class + raw-driver service/controller/routes,
+matching the established pattern for this generation of entities
+(`Study`/`PatientConsent`/`RetentionPolicy`/`TerminologyConcept`), not
+Mongoose.
 
-Left deliberately out of scope, filed separately: **#657** (two
-cosmetic `storagePaths` display readers still show `'N/A'`).
+All 5 acceptance criteria proven against the real backend:
+- **AC#1** — `POST /api/access-requests` registers requester/study/
+  purpose/items.
+- **AC#2** — `POST /:id/evaluate` checks three real dimensions: consent
+  (the requested specimen's real linked participant needs an ACTIVE
+  `PatientConsent`), DUO (an optional `duoCode` resolves against a real
+  `TerminologyConcept` under DUO's systemUri), and access policy (the
+  destination `Study` must be `active` — no dedicated `AccessPolicy`
+  engine exists yet, so this reuses RF021's own Study-status gate as the
+  honest available proxy; see #663).
+- **AC#3** — `POST /:id/decision` records committeeDecision
+  (approved/rejected/conditioned) + justification + approvalPeriod, only
+  after compatibility has actually been evaluated.
+- **AC#4** — `POST /:id/distribute` links approval to
+  distribution/availability, gated on the access being currently
+  allowed. Scoped to `AccessRequest`'s own `distributionStatus`, not the
+  separate `Shipment` entity (dict-02 ELM-0396+, `Condicional` priority,
+  a different domain) — see #660.
+- **AC#5** — `GET /:id/access-check` computes allow/block live from
+  stored state every time (pending/rejected/revoked/expired/
+  not-yet-active all block); `POST /:id/revoke` reverses a previously-
+  approved decision.
 
-## #655 (RF016 label route split) — fixed, merge `19889184`/`fcff884d`
+Gated behind one new permission, `manageAccessRequests` (coordinator +
+administrator) — neither RF024's "Pesquisador" nor "comitê responsável"
+actor maps to this repo's 4-role model. Whether that grant is too broad
+for a real committee decision is flagged, not decided, in #662.
 
-The design-call framing from the prior rotation held up to a second,
-harder docs pass (Dennis pushed back on the first "no docs settle this"
-— rightly; the first pass checked 3 architecture/naming docs, all
-tangential). The real answer was in `E2E_IMPLEMENTATION_PLAN.md` (the
-actual "how to build this" doc, not just an inventory) plus milestone
-#2's own description, in Dennis's own words: "Legacy/testid-less
-frontend pages get rebuilt fresh, not patched." `SampleLabelPage.tsx`
-is on that plan's confirmed testid-less list; its pre-RF016 code survey
-already called `sample.routes.js` the richer, already-built-out
-symbology surface.
+**Real bug found and fixed along the way:** `rbac-catalog-seed.service.js`'s
+role-upsert returned an already-seeded role untouched, so granting
+`manageAccessRequests` to the existing coordinator/administrator roles
+never actually reached them on re-seed — this directly blocked the e2e
+proof (403s until fixed). Fixed by merging freshly-computed
+`permissionIds` into the existing role instead of skipping it outright;
+`roleId` stays stable. **Re-seeding the RBAC catalog against the running
+stack is a manual step** (`node src/scripts/seedRbacCatalog.js` inside
+`backend-app-test`) — it is *not* triggered by a container rebuild or
+restart on an already-bootstrapped stack; only a genuinely empty `users`
+collection re-triggers it automatically. Filed as a workflow-precedent
+note, `dyeallpies-skills-pack#351`, not a product issue (the fix itself
+is already merged here).
 
-Shipped: `SampleLabelPage.tsx` rebuilt with real `data-testid`s, calling
-`sample.routes.js`'s real Code128/DataMatrix/QR symbology
-(`/by-barcode/:barcode/symbology-assets?includePayload=true`) and a new
-ported ZPL print-job route (`GET /:id/label/print-job`, so RF016's
-"gerar e imprimir" requirement isn't lost). `label.routes.js` retired
-entirely (mount, file, test); `intakeWizard.js`'s dead-end label links
-and the dead `sampleChainApi.getLabelBlob` client method cleaned up
-alongside it. **#653** (symbology-assets had no org-scope check) fixed
-in the same commit, since that route became the real page's direct
-dependency rather than an unreached capability.
+Also fixed `tests/unit/config/collections.test.js`'s hardcoded
+expected-defaults list — already stale by 3 keys
+(`notificationRules`/`notifications`/`labelGenerations` from RF014/016)
+before this slice's `accessRequests` made it 4. Pre-existing gap, not
+this slice's regression, but it was failing and directly in the way of a
+clean full-suite run.
 
-New e2e coverage added: UI-driving tests proving the real page (not
-just the API) renders real symbology and downloads a real ZPL job
-(`specimen-quality-inventory.spec.ts`).
+Verification: unit 63/63 new (14 model + 25 service + 24 rbac-catalog-
+seed, including a new test proving the merge-on-reseed fix) — full
+native suite 6296/6296 (317/317 files) after the collections.test.js
+fix. E2E 3/3 new in `specimen-quality-inventory.spec.ts`'s sibling file,
+`scientific-data-access.spec.ts` — happy path (evaluate → approve →
+distribute), rejected + revoked blocking, and expired-period blocking,
+all live against Docker.
 
-## Regression found and fixed mid-verification — `7257ea34`
+## Five follow-ups filed this sitting
 
-Bringing the Docker stack up to verify #655 against real UI, even the
-**pre-existing, untouched** RF016 API tests started failing. Root
-cause: #654's new ancestor-block query, `{ $ne: 'OPERATIONAL' }`,
-matches a `StorageContainer` with **no status field at all** just as
-readily as an explicit `MAINTENANCE`/`RETIRED` one — every e2e seed
-helper's SHELF/RACK containers hit exactly this shape (only the FREEZER
-gets an explicit status, per #598's own precedent). #654's own fix
-would have 422'd every real allocation attempt the moment it shipped.
-Fixed with `{ $exists: true, $ne: 'OPERATIONAL' }`, matching
-`StorageContainer.js`'s own Mongoose default. This also finally made
-#654's ancestor-level RETIRED/MAINTENANCE blocking provable against the
-real backend for the first time — new tests in
-`specimen-quality-inventory.spec.ts`'s RF017 AC#7 block confirm it.
+- **BioAvanceD-v2#660** — `Shipment` entity (dict-02 ELM-0396+,
+  sender/recipient/carrier/MTA tracking) not built; RF024 AC#4 satisfied
+  via `AccessRequest`'s own lighter-weight `distributionStatus` instead.
+- **BioAvanceD-v2#661** — `evaluateCompatibility`'s consent check only
+  resolves a real participant for `itemType: 'specimen'` — `'dataset'`/
+  `'file'` items silently skip consent verification (non-blocking null),
+  not de-identified-by-design vs. genuinely unchecked.
+- **BioAvanceD-v2#662** — question for Dennis/Denise: is
+  `manageAccessRequests` (coordinator+administrator) too permissive for
+  a "comitê responsável" decision, vs. this repo's own
+  `reidentifyParticipant` precedent (administrator-only for a comparably
+  sensitive action)?
+- **BioAvanceD-v2#663** — AC#2's "políticas de acesso" leg has no real
+  `AccessPolicy` entity to evaluate against (dict-02's P1X-0127 is only
+  a P1X/not-yet-consolidated row); proxied via `Study.studyStatus`.
+  Scoping question: Fase 1 gap to close now, or genuinely Fase 3 per
+  RF024's own "F1 contrato / F3 operação" status line?
+- **dyeallpies-skills-pack#351** — the RBAC-reseed-is-manual operational
+  fact above, proposed as a new `build-loop` BioAvanceD-v2 overlay
+  gotcha (not edited directly this sitting — `.claude/skills/` is a
+  junction, editable only from a session in the pack repo itself).
 
-## Six follow-ups filed this sitting
-
-- **BioAvanceD-v2#656** — `storageService.js`'s `allocateSampleToPosition`
-  (and its own private `validatePositionAvailability`) is dead code
-  with zero route callers, but would silently bypass RF017 AC#7 if
-  anything ever wired a route to it. Not urgent (unreachable today),
-  recorded so nobody's surprised later.
-- **BioAvanceD-v2#657** — the two cosmetic `storagePaths` display
-  readers (`getSampleStorageLocation`,
-  `resolveStorageLocationsForSamples`) still show `'N/A'`/`null` for
-  real boxes; deliberately out of #654's scope.
-- **BioAvanceD-v2#658** — `backend-unit-runner` has no `docs/` mount at
-  all, so `dictionary:validate` (already wired into its command chain
-  per the earlier #530 trace) crashes with ENOENT the moment it
-  actually runs. Nobody's noticed because CI's `main`-only trigger
-  (#599, open) means this container has likely never really executed
-  end-to-end on this branch. Will surface as a new red build the moment
-  #599 lands — worth fixing before that, not after.
-- **BioAvanceD-v2#659** — nothing in the app actually links to
-  `SampleLabelPage` (`samples/:id/label`); it's real now but only
-  reachable by typing the URL.
-- **dyeallpies-skills-pack#349** — `resolve-issue`'s docs-first-before-
-  asking rule doesn't mention checking GitHub Milestones, even though
-  `fix-bugs`' own overlay already learned that lesson (#316). This
-  session hit a third data point of the #340 pattern despite genuinely
-  checking docs first — the miss was reaching the *most specific* doc.
-- **dyeallpies-skills-pack#350** — the pre-action routing gate
-  ("no routed workflow skill invoked yet") fired three separate times
-  this sitting on actions taken *after* `fix-bugs` was already actively
-  invoked and mid-execution, with no intervening compact — each
-  required a no-op re-invocation just to clear it. Pure friction, no
-  functional harm, but a real, repeated cost worth fixing at the source.
+Also commented on **dyeallpies-skills-pack#350** (still open): the
+pre-action routing gate fired again mid-`build-loop`, third confirmed
+occurrence and first one not involving `fix-bugs` — corroborates the
+gate's detection window is too narrow generically, not
+`fix-bugs`-specific.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed through both
-  merges (`de504a23`, `fcff884d`). Working tree clean except the
-  gitignored/junctioned `.claude/skills/` and the pre-existing untracked
-  `api/backend/storage/assays/` (matches sibling `storage/samples/`/
-  `storage/datasets/`, not cleaned up, not this sitting's doing).
+- On `feature/docker-e2e-backend-integration`, pushed through the RF024
+  merge (`adbc1bd9`). Working tree clean except the gitignored/junctioned
+  `.claude/skills/` and the pre-existing untracked
+  `api/backend/storage/assays/` (neither this sitting's doing).
 - No PR to `main` exists.
 - **Docker**: `compose.test.yml` is up — all 12 core services healthy,
-  `backend-app-test`/`frontend-app-test` rebuilt through both fixes and
-  re-verified on the merged tree (34/34 e2e in
-  `specimen-quality-inventory.spec.ts`, 451/451 native unit tests, plus
-  `backend-unit-runner`'s actual test suite at 59/60 — 1 pre-existing
-  skip — before hitting #658's unrelated ENOENT). Not torn down; check
-  `docker ps` before assuming either state if picking this up fresh.
-- Two pre-existing dangling local branches noted (not this sitting's
-  work, left untouched both times): `test/377-docs-on-main` (a single
-  docs-only commit, name suggests it was meant to land on `main`
-  directly), `test/human-showcase-video` (a separate demo-video
-  session's work). Neither merged anywhere.
+  `backend-app-test` rebuilt to pick up the RF024 code and re-verified
+  (3/3 new e2e passing). RBAC catalog re-seeded against the running
+  stack (22 permissions, 5 roles) so `manageAccessRequests` is live.
+  Not torn down; check `docker ps` before assuming either state if
+  picking this up fresh.
+- Two pre-existing dangling local branches, still untouched:
+  `test/377-docs-on-main`, `test/human-showcase-video`. Neither merged
+  anywhere. (The slice branch this sitting used,
+  `test/646-rf024-access-requests`, was deleted locally after merging —
+  matching how `fix/654-*`/`fix/655-*` were handled last rotation.)
 
 ## Recommended next steps
 
-Dennis hasn't yet said whether to continue straight to RF024 or address
-anything else first. **#646** (8-RF Wave 3 tracking issue) is still the
-active thread — 4 of 8 done (RF014/015/016/017), RF024/025/026/029
-remaining.
+None queued — Dennis hasn't said what to pick up next. **#646** (8-RF
+Wave 3 tracking issue) is still the active thread: 5 of 8 done
+(RF014/015/016/017/024), RF025/026/029 remaining. #646's own scope table
+flags RF025 as needing a scope-overlap check against this session's own
+`Assay` entity (#641/#643) before building, if it's picked up next.
