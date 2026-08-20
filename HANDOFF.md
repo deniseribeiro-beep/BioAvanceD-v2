@@ -1,119 +1,102 @@
 # HANDOFF
 
-**Written:** 2026-08-20, end of this sitting. Picked up right after the
-prior rotation's close (#669/#670 landed). Dennis said "continue rabbit
-hole... Docker is on... free to divide and conquer" — no mid-workflow
-prompts, repeated twice this sitting. Landed **#671**, **#672**, and
-**#673** (RF029 slices 3/6, 4/6, 5/6). Stopping here to report back per
-the budget checkpoint flagged in this file's own prior rotation, not
-because anything blocked.
+**Written:** 2026-08-20, mid-sitting (not the sitting's end -- rotating
+per-item per `rabbit-hole`'s Step 4). Picked up right after the prior
+rotation's close (RF029 slices 3/6-5/6 landed, #671/#672/#673). Dennis
+said "continue rabbit hole, Docker is on, we're only out when we finish
+Wave 3, though we will probably not finish this session." Landed **#657**
+this item. Still inside the rabbit hole -- more queue items pending this
+same sitting.
 
-## What landed this sitting
+## Rabbit-hole state: STILL INSIDE, not exited
 
-- **#671 (RF029 slice 3/6: telemetry) — shipped, merge `6ca21758`.**
-  `canonical.v1.telemetry` (dict-02 TelemetryReading), proved via the
-  probe-only pattern. Resolved the open "probe-only vs. real production
-  route" coordination question #670 flagged, explicitly, in favor of
-  probe-only — AC#7's InfluxDB routing already has independent proof in
-  `interop-monitoring.spec.ts`. 5 unit + 4 e2e tests, all green.
-- **#672 (RF029 slice 4/6: files) — shipped, merge `8bdd98d3`.**
-  `canonical.v1.file` (dict-02 DataFile), same probe-only pattern. New
-  `seedRawSpecimen` e2e fixture (minimal raw insert, mirrors
-  `seedStudy`/`seedProtocol`). AC#7 (Object Storage) already proven by
-  `scientific-data-access.spec.ts`. 5 unit + 4 e2e tests, all green
-  after a rebuild (see gotcha below).
-- **#673 (RF029 slice 5/6: datasets/assays) — shipped, merge
-  `f25efb46`.** `canonical.v1.assay` + `canonical.v1.dataset` (dict-02
-  Assay/Dataset — both entities already closely dictionary-aligned in
-  the real models). Neither schema requires its own `<entity>Id` —
-  both are purely server-generated, unlike `participantId`. #664
-  (Assay referential-integrity gap on the real route) stays open,
-  explicitly unaddressed — this slice only proves the gateway's generic
-  reference-check against `studyId`. 10 unit + 5 e2e tests, all green
-  on the first run (proactive rebuild this time, see gotcha below).
+**Tracker: #646** (Wave 3 kickoff -- RF014/015/016/017/024/025/026/029).
+RF014-026 are all `DONE` per `E2E_TRACEABILITY_PLAN.md`'s own status
+table, but each left open follow-up/gap issues filed while building
+them -- those count as rabbit-hole queue members (direct descendants of
+the tracker, per the skill's scope rule), not separately-deferred debt.
+**RF029 has its own sub-tracker, #668** (5/6 slices done; #674, slice
+6/6 workflows/omics, stays blocked on RF027/Wave 4, which has **no issue
+filed anywhere** as of this check -- confirmed still not started, so
+#674 is genuinely out of reach this sitting, matching Dennis's own
+expectation).
 
-Full writeups: each issue's own closing comment and #668's three
-"Slice N/6 ... landed" comments.
+**Queue members remaining after #657's close (18 open issues, plus #674
+blocked):**
 
-**RF029 is now 5/6 slices done.** Only **#674** (workflows/omics)
-remains, still blocked on RF027 (Wave 4, not yet scheduled) — #668 and
-#646 cannot close until RF027 lands and #674 is built, independent of
-any pacing decision.
+| # | RF | One-line |
+|---|---|---|
+| #648 | RF014 | AC#4: no admin forced password reset |
+| #649 | RF014 | AC#8: policy changes don't revoke sessions |
+| #650 | RF015 | notification engine only wired to 1 of 5 domains |
+| #652 | RF016 | AC#3: no printer-layout validation |
+| #656 | RF017-adjacent | dead-code `allocateSampleToPosition` bypasses AC#7 if ever wired |
+| #660 | RF024 | AC#4: Shipment entity not built |
+| #661 | RF024 | AC#2: evaluateCompatibility skips dataset/file consent |
+| #662 | RF024 | manageAccessRequests permission may be too broad |
+| #663 | RF024 | AC#2: no AccessPolicy entity, proxied via Study.studyStatus |
+| #664 | RF025 | Assay's entity links are format-only, not referential |
+| #665 | RF025 | Técnico (RF's own primary actor) can't create Assay/ReagentLot |
+| #666 | RF025 | AC#3: dict-02 Device entity richer than code's Equipment |
+| #667 | RF026 | RetentionPolicy ALLOWED_ENTITY_TYPES too narrow |
+| #675 | RF029 | test-support probe route: attacker-controlled payload write, audit before deploy |
+| #676 | RF029 | activeCodeValidator tie-break default needs confirming |
+| #677 | RF005 (RF029-adjacent) | structured clinical-data domain unbuilt |
+| #678 | RF029 | no ThresholdProfile entity |
+| #679 | RF029 | file vocab mismatch (fileFormat/fileRole) |
 
-## Six follow-ups filed this sitting (all open, none blocking)
+Recommended pickup order: smallest/most-independent first (matches this
+sitting's own approach -- #657 was picked first as the cheapest, most
+self-contained item). No hard dependency order among these 18; RF024's
+four (#660-663) and RF025's three (#664-666) each cluster around the
+same files and may be worth picking together.
 
-BioAvanceD-v2 tracker:
-- **#678** — no `ThresholdProfile` entity exists (dict-02 requires one
-  for `TelemetryReading.thresholdProfileId`); `temperaturePolicies` is
-  the practical but differently-shaped stand-in. From #671.
-- **#679** — `canonical.v1.file`'s `fileFormat`/`fileRole` vocabularies
-  (EDAM/MIME, processing-stage) aren't populated by the real upload
-  path's narrower `fileType` enum. From #672.
+**Budget (rabbit-hole Step 5):** ~10-point sitting budget. #657 was 1
+point (small, self-contained bug fix). Running total: **1/10**. Most of
+the budget remains -- expect several more items to land before this
+sitting's own stop-and-report checkpoint fires.
 
-`dyeallpies-skills-pack` tracker (skill/hook orchestration findings, not
-this repo's product — filed there per `wrap-up`'s routing rule):
-- **#355** — the product-file-edit routing gate didn't recognize an
-  already-invoked `build-loop` (reactive block + `work-issue`+re-invoke
-  workaround needed, twice — #671 and #672). Third attempt (#673)
-  invoked `work-issue`+`build-loop` together *proactively* before the
-  first edit and hit no block at all — that workaround is now the
-  known-good pattern for this session's remaining life, until #355 is
-  actually fixed upstream.
-- **#356** — `build-loop`'s "run against real backend" step doesn't
-  point at the `backend-app-test` build-not-mount gotcha at the moment
-  it's relevant (bit reactively on #672 despite having read the rule
-  earlier the same session). Applying it proactively on #673 (rebuild
-  before first run) worked cleanly — also now the known-good pattern.
+## What landed this sitting (so far)
 
-Also carried from the prior rotation, still open: #675 (probe route
-write-primitive exposure), #676 (`activeCodeValidator` tie-break),
-#677 (RF005 AC4-6 structured clinical data).
-
-## Rabbit-hole state: still open, not exited
-
-**#646 stays open** (RF029/#668 is the one Wave 3 RF not yet done) and
-**so does #668** (1/6 RF029 slices remain: #674, blocked). Both carry
-full queue state; this file is a snapshot.
-
-**Budget note (rabbit-hole Step 5):** three "medium" (2-3 point) slices
-landed this sitting — running total ≈9, at the ~10 point budget ceiling.
-This is the actual stop-and-report point Step 5 describes, not an early
-or arbitrary one.
+- **#657 (MongoStorageRepository path:'N/A' fix) -- shipped, merge
+  `759fa9b0`** (fix commit `9eeef825`) on
+  `feature/docker-e2e-backend-integration`. `getSampleStorageLocation`
+  and `resolveStorageLocationsForSamples` now reuse #654's
+  `resolveAncestorContainersLive` (via a new `resolveLiveStoragePath`
+  helper) when `storagePaths` has no matching document -- which is
+  every real box today, since nothing writes that collection. Same
+  live parent_id walk, same path-string/`fullHierarchy` shape
+  `StoragePath.createFromBox` would have produced. Batched form dedupes
+  by `boxId` so samples sharing a box trigger only one live resolution.
+  6 new unit tests (3 written first, confirmed failing against the
+  unfixed code, then passing). 114/114 green across
+  `MongoStorageRepository.test.js`, `GetSampleStorageLocationUseCase.test.js`,
+  `storage-query.controller.test.js` on the merged tree. No friction
+  this iteration (`wrap-up` core audit ran clean).
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, 8 commits ahead of
-  `origin/feature/docker-e2e-backend-integration` — not yet pushed;
-  pushing is a `ship-integration-branch`-gate decision, not a per-item
-  one. Working tree clean except the gitignored/junctioned
-  `.claude/skills/` and the pre-existing untracked
-  `api/backend/storage/assays/` (neither this sitting's doing).
+- On `feature/docker-e2e-backend-integration`, 12 commits ahead of
+  `origin/feature/docker-e2e-backend-integration` (10 from before this
+  sitting + #657's fix commit + merge commit) -- not yet pushed; pushing
+  is a `ship-integration-branch`-gate decision, not a per-item one.
+  Working tree clean except the pre-existing untracked
+  `.claude/skills/` and `api/backend/storage/assays/` (neither this
+  sitting's doing).
 - No PR to `main` exists.
-- **Docker**: test stack was up the whole sitting (`backend-app-test`
-  rebuilt twice — once reactively for #672, once proactively for
-  #673) — **being torn down now** via `clean-up` (this is the sitting's
-  real stopping point, not a per-item pause — see build-loop's "Docker
-  on by default answers bring-up, not teardown" note).
-- All three of this sitting's branches (`test/671-...`, `test/672-...`,
-  `test/673-...`) were merged and deleted locally; none were ever
-  pushed remotely.
-- **Two self-corrected slips, no lasting effect**: forgot to cut a
-  fresh branch before the first edit twice (between #671→#672, and
-  briefly at the very start of #673 before catching it) — both times
-  `edit-branch-guard.cjs` blocked before any edit landed, branch
-  created, edit retried successfully. By #673's actual implementation
-  work the branch was cut first, cleanly. Not filed anywhere — self-
-  corrected in-session, not a skill/hook gap (the hook did exactly its
-  job both times).
+- **Docker**: not brought up for #657 -- native unit tests were
+  sufficient to prove the fix (no route/e2e surface touched). Docker
+  stays "on" for this sitting per Dennis's instruction; later queue
+  items (especially the RF029-adjacent #675/#676/#678/#679, which touch
+  the real-backend ingestion gateway) will likely need it.
+- `fix/657-storage-location-live-fallback` was merged and deleted
+  locally; never pushed remotely.
 
 ## Recommended next steps
 
-Dennis's "continue, free to divide and conquer" instruction still
-stands — this sitting stopped at three slices as the budget's own
-stop-and-report point (Step 5), not because anything blocked. Next
-session: pick up **#674** if RF027 has landed by then (check first —
-it hadn't as of this writing), or address **#675/#676/#677/#678/#679**
-(all smaller, independent, non-blocking), or check on
-**dyeallpies-skills-pack#355/#356** if that repo's own session has
-picked them up — the proactive-invocation workarounds documented above
-remain necessary until then either way.
+Still inside the rabbit hole. Next: pop another item from the 18-issue
+queue above (smallest/most-independent first), work it via the normal
+`work-issue` routing, rotate this file again per Step 4 after each
+close, and stop only at the sitting's own budget checkpoint (~10
+points) or when Dennis says stop -- not before. #674 stays out of reach
+until RF027 exists.
