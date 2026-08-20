@@ -8,8 +8,17 @@ function normalizeBarcodeText(value) {
 function inferScannerSymbology(rawValue) {
   const value = String(rawValue || '');
 
-  if (value.startsWith(']d2') || value.startsWith(']Q3')) {
+  // #646 Wave 3 (RF016 AC#2): ]d2 and ]Q3 are the real, distinct AIM
+  // symbology identifiers for DataMatrix and QR Code respectively -- they
+  // were both folded into 'DataMatrix' before QR rendering existed at all.
+  // Real QR support means this mapping has to be accurate too, not just
+  // the rendering side.
+  if (value.startsWith(']d2')) {
     return 'DataMatrix';
+  }
+
+  if (value.startsWith(']Q3')) {
+    return 'QR';
   }
 
   if (value.startsWith(']C1')) {
@@ -61,6 +70,11 @@ function generateBarcodeSymbologies(barcodeValue) {
       scannerPrefix: ']d2',
       checksumHint: digest.slice(8, 16)
     },
+    qr: {
+      payload: normalized,
+      scannerPrefix: ']Q3',
+      checksumHint: digest.slice(16, 24)
+    },
     generatedAt: new Date()
   };
 }
@@ -87,6 +101,17 @@ function buildBwipRenderOptions(symbology, payload, overrides = {}) {
   if (symbology === 'DataMatrix') {
     return {
       bcid: 'datamatrix',
+      text: payload,
+      scale: 5,
+      paddingwidth: 8,
+      paddingheight: 8,
+      ...overrides
+    };
+  }
+
+  if (symbology === 'QR') {
+    return {
+      bcid: 'qrcode',
       text: payload,
       scale: 5,
       paddingwidth: 8,
@@ -128,13 +153,17 @@ async function generateIndustrialBarcodeArtifacts(barcodeValue, options = {}) {
 
   const digest = crypto.createHash('sha256').update(normalized).digest('hex');
 
-  const [code128Png, dataMatrixPng] = await Promise.all([
+  const [code128Png, dataMatrixPng, qrPng] = await Promise.all([
     renderBarcodePngAsset('Code128', normalized, {
       ...(options.code128 || {}),
       includePayload: options.includePayload
     }),
     renderBarcodePngAsset('DataMatrix', normalized, {
       ...(options.dataMatrix || {}),
+      includePayload: options.includePayload
+    }),
+    renderBarcodePngAsset('QR', normalized, {
+      ...(options.qr || {}),
       includePayload: options.includePayload
     })
   ]);
@@ -154,6 +183,13 @@ async function generateIndustrialBarcodeArtifacts(barcodeValue, options = {}) {
       checksumHint: digest.slice(8, 16),
       renderer: 'bwip-js',
       imagePng: dataMatrixPng
+    },
+    qr: {
+      payload: normalized,
+      scannerPrefix: ']Q3',
+      checksumHint: digest.slice(16, 24),
+      renderer: 'bwip-js',
+      imagePng: qrPng
     },
     generatedAt: new Date()
   };

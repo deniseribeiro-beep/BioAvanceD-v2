@@ -186,7 +186,7 @@ describe('Compliance Gate - DataMatrix/Code128 Industrial Layer', () => {
     expect(Array.from(pngBuffer.subarray(0, 8))).toEqual(PNG_SIGNATURE);
   }
 
-  it('gera artefatos PNG industriais para Code128 e DataMatrix', async () => {
+  it('gera artefatos PNG industriais para Code128, DataMatrix e QR', async () => {
     const artifacts = await generateIndustrialBarcodeArtifacts('BR-2026-001', {
       includePayload: true
     });
@@ -194,9 +194,11 @@ describe('Compliance Gate - DataMatrix/Code128 Industrial Layer', () => {
     expect(artifacts.canonicalValue).toBe('BR-2026-001');
     expect(artifacts.code128.renderer).toBe('bwip-js');
     expect(artifacts.dataMatrix.renderer).toBe('bwip-js');
+    expect(artifacts.qr.renderer).toBe('bwip-js');
 
     expectValidPngAsset(artifacts.code128.imagePng);
     expectValidPngAsset(artifacts.dataMatrix.imagePng);
+    expectValidPngAsset(artifacts.qr.imagePng);
   });
 
   it('normaliza leitura com prefixos industriais de scanner', () => {
