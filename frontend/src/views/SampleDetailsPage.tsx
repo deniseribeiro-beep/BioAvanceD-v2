@@ -11,6 +11,7 @@ import { useEquipment } from '../hooks/useEquipment';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import AnalysisUploadModal from '../components/AnalysisUploadModal';
+import SampleFilesSection from '../components/SampleFilesSection';
 import InlineStorageMovementPanel from '../components/samples/InlineStorageMovementPanel';
 import { buildSprecAxisSummary, buildSprecSummary } from '../components/samples/sampleListFormatters';
 import { Sample, SampleStorageLocationDTO } from '../types/models';
@@ -834,6 +835,17 @@ export default function SampleDetailsPage() {
                 </Table>
               </div>
             )}
+          </Card>
+        )}
+
+        {/* #647: RF007 scientific-file upload/checksum/encryption/audit --
+            a distinct capability and backend collection (sample_files) from
+            the "Resultados"/AnalysisUploadModal card above (/api/results) --
+            previously unreachable, this component existed but was never
+            mounted anywhere. */}
+        {sample && (
+          <Card>
+            <SampleFilesSection sampleID={String(sample._id || (sample as any).specimenId || id || '')} />
           </Card>
         )}
       </div>

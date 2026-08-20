@@ -1037,6 +1037,49 @@ describe('sample.service', () => {
 
       expect(db.collections.samples.find).toHaveBeenCalledWith({});
     });
+
+    // #647 (found blocking a real-UI e2e proof for #647 itself): same shape
+    // as #645's sensor-list bug -- no sort meant Mongo's natural (insertion)
+    // order decided which samples landed on the default 50-item page. Once
+    // the collection passed that default (e2e fixtures accumulate across
+    // sessions), a freshly created sample was silently excluded from the
+    // list, so SampleDetailsPage's client-side find-by-id in the loaded
+    // list came up empty ("Amostra não encontrada") for a sample that had
+    // just been created seconds earlier. makeCursor's own sort() is a
+    // chain-shape no-op, so this uses a realistic order-aware cursor
+    // instead, to actually prove the ordering, not just the call shape.
+    it('surfaces a just-created sample on page 1 even when the collection already holds >limit older samples (natural/insertion order)', async () => {
+      const older = Array.from({ length: 51 }, (_, i) => ({
+        specimenId: `old-${i}`,
+        createdAt: new Date(2026, 0, 1, 0, 0, i)
+      }));
+      const newest = { specimenId: 'just-created', createdAt: new Date(2026, 0, 2) };
+      const naturalOrderDocs = [...older, newest];
+
+      const makeRealCursor = (docs) => {
+        let current = [...docs];
+        const cursor = {
+          sort: vi.fn((criteria) => {
+            const [[field, direction]] = Object.entries(criteria);
+            current = [...current].sort((a, b) => (direction >= 0 ? 1 : -1) * (a[field] > b[field] ? 1 : a[field] < b[field] ? -1 : 0));
+            return cursor;
+          }),
+          limit: vi.fn((n) => { current = current.slice(0, n); return cursor; }),
+          skip: vi.fn((n) => { current = current.slice(n); return cursor; }),
+          toArray: vi.fn(async () => current)
+        };
+        return cursor;
+      };
+
+      const db = makeDb();
+      db.collections.samples.find = vi.fn(() => makeRealCursor(naturalOrderDocs));
+      db.collections.samples.countDocuments.mockResolvedValue(naturalOrderDocs.length);
+
+      const result = await sampleService.listSamples(db, {});
+
+      expect(result.samples.map((s) => s.specimenId)).toContain('just-created');
+      expect(result.samples[0].specimenId).toBe('just-created');
+    });
   });
 
   // -------------------------------------------------------------------
