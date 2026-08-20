@@ -76,6 +76,45 @@ const consentSchema = {
   }
 };
 
+// RF029 slice 2/6 (#670): extracted out of intakeSchema's own inline
+// `clinical` property so it's independently referenceable (canonical.v1.
+// clinicalData) by the ingestion gateway (#669), instead of only existing
+// nested inside one intake-wizard payload. `participantId` is new here —
+// optional, since intakeWizard.js's own payload shape never sets it
+// (the participant is already known from the intake's own top-level
+// `participant` field) — but a standalone clinicalData ingestion call
+// needs it to run assertReferencesExist against a real Participant.
+// additionalProperties: false + no other shape change, so this is a
+// behavior-preserving refactor for the existing intake-wizard path.
+const clinicalDataSchema = {
+  $id: 'canonical.v1.clinicalData',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    participantId: { type: 'string', minLength: 1 },
+    charlsonConditions: { type: 'array' },
+    bloodPressure: { type: 'string' },
+    clinicalObservations: { type: 'string' },
+    diseasePhenotypes: { type: 'array' },
+    diseaseBiomarkers: { type: 'array' },
+    biomarkersValues: { type: 'object' },
+    diagnosisDefinition: { type: 'string' },
+    pharmacologyData: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        treatmentStatus: { type: 'string' },
+        medicationName: { type: 'string' },
+        atcCode: { type: 'string' },
+        atcClass: { type: 'string' },
+        lastDoseDate: { type: 'string' },
+        washoutStartDate: { type: 'string' },
+        washoutEndDate: { type: 'string' }
+      }
+    }
+  }
+};
+
 const intakeSchema = {
   $id: 'canonical.v1.intake',
   type: 'object',
@@ -115,38 +154,13 @@ const intakeSchema = {
         }
       ]
     },
-    clinical: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        charlsonConditions: { type: 'array' },
-        bloodPressure: { type: 'string' },
-        clinicalObservations: { type: 'string' },
-        diseasePhenotypes: { type: 'array' },
-        diseaseBiomarkers: { type: 'array' },
-        biomarkersValues: { type: 'object' },
-        diagnosisDefinition: { type: 'string' },
-        pharmacologyData: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            treatmentStatus: { type: 'string' },
-            medicationName: { type: 'string' },
-            atcCode: { type: 'string' },
-            atcClass: { type: 'string' },
-            lastDoseDate: { type: 'string' },
-            washoutStartDate: { type: 'string' },
-            washoutEndDate: { type: 'string' }
-          }
-        }
-      }
-    },
+    clinical: { $ref: 'canonical.v1.clinicalData' },
     biomarkers: { type: 'array' }
   },
   required: ['participant', 'consent', 'specimen', 'clinical', 'biomarkers']
 };
 
-for (const schema of [participantSchema, specimenSchema, consentSchema, intakeSchema]) {
+for (const schema of [participantSchema, specimenSchema, consentSchema, clinicalDataSchema, intakeSchema]) {
   ajv.addSchema(schema);
 }
 
@@ -166,6 +180,7 @@ module.exports = {
     participantSchema,
     specimenSchema,
     consentSchema,
+    clinicalDataSchema,
     intakeSchema
   }
 };
