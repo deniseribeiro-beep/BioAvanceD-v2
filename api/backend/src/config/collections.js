@@ -30,7 +30,8 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   retentionPolicies: env.COLL_RETENTION_POLICIES || 'retentionPolicies',
   notificationRules: env.COLL_NOTIFICATION_RULES || 'notificationRules',
   notifications: env.COLL_NOTIFICATIONS || 'notifications',
-  labelGenerations: env.COLL_LABEL_GENERATIONS || 'labelGenerations'
+  labelGenerations: env.COLL_LABEL_GENERATIONS || 'labelGenerations',
+  accessRequests: env.COLL_ACCESS_REQUESTS || 'accessRequests'
 });
 
 module.exports = {

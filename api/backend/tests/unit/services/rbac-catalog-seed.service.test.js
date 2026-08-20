@@ -22,6 +22,12 @@ function createFakeCollection() {
     async findOne(filter = {}) {
       return docs.find((doc) => matches(doc, filter)) || null;
     },
+    async updateOne(filter, update) {
+      const doc = docs.find((d) => matches(d, filter));
+      if (!doc) return { matchedCount: 0, modifiedCount: 0 };
+      if (update.$set) Object.assign(doc, update.$set);
+      return { matchedCount: 1, modifiedCount: 1 };
+    },
   };
 }
 
@@ -98,6 +104,30 @@ describe('rbac-catalog-seed.service', () => {
     expect(secondAdminId).toBe(firstAdminId);
   });
 
+  // RF024 (#646 Wave 3): before this fix, upsertByKey returned an
+  // already-seeded role untouched — a permission newly granted to an
+  // existing role in LEGACY_ROLES_SEED never reached a role doc seeded
+  // before the grant, on any later re-run. Simulates that staleness
+  // directly (strip a real permissionId back off an already-seeded
+  // role), then asserts a re-seed heals it without re-minting roleId.
+  it('merges a newly-granted permission into an already-seeded role on re-seed, without minting a new roleId', async () => {
+    const db = createFakeDb();
+
+    const first = await seedRolesAndPermissions(db);
+    const permissionIdByCode = Object.fromEntries(first.permissions.map((p) => [p.permissionCode, p.permissionId]));
+    const coordinatorDoc = db.collections.roles.docs.find((r) => r.roleCode === 'coordinator');
+    const staleRoleId = coordinatorDoc.roleId;
+    coordinatorDoc.permissionIds = coordinatorDoc.permissionIds.filter((id) => id !== permissionIdByCode.manageAccessRequests);
+    expect(coordinatorDoc.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
+
+    const second = await seedRolesAndPermissions(db);
+
+    const coordinator = second.roles.find((r) => r.roleCode === 'coordinator');
+    expect(coordinator.permissionIds).toContain(permissionIdByCode.manageAccessRequests);
+    expect(coordinator.roleId).toBe(staleRoleId);
+    expect(db.collections.roles.docs).toHaveLength(5);
+  });
+
   // #630: allowedActions audited against every real requirePermission()
   // call site in src/interface/routes/ — these are the corrected sets,
   // not the original stale ones (e.g. manageOrganizations used to claim
@@ -122,6 +152,7 @@ describe('rbac-catalog-seed.service', () => {
       ['editResult', ['UPDATE']],
       ['deleteResult', ['DELETE']],
       ['reidentifyParticipant', ['READ']],
+      ['manageAccessRequests', ['CREATE', 'READ', 'UPDATE']],
     ])('%s allows exactly %j', (permissionCode, expectedActions) => {
       expect(PERMISSION_CATALOG[permissionCode].allowedActions).toEqual(expectedActions);
     });
