@@ -73,13 +73,46 @@ class MongoStorageRepository {
   }
 
   /**
+   * #654: storagePaths is never written anywhere in api/backend/src (the
+   * only writer, StoragePath.createFromBox, has zero callers outside its
+   * own tests) — so relying on it alone silently drops ancestor data for
+   * every real box. Walks storageContainers.parent_id up from a box's own
+   * immediate parent until reaching a container with no parent (the
+   * FREEZER), tagging each ancestor by its own containerType. This also
+   * walks transparently through an optional DRAWER level (#458) between
+   * RACK and BOX, which StoragePath's schema has no field for at all.
+   * @param {ObjectId|null} [startParentId] - the box's own parent_id
+   * @param {import('mongodb').ClientSession} [session]
+   * @returns {Promise<Array<object>>} ancestor containers, nearest first
+   */
+  async resolveAncestorContainersLive(startParentId, session) {
+    const containers = [];
+    let currentId = startParentId || null;
+    if (!currentId) return containers;
+
+    // Deferred until there's actually a parent to look up, not hoisted
+    // unconditionally to the top of the method — a box with no parent_id
+    // (or callers that never reach this fallback at all) should never
+    // touch storageContainers.
+    const storageContainersCollection = this.db.collection('storageContainers');
+    while (currentId) {
+      const container = await storageContainersCollection.findOne({ _id: currentId }, { session });
+      if (!container) break;
+      containers.push(container);
+      currentId = container.parent_id || null;
+    }
+
+    return containers;
+  }
+
+  /**
    * dict-02 StorageAssignment (ELM-0167-0178): resolve the rack/shelf/
-   * equipment chain for a box via its StoragePath, best-effort — a box
-   * without a StoragePath record still gets a placement-history entry,
-   * just without the hierarchy fields populated.
+   * equipment chain for a box via its StoragePath when one exists, falling
+   * back to a live parent_id walk (#654) when it doesn't — which is every
+   * real box today, since nothing writes storagePaths.
    *
    * facilityId/roomId (ELM-0168/0169, #418) resolve by walking up from the
-   * freezer's StorageContainer.roomId to Room.facilityId — also best-effort,
+   * freezer's StorageContainer.roomId to Room.facilityId — best-effort,
    * since a FREEZER isn't required to have a Room assigned.
    * @param {ObjectId} boxObjId
    * @param {import('mongodb').ClientSession} [session]
@@ -87,16 +120,27 @@ class MongoStorageRepository {
   async findStorageHierarchyForBox(boxObjId, session) {
     const storagePathsCollection = this.db.collection('storagePaths');
     const path = await storagePathsCollection.findOne({ boxId: boxObjId }, { session });
+
+    let rackId = path?.rackId ? String(path.rackId) : null;
+    let shelfId = path?.shelfId ? String(path.shelfId) : null;
+    let freezerId = path?.freezerId || null;
+
     if (!path) {
-      return { rackId: null, shelfId: null, equipmentId: null, roomId: null, facilityId: null };
+      const box = await this.db.collection('storageBoxes').findOne({ _id: boxObjId }, { session });
+      const ancestors = await this.resolveAncestorContainersLive(box?.parent_id, session);
+      for (const container of ancestors) {
+        if (container.containerType === 'RACK') rackId = String(container._id);
+        else if (container.containerType === 'SHELF') shelfId = String(container._id);
+        else if (container.containerType === 'FREEZER') freezerId = container._id;
+      }
     }
 
-    const { roomId, facilityId } = await this.findFacilityAndRoomForFreezer(path.freezerId, session);
+    const { roomId, facilityId } = await this.findFacilityAndRoomForFreezer(freezerId, session);
 
     return {
-      rackId: path.rackId ? String(path.rackId) : null,
-      shelfId: path.shelfId ? String(path.shelfId) : null,
-      equipmentId: path.freezerId ? String(path.freezerId) : null,
+      rackId,
+      shelfId,
+      equipmentId: freezerId ? String(freezerId) : null,
       roomId,
       facilityId
     };
@@ -616,7 +660,10 @@ class MongoStorageRepository {
     const storagePath = await this.db.collection('storagePaths').findOne({ boxId: box._id }, { session });
     const ancestorIds = storagePath
       ? [storagePath.rackId, storagePath.shelfId, storagePath.freezerId].filter(Boolean)
-      : [];
+      // #654: storagePaths is never written anywhere, so this is the path
+      // every real box takes — without it, a RETIRED/MAINTENANCE ancestor
+      // could never block allocation for any real box.
+      : (await this.resolveAncestorContainersLive(box.parent_id, session)).map((c) => c._id);
     if (ancestorIds.length > 0) {
       const blockedAncestor = await this.db.collection('storageContainers').findOne({
         _id: { $in: ancestorIds },

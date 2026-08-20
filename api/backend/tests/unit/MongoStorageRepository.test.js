@@ -17,6 +17,7 @@ function makeCollection(overrides = {}) {
 function makeDb(collections) {
   const defaults = {
     storagePaths: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
+    storageBoxes: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
     storageContainers: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
     rooms: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
     storageAssignments: makeCollection({
@@ -86,10 +87,11 @@ describe('MongoStorageRepository', () => {
       expect(result.roomId).toBeNull();
     });
 
-    it('leaves facilityId/roomId null when there is no StoragePath at all', async () => {
+    it('leaves everything null when there is no StoragePath and the box itself cannot be found either', async () => {
       const boxObjId = new ObjectId();
       const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
-      const db = makeDb({ storagePaths });
+      const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
+      const db = makeDb({ storagePaths, storageBoxes });
       const repo = new MongoStorageRepository(db);
 
       const result = await repo.findStorageHierarchyForBox(boxObjId, {});
@@ -101,6 +103,81 @@ describe('MongoStorageRepository', () => {
         roomId: null,
         facilityId: null
       });
+    });
+
+    // #654: storagePaths is never written anywhere in api/backend/src, so
+    // every real box hits this branch -- without the live fallback, dict-02's
+    // hierarchy-enrichment fields (facilityId/roomId/equipmentId on
+    // StorageAssignment) silently never populate for any real box.
+    it('#654: falls back to a live parent_id walk when there is no StoragePath document', async () => {
+      const boxObjId = new ObjectId();
+      const rackId = new ObjectId();
+      const shelfId = new ObjectId();
+      const freezerId = new ObjectId();
+      const roomId = new ObjectId();
+      const facilityId = new ObjectId();
+
+      const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: boxObjId, parent_id: rackId })
+      });
+      const storageContainers = makeCollection({
+        findOne: vi.fn()
+          .mockResolvedValueOnce({ _id: rackId, containerType: 'RACK', parent_id: shelfId })
+          .mockResolvedValueOnce({ _id: shelfId, containerType: 'SHELF', parent_id: freezerId })
+          .mockResolvedValueOnce({ _id: freezerId, containerType: 'FREEZER', parent_id: null, roomId })
+          // findFacilityAndRoomForFreezer's own lookup, called with the
+          // resolved freezerId once the walk above completes.
+          .mockResolvedValueOnce({ _id: freezerId, roomId })
+      });
+      const rooms = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: roomId, facilityId })
+      });
+      const db = makeDb({ storagePaths, storageBoxes, storageContainers, rooms });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.findStorageHierarchyForBox(boxObjId, {});
+
+      expect(result).toEqual({
+        rackId: String(rackId),
+        shelfId: String(shelfId),
+        equipmentId: String(freezerId),
+        roomId: String(roomId),
+        facilityId: String(facilityId)
+      });
+    });
+
+    // A box's immediate parent can be a DRAWER instead of a RACK (#458) --
+    // StoragePath's own schema/createFromBox has no drawerId field and would
+    // throw walking through one; the live fallback must walk past it
+    // transparently since it doesn't hardcode chain depth.
+    it('#654: walks through an optional DRAWER level transparently', async () => {
+      const boxObjId = new ObjectId();
+      const drawerId = new ObjectId();
+      const rackId = new ObjectId();
+      const shelfId = new ObjectId();
+      const freezerId = new ObjectId();
+
+      const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: boxObjId, parent_id: drawerId })
+      });
+      const storageContainers = makeCollection({
+        findOne: vi.fn()
+          .mockResolvedValueOnce({ _id: drawerId, containerType: 'DRAWER', parent_id: rackId })
+          .mockResolvedValueOnce({ _id: rackId, containerType: 'RACK', parent_id: shelfId })
+          .mockResolvedValueOnce({ _id: shelfId, containerType: 'SHELF', parent_id: freezerId })
+          .mockResolvedValueOnce({ _id: freezerId, containerType: 'FREEZER', parent_id: null, roomId: null })
+          .mockResolvedValueOnce({ _id: freezerId, roomId: null })
+      });
+      const db = makeDb({ storagePaths, storageBoxes, storageContainers });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.findStorageHierarchyForBox(boxObjId, {});
+
+      expect(result.rackId).toBe(String(rackId));
+      expect(result.shelfId).toBe(String(shelfId));
+      expect(result.equipmentId).toBe(String(freezerId));
     });
   });
 
@@ -1001,7 +1078,7 @@ describe('MongoStorageRepository', () => {
       expect(result.available).toBe(true);
     });
 
-    it('stays available when the box has no StoragePath at all (no ancestor to check)', async () => {
+    it('stays available when the box has no StoragePath and no parent_id either (no ancestor to check)', async () => {
       const storageBoxes = makeCollection({
         findOne: vi.fn().mockResolvedValueOnce({
           _id: boxId,
@@ -1017,6 +1094,42 @@ describe('MongoStorageRepository', () => {
 
       const result = await repo.validatePositionAvailability({ boxId, position: 'A1' });
       expect(result.available).toBe(true);
+    });
+
+    // #654: storagePaths is never written anywhere in api/backend/src, so
+    // every real box hit the (storagePath ? ... : []) branch and skipped the
+    // ancestor check entirely -- a RETIRED/MAINTENANCE rack/shelf/freezer
+    // could never block allocation for any real box, only the mocked-path
+    // unit tests above. The live parent_id walk fixes this for real boxes.
+    it('#654: blocks via a live parent_id walk when there is no StoragePath document', async () => {
+      const rackId = new ObjectId();
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          _id: boxId,
+          status: 'ACTIVE',
+          parent_id: rackId,
+          dimension: { rows: 4, cols: 4 },
+          currentOccupancy: 0,
+          occupancyGrid: {}
+        })
+      });
+      const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
+      const rackDoc = { _id: rackId, containerType: 'RACK', name: 'Rack 1', status: 'MAINTENANCE', parent_id: null };
+      const storageContainers = makeCollection({
+        // First call is resolveAncestorContainersLive's own walk (fetches
+        // the rack to learn its containerType/parent_id); second is the
+        // actual $in + status:{$ne:'OPERATIONAL'} blocking-check query.
+        findOne: vi.fn()
+          .mockResolvedValueOnce(rackDoc)
+          .mockResolvedValueOnce(rackDoc)
+      });
+      const db = makeDb({ storageBoxes, storagePaths, storageContainers });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.validatePositionAvailability({ boxId, position: 'A1' });
+      expect(result).toEqual(
+        expect.objectContaining({ available: false, error: 'LOCATION_UNAVAILABLE' })
+      );
     });
 
     it('returns BOX_NOT_FOUND when box does not exist', async () => {
