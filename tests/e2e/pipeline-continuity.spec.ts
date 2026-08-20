@@ -381,20 +381,23 @@ test.describe('Reference data importers (RF028) — real backend', () => {
 // a resolving reference + an active code (HPO's bootstrapped HP:0000001,
 // same fixture the RF028 AC9 block above already relies on) -> accepted,
 // and a repeated idempotencyKey -> replay without a second quarantine row.
+// Shared by every RF029 slice's describe block below (slice 1's own
+// generic proof plus each entity slice's) — the probe route itself is
+// entity-agnostic, so one helper covers all of them.
+async function probeIngestionGateway(request: import('@playwright/test').APIRequestContext, body: Record<string, unknown>) {
+  const response = await request.post(`${apiBaseURL}/api/_test-support/ingestion/probe`, {
+    headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
+    data: body,
+  });
+  expect(response.ok()).toBe(true);
+  return response.json();
+}
+
 test.describe('Ingestion gateway foundation (RF029 slice 1/6) — real backend', () => {
   test.afterAll(async () => {
     await closeSeedDb();
     await closeIngestionDb();
   });
-
-  async function probeIngestionGateway(request: import('@playwright/test').APIRequestContext, body: Record<string, unknown>) {
-    const response = await request.post(`${apiBaseURL}/api/_test-support/ingestion/probe`, {
-      headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
-      data: body,
-    });
-    expect(response.ok()).toBe(true);
-    return response.json();
-  }
 
   test('a record with no provenance envelope is quarantined, not silently accepted or corrected', async ({ request }) => {
     const outcome = await probeIngestionGateway(request, {
@@ -457,5 +460,144 @@ test.describe('Ingestion gateway foundation (RF029 slice 1/6) — real backend',
 
     const quarantineCount = await countIngestionQuarantineRecordsByIdempotencyKey(idempotencyKey);
     expect(quarantineCount).toBe(1);
+  });
+});
+
+// RF029 slice 2/6 (#670): wires participants/consents/specimens/clinical
+// data through slice 1's generic gateway, proving it against their real
+// canonical.v1 schemas and real reference data — not the synthetic
+// IngestionFoundationProbe shape slice 1's own tests used. Scope note (see
+// #670's own scope-correction comment): this does NOT add new production
+// ingestion routes or persist through the gateway — the app's existing
+// creation paths (POST /api/patients, /api/e-consent/consents, intake-
+// wizard) are untouched, same "leave the existing path alone" call #669
+// made for intakeWizard.js itself. "Clinical data" has no standalone
+// entity yet (dict-02's 10-entity "Dados clínicos" domain is unbuilt,
+// tracked as #677) — canonical.v1.clinicalData (newly extracted from
+// intakeSchema's own inline shape, contracts/canonical/v1/index.js) proves
+// the gateway's contract+reference validation for it regardless.
+test.describe('Ingestion gateway — participants, consents, specimens, clinical data (RF029 slice 2/6) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+    await closeIngestionDb();
+  });
+
+  function provenance() {
+    return {
+      sourceSystem: 'urn:system:pipeline-continuity-e2e',
+      createdBy: 'Actor/e2e-suite',
+      retrievedAt: new Date().toISOString(),
+      purpose: 'e2e_proof',
+    };
+  }
+
+  test('a participant payload matching canonical.v1.participant is accepted', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Participant',
+      schemaId: 'canonical.v1.participant',
+      payload: { participantId: `rf029-e2e-participant-${Date.now()}` },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('accepted');
+    expect(outcome.violations).toEqual([]);
+  });
+
+  // sampleID is routes/intakeWizard.js's own documented legacy alias for
+  // specimenId (collectCanonicalViolations' aliasMap) — proving the
+  // generalized alias check (ingestion/canonicalGateway.js) rejects it
+  // too, for a real entity type beyond slice 1's own synthetic tests. No
+  // real participant/reference needed here — this is isolating the alias
+  // check itself, not the reference check.
+  test('a specimen payload with a legacy alias field is quarantined, not silently normalized', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Specimen',
+      schemaId: 'canonical.v1.specimen',
+      aliasMap: { specimenId: ['sampleID', 'sampleId', 'specimenID', 'mongoSampleId'] },
+      payload: { sampleID: 'S-1', participantId: 'irrelevant-for-this-test' },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(
+      outcome.violations.some((v: { code: string; field: string }) => v.code === 'NON_CANONICAL_FIELD' && v.field === 'sampleID')
+    ).toBe(true);
+  });
+
+  test('a specimen payload referencing a real participant, with a real active code, is accepted', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Specimen',
+      schemaId: 'canonical.v1.specimen',
+      payload: { specimenId: `rf029-e2e-specimen-${Date.now()}`, participantId: participant.participantId },
+      provenance: provenance(),
+      references: [{ collection: 'patients', field: 'participantId', value: participant.participantId, label: 'participantId' }],
+      // Same bootstrapped HPO fixture the RF029 slice 1/6 block above uses
+      // — proving active-code validation composes correctly for a real
+      // entity type, not asserting HP:0000001 is semantically a SPREC code.
+      referenceCodes: [{ systemUri: 'http://purl.obolibrary.org/obo/hp.owl', code: 'HP:0000001', label: 'probeCode' }],
+    });
+
+    expect(outcome.status).toBe('accepted');
+    expect(outcome.violations).toEqual([]);
+  });
+
+  test('a consent payload referencing a nonexistent participant is quarantined', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Consent',
+      schemaId: 'canonical.v1.consent',
+      payload: { consentTemplateId: 'rf029-e2e-template-x', consentGranted: true },
+      provenance: provenance(),
+      references: [{ collection: 'patients', field: 'participantId', value: 'rf029-e2e-nonexistent-participant', label: 'participantId' }],
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'REFERENCE_NOT_FOUND')).toBe(true);
+  });
+
+  test('a consent payload referencing a real participant is accepted', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'Consent',
+      schemaId: 'canonical.v1.consent',
+      payload: { consentTemplateId: participant.consentTemplateId, consentGranted: true },
+      provenance: provenance(),
+      references: [{ collection: 'patients', field: 'participantId', value: participant.participantId, label: 'participantId' }],
+    });
+
+    expect(outcome.status).toBe('accepted');
+    expect(outcome.violations).toEqual([]);
+  });
+
+  test('a clinical data payload referencing a real participant is accepted', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'ClinicalData',
+      schemaId: 'canonical.v1.clinicalData',
+      payload: { participantId: participant.participantId, bloodPressure: '120/80' },
+      provenance: provenance(),
+      references: [{ collection: 'patients', field: 'participantId', value: participant.participantId, label: 'participantId' }],
+    });
+
+    expect(outcome.status).toBe('accepted');
+    expect(outcome.violations).toEqual([]);
+  });
+
+  test('a clinical data payload with an unknown field is quarantined', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'ClinicalData',
+      schemaId: 'canonical.v1.clinicalData',
+      payload: { unknownField: 'x' },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'CONTRACT_VIOLATION')).toBe(true);
   });
 });
