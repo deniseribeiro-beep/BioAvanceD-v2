@@ -2,6 +2,8 @@ const { ObjectId } = require('mongodb');
 const DispositionActionModel = require('../models/DispositionAction');
 const legalHoldService = require('./legalHold.service');
 const { getCollection } = require('../utils/collectionResolver');
+const notificationDispatchService = require('./notificationDispatch.service');
+const logger = require('../utils/logger');
 
 // AC#6 ("Impedir destruição quando houver bloqueio ético ou legal") only
 // names destruição -- transfer/return/anonymize/preserve aren't framed as
@@ -38,6 +40,28 @@ class DispositionActionService {
     const collection = await getCollection(db, 'dispositionActions');
     const document = DispositionActionModel.create({ ...payload, legalHold: activeHold });
     await collection.insertOne(document);
+
+    // #650 (RF015, governança domain) - fire-and-forget, same shape as
+    // iot.controller.js's environmental_excursion call: a missing/
+    // misconfigured NotificationRule must never block or delay the
+    // disposition record itself. Unlike the segurança/consentimento call
+    // sites (which only fire on a rare branch), this one fires on every
+    // successful recordDisposition -- an explicit .catch() keeps a
+    // notification-engine failure from surfacing as an unhandled
+    // rejection on the common path.
+    void notificationDispatchService.dispatchNotification(db, {
+      eventType: 'disposition_action_recorded',
+      sourceEventType: 'DispositionAction',
+      sourceEventId: document.dispositionActionId,
+      payload: {
+        entityType: document.entityType,
+        dispositionAction: document.dispositionAction,
+        retentionPolicyId: document.retentionPolicyId
+      }
+    }).catch((error) => {
+      logger.error('[NOTIFICATION_DISPATCH] Falha ao disparar notificação de disposition action:', error.message || error);
+    });
+
     return document;
   }
 

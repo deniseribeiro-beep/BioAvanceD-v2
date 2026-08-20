@@ -1,10 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const { ObjectId } = require('mongodb');
 const dispositionActionService = require('../../../src/services/dispositionAction.service');
 const legalHoldService = require('../../../src/services/legalHold.service');
+const notificationDispatchService = require('../../../src/services/notificationDispatch.service');
+
+afterEach(() => { vi.restoreAllMocks(); });
 
 /** Real query-matching fake, same pattern as accessRequest.service.test.js. */
 function createFakeCollection(seedDocs = []) {
@@ -162,6 +165,45 @@ describe('dispositionAction.service', () => {
 
       const action = await dispositionActionService.recordDisposition(db, basePayload(policyId, { dispositionAction: 'destroy' }));
       expect(action.legalHold).toBe(false);
+    });
+  });
+
+  describe('#650 (RF015 governança) dispatches a disposition_action_recorded notification', () => {
+    it('dispatches when a disposition is recorded', async () => {
+      const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+      const policyId = new ObjectId();
+      const db = createFakeDb({ retentionPolicies: [{ _id: policyId, version: 'v1', active: true }] });
+
+      const action = await dispositionActionService.recordDisposition(db, basePayload(policyId.toString()));
+
+      expect(dispatchSpy).toHaveBeenCalledWith(db, {
+        eventType: 'disposition_action_recorded',
+        sourceEventType: 'DispositionAction',
+        sourceEventId: action.dispositionActionId,
+        payload: {
+          entityType: 'Log',
+          dispositionAction: 'destroy',
+          retentionPolicyId: policyId.toString()
+        }
+      });
+    });
+
+    it('does NOT dispatch when a destroy action is blocked by an active legal hold', async () => {
+      const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+      const db = createFakeDb();
+      const policyId = new ObjectId();
+      db.collection('retentionPolicies').docs.push({ _id: policyId, version: 'v1', active: true });
+      await legalHoldService.imposeHold(db, {
+        targetEntityType: 'Log',
+        targetEntityIds: ['log-1'],
+        reason: 'Investigação em andamento',
+        imposedBy: 'user-2',
+      });
+
+      await expect(
+        dispositionActionService.recordDisposition(db, basePayload(policyId.toString(), { dispositionAction: 'destroy' }))
+      ).rejects.toThrow(/bloqueio legal ou ético ativo/);
+      expect(dispatchSpy).not.toHaveBeenCalled();
     });
   });
 
