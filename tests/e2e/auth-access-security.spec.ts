@@ -546,3 +546,98 @@ test.describe('User management (RF003) — real backend', () => {
     expect(fetchedUser.lastLogin).toBeFalsy();
   });
 });
+
+// Wave 3 kickoff (#646). requisitos-index.md RF014's 8 acceptance criteria
+// map onto security.service.js's existing security_config singleton
+// (security.routes.js's GET/PUT /api/security/config) -- product-side
+// foundation already existed (confirmed by reading the service, not
+// assumed from the issue's own "likely" framing), this file just never
+// proved it against the real backend. AC#4 (force a user's password reset)
+// and AC#8 (revoke sessions when a policy change requires it) are NOT
+// implemented anywhere in the backend -- filed as gaps rather than built
+// here, since AC#8 in particular needs a design call (which policy
+// changes require revocation?) bigger than this slice.
+test.describe('Security policy management (RF014) — real backend', () => {
+  // security_config is a single global singleton document ('main') shared
+  // by the whole stack, not a per-test fixture -- capture and restore it so
+  // this test doesn't leave the live policy mutated for every other spec/
+  // session sharing the same compose.test.yml stack.
+  test('admin updates session/login/password/MFA policy — versioned, validated, and audited as critical (criteria 1,2,3,5,6,7)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const before = await request.get(`${apiBaseURL}/api/security/config`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(before.ok()).toBeTruthy();
+    const originalConfig = (await before.json()).data;
+    const originalVersion = originalConfig.metadata.version;
+
+    try {
+      const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
+
+      // Criteria 1 (session timeout/max duration), 2 (login attempts/
+      // password rules), 3 (MFA mandatory) — all in one policy update, same
+      // shape a real admin submitting the SecurityPage form would send.
+      const update = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: {
+          session: { timeoutMinutes: 45, maxSessionDuration: 8 },
+          authentication: { maxLoginAttempts: 4, requireMFA: !originalConfig.authentication.requireMFA },
+          passwordRules: { minLength: 12 },
+        },
+      });
+      expect(update.ok(), await update.text()).toBeTruthy();
+      const updated = (await update.json()).data;
+
+      expect(updated.session.timeoutMinutes).toBe(45);
+      expect(updated.session.maxSessionDuration).toBe(8);
+      expect(updated.authentication.maxLoginAttempts).toBe(4);
+      expect(updated.authentication.requireMFA).toBe(!originalConfig.authentication.requireMFA);
+      expect(updated.passwordRules.minLength).toBe(12);
+
+      // Criterion 5 — every update is a new version, not an overwrite.
+      expect(updated.metadata.version).toBe(originalVersion + 1);
+      expect(updated.metadata.lastUpdatedBy).toBeTruthy();
+
+      // Criterion 7 — the change is registered as a critical AuditEvent.
+      // requireMFA is one of security.service.js's own criticalPaths, so
+      // this isn't just "some audit event fired" (assertAuditEventRecorded
+      // below already proves that generically) but specifically a
+      // severity=critical SecurityConfig entry.
+      await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+      const criticalLogs = await request.get(
+        `${apiBaseURL}/api/logs?resourceType=SecurityConfig&severity=critical&limit=20`,
+        { headers: { Authorization: `Bearer ${admin.token}` } }
+      );
+      expect(criticalLogs.ok()).toBeTruthy();
+      const criticalLogsBody = await criticalLogs.json();
+      const requireMfaEntry = (criticalLogsBody.data.logs || criticalLogsBody.data).find(
+        (entry: any) => String(entry.message || '').includes('authentication.requireMFA')
+      );
+      expect(requireMfaEntry).toBeTruthy();
+
+      // Criterion 6 — minimum security limits are validated, not accepted
+      // as-is. maxLoginAttempts is documented (security.service.js#validateConfig)
+      // to accept only 1-10.
+      const invalid = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { authentication: { maxLoginAttempts: 15 } },
+      });
+      expect(invalid.status()).toBe(400);
+    } finally {
+      // Restore the pre-test policy so this run doesn't leave a stricter
+      // (or looser) session/MFA/password policy live for every other spec
+      // sharing this stack.
+      await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: {
+          session: { timeoutMinutes: originalConfig.session.timeoutMinutes, maxSessionDuration: originalConfig.session.maxSessionDuration },
+          authentication: { maxLoginAttempts: originalConfig.authentication.maxLoginAttempts, requireMFA: originalConfig.authentication.requireMFA },
+          passwordRules: { minLength: originalConfig.passwordRules.minLength },
+        },
+      }).catch(() => {});
+    }
+  });
+});
