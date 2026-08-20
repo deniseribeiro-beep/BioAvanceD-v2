@@ -1036,4 +1036,77 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
       consentId: String(consent._id),
     });
   });
+
+  // #650 (RF015 follow-up, governança domain) — the 3rd of the 4 domains
+  // named in the issue. A real disposition action (dispositionAction.
+  // service.js's recordDisposition, RF026's own "Retenção e destinação"
+  // trigger) now also fires dispatchNotification.
+  test('a real disposition action creates a rule-driven notification (RF015 governança domain)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const ruleRes = await request.post(`${apiBaseURL}/api/notification-rules`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        eventType: 'disposition_action_recorded',
+        channels: ['in_app'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: ['entityType', 'dispositionAction', 'retentionPolicyId'],
+        maxDeliveryMinutes: 2,
+      },
+    });
+    expect(ruleRes.ok(), await ruleRes.text()).toBeTruthy();
+    const rule = (await ruleRes.json()).data;
+
+    const policyRes = await request.post(`${apiBaseURL}/api/retention-policies`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        applicableEntityTypes: ['Log'],
+        triggerEvent: 'creation',
+        postRetentionAction: 'destroy',
+        retentionPeriod: 'P365D',
+      },
+    });
+    expect(policyRes.ok(), await policyRes.text()).toBeTruthy();
+    const retentionPolicyId = String((await policyRes.json()).data._id);
+
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const dispositionRes = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        retentionPolicyId,
+        entityType: 'Log',
+        affectedRecordIds: [`log-rf015gov-${suffix}`],
+        dispositionAction: 'destroy',
+        dispositionMethod: 'secure-wipe',
+      },
+    });
+    expect(dispositionRes.ok(), await dispositionRes.text()).toBeTruthy();
+    const disposition = (await dispositionRes.json()).data;
+
+    const findNotification = async () => {
+      const res = await request.get(
+        `${apiBaseURL}/api/notifications?eventType=disposition_action_recorded&limit=50`,
+        { headers: { Authorization: `Bearer ${admin.token}` } }
+      );
+      if (!res.ok()) return null;
+      const body = await res.json();
+      return (body.data || []).find((n: any) => n.sourceEventId === disposition.dispositionActionId) || null;
+    };
+
+    await expect.poll(findNotification, { timeout: 15_000 }).toBeTruthy();
+    const notification = await findNotification();
+
+    expect(notification.ruleId).toBe(rule._id);
+    expect(notification.status).toBe('delivered');
+    expect(notification.deliveredChannel).toBe('in_app');
+    expect(notification.sourceEventType).toBe('DispositionAction');
+    expect(notification.sourceEventId).toBe(disposition.dispositionActionId);
+    expect(notification.payload).toEqual({
+      entityType: 'Log',
+      dispositionAction: 'destroy',
+      retentionPolicyId,
+    });
+  });
 });
