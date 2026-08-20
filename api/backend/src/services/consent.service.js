@@ -797,7 +797,9 @@ class ConsentService {
     // #650 (RF015, consentimento domain) - fire-and-forget, same shape as
     // auth.service.js's mfa_brute_force_lockout call: a missing/
     // misconfigured NotificationRule must never block or delay the
-    // revocation itself.
+    // revocation itself. #685: explicit .catch() -- this repo has no
+    // global unhandledRejection handler, so a bare `void` here would
+    // crash the process on a transient notification-engine failure.
     void notificationDispatchService.dispatchNotification(db, {
       eventType: 'consent_revoked',
       sourceEventType: 'PatientConsent',
@@ -806,6 +808,8 @@ class ConsentService {
         participantId: consent.participantId || null,
         consentId: objectId.toString()
       }
+    }).catch((dispatchError) => {
+      logger.error('[NOTIFICATION_DISPATCH] Falha ao disparar notificação de revogação de consentimento:', dispatchError.message || dispatchError);
     });
 
     const revokedConsent = {

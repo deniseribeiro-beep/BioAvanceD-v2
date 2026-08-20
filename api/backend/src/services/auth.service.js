@@ -399,7 +399,10 @@ class AuthService {
             // #650 (RF015, segurança domain) - fire-and-forget, same shape
             // as iot.controller.js's environmental_excursion call: a
             // missing/misconfigured NotificationRule must never block or
-            // delay the lockout itself.
+            // delay the lockout itself. #685: explicit .catch() -- this
+            // repo has no global unhandledRejection handler, so a bare
+            // `void` here would crash the process on a transient
+            // notification-engine failure.
             void notificationDispatchService.dispatchNotification(db, {
               eventType: 'mfa_brute_force_lockout',
               sourceEventType: 'User',
@@ -409,6 +412,8 @@ class AuthService {
                 username: user.username,
                 failedAttempts
               }
+            }).catch((dispatchError) => {
+              logger.error('[NOTIFICATION_DISPATCH] Falha ao disparar notificação de bloqueio MFA:', dispatchError.message || dispatchError);
             });
 
             throw new Error('MFA bloqueado devido a muitas tentativas falhas');
