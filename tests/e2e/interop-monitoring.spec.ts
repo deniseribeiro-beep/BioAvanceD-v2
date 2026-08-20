@@ -11,6 +11,7 @@ import {
 } from './helpers/seedSensor';
 import { queryTemperaturePoints } from './helpers/queryInflux';
 import { realLogin } from './helpers/realAuth';
+import { computeTotp } from './helpers/totp';
 import { seedSampleNode, readSampleStatus, removeSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
 import {
   findStagingRecordBySpecimenId,
@@ -872,5 +873,98 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
       expect.objectContaining({ channel: 'email', result: 'failure', reason: 'no_recipients', escalation: false }),
       expect.objectContaining({ channel: 'in_app', result: 'success', escalation: true }),
     ]);
+  });
+
+  // #650 (RF015 follow-up, segurança domain) — the first of the 4 remaining
+  // domains named in the issue (segurança/consentimento/qualidade/
+  // governança). RF003's real MFA brute-force lockout (auth.service.js's
+  // processLogin, mfaFailedAttempts >= 5) now also fires dispatchNotification
+  // -- same "prove the real trigger, not a simulated one" bar as the
+  // environmental_excursion tests above.
+  test('a real MFA brute-force lockout creates a rule-driven notification (RF015 segurança domain)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const ruleRes = await request.post(`${apiBaseURL}/api/notification-rules`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        eventType: 'mfa_brute_force_lockout',
+        channels: ['in_app'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: ['userId', 'username', 'failedAttempts'],
+        maxDeliveryMinutes: 2,
+      },
+    });
+    expect(ruleRes.ok(), await ruleRes.text()).toBeTruthy();
+    const rule = (await ruleRes.json()).data;
+
+    const username = `tecnico.rf015sec.${Date.now()}`;
+    const password = 'Tecnico@123456';
+    const registerRes = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        name: 'RF015 Segurança Fixture',
+        email: `${username}@example.com`,
+        username,
+        password,
+        accessType: 2,
+        roleName: 'Técnico',
+      },
+    });
+    expect(registerRes.ok(), await registerRes.text()).toBeTruthy();
+    const userId = (await registerRes.json()).data?._id || (await registerRes.json()).data?.id;
+
+    const qrRes = await request.post(`${apiBaseURL}/api/auth/two-factor/qr-first-login`, {
+      data: { username, password },
+    });
+    expect(qrRes.ok(), await qrRes.text()).toBeTruthy();
+    const totpSecret = (await qrRes.json()).data?.secret;
+    expect(totpSecret).toBeTruthy();
+    const enableRes = await request.post(`${apiBaseURL}/api/auth/two-factor/enable-first-login`, {
+      data: { username, password, code: computeTotp(totpSecret) },
+    });
+    expect(enableRes.ok(), await enableRes.text()).toBeTruthy();
+
+    // 5 wrong codes in a row locks MFA (auth.service.js's processLogin,
+    // mfaFailedAttempts >= 5 on the 5th). Deterministically wrong against
+    // the real secret (not just improbable): the real code is computed and
+    // avoided outright.
+    const realCode = computeTotp(totpSecret);
+    const wrongCode = realCode === '000000' ? '111111' : '000000';
+
+    let lastLoginBody: { message?: string } = {};
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      const loginRes = await request.post(`${apiBaseURL}/api/auth/login`, {
+        data: { username, password, twoFactorCode: wrongCode },
+      });
+      expect(loginRes.status()).toBe(401);
+      lastLoginBody = await loginRes.json();
+    }
+    expect(lastLoginBody.message).toContain('MFA bloqueado');
+
+    const findNotification = async () => {
+      const res = await request.get(
+        `${apiBaseURL}/api/notifications?eventType=mfa_brute_force_lockout&limit=50`,
+        { headers: { Authorization: `Bearer ${admin.token}` } }
+      );
+      if (!res.ok()) return null;
+      const body = await res.json();
+      return (body.data || []).find((n: any) => n.payload?.userId === String(userId)) || null;
+    };
+
+    await expect.poll(findNotification, { timeout: 15_000 }).toBeTruthy();
+    const notification = await findNotification();
+
+    expect(notification.ruleId).toBe(rule._id);
+    expect(notification.status).toBe('delivered');
+    expect(notification.deliveredChannel).toBe('in_app');
+    expect(notification.sourceEventType).toBe('User');
+    expect(notification.sourceEventId).toBe(String(userId));
+    expect(notification.payload).toEqual({
+      userId: String(userId),
+      username,
+      failedAttempts: 5,
+    });
   });
 });

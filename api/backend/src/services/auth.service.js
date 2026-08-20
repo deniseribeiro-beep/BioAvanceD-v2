@@ -9,6 +9,7 @@ const LogModel = require('../models/Log');
 const logger = require('../utils/logger');
 const sessionService = require('./session.service');
 const { grantRoleForAccessType, isAdministrator, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
+const notificationDispatchService = require('./notificationDispatch.service');
 
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL = '7d';
@@ -394,6 +395,22 @@ class AuthService {
               { _id: user._id },
               { $set: { mfaLocked: true } }
             );
+
+            // #650 (RF015, segurança domain) - fire-and-forget, same shape
+            // as iot.controller.js's environmental_excursion call: a
+            // missing/misconfigured NotificationRule must never block or
+            // delay the lockout itself.
+            void notificationDispatchService.dispatchNotification(db, {
+              eventType: 'mfa_brute_force_lockout',
+              sourceEventType: 'User',
+              sourceEventId: user._id,
+              payload: {
+                userId: user._id.toString(),
+                username: user.username,
+                failedAttempts
+              }
+            });
+
             throw new Error('MFA bloqueado devido a muitas tentativas falhas');
           }
 

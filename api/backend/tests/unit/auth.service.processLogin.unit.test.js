@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const authService = require('../../src/services/auth.service');
+const notificationDispatchService = require('../../src/services/notificationDispatch.service');
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -166,6 +167,10 @@ describe('AuthService.processLogin', () => {
   it('locks MFA after 5 failed attempts', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(false);
+    // #650: the lockout branch now also fires dispatchNotification (fire-
+    // and-forget) -- spied so it doesn't hit the real notificationRule
+    // lookup against this test's bare collection mock.
+    vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
     const collectionApi = { findOne: vi.fn(), updateOne: vi.fn().mockResolvedValue({}), find: vi.fn(), insertOne: vi.fn() };
     const db = makeDb(collectionApi);
     const user = { ...BASE_USER, mfaEnabled: true, mfaSecret: 'SECRET', mfaFailedAttempts: 4 };
@@ -176,6 +181,41 @@ describe('AuthService.processLogin', () => {
       { _id: user._id },
       { $set: { mfaLocked: true } }
     );
+  });
+
+  it('#650 (RF015 segurança) dispatches a mfa_brute_force_lockout notification when MFA locks', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(false);
+    const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+    const collectionApi = { findOne: vi.fn(), updateOne: vi.fn().mockResolvedValue({}), find: vi.fn(), insertOne: vi.fn() };
+    const db = makeDb(collectionApi);
+    const user = { ...BASE_USER, mfaEnabled: true, mfaSecret: 'SECRET', mfaFailedAttempts: 4 };
+    await expect(
+      authService.processLogin(db, user, 'pw', '000000', db.collection(), {})
+    ).rejects.toThrow('MFA bloqueado');
+    expect(dispatchSpy).toHaveBeenCalledWith(db, {
+      eventType: 'mfa_brute_force_lockout',
+      sourceEventType: 'User',
+      sourceEventId: user._id,
+      payload: {
+        userId: 'user-1',
+        username: user.username,
+        failedAttempts: 5
+      }
+    });
+  });
+
+  it('#650 (RF015 segurança) does not dispatch a notification on an ordinary MFA rejection (not yet locked)', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(false);
+    const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+    const collectionApi = { findOne: vi.fn(), updateOne: vi.fn().mockResolvedValue({}), find: vi.fn(), insertOne: vi.fn() };
+    const db = makeDb(collectionApi);
+    const user = { ...BASE_USER, mfaEnabled: true, mfaSecret: 'SECRET', mfaFailedAttempts: 0 };
+    await expect(
+      authService.processLogin(db, user, 'pw', '000000', db.collection(), {})
+    ).rejects.toThrow('Código MFA inválido');
+    expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
   it('logs in successfully with a valid MFA code and resets failed attempts', async () => {
