@@ -66,6 +66,84 @@ describe('ingestion/activeCodeValidator (RF029 AC 4)', () => {
       const db = createFakeDb({});
       await expect(checkActiveCode(db, { code: 'HP:0000001' })).rejects.toThrow(/systemUri e code/);
     });
+
+    // #676: no reference-import normalizer ever sets TerminologyConcept's
+    // validFrom (models/TerminologyConcept.js only reads data.validFrom,
+    // which nothing in reference-data/reference-imports/normalize*.js
+    // populates), so an unversioned lookup's old `sort: { validFrom: -1 }`
+    // tiebreak never actually discriminated between concept rows left by
+    // different dataset versions -- it silently fell back to whichever
+    // insertion order Mongo happened to return, which can be the
+    // now-superseded release instead of the current active one.
+    it('#676: resolves the concept belonging to the active release, not insertion order, when a code has rows from a superseded release too', async () => {
+      const supersededConcept = activeConcept({
+        terminologyConceptId: 'concept-old',
+        version: '2025-01-01',
+        referenceDatasetReleaseId: 'release-old',
+      });
+      const currentConcept = activeConcept({
+        terminologyConceptId: 'concept-new',
+        version: '2026-01-01',
+        referenceDatasetReleaseId: 'release-new',
+      });
+      const db = createFakeDb({
+        // Superseded row seeded first, matching real insertion order (the
+        // old release's concepts were written before the new import ran).
+        terminologyConcepts: [supersededConcept, currentConcept],
+        referenceDatasetReleases: [
+          activeRelease({ referenceDatasetReleaseId: 'release-old', releaseStatus: 'superseded' }),
+          activeRelease({ referenceDatasetReleaseId: 'release-new', releaseStatus: 'active' }),
+        ],
+      });
+
+      const result = await checkActiveCode(db, { systemUri: SYSTEM_URI, code: 'HP:0000001' });
+
+      expect(result.active).toBe(true);
+      expect(result.status).toBe('active');
+      expect(result.concept.terminologyConceptId).toBe('concept-new');
+    });
+
+    it('#676: reports ambiguous_active_release when two concept rows both belong to an active release (upstream data bug)', async () => {
+      const conceptA = activeConcept({ terminologyConceptId: 'concept-a', referenceDatasetReleaseId: 'release-a' });
+      const conceptB = activeConcept({ terminologyConceptId: 'concept-b', referenceDatasetReleaseId: 'release-b' });
+      const db = createFakeDb({
+        terminologyConcepts: [conceptA, conceptB],
+        referenceDatasetReleases: [
+          activeRelease({ referenceDatasetReleaseId: 'release-a', releaseStatus: 'active' }),
+          activeRelease({ referenceDatasetReleaseId: 'release-b', releaseStatus: 'active' }),
+        ],
+      });
+
+      const result = await checkActiveCode(db, { systemUri: SYSTEM_URI, code: 'HP:0000001' });
+
+      expect(result.active).toBe(false);
+      expect(result.status).toBe('ambiguous_active_release');
+    });
+
+    it('#676: an explicit version still resolves that exact concept row directly, unaffected by other versions', async () => {
+      const supersededConcept = activeConcept({
+        terminologyConceptId: 'concept-old',
+        version: '2025-01-01',
+        referenceDatasetReleaseId: 'release-old',
+      });
+      const currentConcept = activeConcept({
+        terminologyConceptId: 'concept-new',
+        version: '2026-01-01',
+        referenceDatasetReleaseId: 'release-new',
+      });
+      const db = createFakeDb({
+        terminologyConcepts: [supersededConcept, currentConcept],
+        referenceDatasetReleases: [
+          activeRelease({ referenceDatasetReleaseId: 'release-old', releaseStatus: 'superseded' }),
+          activeRelease({ referenceDatasetReleaseId: 'release-new', releaseStatus: 'active' }),
+        ],
+      });
+
+      const result = await checkActiveCode(db, { systemUri: SYSTEM_URI, code: 'HP:0000001', version: '2025-01-01' });
+
+      expect(result.concept.terminologyConceptId).toBe('concept-old');
+      expect(result.status).toBe('inactive_release');
+    });
   });
 
   describe('validateActiveCodes', () => {
