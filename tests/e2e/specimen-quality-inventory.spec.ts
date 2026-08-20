@@ -1272,3 +1272,162 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     expect(stored.effectivenessVerification.outcome).toBe('effective');
   });
 });
+
+// Wave 3 (#646). RF026's 6 acceptance criteria (requisitos-index.md) --
+// AC#1 (RetentionPolicy, already built by RF014/#440) is reused as-is;
+// this slice's own scope is the disposition/execution side, 100%
+// greenfield. dict-02's DispositionAction (ELM-0411..0415) has no field
+// for "responsável"/"itens afetados" (AC#4) -- `performedBy`/
+// `affectedRecordIds` are local extensions (DispositionAction.js's own
+// header comment). AC#5's certificate is the persisted record itself,
+// reachable at a stable sub-resource -- no real object-storage/PDF
+// generation exists in this repo to build against honestly.
+test.describe('Retention and disposition (RF026) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  async function createRetentionPolicy(request: any, admin: { token: string }, overrides: Record<string, unknown> = {}) {
+    const res = await request.post(`${apiBaseURL}/api/retention-policies`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        applicableEntityTypes: ['Log'],
+        triggerEvent: 'creation',
+        postRetentionAction: 'destroy',
+        retentionPeriod: 'P365D',
+        ...overrides,
+      },
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    const body = (await res.json()).data;
+    return String(body._id);
+  }
+
+  test('records a disposition action linked to a real retention policy, with method/date/responsible/affected items preserved (criteria 1, 3, 4)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const retentionPolicyId = await createRetentionPolicy(request, admin);
+
+    const res = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        retentionPolicyId,
+        entityType: 'Log',
+        affectedRecordIds: ['log-rf026-1', 'log-rf026-2'],
+        dispositionAction: 'destroy',
+        dispositionMethod: 'secure-wipe',
+      },
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    const disposition = (await res.json()).data;
+
+    expect(disposition.retentionPolicyId).toBe(retentionPolicyId);
+    expect(disposition.affectedRecordIds).toEqual(['log-rf026-1', 'log-rf026-2']);
+    expect(disposition.dispositionMethod).toBe('secure-wipe');
+    expect(disposition.performedBy).toBeTruthy();
+    expect(disposition.dispositionDateTime).toBeTruthy();
+    expect(disposition.legalHold).toBe(false);
+
+    // AC#5: gera evidência/certificado.
+    const certRes = await request.get(`${apiBaseURL}/api/disposition-actions/${disposition.dispositionActionId}/certificate`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(certRes.status(), await certRes.text()).toBe(200);
+    const certificate = (await certRes.json()).data;
+    expect(certificate.affectedRecordIds).toEqual(['log-rf026-1', 'log-rf026-2']);
+    expect(certificate.dispositionMethod).toBe('secure-wipe');
+  });
+
+  test('rejects a disposition action whose retentionPolicyId does not resolve to a real policy (criterion 1)', async ({ request }) => {
+    const admin = await realLogin(request);
+
+    const res = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        retentionPolicyId: '65f0a1b2c3d4e5f6a7b8c9d0',
+        entityType: 'Log',
+        affectedRecordIds: ['log-does-not-matter'],
+        dispositionAction: 'destroy',
+      },
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.message).toContain('política de retenção existente');
+  });
+
+  test('applies a legal hold, blocks destruction while active, then allows it again once released (criteria 2, 6)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const retentionPolicyId = await createRetentionPolicy(request, admin);
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const affectedRecordIds = [`log-rf026-hold-${suffix}`];
+
+    const holdRes = await request.post(`${apiBaseURL}/api/legal-holds`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        targetEntityType: 'Log',
+        targetEntityIds: affectedRecordIds,
+        reason: 'Investigação em andamento (ordem judicial) — RF026 e2e fixture',
+      },
+    });
+    expect(holdRes.status(), await holdRes.text()).toBe(201);
+    const hold = (await holdRes.json()).data;
+    expect(hold.status).toBe('active');
+
+    // AC#6: bloqueia a destruição enquanto o bloqueio estiver ativo.
+    const blockedRes = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { retentionPolicyId, entityType: 'Log', affectedRecordIds, dispositionAction: 'destroy' },
+    });
+    expect(blockedRes.status(), await blockedRes.text()).toBe(409);
+
+    // A non-destructive action isn't blocked by the same hold, and truthfully records legalHold: true.
+    const preserveRes = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { retentionPolicyId, entityType: 'Log', affectedRecordIds, dispositionAction: 'preserve' },
+    });
+    expect(preserveRes.status(), await preserveRes.text()).toBe(201);
+    expect((await preserveRes.json()).data.legalHold).toBe(true);
+
+    // AC#2: libera o bloqueio.
+    const releaseRes = await request.post(`${apiBaseURL}/api/legal-holds/${hold.legalHoldId}/release`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { releaseReason: 'Investigação encerrada — RF026 e2e fixture' },
+    });
+    expect(releaseRes.status(), await releaseRes.text()).toBe(200);
+    expect((await releaseRes.json()).data.status).toBe('released');
+
+    // Destruction is allowed again once the hold is released.
+    const allowedRes = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { retentionPolicyId, entityType: 'Log', affectedRecordIds, dispositionAction: 'destroy' },
+    });
+    expect(allowedRes.status(), await allowedRes.text()).toBe(201);
+    expect((await allowedRes.json()).data.legalHold).toBe(false);
+  });
+
+  test('refuses to release an already-released legal hold', async ({ request }) => {
+    const admin = await realLogin(request);
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const holdRes = await request.post(`${apiBaseURL}/api/legal-holds`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        targetEntityType: 'Log',
+        targetEntityIds: [`log-rf026-double-release-${suffix}`],
+        reason: 'RF026 e2e fixture',
+      },
+    });
+    const hold = (await holdRes.json()).data;
+
+    const firstRelease = await request.post(`${apiBaseURL}/api/legal-holds/${hold.legalHoldId}/release`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { releaseReason: 'Primeira liberação' },
+    });
+    expect(firstRelease.status()).toBe(200);
+
+    const secondRelease = await request.post(`${apiBaseURL}/api/legal-holds/${hold.legalHoldId}/release`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { releaseReason: 'Segunda tentativa' },
+    });
+    expect(secondRelease.status()).toBe(400);
+  });
+});
