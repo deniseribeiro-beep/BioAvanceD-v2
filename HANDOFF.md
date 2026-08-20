@@ -1,116 +1,119 @@
 # HANDOFF
 
-**Written:** 2026-08-20, mid-sitting rotation (rabbit-hole Step 4 — per
-item, not end of session). Picked up right after the prior rotation's
-close (#671 landed). Dennis said "continue rabbit hole... Docker is
-on... free to divide and conquer" — no mid-workflow prompts. This item
-landed **#672** (RF029 slice 4/6, files). **Still inside the rabbit hole
-(tracker #668) — continuing the queue, not stopping.**
+**Written:** 2026-08-20, end of this sitting. Picked up right after the
+prior rotation's close (#669/#670 landed). Dennis said "continue rabbit
+hole... Docker is on... free to divide and conquer" — no mid-workflow
+prompts, repeated twice this sitting. Landed **#671**, **#672**, and
+**#673** (RF029 slices 3/6, 4/6, 5/6). Stopping here to report back per
+the budget checkpoint flagged in this file's own prior rotation, not
+because anything blocked.
 
-## What landed this item
+## What landed this sitting
 
-- **#672 (RF029 slice 4/6: files ingestion) — shipped, merge
-  `8bdd98d3`.** Added `canonical.v1.file` (dict-02's `DataFile`,
-  ELM-0316..0321) and proved it through slice 1's gateway (#669) via the
-  same probe-only pattern slices 2-3 established — no new production
-  ingestion routes, RF007's real file-upload path
-  (`sample-file.controller.js`) untouched. `fileUri`/`checksum`/
-  `fileSizeBytes` map onto `SampleFile.js`'s real `storageUri`/
-  `checksum`/`fileSize` fields; `fileRole`/`fileFormat` stay optional
-  (real `fileType` enum is a different vocabulary — see #679).
-  `specimenId` reference-checks against the real `samples` collection
-  via a new `seedRawSpecimen` e2e fixture (added to `seedParticipant.ts`,
-  same minimal-raw-insert shape as the existing `seedStudy`/
-  `seedProtocol`). A payload using the legacy `storageUri` field instead
-  of canonical `fileUri` is quarantined, not silently accepted — same
-  alias-discipline slices 2-3 already proved. AC#7 (Object Storage
-  routing) not re-proven here: `scientific-data-access.spec.ts` already
-  covers it against the same real upload path. 5 new unit tests
-  (`fileSchema.test.js`) + 4 new real-backend e2e tests, all green;
-  re-ran clean with no regressions: 18/18 RF029 e2e tests (slices 1-4),
-  61/61 architecture tests. Full writeup: #672's own closing comment and
-  #668's "Slice 4/6 ... landed" comment.
+- **#671 (RF029 slice 3/6: telemetry) — shipped, merge `6ca21758`.**
+  `canonical.v1.telemetry` (dict-02 TelemetryReading), proved via the
+  probe-only pattern. Resolved the open "probe-only vs. real production
+  route" coordination question #670 flagged, explicitly, in favor of
+  probe-only — AC#7's InfluxDB routing already has independent proof in
+  `interop-monitoring.spec.ts`. 5 unit + 4 e2e tests, all green.
+- **#672 (RF029 slice 4/6: files) — shipped, merge `8bdd98d3`.**
+  `canonical.v1.file` (dict-02 DataFile), same probe-only pattern. New
+  `seedRawSpecimen` e2e fixture (minimal raw insert, mirrors
+  `seedStudy`/`seedProtocol`). AC#7 (Object Storage) already proven by
+  `scientific-data-access.spec.ts`. 5 unit + 4 e2e tests, all green
+  after a rebuild (see gotcha below).
+- **#673 (RF029 slice 5/6: datasets/assays) — shipped, merge
+  `f25efb46`.** `canonical.v1.assay` + `canonical.v1.dataset` (dict-02
+  Assay/Dataset — both entities already closely dictionary-aligned in
+  the real models). Neither schema requires its own `<entity>Id` —
+  both are purely server-generated, unlike `participantId`. #664
+  (Assay referential-integrity gap on the real route) stays open,
+  explicitly unaddressed — this slice only proves the gateway's generic
+  reference-check against `studyId`. 10 unit + 5 e2e tests, all green
+  on the first run (proactive rebuild this time, see gotcha below).
 
-## Friction hit this item (all filed, none blocking)
+Full writeups: each issue's own closing comment and #668's three
+"Slice N/6 ... landed" comments.
 
-- **Backend-app-test build-not-mount gotcha bit reactively**: first e2e
-  run against the still-up stack failed all 4 new tests
-  (`response.ok()` false) because `backend-app-test` was still serving
-  slice 3's image, with no `canonical.v1.file` registered. Fixed with a
-  targeted `up -d --build backend-app-test`; all green after. Filed
-  **dyeallpies-skills-pack#356** suggesting `build-loop`'s own "run
-  against real backend" step point at this gotcha explicitly, since I'd
-  already read the rule this session and still missed applying it
-  proactively.
-- **Routing-gate hook friction recurred** (second occurrence, same shape
-  as #671's — see prior rotation and **dyeallpies-skills-pack#355**):
-  `work-issue`→`build-loop` had to be re-invoked immediately before the
-  first `Edit`, even though `build-loop` had just been invoked
-  immediately prior. Added a corroborating comment to #355 rather than
-  filing a duplicate — this occurrence is stronger evidence the gate's
-  allowlist doesn't recognize `build-loop` by name at all (not a
-  recency/proximity issue, since the two invocations were back-to-back
-  this time).
-- **BioAvanceD-v2#679** — `canonical.v1.file`'s `fileFormat`/`fileRole`
-  vocabularies (EDAM/MIME-coded, processing-stage) aren't populated by
-  the real upload path's `fileType` enum (a different, narrower
-  vocabulary). Not blocking #672 (both stayed optional) but will recur
-  for any future slice needing either field populated for real.
+**RF029 is now 5/6 slices done.** Only **#674** (workflows/omics)
+remains, still blocked on RF027 (Wave 4, not yet scheduled) — #668 and
+#646 cannot close until RF027 lands and #674 is built, independent of
+any pacing decision.
+
+## Six follow-ups filed this sitting (all open, none blocking)
+
+BioAvanceD-v2 tracker:
+- **#678** — no `ThresholdProfile` entity exists (dict-02 requires one
+  for `TelemetryReading.thresholdProfileId`); `temperaturePolicies` is
+  the practical but differently-shaped stand-in. From #671.
+- **#679** — `canonical.v1.file`'s `fileFormat`/`fileRole` vocabularies
+  (EDAM/MIME, processing-stage) aren't populated by the real upload
+  path's narrower `fileType` enum. From #672.
+
+`dyeallpies-skills-pack` tracker (skill/hook orchestration findings, not
+this repo's product — filed there per `wrap-up`'s routing rule):
+- **#355** — the product-file-edit routing gate didn't recognize an
+  already-invoked `build-loop` (reactive block + `work-issue`+re-invoke
+  workaround needed, twice — #671 and #672). Third attempt (#673)
+  invoked `work-issue`+`build-loop` together *proactively* before the
+  first edit and hit no block at all — that workaround is now the
+  known-good pattern for this session's remaining life, until #355 is
+  actually fixed upstream.
+- **#356** — `build-loop`'s "run against real backend" step doesn't
+  point at the `backend-app-test` build-not-mount gotcha at the moment
+  it's relevant (bit reactively on #672 despite having read the rule
+  earlier the same session). Applying it proactively on #673 (rebuild
+  before first run) worked cleanly — also now the known-good pattern.
+
+Also carried from the prior rotation, still open: #675 (probe route
+write-primitive exposure), #676 (`activeCodeValidator` tie-break),
+#677 (RF005 AC4-6 structured clinical data).
 
 ## Rabbit-hole state: still open, not exited
 
 **#646 stays open** (RF029/#668 is the one Wave 3 RF not yet done) and
-**so does #668** (2/6 RF029 slices remain: #673-674). Next concrete
-pickup: **#673** (datasets/assays — extends existing `Assay.js`/
-`Dataset.js` routes with slice 1's contract validation + quarantine).
-**#674** stays blocked on RF027 (not yet scheduled). Also still open,
-non-blocking: **#675** (ingestion test-support route's write-primitive
-exposure), **#676** (`activeCodeValidator`'s unversioned-code tie-break
-ambiguity), **#677** (RF005 AC4-6 structured clinical data, own future
-multi-slice build), **#678** (no ThresholdProfile entity, from #671),
-**#679** (fileFormat/fileRole vocabulary gap, from #672). Both #646 and
-#668 carry full queue state; this file is a snapshot.
+**so does #668** (1/6 RF029 slices remain: #674, blocked). Both carry
+full queue state; this file is a snapshot.
 
-**Budget note (rabbit-hole Step 5):** two "medium" (2-3 point) slices
-landed this sitting (#671, #672) — running total ≈6, approaching half
-the ~10 point budget. #673 is the same shape/size as the two just
-landed; picking it up would push the total to ≈8-9, close to the
-budget ceiling. Next session should treat the *next* pop after #673 (if
-any) as the point to seriously weigh stopping to report back, per Step
-5's "surface, rotate, let the user decide" guidance — not a hard
-stop, but budget is real at that point, not just advisory headroom.
+**Budget note (rabbit-hole Step 5):** three "medium" (2-3 point) slices
+landed this sitting — running total ≈9, at the ~10 point budget ceiling.
+This is the actual stop-and-report point Step 5 describes, not an early
+or arbitrary one.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, 3 commits ahead of
-  `origin/feature/docker-e2e-backend-integration` (this item's merge +
-  the prior item's merge + its own HANDOFF rotation) — not yet pushed;
+- On `feature/docker-e2e-backend-integration`, 8 commits ahead of
+  `origin/feature/docker-e2e-backend-integration` — not yet pushed;
   pushing is a `ship-integration-branch`-gate decision, not a per-item
   one. Working tree clean except the gitignored/junctioned
   `.claude/skills/` and the pre-existing untracked
-  `api/backend/storage/assays/` (neither this item's doing).
+  `api/backend/storage/assays/` (neither this sitting's doing).
 - No PR to `main` exists.
-- **Docker: test stack is up** (`compose.test.yml` core services +
-  `admin-bootstrap-test`, all healthy; `backend-app-test` freshly
-  rebuilt this item) — **left up deliberately**, per build-loop's
-  Docker-on-by-default-per-iteration and this sitting's own precedent
-  of leaving the stack up across slices. `playwright-runner` still has
-  not auto-started (explicit service-name bring-up, not a bare `up -d`)
-  — re-check `docker ps` before any future manual/targeted Playwright
-  run against this stack if a later item ever does a bare `up -d`.
-  **Reminder for the next item**: if it touches backend source, rebuild
-  `backend-app-test` (`up -d --build backend-app-test`) before trusting
-  an e2e run against the still-up stack — don't wait for a confusing
-  failure to reveal it again.
-- The `test/672-rf029-files-ingestion` branch was merged and deleted
-  locally; never pushed remotely.
+- **Docker**: test stack was up the whole sitting (`backend-app-test`
+  rebuilt twice — once reactively for #672, once proactively for
+  #673) — **being torn down now** via `clean-up` (this is the sitting's
+  real stopping point, not a per-item pause — see build-loop's "Docker
+  on by default answers bring-up, not teardown" note).
+- All three of this sitting's branches (`test/671-...`, `test/672-...`,
+  `test/673-...`) were merged and deleted locally; none were ever
+  pushed remotely.
+- **Two self-corrected slips, no lasting effect**: forgot to cut a
+  fresh branch before the first edit twice (between #671→#672, and
+  briefly at the very start of #673 before catching it) — both times
+  `edit-branch-guard.cjs` blocked before any edit landed, branch
+  created, edit retried successfully. By #673's actual implementation
+  work the branch was cut first, cleanly. Not filed anywhere — self-
+  corrected in-session, not a skill/hook gap (the hook did exactly its
+  job both times).
 
 ## Recommended next steps
 
 Dennis's "continue, free to divide and conquer" instruction still
-stands. Next: pick up **#673** (datasets/assays, unblocked, same shape
-as the last two slices) — but per the budget note above, treat whatever
-comes after #673 as a genuine checkpoint-and-report decision, not an
-automatic continue. #675/#676/#677/#678/#679 remain available as
-smaller alternatives if a change of pace is preferred over another
-full slice.
+stands — this sitting stopped at three slices as the budget's own
+stop-and-report point (Step 5), not because anything blocked. Next
+session: pick up **#674** if RF027 has landed by then (check first —
+it hadn't as of this writing), or address **#675/#676/#677/#678/#679**
+(all smaller, independent, non-blocking), or check on
+**dyeallpies-skills-pack#355/#356** if that repo's own session has
+picked them up — the proactive-invocation workarounds documented above
+remain necessary until then either way.
