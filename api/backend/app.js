@@ -284,6 +284,12 @@ app.use("/api/assays", createMasterDataRouter({
   idField: "assayId",
   model: require("./src/models/Assay")
 }));
+app.use("/api/reagent-lots", createMasterDataRouter({
+  collectionName: "reagentLots",
+  idField: "reagentId",
+  model: require("./src/models/ReagentLot")
+}));
+app.use("/api/nonconformances", require("./src/routes/nonconformance.js"));
 app.use("/api/datasets/:datasetId/files", require("./src/interface/routes/dataset-file.routes"));
 app.use("/api/datasets", createMasterDataRouter({
   collectionName: "datasets",

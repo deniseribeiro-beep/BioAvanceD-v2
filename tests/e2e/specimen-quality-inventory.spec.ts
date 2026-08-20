@@ -1088,3 +1088,187 @@ test.describe('Storage location availability (RF017 AC#7) — real backend', () 
     expect(body.available).toBe(true);
   });
 });
+
+// Wave 3 (#646). RF025's 6 acceptance criteria (requisitos-index.md) --
+// AC#1 (link specimen/protocol/operator/laboratory) already existed from
+// #641's Assay slice 1 (format-only validation, no e2e proof until now).
+// AC#2 (reagent lots)/AC#3 (equipment)/AC#4 (structured controls) are new
+// fields this slice added to Assay.js -- dict-02 types `controls` only as
+// an untyped BackboneElement[], so `controlType`/`result`/`reagentLotId`/
+// `notes` are a local design decision (see Assay.js's own header comment).
+// AC#5 (open nonconformance + corrective action)/AC#6 (preserve cause,
+// action, responsible, effectiveness verification) are the new
+// Nonconformance entity -- dict-02's own `capaId` reference points at a
+// `CAPA` entity the dictionary never defines, so the corrective action is
+// embedded rather than a separate collection (Nonconformance.js's own
+// header comment).
+test.describe('Assay quality — reagents, equipment, controls, non-conformance (RF025) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  test('registers an assay linking specimen, protocol, operator, laboratory, reagent lots, equipment, and controls (criteria 1-4)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const studyId = `rf025-study-${suffix}`;
+    const protocolId = `rf025-protocol-${suffix}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId);
+
+    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const sampleRes = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
+    });
+    expect(sampleRes.status(), await sampleRes.text()).toBe(201);
+    const specimenId = String((await sampleRes.json()).data.sampleID);
+
+    const reagentRes = await request.post(`${apiBaseURL}/api/reagent-lots`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { reagentName: 'Primer Mix A', lotNumber: `LOT-${suffix}` },
+    });
+    expect(reagentRes.status(), await reagentRes.text()).toBe(201);
+    const reagentId = (await reagentRes.json()).data.reagentId;
+
+    const equipmentRes = await request.post(`${apiBaseURL}/api/equipment`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { equipmentDescription: `RF025 thermocycler ${suffix}`, name: `Thermocycler ${suffix}`, type: 'Analytical', status: 'Active' },
+    });
+    expect(equipmentRes.status(), await equipmentRes.text()).toBe(201);
+    const equipmentID = (await equipmentRes.json()).data.equipmentID;
+
+    const assayRes = await request.post(`${apiBaseURL}/api/assays`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        studyId,
+        specimenIds: [specimenId],
+        assayType: 'RNA sequencing',
+        protocolId,
+        operatorId: String(admin.user._id),
+        laboratoryId: 'org-rf025',
+        assayDateTime: new Date().toISOString(),
+        intendedUse: 'RF025 e2e proof',
+        reagentLotIds: [reagentId],
+        equipmentIds: [String(equipmentID)],
+        controls: [{ controlType: 'positive', result: 'pass', reagentLotId: reagentId }],
+      },
+    });
+    expect(assayRes.status(), await assayRes.text()).toBe(201);
+    const assay = (await assayRes.json()).data;
+
+    expect(assay.specimenIds).toEqual([specimenId]);
+    expect(assay.protocolId).toBe(protocolId);
+    expect(assay.reagentLotIds).toEqual([reagentId]);
+    expect(assay.equipmentIds).toEqual([String(equipmentID)]);
+    expect(assay.controls).toEqual([{ controlType: 'positive', result: 'pass', reagentLotId: reagentId, notes: null }]);
+  });
+
+  test('rejects a control entry with no valid controlType (criterion 4)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const studyId = `rf025-study-${suffix}`;
+    const protocolId = `rf025-protocol-${suffix}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId);
+
+    const assayRes = await request.post(`${apiBaseURL}/api/assays`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        studyId,
+        specimenIds: ['specimen-does-not-exist'],
+        assayType: 'RNA sequencing',
+        protocolId,
+        operatorId: 'operator-rf025',
+        laboratoryId: 'org-rf025',
+        assayDateTime: new Date().toISOString(),
+        intendedUse: 'RF025 e2e negative case',
+        controls: [{ result: 'pass' }],
+      },
+    });
+    expect(assayRes.status()).toBe(422);
+    const body = await assayRes.json();
+    expect(body.details.join(' ')).toContain('controlType');
+  });
+
+  test('opens a non-conformance, records the corrective action, and verifies effectiveness (criteria 5-6)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const studyId = `rf025-study-${suffix}`;
+    const protocolId = `rf025-protocol-${suffix}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId);
+
+    const assayRes = await request.post(`${apiBaseURL}/api/assays`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        studyId,
+        specimenIds: [`rf025-specimen-${suffix}`],
+        assayType: 'RNA sequencing',
+        protocolId,
+        operatorId: 'operator-rf025',
+        laboratoryId: 'org-rf025',
+        assayDateTime: new Date().toISOString(),
+        intendedUse: 'RF025 non-conformance fixture',
+      },
+    });
+    expect(assayRes.status(), await assayRes.text()).toBe(201);
+    const assayId = (await assayRes.json()).data.assayId;
+
+    // AC#5: abre a não conformidade.
+    const openRes = await request.post(`${apiBaseURL}/api/nonconformances`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        nonconformanceType: 'deviation',
+        detectedAt: new Date().toISOString(),
+        description: 'Temperatura do freezer fora da faixa durante o ensaio',
+        affectedEntityIds: [assayId],
+        rootCause: 'Falha no sensor de temperatura do freezer',
+      },
+    });
+    expect(openRes.status(), await openRes.text()).toBe(201);
+    const nonconformance = (await openRes.json()).data;
+    expect(nonconformance.status).toBe('open');
+    expect(nonconformance.detectedBy).toBeTruthy();
+    expect(nonconformance.rootCause).toBe('Falha no sensor de temperatura do freezer');
+
+    // Effectiveness verification must be refused before a corrective
+    // action exists (service-level ordering, proven end-to-end here).
+    const earlyVerify = await request.post(`${apiBaseURL}/api/nonconformances/${nonconformance.nonconformanceId}/verify-effectiveness`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { outcome: 'effective' },
+    });
+    expect(earlyVerify.status()).toBe(400);
+
+    // AC#5/#6: registra a ação corretiva e o responsável.
+    const correctiveRes = await request.post(`${apiBaseURL}/api/nonconformances/${nonconformance.nonconformanceId}/corrective-action`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { description: 'Recalibrar sensor de temperatura e revisar protocolo de controle', responsible: 'user-rf025-coordenador' },
+    });
+    expect(correctiveRes.status(), await correctiveRes.text()).toBe(200);
+    const withCorrectiveAction = (await correctiveRes.json()).data;
+    expect(withCorrectiveAction.status).toBe('corrective_action_recorded');
+    expect(withCorrectiveAction.correctiveAction.responsible).toBe('user-rf025-coordenador');
+
+    // AC#6: preserva a verificação de eficácia.
+    const verifyRes = await request.post(`${apiBaseURL}/api/nonconformances/${nonconformance.nonconformanceId}/verify-effectiveness`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { outcome: 'effective', notes: 'Confirmado em nova rodada de controle' },
+    });
+    expect(verifyRes.status(), await verifyRes.text()).toBe(200);
+    const closed = (await verifyRes.json()).data;
+    expect(closed.status).toBe('closed');
+    expect(closed.closureDate).toBeTruthy();
+    expect(closed.effectivenessVerification.outcome).toBe('effective');
+    expect(closed.effectivenessVerification.verifiedBy).toBeTruthy();
+
+    // Full record still preserves cause/action/responsible/verification together (AC#6).
+    const getRes = await request.get(`${apiBaseURL}/api/nonconformances/${nonconformance.nonconformanceId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    const stored = (await getRes.json()).data;
+    expect(stored.rootCause).toBeTruthy();
+    expect(stored.correctiveAction.responsible).toBeTruthy();
+    expect(stored.effectivenessVerification.outcome).toBe('effective');
+  });
+});

@@ -62,6 +62,55 @@ describe('AssayModel (RF007 AC#6, dict-02 ELM-0286..0297)', () => {
       const result = AssayModel.validate({ ...baseAssay, controls: 'not-an-array' });
       expect(result.isValid).toBe(false);
     });
+
+    it('controls entry with a valid controlType -> isValid true (RF025 AC#4)', () => {
+      const result = AssayModel.validate({
+        ...baseAssay,
+        controls: [{ controlType: 'positive', result: 'pass', reagentLotId: 'lot-1' }],
+      });
+      expect(result.isValid).toBe(true);
+    });
+
+    it('controls entry missing controlType -> isValid false', () => {
+      const result = AssayModel.validate({ ...baseAssay, controls: [{ result: 'pass' }] });
+      expect(result.isValid).toBe(false);
+      expect(result.errors[0]).toContain('controlType');
+    });
+
+    it('controls entry with an out-of-enum controlType -> isValid false', () => {
+      const result = AssayModel.validate({ ...baseAssay, controls: [{ controlType: 'unknown' }] });
+      expect(result.isValid).toBe(false);
+    });
+
+    it('controls entry that is not an object -> isValid false', () => {
+      const result = AssayModel.validate({ ...baseAssay, controls: ['not-an-object'] });
+      expect(result.isValid).toBe(false);
+    });
+
+    it('reagentLotIds/equipmentIds omitted -> still valid (RF025 AC#2/#3)', () => {
+      const result = AssayModel.validate({ ...baseAssay });
+      expect(result.isValid).toBe(true);
+    });
+
+    it('reagentLotIds not an array -> isValid false', () => {
+      const result = AssayModel.validate({ ...baseAssay, reagentLotIds: 'not-an-array' });
+      expect(result.isValid).toBe(false);
+    });
+
+    it('reagentLotIds with a non-string entry -> isValid false', () => {
+      const result = AssayModel.validate({ ...baseAssay, reagentLotIds: ['lot-1', 42] });
+      expect(result.isValid).toBe(false);
+    });
+
+    it('equipmentIds not an array -> isValid false', () => {
+      const result = AssayModel.validate({ ...baseAssay, equipmentIds: 'not-an-array' });
+      expect(result.isValid).toBe(false);
+    });
+
+    it('equipmentIds with a non-string entry -> isValid false', () => {
+      const result = AssayModel.validate({ ...baseAssay, equipmentIds: ['equip-1', 42] });
+      expect(result.isValid).toBe(false);
+    });
   });
 
   describe('create', () => {
@@ -75,6 +124,8 @@ describe('AssayModel (RF007 AC#6, dict-02 ELM-0286..0297)', () => {
       expect(result.omicsDomain).toBeNull();
       expect(result.assayBatchId).toBeNull();
       expect(result.controls).toEqual([]);
+      expect(result.reagentLotIds).toEqual([]);
+      expect(result.equipmentIds).toEqual([]);
     });
 
     it('does not mutate the caller-provided specimenIds array', () => {
@@ -83,6 +134,29 @@ describe('AssayModel (RF007 AC#6, dict-02 ELM-0286..0297)', () => {
 
       result.specimenIds.push('specimen-2');
       expect(specimenIds).toEqual(['specimen-1']);
+    });
+
+    it('normalizes controls entries to the documented shape, defaulting optional fields (RF025 AC#4)', () => {
+      const result = AssayModel.create({
+        ...baseAssay,
+        controls: [{ controlType: 'negative' }, { controlType: 'positive', result: 'pass', reagentLotId: 'lot-1', notes: 'ok' }],
+      });
+
+      expect(result.controls).toEqual([
+        { controlType: 'negative', result: null, reagentLotId: null, notes: null },
+        { controlType: 'positive', result: 'pass', reagentLotId: 'lot-1', notes: 'ok' },
+      ]);
+    });
+
+    it('preserves reagentLotIds/equipmentIds without mutating the caller-provided arrays', () => {
+      const reagentLotIds = ['lot-1'];
+      const equipmentIds = ['equip-1'];
+      const result = AssayModel.create({ ...baseAssay, reagentLotIds, equipmentIds });
+
+      result.reagentLotIds.push('lot-2');
+      result.equipmentIds.push('equip-2');
+      expect(reagentLotIds).toEqual(['lot-1']);
+      expect(equipmentIds).toEqual(['equip-1']);
     });
   });
 });
