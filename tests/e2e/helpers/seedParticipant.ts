@@ -290,3 +290,27 @@ export async function seedActiveConsent(
     createdAt: new Date(),
   });
 }
+
+/**
+ * RF024 (#646 Wave 3) fixture: seeds a real DUO `TerminologyConcept` doc
+ * directly against Mongo. There's no create API for this collection (only
+ * the RF028 reference-import pipeline populates it) and specs shouldn't
+ * depend on whether that pipeline has actually run against this stack —
+ * same "seed the referent directly" rationale as seedStudy/seedProtocol.
+ * `systemUri` matches sources/duo.js's own fixed DUO ontology URI.
+ */
+export async function seedDuoConcept(code: string, options: { conceptStatus?: string } = {}): Promise<void> {
+  const db = await getDb();
+  await db.collection('terminologyConcepts').insertOne({
+    terminologyConceptId: `rf024-e2e-${code}-${Date.now()}`,
+    systemUri: 'http://purl.obolibrary.org/obo/duo.owl',
+    code,
+    version: 'rf024-e2e',
+    display: `RF024 e2e DUO concept ${code}`,
+    conceptStatus: options.conceptStatus || 'active',
+    sourceRecordId: code,
+    referenceDatasetReleaseId: 'rf024-e2e',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+}

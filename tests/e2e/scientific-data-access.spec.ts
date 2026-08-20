@@ -4,6 +4,9 @@ import { realLogin } from './helpers/realAuth';
 import {
   createRealParticipant,
   seedStorageBoxLocation,
+  seedStudy,
+  seedActiveConsent,
+  seedDuoConcept,
   closeSeedDb,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
@@ -216,5 +219,209 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(upload.status()).toBe(400);
     const body = await upload.json();
     expect(body.success).toBe(false);
+  });
+});
+
+test.describe('Access and distribution requests (RF024) — real backend', () => {
+  async function createRequestForSample(
+    request: any,
+    token: string,
+    opts: { studyId: string; duoCode?: string }
+  ): Promise<any> {
+    const sampleID = await createRealSample(request, token);
+    const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(sampleDoc.status()).toBe(200);
+    const specimenId = (await sampleDoc.json()).data.specimenId;
+    expect(specimenId).toBeTruthy();
+
+    const create = await request.post(`${apiBaseURL}/api/access-requests`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: {
+        requesterId: `researcher-${Date.now()}`,
+        studyId: opts.studyId,
+        requestedPurpose: 'RF024 e2e — pesquisa em biomarcadores oncológicos',
+        duoCode: opts.duoCode,
+        requestedItems: [{ itemType: 'specimen', itemId: specimenId }],
+      },
+    });
+    expect(create.status()).toBe(201);
+    return (await create.json()).data;
+  }
+
+  test('registers a request, evaluates real consent/DUO/study compatibility, and only an approved in-force decision unblocks distribution (AC#1/2/3/4)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const studyId = `rf024-study-${Date.now()}`;
+    await seedStudy(studyId);
+    const duoCode = `DUO:rf024-${Date.now()}`;
+    await seedDuoConcept(duoCode);
+
+    // AC#1 - requester, study, purpose and requested items registered.
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId, duoCode });
+    expect(accessRequest.studyId).toBe(studyId);
+    expect(accessRequest.requestedItems).toHaveLength(1);
+    expect(accessRequest.committeeDecision.status).toBe('pending');
+
+    // AC#5 - pending is not an allowed access state.
+    const preDecisionCheck = await request.get(
+      `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/access-check`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect(preDecisionCheck.status()).toBe(200);
+    expect((await preDecisionCheck.json()).data).toMatchObject({ allowed: false, reason: 'pending' });
+
+    // AC#2 - the specimen's real participant has no ACTIVE consent seeded
+    // yet, so evaluating now must come back incompatible, not silently ok.
+    const earlyEvaluate = await request.post(
+      `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect(earlyEvaluate.status()).toBe(200);
+    const earlyBody = (await earlyEvaluate.json()).data;
+    expect(earlyBody.overallCompatible).toBe(false);
+    const participantId = earlyBody.consentCompatibility[0].participantId;
+    expect(participantId).toBeTruthy();
+
+    // Seed the real ACTIVE consent for that real participant, then re-evaluate.
+    await seedActiveConsent(participantId);
+    const evaluate = await request.post(
+      `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect(evaluate.status()).toBe(200);
+    const evaluateBody = (await evaluate.json()).data;
+    expect(evaluateBody.overallCompatible).toBe(true);
+    expect(evaluateBody.consentCompatibility[0]).toMatchObject({
+      consentValid: true,
+      duoCompatible: true,
+      studyActive: true,
+    });
+
+    // AC#3 - committee decision recorded with justification and validity.
+    const decision = await request.post(
+      `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`,
+      {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: {
+          status: 'approved',
+          justification: 'Compatibilidade confirmada — RF024 e2e',
+          approvalPeriod: {
+            start: new Date(Date.now() - 60_000).toISOString(),
+            end: new Date(Date.now() + 3_600_000).toISOString(),
+          },
+        },
+      }
+    );
+    expect(decision.status()).toBe(200);
+    const decisionBody = (await decision.json()).data;
+    expect(decisionBody.committeeDecision.status).toBe('approved');
+    expect(decisionBody.committeeDecision.decidedBy).toBeTruthy();
+
+    // AC#5 - now allowed.
+    const allowedCheck = await request.get(
+      `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/access-check`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect((await allowedCheck.json()).data).toMatchObject({ allowed: true, reason: 'approved' });
+
+    // AC#4 - approval linked to real distribution/availability.
+    const distribute = await request.post(
+      `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/distribute`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect(distribute.status()).toBe(200);
+    const distributeBody = (await distribute.json()).data;
+    expect(distributeBody.distributionStatus).toBe('released');
+    expect(distributeBody.distributedAt).toBeTruthy();
+  });
+
+  test('blocks access for a rejected decision, and separately for a revoked one (AC#5)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const studyId = `rf024-study-${Date.now()}`;
+    await seedStudy(studyId);
+
+    const rejected = await createRequestForSample(request, admin.token, { studyId });
+    await request.post(`${apiBaseURL}/api/access-requests/${rejected.accessRequestId}/evaluate`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    const rejectDecision = await request.post(
+      `${apiBaseURL}/api/access-requests/${rejected.accessRequestId}/decision`,
+      {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { status: 'rejected', justification: 'Finalidade fora do escopo do consentimento — RF024 e2e' },
+      }
+    );
+    expect(rejectDecision.status()).toBe(200);
+
+    const rejectedCheck = await request.get(
+      `${apiBaseURL}/api/access-requests/${rejected.accessRequestId}/access-check`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect((await rejectedCheck.json()).data).toMatchObject({ allowed: false, reason: 'denied' });
+
+    // A rejected request can never be linked to distribution (AC#4 guard).
+    const distributeRejected = await request.post(
+      `${apiBaseURL}/api/access-requests/${rejected.accessRequestId}/distribute`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect(distributeRejected.status()).toBe(400);
+
+    // Revoked branch — starts from a genuine approval, then gets revoked.
+    const toRevoke = await createRequestForSample(request, admin.token, { studyId });
+    await request.post(`${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/evaluate`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    await request.post(`${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/decision`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        status: 'approved',
+        justification: 'Aprovado antes da revogação — RF024 e2e',
+        approvalPeriod: {
+          start: new Date(Date.now() - 60_000).toISOString(),
+          end: new Date(Date.now() + 3_600_000).toISOString(),
+        },
+      },
+    });
+
+    const revoke = await request.post(`${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/revoke`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { justification: 'Participante retirou o consentimento — RF024 e2e' },
+    });
+    expect(revoke.status()).toBe(200);
+    expect((await revoke.json()).data.committeeDecision.status).toBe('revoked');
+
+    const revokedCheck = await request.get(
+      `${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/access-check`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect((await revokedCheck.json()).data).toMatchObject({ allowed: false, reason: 'revoked' });
+  });
+
+  test('blocks access once a real, persisted approval period has expired (AC#5)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const studyId = `rf024-study-${Date.now()}`;
+    await seedStudy(studyId);
+
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId });
+    await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        status: 'approved',
+        justification: 'Aprovado com vigência já expirada — RF024 e2e',
+        approvalPeriod: { start: '2020-01-01T00:00:00.000Z', end: '2020-01-31T00:00:00.000Z' },
+      },
+    });
+
+    const expiredCheck = await request.get(
+      `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/access-check`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect((await expiredCheck.json()).data).toMatchObject({ allowed: false, reason: 'expired' });
   });
 });

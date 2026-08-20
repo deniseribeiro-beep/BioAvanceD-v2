@@ -43,12 +43,12 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 3,
       roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult'],
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests'],
     },
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant'],
+      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests'],
     },
   ],
 };
@@ -112,6 +112,10 @@ const PERMISSION_CATALOG = {
   // defined need, not reachable via createPatient or any other broader
   // permission — Administrador-only until a narrower need surfaces.
   reidentifyParticipant: { resourceType: 'ParticipantIdentity', allowedActions: ['READ'], displayName: 'Reidentificar participante' },
+  // RF024 (#646 Wave 3): create/evaluate/decide/distribute/revoke all live
+  // behind this one code — see accessRequest.js's own comment for why no
+  // dedicated researcher/committee role exists to split it across.
+  manageAccessRequests: { resourceType: 'AccessRequest', allowedActions: ['CREATE', 'READ', 'UPDATE'], displayName: 'Gerenciar solicitações de acesso' },
 };
 
 function allSeedRoles() {
@@ -177,6 +181,35 @@ async function upsertByKey(collection, doc, keyField) {
   return doc;
 }
 
+/**
+ * RF024 (#646 Wave 3): a plain upsertByKey on `roles` left an
+ * already-seeded role's permissionIds frozen forever at whatever they were
+ * the first time this ran — `existing` was returned as-is, so a later
+ * PERMISSION_CATALOG/LEGACY_ROLES_SEED addition (a new permission granted
+ * to an existing role, e.g. this slice's own `manageAccessRequests`) never
+ * reached a role document seeded before the addition, on any later re-run
+ * or process restart. Roles now merge freshly-computed permissionIds into
+ * whatever the role already has, instead of skipping existing docs
+ * outright — `roleId` (and everything else `existing` already carries)
+ * stays untouched, preserving the idempotency contract
+ * rbac-catalog-seed.service.test.js already asserts on it.
+ */
+async function upsertRole(collection, doc) {
+  const filter = { roleCode: doc.roleCode };
+  const existing = await collection.findOne(filter);
+  if (!existing) {
+    await collection.insertOne(doc);
+    return doc;
+  }
+
+  const mergedPermissionIds = Array.from(new Set([...(existing.permissionIds || []), ...doc.permissionIds]));
+  const gainedNewPermissions = mergedPermissionIds.length !== (existing.permissionIds || []).length;
+  if (!gainedNewPermissions) return existing;
+
+  await collection.updateOne(filter, { $set: { permissionIds: mergedPermissionIds, updatedAt: new Date() } });
+  return { ...existing, permissionIds: mergedPermissionIds };
+}
+
 async function seedRolesAndPermissions(db) {
   const permissionsCollection = await getCollection(db, 'permissions');
   const rolesCollection = await getCollection(db, 'roles');
@@ -191,7 +224,7 @@ async function seedRolesAndPermissions(db) {
   const roleDocs = buildRoleDocs(permissionIdByCode);
   const storedRoles = [];
   for (const doc of roleDocs) {
-    storedRoles.push(await upsertByKey(rolesCollection, doc, 'roleCode'));
+    storedRoles.push(await upsertRole(rolesCollection, doc));
   }
 
   return { roles: storedRoles, permissions: storedPermissions };
