@@ -94,6 +94,11 @@ test.describe('Scientific files (RF007) through the real UI (#647)', () => {
     expect(uploaded).toBeTruthy();
     expect(uploaded.checksum).toBe(expectedChecksum);
     expect(uploaded.uri).toMatch(/^objstore:\/\/samples\//);
+    // dict-02 ELM-0317/ELM-0319 (#679): the upload form doesn't expose a
+    // fileRole control, so the default ('raw') and the fileType-derived
+    // MIME fileFormat prove the real upload path populates both.
+    expect(uploaded.fileRole).toBe('raw');
+    expect(uploaded.fileFormat).toBe('text/csv');
     const fileID = uploaded._id;
 
     // Download round-trip through the real UI click, not a direct API call.

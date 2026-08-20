@@ -186,6 +186,21 @@ class SampleFileController {
         });
       }
 
+      // dict-02 ELM-0317 (DataFile.fileRole) -- optional multipart field
+      // (multer puts non-file fields on req.body); an explicitly-supplied
+      // value must be a real pipeline-stage value, not defaulted away.
+      const fileRole = req.body && req.body.fileRole ? req.body.fileRole : undefined;
+      if (fileRole !== undefined && !SampleFileModel.FILE_ROLES.includes(fileRole)) {
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+        return res.status(400).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.invalidFileRole') : 'fileRole inválido',
+          details: [`fileRole deve ser um dos: ${SampleFileModel.FILE_ROLES.join(', ')}`]
+        });
+      }
+
       // RF007 AC#3/AC#4/AC#5 - checksum do conteúdo original, cifra em
       // repouso (RNF029) e URI estável de Object Storage. O conteúdo em
       // disco é substituído pelo ciphertext; o checksum é sempre calculado
@@ -206,6 +221,8 @@ class SampleFileController {
         specimenId: sample._id.toString(), // Usa _id da amostra como referência principal
         fileName: file.originalname,
         fileType: fileType,
+        fileRole: fileRole || 'raw',
+        fileFormat: SampleFileModel.getFileFormatFromType(fileType),
         fileSize: file.size,
         storagePath: file.path,
         storageUri,
@@ -275,6 +292,8 @@ class SampleFileController {
           specimenId: sampleFile.specimenId,
           fileName: sampleFile.fileName,
           fileType: sampleFile.fileType,
+          fileRole: sampleFile.fileRole,
+          fileFormat: sampleFile.fileFormat,
           fileSize: sampleFile.fileSize,
           uploaderAnonId: sampleFile.uploaderAnonId,
           uploadDate: sampleFile.uploadDate,
@@ -362,6 +381,8 @@ class SampleFileController {
         specimenId: file.specimenId,
         fileName: file.fileName,
         fileType: file.fileType,
+        fileRole: file.fileRole,
+        fileFormat: file.fileFormat,
         fileSize: file.fileSize,
         uri: file.storageUri,
         checksum: file.checksum,
@@ -757,6 +778,19 @@ class SampleFileController {
         });
       }
 
+      // dict-02 ELM-0317 -- substituição pode opcionalmente atualizar o
+      // fileRole (ex.: um arquivo 'raw' substituído por sua versão
+      // 'processed'); sem valor novo, preserva o fileRole existente.
+      const fileRole = req.body && req.body.fileRole ? req.body.fileRole : undefined;
+      if (fileRole !== undefined && !SampleFileModel.FILE_ROLES.includes(fileRole)) {
+        cleanupUploadedFile();
+        return res.status(400).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.invalidFileRole') : 'fileRole inválido',
+          details: [`fileRole deve ser um dos: ${SampleFileModel.FILE_ROLES.join(', ')}`]
+        });
+      }
+
       // Mesmo tratamento de checksum/cifra do upload (RF007 AC#3/AC#4,
       // RNF029) aplicado ao novo conteúdo.
       const plaintext = fs.readFileSync(file.path);
@@ -770,6 +804,7 @@ class SampleFileController {
       const updatedFields = {
         fileName: file.originalname,
         fileType,
+        fileFormat: SampleFileModel.getFileFormatFromType(fileType),
         fileSize: file.size,
         storagePath: file.path,
         storageUri,
@@ -781,6 +816,9 @@ class SampleFileController {
         encryptionTag: encryption ? encryption.tag : null,
         updatedAt: new Date()
       };
+      if (fileRole !== undefined) {
+        updatedFields.fileRole = fileRole;
+      }
 
       const validation = SampleFileModel.validate({
         ...fileRecord,
@@ -846,6 +884,8 @@ class SampleFileController {
           specimenId: specimenIdString,
           fileName: updatedFields.fileName,
           fileType: updatedFields.fileType,
+          fileRole: updatedFields.fileRole !== undefined ? updatedFields.fileRole : fileRecord.fileRole,
+          fileFormat: updatedFields.fileFormat,
           fileSize: updatedFields.fileSize,
           uploaderAnonId: fileRecord.uploaderAnonId,
           uploadDate: fileRecord.uploadDate,

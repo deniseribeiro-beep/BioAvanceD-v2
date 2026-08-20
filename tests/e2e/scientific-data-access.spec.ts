@@ -85,6 +85,10 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(uploadBody.data.encryption.algorithm).toBe('aes-256-gcm');
     // AC#5 - access restrictions recorded alongside the file.
     expect(uploadBody.data.accessPolicy).toMatchObject({ view: 'authenticated' });
+    // AC#5 ("formato")/dict-02 ELM-0317/ELM-0319 (#679) - format and
+    // default pipeline-stage role recorded alongside the file.
+    expect(uploadBody.data.fileFormat).toBe('text/csv');
+    expect(uploadBody.data.fileRole).toBe('raw');
     // AC#6 - linked to the specimen it was uploaded against.
     expect(uploadBody.data.specimenId).toBeTruthy();
 
@@ -114,6 +118,46 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(listedFile.checksum).toBe(expectedChecksum);
     expect(listedFile.uri).toMatch(/^objstore:\/\/samples\//);
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, listWatch);
+  });
+
+  test('accepts an explicit fileRole and records it (dict-02 ELM-0317, #679)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const sampleID = await createRealSample(request, admin.token);
+
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        fileRole: 'processed',
+        file: {
+          name: 'processed-data.csv',
+          mimeType: 'text/csv',
+          buffer: Buffer.from('RF007 e2e fileRole fixture'),
+        },
+      },
+    });
+
+    expect(upload.status()).toBe(201);
+    const uploadBody = await upload.json();
+    expect(uploadBody.data.fileRole).toBe('processed');
+  });
+
+  test('rejects an unsupported fileRole (400, dict-02 ELM-0317, #679)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const sampleID = await createRealSample(request, admin.token);
+
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        fileRole: 'not-a-real-role',
+        file: {
+          name: 'bad-role.csv',
+          mimeType: 'text/csv',
+          buffer: Buffer.from('RF007 e2e invalid fileRole fixture'),
+        },
+      },
+    });
+
+    expect(upload.status()).toBe(400);
   });
 
   test('replaces a scientific file, recomputing checksum/encryption and auditing the substitution (AC#7, #334)', async ({

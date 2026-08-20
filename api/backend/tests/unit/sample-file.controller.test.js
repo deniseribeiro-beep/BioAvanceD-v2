@@ -205,6 +205,34 @@ describe('sample-file.controller', () => {
       expect(unlinkSpy).toHaveBeenCalledWith('/tmp/file.xyz');
     });
 
+    // dict-02 ELM-0317 (#679): an explicit but unsupported fileRole 400s
+    // and cleans up the temp file before the sample_files insert, same
+    // shape as the invalid-fileType rejection above.
+    it('returns 400 and cleans up file when fileRole is invalid', async () => {
+      const specimenId = new ObjectId().toString();
+      const sample = { _id: new ObjectId(specimenId) };
+      const db = createDb({
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId },
+        file: { path: '/tmp/file.csv', originalname: 'file.csv', size: 100 },
+        body: { fileRole: 'bogus' }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+      await controller.uploadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, details: expect.arrayContaining([expect.stringContaining('fileRole')]) })
+      );
+      expect(unlinkSpy).toHaveBeenCalledWith('/tmp/file.csv');
+    });
+
     // #625: an existing sample outside the caller's organization scope
     // 403s before the file is persisted, and cleans up the uploaded temp
     // file same as the other pre-persist rejection paths above.
@@ -288,6 +316,46 @@ describe('sample-file.controller', () => {
       expect(body.data.uri).toMatch(/^objstore:\/\/samples\//);
       expect(body.data.encryption).toEqual({ encrypted: true, algorithm: 'aes-256-gcm' });
       expect(sampleFilesCollection.insertOne).toHaveBeenCalled();
+      // dict-02 ELM-0317/ELM-0319 (#679): default fileRole and a fileType-
+      // derived fileFormat, when the caller doesn't supply either.
+      expect(body.data.fileRole).toBe('raw');
+      expect(body.data.fileFormat).toBe('text/csv');
+    });
+
+    it('happy path with an explicit fileRole: stores and returns it instead of the default', async () => {
+      const specimenId = new ObjectId().toString();
+      const sample = { _id: new ObjectId(specimenId) };
+      const insertedId = new ObjectId();
+      const sampleFilesCollection = {
+        insertOne: vi.fn().mockResolvedValue({ insertedId })
+      };
+      const db = createDb({
+        samples: { findOne: vi.fn().mockResolvedValue(sample) },
+        sample_files: sampleFilesCollection
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId },
+        file: { path: '/tmp/file.pdf', originalname: 'file.pdf', size: 100 },
+        body: { fileRole: 'report' },
+        user: null
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('file content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('PDF');
+      vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+
+      await controller.uploadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      const body = res.json.mock.calls[0][0];
+      expect(body.data.fileRole).toBe('report');
+      expect(body.data.fileFormat).toBe('application/pdf');
+      expect(sampleFilesCollection.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ fileRole: 'report', fileFormat: 'application/pdf' })
+      );
     });
 
     it('happy path with req.user: logs the upload audit entry', async () => {
@@ -419,6 +487,8 @@ describe('sample-file.controller', () => {
           specimenId: sample._id.toString(),
           fileName: 'a.csv',
           fileType: 'CSV',
+          fileRole: 'processed',
+          fileFormat: 'text/csv',
           fileSize: 10,
           uploaderAnonId: 'USR-ABC',
           uploadDate: new Date(),
@@ -443,6 +513,9 @@ describe('sample-file.controller', () => {
       expect(body.data).toHaveLength(1);
       expect(body.data[0].storagePath).toBeUndefined();
       expect(body.data[0].fileName).toBe('a.csv');
+      // dict-02 ELM-0317/ELM-0319 (#679): surfaced in the listing, not just upload.
+      expect(body.data[0].fileRole).toBe('processed');
+      expect(body.data[0].fileFormat).toBe('text/csv');
     });
 
     it('logs the query audit entry when req.user is present', async () => {
@@ -959,6 +1032,7 @@ describe('sample-file.controller', () => {
         _id: new ObjectId(fileID),
         specimenId,
         fileName: 'old.csv',
+        fileRole: 'raw',
         storagePath: '/x/old.csv',
         checksum: 'old-checksum',
         uploaderAnonId: 'anon-1',
@@ -998,6 +1072,78 @@ describe('sample-file.controller', () => {
       expect(body.data.checksum).not.toBe('old-checksum');
       // Fields carried over from the original record, unaffected by replace.
       expect(body.data.uploaderAnonId).toBe('anon-1');
+      // dict-02 ELM-0317/ELM-0319 (#679): fileRole preserved from the
+      // existing record (no override supplied), fileFormat recomputed
+      // from the new file's fileType.
+      expect(body.data.fileRole).toBe('raw');
+      expect(body.data.fileFormat).toBe('text/csv');
+    });
+
+    it('happy path with an explicit fileRole override: updates and returns the new value', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = {
+        _id: new ObjectId(fileID),
+        specimenId,
+        fileName: 'old.csv',
+        fileRole: 'raw',
+        storagePath: '/x/old.csv',
+        checksum: 'old-checksum',
+        uploaderAnonId: 'anon-1',
+        uploadDate: new Date('2026-01-01'),
+        accessPolicy: { view: 'authenticated', manage: ['admin', 'coordinator'] }
+      };
+      const updateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 200 },
+        body: { fileRole: 'derived' },
+        user: null
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+      vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
+      vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const body = res.json.mock.calls[0][0];
+      expect(body.data.fileRole).toBe('derived');
+      expect(updateOne).toHaveBeenCalledWith(
+        { _id: fileRecord._id },
+        { $set: expect.objectContaining({ fileRole: 'derived' }) }
+      );
+    });
+
+    it('returns 400 and cleans up the uploaded file when the fileRole override is invalid', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/old.csv', fileName: 'old.csv' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 200 },
+        body: { fileRole: 'bogus' }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(unlinkSpy).toHaveBeenCalledWith('/tmp/new.csv');
     });
 
     it('happy path with req.user: audits the replace with the previous file identity in the payload', async () => {
@@ -1602,6 +1748,21 @@ describe('sample-file.controller', () => {
         res
       );
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.invalidFileType' }));
+
+      // 400 invalid fileRole (dict-02 ELM-0317, #679)
+      res = createRes();
+      vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
+      await controller.uploadFile(
+        {
+          app: { locals: { db: db3 } },
+          params: { specimenId },
+          file: { path: '/tmp/f.csv', originalname: 'f.csv', size: 1 },
+          body: { fileRole: 'bogus' },
+          t
+        },
+        res
+      );
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.invalidFileRole' }));
 
       // 400 validation error
       res = createRes();
