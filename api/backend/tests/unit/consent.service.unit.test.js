@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const consentService = require('../../src/services/consent.service');
 const notificationService = require('../../src/services/notification.service');
 const notificationDispatchService = require('../../src/services/notificationDispatch.service');
+const logger = require('../../src/utils/logger');
 const { ObjectId } = require('mongodb');
 
 // Fake, chainable Mongo cursor helper: supports .sort().skip().limit().toArray()
@@ -1409,6 +1410,25 @@ describe('ConsentService.revokeConsent', () => {
     await consentService.revokeConsent(db, consentId.toString());
 
     expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it('#685 does not crash the process when the notification engine itself fails on revocation (unhandled rejection guard)', async () => {
+    const consentId = new ObjectId();
+    const consent = { _id: consentId, status: 'ACTIVE', participantId: 'PART-1' };
+    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
+    const db = makeDb({ patientConsents: consents });
+    vi.spyOn(notificationDispatchService, 'dispatchNotification').mockRejectedValue(new Error('notificationRules lookup failed'));
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+    await consentService.revokeConsent(db, consentId.toString());
+
+    // Fire-and-forget (`void`, no await in revokeConsent) -- give the
+    // rejection a turn of the microtask queue to reach a .catch() before
+    // asserting it was actually handled, not left unhandled.
+    await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[NOTIFICATION_DISPATCH]'),
+      expect.anything()
+    ));
   });
 
   it('returns null when the consent does not exist', async () => {

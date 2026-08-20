@@ -6,6 +6,7 @@ const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const authService = require('../../src/services/auth.service');
 const notificationDispatchService = require('../../src/services/notificationDispatch.service');
+const logger = require('../../src/utils/logger');
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -216,6 +217,31 @@ describe('AuthService.processLogin', () => {
       authService.processLogin(db, user, 'pw', '000000', db.collection(), {})
     ).rejects.toThrow('Código MFA inválido');
     expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it('#685 does not crash the process when the notification engine itself fails on lockout (unhandled rejection guard)', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(false);
+    vi.spyOn(notificationDispatchService, 'dispatchNotification').mockRejectedValue(new Error('notificationRules lookup failed'));
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const collectionApi = { findOne: vi.fn(), updateOne: vi.fn().mockResolvedValue({}), find: vi.fn(), insertOne: vi.fn() };
+    const db = makeDb(collectionApi);
+    const user = { ...BASE_USER, mfaEnabled: true, mfaSecret: 'SECRET', mfaFailedAttempts: 4 };
+    await expect(
+      authService.processLogin(db, user, 'pw', '000000', db.collection(), {})
+    ).rejects.toThrow('MFA bloqueado');
+
+    // The dispatch call is fire-and-forget (`void`, no await in processLogin)
+    // -- give its rejection a turn of the microtask queue to reach a .catch()
+    // before asserting it was actually handled, not left unhandled. Matched
+    // on the [NOTIFICATION_DISPATCH]-prefixed message specifically -- the
+    // outer catch's generic 'Erro no login' logger.error call (unrelated to
+    // this rejection) would otherwise make this assertion pass regardless
+    // of whether the dispatch rejection was ever actually caught.
+    await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[NOTIFICATION_DISPATCH]'),
+      expect.anything()
+    ));
   });
 
   it('logs in successfully with a valid MFA code and resets failed attempts', async () => {
