@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const consentService = require('../../src/services/consent.service');
 const notificationService = require('../../src/services/notification.service');
+const notificationDispatchService = require('../../src/services/notificationDispatch.service');
 const { ObjectId } = require('mongodb');
 
 // Fake, chainable Mongo cursor helper: supports .sort().skip().limit().toArray()
@@ -1376,6 +1377,38 @@ describe('ConsentService.revokeConsent', () => {
 
     expect(result).toBe(consent);
     expect(consents.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('#650 (RF015 consentimento) dispatches a consent_revoked notification when a real revocation happens', async () => {
+    const consentId = new ObjectId();
+    const consent = { _id: consentId, status: 'ACTIVE', participantId: 'PART-1' };
+    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
+    const db = makeDb({ patientConsents: consents });
+    const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+
+    await consentService.revokeConsent(db, consentId.toString());
+
+    expect(dispatchSpy).toHaveBeenCalledWith(db, {
+      eventType: 'consent_revoked',
+      sourceEventType: 'PatientConsent',
+      sourceEventId: consentId,
+      payload: {
+        participantId: 'PART-1',
+        consentId: consentId.toString()
+      }
+    });
+  });
+
+  it('#650 (RF015 consentimento) does not dispatch a notification when the consent was already revoked', async () => {
+    const consentId = new ObjectId();
+    const consent = { _id: consentId, status: 'REVOKED' };
+    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
+    const db = makeDb({ patientConsents: consents });
+    const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+
+    await consentService.revokeConsent(db, consentId.toString());
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
   it('returns null when the consent does not exist', async () => {
