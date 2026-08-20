@@ -208,6 +208,42 @@ function escapeXml(value) {
     .replace(/'/g, '&apos;');
 }
 
+function escapeZpl(value) {
+  return String(value ?? '').trim().replace(/[\^~]/g, '');
+}
+
+// #655: reads directly off the already-fetched sample's own storageLocation
+// snapshot (boxName/position, set by sample.service.js#createSample) rather
+// than resolving the full freezer/shelf/rack path via storagePaths -- avoids
+// depending on #657's cosmetic "N/A" gap for new code, and a print job only
+// needs enough to find the box, not the full breadcrumb.
+function buildLocationLineFromSample(sample) {
+  const box = sample?.storageLocation || {};
+  const parts = [
+    box.boxName || box.boxId ? `Box ${box.boxName || box.boxId}` : null,
+    box.position ? `Pos ${box.position}` : null,
+  ].filter(Boolean);
+  return parts.join(' / ') || null;
+}
+
+function buildZplPrintJob({ sampleId, barcode, location }) {
+  const safeSampleId = escapeZpl(sampleId);
+  const safeBarcode = escapeZpl(barcode);
+  const safeLocation = location ? escapeZpl(location).slice(0, 44) : '';
+
+  return [
+    '^XA',
+    '^CI28',
+    '^PW600',
+    '^LL320',
+    '^FO35,28^A0N,30,30^FDBioAvanceD^FS',
+    `^FO35,70^A0N,28,28^FDAmostra: ${safeSampleId}^FS`,
+    `^FO35,110^BCN,80,Y,N,N^FD${safeBarcode}^FS`,
+    safeLocation ? `^FO35,220^A0N,24,24^FD${safeLocation}^FS` : null,
+    '^XZ',
+  ].filter(Boolean).join('\n');
+}
+
 // #646 Wave 3 (RF016 AC#6): "auditar geração e reimpressão" -- shared by
 // both label-generation routes below (SVG /:id/label and PNG
 // /by-barcode/:barcode/symbology-assets) since they're two renderings of
@@ -589,6 +625,87 @@ router.get('/:id/label', authenticate, requireOrganizationScope, async (req, res
     return res.status(500).json({
       success: false,
       error: 'Erro ao gerar etiqueta da amostra',
+      message: error.message
+    });
+  }
+});
+
+// #655: RF016's own requirement text is "gerar E imprimir etiquetas" --
+// label.routes.js (the route SampleLabelPage.tsx used to call) had ZPL
+// print-job generation this file's symbology-backed label family didn't;
+// ported here so nothing is lost now the real UI is redirected to this
+// file's endpoints instead. ZPL's own ^BC command draws the Code128
+// barcode from the raw value at print time -- unlike the on-screen
+// symbology-assets endpoint, a print job doesn't need a rendered PNG.
+router.get('/:id/label/print-job', authenticate, requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const samplesCollection = await getCollection(db, 'samples');
+    const rawId = String(req.params.id);
+    const numericId = Number(rawId);
+    const sample = await samplesCollection.findOne({
+      $or: [
+        ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
+        ...(Number.isFinite(numericId) ? [{ sampleID: numericId }] : []),
+        { sampleID: rawId },
+        { sampleId: rawId },
+        { barcode: rawId },
+      ],
+    });
+    if (!sample) {
+      return res.status(404).json({
+        success: false,
+        error: 'Amostra não encontrada'
+      });
+    }
+
+    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
+      });
+    }
+
+    if (!sample.barcode) {
+      return res.status(409).json({
+        success: false,
+        error: 'Amostra não possui barcode gerado'
+      });
+    }
+
+    const sampleIdentifier = String(sample.sampleID ?? sample._id);
+    const location = buildLocationLineFromSample(sample);
+    const zpl = buildZplPrintJob({ sampleId: sampleIdentifier, barcode: sample.barcode, location });
+
+    // #646 Wave 3 (RF016 AC#6) - audited before responding, same reasoning
+    // as the SVG label route above.
+    const { reprint } = await recordLabelGeneration(db, { sample, formats: ['zpl'], req });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        sampleId: sampleIdentifier,
+        barcode: sample.barcode,
+        format: 'zpl',
+        printerLanguage: 'ZPL',
+        location,
+        reprint,
+        zpl
+      }
+    });
+  } catch (error) {
+    logger.error('Erro ao preparar job de impressão da etiqueta:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao preparar job de impressão da etiqueta',
       message: error.message
     });
   }
@@ -1115,7 +1232,12 @@ router.get('/by-barcode/:barcode', authenticate, async (req, res) => {
   }
 });
 
-router.get('/by-barcode/:barcode/symbology-assets', authenticate, async (req, res) => {
+// #655/#653: this route had no requireOrganizationScope/isRecordInOrganizationScope
+// check at all, unlike every other sample sub-resource route in this file --
+// filed as #653 when this was still an unreached backend capability;
+// SampleLabelPage.tsx now depends on it directly, so the gap is fixed
+// alongside the redirect rather than left for a separate slice.
+router.get('/by-barcode/:barcode/symbology-assets', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1131,6 +1253,14 @@ router.get('/by-barcode/:barcode/symbology-assets', authenticate, async (req, re
       return res.status(404).json({
         success: false,
         error: `Amostra não encontrada com código de barras: ${barcode}`
+      });
+    }
+
+    if (!isRecordInOrganizationScope(lookup.sample, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
       });
     }
 

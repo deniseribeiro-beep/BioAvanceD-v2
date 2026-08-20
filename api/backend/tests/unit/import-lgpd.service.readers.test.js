@@ -83,7 +83,7 @@ describe('ImportLGPDService.readCSV', () => {
     // the only way to make readCSV's own .pipe(...).on('error', ...) handler
     // fire is to swap the cached csv-parser module for a fake parser that
     // emits 'error', then re-require the service fresh (same require.cache
-    // injection pattern used by label.routes.test.js / sample.routes.test.js).
+    // injection pattern used by sample.routes.test.js).
     delete require2.cache[csvParserPath];
     delete require2.cache[importLgpdServicePath];
 
