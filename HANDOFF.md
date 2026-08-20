@@ -131,17 +131,17 @@ issues closed with merge-commit-bearing comments.
   clean except the pre-existing untracked `.claude/skills/` and
   `api/backend/storage/assays/` (neither this sitting's doing).
 - No PR to `main` exists.
-- **Docker: the full test stack is UP and healthy right now**
-  (`bioavanced-test-*` containers, brought up fresh this sitting since
-  it had been fully torn down since last time -- `backend-app-test`/
-  `frontend-app-test` rebuilt from current source, `admin-bootstrap-test`
-  ran successfully, `playwright-runner`'s auto-start was stopped before
-  the manual host-side Playwright runs). **Do not tear this down** if
-  picking up #675/#677/#678/#679 next (all RF029-adjacent, all likely
-  need the real backend) -- reuse the running stack, rebuilding
-  `backend-app-test`/`frontend-app-test` first if backend/frontend
-  source changed since this stack's last bring-up (build-not-mount
-  gotcha, `docker-workflow`'s BioAvanceD-v2 overlay).
+- **Docker: torn down.** A follow-up status-check sitting (2026-08-20,
+  after this file was already written) inherited the stack described
+  above, did no work with it (only re-read this handoff and reported
+  status), and per `clean-up`'s "inherited a stack you didn't start"
+  rule tore it down with Dennis's explicit confirmation rather than
+  leaving it idle. Next sitting starts from a clean slate: bring the
+  stack up fresh (`docker compose -f compose.test.yml up`) before
+  picking up #675/#677/#678/#679 (all RF029-adjacent, all likely need
+  the real backend) -- rebuilding `backend-app-test`/`frontend-app-test`
+  from current source is part of a fresh bring-up regardless (build-not-
+  mount gotcha, `docker-workflow`'s BioAvanceD-v2 overlay).
 - Fix branches from this sitting (`fix/657-...`, `fix/676-...`,
   `fix/656-...`, `test/664-...`) were all merged and deleted locally;
   none were ever pushed remotely.
