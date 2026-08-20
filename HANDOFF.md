@@ -1,104 +1,132 @@
 # HANDOFF
 
-**Written:** 2026-08-20. Picked up right after the prior rotation's "clear
-#644/#645/#647, then Wave 3" note. This sitting closed all three, then
-worked Wave 3 (#646) RF014→RF017 in sequence via build-loop, checking in
-with Dennis after each slice. RF017 surfaced two findings big enough that
-this rotation stops here to check in, rather than continuing straight to
-RF024.
+**Written:** 2026-08-20. Picked up right after the prior rotation's "two
+findings big enough to stop and check in" note (#654 storagePaths,
+#655 label-route split — that rotation explicitly deferred sequencing
+to Dennis rather than picking one). This sitting resolved both, found
+and fixed a real regression along the way, and filed six follow-ups.
 
-## Wave 3 (#646) — 4 of 8 RFs landed this sitting
+## #654 (storagePaths never written) — fixed, merge `988317bf`/`de504a23`
 
-- **RF014** (Políticas de segurança) — merge `30295d40`. No product code
-  changed; ACs 1/2/3/5/6/7 were already covered by existing
-  `security.service.js`/`security.routes.js`. ACs 4/8 (force password
-  reset, revoke sessions on policy change) are genuinely absent — filed as
-  **#648**/**#649**, not built (out of this slice's scope).
-- **RF015** (Alertas e notificações) — merge `c8aab8e0`. Built a
-  from-scratch versioned notification-rule engine (`NotificationRule`
-  model, `notificationRule.service.js`, `notificationDispatch.service.js`,
-  new `/api/notification-rules` + `/api/notifications` routes), wired into
-  `temperature.service.js` and `iot.controller.js`'s environmental-alert
-  paths. Only wired to the `environmental_excursion` event type so far —
-  the other 4 domains are filed as **#650**. Hit and fixed a real BSON
-  cross-connection bug (constructing `ObjectId` from the `mongodb` package
-  against a mongoose-sourced `db` throws `"Unsupported BSON version"`) —
-  documented generally as **#651** since it's a reusable gotcha, not
-  slice-specific.
-- **RF016** (Etiquetagem) — merge `c332f5dd`. Added QR symbology, batch
-  label generation, and audit/reprint tracking to `sample.routes.js`'s
-  label endpoints. AC#3 (printer-layout validation) doesn't exist anywhere
-  in the codebase — filed as **#652** rather than built blind. Found an
-  org-scope gap on the pre-existing `symbology-assets` route while adding
-  QR to it — filed as **#653**.
-  **Correction, found while closing out RF017:** `sample.routes.js`'s
-  label routes (what this slice built against and proved e2e) have **no
-  real frontend caller** — confirmed by grep, plus one fully-dead API
-  client method (`sampleChainApi.getLabelBlob`, zero call sites). The
-  route a real user actually hits is a separate system,
-  `label.routes.js` + `SampleLabelPage.tsx`, which has none of RF016's new
-  capabilities and renders a placeholder-rectangle SVG instead of a real
-  barcode. RF016's work is correct and tested, just stranded on the wrong
-  surface. Full trace and a fix recommendation (point the real UI at the
-  new endpoints, or port the new capabilities onto the old ones — a real
-  design call either way) filed as **#655**; correction comment posted on
-  #646.
-- **RF017** (Equipamentos e armazenamento) — merge `d5beca6c`. AC#7
-  ("bloquear local indisponível") was the only unbuilt criterion:
-  `StorageBox.status`/`StorageContainer.status` existed but nothing
-  checked them anywhere. Added `MongoStorageRepository.checkLocationBlocked`,
-  wired into all 4 write/check paths (`validatePositionAvailability`,
-  `allocateSamplePosition`, `autoAssignSamplePosition`,
-  `moveSamplePosition`). Also fixed a real bug found while tracing the new
-  throw through `move-sample.controller.js`: a location-blocked rejection
-  was falling through to a 500 instead of 400.
-  **Finding:** the `storagePaths` collection — read by
-  `checkLocationBlocked`'s ancestor-level check (and 3 other existing
-  call sites) — is **never written anywhere** in `api/backend/src`. Real
-  boxes never get ancestor IDs populated, so the ancestor-level branch of
-  AC#7 (blocking via a RETIRED/MAINTENANCE rack/shelf/freezer) cannot
-  fire for any real box today. Unit-tested against a mock; NOT provable
-  e2e for this reason. Filed as **#654**. The e2e proof landed
-  (`tests/e2e/specimen-quality-inventory.spec.ts`, "Storage location
-  availability (RF017 AC#7)") is honestly scoped to box-level RETIRED
-  blocking only, via 2 of the 4 call sites (`validate` + `move`).
-  Progress comment posted on #646.
+Docs settled the fix direction before any question was asked:
+`docs/architecture/legacy-location-migration-mapping.md` names
+`StoragePath.js` as the canonical target's "materialized
+freezer→shelf→rack→box path" — confirming populate-on-write over
+delete-the-collection. But tracing the actual write side found there's
+**no live production endpoint that creates a StorageBox/StorageContainer
+at all** — the only writers are a now-moot backfill script and
+test-only raw-insert seed helpers. So the real fix made the *readers*
+(`checkLocationBlocked`, `findStorageHierarchyForBox`) self-sufficient
+instead: a new `resolveAncestorContainersLive` walks
+`storageContainers.parent_id` live whenever no `StoragePath` document
+exists, which is every real box today. Also transparently handles the
+optional `DRAWER` level (#458) that `StoragePath`'s own schema has no
+field for.
 
-## Two findings big enough to stop and check in on
+Left deliberately out of scope, filed separately: **#657** (two
+cosmetic `storagePaths` display readers still show `'N/A'`).
 
-1. **#654** — `storagePaths` is a structurally dead collection (read in
-   4 places, written nowhere). Beyond RF017's AC#7 gap, this likely means
-   dict-02's hierarchy-enrichment fields (facility/room/equipment context
-   derived from a box's ancestor chain) never populate for any real
-   record — not re-audited end-to-end this sitting, just traced far
-   enough to confirm the write-side gap.
-2. **#655** — RF016 (and, by extension, whatever the original RF007/label
-   milestone work assumed) has been building/proving against a label
-   route the frontend doesn't use. Worth deciding deliberately which
-   system is canonical before any further label-related work, rather than
-   letting a 5th slice build on either system without that call being
-   made.
+## #655 (RF016 label route split) — fixed, merge `19889184`/`fcff884d`
 
-Neither was fixed this sitting — both are filed with full traces, not
-silently absorbed into "done."
+The design-call framing from the prior rotation held up to a second,
+harder docs pass (Dennis pushed back on the first "no docs settle this"
+— rightly; the first pass checked 3 architecture/naming docs, all
+tangential). The real answer was in `E2E_IMPLEMENTATION_PLAN.md` (the
+actual "how to build this" doc, not just an inventory) plus milestone
+#2's own description, in Dennis's own words: "Legacy/testid-less
+frontend pages get rebuilt fresh, not patched." `SampleLabelPage.tsx`
+is on that plan's confirmed testid-less list; its pre-RF016 code survey
+already called `sample.routes.js` the richer, already-built-out
+symbology surface.
+
+Shipped: `SampleLabelPage.tsx` rebuilt with real `data-testid`s, calling
+`sample.routes.js`'s real Code128/DataMatrix/QR symbology
+(`/by-barcode/:barcode/symbology-assets?includePayload=true`) and a new
+ported ZPL print-job route (`GET /:id/label/print-job`, so RF016's
+"gerar e imprimir" requirement isn't lost). `label.routes.js` retired
+entirely (mount, file, test); `intakeWizard.js`'s dead-end label links
+and the dead `sampleChainApi.getLabelBlob` client method cleaned up
+alongside it. **#653** (symbology-assets had no org-scope check) fixed
+in the same commit, since that route became the real page's direct
+dependency rather than an unreached capability.
+
+New e2e coverage added: UI-driving tests proving the real page (not
+just the API) renders real symbology and downloads a real ZPL job
+(`specimen-quality-inventory.spec.ts`).
+
+## Regression found and fixed mid-verification — `7257ea34`
+
+Bringing the Docker stack up to verify #655 against real UI, even the
+**pre-existing, untouched** RF016 API tests started failing. Root
+cause: #654's new ancestor-block query, `{ $ne: 'OPERATIONAL' }`,
+matches a `StorageContainer` with **no status field at all** just as
+readily as an explicit `MAINTENANCE`/`RETIRED` one — every e2e seed
+helper's SHELF/RACK containers hit exactly this shape (only the FREEZER
+gets an explicit status, per #598's own precedent). #654's own fix
+would have 422'd every real allocation attempt the moment it shipped.
+Fixed with `{ $exists: true, $ne: 'OPERATIONAL' }`, matching
+`StorageContainer.js`'s own Mongoose default. This also finally made
+#654's ancestor-level RETIRED/MAINTENANCE blocking provable against the
+real backend for the first time — new tests in
+`specimen-quality-inventory.spec.ts`'s RF017 AC#7 block confirm it.
+
+## Six follow-ups filed this sitting
+
+- **BioAvanceD-v2#656** — `storageService.js`'s `allocateSampleToPosition`
+  (and its own private `validatePositionAvailability`) is dead code
+  with zero route callers, but would silently bypass RF017 AC#7 if
+  anything ever wired a route to it. Not urgent (unreachable today),
+  recorded so nobody's surprised later.
+- **BioAvanceD-v2#657** — the two cosmetic `storagePaths` display
+  readers (`getSampleStorageLocation`,
+  `resolveStorageLocationsForSamples`) still show `'N/A'`/`null` for
+  real boxes; deliberately out of #654's scope.
+- **BioAvanceD-v2#658** — `backend-unit-runner` has no `docs/` mount at
+  all, so `dictionary:validate` (already wired into its command chain
+  per the earlier #530 trace) crashes with ENOENT the moment it
+  actually runs. Nobody's noticed because CI's `main`-only trigger
+  (#599, open) means this container has likely never really executed
+  end-to-end on this branch. Will surface as a new red build the moment
+  #599 lands — worth fixing before that, not after.
+- **BioAvanceD-v2#659** — nothing in the app actually links to
+  `SampleLabelPage` (`samples/:id/label`); it's real now but only
+  reachable by typing the URL.
+- **dyeallpies-skills-pack#349** — `resolve-issue`'s docs-first-before-
+  asking rule doesn't mention checking GitHub Milestones, even though
+  `fix-bugs`' own overlay already learned that lesson (#316). This
+  session hit a third data point of the #340 pattern despite genuinely
+  checking docs first — the miss was reaching the *most specific* doc.
+- **dyeallpies-skills-pack#350** — the pre-action routing gate
+  ("no routed workflow skill invoked yet") fired three separate times
+  this sitting on actions taken *after* `fix-bugs` was already actively
+  invoked and mid-execution, with no intervening compact — each
+  required a no-op re-invocation just to clear it. Pure friction, no
+  functional harm, but a real, repeated cost worth fixing at the source.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed through all four
-  RF merges (`30295d40`, `c8aab8e0`, `c332f5dd`, `d5beca6c`). Working tree
-  clean except the gitignored/junctioned `.claude/skills/` and an
-  untracked `api/backend/storage/assays/` (pre-existing pattern, not
-  cleaned up, matches sibling `storage/samples/`/`storage/datasets/`).
+- On `feature/docker-e2e-backend-integration`, pushed through both
+  merges (`de504a23`, `fcff884d`). Working tree clean except the
+  gitignored/junctioned `.claude/skills/` and the pre-existing untracked
+  `api/backend/storage/assays/` (matches sibling `storage/samples/`/
+  `storage/datasets/`, not cleaned up, not this sitting's doing).
 - No PR to `main` exists.
-- **Docker**: `compose.test.yml` is still **up** as of this writing — all
-  12 services healthy, `backend-app-test` rebuilt through RF017's changes
-  and re-verified on the merged tree. Not yet torn down; check `docker ps`
-  before assuming either state if picking this up fresh.
+- **Docker**: `compose.test.yml` is up — all 12 core services healthy,
+  `backend-app-test`/`frontend-app-test` rebuilt through both fixes and
+  re-verified on the merged tree (34/34 e2e in
+  `specimen-quality-inventory.spec.ts`, 451/451 native unit tests, plus
+  `backend-unit-runner`'s actual test suite at 59/60 — 1 pre-existing
+  skip — before hitting #658's unrelated ENOENT). Not torn down; check
+  `docker ps` before assuming either state if picking this up fresh.
+- Two pre-existing dangling local branches noted (not this sitting's
+  work, left untouched both times): `test/377-docs-on-main` (a single
+  docs-only commit, name suggests it was meant to land on `main`
+  directly), `test/human-showcase-video` (a separate demo-video
+  session's work). Neither merged anywhere.
 
 ## Recommended next steps
 
 Dennis hasn't yet said whether to continue straight to RF024 or address
-#654/#655 first — this rotation exists specifically to surface that
-choice, not to make it. Whichever is chosen, **#646** (8-RF Wave 3
-tracking issue) is still the active thread — 4 of 8 done
-(RF014/015/016/017), RF024/025/026/029 remaining.
+anything else first. **#646** (8-RF Wave 3 tracking issue) is still the
+active thread — 4 of 8 done (RF014/015/016/017), RF024/025/026/029
+remaining.
