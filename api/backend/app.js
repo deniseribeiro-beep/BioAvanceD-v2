@@ -282,7 +282,8 @@ app.use("/api/assays/:assayId/files", require("./src/interface/routes/assay-file
 app.use("/api/assays", createMasterDataRouter({
   collectionName: "assays",
   idField: "assayId",
-  model: require("./src/models/Assay")
+  model: require("./src/models/Assay"),
+  validateReferences: require("./src/services/assayReferenceValidator").validateAssayReferences
 }));
 app.use("/api/reagent-lots", createMasterDataRouter({
   collectionName: "reagentLots",
