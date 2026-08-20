@@ -1,123 +1,112 @@
 # HANDOFF
 
-**Written:** 2026-08-20. Picked up right after the prior rotation's close
-(RF024 landed, five follow-ups filed). Dennis gave explicit go-ahead to
-continue #646 as a `rabbit-hole` descent — divide-and-conquer at will,
-no mid-workflow prompts, questions saved for his return. This sitting
-built RF025 and RF026 end-to-end, split RF029 into 6 buildable slices,
-and fixed a stale status table found along the way.
+**Written:** 2026-08-20, mid-sitting rotation. Picked up right after the
+prior rotation's close (RF025/RF026 landed, RF029 split into #668-674).
+Dennis said "continue rabbit hole... free to divide and conquer" — no
+mid-workflow prompts. This checkpoint reflects state right after landing
+**#669** (RF029 slice 1/6, the foundation); the session continues into
+**#670** next within the same sitting, per the rabbit-hole skill's
+"rotate before moving to the next item" rule — this is not necessarily
+the sitting's final state.
 
-## What landed this sitting
+## What landed since the last rotation
 
-- **RF025 (Ensaios, reagentes e não conformidades) — shipped, merge
-  `1d8221b9`.** New `ReagentLot`/`Nonconformance` entities; `Assay`
-  (#641) extended with `reagentLotIds`/`equipmentIds`/structured
-  `controls`. Unit 79/79 new, e2e 3/3 new (`specimen-quality-inventory.spec.ts`,
-  live Docker). Full writeup: #646's "RF025 ... landed" comment.
-- **RF026 (Retenção e destinação) — shipped, merge `365808f4`.** New
-  `LegalHold`/`DispositionAction` entities; `RetentionPolicy` (RF014)
-  reused as-is. `DispositionAction.retentionPolicyId` is checked against
-  a real policy document (not just format-validated) — the referential-
-  integrity discipline #664 flags as *missing* elsewhere. Unit 49/49
-  new, e2e 4/4 new, live Docker. Full writeup: #646's "RF026 ... landed"
-  comment.
-- **RF029 (Ingestão operacional e científica) — split, not built.**
-  Confirmed its stated dependency (RF022/RF028) is satisfied — both are
-  genuinely complete in code; `E2E_TRACEABILITY_PLAN.md`'s RED status for
-  them was stale (git-blamed to 2026-07-27, before #366/#370/#381/#549/
-  #551/#552/#557/#374 all landed). RF029 itself is structurally
-  different from RF014-026 (10 ACs, ~10 non-uniform entity kinds, one
-  with a real external dependency) — ran `divide-and-conquer`'s
-  design-split playbook instead of forcing a build-loop slice. Filed
-  **#668** (RF029's own tracking issue) with 6 dependency-ordered
-  sub-issues: **#669** (foundation — gateway shape, provenance envelope,
-  contract validation, active-code check, idempotency, quarantine;
-  blocking for the rest), **#670** (participants/consents/specimens/
-  clinical), **#671** (telemetry), **#672** (files), **#673** (datasets/
-  assays), **#674** (workflows/omics — additionally blocked on **RF027**,
-  Wave 4, not yet started, which is the RF that actually defines the
-  `Workflow`/`Omics*` entities RF029 AC#5 names).
-- **Doc fix**: `E2E_TRACEABILITY_PLAN.md`'s RF014/015/016/017/022/024/
-  025/026/028/029 status cells were stale (some since 2026-07-27) —
-  corrected in the same pass, separate small commit.
+- **#669 (RF029 slice 1/6: ingestion gateway foundation) — shipped,
+  merge `0d421c05`.** Built the generic machinery #670-674 all depend
+  on: a provenance envelope (`ingestion/provenanceEnvelope.js`, field
+  names reuse dict-02's `BaseRecord` vocabulary — `sourceSystem`/
+  `createdBy`/`retrievedAt` — plus an ingestion-specific `purpose`); a
+  generalized canonical-contract + alias + reference-existence validator
+  (`ingestion/canonicalGateway.js`); an active-reference-code cross-check
+  against `TerminologyConcept`/`ReferenceDatasetRelease`
+  (`ingestion/activeCodeValidator.js`); an idempotency-key claim/replay
+  mechanism (`ingestion/idempotency.js`, new `ingestionIdempotencyKeys`
+  collection); a per-record quarantine model+lifecycle
+  (`models/IngestionQuarantineRecord.js` + `ingestion/quarantine.js`,
+  new `ingestionQuarantineRecords` collection) — all composed into one
+  `ingestion/ingestionGateway.js#ingestRecord()` call. AC8 (audit+outbox)
+  needed no new infrastructure, reused as-is. AC9 got a new architecture
+  test (`tests/architecture/ingestion-civil-data-boundary.arch.test.js`)
+  generalizing the existing per-call-site civil-data discipline into an
+  automated scan, forbidden-field list derived from
+  `contracts/canonical/v1`'s own schema rather than hand-duplicated.
+  No entity is wired to the gateway yet (that's #670-673) — proven via a
+  new NODE_ENV+shared-secret-gated test-support route
+  (`interface/routes/ingestionTestSupport.routes.js`, same shape as
+  `iot.routes.js`'s telemetry-monitor routes), exercised for real against
+  the live Docker test stack in `pipeline-continuity.spec.ts` (RF029's
+  own milestone spec). 62 new unit tests + 1 new architecture test + 3
+  new real-backend e2e tests, all green. Full native suite re-run clean:
+  **391/391 files, 7340/7340 tests** (up from 384/7282 — no
+  regressions). `E2E_TRACEABILITY_PLAN.md`'s RF029 row updated to
+  PARTIAL (1/6). Full writeup: #669's own closing comment and #668's
+  "Slice 1/6 ... landed" comment.
 
-Full native suite re-run after RF026: **384/384 files, 7282/7282 tests
-green** — no regressions from either slice.
+## Two follow-ups filed this item (both open, neither blocking #670-673)
 
-## Nine follow-ups filed this sitting (all still open)
+- **#675** — the new ingestion test-support route accepts a fully
+  attacker-controlled body and persists it (quarantine path) — same
+  NODE_ENV+secret gate as the existing `iot.routes.js` precedent, but a
+  strictly more sensitive shape (write primitive, not just a trigger).
+  Not urgent (no production deployment exists yet) but flagged for
+  before one does, and for whether future entity slices should keep
+  adding their own test-support routes the same way.
+- **#676** — `activeCodeValidator`'s unversioned-code lookup (the common
+  case — most real ingestion won't pin a `TerminologyConcept.version`)
+  silently picks the newest-`validFrom` match on a tie. Asks whether
+  that's the right default before #670-674 start depending on it, or
+  whether an unversioned lookup should instead require exactly one
+  active match.
 
-- **#664** — Assay's specimen/protocol/operator/laboratory/reagentLot/
-  equipment links are format-only, no referential-integrity check.
-- **#665** — Técnico (RF025's own primary actor) can't actually create
-  an Assay or ReagentLot today (`requireRole(3,4)` via the shared
-  `createMasterDataRouter`), even though this slice's own Nonconformance
-  "open" route correctly lets them.
-- **#666** — dict-02's `Device` entity (calibration/qualification/
-  firmware tracking) is richer than the code's `Equipment` model.
-- **#667** — `RetentionPolicy`'s `ALLOWED_ENTITY_TYPES` (`AuditEvent`/
-  `Log` only, from RF014) limits what RF026's new `DispositionAction`/
-  `LegalHold` can practically govern to log housekeeping, not the
-  specimens/samples/participant records RF026's own text implies.
-- **#668-#674** — RF029's tracking issue + 6 sub-slices (see above).
+Also filed **dyeallpies-skills-pack#354** (not this repo) — a
+`build-loop` overlay addition: dict-02's `BaseRecord` ("Governança
+transversal") entity governs shared cross-cutting field vocabulary
+(provenance, audit metadata), not just per-entity field names the
+existing overlay bullet already covers. Per skill-maintenance Rule 0,
+filed as an issue rather than edited directly (this session is in the
+consuming project, not the pack repo).
 
 ## Rabbit-hole state: still open, not exited
 
-**#646 stays open** (8/8 Wave 3 RFs won't be done until #668's 6 slices
-land) and **so does #668** (RF029's own tracker, same reason one level
-down). Next concrete pickup whenever this resumes: **#669** (RF029's
-foundation slice) — everything else in #668 is blocked on it. Both
-issues carry the full queue state; this file is a snapshot, not the
-source of truth for what's left.
+**#646 stays open** (RF029/#668 is the one Wave 3 RF not yet done) and
+**so does #668** (5/6 RF029 slices remain: #670-674). This session is
+continuing into **#670** (participants/consents/specimens/clinical, now
+unblocked) next, within the same sitting — check git log / this file's
+next rotation for whether that also landed before the sitting ended.
+Both #646 and #668 carry full queue state; this file is a snapshot.
 
-## Repo state
+## Repo state (as of this rotation, before #670 starts)
 
-- On `feature/docker-e2e-backend-integration`, pushed through the doc-fix
-  merge (latest: `69ae8d08` plus this rotation's own commit). Working
-  tree clean except the gitignored/junctioned `.claude/skills/` and the
-  pre-existing untracked `api/backend/storage/assays/` (neither this
-  sitting's doing).
+- On `feature/docker-e2e-backend-integration`, 2 commits ahead of
+  `origin/feature/docker-e2e-backend-integration` (#669's merge
+  `0d421c05` + the `E2E_TRACEABILITY_PLAN.md` doc-fix merge on top) —
+  not yet pushed. Working tree clean except the gitignored/junctioned
+  `.claude/skills/` and the pre-existing untracked
+  `api/backend/storage/assays/` (neither this item's doing).
 - No PR to `main` exists.
-- **Docker**: test stack (`compose.test.yml`) was up most of this
-  sitting (rebuilt twice — RF025's new files, then RF026's), **torn down
-  at end of session** (`compose down`, no `-v` — `mongodb-test-data` and
-  other named volumes untouched, so prior fixtures/RBAC seed persist for
-  the next bring-up). Builder cache pruned (`docker builder prune -af`,
-  889.3MB reclaimed). WSL2 vhdx checked: 15.63GB physical — unremarkable,
-  no reset needed.
-- All 3 of this sitting's slice branches (`test/646-rf025-...`,
-  `test/646-rf026-...`, `test/646-traceability-plan-staleness-fix`) were
-  merged and deleted locally; none were ever pushed remotely, so no
-  remote cleanup needed.
+- **Docker**: test stack (`compose.test.yml`) is up (core services +
+  `admin-bootstrap-test`, `backend-app-test`/`frontend-app-test`
+  rebuilt for #669's new source) and **deliberately left up** —
+  #670 will need it again immediately. Tear-down deferred to whenever
+  this sitting actually ends; don't let it idle unattended for hours
+  (see `docker-workflow`'s local-env #160 precedent) — the session
+  continuing immediately into #670 is why it's still up, not neglect.
+- `test/669-rf029-ingestion-gateway-foundation` (#669's own slice
+  branch) and `test/669-traceability-plan-update` (doc-fix) were both
+  merged and deleted locally; neither was ever pushed remotely.
+  `test/669-handoff-rotation` (this file's own branch) will be merged
+  and deleted the same way immediately after this commit.
 - The two pre-existing dangling local branches (`test/377-docs-on-main`,
   `test/human-showcase-video`) remain untouched, as before.
 
-## Open questions for Dennis (saved for his return, not asked mid-sitting)
-
-1. **#665** — should a Técnico actually be able to create an Assay/
-   ReagentLot directly, or is Coordenador-only creation intentional
-   (e.g. a Técnico works under a Coordenador's registration)?
-2. **#666** — worth extending `Equipment` with dict-02's fuller `Device`
-   shape (calibration/qualification/firmware tracking), or leave that
-   aspirational until a requirement actually needs it?
-3. **#667** — is RF026 intentionally scoped to log/audit retention for
-   now (matching RF014's existing `ALLOWED_ENTITY_TYPES` restriction),
-   or should real biobank records (specimens/samples/participant data)
-   be in scope for a near-term follow-up?
-4. **RF029/#668 sizing** — the 6-slice split is designed but nothing is
-   built yet; confirm this is still the right next thing to pick up
-   versus other backlog priorities, and whether #674 (workflows/omics)
-   should wait for RF027 to be scheduled first or stay parked
-   indefinitely until then.
-
-None of these blocked this sitting's work — each is flagged on its own
-issue and safe to leave open indefinitely; surfacing them together here
-since Dennis asked not to be interrupted for them individually.
-
 ## Recommended next steps
 
-Dennis hasn't picked a next task beyond "continue #646," which this
-sitting did to a natural stopping point (two RFs shipped, the third
-properly scoped rather than half-built). Next session: either build
-**#669** (RF029's foundation slice, unblocks 4 of the remaining 5), or
-pick up something else entirely — both #646 and #668 will still be there
-with accurate state either way.
+Continuing into **#670** (participants/consents/specimens/clinical) this
+same sitting per Dennis's "continue, free to divide and conquer"
+instruction — not a deferred pick for a future session unless this
+sitting gets cut off first, in which case: pick up #670 next (it's the
+thinnest of the remaining 5 slices per #668's own design notes — canonical
+contracts partially exist via `intakeWizard.js`'s 4 schemas already), then
+#671 (telemetry) and #672 (files), both also described as thin wraps of
+existing paths, then #673 (datasets/assays), with #674 (workflows/omics)
+parked until RF027 is scheduled.
