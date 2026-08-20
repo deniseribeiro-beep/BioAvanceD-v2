@@ -218,6 +218,20 @@ class MongoStorageRepository {
       throw new Error('Origem inconsistente: posição de origem não contém a amostra informada');
     }
 
+    // #646 Wave 3 (RF017 AC#7) -- see checkLocationBlocked's own comment.
+    // Checked against the destination box only, after the source position
+    // is already freed above -- a blocked destination still leaves the
+    // specimen correctly vacated from its old position; the caller (not
+    // this method) is responsible for retrying with a different target.
+    const toBox = await storageBoxesCollection.findOne({ _id: toBoxObjId }, { session });
+    if (!toBox) {
+      throw new Error('Caixa de destino não encontrada');
+    }
+    const locationCheck = await this.checkLocationBlocked(toBox, session);
+    if (locationCheck.blocked) {
+      throw new Error(locationCheck.message);
+    }
+
     const targetUpdate = await storageBoxesCollection.updateOne(
       {
         _id: toBoxObjId,
@@ -289,6 +303,12 @@ class MongoStorageRepository {
     const box = await storageBoxesCollection.findOne({ _id: boxObjId }, { session });
     if (!box) {
       throw new Error('Caixa de armazenamento não encontrada');
+    }
+
+    // #646 Wave 3 (RF017 AC#7) -- see checkLocationBlocked's own comment.
+    const locationCheck = await this.checkLocationBlocked(box, session);
+    if (locationCheck.blocked) {
+      throw new Error(locationCheck.message);
     }
 
     const positionRegex = /^([A-Z])(\d+)$/;
@@ -374,6 +394,12 @@ class MongoStorageRepository {
     const freshBox = await storageBoxesCollection.findOne({ _id: boxObjId }, { session });
     if (!freshBox) {
       throw new Error('BOX_NOT_FOUND');
+    }
+
+    // #646 Wave 3 (RF017 AC#7) -- see checkLocationBlocked's own comment.
+    const locationCheck = await this.checkLocationBlocked(freshBox, session);
+    if (locationCheck.blocked) {
+      throw new Error(locationCheck.error);
     }
 
     const freshSample = await samplesCollection.findOne({ _id: sampleObjId }, { session });
@@ -561,6 +587,53 @@ class MongoStorageRepository {
   /**
    * @param {{ boxId: string, position: string }} input
    */
+  /**
+   * #646 Wave 3 (RF017 AC#7): "Bloquear local indisponível, interditado ou
+   * fora de condição" -- StorageBox.status (ACTIVE/FULL/RETIRED) and
+   * StorageContainer.status (OPERATIONAL/MAINTENANCE/RETIRED) both already
+   * existed but were never checked at any allocation entry point, so a
+   * RETIRED box (or one whose rack/shelf/freezer ancestor was RETIRED or
+   * under MAINTENANCE) still accepted new allocations as long as the
+   * specific position was unoccupied. Shared by every write/check path
+   * below (validatePositionAvailability, allocateSamplePosition,
+   * autoAssignSamplePosition, moveSamplePosition's destination box) so the
+   * block is consistent regardless of which one a caller uses -- fixing
+   * only validatePositionAvailability (a separate pre-flight check
+   * endpoint) would have left the real allocation paths unguarded.
+   * @param {object} box - the StorageBox document (already fetched by the caller)
+   * @param {import('mongodb').ClientSession} [session]
+   * @returns {Promise<{blocked: boolean, error?: string, message?: string}>}
+   */
+  async checkLocationBlocked(box, session) {
+    if (box.status === 'RETIRED') {
+      return {
+        blocked: true,
+        error: 'BOX_UNAVAILABLE',
+        message: `StorageBox ${box._id} está retirada de uso (status: RETIRED)`
+      };
+    }
+
+    const storagePath = await this.db.collection('storagePaths').findOne({ boxId: box._id }, { session });
+    const ancestorIds = storagePath
+      ? [storagePath.rackId, storagePath.shelfId, storagePath.freezerId].filter(Boolean)
+      : [];
+    if (ancestorIds.length > 0) {
+      const blockedAncestor = await this.db.collection('storageContainers').findOne({
+        _id: { $in: ancestorIds },
+        status: { $ne: 'OPERATIONAL' }
+      }, { session });
+      if (blockedAncestor) {
+        return {
+          blocked: true,
+          error: 'LOCATION_UNAVAILABLE',
+          message: `Localização indisponível: ${blockedAncestor.containerType || 'container'} "${blockedAncestor.name || blockedAncestor._id}" está com status ${blockedAncestor.status}`
+        };
+      }
+    }
+
+    return { blocked: false };
+  }
+
   async validatePositionAvailability(input) {
     const storageBoxesCollection = this.db.collection('storageBoxes');
     const boxObjId = this.toObjectId(input.boxId);
@@ -573,6 +646,14 @@ class MongoStorageRepository {
         error: 'BOX_NOT_FOUND',
         message: `StorageBox ${input.boxId} não encontrada`
       };
+    }
+
+    // Checked before the position-format/bounds work below, since "this
+    // box can't be used at all" doesn't depend on which position was
+    // requested.
+    const locationCheck = await this.checkLocationBlocked(box);
+    if (locationCheck.blocked) {
+      return { available: false, error: locationCheck.error, message: locationCheck.message };
     }
 
     const positionRegex = /^([A-Z])(\d+)$/;

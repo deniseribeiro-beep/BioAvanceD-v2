@@ -304,6 +304,9 @@ describe('MongoStorageRepository', () => {
 
     it('happy path performs all 3 updates', async () => {
       const storageBoxes = makeCollection({
+        // #646 Wave 3 (RF017 AC#7): moveSamplePosition now fetches the
+        // destination box first to check checkLocationBlocked.
+        findOne: vi.fn().mockResolvedValueOnce({ _id: toBoxId, status: 'ACTIVE' }),
         updateOne: vi
           .fn()
           .mockResolvedValueOnce({ matchedCount: 1 }) // source
@@ -325,6 +328,7 @@ describe('MongoStorageRepository', () => {
     // at the target, not just overwrite Sample.storageLocation.
     it('closes the source StorageAssignment and opens one for the target (#402)', async () => {
       const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: toBoxId, status: 'ACTIVE' }),
         updateOne: vi
           .fn()
           .mockResolvedValueOnce({ matchedCount: 1 })
@@ -384,6 +388,7 @@ describe('MongoStorageRepository', () => {
 
     it('throws "STORAGE_COLLISION" when target update matchedCount is 0', async () => {
       const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: toBoxId, status: 'ACTIVE' }),
         updateOne: vi
           .fn()
           .mockResolvedValueOnce({ matchedCount: 1 })
@@ -401,6 +406,7 @@ describe('MongoStorageRepository', () => {
 
     it('throws "Falha ao atualizar localização" when sample update matchedCount is 0', async () => {
       const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: toBoxId, status: 'ACTIVE' }),
         updateOne: vi
           .fn()
           .mockResolvedValueOnce({ matchedCount: 1 })
@@ -415,6 +421,23 @@ describe('MongoStorageRepository', () => {
       await expect(repo.moveSamplePosition(input, {})).rejects.toThrow(
         'Falha ao atualizar localização'
       );
+    });
+
+    // #646 Wave 3 (RF017 AC#7): the source position is already freed by
+    // this point (sourceUpdate above), but the move itself must still be
+    // refused into a blocked destination.
+    it('refuses to move into a RETIRED destination box, after the source position is already freed (criterion 7)', async () => {
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: toBoxId, status: 'RETIRED' }),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 }) // source only
+      });
+      const samples = makeCollection();
+      const db = makeDb({ storageBoxes, samples });
+      const repo = new MongoStorageRepository(db);
+
+      await expect(repo.moveSamplePosition(input, {})).rejects.toThrow('RETIRED');
+      expect(storageBoxes.updateOne).toHaveBeenCalledTimes(1); // source freed, target update never attempted
+      expect(samples.updateOne).not.toHaveBeenCalled();
     });
   });
 
@@ -447,6 +470,24 @@ describe('MongoStorageRepository', () => {
       // a dotted-path $set into it is rejected by real MongoDB, so the first
       // allocation must replace the whole object, not set nested paths.
       expect(setPayload.storageLocation).toEqual({ boxId: expect.anything(), position: 'A1' });
+    });
+
+    // #646 Wave 3 (RF017 AC#7): the real specimen-registration write path
+    // (unlike validatePositionAvailability, a separate pre-flight check
+    // endpoint) must itself refuse a RETIRED box, not just report it.
+    it('refuses to allocate into a RETIRED box (criterion 7)', async () => {
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId })
+      });
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ ...boxDoc, status: 'RETIRED' })
+      });
+      const db = makeDb({ samples, storageBoxes });
+      const repo = new MongoStorageRepository(db);
+
+      await expect(repo.allocateSamplePosition(baseInput, {})).rejects.toThrow('RETIRED');
+      expect(storageBoxes.updateOne).not.toHaveBeenCalled();
+      expect(samples.updateOne).not.toHaveBeenCalled();
     });
 
     // Issue #402: opening a position must also open a StorageAssignment
@@ -599,6 +640,22 @@ describe('MongoStorageRepository', () => {
       await expect(repo.autoAssignSamplePosition({ specimenId, boxId }, {})).rejects.toThrow(
         'BOX_NOT_FOUND'
       );
+    });
+
+    // #646 Wave 3 (RF017 AC#7): auto-assign must also refuse a RETIRED box,
+    // checked before it even looks up the sample.
+    it('refuses to auto-assign into a RETIRED box (criterion 7)', async () => {
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ ...boxDoc, status: 'RETIRED' })
+      });
+      const samples = makeCollection();
+      const db = makeDb({ samples, storageBoxes });
+      const repo = new MongoStorageRepository(db);
+
+      await expect(repo.autoAssignSamplePosition({ specimenId, boxId }, {})).rejects.toThrow(
+        'BOX_UNAVAILABLE'
+      );
+      expect(samples.findOne).not.toHaveBeenCalled();
     });
 
     it('throws SAMPLE_NOT_FOUND when the sample is missing', async () => {
@@ -838,6 +895,129 @@ describe('MongoStorageRepository', () => {
 
   describe('validatePositionAvailability', () => {
     const boxId = new ObjectId().toString();
+
+    // #646 Wave 3 (RF017 AC#7): "Bloquear local indisponível, interditado
+    // ou fora de condição" -- box.status/StorageContainer.status existed
+    // (StorageBox.js: ACTIVE/FULL/RETIRED; StorageContainer.js:
+    // OPERATIONAL/MAINTENANCE/RETIRED) but neither was ever checked here,
+    // so a RETIRED box (or one under a RETIRED/MAINTENANCE rack/shelf/
+    // freezer) still accepted new allocations as long as the specific
+    // position was unoccupied.
+    it('returns BOX_UNAVAILABLE for a RETIRED box, before even checking the position (criterion 7)', async () => {
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          _id: boxId,
+          status: 'RETIRED',
+          dimension: { rows: 4, cols: 4 },
+          occupancyGrid: {}
+        })
+      });
+      const db = makeDb({ storageBoxes });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.validatePositionAvailability({ boxId, position: 'A1' });
+      expect(result).toEqual(
+        expect.objectContaining({ available: false, error: 'BOX_UNAVAILABLE' })
+      );
+    });
+
+    it('returns LOCATION_UNAVAILABLE when the box\'s freezer is RETIRED (criterion 7)', async () => {
+      const freezerId = new ObjectId();
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          _id: boxId,
+          status: 'ACTIVE',
+          dimension: { rows: 4, cols: 4 },
+          occupancyGrid: {}
+        })
+      });
+      const storagePaths = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ boxId, rackId: null, shelfId: null, freezerId })
+      });
+      const storageContainers = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: freezerId, containerType: 'FREEZER', name: 'Freezer 1', status: 'RETIRED' })
+      });
+      const db = makeDb({ storageBoxes, storagePaths, storageContainers });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.validatePositionAvailability({ boxId, position: 'A1' });
+      expect(result).toEqual(
+        expect.objectContaining({ available: false, error: 'LOCATION_UNAVAILABLE' })
+      );
+    });
+
+    it('returns LOCATION_UNAVAILABLE when the box\'s rack is under MAINTENANCE (criterion 7)', async () => {
+      const rackId = new ObjectId();
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          _id: boxId,
+          status: 'ACTIVE',
+          dimension: { rows: 4, cols: 4 },
+          occupancyGrid: {}
+        })
+      });
+      const storagePaths = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ boxId, rackId, shelfId: null, freezerId: null })
+      });
+      const storageContainers = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: rackId, containerType: 'RACK', name: 'Rack 1', status: 'MAINTENANCE' })
+      });
+      const db = makeDb({ storageBoxes, storagePaths, storageContainers });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.validatePositionAvailability({ boxId, position: 'A1' });
+      expect(result).toEqual(
+        expect.objectContaining({ available: false, error: 'LOCATION_UNAVAILABLE' })
+      );
+    });
+
+    it('stays available when the box and every ancestor container are OPERATIONAL/ACTIVE (criterion 7, negative case)', async () => {
+      const freezerId = new ObjectId();
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          _id: boxId,
+          status: 'ACTIVE',
+          dimension: { rows: 4, cols: 4 },
+          currentOccupancy: 0,
+          occupancyGrid: {}
+        })
+      });
+      const storagePaths = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ boxId, rackId: null, shelfId: null, freezerId })
+      });
+      // The production query filters status: { $ne: 'OPERATIONAL' } --
+      // this mock (unlike a real Mongo query) doesn't evaluate the filter
+      // itself, so "every ancestor is OPERATIONAL" is simulated the way
+      // that filter would actually resolve against it: no matching
+      // (non-operational) document, i.e. null, not the operational
+      // container echoed back regardless of query.
+      const storageContainers = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(null)
+      });
+      const db = makeDb({ storageBoxes, storagePaths, storageContainers });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.validatePositionAvailability({ boxId, position: 'A1' });
+      expect(result.available).toBe(true);
+    });
+
+    it('stays available when the box has no StoragePath at all (no ancestor to check)', async () => {
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          _id: boxId,
+          status: 'ACTIVE',
+          dimension: { rows: 4, cols: 4 },
+          currentOccupancy: 0,
+          occupancyGrid: {}
+        })
+      });
+      const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
+      const db = makeDb({ storageBoxes, storagePaths });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.validatePositionAvailability({ boxId, position: 'A1' });
+      expect(result.available).toBe(true);
+    });
 
     it('returns BOX_NOT_FOUND when box does not exist', async () => {
       const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });

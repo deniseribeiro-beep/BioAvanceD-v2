@@ -4,6 +4,7 @@ import {
   createRealParticipant,
   seedActiveConsent,
   seedStorageBoxLocation,
+  retireStorageBox,
   seedStudy,
   seedProtocol,
   seedCollectionEntity,
@@ -917,5 +918,86 @@ test.describe('Sample labeling (RF016) — real backend', () => {
 
     const missing = body.results.find((r: any) => r.specimenId === 'does-not-exist');
     expect(missing).toMatchObject({ success: false });
+  });
+});
+
+// Wave 3 (#646). RF017's 7 acceptance criteria (requisitos-index.md) --
+// AC#1 (Freezer>Shelf>Rack>Box>Position hierarchy), AC#2 (no duplicate
+// position occupancy), AC#3 (StorageAssignment linked to specimen), AC#5
+// (install/move/withdraw recorded) and AC#6 (location history preserved)
+// were already covered by pre-existing storage/chain-of-custody code --
+// not RED-flagged in dict-07/dict-08, and not re-proven here. AC#4 (link
+// sensor/device to equipment) is a pre-existing capability
+// (equipment/sensors collections, seedStorageBoxLocation itself seeds
+// both) not exercised by this block.
+//
+// AC#7 ("Bloquear local indisponível, interditado ou fora de condição")
+// was genuinely unenforced before this session: StorageBox.status and
+// StorageContainer.status both already existed but nothing checked them
+// at any allocation/move entry point. MongoStorageRepository's new
+// checkLocationBlocked now guards all four write/check paths
+// (validatePositionAvailability, allocateSamplePosition,
+// autoAssignSamplePosition, moveSamplePosition's destination box) --
+// proven below via two of them (the read-only pre-flight check and the
+// move write path); the other two share the identical helper and are
+// covered at the unit level (MongoStorageRepository.test.js).
+//
+// Scope note: checkLocationBlocked also blocks via a RETIRED/MAINTENANCE
+// *ancestor* container (rack/shelf/freezer), by reading the storagePaths
+// collection for the box's rackId/shelfId/freezerId. That ancestor check
+// is unit-tested but NOT proven here against the real backend, because
+// storagePaths is read extensively but never written anywhere in
+// api/backend/src -- seedStorageBoxLocation (mirroring the real
+// createSample path) only ever writes the storageContainers parent_id
+// chain, never storagePaths. Filed as #654 rather than silently
+// narrowing AC#7's real-backend coverage to box-level only with no trace.
+test.describe('Storage location availability (RF017 AC#7) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  test('rejects position validation against a RETIRED storage box (criterion 7)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const { boxId } = await seedStorageBoxLocation();
+    await retireStorageBox(boxId);
+
+    const res = await request.get(`${apiBaseURL}/api/storage/validate/${boxId}/A1`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(res.status()).toBe(409);
+    const body = await res.json();
+    expect(body.available).toBe(false);
+    expect(body.error).toBe('BOX_UNAVAILABLE');
+    expect(body.message).toContain('RETIRED');
+  });
+
+  test('blocks moving a specimen into a RETIRED storage box (criterion 7)', async ({ request }) => {
+    const admin = await realLogin(request);
+
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const origin = await seedStorageBoxLocation();
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        boxId: origin.boxId,
+        positionCode: origin.positionCode,
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const sampleId = (await create.json()).data.sampleID;
+
+    const destination = await seedStorageBoxLocation();
+    await retireStorageBox(destination.boxId);
+
+    const res = await request.post(`${apiBaseURL}/api/storage/move`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { sampleId, targetBoxId: destination.boxId, targetPosition: 'A1' },
+    });
+    expect(res.status(), await res.text()).toBe(400);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.message).toContain('retirada de uso');
   });
 });
