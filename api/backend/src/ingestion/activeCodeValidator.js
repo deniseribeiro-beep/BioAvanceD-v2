@@ -10,41 +10,74 @@
  */
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 
+function buildResult(concept, release) {
+  if (!concept) {
+    return { active: false, status: 'unknown', concept: null, release: null };
+  }
+  if (concept.conceptStatus && concept.conceptStatus !== 'active') {
+    return { active: false, status: 'inactive_concept', concept, release: null };
+  }
+  if (!release || release.releaseStatus !== 'active') {
+    return { active: false, status: 'inactive_release', concept, release: release || null };
+  }
+  return { active: true, status: 'active', concept, release };
+}
+
+async function resolveRelease(releases, concept) {
+  if (!concept) return null;
+  return releases.findOne({ referenceDatasetReleaseId: concept.referenceDatasetReleaseId });
+}
+
 /**
  * Resolves one systemUri+code(+version) against TerminologyConcept, then its
- * owning ReferenceDatasetRelease. `version` omitted matches the newest
- * concept row for that systemUri+code (TerminologyConcept.create has no
- * "latest" flag of its own — validFrom descending is the best available
- * ordering; ties are acceptable since a real duplicate would be a data bug
- * upstream, not this validator's concern).
+ * owning ReferenceDatasetRelease.
+ *
+ * #676: `version` omitted used to pick the concept row with the newest
+ * `validFrom` — but no reference-import normalizer (reference-data/
+ * reference-imports/normalize*.js) ever sets `validFrom`, so that ordering
+ * never actually discriminated between rows a re-import's superseded
+ * release left behind and the current active release's own rows; it
+ * silently fell back to insertion order, which can surface the superseded
+ * row. Resolved instead via release status: `promote()` in
+ * reference-imports/pipeline.js guarantees at most one `releaseStatus:
+ * 'active'` release per `datasetCode`, so filtering candidate concepts down
+ * to the one whose own release is active is unambiguous by construction.
+ * More than one active-release match is a genuine upstream data bug (two
+ * releases active at once for the same code) — fail closed rather than
+ * silently pick one.
  */
 async function checkActiveCode(db, { systemUri, code, version = null }) {
   if (!systemUri || !code) {
     throw new Error('checkActiveCode: systemUri e code são obrigatórios');
   }
 
-  const conceptFilter = { systemUri, code };
-  if (version) conceptFilter.version = version;
-
   const concepts = db.collection(CANONICAL_COLLECTIONS.terminologyConcepts);
-  const concept = await concepts.findOne(conceptFilter, { sort: { validFrom: -1 } });
-
-  if (!concept) {
-    return { active: false, status: 'unknown', concept: null, release: null };
-  }
-
-  if (concept.conceptStatus && concept.conceptStatus !== 'active') {
-    return { active: false, status: 'inactive_concept', concept, release: null };
-  }
-
   const releases = db.collection(CANONICAL_COLLECTIONS.referenceDatasetReleases);
-  const release = await releases.findOne({ referenceDatasetReleaseId: concept.referenceDatasetReleaseId });
 
-  if (!release || release.releaseStatus !== 'active') {
-    return { active: false, status: 'inactive_release', concept, release: release || null };
+  if (version) {
+    const concept = await concepts.findOne({ systemUri, code, version });
+    return buildResult(concept, await resolveRelease(releases, concept));
   }
 
-  return { active: true, status: 'active', concept, release };
+  const cursor = await concepts.find({ systemUri, code });
+  const candidates = await cursor.toArray();
+  if (candidates.length === 0) {
+    return buildResult(null, null);
+  }
+
+  const withReleases = await Promise.all(
+    candidates.map(async (concept) => ({ concept, release: await resolveRelease(releases, concept) }))
+  );
+  const activeMatches = withReleases.filter(({ release }) => release && release.releaseStatus === 'active');
+
+  if (activeMatches.length > 1) {
+    return { active: false, status: 'ambiguous_active_release', concept: null, release: null };
+  }
+  if (activeMatches.length === 1) {
+    return buildResult(activeMatches[0].concept, activeMatches[0].release);
+  }
+
+  return buildResult(withReleases[0].concept, withReleases[0].release);
 }
 
 /**
