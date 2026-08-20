@@ -11,6 +11,12 @@ import {
   countTerminologyConceptsBySystemUri,
   closeFoundationDb,
 } from './helpers/queryFoundationData';
+import {
+  findIngestionQuarantineRecord,
+  countIngestionQuarantineRecordsByIdempotencyKey,
+  findIngestionIdempotencyKey,
+  closeIngestionDb,
+} from './helpers/queryIngestion';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -361,5 +367,95 @@ test.describe('Reference data importers (RF028) — real backend', () => {
 
     const concepts = await countTerminologyConceptsBySystemUri('http://edamontology.org/EDAM.owl');
     expect(concepts).toBeGreaterThan(0);
+  });
+});
+
+// RF029 slice 1/6 (#669): the ingestion gateway foundation — no entity slice
+// (#670-673) has a real route wired to it yet, so
+// interface/routes/ingestionTestSupport.routes.js's test-support-only
+// /api/_test-support/ingestion/probe (NODE_ENV+shared-secret gated, same
+// shape as iot.routes.js's telemetry-monitor routes) is this milestone's own
+// real-backend trigger — same rationale interop-monitoring.spec.ts already
+// uses for triggerMonitorCycle. Exercises the real ingestRecord() (real
+// Mongo reads/writes, no faked behavior): missing provenance -> quarantine,
+// a resolving reference + an active code (HPO's bootstrapped HP:0000001,
+// same fixture the RF028 AC9 block above already relies on) -> accepted,
+// and a repeated idempotencyKey -> replay without a second quarantine row.
+test.describe('Ingestion gateway foundation (RF029 slice 1/6) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+    await closeIngestionDb();
+  });
+
+  async function probeIngestionGateway(request: import('@playwright/test').APIRequestContext, body: Record<string, unknown>) {
+    const response = await request.post(`${apiBaseURL}/api/_test-support/ingestion/probe`, {
+      headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
+      data: body,
+    });
+    expect(response.ok()).toBe(true);
+    return response.json();
+  }
+
+  test('a record with no provenance envelope is quarantined, not silently accepted or corrected', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'IngestionFoundationProbe',
+      payload: { probe: 'missing-provenance' },
+      provenance: {},
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'PROVENANCE_FIELD_MISSING')).toBe(true);
+
+    const persisted = await findIngestionQuarantineRecord(outcome.quarantineRecord.ingestionQuarantineRecordId);
+    expect(persisted).toBeTruthy();
+    expect(persisted.resolutionStatus).toBe('open');
+  });
+
+  test('a record whose reference and reference code both resolve against real data is accepted', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'IngestionFoundationProbe',
+      payload: { probe: 'accepted', participantId: participant.participantId },
+      provenance: {
+        sourceSystem: 'urn:system:pipeline-continuity-e2e',
+        createdBy: 'Actor/e2e-suite',
+        retrievedAt: new Date().toISOString(),
+        purpose: 'e2e_proof',
+      },
+      references: [{ collection: 'patients', field: 'participantId', value: participant.participantId, label: 'participantId' }],
+      // HP:0000001 ("All"): the Foundation Data Pipeline bootstrap's own
+      // bundled fixture root concept, same one the RF028 AC9 block above
+      // waits for in Neo4j — guaranteed active with a real, non-fabricated
+      // ReferenceDatasetRelease behind it, unlike a hand-seeded concept doc.
+      referenceCodes: [{ systemUri: 'http://purl.obolibrary.org/obo/hp.owl', code: 'HP:0000001', label: 'probeCode' }],
+    });
+
+    expect(outcome.status).toBe('accepted');
+    expect(outcome.violations).toEqual([]);
+  });
+
+  test('a repeated idempotencyKey replays the first outcome instead of quarantining a second time', async ({ request }) => {
+    const idempotencyKey = `rf029-e2e-${Date.now()}`;
+    const body = {
+      entityType: 'IngestionFoundationProbe',
+      payload: { probe: 'idempotency' },
+      provenance: {},
+      idempotencyKey,
+    };
+
+    const first = await probeIngestionGateway(request, body);
+    expect(first.status).toBe('quarantined');
+
+    const second = await probeIngestionGateway(request, body);
+    expect(second.status).toBe('idempotent_replay');
+    expect(second.resultRef).toBe(first.quarantineRecord.ingestionQuarantineRecordId);
+
+    const keyDoc = await findIngestionIdempotencyKey(idempotencyKey, 'IngestionFoundationProbe');
+    expect(keyDoc?.status).toBe('completed');
+
+    const quarantineCount = await countIngestionQuarantineRecordsByIdempotencyKey(idempotencyKey);
+    expect(quarantineCount).toBe(1);
   });
 });

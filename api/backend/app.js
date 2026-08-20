@@ -309,6 +309,9 @@ app.use("/api/rooms", require("./src/interface/routes/room.routes"));
 app.use("/api/policies", require("./src/interface/routes/policy.routes"));
 app.use("/api/sensors", require("./src/interface/routes/sensor.routes"));
 app.use("/api/iot", require("./src/interface/routes/iot.routes"));
+// RF029 slice 1/6 (#669): test-support-only ingestion gateway probe, same
+// NODE_ENV+shared-secret gating as iot.routes.js's telemetry-monitor routes.
+app.use("/api/_test-support/ingestion", require("./src/interface/routes/ingestionTestSupport.routes"));
 app.use("/api/temperature", require("./src/interface/routes/temperature.routes"));
 app.use("/api/incidents", require("./src/interface/routes/incident.routes"));
 app.use("/api/e-consent", require("./src/routes/eConsent.js"));
