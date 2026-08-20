@@ -1407,7 +1407,7 @@ describe('MongoStorageRepository', () => {
       });
     });
 
-    it('happy path with no matching storagePath returns path N/A and null fullHierarchy', async () => {
+    it('returns path N/A and null fullHierarchy when there is no StoragePath and no resolvable box', async () => {
       const boxId = new ObjectId();
       const samples = makeCollection({
         findOne: vi.fn().mockResolvedValueOnce({
@@ -1424,6 +1424,45 @@ describe('MongoStorageRepository', () => {
       expect(result.found).toBe(true);
       expect(result.location.path).toBe('N/A');
       expect(result.location.fullHierarchy).toBeNull();
+    });
+
+    // #657: storagePaths is never written anywhere in api/backend/src (#654),
+    // so every real sample hit this branch and always showed path:'N/A' --
+    // reuse #654's live parent_id-walk fallback here too.
+    it('#657: falls back to a live parent_id walk when there is no StoragePath document', async () => {
+      const boxId = new ObjectId();
+      const rackId = new ObjectId();
+      const shelfId = new ObjectId();
+      const freezerId = new ObjectId();
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          _id: sampleId,
+          barcode: 'BC-5',
+          storageLocation: { boxId, position: 'C1' }
+        })
+      });
+      const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: boxId, name: 'Box1', parent_id: rackId })
+      });
+      const storageContainers = makeCollection({
+        findOne: vi.fn()
+          .mockResolvedValueOnce({ _id: rackId, name: 'Rack1', containerType: 'RACK', parent_id: shelfId })
+          .mockResolvedValueOnce({ _id: shelfId, name: 'Shelf1', containerType: 'SHELF', parent_id: freezerId })
+          .mockResolvedValueOnce({ _id: freezerId, name: 'Freezer1', containerType: 'FREEZER', parent_id: null })
+      });
+      const db = makeDb({ samples, storagePaths, storageBoxes, storageContainers });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.getSampleStorageLocation({ sampleId });
+      expect(result.found).toBe(true);
+      expect(result.location.path).toBe('Freezer1/Shelf1/Rack1/Box1');
+      expect(result.location.fullHierarchy).toEqual({
+        freezerId,
+        shelfId,
+        rackId,
+        boxId
+      });
     });
   });
 
@@ -1489,6 +1528,70 @@ describe('MongoStorageRepository', () => {
       await repo.resolveStorageLocationsForSamples([{ _id: 'sample-e' }]);
 
       expect(findSpy).not.toHaveBeenCalled();
+    });
+
+    // #657: same live parent_id-walk fallback #654/#657's getSampleStorageLocation
+    // fix introduced, reused here so a page of samples with no StoragePath
+    // documents (every real box, per #654) still resolves a real path instead
+    // of 'N/A' across the whole list view.
+    it('#657: falls back to a live parent_id walk for boxes with no StoragePath document', async () => {
+      const boxId = new ObjectId();
+      const rackId = new ObjectId();
+      const shelfId = new ObjectId();
+      const freezerId = new ObjectId();
+      const toArray = vi.fn().mockResolvedValue([]);
+      const storagePaths = makeCollection({ find: vi.fn().mockReturnValue({ toArray }) });
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: boxId, name: 'Box1', parent_id: rackId })
+      });
+      const storageContainers = makeCollection({
+        findOne: vi.fn()
+          .mockResolvedValueOnce({ _id: rackId, name: 'Rack1', containerType: 'RACK', parent_id: shelfId })
+          .mockResolvedValueOnce({ _id: shelfId, name: 'Shelf1', containerType: 'SHELF', parent_id: freezerId })
+          .mockResolvedValueOnce({ _id: freezerId, name: 'Freezer1', containerType: 'FREEZER', parent_id: null })
+      });
+      const db = makeDb({ storagePaths, storageBoxes, storageContainers });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.resolveStorageLocationsForSamples([
+        { _id: 'sample-f', storageLocation: { boxId, position: 'D4' } }
+      ]);
+
+      expect(result.get('sample-f').path).toBe('Freezer1/Shelf1/Rack1/Box1');
+      expect(result.get('sample-f').fullHierarchy).toEqual({
+        freezerId,
+        shelfId,
+        rackId,
+        boxId
+      });
+    });
+
+    it('#657: resolves a shared boxId with only one live storageBoxes lookup', async () => {
+      const boxId = new ObjectId();
+      const rackId = new ObjectId();
+      const shelfId = new ObjectId();
+      const freezerId = new ObjectId();
+      const toArray = vi.fn().mockResolvedValue([]);
+      const storagePaths = makeCollection({ find: vi.fn().mockReturnValue({ toArray }) });
+      const storageBoxesFindOne = vi.fn().mockResolvedValueOnce({ _id: boxId, name: 'Box1', parent_id: rackId });
+      const storageBoxes = makeCollection({ findOne: storageBoxesFindOne });
+      const storageContainers = makeCollection({
+        findOne: vi.fn()
+          .mockResolvedValueOnce({ _id: rackId, name: 'Rack1', containerType: 'RACK', parent_id: shelfId })
+          .mockResolvedValueOnce({ _id: shelfId, name: 'Shelf1', containerType: 'SHELF', parent_id: freezerId })
+          .mockResolvedValueOnce({ _id: freezerId, name: 'Freezer1', containerType: 'FREEZER', parent_id: null })
+      });
+      const db = makeDb({ storagePaths, storageBoxes, storageContainers });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.resolveStorageLocationsForSamples([
+        { _id: 'sample-g', storageLocation: { boxId, position: 'D4' } },
+        { _id: 'sample-h', storageLocation: { boxId, position: 'D5' } }
+      ]);
+
+      expect(storageBoxesFindOne).toHaveBeenCalledTimes(1);
+      expect(result.get('sample-g').path).toBe('Freezer1/Shelf1/Rack1/Box1');
+      expect(result.get('sample-h').path).toBe('Freezer1/Shelf1/Rack1/Box1');
     });
   });
 
