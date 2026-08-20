@@ -115,6 +115,41 @@ const clinicalDataSchema = {
   }
 };
 
+// RF029 slice 3/6 (#671): TelemetryReading per dict-02_DICIONARIO.md
+// ELM-0357..ELM-0365. Required fields are the dictionary's 1..1 ones that a
+// caller can also actually supply explicitly -- notably `value`/`unit`/
+// `metricType` are required even though RF009's real POST /api/iot/telemetry
+// body today only sends {sensorId, temperature, timestamp} (implicit
+// Celsius, implicit "temperature" metric): the canonical contract
+// deliberately does not accept that implicit legacy shape, same
+// enforce-the-explicit-cardinality spirit as AC#2's alias/unknown-field
+// rejection. `equipmentId` stays optional -- derivable server-side via
+// SensorMetadata.device (same "optional, joinable" call clinicalDataSchema
+// made for participantId) -- even though a real Device model/collection
+// exists (models/Device.schema.js) to reference-check it against when
+// supplied. `thresholdProfileId` also stays optional: dict-02 types it a
+// required Reference, but no ThresholdProfile entity exists in this
+// codebase yet (RF009's temperaturePolicies collection is the closest
+// practical analog, but a distinct shape/name -- introducing a formal
+// ThresholdProfile entity is out of this thin slice's scope).
+const telemetrySchema = {
+  $id: 'canonical.v1.telemetry',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    sensorId: { type: 'string', minLength: 1 },
+    equipmentId: { type: 'string' },
+    metricType: { type: 'string' },
+    timestamp: { type: 'string' },
+    value: { type: 'number' },
+    unit: { type: 'string' },
+    measurementQuality: { type: 'string' },
+    calibrationStatus: { type: 'string' },
+    thresholdProfileId: { type: 'string' }
+  },
+  required: ['sensorId', 'metricType', 'timestamp', 'value', 'unit']
+};
+
 const intakeSchema = {
   $id: 'canonical.v1.intake',
   type: 'object',
@@ -160,7 +195,7 @@ const intakeSchema = {
   required: ['participant', 'consent', 'specimen', 'clinical', 'biomarkers']
 };
 
-for (const schema of [participantSchema, specimenSchema, consentSchema, clinicalDataSchema, intakeSchema]) {
+for (const schema of [participantSchema, specimenSchema, consentSchema, clinicalDataSchema, telemetrySchema, intakeSchema]) {
   ajv.addSchema(schema);
 }
 
@@ -181,6 +216,7 @@ module.exports = {
     specimenSchema,
     consentSchema,
     clinicalDataSchema,
+    telemetrySchema,
     intakeSchema
   }
 };
