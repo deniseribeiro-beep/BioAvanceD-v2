@@ -809,7 +809,11 @@ describe('sample.routes', () => {
         barcode: 'BC<1>&"\'',
         sampleType: 'Sangue & Plasma',
       });
-      const app = buildApp(router, { collection: () => ({ findOne }) });
+      // #646 Wave 3 (RF016 AC#6): recordLabelGeneration's labelGenerations
+      // insertOne, reused (harmlessly) across every collection name this
+      // mock serves.
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'lg1' });
+      const app = buildApp(router, { collection: () => ({ findOne, insertOne }) });
 
       const res = await request(app).get('/api/samples/000000000000000000000000/label');
 
@@ -824,7 +828,8 @@ describe('sample.routes', () => {
     it('falls back to _id, req.params.id, sampleIdentifier and "AMOSTRA" when sample fields are absent', async () => {
       const { router } = loadRoute();
       const findOne = vi.fn().mockResolvedValue({ _id: { toString: () => 'raw-id' } });
-      const app = buildApp(router, { collection: () => ({ findOne }) });
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'lg1' });
+      const app = buildApp(router, { collection: () => ({ findOne, insertOne }) });
 
       const res = await request(app).get('/api/samples/000000000000000000000000/label');
 
@@ -837,7 +842,8 @@ describe('sample.routes', () => {
     it('falls back to req.params.id when sample has neither sampleID nor _id', async () => {
       const { router } = loadRoute();
       const findOne = vi.fn().mockResolvedValue({});
-      const app = buildApp(router, { collection: () => ({ findOne }) });
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'lg1' });
+      const app = buildApp(router, { collection: () => ({ findOne, insertOne }) });
 
       const res = await request(app).get('/api/samples/fallback-param-id/label');
 
@@ -1505,6 +1511,121 @@ describe('sample.routes', () => {
     });
   });
 
+  // #646 Wave 3 (RF016 AC#4): batch label generation given a list of
+  // specimen identifiers.
+  describe('POST /labels/batch', () => {
+    function statefulDb({ samples = [], organizationScope } = {}) {
+      const labelGenerations = { docs: [], findOne: null, insertOne: null };
+      labelGenerations.findOne = vi.fn(async (query) => labelGenerations.docs.find((d) => d.specimenId === query.specimenId) || null);
+      labelGenerations.insertOne = vi.fn(async (doc) => { labelGenerations.docs.push(doc); return { insertedId: 'lg-' + labelGenerations.docs.length }; });
+
+      const samplesCollection = { findOne: vi.fn(async (query) => samples.find((s) => query.$or.some((cond) => Object.entries(cond).every(([k, v]) => String(s[k]) === String(v)))) || null) };
+
+      return {
+        db: { collection: (name) => (name === 'labelGenerations' ? labelGenerations : samplesCollection) },
+        labelGenerations,
+      };
+    }
+
+    it('returns 400 when specimenIds is missing or empty', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples/labels/batch').send({});
+      expect(res.status).toBe(400);
+
+      const res2 = await request(app).post('/api/samples/labels/batch').send({ specimenIds: [] });
+      expect(res2.status).toBe(400);
+    });
+
+    it('generates labels for every resolvable specimen, reporting per-id success and totals', async () => {
+      const getBarcodeIndustrialAssets = vi.fn(async (barcode) => ({
+        canonicalValue: barcode,
+        code128: { payload: barcode },
+        dataMatrix: { payload: barcode },
+        qr: { payload: barcode },
+      }));
+      const { router } = loadRoute({ sampleServiceOverrides: { getBarcodeIndustrialAssets } });
+      const { db, labelGenerations } = statefulDb({
+        samples: [
+          { _id: 's1', sampleID: 's1', barcode: 'BC-1' },
+          { _id: 's2', sampleID: 's2', barcode: 'BC-2' },
+        ],
+      });
+      const app = buildApp(router, db);
+
+      const res = await request(app).post('/api/samples/labels/batch').send({ specimenIds: ['s1', 's2'] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.total).toBe(2);
+      expect(res.body.data.generated).toBe(2);
+      expect(res.body.data.failed).toBe(0);
+      expect(res.body.data.results).toEqual([
+        expect.objectContaining({ specimenId: 's1', success: true, barcode: 'BC-1', reprint: false }),
+        expect.objectContaining({ specimenId: 's2', success: true, barcode: 'BC-2', reprint: false }),
+      ]);
+      expect(labelGenerations.insertOne).toHaveBeenCalledTimes(2);
+    });
+
+    it('marks a second generation for the same specimen as a reprint', async () => {
+      const getBarcodeIndustrialAssets = vi.fn(async (barcode) => ({
+        canonicalValue: barcode, code128: {}, dataMatrix: {}, qr: {},
+      }));
+      const { router } = loadRoute({ sampleServiceOverrides: { getBarcodeIndustrialAssets } });
+      const { db } = statefulDb({ samples: [{ _id: 's1', sampleID: 's1', barcode: 'BC-1' }] });
+      const app = buildApp(router, db);
+
+      const first = await request(app).post('/api/samples/labels/batch').send({ specimenIds: ['s1'] });
+      expect(first.body.data.results[0].reprint).toBe(false);
+
+      const second = await request(app).post('/api/samples/labels/batch').send({ specimenIds: ['s1'] });
+      expect(second.body.data.results[0].reprint).toBe(true);
+    });
+
+    it('reports a per-id failure (not found) without failing the whole batch', async () => {
+      const getBarcodeIndustrialAssets = vi.fn(async (barcode) => ({
+        canonicalValue: barcode, code128: {}, dataMatrix: {}, qr: {},
+      }));
+      const { router } = loadRoute({ sampleServiceOverrides: { getBarcodeIndustrialAssets } });
+      const { db } = statefulDb({ samples: [{ _id: 's1', sampleID: 's1', barcode: 'BC-1' }] });
+      const app = buildApp(router, db);
+
+      const res = await request(app).post('/api/samples/labels/batch').send({ specimenIds: ['s1', 'missing'] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.generated).toBe(1);
+      expect(res.body.data.failed).toBe(1);
+      expect(res.body.data.results[1]).toEqual(
+        expect.objectContaining({ specimenId: 'missing', success: false, error: 'Amostra não encontrada' })
+      );
+    });
+
+    it('reports a per-id 403 when a specimen is outside the caller\'s organization scope, without failing the whole batch', async () => {
+      const getBarcodeIndustrialAssets = vi.fn(async (barcode) => ({
+        canonicalValue: barcode, code128: {}, dataMatrix: {}, qr: {},
+      }));
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getBarcodeIndustrialAssets },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-1'] };
+          next();
+        },
+      });
+      const { db } = statefulDb({
+        samples: [{ _id: 's1', sampleID: 's1', barcode: 'BC-1', collectionSite: 'org-9' }],
+      });
+      const app = buildApp(router, db);
+
+      const res = await request(app).post('/api/samples/labels/batch').send({ specimenIds: ['s1'] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.failed).toBe(1);
+      expect(res.body.data.results[0]).toEqual(
+        expect.objectContaining({ specimenId: 's1', success: false, status: 403 })
+      );
+    });
+  });
+
   describe('GET /:id', () => {
     it('returns 503 when db is unavailable', async () => {
       const { router } = loadRoute();
@@ -2032,19 +2153,27 @@ describe('sample.routes', () => {
         generatedAt: '2026-01-01',
         code128: 'code128data',
         dataMatrix: 'dataMatrixData',
+        qr: 'qrData',
       });
       const { router } = loadRoute({
         sampleServiceOverrides: { getSampleByBarcode, getBarcodeIndustrialAssets },
       });
-      const app = buildApp(router, {});
+      // #646 Wave 3 (RF016 AC#6): recordLabelGeneration reads/writes
+      // labelGenerations -- no prior entry for 's1', so this call is a
+      // first generation (reprint: false).
+      const labelGenerations = { findOne: vi.fn().mockResolvedValue(null), insertOne: vi.fn().mockResolvedValue({ insertedId: 'lg1' }) };
+      const app = buildApp(router, { collection: (name) => (name === 'labelGenerations' ? labelGenerations : {}) });
 
       const res = await request(app).get('/api/samples/by-barcode/BC1/symbology-assets');
 
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual(
-        expect.objectContaining({ barcode: 'BC1', includePayload: false, code128: 'code128data' })
+        expect.objectContaining({ barcode: 'BC1', includePayload: false, code128: 'code128data', qr: 'qrData', reprint: false })
       );
       expect(getBarcodeIndustrialAssets).toHaveBeenCalledWith('BC1', { includePayload: false });
+      expect(labelGenerations.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ specimenId: 's1', formats: ['code128', 'dataMatrix', 'qr'], reprint: false })
+      );
     });
 
     it('returns 500 when generating assets throws', async () => {

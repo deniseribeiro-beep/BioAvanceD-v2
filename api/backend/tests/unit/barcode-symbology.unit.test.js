@@ -70,9 +70,14 @@ describe('parseScannedBarcode', () => {
     expect(result.isValid).toBe(true);
   });
 
-  it('identifies DataMatrix from ]Q3 prefix', () => {
+  // #646 Wave 3 (RF016 AC#2): ]Q3 is QR's own AIM symbology identifier,
+  // distinct from ]d2 (DataMatrix) -- previously folded into 'DataMatrix'
+  // because QR rendering didn't exist yet at all. Now that it does
+  // (generateBarcodeSymbologies/generateIndustrialBarcodeArtifacts below),
+  // the scanner-side identification has to be accurate too.
+  it('identifies QR from ]Q3 prefix', () => {
     const result = parseScannedBarcode(']Q3SMP-003');
-    expect(result.scannerSymbology).toBe('DataMatrix');
+    expect(result.scannerSymbology).toBe('QR');
     expect(result.normalizedValue).toBe('SMP-003');
     expect(result.isValid).toBe(true);
   });
@@ -136,10 +141,17 @@ describe('generateBarcodeSymbologies', () => {
     expect(result.dataMatrix.scannerPrefix).toBe(']d2');
   });
 
+  it('returns qr with correct payload and scannerPrefix', () => {
+    const result = generateBarcodeSymbologies('SMP-001');
+    expect(result.qr.payload).toBe('SMP-001');
+    expect(result.qr.scannerPrefix).toBe(']Q3');
+  });
+
   it('includes checksumHint strings', () => {
     const result = generateBarcodeSymbologies('SMP-001');
     expect(typeof result.code128.checksumHint).toBe('string');
     expect(typeof result.dataMatrix.checksumHint).toBe('string');
+    expect(typeof result.qr.checksumHint).toBe('string');
   });
 
   it('includes generatedAt Date', () => {

@@ -208,6 +208,51 @@ function escapeXml(value) {
     .replace(/'/g, '&apos;');
 }
 
+// #646 Wave 3 (RF016 AC#6): "auditar geração e reimpressão" -- shared by
+// both label-generation routes below (SVG /:id/label and PNG
+// /by-barcode/:barcode/symbology-assets) since they're two renderings of
+// the same underlying concept (a specimen's label) and a reimpressão is
+// tracked per specimen, not per format. labelGenerations is append-only:
+// the presence of a prior entry for this sampleId is what makes this call
+// a reprint rather than the first generation.
+async function recordLabelGeneration(db, { sample, formats, req }) {
+  const { getUserAnonId } = require('../../utils/userAnonymization');
+  const labelGenerationsCollection = await getCollection(db, 'labelGenerations');
+  const sampleId = String(sample._id);
+
+  const priorGeneration = await labelGenerationsCollection.findOne({ specimenId: sampleId });
+  const isReprint = Boolean(priorGeneration);
+
+  await labelGenerationsCollection.insertOne({
+    specimenId: sampleId,
+    barcode: sample.barcode || null,
+    formats,
+    reprint: isReprint,
+    generatedAt: new Date()
+  });
+
+  if (req.user) {
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    const generatedByAnonId = await getUserAnonId(req.user, db);
+    await auditLogger.log({
+      action: isReprint ? 'REPRINT' : 'GENERATE',
+      resourceType: 'SampleLabel',
+      resourceId: sampleId,
+      status: 'success',
+      severity: 'info',
+      message: isReprint
+        ? `Etiqueta reimpressa para amostra ${sampleId} (${formats.join(', ')})`
+        : `Etiqueta gerada para amostra ${sampleId} (${formats.join(', ')})`,
+      payload: { specimenId: sampleId, barcode: sample.barcode || null, formats, reprint: isReprint, generatedByAnonId },
+      req,
+      module: 'Amostras'
+    });
+  }
+
+  return { reprint: isReprint };
+}
+
 // RF004 - Cadastro de Amostra
 router.post('/',
   authenticate,
@@ -530,14 +575,113 @@ router.get('/:id/label', authenticate, requireOrganizationScope, async (req, res
   <text x="189" y="150" font-family="Arial, sans-serif" font-size="18" text-anchor="middle">${sampleIdentifier}</text>
 </svg>`;
 
+    // #646 Wave 3 (RF016 AC#6) - audited before responding so a request
+    // that never actually returns the label to the caller (e.g. a client
+    // disconnect) doesn't count as a generation.
+    const { reprint } = await recordLabelGeneration(db, { sample, formats: ['svg'], req });
+
     res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
     res.setHeader('Content-Disposition', `inline; filename="sample-label-${sampleIdentifier}.svg"`);
+    res.setHeader('X-Label-Reprint', String(reprint));
     return res.status(200).send(svg);
   } catch (error) {
     logger.error('Erro ao gerar etiqueta da amostra:', error.message);
     return res.status(500).json({
       success: false,
       error: 'Erro ao gerar etiqueta da amostra',
+      message: error.message
+    });
+  }
+});
+
+// #646 Wave 3 (RF016 AC#4): "gerar lote após cadastro ou importação
+// autorizada" -- batch generation on demand, given a list of specimen
+// identifiers (the caller resolves which samples just came from a
+// registration/import run; this endpoint doesn't itself auto-trigger from
+// either, same scoping decision as #650's notification-domain follow-up).
+// Each sample is resolved and scope-checked individually so one caller
+// can't fish for another organization's labels by including its id in the
+// batch -- a per-id 403 in results, not a whole-request failure.
+router.post('/labels/batch', authenticate, requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const specimenIds = Array.isArray(req.body?.specimenIds) ? req.body.specimenIds : [];
+    if (specimenIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'specimenIds é obrigatório e deve ser um array não vazio'
+      });
+    }
+
+    const samplesCollection = await getCollection(db, 'samples');
+    const results = await Promise.all(specimenIds.map(async (rawId) => {
+      const id = String(rawId);
+      try {
+        const numericId = Number(id);
+        const sample = await samplesCollection.findOne({
+          $or: [
+            ...(ObjectId.isValid(id) ? [{ _id: new ObjectId(id) }] : []),
+            ...(Number.isFinite(numericId) ? [{ sampleID: numericId }] : []),
+            { sampleID: id },
+            { sampleId: id },
+            { barcode: id },
+          ],
+        });
+
+        if (!sample) {
+          return { specimenId: id, success: false, error: 'Amostra não encontrada' };
+        }
+
+        if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+          return { specimenId: id, success: false, error: 'Acesso negado', status: 403 };
+        }
+
+        if (!sample.barcode) {
+          return { specimenId: id, success: false, error: 'Amostra não possui barcode gerado' };
+        }
+
+        const assets = await sampleService.getBarcodeIndustrialAssets(sample.barcode, { includePayload: false });
+        const { reprint } = await recordLabelGeneration(db, {
+          sample,
+          formats: ['code128', 'dataMatrix', 'qr'],
+          req
+        });
+
+        return {
+          specimenId: id,
+          success: true,
+          barcode: assets.canonicalValue,
+          reprint,
+          code128: assets.code128,
+          dataMatrix: assets.dataMatrix,
+          qr: assets.qr
+        };
+      } catch (error) {
+        return { specimenId: id, success: false, error: error.message };
+      }
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        total: results.length,
+        generated: results.filter((r) => r.success).length,
+        failed: results.filter((r) => !r.success).length,
+        results
+      }
+    });
+  } catch (error) {
+    logger.error('Erro ao gerar lote de etiquetas:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao gerar lote de etiquetas',
       message: error.message
     });
   }
@@ -993,14 +1137,23 @@ router.get('/by-barcode/:barcode/symbology-assets', authenticate, async (req, re
     const includePayload = String(req.query.includePayload || 'false').toLowerCase() === 'true';
     const assets = await sampleService.getBarcodeIndustrialAssets(barcode, { includePayload });
 
+    // #646 Wave 3 (RF016 AC#6).
+    const { reprint } = await recordLabelGeneration(db, {
+      sample: lookup.sample,
+      formats: ['code128', 'dataMatrix', 'qr'],
+      req
+    });
+
     return res.status(200).json({
       success: true,
       data: {
         barcode: assets.canonicalValue,
         generatedAt: assets.generatedAt,
         includePayload,
+        reprint,
         code128: assets.code128,
-        dataMatrix: assets.dataMatrix
+        dataMatrix: assets.dataMatrix,
+        qr: assets.qr
       }
     });
   } catch (error) {

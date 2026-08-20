@@ -816,3 +816,106 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     expect(response.status()).toBe(401);
   });
 });
+
+// Wave 3 kickoff (#646). RF016's 6 acceptance criteria (requisitos-index.md)
+// -- AC#3 (printer-layout validation) has no implementation anywhere in the
+// codebase and needs a design call before it can be scoped; filed as #652
+// rather than built here. AC#1/#2/#5 (unique specimenId+barcode, Code128/
+// DataMatrix/QR) and AC#4/#6 (batch generation, audit + reprint tracking)
+// are all proven below against the real backend.
+test.describe('Sample labeling (RF016) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  async function createRealSample(request: any, token: string): Promise<{ sampleID: string; barcode: string }> {
+    const participant = await createRealParticipant(request, apiBaseURL!, token);
+    const { boxId, positionCode } = await seedStorageBoxLocation();
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
+    });
+    expect([201, 202]).toContain(create.status());
+    const body = (await create.json()).data;
+
+    const get = await request.get(`${apiBaseURL}/api/samples/${body.sampleID}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const sample = (await get.json()).data;
+    return { sampleID: body.sampleID, barcode: sample.barcode };
+  }
+
+  test('generates Code128, DataMatrix and QR symbology assets tied to the specimen\'s own unique barcode (criteria 1, 2)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const sample = await createRealSample(request, admin.token);
+    expect(sample.barcode).toBeTruthy();
+
+    const res = await request.get(
+      `${apiBaseURL}/api/samples/by-barcode/${encodeURIComponent(sample.barcode)}/symbology-assets`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect(res.ok(), await res.text()).toBeTruthy();
+    const assets = (await res.json()).data;
+
+    expect(assets.barcode).toBe(sample.barcode);
+    expect(assets.code128.payload).toBe(sample.barcode);
+    expect(assets.code128.scannerPrefix).toBe(']C1');
+    expect(assets.dataMatrix.payload).toBe(sample.barcode);
+    expect(assets.dataMatrix.scannerPrefix).toBe(']d2');
+    expect(assets.qr.payload).toBe(sample.barcode);
+    expect(assets.qr.scannerPrefix).toBe(']Q3');
+  });
+
+  test('never reuses a barcode across two distinct specimens (criterion 5)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const sampleA = await createRealSample(request, admin.token);
+    const sampleB = await createRealSample(request, admin.token);
+
+    expect(sampleA.barcode).toBeTruthy();
+    expect(sampleB.barcode).toBeTruthy();
+    expect(sampleA.barcode).not.toBe(sampleB.barcode);
+  });
+
+  test('audits label generation and distinguishes a reprint from the first generation (criterion 6)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const sample = await createRealSample(request, admin.token);
+    const url = `${apiBaseURL}/api/samples/by-barcode/${encodeURIComponent(sample.barcode)}/symbology-assets`;
+
+    const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
+    const first = await request.get(url, { headers: { Authorization: `Bearer ${admin.token}` } });
+    expect(first.ok()).toBeTruthy();
+    expect((await first.json()).data.reprint).toBe(false);
+    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+
+    const watch2 = await watchAuditTrail(request, apiBaseURL!, admin.token);
+    const second = await request.get(url, { headers: { Authorization: `Bearer ${admin.token}` } });
+    expect(second.ok()).toBeTruthy();
+    expect((await second.json()).data.reprint).toBe(true);
+    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch2);
+  });
+
+  test('generates a batch of labels for multiple newly-registered specimens in one call (criterion 4)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const sampleA = await createRealSample(request, admin.token);
+    const sampleB = await createRealSample(request, admin.token);
+
+    const res = await request.post(`${apiBaseURL}/api/samples/labels/batch`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { specimenIds: [sampleA.sampleID, sampleB.sampleID, 'does-not-exist'] },
+    });
+    expect(res.ok(), await res.text()).toBeTruthy();
+    const body = (await res.json()).data;
+
+    expect(body.total).toBe(3);
+    expect(body.generated).toBe(2);
+    expect(body.failed).toBe(1);
+
+    const resultA = body.results.find((r: any) => r.specimenId === sampleA.sampleID);
+    expect(resultA).toMatchObject({ success: true, barcode: sampleA.barcode });
+    expect(resultA.qr.payload).toBe(sampleA.barcode);
+
+    const missing = body.results.find((r: any) => r.specimenId === 'does-not-exist');
+    expect(missing).toMatchObject({ success: false });
+  });
+});
