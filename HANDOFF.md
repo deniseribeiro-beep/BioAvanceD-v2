@@ -112,16 +112,17 @@ gate's detection window is too narrow generically, not
   `api/backend/storage/assays/` (neither this sitting's doing).
 - No PR to `main` exists.
 - **Docker**: `backend-app-test` was rebuilt to pick up the RF024 code
-  and re-verified (3/3 new e2e passing) before the stack came down.
-  RBAC catalog was re-seeded against it (22 permissions, 5 roles) so
-  `manageAccessRequests` is live in the image, but that seed lived in
-  Mongo, not the image — **torn down at end of session** (`compose down`,
-  named volumes preserved, this sitting's own `clean-up` decision since
-  it had been inherited already-running from the prior rotation with
-  nothing queued needing it up). A fresh session needs its own
-  `docker compose ... up -d --wait <services>` bring-up (per
-  `docker-workflow`'s BioAvanceD-v2 overlay recipe) and its own RBAC
-  reseed before any `manageAccessRequests`-gated route will authorize.
+  and re-verified (3/3 new e2e passing), and the RBAC catalog re-seeded
+  against it (22 permissions, 5 roles, `manageAccessRequests` live) —
+  then **torn down at end of session** (`compose down`, no `-v`, this
+  sitting's own `clean-up` decision since it had been inherited
+  already-running from the prior rotation with nothing queued needing
+  it up). Per `docker-workflow`'s own `mongodb-test-data` gotcha, a
+  plain `down` doesn't drop that named volume, so the RBAC seed
+  (persisted in Mongo, not the image) should still be there on the next
+  `docker compose ... up -d --wait <services>` bring-up — but confirm
+  with a quick `manageAccessRequests`-gated call rather than assuming,
+  since this wasn't re-verified by actually bringing the stack back up.
 - Two pre-existing dangling local branches, still untouched:
   `test/377-docs-on-main`, `test/human-showcase-video`. Neither merged
   anywhere. (The slice branch this sitting used,
