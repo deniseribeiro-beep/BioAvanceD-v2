@@ -1,13 +1,30 @@
 # HANDOFF
 
-**Written:** 2026-08-20, mid-sitting (not the sitting's end -- rotating
-per-item per `rabbit-hole`'s Step 4). Continuing the Wave 3 rabbit hole
-under Dennis's "continue, Docker is on, we're only out when we finish
-Wave 3, though we will probably not finish this session" instruction.
-Landed **#657**, **#676**, **#656**, and **#664** this sitting, plus
-follow-ups **#680** and two skills-pack findings
-(**dyeallpies-skills-pack#358**, **#359**). Still inside the rabbit
-hole -- more queue items pending this same sitting.
+**Written:** 2026-08-20, end of this sitting (rotating one last time per
+`rabbit-hole`'s Step 4/5). Continuing the Wave 3 rabbit hole under
+Dennis's "continue, Docker is on, we're only out when we finish Wave 3,
+though we will probably not finish this session" instruction. Landed
+**#657**, **#676**, **#656**, and **#664** this sitting, plus follow-ups
+**#680** and two skills-pack findings (**dyeallpies-skills-pack#358**,
+**#359**). Stopping here at the sitting's own budget checkpoint (Step
+5), not because anything blocked -- still inside the rabbit hole.
+
+**Sized but declined this sitting: #648** (RF014 AC#4, forced password
+reset). Investigated (read the issue, the existing `reset-mfa`
+precedent in `user.routes.js`, and `auth.service.js`'s login/
+`processLogin` flow) and confirmed it's well-scoped and unambiguous --
+but bigger than it first looked: a new `mustChangePassword` user-model
+field, an admin endpoint mirroring `reset-mfa`'s shape, real
+entanglement with the login flow (a `requiresPasswordChange`-style
+response + temp token, matching the existing `requiresMFASetup`
+pattern), and a follow-up endpoint to actually set the new password --
+all in a security-sensitive area (auth/login) that deserves a full
+iteration's attention and its own real-backend proof, not a squeeze
+into an already ~7/10-point sitting's tail end. No code was touched for
+it -- pure investigation, safe to pick up fresh next time. #649 (RF014
+AC#8, revoke sessions) is adjacent/similar in shape and probably
+belongs in the same future iteration as #648 since both touch
+`security.service.js`/session lifecycle.
 
 ## Rabbit-hole state: STILL INSIDE, not exited
 
@@ -24,14 +41,14 @@ started).
 
 | # | RF | One-line | Note |
 |---|---|---|---|
-| #648 | RF014 | AC#4: no admin forced password reset | mechanical, build-loop shape |
-| #649 | RF014 | AC#8: policy changes don't revoke sessions | mechanical, build-loop shape |
+| #648 | RF014 | AC#4: no admin forced password reset | sized this sitting -- bigger than it looks, touches login flow, security-sensitive; own iteration, see note above |
+| #649 | RF014 | AC#8: policy changes don't revoke sessions | likely same iteration as #648 (adjacent, same file area) |
 | #650 | RF015 | notification engine only wired to 1 of 5 domains | larger, may need divide-and-conquer |
 | #660 | RF024 | AC#4: Shipment entity not built | explicitly "not urgent... file as a marker" -- don't pick |
 | #661 | RF024 | AC#2: evaluateCompatibility skips dataset/file consent | borderline design call (is de-identified-by-design an explicit policy?) -- read closely before picking |
 | #662 | RF024 | manageAccessRequests permission may be too broad | design call |
 | #663 | RF024 | AC#2: no AccessPolicy entity | **explicit design call, skip** |
-| #665 | RF025 | Técnico (RF's own primary actor) can't create Assay/ReagentLot | mechanical -- matches nonconformances route's own precedent in the same slice |
+| #665 | RF025 | Técnico (RF's own primary actor) can't create Assay/ReagentLot | **re-triaged this sitting: genuine RBAC/access-control policy call ("confirm with Dennis/Denise... or Coordenador-only is intended"), NOT mechanical despite the nonconformances precedent pointing one way -- skip unless Dennis weighs in** |
 | #666 | RF025 | AC#3: dict-02 Device entity richer than code's Equipment | **explicit design call, skip** |
 | #667 | RF026 | RetentionPolicy ALLOWED_ENTITY_TYPES too narrow | **explicit design call, skip -- needs Dennis/Denise** |
 | #675 | RF029 | test-support probe route: attacker-controlled payload write, audit before deploy | security-flavored, needs Docker |
@@ -40,18 +57,19 @@ started).
 | #679 | RF029 | file vocab mismatch (fileFormat/fileRole) | needs Docker |
 | #680 | RF029-adjacent (filed this sitting) | canonical contracts version-requirement policy call | design call, skip |
 
-Recommended next pick: **#665** (mechanical, small, same file area as
-#664 so context is warm) or **#648/#649** (RF014, independent,
-build-loop shape, no Docker needed for #648; #649 touches the
-`sessions` collection, check if native mock suffices before reaching
-for Docker).
+**Of the 15, only #650/#661/#675/#677/#678/#679 are real unstarted
+candidates for the next iteration** (plus #648+#649 as their own
+iteration) -- #660/#662/#663/#665/#666/#667/#680 all need Dennis/Denise's
+input before touching, don't default to them just because they're in
+the queue.
 
 **Budget (rabbit-hole Step 5):** ~10-point sitting budget. #657=1pt,
 #676=~1-2pt, #656=1pt, #664=~3pt (build-loop, Docker, multi-file,
-touched a shared route factory). Running total: **~7/10**. Getting
-close to the sitting's own stop-and-report checkpoint -- one, maybe two
-more small/medium items before surfacing per Step 5, unless the next
-pick is small enough to finish cheaply first.
+touched a shared route factory). Running total: **~7/10** --
+this sitting's own stop-and-report checkpoint, per Step 5. Not a fixed
+count reached by coincidence: #648 was investigated and explicitly
+declined for size/sensitivity reasons above, which is what actually
+triggered stopping here rather than squeezing in one more small item.
 
 ## What landed this sitting (so far)
 
@@ -130,12 +148,22 @@ issues closed with merge-commit-bearing comments.
 
 ## Recommended next steps
 
-Still inside the rabbit hole, approaching this sitting's own budget
-checkpoint (~7/10). Next: pop **#665** or **#648/#649** (mechanical,
-independent of the design-call items). Invoke the routed skill for the
-*current* issue right before editing, every time. The Docker stack is
-up -- reuse it for any RF029-adjacent pick rather than tearing down and
-rebuilding. Rotate this file again per Step 4 after each close; stop at
-the budget checkpoint or when Dennis says stop. #674 stays out of reach
-until RF027 exists; #660/#663/#666/#667/#680 stay parked as explicit
-design calls for Dennis/Denise, not to be resolved unilaterally.
+Still inside the rabbit hole -- stopped at this sitting's own budget
+checkpoint (~7/10), per Dennis's own "probably won't finish this
+session" framing, not because anything blocked. Next sitting: pop
+**#650**, **#661**, **#675**, **#677**, **#678**, or **#679** (the only
+non-design-call items left), or start a fresh iteration on **#648+#649**
+together (same file area, both security-sensitive, both need real
+login-flow/session-lifecycle work and their own real-backend proof).
+Invoke the routed skill for the *current* issue right before editing,
+every time (see this sitting's own friction notes above). The Docker
+stack is up as of this writing -- reuse it for any RF029-adjacent pick
+rather than tearing down and rebuilding, if the next sitting starts
+before it's been torn down some other way. Rotate this file again per
+Step 4 after each close; stop at the budget checkpoint or when Dennis
+says stop. #674 stays out of reach until RF027 exists;
+#660/#662/#663/#665/#666/#667/#680 all stay parked as explicit
+design/policy calls for Dennis/Denise -- don't resolve any of them
+unilaterally, even ones that look mechanical at first glance (see
+#665's re-triage above -- a plausible-looking precedent isn't the same
+as a settled policy).
