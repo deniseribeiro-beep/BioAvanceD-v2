@@ -98,7 +98,16 @@ describe('POST /api/assays', () => {
 
   it('creates an assay for a Coordenador+ role', async () => {
     const coll = createCollectionMock({ insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }) });
-    app.locals.db = createDbMock({ assays: coll, ...rbacCollectionsAdmin });
+    // #664: validateAssayReferences now checks specimenIds/protocolId/
+    // operatorId/laboratoryId resolve to real records before create.
+    app.locals.db = createDbMock({
+      assays: coll,
+      samples: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: 'specimen-1' }) }),
+      protocols: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ protocolId: 'protocol-1' }) }),
+      users: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: 'user-1' }) }),
+      organizations: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }) }),
+      ...rbacCollectionsAdmin,
+    });
 
     const res = await request(app)
       .post('/api/assays')
@@ -109,6 +118,23 @@ describe('POST /api/assays', () => {
     expect(res.body.success).toBe(true);
     expect(res.body.data.assayId).toBeTruthy();
     expect(res.body.data.specimenIds).toEqual(['specimen-1']);
+  });
+
+  it('#664: returns 404 when specimenIds does not resolve to a real sample', async () => {
+    app.locals.db = createDbMock({
+      protocols: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ protocolId: 'protocol-1' }) }),
+      users: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: 'user-1' }) }),
+      organizations: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }) }),
+      ...rbacCollectionsAdmin,
+    });
+
+    const res = await request(app)
+      .post('/api/assays')
+      .set('Authorization', `Bearer ${makeToken('qa-1', 4)}`)
+      .send(VALID_ASSAY_PAYLOAD);
+
+    expect(res.status).toBe(404);
+    expect(res.body.message).toMatch(/specimenIds/);
   });
 });
 

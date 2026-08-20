@@ -3,7 +3,7 @@ const { ObjectId } = require('mongodb');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requireRole } = require('../../infrastructure/middleware/rbac');
 
-function createMasterDataRouter({ collectionName, idField, model }) {
+function createMasterDataRouter({ collectionName, idField, model, validateReferences }) {
   const router = express.Router();
 
   router.use(authenticate);
@@ -57,10 +57,20 @@ function createMasterDataRouter({ collectionName, idField, model }) {
         return res.status(422).json({ success: false, error: 'Payload inválido', details: validation.errors });
       }
 
+      // #664: optional per-entity referential-integrity check (e.g. Assay's
+      // specimen/protocol/operator/laboratory/reagentLot/equipment links) --
+      // runs after format validation, before the document is created.
+      if (validateReferences) {
+        await validateReferences(db, payload);
+      }
+
       const document = model.create(payload);
       const result = await db.collection(collectionName).insertOne(document);
       return res.status(201).json({ success: true, data: { _id: result.insertedId, ...document } });
     } catch (error) {
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({ success: false, error: error.message, message: error.message });
+      }
       return res.status(500).json({ success: false, error: 'Erro ao criar dado mestre', message: error.message });
     }
   });

@@ -1138,6 +1138,19 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     expect(equipmentRes.status(), await equipmentRes.text()).toBe(201);
     const equipmentID = (await equipmentRes.json()).data.equipmentID;
 
+    // #664: laboratoryId now resolves to a real Organization.
+    const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        officialName: `RF025 Lab ${suffix}`,
+        acronym: 'RF025',
+        organizationType: 'biobank',
+        countryCode: 'BR',
+      },
+    });
+    expect(orgRes.status(), await orgRes.text()).toBe(201);
+    const organizationId = (await orgRes.json()).data.organizationId;
+
     const assayRes = await request.post(`${apiBaseURL}/api/assays`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
@@ -1146,7 +1159,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
         assayType: 'RNA sequencing',
         protocolId,
         operatorId: String(admin.user._id),
-        laboratoryId: 'org-rf025',
+        laboratoryId: organizationId,
         assayDateTime: new Date().toISOString(),
         intendedUse: 'RF025 e2e proof',
         reagentLotIds: [reagentId],
@@ -1164,6 +1177,35 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     expect(assay.controls).toEqual([{ controlType: 'positive', result: 'pass', reagentLotId: reagentId, notes: null }]);
   });
 
+  // #664: specimenIds/operatorId/laboratoryId now resolve to real records
+  // (see the two "rejects ... referential" tests below) -- every test past
+  // this point needs a real specimen/operator/organization fixture, not the
+  // placeholder strings this file used before that referential check existed.
+  async function seedRealAssayLinkage(request: any, admin: any) {
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const sampleRes = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
+    });
+    expect(sampleRes.status(), await sampleRes.text()).toBe(201);
+    const specimenId = String((await sampleRes.json()).data.sampleID);
+
+    const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        officialName: `RF025 Lab ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        acronym: 'RF025',
+        organizationType: 'biobank',
+        countryCode: 'BR',
+      },
+    });
+    expect(orgRes.status(), await orgRes.text()).toBe(201);
+    const organizationId = (await orgRes.json()).data.organizationId;
+
+    return { specimenId, operatorId: String(admin.user._id), organizationId };
+  }
+
   test('rejects a control entry with no valid controlType (criterion 4)', async ({ request }) => {
     const admin = await realLogin(request);
     const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1171,16 +1213,17 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     const protocolId = `rf025-protocol-${suffix}`;
     await seedStudy(studyId);
     await seedProtocol(protocolId);
+    const { specimenId, operatorId, organizationId } = await seedRealAssayLinkage(request, admin);
 
     const assayRes = await request.post(`${apiBaseURL}/api/assays`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         studyId,
-        specimenIds: ['specimen-does-not-exist'],
+        specimenIds: [specimenId],
         assayType: 'RNA sequencing',
         protocolId,
-        operatorId: 'operator-rf025',
-        laboratoryId: 'org-rf025',
+        operatorId,
+        laboratoryId: organizationId,
         assayDateTime: new Date().toISOString(),
         intendedUse: 'RF025 e2e negative case',
         controls: [{ result: 'pass' }],
@@ -1191,6 +1234,60 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     expect(body.details.join(' ')).toContain('controlType');
   });
 
+  test('#664: rejects an assay create when specimenIds does not resolve to a real sample', async ({ request }) => {
+    const admin = await realLogin(request);
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const studyId = `rf025-study-${suffix}`;
+    const protocolId = `rf025-protocol-${suffix}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId);
+    const { operatorId, organizationId } = await seedRealAssayLinkage(request, admin);
+
+    const assayRes = await request.post(`${apiBaseURL}/api/assays`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        studyId,
+        specimenIds: ['specimen-does-not-exist'],
+        assayType: 'RNA sequencing',
+        protocolId,
+        operatorId,
+        laboratoryId: organizationId,
+        assayDateTime: new Date().toISOString(),
+        intendedUse: 'RF025 e2e referential-integrity negative case',
+      },
+    });
+    expect(assayRes.status()).toBe(404);
+    const body = await assayRes.json();
+    expect(body.message).toMatch(/specimenIds/);
+  });
+
+  test('#664: rejects an assay create when laboratoryId does not resolve to a real Organization', async ({ request }) => {
+    const admin = await realLogin(request);
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const studyId = `rf025-study-${suffix}`;
+    const protocolId = `rf025-protocol-${suffix}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId);
+    const { specimenId, operatorId } = await seedRealAssayLinkage(request, admin);
+
+    const assayRes = await request.post(`${apiBaseURL}/api/assays`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        studyId,
+        specimenIds: [specimenId],
+        assayType: 'RNA sequencing',
+        protocolId,
+        operatorId,
+        laboratoryId: 'org-does-not-exist',
+        assayDateTime: new Date().toISOString(),
+        intendedUse: 'RF025 e2e referential-integrity negative case',
+      },
+    });
+    expect(assayRes.status()).toBe(404);
+    const body = await assayRes.json();
+    expect(body.message).toMatch(/laboratoryId/);
+  });
+
   test('opens a non-conformance, records the corrective action, and verifies effectiveness (criteria 5-6)', async ({ request }) => {
     const admin = await realLogin(request);
     const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1198,16 +1295,17 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     const protocolId = `rf025-protocol-${suffix}`;
     await seedStudy(studyId);
     await seedProtocol(protocolId);
+    const { specimenId, operatorId, organizationId } = await seedRealAssayLinkage(request, admin);
 
     const assayRes = await request.post(`${apiBaseURL}/api/assays`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         studyId,
-        specimenIds: [`rf025-specimen-${suffix}`],
+        specimenIds: [specimenId],
         assayType: 'RNA sequencing',
         protocolId,
-        operatorId: 'operator-rf025',
-        laboratoryId: 'org-rf025',
+        operatorId,
+        laboratoryId: organizationId,
         assayDateTime: new Date().toISOString(),
         intendedUse: 'RF025 non-conformance fixture',
       },
