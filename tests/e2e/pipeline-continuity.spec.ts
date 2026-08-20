@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
-import { createRealParticipant, closeSeedDb } from './helpers/seedParticipant';
+import { createRealParticipant, seedRawSpecimen, closeSeedDb } from './helpers/seedParticipant';
 import { waitForEthicalConsentStatus, waitForTerminologyConceptNode, waitForTerminologyRelation, closeNeo4jDriver } from './helpers/queryNeo4j';
 import {
   countEssentialReferenceDocs,
@@ -701,6 +701,110 @@ test.describe('Ingestion gateway — telemetry (RF029 slice 3/6) — real backen
       entityType: 'Telemetry',
       schemaId: 'canonical.v1.telemetry',
       payload: { sensorId: 'irrelevant-for-this-test', unknownField: 'x' },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'CONTRACT_VIOLATION')).toBe(true);
+  });
+});
+
+// RF029 slice 4/6 (#672): wires scientific-file binaries through slice 1's
+// gateway, same probe-only pattern slices 2-3 established (no new
+// production ingestion routes — RF007's real file-upload path,
+// sample-file.controller.js, stays untouched). AC#7 ("binários no Object
+// Storage") is not re-proven here: scientific-data-access.spec.ts already
+// covers real objstore:// persistence, checksum, and encryption-at-rest
+// against that same real upload path — this block only proves the new
+// envelope/contract/reference machinery around a canonical file payload.
+test.describe('Ingestion gateway — files (RF029 slice 4/6) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  function provenance() {
+    return {
+      sourceSystem: 'urn:system:pipeline-continuity-e2e',
+      createdBy: 'Actor/e2e-suite',
+      retrievedAt: new Date().toISOString(),
+      purpose: 'e2e_proof',
+    };
+  }
+
+  test('a file payload referencing a real specimen is accepted', async ({ request }) => {
+    const specimenId = `rf029-e2e-specimen-${Date.now()}`;
+    await seedRawSpecimen(specimenId);
+
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'File',
+      schemaId: 'canonical.v1.file',
+      payload: {
+        fileId: `rf029-e2e-file-${Date.now()}`,
+        specimenId,
+        fileRole: 'raw',
+        fileUri: `objstore://samples/${specimenId}/files/report.pdf`,
+        fileFormat: 'PDF',
+        fileSizeBytes: 102400,
+        checksum: 'sha256:e2e-fixture-checksum',
+      },
+      provenance: provenance(),
+      references: [{ collection: 'samples', field: 'specimenId', value: specimenId, label: 'specimenId' }],
+    });
+
+    expect(outcome.status).toBe('accepted');
+    expect(outcome.violations).toEqual([]);
+  });
+
+  // SampleFile.js's real field is `storageUri`, not the canonical `fileUri`
+  // -- same alias-discipline slice 2's specimen test proved for sampleID ->
+  // specimenId, and slice 3's telemetry test proved for temperature -> value.
+  test('a file payload using the legacy `storageUri` field instead of canonical `fileUri` is quarantined', async ({
+    request,
+  }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'File',
+      schemaId: 'canonical.v1.file',
+      aliasMap: { fileUri: ['storageUri'] },
+      payload: {
+        fileId: `rf029-e2e-file-${Date.now()}`,
+        storageUri: 'objstore://samples/irrelevant/files/report.pdf',
+        checksum: 'sha256:e2e-fixture-checksum',
+      },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(
+      outcome.violations.some((v: { code: string; field: string }) => v.code === 'NON_CANONICAL_FIELD' && v.field === 'storageUri')
+    ).toBe(true);
+  });
+
+  test('a file payload referencing a nonexistent specimen is quarantined', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'File',
+      schemaId: 'canonical.v1.file',
+      payload: {
+        fileId: `rf029-e2e-file-${Date.now()}`,
+        specimenId: 'rf029-e2e-nonexistent-specimen',
+        fileUri: 'objstore://samples/rf029-e2e-nonexistent-specimen/files/report.pdf',
+        fileSizeBytes: 102400,
+        checksum: 'sha256:e2e-fixture-checksum',
+      },
+      provenance: provenance(),
+      references: [
+        { collection: 'samples', field: 'specimenId', value: 'rf029-e2e-nonexistent-specimen', label: 'specimenId' },
+      ],
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'REFERENCE_NOT_FOUND')).toBe(true);
+  });
+
+  test('a file payload with an unknown field is quarantined', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'File',
+      schemaId: 'canonical.v1.file',
+      payload: { fileId: 'irrelevant-for-this-test', unknownField: 'x' },
       provenance: provenance(),
     });
 

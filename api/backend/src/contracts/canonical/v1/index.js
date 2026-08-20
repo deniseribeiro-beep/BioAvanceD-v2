@@ -150,6 +150,39 @@ const telemetrySchema = {
   required: ['sensorId', 'metricType', 'timestamp', 'value', 'unit']
 };
 
+// RF029 slice 4/6 (#672): DataFile per dict-02_DICIONARIO.md ELM-0316..
+// ELM-0321. Required fields are the dictionary's 1..1 ones a real caller
+// can supply today -- `fileUri`/`checksum`/`fileSizeBytes` map directly
+// onto SampleFile.js's real `storageUri`/`checksum`/`fileSize` fields
+// (RF007's objstore:// upload path, sample-file.controller.js). `fileId`
+// has no direct real-model equivalent yet (SampleFile.js has no id field
+// of its own beyond Mongo's `_id`) but is required here for the same
+// reason every other entity schema names its own id (participantId,
+// specimenId, sensorId). `fileRole`/`fileFormat` stay optional: dict-02
+// types both 1..1, but the real model's closed `fileType` enum
+// (RAW|ZIP|CSV|XLS|XLSX|PDF|TXT, a technical container format) isn't the
+// same vocabulary as either dict-02 field (fileFormat is EDAM/MIME-coded;
+// fileRole is a raw|intermediate|processed|derived|report|manifest
+// processing-stage marker) -- reconciling that vocabulary mismatch is out
+// of this thin slice's scope. `specimenId` isn't part of dict-02's own
+// DataFile entity, but RF007 AC#6 already links files to a specimen in
+// practice -- included here, optional, for reference-checking.
+const fileSchema = {
+  $id: 'canonical.v1.file',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    fileId: { type: 'string', minLength: 1 },
+    specimenId: { type: 'string' },
+    fileRole: { type: 'string' },
+    fileUri: { type: 'string', minLength: 1 },
+    fileFormat: { type: 'string' },
+    fileSizeBytes: { type: 'number' },
+    checksum: { type: 'string', minLength: 1 }
+  },
+  required: ['fileId', 'fileUri', 'checksum', 'fileSizeBytes']
+};
+
 const intakeSchema = {
   $id: 'canonical.v1.intake',
   type: 'object',
@@ -195,7 +228,7 @@ const intakeSchema = {
   required: ['participant', 'consent', 'specimen', 'clinical', 'biomarkers']
 };
 
-for (const schema of [participantSchema, specimenSchema, consentSchema, clinicalDataSchema, telemetrySchema, intakeSchema]) {
+for (const schema of [participantSchema, specimenSchema, consentSchema, clinicalDataSchema, telemetrySchema, fileSchema, intakeSchema]) {
   ajv.addSchema(schema);
 }
 
@@ -217,6 +250,7 @@ module.exports = {
     consentSchema,
     clinicalDataSchema,
     telemetrySchema,
+    fileSchema,
     intakeSchema
   }
 };
