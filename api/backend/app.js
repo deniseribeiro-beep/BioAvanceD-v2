@@ -313,6 +313,8 @@ app.use("/api/temperature", require("./src/interface/routes/temperature.routes")
 app.use("/api/incidents", require("./src/interface/routes/incident.routes"));
 app.use("/api/e-consent", require("./src/routes/eConsent.js"));
 app.use("/api/retention-policies", require("./src/routes/retentionPolicy.js"));
+app.use("/api/legal-holds", require("./src/routes/legalHold.js"));
+app.use("/api/disposition-actions", require("./src/routes/dispositionAction.js"));
 app.use("/api/access-requests", require("./src/routes/accessRequest.js"));
 app.use("/api/notification-rules", require("./src/routes/notificationRule.js"));
 app.use("/api/notifications", require("./src/routes/notification.js"));

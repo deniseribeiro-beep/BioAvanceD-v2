@@ -33,7 +33,9 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   labelGenerations: env.COLL_LABEL_GENERATIONS || 'labelGenerations',
   accessRequests: env.COLL_ACCESS_REQUESTS || 'accessRequests',
   reagentLots: env.COLL_REAGENT_LOTS || 'reagentLots',
-  nonconformances: env.COLL_NONCONFORMANCES || 'nonconformances'
+  nonconformances: env.COLL_NONCONFORMANCES || 'nonconformances',
+  legalHolds: env.COLL_LEGAL_HOLDS || 'legalHolds',
+  dispositionActions: env.COLL_DISPOSITION_ACTIONS || 'dispositionActions'
 });
 
 module.exports = {

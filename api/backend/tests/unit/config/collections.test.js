@@ -47,7 +47,9 @@ const DEFAULTS = {
   labelGenerations: 'labelGenerations',
   accessRequests: 'accessRequests',
   reagentLots: 'reagentLots',
-  nonconformances: 'nonconformances'
+  nonconformances: 'nonconformances',
+  legalHolds: 'legalHolds',
+  dispositionActions: 'dispositionActions'
 };
 
 const ORIGINAL_ENV = { ...process.env };
@@ -129,10 +131,13 @@ describe('config/collections', () => {
       notifications: 'notifications',
       labelGenerations: 'labelGenerations',
       accessRequests: 'accessRequests',
-      // COLL_REAGENT_LOTS/COLL_NONCONFORMANCES aren't in ENV_KEYS/read by
-      // env.js either, same hardcoded-default reasoning as cids/etc. above.
+      // COLL_REAGENT_LOTS/COLL_NONCONFORMANCES/COLL_LEGAL_HOLDS/
+      // COLL_DISPOSITION_ACTIONS aren't in ENV_KEYS/read by env.js either,
+      // same hardcoded-default reasoning as cids/etc. above.
       reagentLots: 'reagentLots',
-      nonconformances: 'nonconformances'
+      nonconformances: 'nonconformances',
+      legalHolds: 'legalHolds',
+      dispositionActions: 'dispositionActions'
     });
   });
 
