@@ -12,6 +12,7 @@ import {
 import { queryTemperaturePoints } from './helpers/queryInflux';
 import { realLogin } from './helpers/realAuth';
 import { computeTotp } from './helpers/totp';
+import { createRealParticipant, closeSeedDb as closeSeedParticipantDb } from './helpers/seedParticipant';
 import { seedSampleNode, readSampleStatus, removeSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
 import {
   findStagingRecordBySpecimenId,
@@ -748,6 +749,7 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
 test.describe('Alertas e notificações (RF015) — real backend', () => {
   test.afterAll(async () => {
     await closeSeedSensorDb();
+    await closeSeedParticipantDb();
   });
 
   test('a real environmental excursion creates a rule-driven, versioned, event-linked notification within SLA (criteria 1,2,3,6,7)', async ({
@@ -965,6 +967,73 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
       userId: String(userId),
       username,
       failedAttempts: 5,
+    });
+  });
+
+  // #650 (RF015 follow-up, consentimento domain) — the 2nd of the 4 domains
+  // named in the issue. A real consent revocation (consent.service.js's
+  // revokeConsent, the same endpoint eConsent.js's own full-revocation path
+  // and POST /consents/:id/revoke both use) now also fires
+  // dispatchNotification.
+  test('a real consent revocation creates a rule-driven notification (RF015 consentimento domain)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const ruleRes = await request.post(`${apiBaseURL}/api/notification-rules`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        eventType: 'consent_revoked',
+        channels: ['in_app'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: ['participantId', 'consentId'],
+        maxDeliveryMinutes: 2,
+      },
+    });
+    expect(ruleRes.ok(), await ruleRes.text()).toBeTruthy();
+    const rule = (await ruleRes.json()).data;
+
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const consentRes = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        consentTemplateId: participant.consentTemplateId,
+        responses: {},
+        signatureName: 'RF015 consentimento e2e signatory',
+        signatureImageBase64:
+          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      },
+    });
+    expect(consentRes.ok(), await consentRes.text()).toBeTruthy();
+    const consent = (await consentRes.json()).data;
+
+    const revokeRes = await request.post(`${apiBaseURL}/api/e-consent/consents/${consent._id}/revoke`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(revokeRes.ok(), await revokeRes.text()).toBeTruthy();
+
+    const findNotification = async () => {
+      const res = await request.get(
+        `${apiBaseURL}/api/notifications?eventType=consent_revoked&limit=50`,
+        { headers: { Authorization: `Bearer ${admin.token}` } }
+      );
+      if (!res.ok()) return null;
+      const body = await res.json();
+      return (body.data || []).find((n: any) => n.payload?.consentId === String(consent._id)) || null;
+    };
+
+    await expect.poll(findNotification, { timeout: 15_000 }).toBeTruthy();
+    const notification = await findNotification();
+
+    expect(notification.ruleId).toBe(rule._id);
+    expect(notification.status).toBe('delivered');
+    expect(notification.deliveredChannel).toBe('in_app');
+    expect(notification.sourceEventType).toBe('PatientConsent');
+    expect(notification.sourceEventId).toBe(String(consent._id));
+    expect(notification.payload).toEqual({
+      participantId: participant.participantId,
+      consentId: String(consent._id),
     });
   });
 });

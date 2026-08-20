@@ -10,6 +10,7 @@ const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
 const { GraphProjectionService } = require('./graphProjection.service');
 const participantIdentityService = require('./participantIdentity.service');
+const notificationDispatchService = require('./notificationDispatch.service');
 
 const ajv = new Ajv({ allErrors: true, strict: false, removeAdditional: 'failing' });
 addFormats(ajv);
@@ -791,6 +792,20 @@ class ConsentService {
       consentId: objectId.toString(),
       status: 'REVOKED',
       signedAt: consent.signedAt || consent.createdAt || new Date(),
+    });
+
+    // #650 (RF015, consentimento domain) - fire-and-forget, same shape as
+    // auth.service.js's mfa_brute_force_lockout call: a missing/
+    // misconfigured NotificationRule must never block or delay the
+    // revocation itself.
+    void notificationDispatchService.dispatchNotification(db, {
+      eventType: 'consent_revoked',
+      sourceEventType: 'PatientConsent',
+      sourceEventId: objectId,
+      payload: {
+        participantId: consent.participantId || null,
+        consentId: objectId.toString()
+      }
     });
 
     const revokedConsent = {
