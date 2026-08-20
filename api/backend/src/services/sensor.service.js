@@ -153,8 +153,17 @@ class SensorService {
       const limit = filters.limit || 50;
       const skip = filters.skip || 0;
 
+      // #645: no sort meant Mongo's natural (insertion) order decided which
+      // page-1 sensors were visible -- once the collection passed the
+      // default limit of 50 (e2e fixtures accumulate across sessions, see
+      // docker-workflow's local-env), a freshly created sensor silently
+      // never appeared in the default list/UI at all, read from a real
+      // Playwright run as a "flaky locator timeout" (#645) rather than the
+      // deterministic pagination bug it actually is. Newest-first makes the
+      // just-created record always land on page 1 regardless of backlog size.
       const sensors = await sensorsCollection
         .find(query)
+        .sort({ createdAt: -1 })
         .limit(limit)
         .skip(skip)
         .toArray();

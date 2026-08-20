@@ -173,7 +173,8 @@ describe('sensor.service (non-quarantine paths)', () => {
       const toArray = vi.fn().mockResolvedValue(items);
       const skip = vi.fn(() => ({ toArray }));
       const limit = vi.fn(() => ({ skip }));
-      return { find: vi.fn(() => ({ limit })), limit, skip, toArray };
+      const sort = vi.fn(() => ({ limit }));
+      return { find: vi.fn(() => ({ sort })), sort, limit, skip, toArray };
     }
 
     it('returns all sensors with default limit/skip when no filters given', async () => {
@@ -185,6 +186,8 @@ describe('sensor.service (non-quarantine paths)', () => {
       const result = await sensorService.listSensors(db, {});
 
       expect(chain.find).toHaveBeenCalledWith({});
+      // #645: newest-first so a just-created sensor always lands on page 1.
+      expect(chain.sort).toHaveBeenCalledWith({ createdAt: -1 });
       expect(chain.limit).toHaveBeenCalledWith(50);
       expect(chain.skip).toHaveBeenCalledWith(0);
       expect(result).toEqual({ sensors: [{ sensorId: 'S-1' }], total: 1, limit: 50, skip: 0 });
@@ -256,6 +259,50 @@ describe('sensor.service (non-quarantine paths)', () => {
       await sensorService.listSensors(db, { organizationScope: { scope: 'global' } });
 
       expect(chain.find).toHaveBeenCalledWith({});
+    });
+
+    // #645: real-backend Playwright run against compose.test.yml
+    // (e2e fixtures accumulate across sessions per docker-workflow's
+    // local-env) hit exactly this shape -- 51 pre-existing sensors, no sort
+    // applied, default limit 50 -- and the just-created sensor from a real
+    // UI submission silently never appeared in the list, misread as a
+    // flaky Playwright locator timeout rather than a deterministic
+    // pagination bug. This mock honors Mongo's real find().sort().limit()
+    // .skip() ordering semantics (unlike makeFindChain's canned array
+    // above) so the assertion actually proves ordering, not just call shape.
+    it('surfaces a just-created sensor on page 1 even when the collection already holds >limit older sensors (natural/insertion order)', async () => {
+      const older = Array.from({ length: 51 }, (_, i) => ({
+        sensorId: `old-${i}`,
+        createdAt: new Date(2026, 0, 1, 0, 0, i)
+      }));
+      const newest = { sensorId: 'just-created', createdAt: new Date(2026, 0, 2) };
+      // Natural/insertion order: oldest first, newest appended last --
+      // exactly how a real Mongo collection with no explicit sort behaves.
+      const naturalOrderDocs = [...older, newest];
+
+      const makeRealCursor = (docs) => {
+        let current = [...docs];
+        const cursor = {
+          sort: vi.fn((criteria) => {
+            const [[field, direction]] = Object.entries(criteria);
+            current = [...current].sort((a, b) => (direction >= 0 ? 1 : -1) * (a[field] > b[field] ? 1 : a[field] < b[field] ? -1 : 0));
+            return cursor;
+          }),
+          limit: vi.fn((n) => { current = current.slice(0, n); return cursor; }),
+          skip: vi.fn((n) => { current = current.slice(n); return cursor; }),
+          toArray: vi.fn(async () => current)
+        };
+        return cursor;
+      };
+
+      const { db, collection } = makeDb();
+      collection.find = vi.fn(() => makeRealCursor(naturalOrderDocs));
+      collection.countDocuments.mockResolvedValue(naturalOrderDocs.length);
+
+      const result = await sensorService.listSensors(db, {});
+
+      expect(result.sensors.map((s) => s.sensorId)).toContain('just-created');
+      expect(result.sensors[0].sensorId).toBe('just-created');
     });
   });
 
@@ -389,7 +436,8 @@ describe('sensor.service (non-quarantine paths)', () => {
       const toArray = vi.fn().mockResolvedValue([]);
       const skip = vi.fn(() => ({ toArray }));
       const limit = vi.fn(() => ({ skip }));
-      collection.find = vi.fn(() => ({ limit }));
+      const sort = vi.fn(() => ({ limit }));
+      collection.find = vi.fn(() => ({ sort }));
       collection.countDocuments.mockRejectedValue(new Error('count failed'));
 
       await expect(sensorService.listSensors(db, {})).rejects.toThrow('count failed');
