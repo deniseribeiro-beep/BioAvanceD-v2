@@ -1,5 +1,5 @@
 import { APIRequestContext } from '@playwright/test';
-import { MongoClient, Db } from 'mongodb';
+import { MongoClient, Db, ObjectId } from 'mongodb';
 
 /**
  * RF004 (#294) fixture: seeds a real participant with an active consent
@@ -136,6 +136,22 @@ export async function seedStorageBoxLocation(): Promise<SeededStorageBox> {
   });
 
   return { boxId: boxResult.insertedId.toString(), positionCode };
+}
+
+/**
+ * Sets an already-seeded StorageBox's status to RETIRED (#646 Wave 3,
+ * RF017 AC#7) — StorageBox.js's Mongoose default is ACTIVE and
+ * seedStorageBoxLocation doesn't set status at all, so this is the only
+ * way to get a real, hierarchy-complete box into the RETIRED state a
+ * spec needs to prove MongoStorageRepository.checkLocationBlocked's
+ * box-level rejection against the real backend.
+ */
+export async function retireStorageBox(boxId: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('storageBoxes').updateOne(
+    { _id: new ObjectId(boxId) },
+    { $set: { status: 'RETIRED' } }
+  );
 }
 
 /**

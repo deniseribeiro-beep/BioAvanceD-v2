@@ -664,6 +664,12 @@ describe('StorageService.autoAssignSampleToBox', () => {
         if (name === 'samples') return { findOne: samplesFindOne, updateOne: samplesUpdateOne };
         if (name === 'sample_movements') return movements;
         if (name === 'storageAssignments') return { findOne: storageAssignmentsFindOne };
+        // #646 Wave 3 (RF017 AC#7): MongoStorageRepository#autoAssignSamplePosition
+        // (called via storageRepository below) now checks checkLocationBlocked,
+        // which queries these two -- no StoragePath/blocked ancestor by default,
+        // matching every existing test in this block (none exercises AC#7 itself).
+        if (name === 'storagePaths') return { findOne: vi.fn().mockResolvedValue(null) };
+        if (name === 'storageContainers') return { findOne: vi.fn().mockResolvedValue(null) };
         throw new Error(`unexpected collection: ${name}`);
       }),
       getMongo: vi.fn(() => ({ startSession: vi.fn(() => makeSession()) }))

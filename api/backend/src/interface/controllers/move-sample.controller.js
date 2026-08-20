@@ -16,6 +16,13 @@ const VALIDATION_ERROR_PATTERNS = [
   'deve ser diferente da posição atual'
 ];
 
+// Substrings of MongoStorageRepository.checkLocationBlocked's rejection
+// messages (#646 Wave 3, RF017 AC#7) -- a separate list from the
+// client-input patterns above since these are business/state rules
+// (destination box or an ancestor container unavailable), not malformed
+// input, even though both map to the same 400 status.
+const LOCATION_BLOCKED_PATTERNS = ['está retirada de uso', 'Localização indisponível'];
+
 /**
  * Factory de controller HTTP para movimentação de amostras.
  * Mantém a rota desacoplada da implementação concreta do caso de uso.
@@ -73,6 +80,15 @@ function createMoveSampleController() {
         statusCode = 404;
       } else if (message.includes('STORAGE_COLLISION')) {
         statusCode = 409;
+      } else if (LOCATION_BLOCKED_PATTERNS.some((pattern) => message.includes(pattern))) {
+        // #646 Wave 3 (RF017 AC#7): checkLocationBlocked's own rejection
+        // messages ("... está retirada de uso", "Localização
+        // indisponível: ...") don't match não encontrada/STORAGE_COLLISION/
+        // VALIDATION_ERROR_PATTERNS, so without this branch a correctly-
+        // rejected move (destination box RETIRED or under a non-OPERATIONAL
+        // ancestor) reported as a 500 Internal Server Error instead of a
+        // 400 -- the request wasn't malformed, a business rule blocked it.
+        statusCode = 400;
       } else if (VALIDATION_ERROR_PATTERNS.some((pattern) => message.includes(pattern))) {
         statusCode = 400;
       }

@@ -208,6 +208,40 @@ describe('move-sample.controller', () => {
     });
   });
 
+  it('returns 400 when checkLocationBlocked rejects a RETIRED destination box (#646 RF017 AC#7)', async () => {
+    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(
+      new Error('StorageBox 507f1f77bcf86cd799439099 está retirada de uso (status: RETIRED)')
+    );
+    const req = buildReq({ body: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'MOVE_SAMPLE_ERROR',
+      message: 'StorageBox 507f1f77bcf86cd799439099 está retirada de uso (status: RETIRED)'
+    });
+  });
+
+  it('returns 400 when checkLocationBlocked rejects a non-OPERATIONAL ancestor container (#646 RF017 AC#7)', async () => {
+    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(
+      new Error('Localização indisponível: FREEZER "Freezer 3" está com status MAINTENANCE')
+    );
+    const req = buildReq({ body: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'MOVE_SAMPLE_ERROR',
+      message: 'Localização indisponível: FREEZER "Freezer 3" está com status MAINTENANCE'
+    });
+  });
+
   it('returns 500 for an unrecognized use-case error message instead of masking it as a 400 (issue #54)', async () => {
     vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('targetPosition is required'));
     const req = buildReq({ body: { sampleId: 'S1', targetBoxId: 'B1' } });
