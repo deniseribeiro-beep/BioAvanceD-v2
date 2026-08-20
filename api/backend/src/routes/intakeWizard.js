@@ -394,15 +394,18 @@ function buildReadableStorageLocation(automaticLocation, allocation) {
   ].filter(Boolean).join(' / ');
 }
 
+// #655: label.routes.js (the /api/labels/samples/* family these links used
+// to point at) is retired -- SampleLabelPage.tsx now calls sample.routes.js's
+// symbology/print-job endpoints directly, and this function's own output was
+// never read by any frontend caller either (grepped frontend/src), so this
+// is a same-shape correction, not a behavior change any caller depended on.
 function buildLabelLinks(sample) {
   const sampleId = normalizeString(sample?._id?.toString?.() || sample?._id || sample?.sampleID || sample?.barcode);
+  const barcode = normalizeString(sample?.barcode);
   return {
     sampleId,
-    jsonUrl: `/api/labels/samples/${encodeURIComponent(sampleId)}`,
-    zplUrl: `/api/labels/samples/${encodeURIComponent(sampleId)}?format=zpl`,
-    svgUrl: `/api/labels/samples/${encodeURIComponent(sampleId)}?format=svg`,
-    htmlUrl: `/api/labels/samples/${encodeURIComponent(sampleId)}?format=html`,
-    printJobUrl: `/api/labels/samples/${encodeURIComponent(sampleId)}/print-job`,
+    symbologyAssetsUrl: barcode ? `/api/samples/by-barcode/${encodeURIComponent(barcode)}/symbology-assets` : null,
+    printJobUrl: `/api/samples/${encodeURIComponent(sampleId)}/label/print-job`,
   };
 }
 

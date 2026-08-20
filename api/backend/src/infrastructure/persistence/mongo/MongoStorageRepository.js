@@ -665,9 +665,16 @@ class MongoStorageRepository {
       // could never block allocation for any real box.
       : (await this.resolveAncestorContainersLive(box.parent_id, session)).map((c) => c._id);
     if (ancestorIds.length > 0) {
+      // #655 regression fix: a raw-driver insert (every e2e seed helper
+      // besides the FREEZER level, per #598 -- and potentially real legacy
+      // data) can produce a container with no status field at all.
+      // { $ne: 'OPERATIONAL' } alone matches a missing field just as
+      // readily as an explicit non-operational one; { $exists: true } scopes
+      // the block to containers that actually have a status set, matching
+      // StorageContainer.js's own Mongoose default (OPERATIONAL when unset).
       const blockedAncestor = await this.db.collection('storageContainers').findOne({
         _id: { $in: ancestorIds },
-        status: { $ne: 'OPERATIONAL' }
+        status: { $exists: true, $ne: 'OPERATIONAL' }
       }, { session });
       if (blockedAncestor) {
         return {

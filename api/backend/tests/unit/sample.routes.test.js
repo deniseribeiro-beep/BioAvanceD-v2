@@ -2188,5 +2188,127 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(500);
     });
+
+    // #653/#655: this route had no requireOrganizationScope/
+    // isRecordInOrganizationScope check at all, unlike every other sample
+    // sub-resource route in this file (mirrors #619's GET /:id/label test).
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const getSampleByBarcode = vi.fn().mockResolvedValue({
+        sample: { _id: 's1', collectionSite: 'org-other' },
+      });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSampleByBarcode },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/by-barcode/BC1/symbology-assets');
+
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe('GET /:id/label/print-job', () => {
+    it('returns 503 when db is unavailable', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, null);
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
+
+      expect(res.status).toBe(503);
+    });
+
+    it('returns 404 when the sample cannot be found', async () => {
+      const { router } = loadRoute();
+      const findOne = vi.fn().mockResolvedValue(null);
+      const app = buildApp(router, { collection: () => ({ findOne }) });
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
+
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
+      const findOne = vi.fn().mockResolvedValue({ sampleID: 42, barcode: 'BC1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, { collection: () => ({ findOne }) });
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
+
+      expect(res.status).toBe(403);
+    });
+
+    it('returns 409 when the sample has no barcode generated yet', async () => {
+      const { router } = loadRoute();
+      const findOne = vi.fn().mockResolvedValue({ sampleID: 42 });
+      const app = buildApp(router, { collection: () => ({ findOne }) });
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
+
+      expect(res.status).toBe(409);
+    });
+
+    it('returns ZPL with the barcode drawn via ^BC and audits the generation', async () => {
+      const { router } = loadRoute();
+      const findOne = vi.fn().mockResolvedValue({
+        sampleID: 42,
+        barcode: 'BC1',
+        storageLocation: { boxName: 'Box A', position: 'A1' },
+      });
+      const labelGenerations = { findOne: vi.fn().mockResolvedValue(null), insertOne: vi.fn().mockResolvedValue({ insertedId: 'lg1' }) };
+      const app = buildApp(router, {
+        collection: (name) => (name === 'labelGenerations' ? labelGenerations : { findOne }),
+      });
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual(
+        expect.objectContaining({
+          sampleId: '42',
+          barcode: 'BC1',
+          format: 'zpl',
+          printerLanguage: 'ZPL',
+          location: 'Box Box A / Pos A1',
+          reprint: false,
+        })
+      );
+      expect(res.body.data.zpl).toContain('^BCN,80,Y,N,N^FDBC1^FS');
+      expect(labelGenerations.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ specimenId: expect.any(String), formats: ['zpl'], reprint: false })
+      );
+    });
+
+    it('escapes ^ and ~ out of ZPL field data and omits the location line when absent', async () => {
+      const { router } = loadRoute();
+      const findOne = vi.fn().mockResolvedValue({ sampleID: 42, barcode: 'BC^1~x' });
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'lg1' });
+      const app = buildApp(router, { collection: () => ({ findOne, insertOne }) });
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.location).toBeNull();
+      expect(res.body.data.zpl).toContain('^FDBC1x^FS');
+      expect(res.body.data.zpl).not.toContain('BC^1~x');
+    });
+
+    it('returns 500 when the collection lookup throws', async () => {
+      const { router } = loadRoute();
+      const findOne = vi.fn().mockRejectedValue(new Error('db down'));
+      const app = buildApp(router, { collection: () => ({ findOne }) });
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
+
+      expect(res.status).toBe(500);
+    });
   });
 });

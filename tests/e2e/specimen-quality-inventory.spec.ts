@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { realLogin } from './helpers/realAuth';
+import { realLogin, seedRealAuth } from './helpers/realAuth';
 import {
   createRealParticipant,
   seedActiveConsent,
   seedStorageBoxLocation,
   retireStorageBox,
+  setStorageContainerStatus,
   seedStudy,
   seedProtocol,
   seedCollectionEntity,
@@ -921,6 +922,60 @@ test.describe('Sample labeling (RF016) — real backend', () => {
   });
 });
 
+// #655: RF016's real-backend proof above was against sample.routes.js
+// directly -- the page a real user actually lands on (SampleLabelPage.tsx,
+// mounted at samples/:id/label in App.tsx) called a separate, simpler
+// system (label.routes.js, retired by this fix) with no real symbology.
+// This proves the redirect: the real page now renders the real bwip-js
+// Code128/DataMatrix/QR images and drives the ported ZPL print-job route.
+test.describe('Sample labeling (RF016) — through the real UI (#655)', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  async function login(page: import('@playwright/test').Page, request: import('@playwright/test').APIRequestContext) {
+    const session = await realLogin(request);
+    await seedRealAuth(page, session);
+    return session;
+  }
+
+  test('renders real symbology images and downloads a ZPL print job via the real page', async ({ page, request }) => {
+    const admin = await login(page, request);
+
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const { boxId, positionCode } = await seedStorageBoxLocation();
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
+    });
+    expect([201, 202]).toContain(create.status());
+    const sampleID = (await create.json()).data.sampleID;
+
+    await page.goto(`/samples/${sampleID}/label`);
+
+    await expect(page.getByTestId('sample-label-page')).toBeVisible();
+    await expect(page.getByTestId('sample-label-code128-image')).toBeVisible();
+    await expect(page.getByTestId('sample-label-data-matrix-image')).toBeVisible();
+    await expect(page.getByTestId('sample-label-qr-image')).toBeVisible();
+    await expect(page.getByTestId('sample-label-barcode')).not.toHaveText('');
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByTestId('sample-label-print-job-button').click(),
+    ]);
+    expect(download.suggestedFilename()).toBe(`label-${sampleID}-print-job.json`);
+  });
+
+  test('renders the error state for a sample that does not exist', async ({ page, request }) => {
+    await login(page, request);
+
+    await page.goto('/samples/000000000000000000000000/label');
+
+    await expect(page.getByTestId('sample-label-error')).toBeVisible();
+  });
+});
+
 // Wave 3 (#646). RF017's 7 acceptance criteria (requisitos-index.md) --
 // AC#1 (Freezer>Shelf>Rack>Box>Position hierarchy), AC#2 (no duplicate
 // position occupancy), AC#3 (StorageAssignment linked to specimen), AC#5
@@ -942,15 +997,15 @@ test.describe('Sample labeling (RF016) — real backend', () => {
 // move write path); the other two share the identical helper and are
 // covered at the unit level (MongoStorageRepository.test.js).
 //
-// Scope note: checkLocationBlocked also blocks via a RETIRED/MAINTENANCE
-// *ancestor* container (rack/shelf/freezer), by reading the storagePaths
-// collection for the box's rackId/shelfId/freezerId. That ancestor check
-// is unit-tested but NOT proven here against the real backend, because
-// storagePaths is read extensively but never written anywhere in
-// api/backend/src -- seedStorageBoxLocation (mirroring the real
-// createSample path) only ever writes the storageContainers parent_id
-// chain, never storagePaths. Filed as #654 rather than silently
-// narrowing AC#7's real-backend coverage to box-level only with no trace.
+// Scope note (updated by #655): checkLocationBlocked also blocks via a
+// RETIRED/MAINTENANCE *ancestor* container (rack/shelf/freezer). This was
+// filed as #654 -- storagePaths (what the ancestor check originally read)
+// is never written anywhere in api/backend/src, so the branch could only
+// be unit-tested, not proven here. #654's fix added a live
+// storageContainers.parent_id-walk fallback instead of depending on
+// storagePaths at all -- proven below for the first time, against the
+// exact hierarchy seedStorageBoxLocation (mirroring the real createSample
+// path) actually writes.
 test.describe('Storage location availability (RF017 AC#7) — real backend', () => {
   test.afterAll(async () => {
     await closeSeedDb();
@@ -999,5 +1054,37 @@ test.describe('Storage location availability (RF017 AC#7) — real backend', () 
     const body = await res.json();
     expect(body.success).toBe(false);
     expect(body.message).toContain('retirada de uso');
+  });
+
+  // #655: proven for the first time -- see the updated scope note above.
+  test('rejects position validation when the box\'s rack is under MAINTENANCE (ancestor-level, criterion 7)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const { boxId, rackId } = await seedStorageBoxLocation();
+    await setStorageContainerStatus(rackId, 'MAINTENANCE');
+
+    const res = await request.get(`${apiBaseURL}/api/storage/validate/${boxId}/A1`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(res.status()).toBe(409);
+    const body = await res.json();
+    expect(body.available).toBe(false);
+    expect(body.error).toBe('LOCATION_UNAVAILABLE');
+    expect(body.message).toContain('MAINTENANCE');
+  });
+
+  // #655 regression coverage: seedStorageBoxLocation's own SHELF/RACK
+  // containers have no status field at all (only the FREEZER gets one) --
+  // this is exactly the shape that incorrectly blocked every allocation
+  // before the $exists fix (MongoStorageRepository.js#checkLocationBlocked).
+  test('stays available when the box\'s ancestor containers have no status field set (criterion 7, negative case)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const { boxId } = await seedStorageBoxLocation();
+
+    const res = await request.get(`${apiBaseURL}/api/storage/validate/${boxId}/A1`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(res.status(), await res.text()).toBe(200);
+    const body = await res.json();
+    expect(body.available).toBe(true);
   });
 });

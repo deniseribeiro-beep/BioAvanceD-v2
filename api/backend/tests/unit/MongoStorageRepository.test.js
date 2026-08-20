@@ -1132,6 +1132,53 @@ describe('MongoStorageRepository', () => {
       );
     });
 
+    // #655 (found verifying the live-backend e2e spec): a raw-driver insert
+    // (every e2e seed helper, per #598's own precedent for the FREEZER
+    // level -- and potentially real legacy data too) can produce a
+    // StorageContainer with no status field at all, not just an explicit
+    // non-OPERATIONAL one. { $ne: 'OPERATIONAL' } matches a *missing* field
+    // just as readily as an explicit 'MAINTENANCE'/'RETIRED', which made
+    // #654's live-walk fallback block every real allocation attempt whose
+    // ancestor chain includes an unstatused container -- confirmed live via
+    // seedStorageBoxLocation()'s SHELF/RACK containers (only the FREEZER
+    // gets an explicit status), status undefined in the resulting 422.
+    // The mock's own findOne can't evaluate a real Mongo filter's semantics
+    // (same limitation the "every ancestor OPERATIONAL" test above notes),
+    // so this asserts on the filter shape itself rather than trusting a
+    // hand-picked resolved value -- that's what actually distinguishes the
+    // buggy { $ne: 'OPERATIONAL' } from the fixed { $exists: true, $ne:
+    // 'OPERATIONAL' }, and fails against the pre-fix query.
+    it('#654 regression: the ancestor-block query requires status to exist, not just differ from OPERATIONAL', async () => {
+      const rackId = new ObjectId();
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          _id: boxId,
+          status: 'ACTIVE',
+          parent_id: rackId,
+          dimension: { rows: 4, cols: 4 },
+          currentOccupancy: 0,
+          occupancyGrid: {}
+        })
+      });
+      const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
+      const rackDoc = { _id: rackId, containerType: 'RACK', name: 'Rack 1', parent_id: null };
+      const blockCheckFindOne = vi.fn().mockResolvedValueOnce(null);
+      const storageContainers = makeCollection({
+        findOne: vi.fn()
+          .mockResolvedValueOnce(rackDoc)
+          .mockImplementationOnce(blockCheckFindOne)
+      });
+      const db = makeDb({ storageBoxes, storagePaths, storageContainers });
+      const repo = new MongoStorageRepository(db);
+
+      await repo.validatePositionAvailability({ boxId, position: 'A1' });
+
+      expect(blockCheckFindOne).toHaveBeenCalledWith(
+        expect.objectContaining({ status: { $exists: true, $ne: 'OPERATIONAL' } }),
+        expect.anything()
+      );
+    });
+
     it('returns BOX_NOT_FOUND when box does not exist', async () => {
       const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
       const db = makeDb({ storageBoxes });

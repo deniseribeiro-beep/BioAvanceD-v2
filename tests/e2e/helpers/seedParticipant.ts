@@ -67,6 +67,9 @@ export interface SeededParticipant {
 export interface SeededStorageBox {
   boxId: string;
   positionCode: string;
+  rackId: string;
+  shelfId: string;
+  freezerId: string;
 }
 
 /**
@@ -135,7 +138,13 @@ export async function seedStorageBoxLocation(): Promise<SeededStorageBox> {
     createdAt: new Date(),
   });
 
-  return { boxId: boxResult.insertedId.toString(), positionCode };
+  return {
+    boxId: boxResult.insertedId.toString(),
+    positionCode,
+    rackId: rackResult.insertedId.toString(),
+    shelfId: shelfResult.insertedId.toString(),
+    freezerId: freezerResult.insertedId.toString(),
+  };
 }
 
 /**
@@ -151,6 +160,22 @@ export async function retireStorageBox(boxId: string): Promise<void> {
   await db.collection('storageBoxes').updateOne(
     { _id: new ObjectId(boxId) },
     { $set: { status: 'RETIRED' } }
+  );
+}
+
+/**
+ * Sets an already-seeded StorageContainer's (rack/shelf/freezer) status
+ * (#655 fix for #654's own AC#7 scope gap) — proves
+ * MongoStorageRepository.checkLocationBlocked's *ancestor*-level rejection
+ * against the real backend for the first time: #654 found storagePaths is
+ * never written anywhere, so this branch could only be unit-tested until
+ * checkLocationBlocked's live parent_id-walk fallback landed.
+ */
+export async function setStorageContainerStatus(containerId: string, status: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('storageContainers').updateOne(
+    { _id: new ObjectId(containerId) },
+    { $set: { status } }
   );
 }
 
