@@ -35,8 +35,7 @@ skill's own multi-item precedent is in context).
 from the issue itself, don't trust this summary if stale):**
 - [x] **1/4 -- WorkflowRun foundation** -- landed, see below.
 - [x] **2/4 -- Input/output file linkage** -- landed, see below.
-- [ ] **3/4 -- OmicsQualification** (AC#6, independent of 1/4-2/4) --
-  new model + master-data route, same shape as slice 1.
+- [x] **3/4 -- OmicsQualification** -- landed, see below.
 - [ ] **4/4 -- Omics data run records + genomic reference, e2e proof**
   (AC#5 + AC#7 scope-cap check, depends on 1/4) -- design call not yet
   made: default to one modality-discriminated `OmicsRun` model rather
@@ -44,9 +43,8 @@ from the issue itself, don't trust this summary if stale):**
   "structurally interchangeable" reasoning #668 used for RF029. Also
   where the tracker's real-backend e2e proof belongs
   (`scientific-data-access.spec.ts`, per `E2E_TRACEABILITY_PLAN.md:225`).
-
-Close #716 only once all 4 are checked off, then re-check #674 and #668
-for closure (upward-cascade), then #646.
+  **This is the last piece of #716** -- once it lands, close #716, then
+  re-check #674 and #668 for closure (upward-cascade), then #646.
 
 ## What landed this sitting
 
@@ -72,35 +70,54 @@ for closure (upward-cascade), then #646.
   rather than re-implementing upload/download/replace -- a workflow run
   references files that already exist elsewhere, it doesn't own new
   file bytes. 7/7 unit tests, 8/8 integration tests. Merge `c732ed63`.
-  Both slices re-ran clean alongside `master-data.api.test.js` (39/39),
-  `assay-dataset.api.test.js` (11/11), `assay-file.routes.api.test.js`
-  (3/3) -- 104/104 total as of slice 2. Branches
-  `test/716-rf027-workflowrun-foundation` and
-  `test/716-rf027-workflowrun-file-linkage` both merged `--no-ff` and
-  deleted locally; neither pushed remotely.
-- No Docker/e2e proof run this sitting for either slice -- per
+- **Slice 3/4 (#716):** AC#6 "registrar qualificação ômica específica
+  ao ensaio" (dict-02 ELM-0337-0342). `OmicsQualification` model +
+  master-data CRUD route at `/api/omics-qualifications`, same shape as
+  slice 1. Independent of slices 1/4-2/4. 17/17 unit tests, 6/6
+  integration tests. Merge `33751b01`.
+  All 3 slices re-ran clean together alongside `master-data.api.test.js`
+  (39/39) -- 106/106 total as of slice 3. Branches
+  `test/716-rf027-workflowrun-foundation`,
+  `test/716-rf027-workflowrun-file-linkage`, and
+  `test/716-rf027-omics-qualification` all merged `--no-ff` and deleted
+  locally; none pushed remotely.
+- No Docker/e2e proof run this sitting for any of the 3 slices -- per
   `build-loop`'s local-env overlay, a backend-internal slice's proof
   bar is mocked-Mongo supertest, not literal Docker; Docker/Playwright
   proof is deferred to slice 4/4's own e2e-spec addition.
 - Queue-membership comments posted on #646/#668/#674 pointing at #716.
+- One self-caught process error, already fixed: two `gh issue edit 716
+  --body-file /tmp/...` calls silently failed to persist a checklist
+  edit (the issue body reverted to its pre-checklist state) -- traced to
+  `/tmp` path unreliability on this Windows/Git-Bash setup, exactly the
+  failure mode `dennis-windows`'s "Use the session scratchpad, never
+  /tmp" section already documents. Re-did the edit via the session
+  scratchpad path and confirmed it landed (`gh issue view --json body`).
+  No skill fix needed -- the guidance was already correct, this session
+  just didn't follow it the first two times.
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed to origin at
-  `c732ed63`. No PR to `main` exists; `main` stays frozen per convention.
+  `33751b01` (plus this handoff rotation, pushed after). No PR to
+  `main` exists; `main` stays frozen per convention.
 - **Docker: UP**, inherited from a prior session (not started this
   sitting). Dennis was asked at session start whether to tear it down
   and chose to leave it running. Confirm it's still healthy
   (`docker ps`) before trusting it, and rebuild
   `backend-app-test`/`frontend-app-test` before any e2e run against it
-  -- this sitting made backend source changes (slices 1-2/4) that an
+  -- this sitting made backend source changes (slices 1-3/4) that an
   already-running container won't reflect (build-not-mount gotcha).
 
 ## Recommended next steps
 
 Dennis didn't name a specific next issue beyond continuing RF027 itself.
-Picking up **slice 3/4 of #716** (OmicsQualification -- no dependency on
-1/4 or 2/4) is the direct continuation; slice 4/4 depends on 1/4 (done)
-and is the largest remaining piece (design call on `OmicsRun` shape +
-the tracker's own e2e proof). Re-read #716 fresh rather than trusting
-this summary once any more time has passed.
+**Slice 4/4 of #716** (omics data run records + genomic reference +
+the tracker's own real-backend e2e proof) is the direct continuation
+and the last piece -- it's also the largest slice, with a design call
+not yet made (single modality-discriminated `OmicsRun` model vs.
+dict-02's 7 separate modality entities) and the first slice needing an
+actual Docker/Playwright run rather than mocked-Mongo tests, since it's
+where `scientific-data-access.spec.ts` coverage for the whole tracker
+belongs. Re-read #716 fresh rather than trusting this summary once any
+more time has passed.
