@@ -164,7 +164,7 @@ test.describe('Participant identity segregation (RF005/RNF007) — real backend 
   });
 });
 
-test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF005 AC4-6 wiring against a live stack; extended by #708 for AllergyIntolerance)', () => {
+test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF005 AC4-6 wiring against a live stack; extended by #708 for AllergyIntolerance, #709 for FamilyHistory)', () => {
   test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
   const orphaCode = 'ORPHA:558';
@@ -190,6 +190,14 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
   const allergenCode = '03730';
   const allergenName = `RF005 e2e allergen #708 ${Date.now()}`;
   const allergyReaction = 'Urticária';
+  // #709: FamilyHistory -- same "no activeCodeValidator gate" shape as
+  // AllergyIntolerance above (family-history.service.js never calls it
+  // either), so no TerminologyConcept fixture is needed here either --
+  // only a uniquely-named condition value for this test's own query.
+  const familyRelationship = 'mother';
+  const familyConditionOrphaCode = 'ORPHA:558';
+  const familyConditionName = `RF005 e2e family condition #709 ${Date.now()}`;
+  const familyConditionOnset = '30 anos';
 
   let mongoClient: MongoClient;
 
@@ -307,6 +315,14 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await page.getByTestId('wizard-add-allergy').click();
     await expect(page.getByTestId('wizard-allergy-item-0')).toBeVisible();
 
+    // Family history (#709) -- manual-entry, ORPHA-coded condition.
+    await page.getByTestId('wizard-family-relationship').selectOption(familyRelationship);
+    await page.getByTestId('wizard-family-condition-name').fill(familyConditionName);
+    await page.getByTestId('wizard-family-condition-orpha').fill(familyConditionOrphaCode);
+    await page.getByTestId('wizard-family-condition-onset').fill(familyConditionOnset);
+    await page.getByTestId('wizard-add-family-history').click();
+    await expect(page.getByTestId('wizard-family-history-item-0')).toBeVisible();
+
     const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
     await page.getByTestId('wizard-submit-button').click();
     const response = await submissionResponse;
@@ -384,6 +400,25 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
         display: allergenName,
       },
       reaction: [{ manifestation: allergyReaction }],
+    });
+
+    // #709: FamilyHistory -- dict-02 ELM-0249..0251, ORPHA-coded
+    // familyCondition, manual-entry (no MONDO/ICD-11 picker in this
+    // wizard), same additive best-effort call as the other entities above.
+    const familyHistories = await db.collection('familyHistories').find({
+      'familyCondition.condition.display': familyConditionName,
+    }).toArray();
+    expect(familyHistories).toHaveLength(1);
+    expect(familyHistories[0]).toMatchObject({
+      relationship: familyRelationship,
+      familyCondition: [{
+        condition: {
+          systemUri: 'http://www.orpha.net',
+          code: familyConditionOrphaCode,
+          display: familyConditionName,
+        },
+        onset: familyConditionOnset,
+      }],
     });
   });
 });

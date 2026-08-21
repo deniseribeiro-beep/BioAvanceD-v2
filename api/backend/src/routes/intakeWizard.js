@@ -14,6 +14,7 @@ const conditionService = require('../services/condition.service');
 const phenotypeObservationService = require('../services/phenotype-observation.service');
 const medicationExposureService = require('../services/medication-exposure.service');
 const allergyIntoleranceService = require('../services/allergy-intolerance.service');
+const familyHistoryService = require('../services/family-history.service');
 const logger = require('../utils/logger');
 const { validate } = require('../contracts/canonical/v1');
 
@@ -64,10 +65,10 @@ const DCB_SYSTEM_URI = 'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb
  * a materially bigger behavioral change than this additive slice intends.
  *
  * Scope note: originally only the 4 entities with real source data in this
- * wizard's payload were wired here. #708 (RF005 clinical-UI slice, tracker
- * #707) adds AllergyIntolerance, now that the wizard has a real allergen
- * field of its own. ClinicalObservation/ClinicalOutcome/DerivedScore/
- * FamilyHistory/Procedure remain unwired (or, for DerivedScore, would need
+ * wizard's payload were wired here. #708/#709 (RF005 clinical-UI slices,
+ * tracker #707) add AllergyIntolerance/FamilyHistory, now that the wizard
+ * has real fields for both. ClinicalObservation/ClinicalOutcome/
+ * DerivedScore/Procedure remain unwired (or, for DerivedScore, would need
  * an actual Charlson-scoring algorithm, not just a data mapping) -- each
  * tracked as its own follow-up (#707's sibling sub-issues) rather than
  * fabricated here.
@@ -159,6 +160,29 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
       });
     } catch (allergyError) {
       logger.error(`Falha ao registrar AllergyIntolerance (${allergenCode}) para o intake wizard:`, allergyError.message || allergyError);
+    }
+  }
+
+  const familyHistories = Array.isArray(clinicalData?.familyHistories) ? clinicalData.familyHistories : [];
+  for (const entry of familyHistories) {
+    const relationship = String(entry?.relationship || '').trim();
+    if (!relationship) continue;
+    try {
+      const conditionName = String(entry?.conditionName || '').trim();
+      const orphaFamilyCode = String(entry?.orphaCode || '').trim();
+      const onset = String(entry?.onset || '').trim();
+      const familyCondition = orphaFamilyCode || conditionName
+        ? [{
+          condition: orphaFamilyCode
+            ? { systemUri: ORPHA_SYSTEM_URI, code: orphaFamilyCode, display: conditionName || undefined }
+            : { display: conditionName },
+          onset: onset || undefined,
+        }]
+        : [];
+
+      await familyHistoryService.createFamilyHistory(db, { relationship, familyCondition });
+    } catch (familyHistoryError) {
+      logger.error(`Falha ao registrar FamilyHistory (${relationship}) para o intake wizard:`, familyHistoryError.message || familyHistoryError);
     }
   }
 }
@@ -274,6 +298,8 @@ function buildClinicalData(data = {}) {
     biomarkerValues: normalizeObject(clinical.biomarkersValues),
     // #708: ELM-0246..0248 AllergyIntolerance -- manual-entry allergen list.
     allergies: normalizeArray(clinical.allergies),
+    // #709: ELM-0249..0251 FamilyHistory -- manual-entry family list.
+    familyHistories: normalizeArray(clinical.familyHistories),
   };
 }
 
