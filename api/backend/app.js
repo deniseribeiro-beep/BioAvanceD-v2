@@ -302,6 +302,11 @@ app.use("/api/collections", createMasterDataRouter({
   idField: "collectionId",
   model: require("./src/models/Collection")
 }));
+app.use("/api/workflow-runs", createMasterDataRouter({
+  collectionName: "workflowRuns",
+  idField: "workflowRunId",
+  model: require("./src/models/WorkflowRun")
+}));
 app.use("/api/equipment", require("./src/interface/routes/equipment.routes"));
 app.use("/api/organizations", require("./src/interface/routes/organization.routes"));
 app.use("/api/storage", require("./src/interface/routes/storage.routes"));
