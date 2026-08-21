@@ -10,10 +10,13 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173';
 
 export default defineConfig({
   testDir: './tests/e2e-showcase',
-  // Longer than the default 30s -- this reel's beat() pauses alone sum to
-  // ~30s across its 3 segments (login, organizations, collections), before
-  // any real navigation/network time.
-  timeout: 60_000,
+  // Longer than the default 30s -- the Wave 2 reel's beat() pauses alone
+  // sum to ~30s across its 3 segments (login, organizations, collections).
+  // The Wave 3 reel adds a 4th test (login, RF014 security, RF017
+  // equipment, RF016 labeling) whose own beats sum to ~30s on top of real
+  // participant/sample/equipment backend round trips -- 60s was too tight
+  // for that combination, bumped to 120s.
+  timeout: 120_000,
   expect: { timeout: 5_000 },
   fullyParallel: false,
   forbidOnly: false,
