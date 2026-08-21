@@ -367,6 +367,7 @@ const initialState = {
   allergies: [], // [{ allergenName, allergenCode, reaction }]
   familyHistories: [], // [{ relationship, conditionName, orphaCode, onset }]
   procedures: [], // [{ procedureName, procedureCode, performed, bodySite }]
+  observationRecords: [], // [{ testName, loincCode, value, unit, effectiveDate }]
   treatmentStatus: '',
   medicationName: '',
   medicationCode: '',
@@ -1064,6 +1065,7 @@ function createClinicalStepSchema(t, clinicalItems = []) {
     allergies: z.array(z.any()).optional(),
     familyHistories: z.array(z.any()).optional(),
     procedures: z.array(z.any()).optional(),
+    observationRecords: z.array(z.any()).optional(),
     biomarkers_values: z.record(z.string()).optional(),
     treatmentStatus: z.string().trim().optional().or(z.literal('')),
     medicationName: z.string().trim().max(180, t('wizard.validation.medicationNameTooLong', 'Medication name is too long')).optional().or(z.literal('')),
@@ -1492,6 +1494,7 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
     allergies: Array.isArray(formData.allergies) ? formData.allergies : [],
     familyHistories: Array.isArray(formData.familyHistories) ? formData.familyHistories : [],
     procedures: Array.isArray(formData.procedures) ? formData.procedures : [],
+    observationRecords: Array.isArray(formData.observationRecords) ? formData.observationRecords : [],
     pharmacologyData: {
       treatmentStatus: String(formData.treatmentStatus || '').trim(),
       medicationName: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
@@ -1597,6 +1600,7 @@ export default function ClinicalIntakeWizard(props) {
   const [allergyDraft, setAllergyDraft] = useState({ allergenName: '', allergenCode: '', reaction: '' });
   const [familyHistoryDraft, setFamilyHistoryDraft] = useState({ relationship: '', conditionName: '', orphaCode: '', onset: '' });
   const [procedureDraft, setProcedureDraft] = useState({ procedureName: '', procedureCode: '', performed: '', bodySite: '' });
+  const [observationDraft, setObservationDraft] = useState({ testName: '', loincCode: '', value: '', unit: '', effectiveDate: '' });
   const [isConsentPreviewOpen, setIsConsentPreviewOpen] = useState(false);
   const [isBiomarkerRequestOpen, setIsBiomarkerRequestOpen] = useState(false);
   const [isBiomarkerRequestSubmitting, setIsBiomarkerRequestSubmitting] = useState(false);
@@ -2216,6 +2220,36 @@ export default function ClinicalIntakeWizard(props) {
     setFormData((previous) => ({
       ...previous,
       procedures: (Array.isArray(previous.procedures) ? previous.procedures : []).filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
+
+  const handleObservationDraftChange = (field) => (event) => {
+    const value = event.target.value;
+    setObservationDraft((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const handleAddObservation = () => {
+    const testName = String(observationDraft.testName || '').trim();
+    const loincCode = String(observationDraft.loincCode || '').trim();
+    const value = String(observationDraft.value || '').trim();
+    const unit = String(observationDraft.unit || '').trim();
+    const effectiveDate = String(observationDraft.effectiveDate || '').trim();
+    if (!loincCode || !effectiveDate) {
+      return;
+    }
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      observationRecords: [...(Array.isArray(previous.observationRecords) ? previous.observationRecords : []), { testName, loincCode, value, unit, effectiveDate }],
+    }));
+    setObservationDraft({ testName: '', loincCode: '', value: '', unit: '', effectiveDate: '' });
+  };
+
+  const handleRemoveObservation = (index) => {
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      observationRecords: (Array.isArray(previous.observationRecords) ? previous.observationRecords : []).filter((_, itemIndex) => itemIndex !== index),
     }));
   };
 
@@ -3408,6 +3442,99 @@ export default function ClinicalIntakeWizard(props) {
                         onClick={() => handleRemoveProcedure(index)}
                       >
                         {t('wizard.actions.removeProcedure', 'Remover')}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="clinical-subsection space-y-4" data-testid="wizard-observations-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.labObservations', 'Resultados Laboratoriais')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                <Input
+                  id="observationTestName"
+                  name="observationTestName"
+                  data-testid="wizard-observation-test-name"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.observationTestName', 'Exame')}
+                  value={observationDraft.testName}
+                  onChange={handleObservationDraftChange('testName')}
+                  placeholder={t('wizard.placeholders.observationTestName', 'Ex.: Hemoglobina')}
+                />
+                <Input
+                  id="observationLoinc"
+                  name="observationLoinc"
+                  data-testid="wizard-observation-loinc"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.observationLoinc', 'Código LOINC')}
+                  value={observationDraft.loincCode}
+                  onChange={handleObservationDraftChange('loincCode')}
+                  placeholder={t('wizard.placeholders.observationLoinc', 'Ex.: 718-7')}
+                />
+                <Input
+                  id="observationValue"
+                  name="observationValue"
+                  data-testid="wizard-observation-value"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.observationValue', 'Valor')}
+                  value={observationDraft.value}
+                  onChange={handleObservationDraftChange('value')}
+                  placeholder={t('wizard.placeholders.observationValue', 'Ex.: 13.2')}
+                />
+                <Input
+                  id="observationUnit"
+                  name="observationUnit"
+                  data-testid="wizard-observation-unit"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.observationUnit', 'Unidade')}
+                  value={observationDraft.unit}
+                  onChange={handleObservationDraftChange('unit')}
+                  placeholder={t('wizard.placeholders.observationUnit', 'Ex.: g/dL')}
+                />
+                <Input
+                  id="observationEffectiveDate"
+                  name="observationEffectiveDate"
+                  data-testid="wizard-observation-effective-date"
+                  type="date"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.observationEffectiveDate', 'Data do resultado')}
+                  value={observationDraft.effectiveDate}
+                  onChange={handleObservationDraftChange('effectiveDate')}
+                />
+              </div>
+              <Button
+                type="button"
+                data-testid="wizard-add-observation"
+                variant="secondary"
+                onClick={handleAddObservation}
+                disabled={!String(observationDraft.loincCode || '').trim() || !String(observationDraft.effectiveDate || '').trim()}
+              >
+                {t('wizard.actions.addObservation', 'Adicionar resultado')}
+              </Button>
+              {Array.isArray(formData.observationRecords) && formData.observationRecords.length > 0 && (
+                <ul className="observation-list space-y-2" data-testid="wizard-observation-list">
+                  {formData.observationRecords.map((entry, index) => (
+                    <li
+                      key={`${entry.loincCode}-${index}`}
+                      data-testid={`wizard-observation-item-${index}`}
+                      className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2"
+                    >
+                      <span>
+                        <span className="font-semibold text-gray-800">{entry.testName || entry.loincCode}</span>
+                        <span className="ml-2 text-sm text-gray-500">{entry.loincCode}</span>
+                        {entry.value && <span className="ml-2 text-sm text-gray-500">= {entry.value} {entry.unit}</span>}
+                        {entry.effectiveDate && <span className="ml-2 text-sm text-gray-500">· {entry.effectiveDate}</span>}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid={`wizard-remove-observation-${index}`}
+                        className="text-red-600 hover:text-red-800 text-sm"
+                        onClick={() => handleRemoveObservation(index)}
+                      >
+                        {t('wizard.actions.removeObservation', 'Remover')}
                       </button>
                     </li>
                   ))}

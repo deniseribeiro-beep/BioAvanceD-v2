@@ -164,7 +164,7 @@ test.describe('Participant identity segregation (RF005/RNF007) — real backend 
   });
 });
 
-test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF005 AC4-6 wiring against a live stack; extended by #708 for AllergyIntolerance, #709 for FamilyHistory, #710 for Procedure)', () => {
+test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF005 AC4-6 wiring against a live stack; extended by #708 for AllergyIntolerance, #709 for FamilyHistory, #710 for Procedure, #711 for ClinicalObservation)', () => {
   test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
   const orphaCode = 'ORPHA:558';
@@ -205,6 +205,18 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
   const procedureName = `RF005 e2e procedure #710 ${Date.now()}`;
   const procedurePerformed = '2026-01-15';
   const procedureBodySite = 'Fígado';
+  // #711: ClinicalObservation -- clinical-observation.service.js also
+  // never calls activeCodeValidator, same shape as the above; no
+  // TerminologyConcept fixture needed, only a uniquely-named display
+  // value. A real LOINC code (718-7, Hemoglobin) is used since this repo
+  // does have a genuine LOINC importer, unlike the other manually-coded
+  // entities above -- but no active-release gate means the fixture isn't
+  // required for this to persist either.
+  const observationLoincCode = '718-7';
+  const observationTestName = `RF005 e2e observation #711 ${Date.now()}`;
+  const observationValue = '13.2';
+  const observationUnit = 'g/dL';
+  const observationEffectiveDate = '2026-01-15';
 
   let mongoClient: MongoClient;
 
@@ -338,6 +350,15 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await page.getByTestId('wizard-add-procedure').click();
     await expect(page.getByTestId('wizard-procedure-item-0')).toBeVisible();
 
+    // Lab observation (#711) -- manual-entry, real LOINC-coded.
+    await page.getByTestId('wizard-observation-test-name').fill(observationTestName);
+    await page.getByTestId('wizard-observation-loinc').fill(observationLoincCode);
+    await page.getByTestId('wizard-observation-value').fill(observationValue);
+    await page.getByTestId('wizard-observation-unit').fill(observationUnit);
+    await page.getByTestId('wizard-observation-effective-date').fill(observationEffectiveDate);
+    await page.getByTestId('wizard-add-observation').click();
+    await expect(page.getByTestId('wizard-observation-item-0')).toBeVisible();
+
     const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
     await page.getByTestId('wizard-submit-button').click();
     const response = await submissionResponse;
@@ -451,6 +472,25 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
       }],
       performed: procedurePerformed,
       bodySite: [{ text: procedureBodySite }],
+    });
+
+    // #711: ClinicalObservation -- dict-02 ELM-0219..0232, real
+    // LOINC-coded observationCoding, manual-entry, same additive
+    // best-effort call as the other entities above.
+    const observations = await db.collection('clinicalObservations').find({
+      'observationCoding.display': observationTestName,
+    }).toArray();
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toMatchObject({
+      participantId: String(participantId),
+      observationCoding: {
+        systemUri: 'http://loinc.org',
+        code: observationLoincCode,
+        display: observationTestName,
+      },
+      value: observationValue,
+      unit: { text: observationUnit },
+      observationStatus: 'final',
     });
   });
 });

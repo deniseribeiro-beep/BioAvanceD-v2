@@ -21,6 +21,7 @@ const medicationExposureServicePath = require.resolve('../../src/services/medica
 const allergyIntoleranceServicePath = require.resolve('../../src/services/allergy-intolerance.service');
 const familyHistoryServicePath = require.resolve('../../src/services/family-history.service');
 const procedureServicePath = require.resolve('../../src/services/procedure.service');
+const clinicalObservationServicePath = require.resolve('../../src/services/clinical-observation.service');
 const activeCodeValidatorPath = require.resolve('../../src/ingestion/activeCodeValidator');
 const routePath = require.resolve('../../src/routes/intakeWizard.js');
 
@@ -48,6 +49,7 @@ const allPaths = [
   allergyIntoleranceServicePath,
   familyHistoryServicePath,
   procedureServicePath,
+  clinicalObservationServicePath,
   activeCodeValidatorPath,
   routePath,
 ];
@@ -189,6 +191,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       allergyIntolerances: makeInsertCapturingCollection(),
       familyHistories: makeInsertCapturingCollection(),
       procedures: makeInsertCapturingCollection(),
+      clinicalObservations: makeInsertCapturingCollection(),
       ...makeActiveCodeCollections(),
     };
 
@@ -419,5 +422,42 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
 
     expect(res.status).toBe(200);
     expect(collections.procedures.docs).toHaveLength(0);
+  });
+
+  it('#711: creates a ClinicalObservation from a wizard-collected entry, LOINC-coded', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        observationRecords: [{ testName: 'Hemoglobina', loincCode: '718-7', value: '13.2', unit: 'g/dL', effectiveDate: '2026-01-15' }],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.clinicalObservations.docs).toHaveLength(1);
+    expect(collections.clinicalObservations.docs[0]).toMatchObject({
+      participantId: '12345678',
+      observationCoding: { systemUri: 'http://loinc.org', code: '718-7', display: 'Hemoglobina' },
+      value: '13.2',
+      unit: { text: 'g/dL' },
+      observationStatus: 'final',
+    });
+  });
+
+  it('#711: skips an observation entry with no LOINC code or no effective date, and does not fail the intake', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        observationRecords: [{ testName: 'Hemoglobina', loincCode: '', value: '13.2', unit: 'g/dL', effectiveDate: '2026-01-15' }],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.clinicalObservations.docs).toHaveLength(0);
   });
 });
