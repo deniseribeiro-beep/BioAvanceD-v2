@@ -16,6 +16,7 @@ const medicationExposureService = require('../services/medication-exposure.servi
 const allergyIntoleranceService = require('../services/allergy-intolerance.service');
 const familyHistoryService = require('../services/family-history.service');
 const procedureService = require('../services/procedure.service');
+const clinicalObservationService = require('../services/clinical-observation.service');
 const logger = require('../utils/logger');
 const { validate } = require('../contracts/canonical/v1');
 
@@ -48,6 +49,9 @@ const DCB_SYSTEM_URI = 'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb
 // coded against a local/institutional system URI, the explicit alternative
 // dict-02 itself names, rather than left uncoded.
 const LOCAL_PROCEDURE_SYSTEM_URI = 'urn:biobank:local-procedure-terminology';
+// #711: a real RF028 LOINC importer exists (reference-data/reference-
+// imports/sources/loinc.js) -- same systemUri it uses.
+const LOINC_OBSERVATION_SYSTEM_URI = 'http://loinc.org';
 
 /**
  * RF005 AC4-6 (#693, RF005 clinical-data slice 5/5): additively creates
@@ -72,13 +76,13 @@ const LOCAL_PROCEDURE_SYSTEM_URI = 'urn:biobank:local-procedure-terminology';
  * a materially bigger behavioral change than this additive slice intends.
  *
  * Scope note: originally only the 4 entities with real source data in this
- * wizard's payload were wired here. #708/#709/#710 (RF005 clinical-UI
- * slices, tracker #707) add AllergyIntolerance/FamilyHistory/Procedure,
- * now that the wizard has real fields for each. ClinicalObservation/
- * ClinicalOutcome/DerivedScore remain unwired (or, for DerivedScore, would
- * need an actual Charlson-scoring algorithm, not just a data mapping) --
- * each tracked as its own follow-up (#707's sibling sub-issues) rather
- * than fabricated here.
+ * wizard's payload were wired here. #708/#709/#710/#711 (RF005 clinical-UI
+ * slices, tracker #707) add AllergyIntolerance/FamilyHistory/Procedure/
+ * ClinicalObservation, now that the wizard has real fields for each.
+ * ClinicalOutcome/DerivedScore remain unwired (or, for DerivedScore,
+ * would need an actual Charlson-scoring algorithm, not just a data
+ * mapping) -- each tracked as its own follow-up (#707's sibling
+ * sub-issues) rather than fabricated here.
  */
 async function recordClinicalEntities(db, { participantId, clinicalData, pharmacologyData, registeredAt }) {
   let encounterId = null;
@@ -213,6 +217,31 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
       logger.error(`Falha ao registrar Procedure (${procedureCode}) para o intake wizard:`, procedureError.message || procedureError);
     }
   }
+
+  const observationRecords = Array.isArray(clinicalData?.observationRecords) ? clinicalData.observationRecords : [];
+  for (const entry of observationRecords) {
+    const loincCode = String(entry?.loincCode || '').trim();
+    const effectiveDate = String(entry?.effectiveDate || '').trim();
+    if (!loincCode || !effectiveDate) continue;
+    try {
+      const value = String(entry?.value || '').trim();
+      const unit = String(entry?.unit || '').trim();
+      await clinicalObservationService.createClinicalObservation(db, {
+        participantId,
+        observationCoding: {
+          systemUri: LOINC_OBSERVATION_SYSTEM_URI,
+          code: loincCode,
+          display: String(entry?.testName || '').trim() || undefined,
+        },
+        value: value || null,
+        unit: unit ? { text: unit } : null,
+        effectiveDateTime: effectiveDate,
+        observationStatus: 'final',
+      });
+    } catch (observationError) {
+      logger.error(`Falha ao registrar ClinicalObservation (${loincCode}) para o intake wizard:`, observationError.message || observationError);
+    }
+  }
 }
 
 const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
@@ -330,6 +359,11 @@ function buildClinicalData(data = {}) {
     familyHistories: normalizeArray(clinical.familyHistories),
     // #710: ELM-0242..0245 Procedure -- manual-entry procedure list.
     procedures: normalizeArray(clinical.procedures),
+    // #711: ELM-0219..0232 ClinicalObservation -- manual-entry lab-result
+    // list. Named observationRecords, not clinicalObservations -- see
+    // clinicalDataSchema's own note on the naming collision with the
+    // existing free-text clinical-notes field below.
+    observationRecords: normalizeArray(clinical.observationRecords),
   };
 }
 

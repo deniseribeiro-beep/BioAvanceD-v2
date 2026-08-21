@@ -155,6 +155,31 @@ const clinicalDataSchema = {
         }
       }
     },
+    // #711 (RF005 clinical-UI slice, tracker #707): manual-entry
+    // lab-result/observation list -- dict-02 ELM-0219..0232's
+    // ClinicalObservation entity (observationCoding LOINC-coded,
+    // value/unit preserved as originally entered, effectiveDateTime
+    // required). Named `observationRecords`, not `clinicalObservations`
+    // -- that key already exists just below as the free-text clinical
+    // notes textarea (`formData.clinicalObservations`), a distinct,
+    // unrelated field that predates this entity's wiring. This repo has
+    // a real LOINC reference importer (reference-data/reference-imports/
+    // sources/loinc.js), so observationCoding is coded against the real
+    // 'http://loinc.org' systemUri, not a locally-invented one.
+    observationRecords: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          testName: { type: 'string' },
+          loincCode: { type: 'string' },
+          value: { type: 'string' },
+          unit: { type: 'string' },
+          effectiveDate: { type: 'string' }
+        }
+      }
+    },
     pharmacologyData: {
       type: 'object',
       additionalProperties: false,

@@ -1159,6 +1159,21 @@ against the real `samples`/`devices` collections at create time — the
 first entity in this domain to enforce a reference rather than leave it
 joinable-but-unenforced, per #691's own scope.
 
+**Wired in #711 (RF005 clinical-UI slice, tracker #707):** the intake
+wizard now has a real, manual-entry lab-result field (test name + LOINC
+code + value + unit + a required effective date) --
+`observationCoding` is coded against the real `http://loinc.org`
+systemUri (this repo has a genuine RF028 LOINC importer, unlike DCB/
+local-procedure-terminology's manual-coding precedent in #708/#710).
+`observationStatus` is hardcoded `'final'` (no status picker in this
+minimal UI); `specimenId`/`deviceId` are never supplied from the
+wizard, so the hard reference-check above is never exercised by this
+path. The wizard payload's new `clinical.observationRecords` key is
+deliberately distinct from the pre-existing `clinical.
+clinicalObservations` (a free-text clinical-notes string, unrelated to
+this entity) to avoid a naming collision -- see
+`contracts/canonical/v1/index.js`'s own comment on the schema.
+
 ### ClinicalOutcome
 
 - `outcomeId` (internal identity, dict-02 ELM-0252; assigned via
