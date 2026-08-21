@@ -1,120 +1,91 @@
 # HANDOFF
 
-**Written:** 2026-08-21. Docker is on.
+**Written:** 2026-08-21. Docker is on (inherited stack from a prior session, left running -- see "Repo state" below).
 
-## Rabbit-hole EXIT: #646 -> #707 closed at the #707 level -- all 6 sub-slices landed
+## Still inside the rabbit hole: #646 -> #668 -> #674 -> #716 (RF027, slice 1/4 landed, 3 remain)
 
-**Tracker: #646** (Wave 3 kickoff) -> **#707** (RF005: wire remaining 6
-clinical-data entities into real intake-wizard UI + a real CCI
-algorithm) -> **closed this sitting**.
+**Tracker chain, re-derived fresh this sitting from the issue threads
+themselves (not from the prior handoff's summary):** #646 (Wave 3
+kickoff) is **not** actually closed/unrelated as the prior handoff
+claimed -- its own comment thread already established #668 (RF029
+tracker) and, through #668, #674 (RF029 slice 6/6) as live descendants.
+#674 was the one open item left in #646's queue, blocked on **RF027**
+("Workflows e dados ômicos") not existing yet -- explicitly Wave 4,
+lowest-urgency, per `E2E_TRACEABILITY_PLAN.md`.
 
-This sitting continued directly from the prior handoff's state (4/6
-done: #708-711 already landed) and finished the remaining two:
+**Dennis explicitly chose to pull RF027 forward this sitting** rather
+than leave #674 parked. Filed **#716** as RF027's own tracking issue,
+scoped from `docs/docs-7-31-2026/1-Requisitos-Funcionais-e-Nao-Funcionais.md:638-651`
+(AC text unchanged from v3.0.0, confirmed via the 2026-07-31 changelog)
+and `dict-02_DICIONARIO.md` ELM-0326-0356. Initially split into 4
+separate issue numbers (#717-720) by mistake -- corrected mid-sitting
+and closed them, folding the same 4-slice breakdown into #716's own
+body as a checklist instead, per this repo's precedent for multi-item
+requirements that don't need independent backend/ownership split
+(`build-loop`'s local-env overlay, #278; contrast #668/RF029, which
+*did* split because its slices targeted genuinely different storage
+backends -- RF027's 4 slices are all MongoDB master-data entities via
+the same `createMasterDataRouter` pattern).
 
-- **#712 (ClinicalOutcome):** no longitudinal-outcome UI existed in the
-  wizard before this -- added a manual-entry outcome field (`Select`
-  over dict-02's 7 outcomeType categories, mapped to English slugs,
-  plus a required outcome date) to `ClinicalIntakeWizard.jsx`, wired
-  additively via `recordClinicalEntities`. Also had to add
-  `clinicalOutcomes` to `contracts/canonical/v1/index.js`'s
-  `clinicalDataSchema` AJV contract -- a second, independent validation
-  gate from `buildClinicalData`, missed on the first pass, caught by a
-  422 `NON_CANONICAL_FIELD` mid-work. Also fixed a pre-existing broken
-  `toEqual` test in `intakeWizard.helpers.test.js` that #708-711 never
-  updated for their own added fields. Merged `cdaddcd4`.
-- **#713 (real Charlson Comorbidity Index + DerivedScore):** implemented
-  the original-1987 CCI as a new pure module
-  (`api/backend/src/services/charlsonComorbidityIndex.js`), wired into
-  `recordClinicalEntities` to create a `DerivedScore`. The wizard's
-  existing `charlsonConditions` checklist (12 items) predates this
-  slice and was never the real 19-category Charlson set -- only
-  `diabetesType1`/`diabetesType2` (collapsed to one "diabetes"
-  category, weight 1), `copd` (weight 1), and `ckd` (weight 2)
-  genuinely map to real Charlson categories; the rest are correctly
-  excluded from the score (dict-05 REF-033's own caution). **Also
-  discovered and fixed inline, since it blocked #713's own DoD:** the
-  wizard had formData fields, a schema, and even a pre-existing unit
-  test (#522) for the comorbidity checklist, but literally no checkbox
-  ever rendered in the JSX -- `charlsonConditions` was always empty
-  from a real submission. Added the missing checkbox grid. Merged
-  `7daa068f`.
+**#716's checklist (only source of truth for what's left -- re-derive
+from the issue itself, don't trust this summary if stale):**
+- [x] **1/4 -- WorkflowRun foundation** -- landed this sitting, see below.
+- [ ] **2/4 -- Input/output file linkage** (AC#3, depends on 1/4) --
+  wire `WorkflowRun.inputFileIds`/`outputFileIds` following
+  `assay-file.routes.js`/`dataset-file.routes.js`'s pattern.
+- [ ] **3/4 -- OmicsQualification** (AC#6, independent of 1/4-2/4) --
+  new model + master-data route, same shape as slice 1.
+- [ ] **4/4 -- Omics data run records + genomic reference, e2e proof**
+  (AC#5 + AC#7 scope-cap check, depends on 1/4) -- design call not yet
+  made: default to one modality-discriminated `OmicsRun` model rather
+  than dict-02's 7 separate modality entities (ELM-0343-0356), per the
+  "structurally interchangeable" reasoning #668 used for RF029. Also
+  where the tracker's real-backend e2e proof belongs
+  (`scientific-data-access.spec.ts`, per `E2E_TRACEABILITY_PLAN.md:225`).
 
-All four #708-711 progress comments, plus two more (5/6, 6/6), landed
-on #707 across this sitting and the prior one. #707 closed with a
-summary naming all 6 merge commits.
-
-**#707's own parent chain, checked fresh (not assumed from the prior
-handoff's narrative):** #697 (the issue #707 split from) was already
-closed. **#646 ("Wave 3 kickoff," scoped to RF014/015/016/017/024/025/
-026/029) does NOT actually list #707/RF005 as one of its own items** --
-its body was re-read fresh this sitting and RF005 doesn't appear
-anywhere in it. The prior handoff's "#646 -> #707" framing was a loose
-rabbit-hole lineage note, not a real tracking relationship. **#646
-stays open, completely untouched this sitting, with its own unrelated
-scope** -- picking it up next is a fresh, unrelated rabbit hole, not a
-continuation of anything landed here.
-
-**New issues filed this sitting:**
-- [**#715**](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/715):
-  the real CCI only scores 3 of the original index's 19 categories
-  today, because the wizard's checklist only collects data for those 3
-  -- a completeness follow-up, not a correctness bug (the score is
-  accurate for what it can compute). Not blocking, doesn't reopen #713.
-- [**dyeallpies-skills-pack#379**](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/379):
-  `build-loop`'s own `local-env` overlay already documented the exact
-  fix for the #712 AJV-schema miss above, but this session never read
-  that overlay before starting -- a session-friction report about the
-  skill's structure, not a product issue.
+Close #716 only once all 4 are checked off, then re-check #674 and #668
+for closure (upward-cascade), then #646.
 
 ## What landed this sitting
 
-- 2 merge commits (`cdaddcd4`, `7daa068f`) on
-  `feature/docker-e2e-backend-integration`, pushed to origin.
-- #712, #713 closed. #707 (tracker) closed. Both per-issue branches
-  (`test/712-...`, `test/713-...`) merged `--no-ff` and deleted
-  locally; neither was ever pushed remotely.
-- #715 filed (product follow-up). dyeallpies-skills-pack#379 filed
-  (skills-pack friction report).
-- Full native backend unit suite run twice this sitting (once per
-  slice), green both times: 6623/6623 after #712, 6637/6637 after
-  #713.
-- Two real-backend Playwright proofs, one per slice, both 1/1 passing
-  against the Docker test stack (`compose.test.yml`, `--build` for
-  `backend-app-test`/`frontend-app-test` each time, since both slices
-  touched backend and/or frontend source).
+- **Slice 1/4 (#716):** `WorkflowRun` model (dict-02 ELM-0326-0336) +
+  master-data CRUD route at `/api/workflow-runs`, mounted in `app.js`
+  via the existing `createMasterDataRouter` factory (same as
+  `/api/assays`/`/api/datasets`). Covers AC#1 (workflow/version/
+  container image), AC#2 (parameters/dependencies), AC#4 (start/end/
+  executor/status) -- AC#4's "executor" reuses BaseRecord's shared
+  `createdBy` field (ELM-0007) rather than inventing new vocabulary,
+  same precedent #669 set for its own ingestion envelope.
+  `inputFileIds`/`outputFileIds` stay optional pending slice 2/4,
+  mirroring `Dataset.js`'s own `distributionFiles` precedent.
+  30/30 unit tests (`workflowRun.model.test.js`), 6/6 integration tests
+  (`workflow-run.api.test.js`); re-ran clean alongside
+  `master-data.api.test.js` (39/39) and `assay-dataset.api.test.js`
+  (11/11) -- 86/86 total. Merge `0d719166` on
+  `feature/docker-e2e-backend-integration`, pushed. Branch
+  `test/716-rf027-workflowrun-foundation` merged and deleted.
+- No Docker/e2e proof run this sitting for slice 1 -- per
+  `build-loop`'s local-env overlay, a backend-internal slice's proof
+  bar is mocked-Mongo supertest, not literal Docker; Docker/Playwright
+  proof is deferred to slice 4/4's own e2e-spec addition.
+- Queue-membership comments posted on #646/#668/#674 pointing at #716.
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed to origin at
-  `7daa068f`. No PR to `main` exists. `main` stays frozen per this
-  repo's convention.
-- **Docker: UP.** The test stack was rebuilt twice this sitting
-  (`--build` for `backend-app-test`/`frontend-app-test`, once per
-  slice). Mid-sitting, after #712 landed, Dennis was asked whether to
-  tear it down and explicitly chose to leave it running (anticipating
-  #713's pickup, which then happened in the same sitting). It is still
-  up at session end -- the next session should confirm it's still
-  healthy (`docker ps`) rather than assume, and rebuild
-  `backend-app-test`/`frontend-app-test` again before trusting it
-  reflects any newer source changes (build-not-mount gotcha,
-  `docker-workflow`'s BioAvanceD-v2 overlay).
+  `0d719166`. No PR to `main` exists; `main` stays frozen per convention.
+- **Docker: UP**, inherited from a prior session (not started this
+  sitting). Dennis was asked at session start whether to tear it down
+  and chose to leave it running. Confirm it's still healthy
+  (`docker ps`) before trusting it, and rebuild
+  `backend-app-test`/`frontend-app-test` before any e2e run against it
+  -- this sitting made backend source changes (slice 1/4) that an
+  already-running container won't reflect (build-not-mount gotcha).
 
 ## Recommended next steps
 
-No specific issue was named by Dennis for the next session -- none
-queued. For reference, what's currently open and relevant:
-
-- [**#714**](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/714)
-  (from a prior sitting, untouched this one): three manually-coded
-  entities (`AllergyIntolerance`/`FamilyHistory`/`Procedure`) don't
-  gate their coded fields on `activeCodeValidator` per RF005 AC#4 --
-  ordinary backlog.
-- [**#715**](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/715)
-  (filed this sitting): extend the wizard's comorbidity checklist to
-  cover more of the real 19 Charlson categories -- smaller, well-scoped.
-- **#646** (Wave 3 kickoff: RF014/015/016/017/024/025/026/029) remains
-  open, completely untouched across this sitting and the prior ones --
-  a fresh pickup here is unrelated to everything #707's rabbit hole
-  covered.
-- #674 stays parked on RF027 (Wave 4, not started, out of scope) --
-  unless Dennis pulls it forward, untouched.
+Dennis didn't name a specific next issue beyond continuing RF027 itself.
+Picking up **slice 2/4 or 3/4 of #716** (see checklist above) is the
+direct continuation -- 3/4 (OmicsQualification) has no dependency on
+2/4 and could be done in either order. Re-read #716 fresh rather than
+trusting this summary once any more time has passed.
