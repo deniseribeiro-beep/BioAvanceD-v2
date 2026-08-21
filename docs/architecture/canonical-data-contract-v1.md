@@ -1025,6 +1025,87 @@ entity in, and there is no real-backend e2e proof beyond this slice's own
 native-only service/model tests. Both land together with #693's
 intake-wizard integration, per #677's slice breakdown.
 
+### Condition
+
+- `conditionId` (internal identity, dict-02 ELM-0200; assigned via
+  `crypto.randomUUID()` in `ConditionModel.create`, #690)
+- `participantId` (reference to `Participant`, dict-02 ELM-0201)
+- `conditionCoding` (`Coding[]`, 1..*, dict-02 ELM-0202 — AC4-6's own
+  requirement text: ORPHA/ICD-11/ICD-10/SNOMED/MONDO/OMIM, "preservando a
+  fonte." Each entry is `{ systemUri, code, version, display }`, matching
+  `TerminologyConceptModel`'s own field names rather than FHIR's plain
+  `system`, so entries pass straight into
+  `activeCodeValidator.checkActiveCode` with no reshaping)
+- `clinicalStatus` / `verificationStatus` (dict-02 ELM-0203/0204, FHIR
+  ConditionClinicalStatus/ConditionVerificationStatus vocab, stored as
+  given)
+- `onset` / `abatement` (dict-02 ELM-0205/0206, FHIR onset[x]/abatement[x]
+  choice types, stored as given)
+- `severity` (CodeableConcept, dict-02 ELM-0207)
+- `stage` (BackboneElement, dict-02 ELM-0208, stored as given)
+- `diagnosisEvidence` (0..*, references to `DiagnosticReport` — stays
+  unenforced, no `DiagnosticReport` entity exists in this repo, dict-02
+  ELM-0209)
+- `recordedDate` (dict-02 ELM-0210)
+
+**Landed in #690 (RF005 clinical-data slice 2/5, tracked under #677):**
+the entity/collection (`conditions`) exists (`ConditionModel`,
+`condition.service.js#createCondition`/`getConditionsForParticipant`/
+`getConditionById`). RF005 AC#4 ("permitir codificação... somente quando
+houver ReferenceDatasetRelease ativa e validada") is enforced at create
+time by reusing `activeCodeValidator.validateActiveCodes` (RF029 AC#4's
+own machinery, #669) against every `conditionCoding[]` entry — a coding
+whose `TerminologyConcept`/`ReferenceDatasetRelease` doesn't resolve to
+`releaseStatus: 'active'` fails the create outright, no controlled-review
+escape hatch (unlike `ingestionGateway.js`'s `allowControlledReview`,
+which is RF029's own AC, not RF005's). This deliberately does not go
+through `ingestionGateway.js`'s broader envelope (provenance/idempotency/
+quarantine) — wiring an entity type into that gateway is RF029's own
+scope (#670-673), a distinct concern from RF005's AC#4 code check.
+
+### PhenotypeObservation
+
+- `phenotypeObservationId` (internal identity, dict-02 ELM-0211; assigned
+  via `crypto.randomUUID()` in `PhenotypeObservationModel.create`, #690)
+- `participantId` (reference to `Participant`, dict-02 P1X-0074)
+- `hpoCoding` (`Coding`, 1..1, dict-02 ELM-0212 — HPO-coded, "presente ou
+  explicitamente ausente." Same `{ systemUri, code, version, display }`
+  shape as `Condition.conditionCoding`, same
+  `activeCodeValidator.checkActiveCode` reuse)
+- `presenceStatus` (dict-02 ELM-0213, one of `present|absent|unknown|
+  not_assessed` — dict-02's own note: "ausente não equivale a não
+  preenchido." `PhenotypeObservationModel` enforces this literally: an
+  omitted `presenceStatus` fails validation outright rather than
+  defaulting to any of the four real states, so "not filled in" can never
+  be silently read back as "absent")
+- `phenotypeOnset` (dict-02 ELM-0214, choice type, stored as given)
+- `phenotypeSeverity` / `phenotypeFrequency` / `observationMethod`
+  (CodeableConcept, dict-02 ELM-0215/0216/0217)
+- `phenotypeEvidence` (0..*, references to `DiagnosticReport` — stays
+  unenforced, same pattern as `Condition.diagnosisEvidence`, dict-02
+  ELM-0218)
+- `encounterId` (0..1, reference to `Encounter`/#689, dict-02 P1X-0075 —
+  joinable-but-not-enforced, same pattern as `equipmentId`/
+  `thresholdProfileId` elsewhere in this contract)
+- `effectiveDateTime` (1..1, dict-02 P1X-0076)
+
+**Landed in #690 (RF005 clinical-data slice 2/5, tracked under #677):**
+the entity/collection (`phenotypeObservations`) exists
+(`PhenotypeObservationModel`,
+`phenotype-observation.service.js#createPhenotypeObservation`/
+`getPhenotypeObservationsForParticipant`/
+`getPhenotypeObservationsForEncounter`). Same RF005 AC#4 active-code
+enforcement on `hpoCoding` as `Condition.conditionCoding` above.
+
+**Not yet landed for either entity (follow-up tracked under #693, slice
+5/5):** no live caller creates a `Condition` or `PhenotypeObservation`
+yet — `intakeWizard.js` doesn't wire either in, and there is no
+real-backend e2e proof beyond this slice's own native-only service/model
+tests (which do exercise the active-code gate against a real-semantics
+in-memory `TerminologyConcept`/`ReferenceDatasetRelease` fake, not a
+canned stub). Both land together with #693's intake-wizard integration,
+per #677's slice breakdown.
+
 ### Consent
 
 - `consentId` (internal identity of the consent instance, distinct from
