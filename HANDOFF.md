@@ -1,6 +1,6 @@
 # HANDOFF
 
-**Written:** 2026-08-21. Docker is on (inherited stack, left running -- see "Repo state" below).
+**Written:** 2026-08-21. Docker was torn down at end of day (see "Repo state" below) -- next session starts from a cold, empty daemon.
 
 ## What landed this sitting
 
@@ -65,13 +65,17 @@ RF029 row said "#664 ... stays open" -- #664 was actually closed
   pushed** (`b38094e8`). **The #664 doc fix (`c36c2cb1`) is NOT yet
   pushed** -- 1 commit ahead of `origin` as of this writing; push on
   Dennis's say-so per this repo's convention.
-- **Docker: UP**, inherited stack, still running (12/12 containers
-  healthy as of this sitting's end, confirmed via the Wave 3 video's own
-  passing test run against it). Confirm still healthy (`docker ps`)
-  before trusting it in a future session.
-- `test-results/` has fresh Wave-3-run artifacts (webm + traces) from
-  this sitting -- session/build cleanup, not reviewed for deletion this
-  sitting.
+- **Docker: DOWN, daemon fully emptied** (end-of-day cleanup,
+  2026-08-21): test stack `compose down -v` (all containers, network,
+  and named test volumes including `mongodb-test-data` -- so #724's
+  521-row equipment debris is wiped, though the accumulation *pattern*
+  the issue tracks is unfixed), then all images, anonymous volumes, and
+  build cache pruned (`docker system df` all zeros). Dennis planned to
+  shut Docker Desktop down and delete the 24GB `docker_data.vhdx`
+  afterward -- next session needs a full cold rebuild
+  (`up -d --build`) and fresh `admin-bootstrap-test`.
+- `test-results/` (Wave-3 webm + traces) deleted -- the deliverable
+  `docs/e2e-showcase-2026-08-21.mp4` is committed and untouched.
 - Two untracked paths present all sitting, not touched: `.claude/skills/`
   and `api/backend/storage/assays/` -- pre-existing, not created by this
   session.
