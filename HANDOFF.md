@@ -82,10 +82,17 @@ left undocumented:**
   `test/711-...`) were merged `--no-ff` and deleted locally (none was
   ever pushed remotely).
 - No PR to `main` exists. `main` stays frozen per this repo's convention.
-- **Docker: UP.** `backend-app-test`/`frontend-app-test` rebuilt with
-  `--build` four times this sitting (once per slice) to pick up source
-  changes; `playwright-runner` stopped before each manual run, left
-  stopped. Stack left running for the next #707 pickup.
+- **Docker: DOWN.** `backend-app-test`/`frontend-app-test` were rebuilt
+  with `--build` four times this sitting (once per slice) to pick up
+  source changes, and every e2e run happened against that stack. It was
+  inherited (already up ~2h before this session started, not spun up by
+  this session) -- at session end, with the rabbit hole paused and
+  #712/#713 not being picked up immediately, `clean-up`'s "inherited
+  stack" check asked Dennis whether to tear it down rather than leave it
+  running unattended; he chose teardown (`docker compose ... down`,
+  named volumes untouched). The next #707 pickup needs a fresh
+  `docker compose up` per `docker-workflow`'s recipe, not an assumoption
+  the stack is still up.
 
 ## Recommended next steps
 
