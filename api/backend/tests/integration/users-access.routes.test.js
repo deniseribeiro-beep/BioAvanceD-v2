@@ -300,6 +300,47 @@ describe('Users and Access routes', () => {
     expect(usersCollection.updateOne).toHaveBeenCalled();
   });
 
+  // RF014 AC#4 (#648): admin-initiated -- flags the target user's account so
+  // their next login requires setting a new password (auth.service.js's
+  // processLogin gate). Same handler shape as reset-mfa above.
+  it('POST /api/users/:id/force-password-reset deve marcar forceReset no usuário alvo', async () => {
+    const handler = getHandler(userRoutes, 'post', '/:id/force-password-reset');
+    usersCollection.findOne
+      .mockResolvedValueOnce({
+        _id: 'user-target-1',
+        accessType: 2,
+        roleName: 'Técnico',
+        forceReset: false,
+      });
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const req = createRequest({ params: { id: 'user-target-1' } });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(usersCollection.updateOne).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ $set: expect.objectContaining({ forceReset: true }) })
+    );
+  });
+
+  it('POST /api/users/:id/force-password-reset retorna 404 quando o usuário alvo não existe', async () => {
+    const handler = getHandler(userRoutes, 'post', '/:id/force-password-reset');
+    usersCollection.findOne.mockResolvedValueOnce(null);
+
+    const req = createRequest({ params: { id: 'no-such-user' } });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(404);
+    expect(usersCollection.updateOne).not.toHaveBeenCalled();
+  });
+
   it('POST /api/users/:id/disable-mfa deve desativar MFA de admin', async () => {
     // #426: both the requester ('...011') and the target ('user-target-2')
     // need an active administrator UserRoleAssignment for this scenario --

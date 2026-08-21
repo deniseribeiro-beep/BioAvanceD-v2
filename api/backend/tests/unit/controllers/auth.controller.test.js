@@ -146,6 +146,30 @@ describe('AuthController.login', () => {
     expect(res.cookie).not.toHaveBeenCalled();
   });
 
+  // RF014 AC#4 (#648): requiresPasswordChange must be hoisted to the
+  // response's root level, same as requiresMFASetup/requiresMFA above --
+  // AuthContext.tsx's frontend only reads it there, not nested under
+  // `data`. Left nested, the frontend falls through to its generic 2FA
+  // fallback instead (confirmed live, real-backend e2e, before this fix).
+  it('returns requiresPasswordChange payload when the service indicates a forced reset', async () => {
+    vi.spyOn(authService, 'login').mockResolvedValue({
+      requiresPasswordChange: true,
+      message: 'Alteração de senha obrigatória antes de continuar',
+    });
+    const req = createReq({ body: { username: 'alice', password: 'x' } });
+    const res = createRes();
+
+    await authController.login(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      requiresPasswordChange: true,
+      message: 'Alteração de senha obrigatória antes de continuar',
+    });
+    expect(res.cookie).not.toHaveBeenCalled();
+  });
+
   it('sets refresh cookie, sanitizes payload, and logs successful login on success', async () => {
     vi.useFakeTimers();
     const logLoginSpy = vi.spyOn(auditLogger, 'logLogin').mockResolvedValue();

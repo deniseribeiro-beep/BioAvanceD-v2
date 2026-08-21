@@ -100,6 +100,19 @@ class AuthController {
         });
       }
 
+      // RF014 AC#4 (#648): admin forçou redefinição de senha e a nova senha
+      // ainda não foi enviada -- mesmo padrão de "flag no nível raiz" que
+      // requiresMFASetup/requiresMFA acima, não aninhado em `data`
+      // (AuthContext.tsx's frontend só lê responseData.requiresPasswordChange
+      // no nível raiz; aninhado em `data`, cai no fallback genérico de 2FA).
+      if (result.requiresPasswordChange) {
+        return res.status(200).json({
+          success: true,
+          requiresPasswordChange: true,
+          message: (req.t && req.t('auth.passwordChangeRequired')) || result.message
+        });
+      }
+
       // Log de login bem-sucedido (assíncrono para não bloquear resposta)
       if (result.user) {
         req.user = result.user; // Define req.user para o auditLogger

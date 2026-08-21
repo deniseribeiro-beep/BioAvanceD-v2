@@ -510,6 +510,7 @@ export const userService = {
   delete: (id: number | string) => api.delete(`/users/${id}`),
   resetMFA: (id: number | string) => api.post(`/users/${id}/reset-mfa`),
   disableMFA: (id: number | string) => api.post(`/users/${id}/disable-mfa`),
+  forcePasswordReset: (id: number | string) => api.post(`/users/${id}/force-password-reset`),
 };
 
 // ========== ORGANIZATION SERVICES ==========
@@ -631,8 +632,8 @@ export const auditService = {
 
 // ========== AUTH SERVICES ==========
 export const authService = {
-  login: (username: string, password: string, twoFactorCode?: string) =>
-    api.post('/auth/login', { username, password, twoFactorCode }),
+  login: (username: string, password: string, twoFactorCode?: string, newPassword?: string) =>
+    api.post('/auth/login', { username, password, twoFactorCode, newPassword }),
   logout: () => api.post('/auth/logout'),
   getSessions: () => api.get('/auth/sessions'),
   revokeSession: (sessionId: string) => api.delete(`/auth/sessions/${sessionId}`),

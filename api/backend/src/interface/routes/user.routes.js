@@ -898,6 +898,55 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
   }
 });
 
+// Forçar redefinição de senha - RF014 AC#4 (#648): flags the target user's
+// account so their next login requires setting a new password before
+// proceeding (auth.service.js#processLogin gates on this flag).
+router.post('/:id/force-password-reset', authenticate, requirePermission('forcePasswordReset', 'UPDATE'), async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const usersCollection = db.collection('users');
+
+    const userFilter = buildUserFilterById(req.params.id);
+    const targetUser = await usersCollection.findOne(userFilter);
+
+    if (!targetUser) {
+      return res.status(404).json({
+        success: false,
+        error: 'Usuário não encontrado'
+      });
+    }
+
+    await usersCollection.updateOne(
+      userFilter,
+      {
+        $set: {
+          forceReset: true,
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: req.t('users.forcePasswordResetSuccess')
+    });
+  } catch (error) {
+    logger.error('Erro ao forçar redefinição de senha:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: req.t('users.forcePasswordResetError'),
+      message: error.message
+    });
+  }
+});
+
 // Desativar MFA - apenas para administradores (permite desativar MFA de outros admins também)
 router.post('/:id/disable-mfa', authenticate, async (req, res) => {
   try {

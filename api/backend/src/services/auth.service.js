@@ -8,6 +8,7 @@ const UserModel = require('../models/User');
 const LogModel = require('../models/Log');
 const logger = require('../utils/logger');
 const sessionService = require('./session.service');
+const passwordService = require('./password.service');
 const { grantRoleForAccessType, isAdministrator, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
 const notificationDispatchService = require('./notificationDispatch.service');
 
@@ -212,7 +213,7 @@ class AuthService {
    */
   async login(db, credentials, req) {
     try {
-      const { email, password, mfaCode } = credentials;
+      const { email, password, mfaCode, newPassword } = credentials;
 
       if (!email || !password) {
         const { translate } = require('../i18n');
@@ -256,7 +257,7 @@ class AuthService {
       
       logger.info(`Usuário encontrado: username="${user.username}", email="${user.email}"`);
       
-      return await this.processLogin(db, user, password, mfaCode, usersCollection, req);
+      return await this.processLogin(db, user, password, mfaCode, usersCollection, req, newPassword);
     } catch (error) {
       logger.error('Erro no login:', error.message);
       throw error;
@@ -266,7 +267,7 @@ class AuthService {
   /**
    * Processa o login após encontrar o usuário
    */
-  async processLogin(db, user, password, mfaCode, usersCollection, req) {
+  async processLogin(db, user, password, mfaCode, usersCollection, req, newPassword) {
     try {
 
 
@@ -427,6 +428,42 @@ class AuthService {
           { _id: user._id },
           { $set: { mfaFailedAttempts: 0 } }
         );
+      }
+
+      // RF014 AC#4 (#648): forceReset (admin-forced, or createFirstAdmin's
+      // own bootstrap flag) blocks a full session until a new password is
+      // set. Mirrors changePassword's validate/hash/history update
+      // (auth.controller.js) inlined here, since this path has no prior
+      // authenticated session to call that endpoint with.
+      if (user.forceReset) {
+        if (!newPassword) {
+          return {
+            requiresPasswordChange: true,
+            message: 'Alteração de senha obrigatória antes de continuar'
+          };
+        }
+
+        passwordService.validateStrength(newPassword);
+        await passwordService.validateReuse(newPassword, user);
+
+        const newHash = await bcrypt.hash(newPassword, 10);
+        const history = Array.isArray(user.passwordHistory) ? user.passwordHistory : [];
+        const updatedHistory = [user.password, ...history].slice(0, 3);
+
+        await usersCollection.updateOne(
+          { _id: user._id },
+          {
+            $set: {
+              password: newHash,
+              passwordHistory: updatedHistory,
+              lastPasswordChange: new Date(),
+              forceReset: false,
+              updatedAt: new Date()
+            }
+          }
+        );
+
+        user.password = newHash;
       }
 
       // Atualiza último login
