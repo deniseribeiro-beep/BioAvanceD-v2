@@ -280,6 +280,21 @@ export async function seedRawSpecimen(specimenId: string): Promise<void> {
   });
 }
 
+/**
+ * RF029 slice 6/6 (#674) fixture: seeds a bare `assays` doc with just an
+ * `assayId`, same minimal-raw-insert shape as seedRawSpecimen above --
+ * the ingestion gateway's assertReferencesExist only needs the id to
+ * resolve via findOne, not a fully-formed assay through the real
+ * POST /api/assays flow.
+ */
+export async function seedAssay(assayId: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('assays').insertOne({
+    assayId,
+    createdAt: new Date(),
+  });
+}
+
 export async function seedCollectionEntity(collectionId: string): Promise<void> {
   const db = await getDb();
   await db.collection('collections').insertOne({

@@ -346,6 +346,103 @@ const datasetSchema = {
   required: ['datasetTitle', 'datasetVersion', 'creators', 'license']
 };
 
+// RF029 slice 6/6 (#674): WorkflowRun per dict-02_DICIONARIO.md
+// ELM-0326..0336 ("Proveniência computacional") -- same "mirror the real
+// model's own validate() field-for-field" reasoning as assaySchema/
+// datasetSchema above, since RF027 (#716) already built WorkflowRunModel
+// against this exact ELM range. `workflowRunId` is not required here,
+// same precedent as assayId/datasetId -- WorkflowRunModel.create()
+// generates it server-side (randomUUID()), never reads it from input.
+// `runStatus` mirrors WorkflowRunModel.RUN_STATUSES verbatim rather than
+// importing the model (contracts/canonical/v1 stays a standalone schema
+// module, no cross-import into src/models, same as every schema above).
+// No reference field: workflowId/workflowVersion identify a pipeline
+// definition, not a row in an existing collection -- there is no
+// "workflows" master collection to check against, unlike Assay's
+// studyId. inputFileIds/outputFileIds stay unreferenced for the same
+// reason WorkflowRun.js's own header notes them as populated by a
+// separate file-linkage route (#716 slice 2/4), and (per #664's own
+// precedent) resolving a fileId across this repo's three per-parent file
+// collections is out of this thin slice's scope.
+const workflowSchema = {
+  $id: 'canonical.v1.workflow',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    workflowRunId: { type: 'string', minLength: 1 },
+    workflowId: { type: 'string', minLength: 1 },
+    workflowVersion: { type: 'string', minLength: 1 },
+    createdBy: { type: 'string', minLength: 1 },
+    containerImageDigest: { type: 'string' },
+    softwareDependencies: { type: 'array' },
+    parameters: { type: 'object' },
+    inputFileIds: { type: 'array', items: { type: 'string' } },
+    outputFileIds: { type: 'array', items: { type: 'string' } },
+    startedAt: { type: 'string' },
+    completedAt: { type: 'string' },
+    runStatus: { type: 'string', enum: ['queued', 'running', 'succeeded', 'failed', 'cancelled'] }
+  },
+  required: ['workflowId', 'workflowVersion', 'createdBy', 'startedAt', 'runStatus']
+};
+
+// RF029 slice 6/6 (#674): OmicsQualification per dict-02_DICIONARIO.md
+// ELM-0337..0342 ("Qualidade específica do ensaio") -- mirrors
+// OmicsQualificationModel.validate() field-for-field, same reasoning as
+// workflowSchema above. `omicsQualificationId` not required, same
+// server-generated-id precedent. `targetAssay` is this schema's one
+// FK-shaped field -- it names the Assay this qualification was run
+// against, which (unlike WorkflowRun's workflowId) does resolve to a
+// real `assays` collection row, so it's the reference this slice's e2e
+// proof checks (the same "one cheaply-seedable reference" scope #673
+// applied to Assay's own studyId).
+const omicsQualificationSchema = {
+  $id: 'canonical.v1.omicsQualification',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    omicsQualificationId: { type: 'string', minLength: 1 },
+    targetAssay: { type: 'string', minLength: 1 },
+    qcRuleSetVersion: { type: 'string', minLength: 1 },
+    qcMetrics: { type: 'array', minItems: 1, items: { type: 'object' } },
+    qualificationDecision: { type: 'string', enum: ['eligible', 'ineligible', 'conditional', 'review_required'] },
+    limitations: { type: 'string' }
+  },
+  required: ['targetAssay', 'qcRuleSetVersion', 'qcMetrics', 'qualificationDecision']
+};
+
+// RF029 slice 6/6 (#674): OmicsRun per dict-02_DICIONARIO.md ELM-0343..
+// 0352 ("Dados ômicos e imagens", genomics/transcriptomics/proteomics/
+// metabolomics/microbiome sub-slice -- see OmicsRun.js's own header for
+// why the imaging pair, ELM-0353..0356, is out of this model's scope).
+// Mirrors OmicsRunModel.validate() field-for-field. `omicsRunId` not
+// required, same server-generated-id precedent. `fileLinks` stays
+// unreferenced for the same cross-collection-resolution reason as
+// workflowSchema's inputFileIds/outputFileIds above.
+const omicsRunSchema = {
+  $id: 'canonical.v1.omicsRun',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    omicsRunId: { type: 'string', minLength: 1 },
+    modality: { type: 'string', enum: ['genomics', 'transcriptomics', 'proteomics', 'metabolomics', 'microbiome'] },
+    referenceAssembly: { type: 'string' },
+    mixsChecklist: { type: 'string' },
+    fileLinks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          role: { type: 'string', minLength: 1 },
+          fileId: { type: 'string', minLength: 1 }
+        },
+        required: ['role', 'fileId']
+      }
+    }
+  },
+  required: ['modality']
+};
+
 const intakeSchema = {
   $id: 'canonical.v1.intake',
   type: 'object',
@@ -391,7 +488,7 @@ const intakeSchema = {
   required: ['participant', 'consent', 'specimen', 'clinical', 'biomarkers']
 };
 
-for (const schema of [participantSchema, specimenSchema, consentSchema, clinicalDataSchema, telemetrySchema, fileSchema, assaySchema, datasetSchema, intakeSchema]) {
+for (const schema of [participantSchema, specimenSchema, consentSchema, clinicalDataSchema, telemetrySchema, fileSchema, assaySchema, datasetSchema, workflowSchema, omicsQualificationSchema, omicsRunSchema, intakeSchema]) {
   ajv.addSchema(schema);
 }
 
@@ -416,6 +513,9 @@ module.exports = {
     fileSchema,
     assaySchema,
     datasetSchema,
+    workflowSchema,
+    omicsQualificationSchema,
+    omicsRunSchema,
     intakeSchema
   }
 };
