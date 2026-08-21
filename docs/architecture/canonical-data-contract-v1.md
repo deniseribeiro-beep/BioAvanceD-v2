@@ -1190,6 +1190,17 @@ dict-02's own row set for this entity has no `participantId` field
 would be a design call beyond what the dictionary defines today, not an
 oversight in this one.
 
+**Wired in #712 (RF005 clinical-UI slice, tracker #707):** unlike the
+other 5 clinical-UI slices, no longitudinal-outcome UI existed in the
+intake wizard at all before this — `ClinicalIntakeWizard.jsx` now has a
+real manual-entry outcome field (a `Select` over the 7 dict-02 outcome
+categories, mapped to English slugs — `progression`/`remission`/
+`relapse`/`response`/`toxicity`/`hospitalization`/`death` — plus a
+required outcome date). `recordClinicalEntities` (`intakeWizard.js`)
+additively creates one `ClinicalOutcome` per wizard-collected outcome
+entry, `outcomeType` stored as `{ code: <slug> }` (CodeableConcept,
+stored as given, matching the model's own precedent).
+
 ### DerivedScore
 
 - `derivedScoreId` (internal identity; assigned via `crypto.randomUUID()`
@@ -1211,13 +1222,11 @@ oversight in this one.
 (`DerivedScoreModel`, `derived-score.service.js`). Same "dict-02 has no
 `participantId` row for this entity" note as `ClinicalOutcome` above.
 
-**Not yet landed for any of the three entities above (follow-up tracked
-as #697):** no live caller creates a `ClinicalObservation`,
-`ClinicalOutcome`, or `DerivedScore` — unlike `Encounter`/`Condition`/
-`PhenotypeObservation`/`MedicationExposure` (wired in #693), none of
-these three have a corresponding data source in the intake wizard's
-current UI (and `DerivedScore` would need a real Charlson-scoring
-algorithm, not just a data mapping) — #697 is a marker, not picked up.
+**Not yet landed (follow-up tracked as #697, now narrowed to
+`DerivedScore` alone — see #713):** `ClinicalObservation` was wired in
+#711, `ClinicalOutcome` in #712 (both above). `DerivedScore` remains the
+only one of the three with no live caller — it would need a real
+Charlson-scoring algorithm, not just a data mapping, tracked as #713.
 
 ### AllergyIntolerance
 

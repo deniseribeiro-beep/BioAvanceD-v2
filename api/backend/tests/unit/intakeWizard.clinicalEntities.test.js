@@ -22,6 +22,7 @@ const allergyIntoleranceServicePath = require.resolve('../../src/services/allerg
 const familyHistoryServicePath = require.resolve('../../src/services/family-history.service');
 const procedureServicePath = require.resolve('../../src/services/procedure.service');
 const clinicalObservationServicePath = require.resolve('../../src/services/clinical-observation.service');
+const clinicalOutcomeServicePath = require.resolve('../../src/services/clinical-outcome.service');
 const activeCodeValidatorPath = require.resolve('../../src/ingestion/activeCodeValidator');
 const routePath = require.resolve('../../src/routes/intakeWizard.js');
 
@@ -50,6 +51,7 @@ const allPaths = [
   familyHistoryServicePath,
   procedureServicePath,
   clinicalObservationServicePath,
+  clinicalOutcomeServicePath,
   activeCodeValidatorPath,
   routePath,
 ];
@@ -192,6 +194,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       familyHistories: makeInsertCapturingCollection(),
       procedures: makeInsertCapturingCollection(),
       clinicalObservations: makeInsertCapturingCollection(),
+      clinicalOutcomes: makeInsertCapturingCollection(),
       ...makeActiveCodeCollections(),
     };
 
@@ -459,5 +462,39 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
 
     expect(res.status).toBe(200);
     expect(collections.clinicalObservations.docs).toHaveLength(0);
+  });
+
+  it('#712: creates a ClinicalOutcome from a wizard-collected entry', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        clinicalOutcomes: [{ outcomeType: 'remission', outcomeDate: '2026-02-01' }],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.clinicalOutcomes.docs).toHaveLength(1);
+    expect(collections.clinicalOutcomes.docs[0]).toMatchObject({
+      outcomeType: { code: 'remission' },
+    });
+    expect(collections.clinicalOutcomes.docs[0].outcomeDate).toBeInstanceOf(Date);
+  });
+
+  it('#712: skips an outcome entry with no outcome type or no outcome date, and does not fail the intake', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        clinicalOutcomes: [{ outcomeType: '', outcomeDate: '2026-02-01' }],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.clinicalOutcomes.docs).toHaveLength(0);
   });
 });

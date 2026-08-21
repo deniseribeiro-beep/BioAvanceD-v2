@@ -368,6 +368,7 @@ const initialState = {
   familyHistories: [], // [{ relationship, conditionName, orphaCode, onset }]
   procedures: [], // [{ procedureName, procedureCode, performed, bodySite }]
   observationRecords: [], // [{ testName, loincCode, value, unit, effectiveDate }]
+  clinicalOutcomes: [], // [{ outcomeType, outcomeDate }]
   treatmentStatus: '',
   medicationName: '',
   medicationCode: '',
@@ -1066,6 +1067,7 @@ function createClinicalStepSchema(t, clinicalItems = []) {
     familyHistories: z.array(z.any()).optional(),
     procedures: z.array(z.any()).optional(),
     observationRecords: z.array(z.any()).optional(),
+    clinicalOutcomes: z.array(z.any()).optional(),
     biomarkers_values: z.record(z.string()).optional(),
     treatmentStatus: z.string().trim().optional().or(z.literal('')),
     medicationName: z.string().trim().max(180, t('wizard.validation.medicationNameTooLong', 'Medication name is too long')).optional().or(z.literal('')),
@@ -1495,6 +1497,7 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
     familyHistories: Array.isArray(formData.familyHistories) ? formData.familyHistories : [],
     procedures: Array.isArray(formData.procedures) ? formData.procedures : [],
     observationRecords: Array.isArray(formData.observationRecords) ? formData.observationRecords : [],
+    clinicalOutcomes: Array.isArray(formData.clinicalOutcomes) ? formData.clinicalOutcomes : [],
     pharmacologyData: {
       treatmentStatus: String(formData.treatmentStatus || '').trim(),
       medicationName: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
@@ -1601,6 +1604,7 @@ export default function ClinicalIntakeWizard(props) {
   const [familyHistoryDraft, setFamilyHistoryDraft] = useState({ relationship: '', conditionName: '', orphaCode: '', onset: '' });
   const [procedureDraft, setProcedureDraft] = useState({ procedureName: '', procedureCode: '', performed: '', bodySite: '' });
   const [observationDraft, setObservationDraft] = useState({ testName: '', loincCode: '', value: '', unit: '', effectiveDate: '' });
+  const [outcomeDraft, setOutcomeDraft] = useState({ outcomeType: '', outcomeDate: '' });
   const [isConsentPreviewOpen, setIsConsentPreviewOpen] = useState(false);
   const [isBiomarkerRequestOpen, setIsBiomarkerRequestOpen] = useState(false);
   const [isBiomarkerRequestSubmitting, setIsBiomarkerRequestSubmitting] = useState(false);
@@ -2250,6 +2254,33 @@ export default function ClinicalIntakeWizard(props) {
     setFormData((previous) => ({
       ...previous,
       observationRecords: (Array.isArray(previous.observationRecords) ? previous.observationRecords : []).filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
+
+  const handleOutcomeDraftChange = (field) => (event) => {
+    const value = event.target.value;
+    setOutcomeDraft((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const handleAddOutcome = () => {
+    const outcomeType = String(outcomeDraft.outcomeType || '').trim();
+    const outcomeDate = String(outcomeDraft.outcomeDate || '').trim();
+    if (!outcomeType || !outcomeDate) {
+      return;
+    }
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      clinicalOutcomes: [...(Array.isArray(previous.clinicalOutcomes) ? previous.clinicalOutcomes : []), { outcomeType, outcomeDate }],
+    }));
+    setOutcomeDraft({ outcomeType: '', outcomeDate: '' });
+  };
+
+  const handleRemoveOutcome = (index) => {
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      clinicalOutcomes: (Array.isArray(previous.clinicalOutcomes) ? previous.clinicalOutcomes : []).filter((_, itemIndex) => itemIndex !== index),
     }));
   };
 
@@ -3535,6 +3566,76 @@ export default function ClinicalIntakeWizard(props) {
                         onClick={() => handleRemoveObservation(index)}
                       >
                         {t('wizard.actions.removeObservation', 'Remover')}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="clinical-subsection space-y-4" data-testid="wizard-outcomes-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.clinicalOutcomes', 'Desfechos Longitudinais')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Select
+                  id="outcomeType"
+                  name="outcomeType"
+                  data-testid="wizard-outcome-type"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                  label={t('wizard.fields.outcomeType', 'Tipo de desfecho')}
+                  value={outcomeDraft.outcomeType}
+                  onChange={handleOutcomeDraftChange('outcomeType')}
+                  options={[
+                    { value: '', label: t('wizard.fields.selectOutcomeType', 'Selecione o tipo de desfecho') },
+                    { value: 'progression', label: t('wizard.fields.outcomeProgression', 'Progressão') },
+                    { value: 'remission', label: t('wizard.fields.outcomeRemission', 'Remissão') },
+                    { value: 'relapse', label: t('wizard.fields.outcomeRelapse', 'Recidiva') },
+                    { value: 'response', label: t('wizard.fields.outcomeResponse', 'Resposta') },
+                    { value: 'toxicity', label: t('wizard.fields.outcomeToxicity', 'Toxicidade') },
+                    { value: 'hospitalization', label: t('wizard.fields.outcomeHospitalization', 'Hospitalização') },
+                    { value: 'death', label: t('wizard.fields.outcomeDeath', 'Óbito') },
+                  ]}
+                />
+                <Input
+                  id="outcomeDate"
+                  name="outcomeDate"
+                  data-testid="wizard-outcome-date"
+                  type="date"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.outcomeDate', 'Data do desfecho')}
+                  value={outcomeDraft.outcomeDate}
+                  onChange={handleOutcomeDraftChange('outcomeDate')}
+                />
+              </div>
+              <Button
+                type="button"
+                data-testid="wizard-add-outcome"
+                variant="secondary"
+                onClick={handleAddOutcome}
+                disabled={!String(outcomeDraft.outcomeType || '').trim() || !String(outcomeDraft.outcomeDate || '').trim()}
+              >
+                {t('wizard.actions.addOutcome', 'Adicionar desfecho')}
+              </Button>
+              {Array.isArray(formData.clinicalOutcomes) && formData.clinicalOutcomes.length > 0 && (
+                <ul className="outcome-list space-y-2" data-testid="wizard-outcome-list">
+                  {formData.clinicalOutcomes.map((entry, index) => (
+                    <li
+                      key={`${entry.outcomeType}-${index}`}
+                      data-testid={`wizard-outcome-item-${index}`}
+                      className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2"
+                    >
+                      <span>
+                        <span className="font-semibold text-gray-800">{entry.outcomeType}</span>
+                        {entry.outcomeDate && <span className="ml-2 text-sm text-gray-500">· {entry.outcomeDate}</span>}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid={`wizard-remove-outcome-${index}`}
+                        className="text-red-600 hover:text-red-800 text-sm"
+                        onClick={() => handleRemoveOutcome(index)}
+                      >
+                        {t('wizard.actions.removeOutcome', 'Remover')}
                       </button>
                     </li>
                   ))}
