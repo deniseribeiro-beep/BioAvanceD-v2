@@ -302,6 +302,7 @@ app.use("/api/collections", createMasterDataRouter({
   idField: "collectionId",
   model: require("./src/models/Collection")
 }));
+app.use("/api/workflow-runs/:workflowRunId/files", require("./src/interface/routes/workflow-run-file-link.routes"));
 app.use("/api/workflow-runs", createMasterDataRouter({
   collectionName: "workflowRuns",
   idField: "workflowRunId",
