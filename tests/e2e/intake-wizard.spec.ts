@@ -164,7 +164,7 @@ test.describe('Participant identity segregation (RF005/RNF007) — real backend 
   });
 });
 
-test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF005 AC4-6 wiring against a live stack; extended by #708 for AllergyIntolerance, #709 for FamilyHistory, #710 for Procedure, #711 for ClinicalObservation, #712 for ClinicalOutcome)', () => {
+test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF005 AC4-6 wiring against a live stack; extended by #708 for AllergyIntolerance, #709 for FamilyHistory, #710 for Procedure, #711 for ClinicalObservation, #712 for ClinicalOutcome, #713 for the real Charlson Comorbidity Index/DerivedScore)', () => {
   test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
   const orphaCode = 'ORPHA:558';
@@ -377,6 +377,14 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await page.getByTestId('wizard-add-outcome').click();
     await expect(page.getByTestId('wizard-outcome-item-0')).toBeVisible();
 
+    // Comorbidities / CCI (#713) -- checks copd (real Charlson category,
+    // weight 1) and ckd (weight 2), plus hypertension (NOT a real Charlson
+    // category -- proves it's correctly excluded from the computed score,
+    // same "real algorithm, not just wiring" bar the issue's own DoD sets).
+    await page.getByTestId('wizard-comorbidity-copd').check();
+    await page.getByTestId('wizard-comorbidity-ckd').check();
+    await page.getByTestId('wizard-comorbidity-hypertension').check();
+
     const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
     await page.getByTestId('wizard-submit-button').click();
     const response = await submissionResponse;
@@ -524,5 +532,30 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     expect(outcomes[0]).toMatchObject({
       outcomeType: { code: outcomeType },
     });
+
+    // #713: DerivedScore (CCI) -- dict-02 ELM-0255..0259, a real
+    // original-1987 Charlson Comorbidity Index computed from copd (weight
+    // 1) + ckd (weight 2) = 3; hypertension was also checked above but is
+    // NOT a real Charlson category, proving it's correctly excluded rather
+    // than silently inflating the score. Like ClinicalOutcome/DerivedScore
+    // above, dict-02 defines no participantId field for this entity and
+    // this run's fixture has no other unique discriminator either (every
+    // field the algorithm produces is deterministic given the same
+    // checked boxes) -- queried as the most recently created matching
+    // record instead, immediately after this test's own submission
+    // response was received.
+    const derivedScores = await db.collection('derivedScores')
+      .find({ 'scoreType.code': 'cci', algorithmVersion: 'CCI-original' })
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .toArray();
+    expect(derivedScores).toHaveLength(1);
+    expect(derivedScores[0]).toMatchObject({
+      scoreType: { code: 'cci', display: 'Charlson Comorbidity Index' },
+      scoreValue: 3,
+      algorithmVersion: 'CCI-original',
+    });
+    const scoreComponentCodes = derivedScores[0].scoreComponents.map((c: { condition: { code: string } }) => c.condition.code);
+    expect(scoreComponentCodes.sort()).toEqual(['chronicPulmonaryDisease', 'renalDisease']);
   });
 });

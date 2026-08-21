@@ -18,6 +18,8 @@ const familyHistoryService = require('../services/family-history.service');
 const procedureService = require('../services/procedure.service');
 const clinicalObservationService = require('../services/clinical-observation.service');
 const clinicalOutcomeService = require('../services/clinical-outcome.service');
+const derivedScoreService = require('../services/derived-score.service');
+const { computeCharlsonScore, ALGORITHM_VERSION: CCI_ALGORITHM_VERSION, SCORE_TYPE: CCI_SCORE_TYPE } = require('../services/charlsonComorbidityIndex');
 const logger = require('../utils/logger');
 const { validate } = require('../contracts/canonical/v1');
 
@@ -77,12 +79,11 @@ const LOINC_OBSERVATION_SYSTEM_URI = 'http://loinc.org';
  * a materially bigger behavioral change than this additive slice intends.
  *
  * Scope note: originally only the 4 entities with real source data in this
- * wizard's payload were wired here. #708/#709/#710/#711/#712 (RF005
+ * wizard's payload were wired here. #708/#709/#710/#711/#712/#713 (RF005
  * clinical-UI slices, tracker #707) add AllergyIntolerance/FamilyHistory/
- * Procedure/ClinicalObservation/ClinicalOutcome, now that the wizard has
- * real fields for each. DerivedScore remains unwired -- it needs an
- * actual Charlson-scoring algorithm, not just a data mapping -- tracked
- * as its own follow-up (#713) rather than fabricated here.
+ * Procedure/ClinicalObservation/ClinicalOutcome/DerivedScore, now that the
+ * wizard has real fields (or, for DerivedScore, a real scoring algorithm)
+ * for each. All 6 sibling slices are now wired.
  */
 async function recordClinicalEntities(db, { participantId, clinicalData, pharmacologyData, registeredAt }) {
   let encounterId = null;
@@ -260,6 +261,29 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
       });
     } catch (outcomeError) {
       logger.error(`Falha ao registrar ClinicalOutcome (${outcomeTypeCode}) para o intake wizard:`, outcomeError.message || outcomeError);
+    }
+  }
+
+  // #713: ELM-0255..0259 DerivedScore -- real original-1987 Charlson
+  // Comorbidity Index, computed from the wizard's already-collected
+  // charlsonConditions checklist (charlsonComorbidityIndex.js's own file
+  // comment documents which checklist items actually map to a real
+  // Charlson category and which don't). Skipped entirely (not created
+  // with a zero score) when none of the reported conditions map to a real
+  // category -- dict-02 ELM-0259 requires scoreComponents non-empty
+  // ("nunca armazenar somente o escore final"), so there is nothing valid
+  // to persist in that case.
+  const { scoreValue, scoreComponents } = computeCharlsonScore(clinicalData?.charlsonComorbidities);
+  if (scoreComponents.length > 0) {
+    try {
+      await derivedScoreService.createDerivedScore(db, {
+        scoreType: CCI_SCORE_TYPE,
+        scoreValue,
+        algorithmVersion: CCI_ALGORITHM_VERSION,
+        scoreComponents,
+      });
+    } catch (scoreError) {
+      logger.error('Falha ao registrar DerivedScore (CCI) para o intake wizard:', scoreError.message || scoreError);
     }
   }
 }
