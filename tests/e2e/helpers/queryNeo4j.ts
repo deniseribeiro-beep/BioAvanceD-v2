@@ -207,6 +207,66 @@ async function readTerminologyRelationType(sourceCode: string, targetCode: strin
 }
 
 /** Polls Neo4j until the `sourceCode -[TERMINOLOGY_RELATION]-> targetCode` edge reaches `expectedRelationType`, or throws once `timeoutMs` elapses. */
+/**
+ * #696 (RF005 AC4-6 real-backend proof) fixture: seeds the `Doenca_ORPHA`
+ * -[:APRESENTA_FENOTIPO]-> `Fenotipo_HPO` graph shape `GET
+ * /api/dictionary/suggest` (dictionary.js) queries directly against Neo4j
+ * to populate the intake wizard's disease-phenotype cascade. This is a
+ * different, older graph model from RF028/RF023's own
+ * `:TerminologyConcept`/`:TerminologyRelation` projection (no cross-
+ * reference from ORPHA to HPO exists in RF028's bundled sample fixtures,
+ * which only carry each ontology's own intra-hierarchy `is_a` edges) — so
+ * seeding this graph directly, the same "seed the referent directly"
+ * rationale as `seedSampleNode` above, is the only way to get the
+ * wizard's phenotype-suggestion step to return real data against a real
+ * backend without depending on Neo4j actually erroring (the only other
+ * path into `buildLocalSemanticSuggestions`' Mongo fallback).
+ */
+export async function seedOrphaPhenotypeGraph(
+  orphaCode: string,
+  orphaLabel: string,
+  phenotypes: Array<{ hpoCode: string; label: string }>
+): Promise<void> {
+  const session = getDriver().session({ database });
+  try {
+    await session.run('MERGE (d:Doenca_ORPHA {code: $orphaCode}) SET d.nome = $orphaLabel', {
+      orphaCode,
+      orphaLabel,
+    });
+    for (const phenotype of phenotypes) {
+      await session.run(
+        `
+          MERGE (h:Fenotipo_HPO {code: $hpoCode})
+          SET h.nome = $label
+          WITH h
+          MATCH (d:Doenca_ORPHA {code: $orphaCode})
+          MERGE (d)-[:APRESENTA_FENOTIPO]->(h)
+        `,
+        { hpoCode: phenotype.hpoCode, label: phenotype.label, orphaCode }
+      );
+    }
+  } finally {
+    await session.close();
+  }
+}
+
+/** Deletes a seeded `:Doenca_ORPHA` node and its `:Fenotipo_HPO` phenotypes — call from a spec's cleanup so fixtures don't accumulate across runs. */
+export async function removeOrphaPhenotypeGraph(orphaCode: string): Promise<void> {
+  const session = getDriver().session({ database });
+  try {
+    await session.run(
+      `
+        MATCH (d:Doenca_ORPHA {code: $orphaCode})
+        OPTIONAL MATCH (d)-[:APRESENTA_FENOTIPO]->(h:Fenotipo_HPO)
+        DETACH DELETE d, h
+      `,
+      { orphaCode }
+    );
+  } finally {
+    await session.close();
+  }
+}
+
 export async function waitForTerminologyRelation(
   sourceCode: string,
   targetCode: string,

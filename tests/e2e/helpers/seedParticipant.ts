@@ -43,7 +43,7 @@ export async function closeSeedDb(): Promise<void> {
   }
 }
 
-async function seedActiveConsentTemplate(db: Db): Promise<string> {
+export async function seedActiveConsentTemplate(db: Db): Promise<string> {
   // Canonical name is `consent_templates` (snake_case), not the
   // `consentTemplates` field/param name used throughout the API layer —
   // see api/backend/src/config/collections.js's CANONICAL_COLLECTIONS map.
@@ -327,5 +327,137 @@ export async function seedDuoConcept(code: string, options: { conceptStatus?: st
     referenceDatasetReleaseId: 'rf024-e2e',
     createdAt: new Date(),
     updatedAt: new Date(),
+  });
+}
+
+/**
+ * #696 (RF005 AC4-6 real-backend proof) fixture: seeds a
+ * `TerminologyConcept` **and** its owning `ReferenceDatasetRelease`
+ * (`releaseStatus: 'active'`) so `activeCodeValidator.checkActiveCode`
+ * (condition.service.js/phenotype-observation.service.js's active-release
+ * gate, reused from RF029/#669) resolves the code as active — unlike
+ * `seedDuoConcept` above, which only inserts the concept row (fine for
+ * RF024's own flow, which doesn't call activeCodeValidator, but not
+ * enough for RF005's Condition/PhenotypeObservation writes, which do).
+ * `code` must match exactly what a real RF028 importer would have stored
+ * (see reference-imports/sources/*.js's own `raw.id`-verbatim
+ * normalization) — not what the intake wizard's own code-formatting
+ * helpers produce, which is what #696 found actually diverges for OMIM.
+ */
+export async function seedActiveTerminologyConcept(
+  systemUri: string,
+  code: string,
+  display: string,
+  options: { datasetCode?: string } = {}
+): Promise<void> {
+  const db = await getDb();
+  const datasetCode = options.datasetCode || 'E2E';
+  const referenceDatasetReleaseId = `e2e-696-${datasetCode}-${Date.now()}`;
+
+  await db.collection('referenceDatasetReleases').insertOne({
+    referenceDatasetReleaseId,
+    sourceId: `SRC_${datasetCode}`,
+    datasetCode,
+    datasetName: `#696 e2e ${datasetCode} release`,
+    systemUri,
+    datasetVersion: 'e2e-696',
+    retrievalUri: 'file://e2e-696-fixture',
+    accessMethod: 'manual_upload',
+    sourceFormat: ['JSON'],
+    license: 'e2e-fixture',
+    licenseUri: null,
+    sourceChecksum: 'e2e-696',
+    parserVersion: '1.0.0',
+    mappingVersion: '1.0.0',
+    releaseStatus: 'active',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  await db.collection('terminologyConcepts').insertOne({
+    terminologyConceptId: `e2e-696-${code}-${Date.now()}`,
+    systemUri,
+    code,
+    version: 'e2e-696',
+    display,
+    conceptStatus: 'active',
+    sourceRecordId: code,
+    referenceDatasetReleaseId,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+}
+
+/**
+ * #696 fixture: seeds the legacy `terminologies` doc the intake wizard's
+ * own diagnosis-search UI reads (`GET /api/terminologies`,
+ * terminologies.routes.js) — a different collection from
+ * `terminologyConcepts` above (RF028's canonical import pipeline never
+ * writes here; this is the older UI-facing search index).
+ */
+export async function seedLegacyDiagnosisTerminology(options: {
+  orphaCode: string;
+  cidCode: string;
+  omimCode: string;
+  description: string;
+}): Promise<void> {
+  const db = await getDb();
+  await db.collection('terminologies').insertOne({
+    sistema: 'ORPHA',
+    codigo: options.orphaCode,
+    descricao: options.description,
+    label: options.description,
+    sinonimos: [],
+    aliases: [],
+    relacoes: {
+      cid: options.cidCode,
+      cid10: options.cidCode,
+      omim: options.omimCode,
+      orpha: options.orphaCode,
+      hpo: '',
+    },
+    ativo: true,
+    sincronizadoEm: new Date(),
+    updatedAt: new Date(),
+    lang: 'pt',
+    fonte: 'e2e-696-fixture',
+  });
+}
+
+/**
+ * #696 fixture: seeds the `disease_dictionary` doc `buildLocalSemanticSuggestions`
+ * (dictionary.js) reads as its Mongo fallback for `GET /api/dictionary/suggest`
+ * — only reached if the Neo4j query itself throws, not merely returns zero
+ * rows (dictionary.js:298 returns 404 directly on an empty Neo4j result set),
+ * so this alone isn't sufficient against a healthy Neo4j — see
+ * `seedOrphaPhenotypeGraph` in queryNeo4j.ts for the graph-side fixture this
+ * pairs with.
+ */
+export async function seedDiseaseDictionaryPhenotypes(
+  orphaNumeric: string,
+  phenotypes: Array<{ hpoId: string; label: string }>
+): Promise<void> {
+  const db = await getDb();
+  await db.collection('disease_dictionary').insertOne({
+    orpha_code: orphaNumeric,
+    name: `#696 e2e disease ${orphaNumeric}`,
+    active: true,
+    phenotypes,
+    createdAt: new Date(),
+  });
+}
+
+/** #696 fixture: seeds a `medication_dictionary` doc for `GET /api/dictionary/atc/search` (DrugService.searchAndCacheDrug). */
+export async function seedMedicationDictionaryEntry(options: {
+  name: string;
+  atcCode: string;
+}): Promise<void> {
+  const db = await getDb();
+  await db.collection('medication_dictionary').insertOne({
+    name: options.name,
+    generic_name: options.name,
+    atc_code: options.atcCode,
+    active: true,
+    createdAt: new Date(),
   });
 }
