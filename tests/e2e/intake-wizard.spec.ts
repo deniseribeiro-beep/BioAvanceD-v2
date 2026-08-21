@@ -253,6 +253,11 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     // fixture data. "Processing information unknown" auto-fills axes 3-6.
     await expect(page.getByTestId('wizard-sprec-axis-1')).toBeVisible();
     await page.getByTestId('wizard-sprec-matrix').selectOption('fluid');
+    // MIABIS-coded classification (#701) -- a distinct, fixed id list from
+    // the SPREC axis fields below, selected by index like them.
+    await page.getByTestId('wizard-sample-type').selectOption({ index: 1 });
+    await page.getByTestId('wizard-sample-origin').selectOption({ index: 1 });
+    await page.getByTestId('wizard-extraction-protocol').selectOption({ index: 1 });
     await page.getByTestId('wizard-sprec-axis-1').selectOption({ index: 1 });
     await page.getByTestId('wizard-sprec-axis-2').selectOption({ index: 1 });
     await page.getByTestId('wizard-processing-unknown').check();
@@ -283,13 +288,19 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     const response = await submissionResponse;
     // #699 (fixed): this used to 422 with NON_CANONICAL_FIELD -- the
     // wizard's real payload never matched the canonical.v1.intake AJV
-    // contract. Now blocked one layer deeper by #701: sampleType/
-    // sampleOrigin/extractionProtocol send real SPREC axis codes, not the
-    // closed MIABIS enum SampleModel.validate() requires. Left as a real
-    // (red) test per this repo's "RED tests are legitimate deliverables"
-    // convention -- do not weaken this assertion to hide the gap; once
-    // #701 is fixed this should start passing and prove out the rest of
-    // this test (the actual point of #696).
+    // contract. #701 (fixed): sampleType/sampleOrigin/extractionProtocol
+    // sent real SPREC axis codes, not the closed MIABIS enum
+    // SampleModel.validate() requires -- the wizard now collects real
+    // MIABIS-coded selections separately from the SPREC axis fields. Now
+    // blocked one layer deeper by #703: matchOrUpsertParticipant treats
+    // the wizard's placeholder participantId ('placeholder', sent for
+    // every new patient per #699's own precedent) as a real, literal id
+    // instead of generating one, so the specimen-creation step's
+    // /^\d{8}$/ format check fails. Left as a real (red) test per this
+    // repo's "RED tests are legitimate deliverables" convention -- do not
+    // weaken this assertion to hide the gap; once #703 is fixed this
+    // should start passing and prove out the rest of this test (the
+    // actual point of #696).
     expect(response.ok()).toBe(true);
     const body = await response.json();
     expect(body.success).toBe(true);
