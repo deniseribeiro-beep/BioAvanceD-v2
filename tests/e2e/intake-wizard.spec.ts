@@ -172,7 +172,8 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
   // RF028's real OMIM importer stores bare digits (no "OMIM:" prefix) —
   // reference-data/reference-imports/sources/omim.js's fixture id is
   // literally "154700" for Marfan syndrome. Seeded here in that same real
-  // format on purpose, not the wizard's own "OMIM:154700" — see #698.
+  // format on purpose, not the wizard's own "OMIM:154700" — see #698
+  // (fixed: intakeWizard.js#buildClinicalData now strips that prefix).
   const omimCodeAsImported = '154700';
   const cidCode = 'C50';
   const hpoCode = 'HP:0001250';
@@ -211,10 +212,12 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     // RF028 canonical TerminologyConcept/ReferenceDatasetRelease fixtures
     // (activeCodeValidator's own lookup) — ORPHA and ICD-10 seeded in the
     // exact format the wizard itself sends (matches real RF028 importer
-    // output for these two). OMIM is deliberately seeded in RF028's real
-    // bare-digit format, NOT the wizard's always-prefixed "OMIM:154700" —
-    // this is what #698 proves out below. MedicationExposure's ATC code is
-    // not gated by activeCodeValidator at all (medication-exposure.service.js
+    // output for these two). OMIM is seeded in RF028's real bare-digit
+    // format, NOT the wizard's always-prefixed "OMIM:154700" — #698 (fixed)
+    // strips that prefix server-side (intakeWizard.js#buildClinicalData)
+    // before building conditionCoding, so this now resolves as active too.
+    // MedicationExposure's ATC code is not gated by activeCodeValidator at all
+    // (medication-exposure.service.js
     // never calls it — only condition.service.js/phenotype-observation.
     // service.js do), so no ATC TerminologyConcept fixture is needed for
     // MedicationExposure to be created.
@@ -323,14 +326,17 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     const conditionCodings = conditions[0].conditionCoding.map((coding: { systemUri: string; code: string }) => `${coding.systemUri}|${coding.code}`);
     expect(conditionCodings).toContain(`http://www.orpha.net|${orphaCode}`);
     expect(conditionCodings).toContain(`http://hl7.org/fhir/sid/icd-10|${cidCode}`);
-    // #698: the wizard always sends "OMIM:154700" (normalizeOmimCode's own
-    // always-prefixed format), which never matches RF028's real bare-digit
-    // TerminologyConcept ("154700") — so activeCodeValidator resolves it as
-    // unknown and condition.service.js silently drops the OMIM coding from
-    // conditionCoding. Asserted here as the real (buggy) behavior, not
-    // weakened to look like a pass — the code above intentionally seeds the
-    // OMIM concept in RF028's real format specifically to prove this gap.
-    expect(conditionCodings.some((entry: string) => entry.startsWith('https://www.omim.org|'))).toBe(false);
+    // #698 (fixed): intakeWizard.js#buildClinicalData now strips the
+    // wizard's always-prefixed "OMIM:" down to RF028's real bare-digit
+    // format before building conditionCoding, so this resolves as active
+    // and is stored bare -- not "OMIM:154700". #706 confirmed
+    // condition.service.js#createCondition's all-or-nothing gate (any
+    // invalid conditionCoding entry rejects the whole write) is RF005
+    // AC#4's intended reading for a multi-coding entity, not a bug -- with
+    // #698 fixed, all three codings resolve active here, so that gate
+    // isn't exercised by this happy-path spec (see condition.service.
+    // test.js for a dedicated multi-coding-rejection unit test).
+    expect(conditionCodings).toContain(`https://www.omim.org|${omimCodeAsImported}`);
 
     const phenotypeObservations = await db.collection('phenotypeObservations').find({ participantId: String(participantId) }).toArray();
     expect(phenotypeObservations).toHaveLength(1);

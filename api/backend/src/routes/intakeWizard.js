@@ -233,7 +233,12 @@ function buildClinicalData(data = {}) {
 
   return {
     orphaCode: normalizeString(diagnosis.orphaCode),
-    omimCode: normalizeString(diagnosis.omimCode),
+    // #698: the wizard's own OMIM field is always "OMIM:<digits>"
+    // (normalizeOmimCode, ClinicalIntakeWizard.jsx), but RF028's real OMIM
+    // importer stores bare digits with no prefix -- strip it here so
+    // conditionCoding matches the TerminologyConcept activeCodeValidator
+    // actually looks up, same as atcCode's "^ATC:/i" strip below.
+    omimCode: normalizeString(diagnosis.omimCode).replace(/^OMIM:/i, ''),
     cid: normalizeString(diagnosis.icdCode),
     phenotypes: normalizeArray(clinical.diseasePhenotypes),
     charlsonComorbidities: normalizeArray(clinical.charlsonConditions),
