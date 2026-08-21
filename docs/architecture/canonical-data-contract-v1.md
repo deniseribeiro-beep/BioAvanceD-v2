@@ -1249,6 +1249,15 @@ flagged during #708, not fixed here.
 **Landed in #692:** the entity/collection (`familyHistories`) exists
 (`FamilyHistoryModel`, `family-history.service.js`).
 
+**Wired in #709 (RF005 clinical-UI slice, tracker #707):** the intake
+wizard now has a real, manual-entry family-history field (relationship
+select + free-text condition name/onset + an ORPHA code field) --
+`relationship` has no dict-specified coding system, so it stays a plain
+kinship value; `familyCondition` is coded against ORPHA only (this
+wizard's existing, working disease-search infrastructure is ORPHA-based
+-- no ICD-11/MONDO picker exists here), same "code what's actually
+searchable" precedent as `AllergyIntolerance`'s DCB-only coding (#708).
+
 ### MedicationExposure
 
 - `medicationRecordId` (internal identity; assigned via

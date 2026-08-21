@@ -365,6 +365,7 @@ const initialState = {
   biomarkers_values: {},
   phenotypes: [], // [{ hpoId, label }]
   allergies: [], // [{ allergenName, allergenCode, reaction }]
+  familyHistories: [], // [{ relationship, conditionName, orphaCode, onset }]
   treatmentStatus: '',
   medicationName: '',
   medicationCode: '',
@@ -1060,6 +1061,7 @@ function createClinicalStepSchema(t, clinicalItems = []) {
     diseasePhenotypes: z.array(z.any()).optional(),
     diseaseBiomarkers: z.array(z.any()).optional(),
     allergies: z.array(z.any()).optional(),
+    familyHistories: z.array(z.any()).optional(),
     biomarkers_values: z.record(z.string()).optional(),
     treatmentStatus: z.string().trim().optional().or(z.literal('')),
     medicationName: z.string().trim().max(180, t('wizard.validation.medicationNameTooLong', 'Medication name is too long')).optional().or(z.literal('')),
@@ -1486,6 +1488,7 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
     biomarkersValues: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
     diagnosisDefinition: String(formData.diagnosisDefinition || '').trim(),
     allergies: Array.isArray(formData.allergies) ? formData.allergies : [],
+    familyHistories: Array.isArray(formData.familyHistories) ? formData.familyHistories : [],
     pharmacologyData: {
       treatmentStatus: String(formData.treatmentStatus || '').trim(),
       medicationName: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
@@ -1589,6 +1592,7 @@ export default function ClinicalIntakeWizard(props) {
   const [medicationLoading, setMedicationLoading] = useState(false);
   const [medicationError, setMedicationError] = useState('');
   const [allergyDraft, setAllergyDraft] = useState({ allergenName: '', allergenCode: '', reaction: '' });
+  const [familyHistoryDraft, setFamilyHistoryDraft] = useState({ relationship: '', conditionName: '', orphaCode: '', onset: '' });
   const [isConsentPreviewOpen, setIsConsentPreviewOpen] = useState(false);
   const [isBiomarkerRequestOpen, setIsBiomarkerRequestOpen] = useState(false);
   const [isBiomarkerRequestSubmitting, setIsBiomarkerRequestSubmitting] = useState(false);
@@ -2150,6 +2154,35 @@ export default function ClinicalIntakeWizard(props) {
     setFormData((previous) => ({
       ...previous,
       allergies: (Array.isArray(previous.allergies) ? previous.allergies : []).filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
+
+  const handleFamilyHistoryDraftChange = (field) => (event) => {
+    const value = event.target.value;
+    setFamilyHistoryDraft((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const handleAddFamilyHistory = () => {
+    const relationship = String(familyHistoryDraft.relationship || '').trim();
+    const conditionName = String(familyHistoryDraft.conditionName || '').trim();
+    const orphaCode = String(familyHistoryDraft.orphaCode || '').trim();
+    const onset = String(familyHistoryDraft.onset || '').trim();
+    if (!relationship) {
+      return;
+    }
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      familyHistories: [...(Array.isArray(previous.familyHistories) ? previous.familyHistories : []), { relationship, conditionName, orphaCode, onset }],
+    }));
+    setFamilyHistoryDraft({ relationship: '', conditionName: '', orphaCode: '', onset: '' });
+  };
+
+  const handleRemoveFamilyHistory = (index) => {
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      familyHistories: (Array.isArray(previous.familyHistories) ? previous.familyHistories : []).filter((_, itemIndex) => itemIndex !== index),
     }));
   };
 
@@ -3168,6 +3201,97 @@ export default function ClinicalIntakeWizard(props) {
                         onClick={() => handleRemoveAllergy(index)}
                       >
                         {t('wizard.actions.removeAllergy', 'Remover')}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="clinical-subsection space-y-4" data-testid="wizard-family-history-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.familyHistory', 'Histórico Familiar')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <Select
+                  id="familyHistoryRelationship"
+                  name="familyHistoryRelationship"
+                  data-testid="wizard-family-relationship"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                  label={t('wizard.fields.familyRelationship', 'Grau de parentesco')}
+                  value={familyHistoryDraft.relationship}
+                  onChange={handleFamilyHistoryDraftChange('relationship')}
+                  options={[
+                    { value: '', label: t('wizard.fields.selectRelationship', 'Selecione o parentesco') },
+                    { value: 'mother', label: t('wizard.fields.relationshipMother', 'Mãe') },
+                    { value: 'father', label: t('wizard.fields.relationshipFather', 'Pai') },
+                    { value: 'sibling', label: t('wizard.fields.relationshipSibling', 'Irmão/Irmã') },
+                    { value: 'child', label: t('wizard.fields.relationshipChild', 'Filho/Filha') },
+                    { value: 'grandparent', label: t('wizard.fields.relationshipGrandparent', 'Avô/Avó') },
+                    { value: 'other', label: t('wizard.fields.relationshipOther', 'Outro') },
+                  ]}
+                />
+                <Input
+                  id="familyConditionName"
+                  name="familyConditionName"
+                  data-testid="wizard-family-condition-name"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.familyConditionName', 'Condição/doença')}
+                  value={familyHistoryDraft.conditionName}
+                  onChange={handleFamilyHistoryDraftChange('conditionName')}
+                  placeholder={t('wizard.placeholders.familyConditionName', 'Ex.: Síndrome de Marfan')}
+                />
+                <Input
+                  id="familyConditionOrpha"
+                  name="familyConditionOrpha"
+                  data-testid="wizard-family-condition-orpha"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.familyConditionOrpha', 'Código ORPHA')}
+                  value={familyHistoryDraft.orphaCode}
+                  onChange={handleFamilyHistoryDraftChange('orphaCode')}
+                  placeholder={t('wizard.placeholders.familyConditionOrpha', 'Ex.: ORPHA:558')}
+                />
+                <Input
+                  id="familyConditionOnset"
+                  name="familyConditionOnset"
+                  data-testid="wizard-family-condition-onset"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.familyConditionOnset', 'Idade/período de início')}
+                  value={familyHistoryDraft.onset}
+                  onChange={handleFamilyHistoryDraftChange('onset')}
+                  placeholder={t('wizard.placeholders.familyConditionOnset', 'Ex.: 30 anos')}
+                />
+              </div>
+              <Button
+                type="button"
+                data-testid="wizard-add-family-history"
+                variant="secondary"
+                onClick={handleAddFamilyHistory}
+                disabled={!String(familyHistoryDraft.relationship || '').trim()}
+              >
+                {t('wizard.actions.addFamilyHistory', 'Adicionar histórico familiar')}
+              </Button>
+              {Array.isArray(formData.familyHistories) && formData.familyHistories.length > 0 && (
+                <ul className="family-history-list space-y-2" data-testid="wizard-family-history-list">
+                  {formData.familyHistories.map((entry, index) => (
+                    <li
+                      key={`${entry.relationship}-${index}`}
+                      data-testid={`wizard-family-history-item-${index}`}
+                      className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2"
+                    >
+                      <span>
+                        <span className="font-semibold text-gray-800">{entry.relationship}</span>
+                        {entry.conditionName && <span className="ml-2 text-sm text-gray-500">— {entry.conditionName}</span>}
+                        {entry.orphaCode && <span className="ml-2 text-sm text-gray-500">({entry.orphaCode})</span>}
+                        {entry.onset && <span className="ml-2 text-sm text-gray-500">· {entry.onset}</span>}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid={`wizard-remove-family-history-${index}`}
+                        className="text-red-600 hover:text-red-800 text-sm"
+                        onClick={() => handleRemoveFamilyHistory(index)}
+                      >
+                        {t('wizard.actions.removeFamilyHistory', 'Remover')}
                       </button>
                     </li>
                   ))}

@@ -19,6 +19,7 @@ const conditionServicePath = require.resolve('../../src/services/condition.servi
 const phenotypeObservationServicePath = require.resolve('../../src/services/phenotype-observation.service');
 const medicationExposureServicePath = require.resolve('../../src/services/medication-exposure.service');
 const allergyIntoleranceServicePath = require.resolve('../../src/services/allergy-intolerance.service');
+const familyHistoryServicePath = require.resolve('../../src/services/family-history.service');
 const activeCodeValidatorPath = require.resolve('../../src/ingestion/activeCodeValidator');
 const routePath = require.resolve('../../src/routes/intakeWizard.js');
 
@@ -44,6 +45,7 @@ const allPaths = [
   phenotypeObservationServicePath,
   medicationExposureServicePath,
   allergyIntoleranceServicePath,
+  familyHistoryServicePath,
   activeCodeValidatorPath,
   routePath,
 ];
@@ -183,6 +185,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       phenotypeObservations: makeInsertCapturingCollection(),
       medicationExposures: makeInsertCapturingCollection(),
       allergyIntolerances: makeInsertCapturingCollection(),
+      familyHistories: makeInsertCapturingCollection(),
       ...makeActiveCodeCollections(),
     };
 
@@ -341,5 +344,42 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
 
     expect(res.status).toBe(200);
     expect(collections.allergyIntolerances.docs).toHaveLength(0);
+  });
+
+  it('#709: creates a FamilyHistory from a wizard-collected family entry, ORPHA-coded condition', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        familyHistories: [{ relationship: 'mother', conditionName: 'Marfan syndrome', orphaCode: 'ORPHA:558', onset: '30 anos' }],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.familyHistories.docs).toHaveLength(1);
+    expect(collections.familyHistories.docs[0]).toMatchObject({
+      relationship: 'mother',
+      familyCondition: [{
+        condition: { systemUri: ORPHA_SYSTEM_URI, code: 'ORPHA:558', display: 'Marfan syndrome' },
+        onset: '30 anos',
+      }],
+    });
+  });
+
+  it('#709: skips a family-history entry with no relationship, and does not fail the intake', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        familyHistories: [{ relationship: '', conditionName: 'Marfan syndrome', orphaCode: 'ORPHA:558' }],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.familyHistories.docs).toHaveLength(0);
   });
 });

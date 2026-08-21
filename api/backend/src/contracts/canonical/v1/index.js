@@ -116,6 +116,25 @@ const clinicalDataSchema = {
         }
       }
     },
+    // #709 (RF005 clinical-UI slice, tracker #707): manual-entry family
+    // history list -- dict-02 ELM-0249..0251's FamilyHistory (relationship
+    // CodeableConcept with no dict-specified coding system, familyCondition
+    // ORPHA|ICD-11|MONDO-coded but coded here against ORPHA only, same
+    // "code what's actually searchable in this wizard" precedent as
+    // ICD-10-only for diagnosisCidCode).
+    familyHistories: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          relationship: { type: 'string' },
+          conditionName: { type: 'string' },
+          orphaCode: { type: 'string' },
+          onset: { type: 'string' }
+        }
+      }
+    },
     pharmacologyData: {
       type: 'object',
       additionalProperties: false,
