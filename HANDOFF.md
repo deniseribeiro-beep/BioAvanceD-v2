@@ -1,145 +1,168 @@
 # HANDOFF
 
-**Written:** 2026-08-21, after closing #689 (RF005 clinical-data slice
-1/5, Encounter entity). Continuing the Wave 3 rabbit hole (tracker
-**#646**) under Dennis's "Docker is on, continue rabbit hole"
-instruction, a new sitting following the prior rotation
-(`d4bc9afe`/`ce803200`) whose own checkpoint asked whether to continue
-into #689 — Dennis picked it up this sitting.
+**Written:** 2026-08-21, after closing #690 (RF005 clinical-data slice
+2/5, Condition + PhenotypeObservation entities). Continuing the Wave 3
+rabbit hole (tracker **#646**) under Dennis's "Docker is on, continue
+rabbit hole" instruction -- same sitting as the #689 rotation, this one
+supersedes it after landing one more item.
 
-## Rabbit-hole state: STILL INSIDE, not exited -- ~2-3/10 spent this sitting
+## Rabbit-hole state: STILL INSIDE, not exited -- ~5-6/10 spent this sitting
 
 **Tracker: #646** (Wave 3 kickoff -- RF014/015/016/017/024/025/026/029).
 **RF029 has its own sub-tracker, #668** (5/6 slices done; #674, slice
 6/6, still blocked on RF027/Wave 4, not started). **RF005's clinical-data
-domain has its own sub-tracker, #677** (5 slices; slice 1/5 now landed
-this sitting, 4 remain).
+domain has its own sub-tracker, #677** (5 slices; 2/5 now landed this
+sitting -- #689 and #690 -- 3 remain).
 
 ## What landed this sitting
 
-- **#689 CLOSED -- RF005 clinical-data slice 1/5: Encounter entity**,
-  merge `0691e12f` on `feature/docker-e2e-backend-integration` (branch
-  `fix/689-encounter-entity`, deleted after merge). Pushed to
-  `origin/feature/docker-e2e-backend-integration`.
-  - Built per `dict-02_DICIONARIO.md` ELM-0194..ELM-0199 (domain "Dados
-    clínicos"), cross-checked against `requisitos-index.md`'s RF005
-    entry (the hook-enforced primary-doc read) -- RF005's own AC list
-    doesn't name Encounter directly (AC4-6 are the terminology-coding
-    ACs for later slices), confirming this slice is genuinely
-    foundational infrastructure, not something the primary doc
-    contradicts.
-  - `EncounterModel` (plain JS class, `src/models/Encounter.js`) follows
-    the `RcsAssessment`/`SpecimenPreanalytics` referenced-entity pattern
-    (#383/#388), not an embedded field -- `encounterId` generated via
-    `crypto.randomUUID()` same as `PatientConsentModel.consentId`/
-    `QuarantineActionModel.quarantineActionId`. `encounterType`
-    (CodeableConcept) stored as given, same "not forced into one shape"
-    precedent `QuarantineAction.reasonCodes` uses. `encounterPeriod`
-    uses the `{start, end: null-means-open-ended}` shape
-    `TemperaturePolicy.effectivePeriod` already established.
-  - `encounter.service.js`: `createEncounter`/`getEncountersForParticipant`/
-    `getEncounterById`, registered as the `encounters` collection in
-    `config/collections.js` (`collections.test.js` updated for the new
-    key -- its `toEqual(DEFAULTS)` assertions needed both DEFAULTS
-    objects extended, a real gotcha since it's a full-object-equality
-    check, not additive).
-  - **Verified**: 15 new unit tests (model validation/defaults + service
-    query-matching against a real-semantics in-memory collection fake,
-    not a canned stub) + full backend unit suite re-run clean: 339 files
-    / 6521 tests, no regressions.
-  - **Docker not brought up this iteration** -- deliberate, per
-    `build-loop`'s BioAvanceD-v2 overlay: this is a backend-internal,
-    non-e2e slice, so the native-only in-memory-mock proof bar applies
-    (literal Docker/live-DB stays reserved for the milestone's own e2e
-    Playwright specs). No live caller wires this entity in yet --
-    intentional, deferred to #693 (slice 5/5) alongside the
-    intake-wizard integration and real-backend e2e proof.
-  - `docs/architecture/canonical-data-contract-v1.md` gained an
-    Encounter section (inserted between SpecimenPreanalytics and
-    Consent) documenting the fields, what's landed, and what's
-    deliberately deferred to #693 -- per `build-loop`'s "update the doc
-    a slice touches, same commit" step.
-  - Progress-commented onto #677 (the slice tracker): "Slice 1/5 (#689)
-    landed -- merge 0691e12f. #690-#693 remain."
+- **#689 CLOSED** -- see the prior rotation's own entry (superseded here,
+  not repeated). Encounter entity, merge `0691e12f`.
+- **#690 CLOSED -- RF005 clinical-data slice 2/5: Condition +
+  PhenotypeObservation entities**, merge `6595617f` on
+  `feature/docker-e2e-backend-integration` (branch
+  `fix/690-condition-phenotype-observation`, deleted after merge).
+  Pushed to `origin/feature/docker-e2e-backend-integration`.
+  - Built per `dict-02_DICIONARIO.md` ELM-0200..ELM-0210 (Condition) +
+    ELM-0211..ELM-0218 + P1X-0074..P1X-0076 (PhenotypeObservation) --
+    AC4-6's own requirement text (structured coding via ORPHA/ICD-11/
+    ICD-10/SNOMED/MONDO/OMIM + HPO).
+  - `ConditionModel`/`PhenotypeObservationModel` (plain JS class pattern,
+    `RcsAssessment`/`SpecimenPreanalytics` precedent) + `condition.
+    service.js`/`phenotype-observation.service.js`, registered as the
+    `conditions`/`phenotypeObservations` collections.
+  - **RF005 AC#4 ("permitir codificação... somente quando houver
+    ReferenceDatasetRelease ativa e validada") enforced at create time**
+    by reusing `activeCodeValidator.validateActiveCodes` (RF029 AC#4's
+    own machinery, #669) against every `conditionCoding`/`hpoCoding`
+    entry -- a real find-and-reuse win, not reinvented. Deliberately
+    does NOT go through `ingestionGateway.js`'s broader envelope
+    (provenance/idempotency/quarantine) -- wiring an entity type into
+    that gateway is RF029's own scope (#670-673), a distinct concern
+    from RF005's own AC#4 code check. No controlled-review escape
+    hatch either (unlike `ingestionGateway`'s `allowControlledReview`)
+    -- AC#4 reads "somente" (only), not "unless reviewed."
+  - `presenceStatus` has no default, per dict-02's own note "ausente não
+    equivale a não preenchido" -- an omitted value fails validation
+    outright rather than silently resolving to any of the four real
+    states.
+  - **Verified**: 29 new unit tests (models + services, active-code
+    gating exercised against a real-semantics in-memory
+    `TerminologyConcept`/`ReferenceDatasetRelease` fake) + full backend
+    unit suite re-run clean: 343 files / 6546 tests, no regressions.
+  - **Docker not brought up this iteration either** -- same deliberate
+    native-only-proof-bar reasoning as #689 (backend-internal, non-e2e
+    slice). No live caller wires these entities in yet -- deferred to
+    #693 (slice 5/5).
+  - `docs/architecture/canonical-data-contract-v1.md` gained Condition
+    and PhenotypeObservation sections.
+  - Progress-commented onto #677: "Slice 2/5 (#690) landed -- merge
+    6595617f. #691-#693 remain."
+  - **Filed #694** (deniseribeiro-beep/BioAvanceD-v2, not a #646/#677
+    descendant -- an ordinary mid-session finding, not a rabbit-hole
+    queue member): `tests/unit/ingestion/testHelpers.js`'s shared fake
+    collection makes `find()` async with no `.sort()` support, diverging
+    from the real MongoDB driver's sync-cursor shape and from
+    `rcs-assessment.service.test.js`'s own local fake (sync `find()` +
+    chainable `.sort()`). Cost this iteration: `getConditionsFor
+    Participant`/`getPhenotypeObservationsForParticipant`/
+    `getPhenotypeObservationsForEncounter` were first written as
+    `collection.find(filter).toArray()` (the natural, real-driver-
+    matching form) and needed rewriting to `const cursor = await
+    collection.find(filter); return cursor.toArray();` after 5 test
+    failures. Likely to recur for #691-#693, which will probably reuse
+    the same shared fake for their own terminology-coded fields --
+    worth checking #694's status before hitting the same wall again.
 
 ## Queue members remaining (17 open issues across #646/#677/#668, plus #674/#687 pending sign-off)
 
-Unchanged from the prior rotation except #689 closed and #690 now has no
-remaining soft blocker of its own kind (its dependency, #689, landed).
-Full table not re-copied here -- see this file's own git history
-(`ce803200`) for the complete list; the only rows that changed:
-
 | # | RF | One-line | Note |
 |---|---|---|---|
-| #689 | RF005 (#677 slice 1/5) | Encounter entity | **CLOSED this sitting, merge 0691e12f** |
-| #690 | RF005 (#677 slice 2/5) | Condition + PhenotypeObservation | soft dependency on #689 now satisfied -- **next genuine candidate** |
-| #691 | RF005 (#677 slice 3/5) | ClinicalObservation + ClinicalOutcome + DerivedScore | same soft dependency on #689, now satisfied |
-| #692 | RF005 (#677 slice 4/5) | AllergyIntolerance + FamilyHistory + MedicationExposure + Procedure | soft dependency on #690 (MedicationExposure.indication -> Condition) |
-| #693 | RF005 (#677 slice 5/5) | wire intake-wizard + e2e proof + traceability-doc fix | depends on #689-#692 all landing first |
+| #691 | RF005 (#677 slice 3/5) | ClinicalObservation + ClinicalOutcome + DerivedScore | soft dependency on #689 (encounterId join), now satisfied -- **next genuine candidate** |
+| #692 | RF005 (#677 slice 4/5) | AllergyIntolerance + FamilyHistory + MedicationExposure + Procedure | soft dependency on #690 (MedicationExposure.indication -> Condition), now satisfied |
+| #693 | RF005 (#677 slice 5/5) | wire intake-wizard + e2e proof + traceability-doc fix | depends on #689-#692 all landing first -- #691/#692 still outstanding |
 
-Everything else in the prior rotation's table (#649/#660/#662/#663/#665/
-#666/#667/#680/#681/#682/#683/#684/#687/#688) is unchanged -- still
+Everything else from the prior rotations' tables (#649/#660/#662/#663/
+#665/#666/#667/#680/#681/#682/#683/#684/#687/#688) is unchanged -- still
 design/policy calls, markers, sign-off requests, or outside this rabbit
-hole's own scope. Don't pick any of those unilaterally.
+hole's own scope. Don't pick any of those unilaterally. **#694 is a real
+project issue but not a rabbit-hole queue member** -- an ordinary
+mid-session finding, filed per `wrap-up`'s case-4 rule, not a
+`divide-and-conquer` split of anything already in the hole.
 
-**Real unstarted candidate for the next pick: #690** (Condition +
-PhenotypeObservation -- AC4-6's core terminology-coded diagnostic path,
-HPO/ORPHA/CID/MONDO/OMIM). Larger than #689 (two entities, terminology-
-coding validation against `ReferenceDatasetRelease`), likely a
-medium-large slice. **#691-#693 in order after it.**
+**Real unstarted candidate for the next pick: #691** (ClinicalObservation
++ ClinicalOutcome + DerivedScore). **#692 after it, #693 last** (depends
+on all four prior slices).
 
 ## Budget (rabbit-hole Step 5)
 
-**~2-3/10 spent this sitting** -- #689 was medium (~2-3pt: new entity +
-service + collection wiring + doc update + 15 tests + full-suite
-re-verification, no Docker needed). Well under the ~10pt ceiling --
-room to continue into #690 this same sitting if Dennis wants to keep
-going.
+**~5-6/10 spent this sitting** -- #689 medium (~2-3pt), #690 medium-large
+(~3pt: two entities, real terminology-governance gating logic reused
+from RF029, 29 tests, doc updates, plus a filed follow-up issue).
+Approaching the midpoint of the ~10pt ceiling -- room for one more
+similar-sized slice (#691) this sitting, but worth checking in with
+Dennis after it rather than chaining straight through to #692/#693
+without a checkpoint.
 
 ## Friction this sitting (wrap-up audit)
 
-- **`collections.test.js`'s `toEqual(DEFAULTS)` assertions are exact-
-  object-equality, not additive** -- adding a new `CANONICAL_COLLECTIONS`
-  key without updating both `DEFAULTS` blocks in that test file fails
-  immediately. Caught before commit by running the test, not a real
-  incident, but worth remembering for the next new-collection slice
-  (#690-#693 will each likely add one).
-- No other friction -- the branch-before-edit discipline held this time
-  (branch created as the literal first action, per the prior rotation's
-  explicit reminder and dyeallpies-skills-pack#369), the primary-doc-read
-  hook fired correctly and was satisfied before the blocked edit retried
-  clean, and the merge stayed scoped to exactly the 7 files the slice
-  touched (confirmed via the merge's own `--stat` output).
+- **`tests/unit/ingestion/testHelpers.js`'s async `find()` API mismatch**
+  -- filed #694 (BioAvanceD-v2), not a rabbit-hole queue member. See
+  above for the full description; the practical takeaway for #691-#693:
+  if reusing this shared fake, write `const cursor = await
+  collection.find(filter); return cursor.toArray();`, not the
+  more-natural chained `collection.find(filter).toArray()`, until #694
+  is resolved.
+- **`collections.test.js`'s `toEqual(DEFAULTS)` exact-object-equality
+  gotcha recurred** -- same friction the #689 rotation already noted;
+  #690 added two more collection keys (`conditions`,
+  `phenotypeObservations`) and both `DEFAULTS` blocks needed updating
+  again. Not re-filed as new friction (same known shape, not a fresh
+  discovery) -- just confirming it'll keep recurring for #691/#692's own
+  new collections too.
+- **The `gh issue close`/`gh issue edit` routing gate is scoped per-issue,
+  not per-session** -- closing #690 was blocked until `build-loop` was
+  explicitly re-invoked via the Skill tool for #690 specifically, even
+  though this same iteration had already been following build-loop's
+  process throughout (just without a fresh per-issue Skill call). The
+  gate's own error text cited this as known, already-tracked behavior
+  (dyeallpies-skills-pack#228/#355) -- not new friction, just a reminder
+  to make the explicit re-invocation call for #691/#692/#693 too, not
+  assume the earlier #689/#690 invocations carry over.
+- No other friction -- branch-before-edit discipline held (branch
+  created as the literal first action for #690, same as #689), the
+  primary-doc-read hook fired and was satisfied cleanly, and the merge
+  stayed scoped to exactly the 11 files the slice touched (confirmed via
+  `git status`/the merge's own `--stat` output).
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed to
-  `origin/feature/docker-e2e-backend-integration` (this sitting's one
-  merge commit, `0691e12f`). Working tree clean except the pre-existing
-  untracked `.claude/skills/` and `api/backend/storage/assays/` (neither
-  this sitting's doing).
+  `origin/feature/docker-e2e-backend-integration` (this sitting's two
+  merge commits, `0691e12f` and `6595617f`). Working tree clean except
+  the pre-existing untracked `.claude/skills/` and
+  `api/backend/storage/assays/` (neither this sitting's doing).
 - No PR to `main` exists. `main` stays frozen per this repo's own
   convention.
-- **Docker: DOWN** (unchanged from the prior rotation -- this sitting's
-  slice didn't need it, native-only proof was the correct bar). Next
-  bring-up should still start from the already-aligned
-  `temperaturePolicies` schema (#678) plus whatever named volumes
-  persisted through the prior teardown.
+- **Docker: DOWN** (unchanged -- neither #689 nor #690 needed it, native-
+  only proof was the correct bar for both). Next bring-up should still
+  start from the already-aligned `temperaturePolicies` schema (#678)
+  plus whatever named volumes persisted through the prior teardown.
 
 ## Recommended next steps
 
 Dennis said "continue rabbit hole" -- this rotation is a mid-sitting
 checkpoint (per rabbit-hole Step 4's "every item gets its own handoff"
-rule), not a stopping point. **Next pick: #690** (Condition +
-PhenotypeObservation, RF005 slice 2/5, its soft dependency on #689 now
-satisfied) unless Dennis redirects. Same discipline as this iteration:
-create the per-issue branch as the literal first action, read
-`dict-02_DICIONARIO.md`'s Condition/PhenotypeObservation rows (ELM-0200+)
-and cross-check `requisitos-index.md`'s RF005 AC4-6 (terminology coding
-via HPO/ORPHA/CID/MONDO/OMIM, gated on an active/validated
-`ReferenceDatasetRelease`) before implementing -- this slice is likely
-the first of the five to actually touch that gating logic, unlike #689's
-plain foundational entity. Bring Docker up only if #690 turns out to need
-live-backend proof beyond the native-only in-memory-mock bar (e.g. if it
-ends up wiring a real caller) -- default to the same native-only bar
-#689 used otherwise, per the overlay's explicit carve-out.
+rule), not a stopping point. **Next pick: #691** (ClinicalObservation +
+ClinicalOutcome + DerivedScore, RF005 slice 3/5) unless Dennis redirects.
+Same discipline as #689/#690: create the per-issue branch as the literal
+first action, read `dict-02_DICIONARIO.md`'s relevant ELM rows and
+cross-check `requisitos-index.md`'s RF005 AC4-6 before implementing, and
+explicitly re-invoke the routed skill (`build-loop`) via the Skill tool
+for #691 specifically before closing it (the gate is per-issue, per this
+rotation's own friction note above). Check whether #691's own coding
+fields need the same `activeCodeValidator` reuse #690 established, and if
+reusing `tests/unit/ingestion/testHelpers.js`'s shared fake, use the
+`await collection.find(filter)` form per #694's note above. After #691,
+check in with Dennis before continuing to #692/#693 -- budget will be
+close to the ~10pt ceiling by then.
