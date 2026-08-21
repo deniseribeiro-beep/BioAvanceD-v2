@@ -147,27 +147,21 @@ autonomously picking up another item.
   This sitting's branch (`test/648-admin-force-password-reset`) merged
   (`79149980`) and deleted locally, never pushed remotely.
 - No PR to `main` exists.
-- **Docker: UP.** `compose.test.yml` test stack is currently running,
-  `backend-app-test`/`frontend-app-test` freshly rebuilt with this
-  sitting's #648 changes (confirmed via `docker exec` grep against the
-  running containers' own source, not just container-created
-  timestamps). RBAC catalog re-seeded (23 permissions, up from 22) so
-  the new `forcePasswordReset` permission is live. The persistent test
-  admin's dormant `forceReset:true` was cleared directly (one-time data
-  fix on the already-bootstrapped fixture; the `BOOTSTRAP_ADMIN_FORCE_RESET`
-  code fix only affects *future* fresh bootstraps).
-  **`playwright-runner` is no longer present at all** (not just stopped)
-  -- was "stopped, not removed" per the prior rotation; unclear why it's
-  now absent from `docker ps -a` entirely. Didn't block anything this
-  sitting (all verification ran as targeted host-side Playwright
-  commands against specific spec files) and wasn't investigated further
-  -- flagging in case a future session needs the full containerized
-  suite and finds it missing. Restart/recreate via `docker compose -f
-  compose.test.yml up -d playwright-runner` if needed, or a targeted
-  `up -d --build --wait` on it specifically if the image itself is gone.
-  Tear down the whole stack only at Dennis's explicit request or genuine
-  end of sitting: `docker compose --env-file .env.test.example -f
-  compose.test.yml down` (no `-v`).
+- **Docker: DOWN.** Torn down at Dennis's explicit request right after
+  the #648 rotation above was written (`docker compose --env-file
+  .env.test.example -f compose.test.yml down`, no `-v` -- confirmed
+  clean via `docker ps -a`, zero `bioavanced-test-*` containers left).
+  Named volumes preserved, so the next bring-up starts from this
+  sitting's already-fixed DB state: RBAC catalog already has the new
+  `forcePasswordReset` permission (23 permissions), and the persistent
+  test admin's dormant `forceReset:true` is already cleared -- neither
+  the reseed nor the mongosh fix needs repeating unless a future
+  `down --volumes` wipes them. **`playwright-runner`'s prior absence
+  from `docker ps -a`** (noted in this rotation's earlier draft, before
+  teardown) is now moot -- the whole stack is down anyway; if it recurs
+  after a fresh bring-up, it wasn't investigated and may be worth a
+  closer look then. Bring the stack back up per the recipe in
+  `docker-workflow`'s bioavanced-v2 overlay when next needed.
 
 ## Recommended next steps
 
