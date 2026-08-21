@@ -25,6 +25,7 @@ import { consentService } from '../../../services/api';
 import { LIMITS } from '../../../config/constants/limits.constants';
 import { VALIDATION_MESSAGES, VALIDATION_RULES } from '../../../config/constants/validation.constants';
 import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../../../constants/sprecDictionary';
+import { SPECIMEN_TYPES, SAMPLE_ORIGINS, EXTRACTION_PROTOCOLS } from '../../../config/constants/specimen.constants';
 import { buildSampleMerkleRoot } from '../../../utils/sampleMerkleIntegrity';
 import './ClinicalIntakeWizard.css';
 
@@ -991,6 +992,8 @@ function getQualityTheme(finalGrade, t) {
 
 function createSampleStepSchema(t) {
   return z.object({
+    sampleType: z.string().trim().min(1, t('wizard.validation.sampleType', 'Select the MIABIS sample type')),
+    sampleOrigin: z.string().trim().min(1, t('wizard.validation.sampleOrigin', 'Select the MIABIS sample origin')),
     sprecSampleType: z.string().trim().min(1, t('wizard.validation.sprecSampleType', 'Select the SPREC sample type')),
     sprecPrimaryContainer: z.string().trim().min(1, t('wizard.validation.sprecPrimaryContainer', 'Select the SPREC primary container')),
     sprecPreCentrifugation: z.string().trim().min(1, t('wizard.validation.sprecPreCentrifugation', 'Select SPREC pre-centrifugation')),
@@ -1004,10 +1007,7 @@ function createSampleStepSchema(t) {
       .min(2, t('wizard.validation.collectionInstitution', 'Enter the source clinic / hospital'))
       .max(LIMITS.GENERIC_TEXT_MAX_LENGTH, t('wizard.validation.collectionInstitutionTooLong', 'Source clinic / hospital is too long')),
     collectionInstitutionAcronym: z.string().trim().optional().or(z.literal('')),
-    extractionProtocol: z
-      .string()
-      .optional()
-      .or(z.literal('')),
+    extractionProtocol: z.string().trim().min(1, t('wizard.validation.extractionProtocol', 'Select the MIABIS extraction protocol')),
     quantity: z
       .string()
       .trim()
@@ -1518,14 +1518,18 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       // time, but canonical.v1.specimen requires a non-empty specimenId (#699).
       specimenId: String(formData.specimenId || formData.sampleId || formData.sampleID || '').trim() || 'placeholder',
       participantId,
-      sampleType: formData.sprecSampleType || formData.sampleType,
-      sampleOrigin: String(formData.sampleOrigin || formData.sprecSampleType || '').trim(),
+      // Real MIABIS-coded selections (#701) -- a different, smaller
+      // vocabulary than the SPREC axis fields under sprec.* below; never
+      // derived from them (SPREC's ~30-value axis has no 1:1 mapping onto
+      // MIABIS's closed enum, per SampleModel.validate()).
+      sampleType: String(formData.sampleType || '').trim(),
+      sampleOrigin: String(formData.sampleOrigin || '').trim(),
       // collectionInstitution/collectionInstitutionAcronym have no
       // equivalent in canonical.v1.specimen (#699) -- the schema's real
       // field, collectionSite, is an Organization reference the wizard has
       // no picker for; not sent here, still shown/edited in the UI as
       // formData.collectionInstitution(Acronym) for now.
-      extractionProtocol: String(formData.extractionProtocol || formData.sprecPrimaryContainer || '').trim(),
+      extractionProtocol: String(formData.extractionProtocol || '').trim(),
       barcode: undefined,
       quantity: Number(formData.quantity),
       unit: sampleUnit,
@@ -1615,15 +1619,20 @@ export default function ClinicalIntakeWizard(props) {
     },
   ]), [t]);
 
-  const sampleTypeDefinitions = useMemo(() => (Array.isArray(dictionaries.sampleTypes) ? dictionaries.sampleTypes : []), [dictionaries.sampleTypes]);
-  const anatomicalOriginDefinitions = useMemo(() => (Array.isArray(dictionaries.anatomicalOrigins) ? dictionaries.anatomicalOrigins : []), [dictionaries.anatomicalOrigins]);
-  const extractionProtocolDefinitions = useMemo(() => (Array.isArray(dictionaries.extractionProtocols) ? dictionaries.extractionProtocols : []), [dictionaries.extractionProtocols]);
   const clinicalComorbidityDefinitions = useMemo(() => (Array.isArray(dictionaries.clinicalComorbidities) ? dictionaries.clinicalComorbidities : []), [dictionaries.clinicalComorbidities]);
   const biomarkerDefinitions = useMemo(() => (Array.isArray(dictionaries.biomarkers) ? dictionaries.biomarkers : []), [dictionaries.biomarkers]);
 
-  const sampleTypeOptions = useMemo(() => mapDictionaryOptions(sampleTypeDefinitions), [sampleTypeDefinitions]);
-  const sampleOriginOptions = useMemo(() => mapDictionaryOptions(anatomicalOriginDefinitions), [anatomicalOriginDefinitions]);
-  const extractionProtocolOptions = useMemo(() => mapDictionaryOptions(extractionProtocolDefinitions), [extractionProtocolDefinitions]);
+  // Real MIABIS-coded selections (#701) -- sourced from the same fixed
+  // id/label list SampleModel.validate() checks against server-side
+  // (mirrored at api/backend/src/config/constants/specimen.constants.js),
+  // not from `dictionaries.*` (fed by GET /api/terminologies, which never
+  // actually serves MIABIS data -- the essential seed writes it into
+  // separate sampleTypes/sampleOrigins/extractionProtocols collections
+  // that route never reads). Same source `SampleWithdrawalReturnPage.tsx`
+  // already uses.
+  const sampleTypeOptions = useMemo(() => SPECIMEN_TYPES.map((type) => ({ value: type.id, label: type.label })), []);
+  const sampleOriginOptions = useMemo(() => SAMPLE_ORIGINS.map((origin) => ({ value: origin.id, label: origin.label })), []);
+  const extractionProtocolOptions = useMemo(() => EXTRACTION_PROTOCOLS.map((protocol) => ({ value: protocol.id, label: protocol.label })), []);
   const clinicalComorbidityOptions = useMemo(() => mapDictionaryOptions(clinicalComorbidityDefinitions), [clinicalComorbidityDefinitions]);
   const sprecMatrixType = useMemo(
     () => (String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid'),
@@ -1910,12 +1919,6 @@ export default function ClinicalIntakeWizard(props) {
         });
       }
 
-      const syncedSampleType = String(previous.sprecSampleType || '').trim();
-      if (previous.sampleType !== syncedSampleType) {
-        next.sampleType = syncedSampleType;
-        hasChanges = true;
-      }
-
       if (previous.sprecCode !== sprecCode) {
         next.sprecCode = sprecCode;
         hasChanges = true;
@@ -1927,7 +1930,7 @@ export default function ClinicalIntakeWizard(props) {
 
       return next;
     });
-  }, [formData.preAnalyticalUnknown, formData.sprecSampleType, sprecCode, sprecPreCentrifugationOptions, sprecCentrifugationOptions, sprecSecondCentrifugationOptions, sprecPostCentrifugationDelayOptions]);
+  }, [formData.preAnalyticalUnknown, sprecCode, sprecPreCentrifugationOptions, sprecCentrifugationOptions, sprecSecondCentrifugationOptions, sprecPostCentrifugationDelayOptions]);
 
   useEffect(() => {
     setFormData((previous) => {
@@ -2662,6 +2665,42 @@ export default function ClinicalIntakeWizard(props) {
                 { value: 'fluid', label: t('wizard.matrix.fluid', 'Fluidos (SPREC 2.0)') },
                 { value: 'solid', label: t('wizard.matrix.solid', 'Sólidos (SPREC 2.0)') },
               ]}
+            />
+            <div className="wizard-span-2 md:col-span-2 text-sm font-semibold text-gray-700 -mb-2">
+              {t('wizard.sections.miabisClassification', 'Classificação MIABIS')}
+            </div>
+            <Select
+              id="sampleType"
+              name="sampleType"
+              data-testid="wizard-sample-type"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500"
+              label={t('wizard.fields.sampleType', 'Tipo de Amostra (MIABIS)')}
+              value={formData.sampleType}
+              onChange={handleFieldChange('sampleType')}
+              required
+              options={[{ value: '', label: t('wizard.placeholders.selectSampleType', 'Selecione o tipo de amostra') }, ...sampleTypeOptions]}
+            />
+            <Select
+              id="sampleOrigin"
+              name="sampleOrigin"
+              data-testid="wizard-sample-origin"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500"
+              label={t('wizard.fields.sampleOrigin', 'Origem da Amostra (MIABIS)')}
+              value={formData.sampleOrigin}
+              onChange={handleFieldChange('sampleOrigin')}
+              required
+              options={[{ value: '', label: t('wizard.placeholders.selectSampleOrigin', 'Selecione a origem da amostra') }, ...sampleOriginOptions]}
+            />
+            <Select
+              id="extractionProtocol"
+              name="extractionProtocol"
+              data-testid="wizard-extraction-protocol"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500"
+              label={t('wizard.fields.extractionProtocol', 'Protocolo de Extração (MIABIS)')}
+              value={formData.extractionProtocol}
+              onChange={handleFieldChange('extractionProtocol')}
+              required
+              options={[{ value: '', label: t('wizard.placeholders.selectExtractionProtocol', 'Selecione o protocolo de extração') }, ...extractionProtocolOptions]}
             />
             <Select
               id="sprecAxis1"

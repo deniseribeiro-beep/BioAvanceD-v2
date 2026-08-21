@@ -89,4 +89,37 @@ describe('ClinicalIntakeWizard buildSubmissionPayload', () => {
     expect(payload.specimen.sprec.sampleType).toBe('BLD');
     expect(typeof payload.specimen.sprec.sampleType).toBe('string');
   });
+
+  it('#701: specimen.sampleType/sampleOrigin/extractionProtocol carry the real MIABIS selections, not the SPREC axis codes', () => {
+    const formData = {
+      isHealthyControl: true,
+      patientID: '',
+      patientName: 'Paciente Teste',
+      birthDate: '01011990',
+      prontuario: 'PRONT-1',
+      collectionInstitution: 'Hospital Teste',
+      collectionInstitutionAcronym: 'HT',
+      linkedProject: 'PROJ-1',
+      sprecCode: 'BLD-PL1-A-N-N-A-N',
+      sprecMatrixType: 'fluid',
+      // SPREC axis values -- a different, larger vocabulary than MIABIS
+      // (real SPREC codes, e.g. BLD/PL1), never a substitute for the
+      // MIABIS-coded fields below (#701).
+      sprecSampleType: 'BLD',
+      sprecPrimaryContainer: 'PL1',
+      // Real MIABIS-coded selections, distinct from the SPREC axis fields.
+      sampleType: 'PLASMA',
+      sampleOrigin: 'VENOUS_BLOOD',
+      extractionProtocol: 'TUBE_EDTA',
+    };
+
+    const payload = buildSubmissionPayload(formData);
+
+    expect(payload.specimen.sampleType).toBe('PLASMA');
+    expect(payload.specimen.sampleOrigin).toBe('VENOUS_BLOOD');
+    expect(payload.specimen.extractionProtocol).toBe('TUBE_EDTA');
+    // The SPREC axis codes still travel separately, untouched, under sprec.*.
+    expect(payload.specimen.sprec.sampleType).toBe('BLD');
+    expect(payload.specimen.sprec.primaryContainer).toBe('PL1');
+  });
 });
