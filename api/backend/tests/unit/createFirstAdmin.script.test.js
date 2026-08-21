@@ -78,6 +78,34 @@ describe('createFirstAdmin', () => {
     );
   });
 
+  // RF014 AC#4 (#648): explicit, isolated opt-out for a controlled/automated
+  // bootstrap (compose.test.yml's BOOTSTRAP_ADMIN_FORCE_RESET: "false") --
+  // never inferred from NODE_ENV, same shape AUTH_RATE_LIMIT_RELAXED uses.
+  it('respeita BOOTSTRAP_ADMIN_FORCE_RESET=false (bootstrap automatizado, ex.: e2e)', async () => {
+    const { db, users, systemBootstrap } = createMockDb(0);
+    const env = { ...validEnv, BOOTSTRAP_ADMIN_FORCE_RESET: 'false' };
+
+    const result = await createFirstAdmin({ db, env, logger: { info: vi.fn() } });
+
+    expect(result.forceReset).toBe(false);
+    const inserted = users.insertOne.mock.calls[0][0];
+    expect(inserted.forceReset).toBe(false);
+    expect(systemBootstrap.updateOne).toHaveBeenCalledWith(
+      { _id: 'first_admin_bootstrap_v1' },
+      expect.objectContaining({ $set: expect.objectContaining({ forceReset: false }) }),
+      { upsert: true }
+    );
+  });
+
+  it('mantem forceReset:true quando BOOTSTRAP_ADMIN_FORCE_RESET nao e a string "false" (ex.: ausente, ou um valor inesperado)', async () => {
+    const { db, users } = createMockDb(0);
+    const env = { ...validEnv, BOOTSTRAP_ADMIN_FORCE_RESET: 'nope' };
+
+    await createFirstAdmin({ db, env, logger: { info: vi.fn() } });
+
+    expect(users.insertOne.mock.calls[0][0].forceReset).toBe(true);
+  });
+
   // #427: accessType/roleName are no longer written to the User document —
   // only used transiently to grant the matching UserRoleAssignment (#421).
   it('nao persiste accessType/roleName no documento do usuario, mas concede a UserRoleAssignment de administrator', async () => {

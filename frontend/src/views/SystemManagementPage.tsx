@@ -5,7 +5,7 @@ import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
-import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle, Building2, FlaskConical } from 'lucide-react';
+import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle, Building2, FlaskConical, KeyRound } from 'lucide-react';
 import { useUsers } from '../hooks/useUsers';
 import { useOrganizations } from '../hooks/useOrganizations';
 import { useCollections } from '../hooks/useCollections';
@@ -270,6 +270,31 @@ function UsersSection() {
                       title={t('common.edit')}
                     >
                       <Edit size={16} />
+                    </button>
+                    <button
+                      data-testid={`force-password-reset-button-${userId || user.id}`}
+                      className="action-button"
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (!userId) {
+                          alert(t('users.userIdNotFound'));
+                          return;
+                        }
+                        const confirmMessage = t('users.forcePasswordResetConfirm').replace('{name}', user.name);
+                        if (confirm(confirmMessage)) {
+                          try {
+                            await userService.forcePasswordReset(userId);
+                            alert(t('users.forcePasswordResetSuccess'));
+                            await loadUsers();
+                          } catch (err: any) {
+                            alert(err.response?.data?.error || err.response?.data?.message || err.message || t('users.forcePasswordResetError'));
+                          }
+                        }
+                      }}
+                      title={t('users.forcePasswordResetTitle')}
+                    >
+                      <KeyRound size={16} />
                     </button>
                     <button
                       data-testid={`delete-user-button-${userId || user.id}`}

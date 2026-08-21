@@ -48,7 +48,7 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests'],
+      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests'],
     },
   ],
 };
@@ -102,6 +102,10 @@ const PERMISSION_CATALOG = {
   manageBackup: { resourceType: 'System', allowedActions: ['CREATE', 'READ', 'UPDATE'], displayName: 'Gerenciar backup' },
   manageSystem: { resourceType: 'System', allowedActions: ['UPDATE'], displayName: 'Gerenciar sistema' },
   resetMFA: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Redefinir MFA' },
+  // RF014 AC#4 (#648): admin-initiated -- flags a target user's account so
+  // their next login requires setting a new password, mirroring resetMFA's
+  // shape (same resourceType/action, same "act on another user" concern).
+  forcePasswordReset: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Forçar redefinição de senha' },
   manageTemperature: { resourceType: 'Temperature', allowedActions: ['UPDATE'], displayName: 'Gerenciar incidentes de temperatura' },
   manageOrganizations: { resourceType: 'Organization', allowedActions: ['CREATE', 'UPDATE', 'DELETE'], displayName: 'Gerenciar organizações' },
   viewAuditLogs: { resourceType: 'AuditLog', allowedActions: ['READ'], displayName: 'Visualizar trilhas de auditoria' },

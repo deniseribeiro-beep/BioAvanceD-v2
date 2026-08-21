@@ -56,6 +56,15 @@ async function createFirstAdmin(options = {}) {
     // #427: accessType is only used below to grant the matching
     // UserRoleAssignment — no longer persisted on the User document.
     const ADMIN_ACCESS_TYPE = 4;
+    // RF014 AC#4 (#648): forceReset is now actually enforced at login
+    // (previously dormant) -- an explicit, isolated opt-out lets a
+    // controlled/automated bootstrap (compose.test.yml's
+    // BOOTSTRAP_ADMIN_FORCE_RESET: "false") skip the forced first-login
+    // password change, same "never inferred from NODE_ENV" discipline
+    // AUTH_RATE_LIMIT_RELAXED already uses (#359). Unset defaults to the
+    // secure behavior -- a real production or dev-stack bootstrap keeps
+    // forceReset:true unless it explicitly opts out too.
+    const forceReset = String(env.BOOTSTRAP_ADMIN_FORCE_RESET ?? 'true').toLowerCase() !== 'false';
     const adminUser = {
       name: config.name,
       email: config.email,
@@ -64,7 +73,7 @@ async function createFirstAdmin(options = {}) {
       status: 'active',
       mfaEnabled: false,
       mfaSecret: null,
-      forceReset: true,
+      forceReset,
       passwordHistory: [],
       failedLoginAttempts: 0,
       lastLogin: null,
@@ -100,15 +109,15 @@ async function createFirstAdmin(options = {}) {
           status: 'created',
           userId,
           anonId,
-          forceReset: true,
+          forceReset,
           completedAt: new Date(),
         },
       },
       { upsert: true }
     );
 
-    logger.info('[ADMIN_BOOTSTRAP] First admin created with forceReset=true.');
-    return { status: 'created', userId, anonId, forceReset: true };
+    logger.info(`[ADMIN_BOOTSTRAP] First admin created with forceReset=${forceReset}.`);
+    return { status: 'created', userId, anonId, forceReset };
   } finally {
     if (shouldClose) {
       await closeConnection();

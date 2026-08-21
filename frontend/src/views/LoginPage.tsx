@@ -20,6 +20,9 @@ export default function LoginPage() {
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [requiresTwoFactor, setRequiresTwoFactor] = useState(false);
   const [attemptsRemaining, setAttemptsRemaining] = useState<number | undefined>();
+  const [requiresPasswordChange, setRequiresPasswordChange] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
@@ -42,30 +45,51 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (requiresPasswordChange && newPassword !== confirmNewPassword) {
+      setError(t('auth.passwordsDoNotMatch'));
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const result = await login(username, password, requiresTwoFactor ? twoFactorCode : undefined);
-      
+      const result = await login(
+        username,
+        password,
+        requiresTwoFactor ? twoFactorCode : undefined,
+        requiresPasswordChange ? newPassword : undefined
+      );
+
       if (result && result.requiresTwoFactorSetup) {
         // Redireciona para página de configuração de MFA
-        navigate('/mfa-setup', { 
-          state: { 
+        navigate('/mfa-setup', {
+          state: {
             isFirstLogin: true,
             username: username,
             password: password
-          } 
+          }
         });
         setLoading(false);
         return;
       }
-      
+
       if (result && result.requiresTwoFactor) {
         setRequiresTwoFactor(true);
         setLoading(false);
         return;
       }
-      
+
+      // RF014 AC#4 (#648): admin forçou redefinição de senha -- pede a nova
+      // senha inline (mesmo padrão do 2FA acima), sem navegar para outra
+      // página, já que username/password já foram validados.
+      if (result && result.requiresPasswordChange) {
+        setRequiresTwoFactor(false);
+        setRequiresPasswordChange(true);
+        setLoading(false);
+        return;
+      }
+
       // Login bem-sucedido - redireciona por perfil
       const targetRoute = getPostLoginRoute(result?.user?.roleName, result?.user?.accessType);
       navigate(targetRoute, { replace: true });
@@ -82,6 +106,9 @@ export default function LoginPage() {
         setError(errorMessage);
         setRequiresTwoFactor(false);
         setTwoFactorCode('');
+        setRequiresPasswordChange(false);
+        setNewPassword('');
+        setConfirmNewPassword('');
 
         if (import.meta.env.DEV && !(String(errorMessage).includes('credentials') || String(errorMessage).includes('Credenciais'))) {
           console.warn('Falha inesperada no login:', err);
@@ -127,8 +154,35 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               placeholder={t('auth.password')}
-              disabled={requiresTwoFactor}
+              disabled={requiresTwoFactor || requiresPasswordChange}
             />
+
+            {requiresPasswordChange && (
+              <div className="two-factor-section" data-testid="force-password-change-section">
+                <p className="two-factor-info">
+                  {t('auth.passwordChangeRequired')}
+                </p>
+                <Input
+                  data-testid="login-new-password-input"
+                  label={t('auth.newPassword')}
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  required
+                  autoFocus
+                  placeholder={t('auth.newPassword')}
+                />
+                <Input
+                  data-testid="login-confirm-new-password-input"
+                  label={t('auth.confirmPassword')}
+                  type="password"
+                  value={confirmNewPassword}
+                  onChange={(e) => setConfirmNewPassword(e.target.value)}
+                  required
+                  placeholder={t('auth.confirmPassword')}
+                />
+              </div>
+            )}
 
             {requiresTwoFactor && (
               <div className="two-factor-section" data-testid="two-factor-section">
@@ -162,7 +216,13 @@ export default function LoginPage() {
               data-testid="login-submit-button"
               disabled={loading}
             >
-              {loading ? t('common.loading') : requiresTwoFactor ? t('mfa.verify') : t('auth.login')}
+              {loading
+                ? t('common.loading')
+                : requiresPasswordChange
+                ? t('auth.changePasswordAndLogin')
+                : requiresTwoFactor
+                ? t('mfa.verify')
+                : t('auth.login')}
             </Button>
 
             <div className="forgot-password-link">

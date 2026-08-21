@@ -37,6 +37,14 @@ x-test-env: &test-env
   BOOTSTRAP_ADMIN_EMAIL: e2e-admin@bioavanced.test
   BOOTSTRAP_ADMIN_USERNAME: admin
   BOOTSTRAP_ADMIN_TEMP_PASSWORD: Admin@123
+  # RF014 AC#4 (#648): createFirstAdmin.js's forceReset:true is now actually
+  # enforced at login (previously dormant) -- every spec here logs in
+  # directly as TEST_USER/TEST_PASS via realLogin(), with no forced-reset
+  # step of its own, so the bootstrap admin must skip it. Explicit opt-out
+  # (never inferred from NODE_ENV, same isolated-flag shape
+  # ENABLE_TEST_SUPPORT_ROUTES already uses below) -- a real production or
+  # dev-stack bootstrap keeps the default (unset = forceReset:true).
+  BOOTSTRAP_ADMIN_FORCE_RESET: "false"
   TEST_SUPPORT_SECRET: e2e-test-support-secret
   # #675: test-support routes also require this explicit opt-in to be
   # registered at all, on top of NODE_ENV/TEST_SUPPORT_SECRET above --

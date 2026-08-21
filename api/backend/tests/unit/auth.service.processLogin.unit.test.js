@@ -282,6 +282,58 @@ describe('AuthService.processLogin', () => {
     const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {});
     expect(result.user.accessType).toBe(3);
   });
+
+  // RF014 AC#4 (#648): admin-forced password reset -- forceReset blocks a
+  // full session until a new password is set. Mirrors changePassword's own
+  // validate/hash/history update, inlined into the login path since this
+  // case has no prior authenticated session to call that endpoint with.
+  it('returns requiresPasswordChange without issuing a token when forceReset is set and no newPassword given', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const db = makeDb();
+    const user = { ...BASE_USER, forceReset: true };
+    const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {});
+    expect(result.requiresPasswordChange).toBe(true);
+    expect(result.token).toBeUndefined();
+  });
+
+  it('rejects a newPassword that fails strength validation when forceReset is set', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const db = makeDb();
+    const user = { ...BASE_USER, forceReset: true };
+    await expect(
+      authService.processLogin(db, user, 'pw', null, db.collection(), {}, 'weak')
+    ).rejects.toThrow();
+  });
+
+  it('rejects a newPassword that matches a recently used password when forceReset is set', async () => {
+    // The reused candidate must itself pass validateStrength (otherwise that
+    // earlier check would throw first) -- so the old login password and the
+    // rejected "new" password are the same strong-looking string, and
+    // bcrypt.compare (validateReuse's own reuse check) matches only that one.
+    const OLD_PASSWORD = 'OldStrongPass1!';
+    vi.spyOn(bcrypt, 'compare').mockImplementation(async (candidate) => candidate === OLD_PASSWORD);
+    const db = makeDb();
+    const user = { ...BASE_USER, forceReset: true };
+    await expect(
+      authService.processLogin(db, user, OLD_PASSWORD, null, db.collection(), {}, OLD_PASSWORD)
+    ).rejects.toThrow('já utilizada recentemente');
+  });
+
+  it('clears forceReset, updates the password, and issues a full session when a valid newPassword is given', async () => {
+    vi.spyOn(bcrypt, 'compare').mockImplementation(async (candidate) => candidate === 'pw');
+    const collectionApi = { findOne: vi.fn(), updateOne: vi.fn().mockResolvedValue({}), find: vi.fn(), insertOne: vi.fn().mockResolvedValue({ insertedId: { toString: () => 'sess-1' } }) };
+    const db = makeDb(collectionApi);
+    const user = { ...BASE_USER, forceReset: true };
+    const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {}, 'NewStrongPass1!');
+    expect(result.token).toBeTruthy();
+    expect(result.requiresPasswordChange).toBeUndefined();
+    expect(collectionApi.updateOne).toHaveBeenCalledWith(
+      { _id: user._id },
+      expect.objectContaining({
+        $set: expect.objectContaining({ forceReset: false, password: expect.any(String) })
+      })
+    );
+  });
 });
 
 describe('AuthService.setupMFAFirstLogin', () => {

@@ -640,4 +640,76 @@ test.describe('Security policy management (RF014) — real backend', () => {
       }).catch(() => {});
     }
   });
+
+  // #648: AC#4 was genuinely absent (no code path at all) as of the test
+  // above — built separately so this criterion's own admin-action + login-
+  // gate + real-UI-blocking round trip gets its own real-backend proof.
+  // Uses a second admin-role fixture user (not the shared 'admin' account
+  // every other spec in this file depends on) so forcing its password reset
+  // can't disrupt the rest of the suite sharing this compose.test.yml stack.
+  // Admin-role specifically (not Técnico) so first login skips the
+  // mandatory-MFA-setup branch entirely and reaches the forceReset gate
+  // directly — same path createFirstAdmin.js's own forceReset:true bootstrap
+  // takes in production, so this is also a faithful proof of that case.
+  test('admin forces a password reset, and the target user is blocked at login until they set a new password (criterion 4)', async ({
+    page,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const username = `admin.rf014ac4.${Date.now()}`;
+    const originalPassword = 'OriginalPass@123';
+    const newPassword = 'BrandNewPass@456';
+
+    const registerResponse = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        name: 'RF014 AC4 Force-Reset Fixture',
+        email: `${username}@example.com`,
+        username,
+        password: originalPassword,
+        accessType: 4,
+        roleName: 'Administrador',
+      },
+    });
+    expect(registerResponse.ok(), await registerResponse.text()).toBeTruthy();
+    const userID = (await registerResponse.json()).data?._id || (await registerResponse.json()).data?.id;
+
+    const forceReset = await request.post(`${apiBaseURL}/api/users/${userID}/force-password-reset`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(forceReset.ok(), await forceReset.text()).toBeTruthy();
+
+    // The target user logs in with their original password — blocked inline
+    // (no navigation away from /login) rather than reaching the dashboard.
+    await page.goto('/login');
+    await page.getByTestId('login-username-input').fill(username);
+    await page.getByTestId('login-password-input').fill(originalPassword);
+    await page.getByTestId('login-submit-button').click();
+
+    await expect(page.getByTestId('force-password-change-section')).toBeVisible();
+    await expect(page).toHaveURL(/\/login$/);
+
+    // Completes the required change inline (same form, no navigation) and
+    // reaches the real dashboard.
+    await page.getByTestId('login-new-password-input').fill(newPassword);
+    await page.getByTestId('login-confirm-new-password-input').fill(newPassword);
+    await page.getByTestId('login-submit-button').click();
+
+    await page.waitForURL('**/system-management');
+    await expect(page.getByTestId('system-management-page')).toBeVisible();
+
+    // The password genuinely changed server-side, not just client UI state —
+    // the old password no longer authenticates.
+    const oldPasswordAttempt = await request.post(`${apiBaseURL}/api/auth/login`, {
+      data: { username, password: originalPassword },
+    });
+    expect(oldPasswordAttempt.status()).toBe(401);
+
+    const newPasswordAttempt = await request.post(`${apiBaseURL}/api/auth/login`, {
+      data: { username, password: newPassword },
+    });
+    expect(newPasswordAttempt.ok(), await newPasswordAttempt.text()).toBeTruthy();
+    expect((await newPasswordAttempt.json()).data.token).toBeTruthy();
+  });
 });
