@@ -1,7 +1,16 @@
 import { test, expect } from '@playwright/test';
 import { mockLogin } from './helpers/mockAuth';
-import { realLogin } from './helpers/realAuth';
-import { createRealParticipant, closeSeedDb } from './helpers/seedParticipant';
+import { realLogin, realAuthLogin } from './helpers/realAuth';
+import {
+  createRealParticipant,
+  closeSeedDb,
+  seedActiveConsentTemplate,
+  seedActiveTerminologyConcept,
+  seedLegacyDiagnosisTerminology,
+  seedDiseaseDictionaryPhenotypes,
+  seedMedicationDictionaryEntry,
+} from './helpers/seedParticipant';
+import { seedOrphaPhenotypeGraph, removeOrphaPhenotypeGraph, closeNeo4jDriver } from './helpers/queryNeo4j';
 import { MongoClient } from 'mongodb';
 
 const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
@@ -151,5 +160,176 @@ test.describe('Participant identity segregation (RF005/RNF007) — real backend 
     } finally {
       await client.close();
     }
+  });
+});
+
+test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF005 AC4-6 wiring against a live stack)', () => {
+  test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
+
+  const orphaCode = 'ORPHA:558';
+  const orphaNumeric = '558';
+  // RF028's real OMIM importer stores bare digits (no "OMIM:" prefix) —
+  // reference-data/reference-imports/sources/omim.js's fixture id is
+  // literally "154700" for Marfan syndrome. Seeded here in that same real
+  // format on purpose, not the wizard's own "OMIM:154700" — see #698.
+  const omimCodeAsImported = '154700';
+  const cidCode = 'C50';
+  const hpoCode = 'HP:0001250';
+  const atcCode = 'C09AA01';
+  const diseaseLabel = `RF005 e2e Marfan-like disease ${Date.now()}`;
+  const phenotypeLabel = 'Seizure';
+  const medicationName = `rf005-e2e-captopril-${Date.now()}`;
+
+  let mongoClient: MongoClient;
+
+  test.beforeAll(async () => {
+    mongoClient = new MongoClient(mongoUri);
+    await mongoClient.connect();
+    const db = mongoClient.db(mongoDbName);
+
+    await seedActiveConsentTemplate(db);
+
+    // UI-facing legacy collections (terminologies.routes.js / dictionary.js)
+    // — a different set of collections from RF028's canonical
+    // TerminologyConcept pipeline below; both are needed for the wizard's
+    // own search/suggest UI to surface real, selectable results.
+    await seedLegacyDiagnosisTerminology({
+      orphaCode,
+      cidCode,
+      omimCode: `OMIM:${omimCodeAsImported}`,
+      description: diseaseLabel,
+    });
+    await seedDiseaseDictionaryPhenotypes(orphaNumeric, [{ hpoId: hpoCode, label: phenotypeLabel }]);
+    await seedMedicationDictionaryEntry({ name: medicationName, atcCode });
+    // GET /api/dictionary/suggest queries Neo4j directly and only falls back
+    // to the Mongo disease_dictionary doc above if the Neo4j call itself
+    // throws (dictionary.js:298 returns 404 on a merely-empty result) — so
+    // the phenotype cascade needs a real graph fixture too.
+    await seedOrphaPhenotypeGraph(orphaNumeric, diseaseLabel, [{ hpoCode, label: phenotypeLabel }]);
+
+    // RF028 canonical TerminologyConcept/ReferenceDatasetRelease fixtures
+    // (activeCodeValidator's own lookup) — ORPHA and ICD-10 seeded in the
+    // exact format the wizard itself sends (matches real RF028 importer
+    // output for these two). OMIM is deliberately seeded in RF028's real
+    // bare-digit format, NOT the wizard's always-prefixed "OMIM:154700" —
+    // this is what #698 proves out below. MedicationExposure's ATC code is
+    // not gated by activeCodeValidator at all (medication-exposure.service.js
+    // never calls it — only condition.service.js/phenotype-observation.
+    // service.js do), so no ATC TerminologyConcept fixture is needed for
+    // MedicationExposure to be created.
+    await seedActiveTerminologyConcept('http://www.orpha.net', orphaCode, diseaseLabel, { datasetCode: 'ORPHA' });
+    await seedActiveTerminologyConcept('http://hl7.org/fhir/sid/icd-10', cidCode, 'malignant neoplasm of breast', { datasetCode: 'ICD10' });
+    await seedActiveTerminologyConcept('https://www.omim.org', omimCodeAsImported, 'marfan syndrome', { datasetCode: 'OMIM' });
+    await seedActiveTerminologyConcept('http://purl.obolibrary.org/obo/hp.owl', hpoCode, phenotypeLabel, { datasetCode: 'HPO' });
+  });
+
+  test.afterAll(async () => {
+    await removeOrphaPhenotypeGraph(orphaNumeric);
+    await closeNeo4jDriver();
+    await mongoClient.close();
+    await closeSeedDb();
+  });
+
+  test('a real submission through the intake wizard creates Encounter/Condition/PhenotypeObservation/MedicationExposure with terminology coding (#693)', async ({ page, request }) => {
+    await realAuthLogin(request, page);
+    await page.goto('/next/intake');
+    await expect(page.getByTestId('intake-wizard-root')).toBeVisible();
+
+    // Step 1 — demographics. "11144477735" is a checksum-valid CPF (a
+    // commonly used test value — 111.444.777-35) since a purely numeric
+    // document is always routed through the CPF checksum check, never the
+    // passport branch, regardless of digit count.
+    const suffix = Date.now();
+    await page.getByTestId('wizard-full-name').fill(`RF005 e2e #696 patient ${suffix}`);
+    await page.getByTestId('wizard-birth-date').fill('01/01/1990');
+    await page.getByTestId('wizard-gender').selectOption('F');
+    await page.getByTestId('wizard-email').fill(`e2e-696-${suffix}@example.com`);
+    await page.getByTestId('wizard-document').fill('11144477735');
+    await page.getByTestId('wizard-next-button').click();
+
+    // Step 2 — pre-analytical sample. SPREC axis option lists come from a
+    // static local dictionary (not backend-fetched), so selecting by index
+    // (skipping each list's own empty placeholder at index 0) needs no
+    // fixture data. "Processing information unknown" auto-fills axes 3-6.
+    await expect(page.getByTestId('wizard-sprec-axis-1')).toBeVisible();
+    await page.getByTestId('wizard-sprec-matrix').selectOption('fluid');
+    await page.getByTestId('wizard-sprec-axis-1').selectOption({ index: 1 });
+    await page.getByTestId('wizard-sprec-axis-2').selectOption({ index: 1 });
+    await page.getByTestId('wizard-processing-unknown').check();
+    await page.getByTestId('wizard-sprec-axis-7').selectOption({ index: 1 });
+    await page.getByTestId('wizard-quantity').fill('5');
+    await page.getByTestId('wizard-linked-project').fill(`RF005-E2E-696-${suffix}`);
+    await page.getByTestId('wizard-institution-name').fill('Hospital E2E 696');
+    await page.getByTestId('wizard-next-button').click();
+
+    // Step 3 — diagnosis search & select (fills ORPHA/OMIM/CID-10 readonly
+    // fields and triggers the disease-phenotype cascade automatically —
+    // there is no separate "add phenotype" UI, see #696's own research).
+    await expect(page.getByTestId('wizard-diagnosis-search')).toBeVisible();
+    await page.getByTestId('wizard-diagnosis-search').fill(diseaseLabel);
+    await expect(page.getByTestId('wizard-diagnosis-option-0')).toBeVisible({ timeout: 10_000 });
+    await page.getByTestId('wizard-diagnosis-option-0').click();
+    await expect(page.locator('.phenotype-card', { hasText: phenotypeLabel })).toBeVisible({ timeout: 10_000 });
+
+    // Medication/pharmacology.
+    await page.getByTestId('wizard-treatment-status').selectOption('TREATED');
+    await page.getByTestId('wizard-medication-search').fill(medicationName);
+    await expect(page.getByTestId('wizard-medication-option-0')).toBeVisible({ timeout: 10_000 });
+    await page.getByTestId('wizard-medication-option-0').click();
+    await page.locator('input[type="date"]').first().fill('2026-01-15');
+
+    const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
+    await page.getByTestId('wizard-submit-button').click();
+    const response = await submissionResponse;
+    // #699 (fixed): this used to 422 with NON_CANONICAL_FIELD -- the
+    // wizard's real payload never matched the canonical.v1.intake AJV
+    // contract. Now blocked one layer deeper by #701: sampleType/
+    // sampleOrigin/extractionProtocol send real SPREC axis codes, not the
+    // closed MIABIS enum SampleModel.validate() requires. Left as a real
+    // (red) test per this repo's "RED tests are legitimate deliverables"
+    // convention -- do not weaken this assertion to hide the gap; once
+    // #701 is fixed this should start passing and prove out the rest of
+    // this test (the actual point of #696).
+    expect(response.ok()).toBe(true);
+    const body = await response.json();
+    expect(body.success).toBe(true);
+    const participantId = body?.data?.patientMatch?.patientID;
+    expect(participantId).toBeTruthy();
+
+    const db = mongoClient.db(mongoDbName);
+
+    const encounters = await db.collection('encounters').find({ participantId: String(participantId) }).toArray();
+    expect(encounters).toHaveLength(1);
+    expect(encounters[0].encounterType).toBe('collection');
+
+    const conditions = await db.collection('conditions').find({ participantId: String(participantId) }).toArray();
+    expect(conditions).toHaveLength(1);
+    const conditionCodings = conditions[0].conditionCoding.map((coding: { systemUri: string; code: string }) => `${coding.systemUri}|${coding.code}`);
+    expect(conditionCodings).toContain(`http://www.orpha.net|${orphaCode}`);
+    expect(conditionCodings).toContain(`http://hl7.org/fhir/sid/icd-10|${cidCode}`);
+    // #698: the wizard always sends "OMIM:154700" (normalizeOmimCode's own
+    // always-prefixed format), which never matches RF028's real bare-digit
+    // TerminologyConcept ("154700") — so activeCodeValidator resolves it as
+    // unknown and condition.service.js silently drops the OMIM coding from
+    // conditionCoding. Asserted here as the real (buggy) behavior, not
+    // weakened to look like a pass — the code above intentionally seeds the
+    // OMIM concept in RF028's real format specifically to prove this gap.
+    expect(conditionCodings.some((entry: string) => entry.startsWith('https://www.omim.org|'))).toBe(false);
+
+    const phenotypeObservations = await db.collection('phenotypeObservations').find({ participantId: String(participantId) }).toArray();
+    expect(phenotypeObservations).toHaveLength(1);
+    expect(phenotypeObservations[0].hpoCoding.systemUri).toBe('http://purl.obolibrary.org/obo/hp.owl');
+    expect(phenotypeObservations[0].hpoCoding.code).toBe(hpoCode);
+
+    const medicationExposures = await db.collection('medicationExposures').find({
+      'medicationCoding.display': medicationName,
+    }).toArray();
+    expect(medicationExposures).toHaveLength(1);
+    expect(medicationExposures[0].medicationCoding[0]).toMatchObject({
+      systemUri: 'http://www.whocc.no/atc',
+      code: atcCode,
+      display: medicationName,
+    });
+    expect(medicationExposures[0].medicationStatus).toBe('active');
   });
 });

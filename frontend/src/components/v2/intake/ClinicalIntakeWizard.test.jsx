@@ -53,4 +53,40 @@ describe('ClinicalIntakeWizard buildSubmissionPayload', () => {
     expect(payload.clinical.charlsonConditions).toEqual(['diabetes', 'ckd']);
     expect(payload.clinical.comorbidities).toBeUndefined();
   });
+
+  it('#699: participant/specimen match the canonical.v1.intake AJV contract shape', () => {
+    const formData = {
+      isHealthyControl: true,
+      patientID: '',
+      patientName: 'Paciente Teste',
+      birthDate: '01011990',
+      prontuario: 'PRONT-1',
+      collectionInstitution: 'Hospital Teste',
+      collectionInstitutionAcronym: 'HT',
+      linkedProject: 'PROJ-1',
+      sprecCode: 'BLD-PL1-A-N-N-A-N',
+      sprecMatrixType: 'fluid',
+      sprecSampleType: 'BLD',
+    };
+
+    const payload = buildSubmissionPayload(formData);
+
+    // recordNumber, not the legacy prontuario field name (additionalProperties: false).
+    expect(payload.participant.recordNumber).toBe('PRONT-1');
+    expect(payload.participant.prontuario).toBeUndefined();
+    // bare date, not a full ISO datetime (format: 'date').
+    expect(payload.participant.birthDate).toBe('1990-01-01');
+    // required, non-empty even for a new patient the server hasn't assigned an id to yet.
+    expect(payload.participant.participantId).toBe('placeholder');
+    expect(payload.specimen.participantId).toBe('placeholder');
+    expect(payload.specimen.specimenId).toBe('placeholder');
+    // no equivalent in the contract -- dropped, not sent.
+    expect(payload.specimen.collectionInstitution).toBeUndefined();
+    expect(payload.specimen.collectionInstitutionAcronym).toBeUndefined();
+    // flat strings with a top-level code/version, not nested {code, label} axis objects.
+    expect(payload.specimen.sprec.code).toBe('BLD-PL1-A-N-N-A-N');
+    expect(payload.specimen.sprec.version).toBe('SPREC-2.0');
+    expect(payload.specimen.sprec.sampleType).toBe('BLD');
+    expect(typeof payload.specimen.sprec.sampleType).toBe('string');
+  });
 });
