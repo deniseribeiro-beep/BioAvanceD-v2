@@ -291,16 +291,13 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     // contract. #701 (fixed): sampleType/sampleOrigin/extractionProtocol
     // sent real SPREC axis codes, not the closed MIABIS enum
     // SampleModel.validate() requires -- the wizard now collects real
-    // MIABIS-coded selections separately from the SPREC axis fields. Now
-    // blocked one layer deeper by #703: matchOrUpsertParticipant treats
-    // the wizard's placeholder participantId ('placeholder', sent for
-    // every new patient per #699's own precedent) as a real, literal id
-    // instead of generating one, so the specimen-creation step's
-    // /^\d{8}$/ format check fails. Left as a real (red) test per this
-    // repo's "RED tests are legitimate deliverables" convention -- do not
-    // weaken this assertion to hide the gap; once #703 is fixed this
-    // should start passing and prove out the rest of this test (the
-    // actual point of #696).
+    // MIABIS-coded selections separately from the SPREC axis fields. #703
+    // (fixed): matchOrUpsertParticipant treated the wizard's placeholder
+    // participantId ('placeholder', sent for every new patient per #699's
+    // own precedent) as a real, literal id instead of generating one, so
+    // the specimen-creation step's /^\d{8}$/ format check failed -- it now
+    // treats any non-/^\d{8}$/ participantId the same as no participantId
+    // supplied.
     expect(response.ok()).toBe(true);
     const body = await response.json();
     expect(body.success).toBe(true);

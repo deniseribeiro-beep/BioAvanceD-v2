@@ -51,15 +51,21 @@ class participantIdentityService {
     const phone = normalizeString(payload.phone);
     const sex = normalizeString(payload.sex);
     const cpf = normalizeString(payload.cpf);
+    // #703: a caller-supplied participantId that isn't a real 8-digit id
+    // (e.g. the intake wizard's 'placeholder', sent for every new patient
+    // per #699's precedent) must be treated the same as no participantId at
+    // all -- not accepted as a literal id to look up or insert verbatim.
+    const validParticipantId = /^\d{8}$/.test(participantId) ? participantId : null;
 
-    if (!participantId && (!normalizedName || !birthDate)) {
+    if (!validParticipantId && (!normalizedName || !birthDate)) {
       throw new Error('Identificação insuficiente: informe participantId ou (patientName + birthDate).');
     }
 
     // RF005/RNF007 (#561): resolve the name+birthDate match via
     // ParticipantIdentity, not Patient's own (soon to be removed)
     // patientNameNormalized/birthDateKey fields.
-    let matchedParticipantId = participantId || null;
+    let matchedParticipantId = validParticipantId;
+    const matchedBySuppliedId = Boolean(validParticipantId);
     if (!matchedParticipantId) {
       const startOfDay = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
       const endOfDay = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), startOfDay.getDate() + 1);
@@ -122,10 +128,10 @@ class participantIdentityService {
         },
         { upsert: true }
       );
-      return { created: false, matchType: participantId ? 'participantId' : 'name+birthDate', patient: { ...existing, ...update, ...identityValues, participantId: existing.participantId || participantId } };
+      return { created: false, matchType: matchedBySuppliedId ? 'participantId' : 'name+birthDate', patient: { ...existing, ...update, ...identityValues, participantId: existing.participantId || matchedParticipantId } };
     }
 
-    const generatedParticipantId = participantId || await generateUniqueParticipantId(db);
+    const generatedParticipantId = validParticipantId || await generateUniqueParticipantId(db);
     const identityValues = {
       patientName: patientName || 'PACIENTE SEM NOME',
       birthDate: birthDate || null,
