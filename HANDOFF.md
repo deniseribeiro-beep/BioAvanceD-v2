@@ -1,169 +1,158 @@
 # HANDOFF
 
-**Written:** 2026-08-21, after closing #691 (RF005 clinical-data slice
-3/5, ClinicalObservation + ClinicalOutcome + DerivedScore entities).
-Continuing the Wave 3 rabbit hole (tracker **#646**) under Dennis's
-"Docker is on, continue rabbit hole" instruction -- same sitting as the
-#689/#690 rotations, this one supersedes them after landing one more
-item and hitting this sitting's own planned checkpoint.
+**Written:** 2026-08-21, after closing #692 (RF005 clinical-data slice
+4/5, AllergyIntolerance + FamilyHistory + MedicationExposure +
+Procedure entities). Continuing the Wave 3 rabbit hole (tracker
+**#646**) under Dennis's "Docker is on, continue rabbit hole"
+instruction -- same sitting as the #689/#690/#691 rotations, this one
+supersedes them after landing one more item. Dennis was checkpointed
+before this item (budget was already ~8-9/10) and explicitly chose to
+continue into #692.
 
-## Rabbit-hole state: STILL INSIDE, not exited -- ~8-9/10 spent this sitting -- CHECKPOINT, awaiting Dennis
+## Rabbit-hole state: STILL INSIDE, not exited -- ~11-13/10 spent this sitting, OVER the advisory ceiling -- CHECKPOINT, awaiting Dennis
 
 **Tracker: #646** (Wave 3 kickoff -- RF014/015/016/017/024/025/026/029).
 **RF029 has its own sub-tracker, #668** (5/6 slices done; #674, slice
 6/6, still blocked on RF027/Wave 4, not started). **RF005's clinical-data
-domain has its own sub-tracker, #677** (5 slices; 3/5 now landed this
-sitting -- #689, #690, #691 -- 2 remain, #692 and #693).
+domain has its own sub-tracker, #677** (5 slices; **4/5 now landed this
+sitting** -- #689, #690, #691, #692 -- only #693 remains).
 
 ## What landed this sitting
 
-- **#689 CLOSED** and **#690 CLOSED** -- see the prior two rotations'
-  own entries (superseded here, not repeated). Encounter entity (merge
-  `0691e12f`); Condition + PhenotypeObservation entities (merge
-  `6595617f`).
-- **#691 CLOSED -- RF005 clinical-data slice 3/5: ClinicalObservation +
-  ClinicalOutcome + DerivedScore entities**, merge `ed52cb5e` on
-  `feature/docker-e2e-backend-integration` (branch
-  `fix/691-clinical-observation-outcome-derived-score`, deleted after
-  merge). Pushed to `origin/feature/docker-e2e-backend-integration`.
-  - Built per `dict-02_DICIONARIO.md` ELM-0219..ELM-0232 +
-    P1X-0077..P1X-0078 (ClinicalObservation), ELM-0252..ELM-0254
-    (ClinicalOutcome), ELM-0255..ELM-0259 (DerivedScore) -- three
-    "Observation"-shaped entities grouped per #691's own scope.
-  - `ClinicalObservationModel`/`ClinicalOutcomeModel`/`DerivedScoreModel`
-    (plain JS class pattern) + `clinical-observation.service.js`/
-    `clinical-outcome.service.js`/`derived-score.service.js`, registered
-    as the `clinicalObservations`/`clinicalOutcomes`/`derivedScores`
-    collections.
-  - **`specimenId`/`deviceId` on ClinicalObservation are hard-checked**
-    against the real `samples`/`devices` collections at create time via
-    `assertReferencesExist` (RF029 AC#2's own machinery, #669) -- the
-    first entity in this domain to enforce a reference rather than leave
-    it joinable-but-unenforced, per #691's own scope. `diagnosticReportId`
-    stays unenforced (no `DiagnosticReport` entity exists -- see #695
-    below).
-  - `value`/`normalizedValue` kept as distinct fields per dict-02's own
-    "não sobrescrever o original." `DerivedScore.scoreComponents`
-    rejects an empty array per "nunca armazenar somente o escore final."
-  - **`ClinicalOutcome`/`DerivedScore` genuinely have no `participantId`
-    field** -- dict-02's own row set for both omits it (confirmed by
-    grep, not an oversight), matching #691's own issue scope exactly.
-  - **Verified**: 24 new unit tests (models + services, the reference-
-    check gate exercised against a real-semantics in-memory
-    samples/devices fake) + full backend unit suite re-run clean: 349
-    files / 6573 tests, no regressions.
+- **#689, #690, #691 CLOSED** -- see the prior three rotations' own
+  entries (superseded here, not repeated). Encounter (merge `0691e12f`);
+  Condition + PhenotypeObservation (merge `6595617f`);
+  ClinicalObservation + ClinicalOutcome + DerivedScore (merge
+  `ed52cb5e`).
+- **#692 CLOSED -- RF005 clinical-data slice 4/5: AllergyIntolerance +
+  FamilyHistory + MedicationExposure + Procedure entities**, merge
+  `ec2a0d43` on `feature/docker-e2e-backend-integration` (branch
+  `fix/692-allergy-familyhistory-medicationexposure-procedure`, deleted
+  after merge). Pushed to `origin/feature/docker-e2e-backend-integration`.
+  - Built per `dict-02_DICIONARIO.md` ELM-0246..0248 (AllergyIntolerance),
+    ELM-0249..0251 (FamilyHistory), ELM-0233..0241 (MedicationExposure),
+    ELM-0242..0245 (Procedure) -- the remaining clinical-history entities
+    not covered by #689-#691.
+  - Four plain-JS-class models + services, registered as the
+    `allergyIntolerances`/`familyHistories`/`medicationExposures`/
+    `procedures` collections.
+  - `MedicationExposure.indication` (-> Condition/#690) stays
+    joinable-but-unenforced -- #692's own scope didn't call for a hard
+    reference-check the way #691's `specimenId`/`deviceId` did, so it
+    follows the default pattern most Reference fields in this domain use.
+  - **All four entities genuinely have no `participantId` field** --
+    confirmed by grepping dict-02's full row set for each entity name
+    (not just the ELM-02xx block), same documented pattern #691 already
+    established for ClinicalOutcome/DerivedScore.
+  - Dropped an initially-written `getMedicationExposuresForIndication`
+    query helper -- not required by the issue's own scope, and its array-
+    containment filter semantics don't reproduce cleanly against this
+    repo's simple exact-match test fakes; kept the service to the same
+    minimal create+getById shape its three sibling services this
+    iteration use, rather than build and under-test an extra feature.
+  - **Verified**: 35 new unit tests + full backend unit suite re-run
+    clean: 357 files / 6604 tests, no regressions.
   - **Docker not brought up this iteration either** -- same deliberate
-    native-only-proof-bar reasoning as #689/#690.
-  - `docs/architecture/canonical-data-contract-v1.md` gained
-    ClinicalObservation/ClinicalOutcome/DerivedScore sections.
-  - Progress-commented onto #677: "Slice 3/5 (#691) landed -- merge
-    ed52cb5e. #692-#693 remain."
-  - **Filed #695** (deniseribeiro-beep/BioAvanceD-v2, not a #646/#677
-    descendant -- an ordinary marker finding, not a rabbit-hole queue
-    member): dict-02's own `DiagnosticReport` entity (`P1X-0168..0171+`,
-    itself flagged **"P1-Stub"** in the dictionary's own Observações
-    column) is now referenced-but-unenforced by 3 fields across #690/
-    #691 (`Condition.diagnosisEvidence`, `PhenotypeObservation.
-    phenotypeEvidence`, `ClinicalObservation.diagnosticReportId`) with
-    no tracking marker until now. Not urgent, not picked up -- same
-    "marker, don't build yet" precedent as #660/#681.
+    native-only-proof-bar reasoning as #689-#691.
+  - `docs/architecture/canonical-data-contract-v1.md` gained sections
+    for all four entities.
+  - Progress-commented onto #677: "Slice 4/5 (#692) landed -- merge
+    ec2a0d43. #693 (final slice) remains."
+  - **No new friction filed this iteration** -- the first fully clean
+    iteration of the sitting per `wrap-up`'s own audit: all 35 tests
+    passed on the first run, scope matched exactly, no new judgment
+    calls needed (the "no participantId"/"unenforced reference" patterns
+    were already established by #691's precedent).
 
-## Queue members remaining (18 open issues across #646/#677/#668, plus #674/#687 pending sign-off)
+## Queue members remaining (14 open issues across #646/#677/#668, plus #674/#687 pending sign-off)
 
 | # | RF | One-line | Note |
 |---|---|---|---|
-| #692 | RF005 (#677 slice 4/5) | AllergyIntolerance + FamilyHistory + MedicationExposure + Procedure | soft dependency on #690 (MedicationExposure.indication -> Condition), now satisfied -- **next genuine candidate** |
-| #693 | RF005 (#677 slice 5/5) | wire intake-wizard + e2e proof + traceability-doc fix | depends on #689-#692 all landing first -- #692 still outstanding |
+| #693 | RF005 (#677 slice 5/5, FINAL) | wire intake-wizard + real-backend e2e proof + `E2E_TRACEABILITY_PLAN.md` RF005 row fix | depends on #689-#692, all now landed -- **the only remaining #677 slice** |
 
 Everything else from the prior rotations' tables (#649/#660/#662/#663/
 #665/#666/#667/#680/#681/#682/#683/#684/#687/#688) is unchanged -- still
 design/policy calls, markers, sign-off requests, or outside this rabbit
-hole's own scope. Don't pick any of those unilaterally. **#694/#695 are
-real project issues but not rabbit-hole queue members** -- ordinary
-mid-session findings, filed per `wrap-up`'s case-4 rule, not
-`divide-and-conquer` splits of anything already in the hole.
+hole's own scope. Don't pick any of those unilaterally. **#694 and #695
+are real project issues but not rabbit-hole queue members** -- ordinary
+mid-session findings, filed per `wrap-up`'s case-4 rule.
 
-**Real unstarted candidate for the next pick: #692** (AllergyIntolerance
-+ FamilyHistory + MedicationExposure + Procedure -- four entities, the
-largest remaining slice by entity count). **#693 last** (depends on all
-four prior slices landing).
+**#693 is the only remaining candidate**, and it's a materially
+different shape from #689-#692: wiring `intakeWizard.js` into all five
+new entities, plus the milestone's own real-backend e2e proof (unlike
+#689-#692, which all used native-only proof), plus fixing
+`E2E_TRACEABILITY_PLAN.md`'s RF005 row. Likely needs Docker brought back
+up, unlike every slice so far this sitting.
 
-## Budget (rabbit-hole Step 5) -- CHECKPOINT
+## Budget (rabbit-hole Step 5) -- OVER the advisory ceiling, checkpoint again
 
-**~8-9/10 spent this sitting** -- #689 medium (~2-3pt), #690 medium-large
-(~3pt), #691 medium-large (~3pt: three entities plus new reference-check
-machinery, 24 tests, doc updates, plus a filed marker issue). This is
-the checkpoint the prior rotation's own "Recommended next steps" flagged
-in advance: **stopping here to report to Dennis rather than picking up
-#692 unilaterally** -- #692 is itself a 4-entity slice, likely another
-~3pt, which would push well past the ~10pt ceiling with no natural
-stopping point until #693 (which itself depends on #692 landing first).
+**~11-13/10 spent this sitting** -- #689 (~2-3pt), #690 (~3pt), #691
+(~3pt), #692 (~3-4pt: four entities, though the smallest-scope-per-entity
+slice of the four RF005 slices built so far). This sitting is now past
+the ~10pt advisory ceiling Dennis was already checkpointed on before
+picking up #692. **Stopping here is the right call, not a formality** --
+#693 is both the largest remaining item (real e2e proof, intake-wizard
+wiring across 5 entities, a doc fix) and the natural close of #677's
+whole 5-slice arc, which argues for giving it a fresh sitting's full
+budget rather than squeezing it in over-budget.
 
-## Friction this sitting (wrap-up audit)
+## Friction this sitting (wrap-up audit) -- cumulative across #689-#692
 
-- **Filed #695** (DiagnosticReport entity marker) -- see above. Not
-  itself friction, but the kind of finding `wrap-up`'s addendum exists
-  to catch: three separate unenforced-reference mentions across two
-  closed issues had accumulated with no tracking marker until this
-  rotation's audit caught it.
-- **`tests/unit/ingestion/testHelpers.js`'s async `find()` gotcha (#694,
-  filed during the #690 rotation) did NOT recur this iteration** -- 
-  `clinical-observation.service.js` was written with the
-  `await collection.find(filter); cursor.toArray()` form from the start,
-  per that issue's own note. Confirms the fix documented in #694 works
-  as a workaround for future slices reusing the same shared fake, even
-  before #694 itself is resolved.
-- **The full-suite-guard hook's bare-directory detection is inconsistent
-  between a solo `tests/unit` run and a multi-file command that includes
-  a directory among named files** -- a compound command listing ~9
-  explicit test files plus `tests/unit/ingestion` (meant as "also run
-  this whole related subdirectory") was blocked as looking like an
-  untargeted full-suite run, while a solo `npx vitest run tests/unit`
-  (this iteration's own end-of-slice regression check) was not blocked,
-  consistent with #689/#690's own successful use of that same solo form.
-  Worked around by naming the ingestion subdirectory's files
-  individually instead. Not filed as new friction -- didn't block the
-  actual verification, just needed one extra rewrite of the command.
-- No other friction -- branch-before-edit discipline held, the
-  primary-doc-read hook and the per-issue `gh issue close` routing gate
-  both fired and were satisfied cleanly (the routing gate needed an
-  explicit `build-loop` re-invocation for #691 specifically, same
-  already-expected step as #690's own rotation noted), and the merge
-  stayed scoped to exactly the 15 files the slice touched.
+- **#694** (BioAvanceD-v2, filed during #690's rotation): `tests/unit/
+  ingestion/testHelpers.js`'s shared fake makes `find()` async with no
+  `.sort()` support, diverging from the real MongoDB driver and from
+  `rcs-assessment.service.test.js`'s own local fake. Still open, not
+  blocking -- #691/#692 both worked around it correctly from the start
+  by using `const cursor = await collection.find(filter); return
+  cursor.toArray();`.
+- **#695** (BioAvanceD-v2, filed during #691's rotation): dict-02's own
+  `DiagnosticReport` entity (`P1X-0168..0171+`, itself flagged "P1-Stub")
+  is referenced-but-unenforced by 3 fields across #690/#691, with no
+  tracking marker until that rotation. Still open, not urgent, not
+  picked up.
+- **#692's own iteration added no new friction** -- see this rotation's
+  own audit entry above.
+- The per-issue `gh issue close`/product-file-edit routing gate (requires
+  re-invoking the routed skill, e.g. `build-loop`, via the Skill tool
+  freshly for each issue number, even within one continuous sitting) held
+  consistent across all four slices this sitting -- confirmed expected
+  behavior, not friction, per its own error text citing dyeallpies-
+  skills-pack#228/#355.
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed to
-  `origin/feature/docker-e2e-backend-integration` (this sitting's three
-  merge commits: `0691e12f`, `6595617f`, `ed52cb5e`). Working tree clean
-  except the pre-existing untracked `.claude/skills/` and
+  `origin/feature/docker-e2e-backend-integration` (this sitting's four
+  merge commits: `0691e12f`, `6595617f`, `ed52cb5e`, `ec2a0d43`). Working
+  tree clean except the pre-existing untracked `.claude/skills/` and
   `api/backend/storage/assays/` (neither this sitting's doing).
 - No PR to `main` exists. `main` stays frozen per this repo's own
   convention.
-- **Docker: DOWN** (unchanged -- none of #689/#690/#691 needed it,
-  native-only proof was the correct bar for all three). Next bring-up
-  should still start from the already-aligned `temperaturePolicies`
-  schema (#678) plus whatever named volumes persisted through the prior
-  teardown.
+- **Docker: DOWN** (unchanged -- none of #689-#692 needed it, native-only
+  proof was the correct bar for all four). **#693 will very likely need
+  Docker brought back up** for its real-backend e2e proof requirement --
+  bring it up per `docker-workflow`'s bioavanced-v2 overlay recipe when
+  that slice starts, starting from the already-aligned
+  `temperaturePolicies` schema (#678) plus whatever named volumes
+  persisted through the prior teardown.
 
 ## Recommended next steps
 
-**This is a genuine checkpoint, not a forced stop** -- budget is close
-to but not over the ~10pt ceiling, and the prior rotation already
-flagged this exact point as where to check in with Dennis rather than
-chain straight through. Report this rotation's summary and ask whether
-to continue this sitting into **#692** (AllergyIntolerance +
-FamilyHistory + MedicationExposure + Procedure, the largest remaining
-RF005 slice) or stop here. If continuing: same discipline as #689/#690/
-#691 -- branch as the literal first action, read `dict-02_DICIONARIO.md`'s
-relevant ELM rows for all four entities before implementing, re-invoke
-`build-loop` via the Skill tool for #692 specifically before closing it,
-and check whether any of the four entities' own reference fields
-(MedicationExposure.indication -> Condition is the one #692's own issue
-text already flags) need the same hard-reference-check treatment #691
-established for ClinicalObservation, vs. the softer joinable-unenforced
-pattern most other fields in this domain use. After #692, #693 (wire
-intake-wizard + e2e proof + traceability-doc fix, depends on all of
-#689-#692) is the natural closer for #677's whole 5-slice breakdown --
-likely warrants Docker being brought back up for its real-backend e2e
-proof, unlike every slice so far.
+**This is a genuine stopping point, not a forced one** -- 4 of #677's 5
+slices landed this single sitting, budget is now past the advisory
+ceiling, and #693 (the final slice) is both large and a different shape
+(real e2e proof + intake-wizard wiring across all 5 entities + a
+traceability-doc fix) from the pure-model-building slices #689-#692
+were. Report this rotation's summary to Dennis and ask whether to
+continue this sitting into #693 or stop -- don't pick it up unilaterally
+given the budget is already over. If Dennis chooses to continue: #693
+will need `docker-workflow`'s overlay read fresh (Docker hasn't been
+brought up all sitting), the per-issue routing-gate re-invocation for
+`build-loop` (or `resolve-issue`, if #693's own shape reads more like
+wiring/integration than net-new capability -- worth re-classifying via
+`work-issue`'s Step 2 rather than assuming `build-loop` carries over
+from #689-#692), and likely a genuinely different sizing/`divide-and-
+conquer` judgment call given its combined scope (5-entity wiring + e2e
+spec + doc fix could itself be too big for one iteration). Once #693
+closes, #677 itself closes (all 5 slices done), which is the natural
+point to also re-check #646's own overall Wave 3 tracker status.
