@@ -354,6 +354,18 @@ export async function seedActiveTerminologyConcept(
   const datasetCode = options.datasetCode || 'E2E';
   const referenceDatasetReleaseId = `e2e-696-${datasetCode}-${Date.now()}`;
 
+  // #705: activeCodeValidator.checkActiveCode fails closed
+  // (`ambiguous_active_release`) on more than one `releaseStatus: 'active'`
+  // release per datasetCode — an invariant the real importer's own
+  // `promote()` (reference-imports/pipeline.js) guarantees by superseding
+  // the prior active release, never leaving two active at once. This
+  // fixture skipped that step, so every run left the previous run's
+  // release active too. Mirror promote()'s own supersede behavior here.
+  await db.collection('referenceDatasetReleases').updateMany(
+    { datasetCode, releaseStatus: 'active' },
+    { $set: { releaseStatus: 'superseded', updatedAt: new Date() } }
+  );
+
   await db.collection('referenceDatasetReleases').insertOne({
     referenceDatasetReleaseId,
     sourceId: `SRC_${datasetCode}`,
@@ -385,6 +397,27 @@ export async function seedActiveTerminologyConcept(
     referenceDatasetReleaseId,
     createdAt: new Date(),
     updatedAt: new Date(),
+  });
+}
+
+/**
+ * #705: deletes the `referenceDatasetReleases`/`terminologyConcepts` docs
+ * `seedActiveTerminologyConcept` inserted this run (its own `e2e-696-`
+ * prefixed ids) — call from the owning spec's `afterAll`. Without this,
+ * repeated runs against a shared/persistent Docker volume keep
+ * accumulating `superseded` releases and orphaned concepts indefinitely.
+ * Superseded releases are inert for `checkActiveCode` (only `active` ones
+ * count), so this is housekeeping, not a correctness fix on its own — the
+ * supersede step above is what actually stops new `ambiguous_active_release`
+ * failures.
+ */
+export async function cleanupActiveTerminologyConcepts(): Promise<void> {
+  const db = await getDb();
+  await db.collection('referenceDatasetReleases').deleteMany({
+    referenceDatasetReleaseId: { $regex: /^e2e-696-/ },
+  });
+  await db.collection('terminologyConcepts').deleteMany({
+    terminologyConceptId: { $regex: /^e2e-696-/ },
   });
 }
 

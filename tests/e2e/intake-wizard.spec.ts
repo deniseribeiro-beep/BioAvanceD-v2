@@ -6,6 +6,7 @@ import {
   closeSeedDb,
   seedActiveConsentTemplate,
   seedActiveTerminologyConcept,
+  cleanupActiveTerminologyConcepts,
   seedLegacyDiagnosisTerminology,
   seedDiseaseDictionaryPhenotypes,
   seedMedicationDictionaryEntry,
@@ -227,6 +228,10 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await removeOrphaPhenotypeGraph(orphaNumeric);
     await closeNeo4jDriver();
     await mongoClient.close();
+    // #705: seedActiveTerminologyConcept's own e2e-696-* fixtures don't
+    // get cleaned up by anything else — must run before closeSeedDb()
+    // closes the connection cleanupActiveTerminologyConcepts reuses.
+    await cleanupActiveTerminologyConcepts();
     await closeSeedDb();
   });
 
