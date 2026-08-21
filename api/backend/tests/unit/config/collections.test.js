@@ -36,6 +36,10 @@ const DEFAULTS = {
   clinicalObservations: 'clinicalObservations',
   clinicalOutcomes: 'clinicalOutcomes',
   derivedScores: 'derivedScores',
+  allergyIntolerances: 'allergyIntolerances',
+  familyHistories: 'familyHistories',
+  medicationExposures: 'medicationExposures',
+  procedures: 'procedures',
   specimenPreanalytics: 'specimenPreanalytics',
   quarantineActions: 'quarantineActions',
   referenceDatasetReleases: 'referenceDatasetReleases',
@@ -123,14 +127,20 @@ describe('config/collections', () => {
       rcsAssessments: 'rcsAssessments',
       // COLL_ENCOUNTERS/COLL_CONDITIONS/COLL_PHENOTYPE_OBSERVATIONS/
       // COLL_CLINICAL_OBSERVATIONS/COLL_CLINICAL_OUTCOMES/
-      // COLL_DERIVED_SCORES aren't in ENV_KEYS/read by env.js either,
-      // same hardcoded-default reasoning as cids/etc. above.
+      // COLL_DERIVED_SCORES/COLL_ALLERGY_INTOLERANCES/
+      // COLL_FAMILY_HISTORIES/COLL_MEDICATION_EXPOSURES/COLL_PROCEDURES
+      // aren't in ENV_KEYS/read by env.js either, same hardcoded-default
+      // reasoning as cids/etc. above.
       encounters: 'encounters',
       conditions: 'conditions',
       phenotypeObservations: 'phenotypeObservations',
       clinicalObservations: 'clinicalObservations',
       clinicalOutcomes: 'clinicalOutcomes',
       derivedScores: 'derivedScores',
+      allergyIntolerances: 'allergyIntolerances',
+      familyHistories: 'familyHistories',
+      medicationExposures: 'medicationExposures',
+      procedures: 'procedures',
       specimenPreanalytics: 'specimenPreanalytics',
       quarantineActions: 'quarantineActions',
       referenceDatasetReleases: 'referenceDatasetReleases',
