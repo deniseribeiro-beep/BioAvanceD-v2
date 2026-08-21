@@ -1,90 +1,104 @@
 # HANDOFF
 
 **Written:** 2026-08-21, continuing the same rabbit hole under Dennis's
-"Continue rabbit hole" instruction this sitting. Docker is on.
+"Keep descending" instruction this sitting. Docker is on.
 
-## Rabbit-hole state: STILL INSIDE #646 -- #697 resolved into a concrete 6-slice plan (#707-713), none started yet
+## Rabbit-hole state: STILL INSIDE #646 -> #707 -- 1/6 sub-slices landed (#708), 5 remain (#709-713)
 
-**Tracker: #646** (Wave 3 kickoff -- RF014/015/016/017/024/025/026/029).
-This sitting made **no product-code changes** -- it was entirely
-tracker bookkeeping + one design decision from Dennis:
+**Tracker: #646** (Wave 3 kickoff) -> **#707** (RF005: wire remaining 6
+clinical-data entities into real intake-wizard UI + a real CCI
+algorithm).
 
-1. Caught #646 up on last sitting's unposted #706/#698/#696 resolution
-   (comment posted).
-2. Re-derived #646's live queue from scratch. Found both remaining open
-   descendants non-actionable without Dennis: **#674** (RF029 slice 6/6,
-   blocked on RF027 -- confirmed no RF027 issue exists anywhere, still
-   `MISSING`/Wave-4/"lowest urgency" per `E2E_TRACEABILITY_PLAN.md:338-
-   339`) and **#697** (RF005's 6 remaining clinical entities, self-
-   scoped as "marker, not picked up" pending a UI/product call, per
-   `canonical-data-contract-v1.md:1295-1298`).
-3. Asked Dennis how to proceed on both. He chose: **leave RF027/#674
-   alone for now**; **make the #697 UI call now** -- build real
-   intake-wizard UI for all 5 UI-gap entities (ClinicalObservation/
-   ClinicalOutcome/AllergyIntolerance/FamilyHistory/Procedure) and
-   implement a real Charlson Comorbidity Index (CCI) algorithm for
-   `DerivedScore`, rather than leaving them schema-only.
-4. That's real, multi-slice build work -- ran `divide-and-conquer`'s
-   filing playbook. Filed **#707** as the tracking issue with 6
-   independent sub-slices (no cross-dependencies, all 6 entities'
-   models/services already exist per #691/#692):
-   - **#708** AllergyIntolerance intake-wizard UI + wiring
-   - **#709** FamilyHistory intake-wizard UI + wiring
-   - **#710** Procedure intake-wizard UI + wiring
-   - **#711** ClinicalObservation intake-wizard UI + wiring (genuinely
-     new UI, no existing field to repurpose)
-   - **#712** ClinicalOutcome intake-wizard UI + wiring (genuinely new
-     UI)
-   - **#713** real CCI algorithm + `DerivedScore` wiring
-   Closed **#697** as superseded by #707's concrete plan.
-5. Asked Dennis whether to start slice 1 this sitting given the rabbit
-   hole's budget was already well past its advisory limit before this
-   sitting even started -- he chose **file and stop**. None of #708-713
-   started.
+This sitting picked up **#708** (AllergyIntolerance intake-wizard UI +
+wiring) via `build-loop` and landed it in full:
+
+1. Added a manual-entry allergen field (name + DCB code + reaction) to
+   `ClinicalIntakeWizard.jsx`'s clinical step -- no dictionary picker
+   exists for DCB in this repo, same "accept manual entry" precedent the
+   wizard's diagnosis codes already use.
+2. `recordClinicalEntities` (`intakeWizard.js`) additively creates a
+   real, DCB-coded `AllergyIntolerance` document per wizard-collected
+   entry -- same additive best-effort pattern #693 used for
+   Encounter/Condition/PhenotypeObservation/MedicationExposure.
+   `clinicalDataSchema` (`contracts/canonical/v1/index.js`) gained the
+   `allergies` array.
+3. Proof: 2 new native-only cases in
+   `tests/unit/intakeWizard.clinicalEntities.test.js`, plus #696's
+   real-backend Playwright spec (`tests/e2e/intake-wizard.spec.ts`'s
+   "Clinical-entity wiring" describe block) extended to submit and
+   assert a real `AllergyIntolerance` alongside the other 4 entities
+   from one live submission -- ran against the real docker-compose test
+   stack, passing (6/6 in that file).
+4. Docs updated: `docs/architecture/canonical-data-contract-v1.md`'s
+   AllergyIntolerance section, `E2E_TRACEABILITY_PLAN.md`'s RF005 row.
+5. **Scope call, flagged not fixed:** `allergy-intolerance.service.js`
+   does not gate `allergenCoding` on `activeCodeValidator` (RF005 AC#4)
+   -- a pre-existing gap since #692, not added here to keep #708 scoped
+   to "UI + wiring." Filed separately as
+   [**#714**](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/714)
+   rather than expanding this slice or silently leaving it undocumented.
+6. Merged to `feature/docker-e2e-backend-integration` at `b4889219`,
+   pushed. Closed #708 with the landing summary. Progress-commented on
+   #707 (1/6 done).
 
 ## What landed this sitting
 
-- Tracker bookkeeping only: 1 catch-up comment + 1 final queue-update
-  comment on #646; #697 closed; #707 opened as tracking issue; #708-713
-  opened as its 6 sub-slices. No code, no branch, no merge.
-- **Friction found and filed:** `gh issue create` doesn't support
-  `--json`/`-q` (unlike `view`/`list`) -- a capture attempt
-  (`n1=$(gh issue create ... --json number -q .number | tail -1)`)
-  silently no-op'd on 3 issues before being caught via a sanity-check
-  `gh issue list --search`. No data lost, but worth knowing: capture the
-  printed URL instead. Filed as
-  [dyeallpies-skills-pack#376](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/376).
-- Docker stack (inherited, not started/used this sitting): confirmed
-  still up via `docker ps` at session start; Dennis chose to leave it
-  running for the next #646/#707 pickup.
+- 1 merge commit (`b4889219`) on `feature/docker-e2e-backend-integration`
+  carrying #708's full slice (backend + frontend + tests + docs, 7
+  files, +241/-8).
+- #708 closed. #707 progress-commented. **#714** filed (new gap:
+  AllergyIntolerance's missing RF005 AC#4 gate).
+- No friction this sitting -- `docker-workflow`'s rebuild-before-verify
+  recipe worked exactly as documented; the `resolve-issue` pre-close
+  routing gate needed a second fresh invocation right before the close
+  call (a `gh issue view` in between the first invocation and the close
+  attempt didn't count as still-routed) -- mechanical, not a real
+  ambiguity, didn't slow things down materially.
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed to origin at
-  `dd70afc0` (one docs-only commit this sitting: the mid-sitting
-  HANDOFF.md rotation -- this file supersedes it). No product-code
-  branch created or needed.
+  `b4889219`. The per-issue branch (`test/708-allergy-intolerance-
+  intake-ui`) was merged `--no-ff` and deleted locally (never pushed
+  remotely, so nothing to delete there).
 - No PR to `main` exists. `main` stays frozen per this repo's convention.
-- **Docker: UP.** Same stack, not rebuilt (no source changed this
-  sitting). Deliberately left running per Dennis's check-in.
+- **Docker: UP.** `backend-app-test`/`frontend-app-test` were rebuilt
+  with `--build` this sitting (both are build-not-mount services) to
+  pick up #708's source changes, then verified via the real e2e spec.
+  `playwright-runner` was stopped before the manual run (per its
+  auto-run-on-`up`gotcha) and left stopped. Left running for the next
+  #707 pickup -- not torn down.
 
 ## Recommended next steps
 
-**#707's 6 sub-slices (#708-713) are the live, unblocked queue** --
-each independent, each `build-loop` shaped (real intake-wizard UI +
-backend wiring + real-backend Playwright proof, same pattern as #693).
-No slice depends on another; pick any. #711/#712 (ClinicalObservation/
-ClinicalOutcome) are the two needing genuinely new UI fields rather than
-repurposing an existing one -- likely the larger two.
+**#707's 5 remaining sub-slices (#709-713) are the live, unblocked
+queue** -- same shape as #708, each independent, each `build-loop`
+shaped (real intake-wizard UI + backend wiring + real-backend Playwright
+proof):
+- #709 FamilyHistory intake-wizard UI + wiring
+- #710 Procedure intake-wizard UI + wiring
+- #711 ClinicalObservation intake-wizard UI + wiring (genuinely new UI,
+  no existing field to repurpose -- likely larger)
+- #712 ClinicalOutcome intake-wizard UI + wiring (genuinely new UI --
+  likely larger)
+- #713 real CCI algorithm + `DerivedScore` wiring
 
-#674 stays parked on RF027 (Wave 4, not started, out of scope for now)
--- Dennis explicitly chose not to pull that forward this sitting.
+No slice depends on another; pick any. #711/#712 are still the two
+likely-larger ones (flagged since #707 was filed, unchanged by this
+sitting).
 
-Rabbit-hole budget: this sitting spent ~2pts (investigation + design
-decision + filing 7 issues, no code). Cumulative total from prior
-sittings was already well past the ~10pt advisory budget before this
-one started. Six new unstarted slices (#708-713) now sit in the queue
-on top of that -- worth a explicit gut-check with Dennis at the start of
-the next sitting on whether to keep descending on #646/#707 or treat
-this as a natural point to close out the rabbit hole and revisit #707
-as ordinary backlog.
+**New, separate from #707:** #714 (AllergyIntolerance's missing RF005
+AC#4 gate) -- ordinary backlog, not part of #707's queue, no urgency
+stated.
+
+#674 stays parked on RF027 (Wave 4, not started, out of scope) -- unless
+Dennis pulls it forward, this stays untouched.
+
+Rabbit-hole budget: this sitting spent ~3pts (one full build-loop slice:
+new UI + backend wiring + schema + 2 unit tests + 1 extended e2e spec +
+2 docs + 1 new filed issue). Cumulative total was already well past the
+~10pt advisory budget before this sitting started, and stays there. 5
+more slices (#709-713) remain queued on top of that -- worth another
+explicit check-in with Dennis before continuing further this same
+sitting, per the rabbit-hole skill's own pacing guidance, even though
+"keep descending" was the standing instruction coming in.
