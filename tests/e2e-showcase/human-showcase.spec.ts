@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { realLogin } from '../e2e/helpers/realAuth';
+import { createRealParticipant, seedStorageBoxLocation, closeSeedDb } from '../e2e/helpers/seedParticipant';
 
 // Not a coverage spec — a human-paced showcase reel for Denise, recorded via
 // `playwright.showcase.config.ts` (video: 'on', single worker, real backend).
@@ -127,6 +128,174 @@ test.describe('Human-paced e2e showcase reel — Wave 2 (#331)', () => {
         }
         await request.delete(`${apiBaseURL}/api/collections/${collectionId}`, {
           headers: { Authorization: `Bearer ${session.token}` },
+        }).catch(() => {});
+      }
+    }
+  });
+});
+
+// Wave 3 reel (#646): demonstrates what's provably working end-to-end
+// through the real UI against the real backend for RF014 (security policy
+// management, including the login MFA-toggle round trip), RF017 (equipment
+// management), and RF016 (real symbology label generation + print-job
+// download, #655). RF015/RF024/RF025/RF026/RF029 are proven real-backend
+// but API-only today -- no frontend caller exists for any of them (see
+// specimen-quality-inventory.spec.ts / scientific-data-access.spec.ts /
+// pipeline-continuity.spec.ts's own RF015/24/25/26/29 blocks, all
+// `request`-only) -- so, per this skill's own "reuse proven flows, don't
+// improvise a new one" guidance, this reel doesn't fabricate a UI path for
+// them rather than demo an unproven flow live. RF017's storage-topology
+// sub-flow (InlineStorageMovementPanel) is also skipped: its freezer
+// dropdown has no data-testid coverage and is blocked by the known
+// seedStorageBoxLocation() fixture gap (#598, see this skill's local-env
+// overlay) -- the equipment sub-domain alone is what's demoed for RF017.
+test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  test('login, RF014 security policy update via the real UI, RF017 equipment management, RF016 real sample labeling', async ({ page, request }) => {
+    const testUser = process.env.TEST_USER || 'admin';
+    const testPass = process.env.TEST_PASS || 'Admin@123';
+
+    const equipmentDescription = `Showcase Freezer ${Date.now()}`;
+    let originalSecurityConfig: Record<string, any> | null = null;
+    let equipmentIdToDelete: string | null = null;
+
+    try {
+      // 1. Real admin login. RF003 itself (rejected + corrected password)
+      // is already fully demoed in the Wave 2 reel -- just enough here to
+      // reach an authenticated session.
+      await page.goto('/login');
+      await expect(page.getByTestId('login-page')).toBeVisible();
+      await beat(page, MEDIUM);
+      await page.getByTestId('login-username-input').fill(testUser);
+      await beat(page, SMALL);
+      await page.getByTestId('login-password-input').fill(testPass);
+      await beat(page, SMALL);
+      await page.getByTestId('login-submit-button').click();
+      await page.waitForURL('**/system-management');
+      await expect(page.getByTestId('system-management-page')).toBeVisible();
+      await beat(page, LARGE);
+
+      const admin = await realLogin(request);
+
+      // 2. Security policy management through the real UI. (RF014, #646 Wave 3)
+      // security_config is a single global singleton shared by the whole
+      // stack -- capture it now so it can be restored below, same rationale
+      // as auth-access-security.spec.ts's own RF014 policy-update test.
+      const before = await request.get(`${apiBaseURL}/api/security/config`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      originalSecurityConfig = (await before.json()).data;
+
+      await page.goto('/system-management?tab=security');
+      await expect(page.getByTestId('security-page')).toBeVisible();
+      await beat(page, MEDIUM);
+      await page.getByTestId('security-nav-authentication').click();
+      await beat(page, SMALL);
+      await page.getByTestId('security-require-mfa-toggle').click();
+      await beat(page, SMALL);
+      await page.getByTestId('security-save-config-button').click();
+      // saveStatus auto-resets to 'idle' 3s after a successful save
+      // (SecurityPage.tsx's handleSaveConfig) -- assert right away, then
+      // beat for less than that window so the confirmation is still on
+      // screen while the viewer registers it.
+      await expect(page.locator('.security-success')).toBeVisible();
+      await beat(page, MEDIUM);
+
+      // 3. Equipment management through the real UI. (RF017, #646 Wave 3)
+      await page.goto('/facility-management?tab=equipment');
+      await beat(page, MEDIUM);
+      await page.getByTestId('equipment-new-button').click();
+      await beat(page, SMALL);
+      await page.getByTestId('equipment-description-input').fill(equipmentDescription);
+      await beat(page, SMALL);
+      await page.getByTestId('equipment-model-input').fill('Freezer -80°C');
+      await beat(page, SMALL);
+      await page.getByTestId('equipment-serial-input').fill(`SN-SHOWCASE-${Date.now()}`);
+      await beat(page, SMALL);
+      await page.getByTestId('equipment-save-button').click();
+      // Not a row-text assertion: this shared test DB accumulates equipment
+      // fixtures across every session (500+ rows as of this writing), so a
+      // freshly-created row can land many pages deep in the unsorted,
+      // 10-per-page table. The form panel closing on success (it stays open
+      // on error, see EquipmentForm's onSave catch block) is the reliable
+      // signal instead.
+      await expect(page.getByTestId('equipment-form-panel')).not.toBeVisible();
+      await beat(page, LARGE);
+
+      // 4. Real sample labeling through the real UI. (RF016, #655/#646)
+      // Fixture setup only -- not shown on camera.
+      const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+      const { boxId, positionCode } = await seedStorageBoxLocation();
+      const sampleCreate = await request.post(`${apiBaseURL}/api/samples`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: {
+          participantId: participant.participantId,
+          sampleType: 'PLASMA',
+          sampleOrigin: 'VENOUS_BLOOD',
+          extractionProtocol: 'TUBE_EDTA',
+          quantity: 5,
+          quality: 'GOOD',
+          linkedProject: 'Wave 3 showcase fixture',
+          registeredAt: new Date().toISOString(),
+          boxId,
+          positionCode,
+        },
+      });
+      expect([201, 202]).toContain(sampleCreate.status());
+      const sampleID = (await sampleCreate.json()).data.sampleID;
+
+      await page.goto(`/samples/${sampleID}/label`);
+      await expect(page.getByTestId('sample-label-page')).toBeVisible();
+      await beat(page, MEDIUM);
+      await expect(page.getByTestId('sample-label-code128-image')).toBeVisible();
+      await beat(page, SMALL);
+      await expect(page.getByTestId('sample-label-data-matrix-image')).toBeVisible();
+      await beat(page, SMALL);
+      await expect(page.getByTestId('sample-label-qr-image')).toBeVisible();
+      await beat(page, MEDIUM);
+
+      await Promise.all([
+        page.waitForEvent('download'),
+        page.getByTestId('sample-label-print-job-button').click(),
+      ]);
+      await beat(page, LARGE);
+
+      // Resolve the created equipment's id (server-generated) for cleanup below.
+      const equipmentList = await request.get(`${apiBaseURL}/api/equipment`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      if (equipmentList.ok()) {
+        const list = (await equipmentList.json()).data;
+        const created = list.find((eq: Record<string, unknown>) => eq.equipmentDescription === equipmentDescription);
+        equipmentIdToDelete = created ? (created._id || created.equipmentID) : null;
+      }
+    } finally {
+      // Not shown on camera -- restore the shared security_config singleton
+      // and remove the equipment demo fixture, same rationale as the Wave 2
+      // reel's own finally block.
+      const admin = await realLogin(request).catch(() => null);
+      if (admin && originalSecurityConfig) {
+        await request.put(`${apiBaseURL}/api/security/config`, {
+          headers: { Authorization: `Bearer ${admin.token}` },
+          data: {
+            session: {
+              timeoutMinutes: originalSecurityConfig.session.timeoutMinutes,
+              maxSessionDuration: originalSecurityConfig.session.maxSessionDuration,
+            },
+            authentication: {
+              maxLoginAttempts: originalSecurityConfig.authentication.maxLoginAttempts,
+              requireMFA: originalSecurityConfig.authentication.requireMFA,
+            },
+            passwordRules: { minLength: originalSecurityConfig.passwordRules.minLength },
+          },
+        }).catch(() => {});
+      }
+      if (admin && equipmentIdToDelete) {
+        await request.delete(`${apiBaseURL}/api/equipment/${equipmentIdToDelete}`, {
+          headers: { Authorization: `Bearer ${admin.token}` },
         }).catch(() => {});
       }
     }
