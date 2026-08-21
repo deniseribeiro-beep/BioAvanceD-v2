@@ -284,6 +284,48 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
     });
   });
 
+  describe('#703: invalid-format participantId (e.g. wizard placeholder) must not be treated as a literal id', () => {
+    it('generates a real participantId and does not insert the placeholder literally', async () => {
+      identityCandidates([]);
+      patientsCollection.insertOne.mockResolvedValueOnce({ insertedId: '111f1f77bcf86cd799439111' });
+
+      const result = await patientIdentityService.matchOrUpsertParticipant(db, {
+        participantId: 'placeholder',
+        patientName: 'Novo Paciente Wizard',
+        birthDate: '20/01/2000',
+      });
+
+      expect(result.created).toBe(true);
+      expect(patientsCollection.findOne).not.toHaveBeenCalledWith({ participantId: 'placeholder' });
+      const insertedDoc = patientsCollection.insertOne.mock.calls[0][0];
+      expect(insertedDoc.participantId).not.toBe('placeholder');
+      expect(insertedDoc.participantId).toMatch(/^\d{8}$/);
+      expect(result.patient.participantId).toMatch(/^\d{8}$/);
+    });
+
+    it('still matches an existing patient by name+birthDate when the supplied participantId is a placeholder', async () => {
+      const existingPatient = {
+        _id: '507f1f77bcf86cd799439011',
+        participantId: '87654321',
+        patientName: 'Paciente Repetido',
+        birthDate: new Date('1990-05-15'),
+      };
+      identityCandidates([{ participantId: '87654321', patientName: 'Paciente Repetido', birthDate: new Date('1990-05-15') }]);
+      patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
+      patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
+
+      const result = await patientIdentityService.matchOrUpsertParticipant(db, {
+        participantId: 'placeholder',
+        patientName: 'Paciente Repetido',
+        birthDate: '15/05/1990',
+      });
+
+      expect(result.created).toBe(false);
+      expect(result.patient.participantId).toBe('87654321');
+      expect(patientsCollection.findOne).toHaveBeenCalledWith({ participantId: '87654321' });
+    });
+  });
+
   describe('Error handling', () => {
     it('deve lançar erro se não houver participantId e nem (patientName + birthDate)', async () => {
       await expect(
