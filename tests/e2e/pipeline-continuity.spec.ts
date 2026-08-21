@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
-import { createRealParticipant, seedRawSpecimen, seedStudy, closeSeedDb } from './helpers/seedParticipant';
+import { createRealParticipant, seedRawSpecimen, seedStudy, seedAssay, closeSeedDb } from './helpers/seedParticipant';
 import { waitForEthicalConsentStatus, waitForTerminologyConceptNode, waitForTerminologyRelation, closeNeo4jDriver } from './helpers/queryNeo4j';
 import {
   countEssentialReferenceDocs,
@@ -934,6 +934,157 @@ test.describe('Ingestion gateway — datasets, assays (RF029 slice 5/6) — real
         datasetVersion: '1.0.0',
         creators: [],
         license: 'CC BY 4.0',
+      },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'CONTRACT_VIOLATION')).toBe(true);
+  });
+});
+
+// RF029 slice 6/6 (#674): wires WorkflowRun/OmicsQualification/OmicsRun
+// (RF027, #716) through slice 1's gateway, same probe-only pattern
+// slices 2-5 established — no new production ingestion routes, the
+// existing /api/workflow-runs, /api/omics-qualifications and
+// /api/omics-runs master-data routes stay untouched. workflowSchema has
+// no reference field (workflowId/workflowVersion aren't rows in an
+// existing collection — see contracts/canonical/v1's own comment), so
+// this block's Workflow tests only cover accept/contract-violation, the
+// same shape #673 used for Dataset's own no-reference-field case.
+// omicsQualificationSchema's targetAssay is this slice's one
+// FK-shaped/cheaply-seedable reference (via the new seedAssay helper,
+// same "one reference this slice's fixtures can cheaply seed" scope
+// #673 applied to Assay's own studyId) — omicsRunSchema's fileLinks
+// stays unreferenced for the same cross-collection-resolution reason as
+// canonical.v1.file's own out-of-scope note.
+test.describe('Ingestion gateway — workflows, omics data (RF029 slice 6/6) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  function provenance() {
+    return {
+      sourceSystem: 'urn:system:pipeline-continuity-e2e',
+      createdBy: 'Actor/e2e-suite',
+      retrievedAt: new Date().toISOString(),
+      purpose: 'e2e_proof',
+    };
+  }
+
+  test('a workflow payload with the required fields is accepted, no reference needed', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'WorkflowRun',
+      schemaId: 'canonical.v1.workflow',
+      payload: {
+        workflowId: 'rf029-e2e-variant-calling-pipeline',
+        workflowVersion: '2.3.1',
+        createdBy: 'User/e2e-suite',
+        startedAt: new Date().toISOString(),
+        runStatus: 'succeeded',
+      },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('accepted');
+    expect(outcome.violations).toEqual([]);
+  });
+
+  test('a workflow payload missing createdBy is quarantined (AC#4)', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'WorkflowRun',
+      schemaId: 'canonical.v1.workflow',
+      payload: {
+        workflowId: 'rf029-e2e-variant-calling-pipeline',
+        workflowVersion: '2.3.1',
+        startedAt: new Date().toISOString(),
+        runStatus: 'succeeded',
+      },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'CONTRACT_VIOLATION')).toBe(true);
+  });
+
+  test('an omics qualification payload referencing a real assay is accepted', async ({ request }) => {
+    const assayId = `rf029-e2e-assay-${Date.now()}`;
+    await seedAssay(assayId);
+
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'OmicsQualification',
+      schemaId: 'canonical.v1.omicsQualification',
+      payload: {
+        targetAssay: assayId,
+        qcRuleSetVersion: 'v2.1',
+        qcMetrics: [{ metric: 'readDepth', value: 30 }],
+        qualificationDecision: 'eligible',
+      },
+      provenance: provenance(),
+      references: [{ collection: 'assays', field: 'assayId', value: assayId, label: 'targetAssay' }],
+    });
+
+    expect(outcome.status).toBe('accepted');
+    expect(outcome.violations).toEqual([]);
+  });
+
+  test('an omics qualification payload referencing a nonexistent assay is quarantined', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'OmicsQualification',
+      schemaId: 'canonical.v1.omicsQualification',
+      payload: {
+        targetAssay: 'rf029-e2e-nonexistent-assay',
+        qcRuleSetVersion: 'v2.1',
+        qcMetrics: [{ metric: 'readDepth', value: 30 }],
+        qualificationDecision: 'eligible',
+      },
+      provenance: provenance(),
+      references: [{ collection: 'assays', field: 'assayId', value: 'rf029-e2e-nonexistent-assay', label: 'targetAssay' }],
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'REFERENCE_NOT_FOUND')).toBe(true);
+  });
+
+  test('an omics qualification payload with an empty qcMetrics array is quarantined', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'OmicsQualification',
+      schemaId: 'canonical.v1.omicsQualification',
+      payload: {
+        targetAssay: 'irrelevant-for-this-test',
+        qcRuleSetVersion: 'v2.1',
+        qcMetrics: [],
+        qualificationDecision: 'eligible',
+      },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations.some((v: { code: string }) => v.code === 'CONTRACT_VIOLATION')).toBe(true);
+  });
+
+  test('an omics run payload with a valid modality is accepted, no reference needed', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'OmicsRun',
+      schemaId: 'canonical.v1.omicsRun',
+      payload: {
+        modality: 'genomics',
+        referenceAssembly: 'GRCh38',
+        fileLinks: [],
+      },
+      provenance: provenance(),
+    });
+
+    expect(outcome.status).toBe('accepted');
+    expect(outcome.violations).toEqual([]);
+  });
+
+  test('an omics run payload with an invalid modality is quarantined', async ({ request }) => {
+    const outcome = await probeIngestionGateway(request, {
+      entityType: 'OmicsRun',
+      schemaId: 'canonical.v1.omicsRun',
+      payload: {
+        modality: 'astrology',
       },
       provenance: provenance(),
     });
