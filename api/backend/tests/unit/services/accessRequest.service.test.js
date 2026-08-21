@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
+const { ObjectId } = require('mongodb');
 const accessRequestService = require('../../../src/services/accessRequest.service');
 const { evaluateAccessState, DUO_SYSTEM_URI } = accessRequestService;
 
@@ -13,7 +14,14 @@ const { evaluateAccessState, DUO_SYSTEM_URI } = accessRequestService;
  */
 function createFakeCollection(seedDocs = []) {
   const docs = [...seedDocs];
-  const matches = (doc, filter) => Object.keys(filter).every((key) => doc[key] === filter[key]);
+  // `_id` gets a dedicated comparison (dispositionAction.service.test.js's
+  // own precedent) since the service constructs a real ObjectId instance to
+  // query by, and two ObjectId instances with the same value are never
+  // `===` to each other.
+  const matches = (doc, filter) => Object.keys(filter).every((key) => {
+    if (key === '_id') return String(doc._id) === String(filter._id);
+    return doc[key] === filter[key];
+  });
   return {
     docs,
     async insertOne(doc) {
@@ -43,13 +51,14 @@ function createFakeCollection(seedDocs = []) {
   };
 }
 
-function createFakeDb({ samples = [], consents = [], terminologyConcepts = [], studies = [] } = {}) {
+function createFakeDb({ samples = [], consents = [], terminologyConcepts = [], studies = [], sampleFiles = [] } = {}) {
   const collections = {
     accessRequests: createFakeCollection(),
     samples: createFakeCollection(samples),
     patientConsents: createFakeCollection(consents),
     terminologyConcepts: createFakeCollection(terminologyConcepts),
     studies: createFakeCollection(studies),
+    sample_files: createFakeCollection(sampleFiles),
   };
   return {
     collection(name) {
@@ -167,6 +176,100 @@ describe('accessRequest.service', () => {
 
       expect(evaluated.consentCompatibility[0].duoCompatible).toBeNull();
       expect(evaluated.overallCompatible).toBe(true);
+    });
+
+    it('#661: resolves a file item to its specimen/participant and checks consent, same as specimen', async () => {
+      const fileId = new ObjectId();
+      const db = createFakeDb({
+        sampleFiles: [{ _id: fileId, specimenId: 'SPEC-1' }],
+        samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1' }],
+        consents: [{ participantId: 'participant-1', status: 'ACTIVE' }],
+        studies: [{ studyId: 'study-1', studyStatus: 'active' }],
+      });
+      const created = await accessRequestService.createRequest(
+        db,
+        baseRequestPayload({ requestedItems: [{ itemType: 'file', itemId: fileId.toString() }] })
+      );
+
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      expect(evaluated.overallCompatible).toBe(true);
+      expect(evaluated.consentCompatibility[0]).toMatchObject({
+        itemType: 'file',
+        participantId: 'participant-1',
+        consentValid: true,
+        compatible: true,
+      });
+    });
+
+    it('#661: marks a file item incompatible when its resolved participant has no ACTIVE consent', async () => {
+      const fileId = new ObjectId();
+      const db = createFakeDb({
+        sampleFiles: [{ _id: fileId, specimenId: 'SPEC-1' }],
+        samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1' }],
+        consents: [],
+        studies: [{ studyId: 'study-1', studyStatus: 'active' }],
+      });
+      const created = await accessRequestService.createRequest(
+        db,
+        baseRequestPayload({ requestedItems: [{ itemType: 'file', itemId: fileId.toString() }] })
+      );
+
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      expect(evaluated.overallCompatible).toBe(false);
+      expect(evaluated.consentCompatibility[0].consentValid).toBe(false);
+    });
+
+    it('#661: marks a file item incompatible when its itemId does not resolve to a real file', async () => {
+      const db = createFakeDb({
+        studies: [{ studyId: 'study-1', studyStatus: 'active' }],
+      });
+      const created = await accessRequestService.createRequest(
+        db,
+        baseRequestPayload({ requestedItems: [{ itemType: 'file', itemId: new ObjectId().toString() }] })
+      );
+
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      expect(evaluated.overallCompatible).toBe(false);
+      expect(evaluated.consentCompatibility[0].participantId).toBeNull();
+      expect(evaluated.consentCompatibility[0].consentValid).toBe(false);
+    });
+
+    it('#661: a malformed (non-ObjectId) file itemId does not throw, just fails to resolve', async () => {
+      const db = createFakeDb({
+        studies: [{ studyId: 'study-1', studyStatus: 'active' }],
+      });
+      const created = await accessRequestService.createRequest(
+        db,
+        baseRequestPayload({ requestedItems: [{ itemType: 'file', itemId: 'not-an-object-id' }] })
+      );
+
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      expect(evaluated.consentCompatibility[0].participantId).toBeNull();
+      expect(evaluated.consentCompatibility[0].consentValid).toBe(false);
+    });
+
+    it('#661: dataset items stay exempt -- non-blocking null consent, per de-identified-by-design', async () => {
+      const db = createFakeDb({
+        studies: [{ studyId: 'study-1', studyStatus: 'active' }],
+      });
+      const created = await accessRequestService.createRequest(
+        db,
+        baseRequestPayload({ requestedItems: [{ itemType: 'dataset', itemId: 'DATASET-1' }] })
+      );
+
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      expect(evaluated.overallCompatible).toBe(true);
+      expect(evaluated.consentCompatibility[0]).toMatchObject({
+        itemType: 'dataset',
+        participantId: null,
+        consentValid: null,
+        compatible: true,
+      });
     });
   });
 
