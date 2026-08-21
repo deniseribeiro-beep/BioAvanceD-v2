@@ -146,26 +146,31 @@ continue (picking up #689) or stop here.
   sitting's doing).
 - No PR to `main` exists. `main` stays frozen per this repo's own
   convention.
-- **Docker: UP.** Test stack brought up this sitting (12 core services +
+- **Docker: DOWN.** Brought up this sitting (12 core services +
   `admin-bootstrap-test`, all healthy/exited-0 as expected) to verify
-  #678 against real Mongo/Neo4j. **Not torn down yet** -- prior rotations
-  tore down at Dennis's explicit request each time rather than by
-  default; this rotation leaves that decision open rather than assuming
-  it. If continuing to #689 next, the stack staying up saves a
-  re-bring-up. `playwright-runner`/full-suite container was never
-  started this sitting (not included in the service list used), so no
-  resource-contention risk from it.
+  #678 against real Mongo/Neo4j, then torn down at Dennis's explicit
+  request once the sitting's checkpoint question was answered
+  (`docker compose --env-file .env.test.example -f compose.test.yml
+  down`, no `-v` -- confirmed clean via `docker ps -a`, zero
+  `bioavanced-test-*` containers left). Named volumes preserved, so the
+  next bring-up starts from this sitting's already-aligned
+  `temperaturePolicies` schema. `playwright-runner`/full-suite container
+  was never started this sitting (not included in the service list
+  used), so no teardown concern there.
 
 ## Recommended next steps
 
-Budget is close to the ~10pt ceiling -- this is a reasonable checkpoint
-to ask Dennis whether to continue this sitting (pick up **#689**, the
-smallest genuine #646/#677 descendant) or stop and tear down Docker.
-Everything else in the queue table stays parked as an explicit design/
-policy call, a marker, or outside this rabbit hole's own scope
-(#683/#684) -- don't resolve any of those unilaterally. Invoke the
-routed skill (`work-issue` -> classified loop) for whichever issue is
-picked next, right before editing -- and **create the per-issue branch
-as the literal first action**, before any Read/Edit call, given this
-sitting's own recurring slip on that exact point. Rotate this file again
-after the next item lands/closes, per Step 4.
+**Dennis chose to stop this sitting rather than continue into #689** --
+this is a clean checkpoint, not a forced stop (budget was close to the
+~10pt ceiling but not over it). Next sitting: **#689** (Encounter,
+smallest genuine #646/#677 descendant, no deps) is the natural pick,
+then #690-#693 in order. Everything else in the queue table stays parked
+as an explicit design/policy call, a marker, or outside this rabbit
+hole's own scope (#683/#684) -- don't resolve any of those unilaterally.
+Invoke the routed skill (`work-issue` -> classified loop) for whichever
+issue is picked next, right before editing -- and **create the per-issue
+branch as the literal first action**, before any Read/Edit call, given
+this sitting's own recurring slip on that exact point (dyeallpies-
+skills-pack#369). Bring Docker back up per `docker-workflow`'s
+bioavanced-v2 overlay recipe when next needed -- #690-#693 will likely
+need it for real-backend proof, same as #678 did.
