@@ -1191,6 +1191,86 @@ under #693, slice 5/5):** no live caller creates a `ClinicalObservation`,
 #689/#690 — real-backend e2e proof is deferred to #693's intake-wizard
 integration.
 
+### AllergyIntolerance
+
+- `allergyId` (internal identity; assigned via `crypto.randomUUID()` in
+  `AllergyIntoleranceModel.create`, #692 — dict-02 ELM-0246)
+- `allergenCoding` (`Coding`, 1..1, dict-02 ELM-0247 — DCB/SNOMED subset,
+  same `{ systemUri, code, version, display }` shape as elsewhere in this
+  domain)
+- `reaction` (`BackboneElement[]`, 0..*, dict-02 ELM-0248 —
+  "manifestação, severidade e período," stored as given)
+
+**Landed in #692 (RF005 clinical-data slice 4/5, tracked under #677):**
+the entity/collection (`allergyIntolerances`) exists
+(`AllergyIntoleranceModel`, `allergy-intolerance.service.js`). Same
+"dict-02 has no `participantId` row for this entity" note as
+`ClinicalOutcome`/`DerivedScore` above.
+
+### FamilyHistory
+
+- `familyHistoryId` (internal identity; assigned via
+  `crypto.randomUUID()` in `FamilyHistoryModel.create`, #692 — dict-02
+  ELM-0249, whose own field description calls it a "registro familiar
+  pseudonimizado," the same civil-identity discipline as
+  `ParticipantIdentity` even though this entity has no `participantId`
+  field of its own)
+- `relationship` (CodeableConcept, 1..1, dict-02 ELM-0250 — degree of
+  kinship, stored as given)
+- `familyCondition` (`BackboneElement[]`, 0..*, dict-02 ELM-0251 —
+  ORPHA|ICD-11|MONDO coded disease + age/period of onset in the family
+  member, stored as given)
+
+**Landed in #692:** the entity/collection (`familyHistories`) exists
+(`FamilyHistoryModel`, `family-history.service.js`).
+
+### MedicationExposure
+
+- `medicationRecordId` (internal identity; assigned via
+  `crypto.randomUUID()` in `MedicationExposureModel.create`, #692 —
+  dict-02 ELM-0233)
+- `medicationCoding` (`Coding[]`, 1..*, dict-02 ELM-0234 — DCB|ATC|SNOMED
+  subset)
+- `recordType` (dict-02 ELM-0235 — prescribed/dispensed/administered/
+  reported, stored as given)
+- `medicationStatus` (dict-02 ELM-0236, FHIR status vocab, stored as
+  given)
+- `dose` (Quantity, 0..1, dict-02 ELM-0237)
+- `route` (CodeableConcept, 0..1, dict-02 ELM-0238)
+- `frequency` (Timing, 0..1, dict-02 ELM-0239, stored as given)
+- `medicationPeriod` (`{ start, end }`, 0..1, dict-02 ELM-0240 — same
+  Period shape `Encounter.encounterPeriod` uses)
+- `indication` (0..*, references to `Condition`/#690, dict-02 ELM-0241 —
+  joinable-but-not-enforced. Unlike `ClinicalObservation.specimenId`/
+  `deviceId` (#691), #692's own scope didn't call for a hard
+  reference-check here, so this stays the default unenforced pattern
+  most other Reference fields in this domain use)
+
+**Landed in #692:** the entity/collection (`medicationExposures`) exists
+(`MedicationExposureModel`, `medication-exposure.service.js`).
+
+### Procedure
+
+- `procedureId` (internal identity; assigned via `crypto.randomUUID()`
+  in `ProcedureModel.create`, #692 — dict-02 ELM-0242)
+- `procedureCoding` (`Coding[]`, 1..*, dict-02 ELM-0243 — SNOMED/
+  institutional terminology)
+- `performed` (choice, 1..1, dict-02 ELM-0244 — date or Period, stored
+  as given)
+- `bodySite` (`CodeableConcept[]`, 0..*, dict-02 ELM-0245 — Uberon/SNOMED
+  subset. This repo already imports Uberon as a RF028 reference dataset,
+  but resolving/validating `bodySite` against it is a distinct
+  ingestion-pipeline concern this slice didn't take on — stored as
+  given, same as every other CodeableConcept field in this domain)
+
+**Landed in #692:** the entity/collection (`procedures`) exists
+(`ProcedureModel`, `procedure.service.js`).
+
+**Not yet landed for any of the four entities above (follow-up tracked
+under #693, slice 5/5):** no live caller creates any of these yet. Same
+native-only proof bar as #689-#691 — real-backend e2e proof is deferred
+to #693's intake-wizard integration.
+
 ### Consent
 
 - `consentId` (internal identity of the consent instance, distinct from
