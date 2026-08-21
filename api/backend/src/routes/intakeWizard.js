@@ -15,6 +15,7 @@ const phenotypeObservationService = require('../services/phenotype-observation.s
 const medicationExposureService = require('../services/medication-exposure.service');
 const allergyIntoleranceService = require('../services/allergy-intolerance.service');
 const familyHistoryService = require('../services/family-history.service');
+const procedureService = require('../services/procedure.service');
 const logger = require('../utils/logger');
 const { validate } = require('../contracts/canonical/v1');
 
@@ -41,6 +42,12 @@ const ATC_SYSTEM_URI = 'http://www.whocc.no/atc';
 // against DCB only, same "code what's actually importable" precedent as
 // ICD-10-only for diagnosisCidCode above.
 const DCB_SYSTEM_URI = 'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb';
+// #710: dict-02's ELM-0243 allows "SNOMED/terminologia institucional" for
+// procedureCoding -- no SNOMED importer exists in this repo (same gap as
+// DCB/SNOMED for AllergyIntolerance, #708), so manual-entry procedures are
+// coded against a local/institutional system URI, the explicit alternative
+// dict-02 itself names, rather than left uncoded.
+const LOCAL_PROCEDURE_SYSTEM_URI = 'urn:biobank:local-procedure-terminology';
 
 /**
  * RF005 AC4-6 (#693, RF005 clinical-data slice 5/5): additively creates
@@ -65,13 +72,13 @@ const DCB_SYSTEM_URI = 'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb
  * a materially bigger behavioral change than this additive slice intends.
  *
  * Scope note: originally only the 4 entities with real source data in this
- * wizard's payload were wired here. #708/#709 (RF005 clinical-UI slices,
- * tracker #707) add AllergyIntolerance/FamilyHistory, now that the wizard
- * has real fields for both. ClinicalObservation/ClinicalOutcome/
- * DerivedScore/Procedure remain unwired (or, for DerivedScore, would need
- * an actual Charlson-scoring algorithm, not just a data mapping) -- each
- * tracked as its own follow-up (#707's sibling sub-issues) rather than
- * fabricated here.
+ * wizard's payload were wired here. #708/#709/#710 (RF005 clinical-UI
+ * slices, tracker #707) add AllergyIntolerance/FamilyHistory/Procedure,
+ * now that the wizard has real fields for each. ClinicalObservation/
+ * ClinicalOutcome/DerivedScore remain unwired (or, for DerivedScore, would
+ * need an actual Charlson-scoring algorithm, not just a data mapping) --
+ * each tracked as its own follow-up (#707's sibling sub-issues) rather
+ * than fabricated here.
  */
 async function recordClinicalEntities(db, { participantId, clinicalData, pharmacologyData, registeredAt }) {
   let encounterId = null;
@@ -183,6 +190,27 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
       await familyHistoryService.createFamilyHistory(db, { relationship, familyCondition });
     } catch (familyHistoryError) {
       logger.error(`Falha ao registrar FamilyHistory (${relationship}) para o intake wizard:`, familyHistoryError.message || familyHistoryError);
+    }
+  }
+
+  const procedures = Array.isArray(clinicalData?.procedures) ? clinicalData.procedures : [];
+  for (const entry of procedures) {
+    const procedureCode = String(entry?.procedureCode || '').trim();
+    const performed = String(entry?.performed || '').trim();
+    if (!procedureCode || !performed) continue;
+    try {
+      const bodySiteText = String(entry?.bodySite || '').trim();
+      await procedureService.createProcedure(db, {
+        procedureCoding: [{
+          systemUri: LOCAL_PROCEDURE_SYSTEM_URI,
+          code: procedureCode,
+          display: String(entry?.procedureName || '').trim() || undefined,
+        }],
+        performed,
+        bodySite: bodySiteText ? [{ text: bodySiteText }] : [],
+      });
+    } catch (procedureError) {
+      logger.error(`Falha ao registrar Procedure (${procedureCode}) para o intake wizard:`, procedureError.message || procedureError);
     }
   }
 }
@@ -300,6 +328,8 @@ function buildClinicalData(data = {}) {
     allergies: normalizeArray(clinical.allergies),
     // #709: ELM-0249..0251 FamilyHistory -- manual-entry family list.
     familyHistories: normalizeArray(clinical.familyHistories),
+    // #710: ELM-0242..0245 Procedure -- manual-entry procedure list.
+    procedures: normalizeArray(clinical.procedures),
   };
 }
 

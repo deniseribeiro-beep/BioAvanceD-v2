@@ -135,6 +135,26 @@ const clinicalDataSchema = {
         }
       }
     },
+    // #710 (RF005 clinical-UI slice, tracker #707): manual-entry procedure
+    // list -- dict-02 ELM-0242..0245's Procedure (procedureCoding
+    // SNOMED/institutional-terminology-coded, performed a required date,
+    // bodySite an optional free-text site). No SNOMED importer exists in
+    // this repo, so procedureCoding is coded against a local/institutional
+    // system URI (dict-02 explicitly allows "terminologia institucional"
+    // as an alternative to SNOMED) rather than left uncoded.
+    procedures: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          procedureName: { type: 'string' },
+          procedureCode: { type: 'string' },
+          performed: { type: 'string' },
+          bodySite: { type: 'string' }
+        }
+      }
+    },
     pharmacologyData: {
       type: 'object',
       additionalProperties: false,
