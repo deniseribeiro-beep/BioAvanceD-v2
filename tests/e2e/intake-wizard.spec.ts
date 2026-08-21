@@ -164,7 +164,7 @@ test.describe('Participant identity segregation (RF005/RNF007) — real backend 
   });
 });
 
-test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF005 AC4-6 wiring against a live stack; extended by #708 for AllergyIntolerance, #709 for FamilyHistory)', () => {
+test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF005 AC4-6 wiring against a live stack; extended by #708 for AllergyIntolerance, #709 for FamilyHistory, #710 for Procedure)', () => {
   test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
   const orphaCode = 'ORPHA:558';
@@ -198,6 +198,13 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
   const familyConditionOrphaCode = 'ORPHA:558';
   const familyConditionName = `RF005 e2e family condition #709 ${Date.now()}`;
   const familyConditionOnset = '30 anos';
+  // #710: Procedure -- procedure.service.js also never calls
+  // activeCodeValidator, same shape as the two above; no TerminologyConcept
+  // fixture needed, only a uniquely-named display value.
+  const procedureCode = `LOCAL-${Date.now()}`;
+  const procedureName = `RF005 e2e procedure #710 ${Date.now()}`;
+  const procedurePerformed = '2026-01-15';
+  const procedureBodySite = 'Fígado';
 
   let mongoClient: MongoClient;
 
@@ -323,6 +330,14 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await page.getByTestId('wizard-add-family-history').click();
     await expect(page.getByTestId('wizard-family-history-item-0')).toBeVisible();
 
+    // Procedure (#710) -- manual-entry, locally-coded.
+    await page.getByTestId('wizard-procedure-name').fill(procedureName);
+    await page.getByTestId('wizard-procedure-code').fill(procedureCode);
+    await page.getByTestId('wizard-procedure-performed').fill(procedurePerformed);
+    await page.getByTestId('wizard-procedure-body-site').fill(procedureBodySite);
+    await page.getByTestId('wizard-add-procedure').click();
+    await expect(page.getByTestId('wizard-procedure-item-0')).toBeVisible();
+
     const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
     await page.getByTestId('wizard-submit-button').click();
     const response = await submissionResponse;
@@ -419,6 +434,23 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
         },
         onset: familyConditionOnset,
       }],
+    });
+
+    // #710: Procedure -- dict-02 ELM-0242..0245, locally-coded
+    // procedureCoding (no SNOMED importer in this repo), manual-entry, same
+    // additive best-effort call as the other entities above.
+    const procedures = await db.collection('procedures').find({
+      'procedureCoding.display': procedureName,
+    }).toArray();
+    expect(procedures).toHaveLength(1);
+    expect(procedures[0]).toMatchObject({
+      procedureCoding: [{
+        systemUri: 'urn:biobank:local-procedure-terminology',
+        code: procedureCode,
+        display: procedureName,
+      }],
+      performed: procedurePerformed,
+      bodySite: [{ text: procedureBodySite }],
     });
   });
 });

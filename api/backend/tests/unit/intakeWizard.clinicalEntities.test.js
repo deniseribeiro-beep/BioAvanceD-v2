@@ -20,6 +20,7 @@ const phenotypeObservationServicePath = require.resolve('../../src/services/phen
 const medicationExposureServicePath = require.resolve('../../src/services/medication-exposure.service');
 const allergyIntoleranceServicePath = require.resolve('../../src/services/allergy-intolerance.service');
 const familyHistoryServicePath = require.resolve('../../src/services/family-history.service');
+const procedureServicePath = require.resolve('../../src/services/procedure.service');
 const activeCodeValidatorPath = require.resolve('../../src/ingestion/activeCodeValidator');
 const routePath = require.resolve('../../src/routes/intakeWizard.js');
 
@@ -46,6 +47,7 @@ const allPaths = [
   medicationExposureServicePath,
   allergyIntoleranceServicePath,
   familyHistoryServicePath,
+  procedureServicePath,
   activeCodeValidatorPath,
   routePath,
 ];
@@ -186,6 +188,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       medicationExposures: makeInsertCapturingCollection(),
       allergyIntolerances: makeInsertCapturingCollection(),
       familyHistories: makeInsertCapturingCollection(),
+      procedures: makeInsertCapturingCollection(),
       ...makeActiveCodeCollections(),
     };
 
@@ -381,5 +384,40 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
 
     expect(res.status).toBe(200);
     expect(collections.familyHistories.docs).toHaveLength(0);
+  });
+
+  it('#710: creates a Procedure from a wizard-collected entry, locally-coded', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        procedures: [{ procedureName: 'Liver biopsy', procedureCode: 'LOCAL-001', performed: '2026-01-15', bodySite: 'Liver' }],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.procedures.docs).toHaveLength(1);
+    expect(collections.procedures.docs[0]).toMatchObject({
+      procedureCoding: [{ systemUri: 'urn:biobank:local-procedure-terminology', code: 'LOCAL-001', display: 'Liver biopsy' }],
+      performed: '2026-01-15',
+      bodySite: [{ text: 'Liver' }],
+    });
+  });
+
+  it('#710: skips a procedure entry with no code or no performed date, and does not fail the intake', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        procedures: [{ procedureName: 'Liver biopsy', procedureCode: '', performed: '2026-01-15' }],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.procedures.docs).toHaveLength(0);
   });
 });

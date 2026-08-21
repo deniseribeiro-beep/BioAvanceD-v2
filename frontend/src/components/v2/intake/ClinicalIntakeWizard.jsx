@@ -366,6 +366,7 @@ const initialState = {
   phenotypes: [], // [{ hpoId, label }]
   allergies: [], // [{ allergenName, allergenCode, reaction }]
   familyHistories: [], // [{ relationship, conditionName, orphaCode, onset }]
+  procedures: [], // [{ procedureName, procedureCode, performed, bodySite }]
   treatmentStatus: '',
   medicationName: '',
   medicationCode: '',
@@ -1062,6 +1063,7 @@ function createClinicalStepSchema(t, clinicalItems = []) {
     diseaseBiomarkers: z.array(z.any()).optional(),
     allergies: z.array(z.any()).optional(),
     familyHistories: z.array(z.any()).optional(),
+    procedures: z.array(z.any()).optional(),
     biomarkers_values: z.record(z.string()).optional(),
     treatmentStatus: z.string().trim().optional().or(z.literal('')),
     medicationName: z.string().trim().max(180, t('wizard.validation.medicationNameTooLong', 'Medication name is too long')).optional().or(z.literal('')),
@@ -1489,6 +1491,7 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
     diagnosisDefinition: String(formData.diagnosisDefinition || '').trim(),
     allergies: Array.isArray(formData.allergies) ? formData.allergies : [],
     familyHistories: Array.isArray(formData.familyHistories) ? formData.familyHistories : [],
+    procedures: Array.isArray(formData.procedures) ? formData.procedures : [],
     pharmacologyData: {
       treatmentStatus: String(formData.treatmentStatus || '').trim(),
       medicationName: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
@@ -1593,6 +1596,7 @@ export default function ClinicalIntakeWizard(props) {
   const [medicationError, setMedicationError] = useState('');
   const [allergyDraft, setAllergyDraft] = useState({ allergenName: '', allergenCode: '', reaction: '' });
   const [familyHistoryDraft, setFamilyHistoryDraft] = useState({ relationship: '', conditionName: '', orphaCode: '', onset: '' });
+  const [procedureDraft, setProcedureDraft] = useState({ procedureName: '', procedureCode: '', performed: '', bodySite: '' });
   const [isConsentPreviewOpen, setIsConsentPreviewOpen] = useState(false);
   const [isBiomarkerRequestOpen, setIsBiomarkerRequestOpen] = useState(false);
   const [isBiomarkerRequestSubmitting, setIsBiomarkerRequestSubmitting] = useState(false);
@@ -2183,6 +2187,35 @@ export default function ClinicalIntakeWizard(props) {
     setFormData((previous) => ({
       ...previous,
       familyHistories: (Array.isArray(previous.familyHistories) ? previous.familyHistories : []).filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
+
+  const handleProcedureDraftChange = (field) => (event) => {
+    const value = event.target.value;
+    setProcedureDraft((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const handleAddProcedure = () => {
+    const procedureName = String(procedureDraft.procedureName || '').trim();
+    const procedureCode = String(procedureDraft.procedureCode || '').trim();
+    const performed = String(procedureDraft.performed || '').trim();
+    const bodySite = String(procedureDraft.bodySite || '').trim();
+    if (!procedureCode || !performed) {
+      return;
+    }
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      procedures: [...(Array.isArray(previous.procedures) ? previous.procedures : []), { procedureName, procedureCode, performed, bodySite }],
+    }));
+    setProcedureDraft({ procedureName: '', procedureCode: '', performed: '', bodySite: '' });
+  };
+
+  const handleRemoveProcedure = (index) => {
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      procedures: (Array.isArray(previous.procedures) ? previous.procedures : []).filter((_, itemIndex) => itemIndex !== index),
     }));
   };
 
@@ -3292,6 +3325,89 @@ export default function ClinicalIntakeWizard(props) {
                         onClick={() => handleRemoveFamilyHistory(index)}
                       >
                         {t('wizard.actions.removeFamilyHistory', 'Remover')}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="clinical-subsection space-y-4" data-testid="wizard-procedures-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.procedures', 'Procedimentos')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <Input
+                  id="procedureName"
+                  name="procedureName"
+                  data-testid="wizard-procedure-name"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.procedureName', 'Procedimento')}
+                  value={procedureDraft.procedureName}
+                  onChange={handleProcedureDraftChange('procedureName')}
+                  placeholder={t('wizard.placeholders.procedureName', 'Ex.: Biópsia hepática')}
+                />
+                <Input
+                  id="procedureCode"
+                  name="procedureCode"
+                  data-testid="wizard-procedure-code"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.procedureCode', 'Código')}
+                  value={procedureDraft.procedureCode}
+                  onChange={handleProcedureDraftChange('procedureCode')}
+                  placeholder={t('wizard.placeholders.procedureCode', 'Código institucional')}
+                />
+                <Input
+                  id="procedurePerformed"
+                  name="procedurePerformed"
+                  data-testid="wizard-procedure-performed"
+                  type="date"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.procedurePerformed', 'Data de realização')}
+                  value={procedureDraft.performed}
+                  onChange={handleProcedureDraftChange('performed')}
+                />
+                <Input
+                  id="procedureBodySite"
+                  name="procedureBodySite"
+                  data-testid="wizard-procedure-body-site"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.procedureBodySite', 'Sítio anatômico')}
+                  value={procedureDraft.bodySite}
+                  onChange={handleProcedureDraftChange('bodySite')}
+                  placeholder={t('wizard.placeholders.procedureBodySite', 'Ex.: Fígado')}
+                />
+              </div>
+              <Button
+                type="button"
+                data-testid="wizard-add-procedure"
+                variant="secondary"
+                onClick={handleAddProcedure}
+                disabled={!String(procedureDraft.procedureCode || '').trim() || !String(procedureDraft.performed || '').trim()}
+              >
+                {t('wizard.actions.addProcedure', 'Adicionar procedimento')}
+              </Button>
+              {Array.isArray(formData.procedures) && formData.procedures.length > 0 && (
+                <ul className="procedure-list space-y-2" data-testid="wizard-procedure-list">
+                  {formData.procedures.map((entry, index) => (
+                    <li
+                      key={`${entry.procedureCode}-${index}`}
+                      data-testid={`wizard-procedure-item-${index}`}
+                      className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2"
+                    >
+                      <span>
+                        <span className="font-semibold text-gray-800">{entry.procedureName || entry.procedureCode}</span>
+                        <span className="ml-2 text-sm text-gray-500">{entry.procedureCode}</span>
+                        {entry.performed && <span className="ml-2 text-sm text-gray-500">· {entry.performed}</span>}
+                        {entry.bodySite && <span className="ml-2 text-sm text-gray-500">({entry.bodySite})</span>}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid={`wizard-remove-procedure-${index}`}
+                        className="text-red-600 hover:text-red-800 text-sm"
+                        onClick={() => handleRemoveProcedure(index)}
+                      >
+                        {t('wizard.actions.removeProcedure', 'Remover')}
                       </button>
                     </li>
                   ))}

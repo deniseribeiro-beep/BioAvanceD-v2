@@ -1300,6 +1300,17 @@ searchable" precedent as `AllergyIntolerance`'s DCB-only coding (#708).
 **Landed in #692:** the entity/collection (`procedures`) exists
 (`ProcedureModel`, `procedure.service.js`).
 
+**Wired in #710 (RF005 clinical-UI slice, tracker #707):** the intake
+wizard now has a real, manual-entry procedure field (name + code + a
+required performed date + optional body-site text) --
+`procedureCoding` is coded against a local/institutional system URI
+(`urn:biobank:local-procedure-terminology`), the explicit
+"terminologia institucional" alternative dict-02 itself names, since no
+SNOMED importer exists in this repo (same "code what's actually
+importable" precedent as `AllergyIntolerance`'s DCB-only coding, #708).
+`bodySite` stays free text, not Uberon-coded, per this section's own
+existing note above.
+
 **`MedicationExposure` wired in #693 (RF005 clinical-data slice 5/5):**
 `intakeWizard.js`'s `recordClinicalEntities` additively creates a real
 `MedicationExposure` from `pharmacologyData` when both `medicationName`
