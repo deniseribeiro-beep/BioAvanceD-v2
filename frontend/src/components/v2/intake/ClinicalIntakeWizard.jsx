@@ -1175,7 +1175,9 @@ function normalizeBirthDateForPayload(value) {
   const day = digits.slice(0, 2);
   const month = digits.slice(2, 4);
   const year = digits.slice(4, 8);
-  return `${year}-${month}-${day}T00:00:00.000Z`;
+  // canonical.v1.participant's birthDate is format:'date' (bare YYYY-MM-DD,
+  // #699) -- no time component, unlike a full ISO datetime.
+  return `${year}-${month}-${day}`;
 }
 
 function buildPenaltyLog(qualityAssessment) {
@@ -1243,6 +1245,39 @@ function buildCanonicalSprecPayload(formData, matrixType, dictionary) {
     postCentrifugationDelay: axis6,
     longTermStorage,
     preAnalyticalUnknown: Boolean(formData.preAnalyticalUnknown),
+  };
+}
+
+// dict-02 ELM-0146 -- SPREC standard version used to encode this profile.
+// Mirrors api/backend/src/services/rcs-reference-data.js's SPREC_VERSION;
+// no shared constant exists across the frontend/backend split.
+const SPREC_VERSION = 'SPREC-2.0';
+
+// canonical.v1.specimen's sprec (#699) is flat strings with required
+// top-level code/version -- buildCanonicalSprecPayload's {code, label,
+// ...extra} objects (shared with the quality-preview and sample-integrity
+// callers below, which need the fuller shape) don't match it. This
+// flattens to just the axis codes, dropping the extra applicable/required
+// flags and axis-object nesting the AJV schema doesn't allow.
+function buildIntakeSprecPayload(formData, matrixType, dictionary) {
+  const canonical = buildCanonicalSprecPayload(formData, matrixType, dictionary);
+  const axisFields = matrixType === 'solid'
+    ? ['sampleType', 'collectionType', 'warmIschemia', 'coldIschemia', 'fixationType', 'fixationTime', 'longTermStorage']
+    : ['sampleType', 'primaryContainer', 'preCentrifugation', 'centrifugation', 'secondCentrifugation', 'postCentrifugationDelay', 'longTermStorage'];
+
+  const flat = { matrixType };
+  for (const key of axisFields) {
+    const axisValue = canonical[key];
+    const code = axisValue && typeof axisValue === 'object' ? axisValue.code : axisValue;
+    if (code) {
+      flat[key] = code;
+    }
+  }
+
+  return {
+    code: String(formData.sprecCode || '').trim() || 'UNKNOWN',
+    version: SPREC_VERSION,
+    ...flat,
   };
 }
 
@@ -1369,7 +1404,14 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
   const now = new Date().toISOString();
   const sprecMatrixType = String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
   const sprecDictionary = sprecMatrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
-  const canonicalSprec = buildCanonicalSprecPayload(formData, sprecMatrixType, sprecDictionary);
+  const canonicalSprec = buildIntakeSprecPayload(formData, sprecMatrixType, sprecDictionary);
+  // canonical.v1.participant/specimen both require a non-empty
+  // participantId (#699) even though the server always discards and
+  // regenerates it for a new patient (intakeWizard.js's resolvePatientID
+  // only accepts an existing 8-digit id) -- same "required by validation,
+  // regenerated server-side" precedent tests/e2e/helpers/seedParticipant.ts's
+  // createRealParticipant already documents for POST /api/patients.
+  const participantId = String(formData.patientID || '').trim() || 'placeholder';
   const sampleUnit = getSampleQuantityUnit(formData.sprecSampleType, SPREC_FLUID_DICTIONARY.sampleType.options);
   const patientDocument = normalizeDocumentForPayload(formData.documento);
   const diagnosis = formData.isHealthyControl ? null : {
@@ -1454,14 +1496,14 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
 
   return {
     participant: {
-      participantId: String(formData.patientID || '').trim(),
+      participantId,
       patientName: formData.patientName.trim(),
       birthDate: normalizeBirthDateForPayload(formData.birthDate),
       email: normalizeEmailInput(formData.email),
       isDeceased: Boolean(formData.isDeceased),
       phone: digitsOnly(formData.phone),
       identityDocument: patientDocument,
-      prontuario: String(formData.prontuario || '').trim(),
+      recordNumber: String(formData.prontuario || '').trim(),
     },
     diagnosis,
     legalRepresentative: formData.isDeceased ? {
@@ -1471,12 +1513,18 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       phone: digitsOnly(formData.representativePhone || ''),
     } : null,
     specimen: {
-      specimenId: String(formData.specimenId || formData.sampleId || formData.sampleID || '').trim() || undefined,
-      participantId: String(formData.patientID || '').trim(),
+      // Same "required by validation, regenerated server-side" precedent as
+      // participantId above -- a new specimen has no id yet at submission
+      // time, but canonical.v1.specimen requires a non-empty specimenId (#699).
+      specimenId: String(formData.specimenId || formData.sampleId || formData.sampleID || '').trim() || 'placeholder',
+      participantId,
       sampleType: formData.sprecSampleType || formData.sampleType,
       sampleOrigin: String(formData.sampleOrigin || formData.sprecSampleType || '').trim(),
-      collectionInstitution: formData.collectionInstitution.trim(),
-      collectionInstitutionAcronym: formData.collectionInstitutionAcronym.trim() || generateAcronym(formData.collectionInstitution),
+      // collectionInstitution/collectionInstitutionAcronym have no
+      // equivalent in canonical.v1.specimen (#699) -- the schema's real
+      // field, collectionSite, is an Organization reference the wizard has
+      // no picker for; not sent here, still shown/edited in the UI as
+      // formData.collectionInstitution(Acronym) for now.
       extractionProtocol: String(formData.extractionProtocol || formData.sprecPrimaryContainer || '').trim(),
       barcode: undefined,
       quantity: Number(formData.quantity),

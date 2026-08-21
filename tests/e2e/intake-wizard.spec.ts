@@ -281,16 +281,15 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
     await page.getByTestId('wizard-submit-button').click();
     const response = await submissionResponse;
-    // #699: this submission is currently expected to fail here with a 422
-    // NON_CANONICAL_FIELD -- the wizard's own real payload (this exact one,
-    // built by driving the real UI above) has never matched the
-    // canonical.v1.intake AJV contract (participant.prontuario vs.
-    // recordNumber, an empty participantId for new patients, specimen.
-    // collectionInstitutionAcronym, and specimen.sprec's whole shape). Left
-    // as a real (red) test per this repo's "RED tests are legitimate
-    // deliverables" convention -- do not weaken this assertion to hide the
-    // gap; once #699 is fixed this should start passing and prove out the
-    // rest of this test (the actual point of #696).
+    // #699 (fixed): this used to 422 with NON_CANONICAL_FIELD -- the
+    // wizard's real payload never matched the canonical.v1.intake AJV
+    // contract. Now blocked one layer deeper by #701: sampleType/
+    // sampleOrigin/extractionProtocol send real SPREC axis codes, not the
+    // closed MIABIS enum SampleModel.validate() requires. Left as a real
+    // (red) test per this repo's "RED tests are legitimate deliverables"
+    // convention -- do not weaken this assertion to hide the gap; once
+    // #701 is fixed this should start passing and prove out the rest of
+    // this test (the actual point of #696).
     expect(response.ok()).toBe(true);
     const body = await response.json();
     expect(body.success).toBe(true);
