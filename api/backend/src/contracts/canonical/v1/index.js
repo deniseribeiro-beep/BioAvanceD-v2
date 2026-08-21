@@ -127,11 +127,14 @@ const clinicalDataSchema = {
 // SensorMetadata.device (same "optional, joinable" call clinicalDataSchema
 // made for participantId) -- even though a real Device model/collection
 // exists (models/Device.schema.js) to reference-check it against when
-// supplied. `thresholdProfileId` also stays optional: dict-02 types it a
-// required Reference, but no ThresholdProfile entity exists in this
-// codebase yet (RF009's temperaturePolicies collection is the closest
-// practical analog, but a distinct shape/name -- introducing a formal
-// ThresholdProfile entity is out of this thin slice's scope).
+// supplied. `thresholdProfileId` also stays optional, same "optional,
+// joinable" precedent as equipmentId above: #678 aligned RF009's
+// temperaturePolicies collection to dict-02's ThresholdProfile shape
+// (metricType/ruleVersion/effectivePeriod/minimumDuration added,
+// models/TemperaturePolicy.schema.js), so the entity now genuinely
+// exists -- but reference-validating a supplied thresholdProfileId
+// against it is a separate ingestion-pipeline concern this slice didn't
+// take on, not still blocked on the entity's absence.
 const telemetrySchema = {
   $id: 'canonical.v1.telemetry',
   type: 'object',

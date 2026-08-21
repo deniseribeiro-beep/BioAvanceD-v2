@@ -196,4 +196,45 @@ describe('TemperaturePolicy schema', () => {
 
     expect(doc.hysteresis).toBe(1.5);
   });
+
+  describe('#678 dict-02 ThresholdProfile alignment', () => {
+    it('defaults metricType, ruleVersion and effectivePeriod.start, leaves minimumDuration/effectivePeriod.end null', () => {
+      const doc = new TemperaturePolicy({
+        name: 'Cold storage',
+        targetTemp: -20,
+        minTemp: -25,
+        maxTemp: -15,
+      });
+
+      expect(doc.metricType).toBe('temperature');
+      expect(doc.ruleVersion).toBe('1.0.0');
+      expect(doc.effectivePeriod.start).toBeInstanceOf(Date);
+      expect(doc.effectivePeriod.end).toBeNull();
+      expect(doc.minimumDuration).toBeNull();
+
+      const err = doc.validateSync();
+      expect(err).toBeUndefined();
+    });
+
+    it('allows overriding metricType, ruleVersion, effectivePeriod and minimumDuration', () => {
+      const start = new Date('2026-01-01T00:00:00Z');
+      const end = new Date('2026-12-31T00:00:00Z');
+      const doc = new TemperaturePolicy({
+        name: 'Cold storage',
+        targetTemp: -20,
+        minTemp: -25,
+        maxTemp: -15,
+        metricType: 'humidity',
+        ruleVersion: '2.0.0',
+        effectivePeriod: { start, end },
+        minimumDuration: 30,
+      });
+
+      expect(doc.metricType).toBe('humidity');
+      expect(doc.ruleVersion).toBe('2.0.0');
+      expect(doc.effectivePeriod.start).toEqual(start);
+      expect(doc.effectivePeriod.end).toEqual(end);
+      expect(doc.minimumDuration).toBe(30);
+    });
+  });
 });
