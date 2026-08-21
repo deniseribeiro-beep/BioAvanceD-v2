@@ -1019,11 +1019,14 @@ ClinicalObservation, #690/#691) optionally reference via `encounterId`
 `thresholdProfileId` elsewhere in this contract). No hard schema-level
 dependency in either direction.
 
-**Not yet landed (follow-up tracked under #693, slice 5/5):** no live
-caller creates an `Encounter` yet — `intakeWizard.js` doesn't wire this
-entity in, and there is no real-backend e2e proof beyond this slice's own
-native-only service/model tests. Both land together with #693's
-intake-wizard integration, per #677's slice breakdown.
+**Wired in #693 (RF005 clinical-data slice 5/5):** `intakeWizard.js`'s
+`recordClinicalEntities` additively creates a real `Encounter` per intake
+submission (`encounterType: 'collection'`, `encounterPeriod.start` from
+the specimen's `registeredAt`) — best-effort, same non-fatal precedent
+#505's `RcsAssessment` recording already established for this handler.
+Proven so far by `tests/unit/intakeWizard.clinicalEntities.test.js`
+(native-only, real-semantics fakes). **The literal real-backend
+Playwright e2e proof is tracked separately as #696**, not yet built.
 
 ### Condition
 
@@ -1097,14 +1100,22 @@ the entity/collection (`phenotypeObservations`) exists
 `getPhenotypeObservationsForEncounter`). Same RF005 AC#4 active-code
 enforcement on `hpoCoding` as `Condition.conditionCoding` above.
 
-**Not yet landed for either entity (follow-up tracked under #693, slice
-5/5):** no live caller creates a `Condition` or `PhenotypeObservation`
-yet — `intakeWizard.js` doesn't wire either in, and there is no
-real-backend e2e proof beyond this slice's own native-only service/model
-tests (which do exercise the active-code gate against a real-semantics
-in-memory `TerminologyConcept`/`ReferenceDatasetRelease` fake, not a
-canned stub). Both land together with #693's intake-wizard integration,
-per #677's slice breakdown.
+**Wired in #693 (RF005 clinical-data slice 5/5):** `intakeWizard.js`'s
+`recordClinicalEntities` additively creates a real `Condition` (from
+`diagnosis.orphaCode`/`omimCode`/`icdCode`) and one `PhenotypeObservation`
+per `clinical.diseasePhenotypes[]` entry (HPO-coded, `presenceStatus:
+'present'`, joined to the same submission's `Encounter` via
+`encounterId`) — both best-effort, and both go through RF005 AC#4's
+active-code gate for real: a code that doesn't resolve to an active
+`ReferenceDatasetRelease` is silently skipped rather than persisted or
+failing the whole submission (this wizard already allows manually-entered
+codes with no reference-catalog match today; making that a hard failure
+would be a materially bigger behavioral change than this additive slice
+intends). Proven so far by `tests/unit/intakeWizard.clinicalEntities.
+test.js` (native-only, real-semantics fakes, including a case asserting
+an inactive/unknown code is skipped without failing the intake). **The
+literal real-backend Playwright e2e proof is tracked separately as
+#696**, not yet built.
 
 ### ClinicalObservation
 
@@ -1186,10 +1197,12 @@ oversight in this one.
 `participantId` row for this entity" note as `ClinicalOutcome` above.
 
 **Not yet landed for any of the three entities above (follow-up tracked
-under #693, slice 5/5):** no live caller creates a `ClinicalObservation`,
-`ClinicalOutcome`, or `DerivedScore` yet. Same native-only proof bar as
-#689/#690 — real-backend e2e proof is deferred to #693's intake-wizard
-integration.
+as #697):** no live caller creates a `ClinicalObservation`,
+`ClinicalOutcome`, or `DerivedScore` — unlike `Encounter`/`Condition`/
+`PhenotypeObservation`/`MedicationExposure` (wired in #693), none of
+these three have a corresponding data source in the intake wizard's
+current UI (and `DerivedScore` would need a real Charlson-scoring
+algorithm, not just a data mapping) — #697 is a marker, not picked up.
 
 ### AllergyIntolerance
 
@@ -1266,10 +1279,23 @@ the entity/collection (`allergyIntolerances`) exists
 **Landed in #692:** the entity/collection (`procedures`) exists
 (`ProcedureModel`, `procedure.service.js`).
 
-**Not yet landed for any of the four entities above (follow-up tracked
-under #693, slice 5/5):** no live caller creates any of these yet. Same
-native-only proof bar as #689-#691 — real-backend e2e proof is deferred
-to #693's intake-wizard integration.
+**`MedicationExposure` wired in #693 (RF005 clinical-data slice 5/5):**
+`intakeWizard.js`'s `recordClinicalEntities` additively creates a real
+`MedicationExposure` from `pharmacologyData` when both `medicationName`
+and `atcCode` are present (no `atcCode` means no valid `Coding` to
+satisfy `medicationCoding`'s 1..* requirement, so the entity is skipped
+rather than persisted with an empty coding array) — `recordType:
+'reported'` (patient-reported at intake, not prescribed/dispensed/
+administered), `medicationStatus` mapped from `treatmentStatus`
+(`TREATED`/`ON_TREATMENT` → `active`, `WASHOUT` → `stopped`, else
+`unknown`). Proven by `tests/unit/intakeWizard.clinicalEntities.test.js`.
+**The literal real-backend Playwright e2e proof is tracked separately as
+#696**, not yet built.
+
+**`AllergyIntolerance`/`FamilyHistory`/`Procedure` not yet landed
+(follow-up tracked as #697):** no live caller creates any of these three
+— unlike `MedicationExposure`, none has a corresponding data source in
+the intake wizard's current UI at all. #697 is a marker, not picked up.
 
 ### Consent
 

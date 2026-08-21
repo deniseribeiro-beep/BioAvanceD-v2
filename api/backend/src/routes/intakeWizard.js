@@ -9,8 +9,130 @@ const auditLogger = require('../utils/auditLogger');
 const qualityDomain = require('../services/quality-domain.service');
 const sampleService = require('../services/sample.service');
 const rcsAssessmentService = require('../services/rcs-assessment.service');
+const encounterService = require('../services/encounter.service');
+const conditionService = require('../services/condition.service');
+const phenotypeObservationService = require('../services/phenotype-observation.service');
+const medicationExposureService = require('../services/medication-exposure.service');
 const logger = require('../utils/logger');
 const { validate } = require('../contracts/canonical/v1');
+
+// #693 (RF005 clinical-data slice 5/5): systemUri constants matching this
+// repo's existing reference-import sources (reference-data/reference-
+// imports/sources/*.js) -- reused here so conditionCoding/hpoCoding
+// entries resolve against the same TerminologyConcept/ReferenceDatasetRelease
+// rows RF028's importers actually populate, not a locally-invented URI.
+const ORPHA_SYSTEM_URI = 'http://www.orpha.net';
+const OMIM_SYSTEM_URI = 'https://www.omim.org';
+// "CID" in this wizard's own field names is the Brazilian Portuguese
+// abbreviation for ICD -- dict-01_FONTES.md's own SRC_ICD10/SRC_ICD11 rows
+// use the English abbreviation instead (see build-loop's overlay, #255).
+// Mapped to ICD-10 here since this wizard's diagnosisCidCode field has
+// always meant CID-10 in this repo's existing terminology (no ICD-11
+// picker exists in this wizard).
+const ICD10_SYSTEM_URI = 'http://hl7.org/fhir/sid/icd-10';
+const HPO_SYSTEM_URI = 'http://purl.obolibrary.org/obo/hp.owl';
+const ATC_SYSTEM_URI = 'http://www.whocc.no/atc';
+
+/**
+ * RF005 AC4-6 (#693, RF005 clinical-data slice 5/5): additively creates
+ * real, terminology-coded Encounter/Condition/PhenotypeObservation/
+ * MedicationExposure documents (#689-#692) from the same data the intake
+ * wizard already collects -- proving AC4-6's structured-coding requirement
+ * is satisfied by a real write path, not just schema-complete. Additive,
+ * not a replacement: `sampleToPersist.clinicalData`/`pharmacologyData`
+ * (the existing embedded subdocument) is untouched, per the issue's own
+ * "additive path is very likely the right first move" call -- a future
+ * slice may migrate consumers off the embedded copy once these entities
+ * have real callers reading them.
+ *
+ * Every write here is best-effort (caught, logged, never fails the
+ * intake response) -- same precedent #505's RcsAssessment recording
+ * already established for this handler. A code that fails RF005 AC#4's
+ * active-release gate (activeCodeValidator, reused by
+ * condition.service.js/phenotype-observation.service.js) skips that one
+ * entity rather than blocking the whole submission -- this wizard already
+ * allows diagnosis codes with no matching reference-catalog entry today
+ * (manual-entry mode), so making that a hard submission failure would be
+ * a materially bigger behavioral change than this additive slice intends.
+ *
+ * Scope note: only the 4 entities with real source data in this wizard's
+ * current payload are wired here. ClinicalObservation/ClinicalOutcome/
+ * DerivedScore/AllergyIntolerance/FamilyHistory/Procedure have no
+ * corresponding UI fields (or, for DerivedScore, would need an actual
+ * Charlson-scoring algorithm, not just a data mapping) -- tracked as a
+ * separate follow-up rather than fabricated here.
+ */
+async function recordClinicalEntities(db, { participantId, clinicalData, pharmacologyData, registeredAt }) {
+  let encounterId = null;
+
+  try {
+    const encounter = await encounterService.createEncounter(db, {
+      participantId,
+      encounterType: 'collection',
+      encounterPeriod: { start: registeredAt },
+    });
+    encounterId = encounter.encounterId;
+  } catch (encounterError) {
+    logger.error('Falha ao registrar Encounter para o intake wizard:', encounterError.message || encounterError);
+  }
+
+  const conditionCoding = [];
+  if (clinicalData?.orphaCode) conditionCoding.push({ systemUri: ORPHA_SYSTEM_URI, code: clinicalData.orphaCode });
+  if (clinicalData?.omimCode) conditionCoding.push({ systemUri: OMIM_SYSTEM_URI, code: clinicalData.omimCode });
+  if (clinicalData?.cid) conditionCoding.push({ systemUri: ICD10_SYSTEM_URI, code: clinicalData.cid });
+
+  if (conditionCoding.length > 0) {
+    try {
+      await conditionService.createCondition(db, {
+        participantId,
+        conditionCoding,
+        clinicalStatus: 'active',
+        recordedDate: registeredAt,
+      });
+    } catch (conditionError) {
+      logger.error('Falha ao registrar Condition para o intake wizard:', conditionError.message || conditionError);
+    }
+  }
+
+  const phenotypes = Array.isArray(clinicalData?.phenotypes) ? clinicalData.phenotypes : [];
+  for (const phenotype of phenotypes) {
+    const hpoId = String(phenotype?.hpoId || '').trim();
+    if (!hpoId) continue;
+    try {
+      await phenotypeObservationService.createPhenotypeObservation(db, {
+        participantId,
+        hpoCoding: { systemUri: HPO_SYSTEM_URI, code: hpoId, display: String(phenotype?.label || '').trim() || undefined },
+        presenceStatus: 'present',
+        effectiveDateTime: registeredAt,
+        encounterId,
+      });
+    } catch (phenotypeError) {
+      logger.error(`Falha ao registrar PhenotypeObservation (${hpoId}) para o intake wizard:`, phenotypeError.message || phenotypeError);
+    }
+  }
+
+  if (pharmacologyData?.medicationName && pharmacologyData?.atcCode) {
+    try {
+      const medicationStatus = ['TREATED', 'ON_TREATMENT'].includes(pharmacologyData.treatmentStatus)
+        ? 'active'
+        : pharmacologyData.treatmentStatus === 'WASHOUT'
+          ? 'stopped'
+          : 'unknown';
+      const medicationPeriod = pharmacologyData.washoutStartDate || pharmacologyData.washoutEndDate
+        ? { start: pharmacologyData.washoutStartDate || null, end: pharmacologyData.washoutEndDate || null }
+        : null;
+
+      await medicationExposureService.createMedicationExposure(db, {
+        medicationCoding: [{ systemUri: ATC_SYSTEM_URI, code: pharmacologyData.atcCode, display: pharmacologyData.medicationName }],
+        recordType: 'reported',
+        medicationStatus,
+        medicationPeriod,
+      });
+    } catch (medicationError) {
+      logger.error('Falha ao registrar MedicationExposure para o intake wizard:', medicationError.message || medicationError);
+    }
+  }
+}
 
 const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
 const BLOCKED_EQUIPMENT_STATUSES = ['maintenance', 'inactive', 'needs calibration', 'error', 'retired'];
@@ -563,6 +685,15 @@ async function handleIntakeWizard(req, res) {
     } catch (assessmentError) {
       logger.error('Falha ao registrar RcsAssessment para a amostra do intake wizard:', assessmentError.message || assessmentError);
     }
+
+    // #693 (RF005 AC4-6): additive real-entity recording, best-effort --
+    // see recordClinicalEntities' own doc comment for scope/rationale.
+    await recordClinicalEntities(db, {
+      participantId: allocatedSample.participantId,
+      clinicalData: sampleToPersist.clinicalData,
+      pharmacologyData: sampleToPersist.pharmacologyData,
+      registeredAt: sampleToPersist.registeredAt,
+    });
 
     const patientsCollection = await getCollection(db, 'patients');
     await patientsCollection.updateOne(
