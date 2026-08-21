@@ -30,6 +30,7 @@ const DEFAULTS = {
   foundationDataRuns: 'foundationDataRuns',
   participantIdentities: 'participantIdentities',
   rcsAssessments: 'rcsAssessments',
+  encounters: 'encounters',
   specimenPreanalytics: 'specimenPreanalytics',
   quarantineActions: 'quarantineActions',
   referenceDatasetReleases: 'referenceDatasetReleases',
@@ -115,6 +116,9 @@ describe('config/collections', () => {
       foundationDataRuns: 'foundationDataRuns',
       participantIdentities: 'participantIdentities',
       rcsAssessments: 'rcsAssessments',
+      // COLL_ENCOUNTERS isn't in ENV_KEYS/read by env.js either, same
+      // hardcoded-default reasoning as cids/etc. above.
+      encounters: 'encounters',
       specimenPreanalytics: 'specimenPreanalytics',
       quarantineActions: 'quarantineActions',
       referenceDatasetReleases: 'referenceDatasetReleases',
