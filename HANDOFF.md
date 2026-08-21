@@ -1,142 +1,118 @@
 # HANDOFF
 
-**Written:** 2026-08-21, after fixing #699 and re-verifying #696's
-real-backend Playwright proof, in a fresh sitting under Dennis's
-"Continue. See if docs have a direction first. Docker is on." instruction.
-This rotation supersedes the prior #696/#699 rotation (written on the
-now-deleted `fix/696-...` branch, never separately merged into this
-branch's own `HANDOFF.md` history -- everything relevant from it is
-captured fresh below).
+**Written:** 2026-08-21, later the same day as the #699 rotation, in the
+same sitting under Dennis's "Continue. Check up to date docs to see if
+answer can be found there or we can infer intention. Docker is on."
+instruction.
 
-## Rabbit-hole state: STILL INSIDE #646 -- #696 NOT closed, now blocked on #701 (a real product-code decision only Dennis can make) -- STOP HERE
+## Rabbit-hole state: STILL INSIDE #646 -- #696 NOT closed, now blocked on #703 -- STOP HERE
 
 **Tracker: #646** (Wave 3 kickoff -- RF014/015/016/017/024/025/026/029).
-This sitting picked up **#699** (the queue member #696 was blocked on)
-and fixed it. #699 is **closed**. But fixing it surfaced a new, deeper
-blocker in the same real submission path, filed as **#701** and added to
-the tracker's live queue. #696 itself remains **not closed** -- it is
-still a legitimate red test, now blocked by #701 instead of #699.
-Continuing #696 further is blocked until Dennis decides #701's fix
-direction -- not something a test-loop/fix-bugs iteration can guess at.
+This sitting picked up **#701** (the queue member #696 was blocked on)
+and fixed it. #701 is **closed**. Verifying the fix against #696's own
+real-backend Playwright proof surfaced a new, deeper blocker in the same
+submission path, filed as **#703** and added to the tracker's live
+queue. #696 itself remains **not closed** -- it is still a legitimate
+red test, now blocked by #703 instead of #701.
 
 ## What landed this sitting
 
-- **Docs research first, per Dennis's instruction.** Checked
-  `docs/architecture/canonical-data-contract-v1.md` (confirmed via git
-  log to already be kept current through #575's `ParticipantIdentity`
-  segregation -- not stale, despite an older flag in
-  `E2E_TRACEABILITY_PLAN.md` suggesting otherwise) against the
-  `canonical.v1.intake` AJV contract (`api/backend/src/contracts/canonical/v1/index.js`)
-  -- they match exactly. Converted `docs/docs-7-31-2026/manuscript/
-  2.2-Additional_file_2_Polyglot_Persistence_Data_Model.docx` to markdown
-  via `pandoc` (available on this machine) per Dennis's "more up to date
-  docs" nudge -- confirmed it's architecture-level (entity/persistence
-  classification), doesn't add field-level detail beyond what
-  `canonical-data-contract-v1.md` already has, and doesn't contradict it.
-  Conclusion: **the contract was correct; the frontend payload had
-  drifted from it** -- not a contract-relaxation call.
+- **Docs-vs-precedent investigation for #701.** Docs
+  (`dict-02_DICIONARIO.md`, `dict-07_ALINHAMENTO_CODIGO.md`,
+  `dict-08_MAIN_GAPS.md`, `canonical-data-contract-v1.md`) suggested the
+  MIABIS enum gate in `SampleModel.validate()` was legacy debt to relax.
+  But tracing every real call site (`sample.service.js`,
+  `import.service.js` CSV/JSON, `import-lgpd.service.js`) showed the
+  opposite: all 3 already treat `sampleType`/`sampleOrigin`/
+  `extractionProtocol` (MIABIS) as genuinely distinct from `sprec.*`
+  (SPREC axis codes), populated from different source columns. Docs
+  describe a not-yet-implemented target state; live precedent won.
+  Confirmed via a further grep: `frontend/src/config/constants/
+  specimen.constants.js` is an existing, already-used mirror of the
+  backend's exact MIABIS id/label lists (`SampleWithdrawalReturnPage.tsx`
+  already consumes it), and `ClinicalIntakeWizard.jsx` already had dead
+  scaffolding (`sampleTypeOptions`/`sampleOriginOptions`/
+  `extractionProtocolOptions`, computed but never rendered) built for
+  exactly this. Filed the general lesson against the skills pack
+  (`DyeAllPies/dyeallpies-skills-pack#374`): live call-site precedent can
+  outweigh docs describing an unimplemented target architecture, and the
+  correct fix is often already partially wired up in the codebase.
 
-- **Branch `fix/699-canonical-intake-contract-payload`** (off
-  `feature/docker-e2e-backend-integration`, cherry-picking #696's own
-  test-only commit from its branch first so there was something to
-  reproduce against -- see pack#373 for writing this pattern down
-  properly). Merged into `feature/docker-e2e-backend-integration` at
-  **`e1108a7a`**; branch deleted both locally and remotely. Fixed
-  `ClinicalIntakeWizard.jsx`'s `buildSubmissionPayload` on all 5 axes
-  #699 named:
-  - `participant.prontuario` -> `recordNumber`.
-  - Empty `participantId`/`specimenId` for a new patient/specimen -> a
-    non-empty `'placeholder'` string (server always regenerates both
-    server-side; mirrors the exact precedent
-    `tests/e2e/helpers/seedParticipant.ts`'s `createRealParticipant`
-    already documents for `POST /api/patients`).
-  - `specimen.collectionInstitution`/`collectionInstitutionAcronym` --
-    traced every backend call site (zero consumers, confirmed by grep)
-    and dropped both from the payload rather than punting to Dennis; the
-    contract's real field, `collectionSite`, is an Organization
-    reference the wizard has no picker for -- building that is a
-    separate, larger feature, not this bug fix.
-  - `specimen.sprec` -- added a new `buildIntakeSprecPayload` (kept
-    `buildCanonicalSprecPayload` itself unchanged, since the quality-
-    preview and sample-integrity callers still need its `{code, label}`
-    object shape) that flattens to the contract's plain-string axes plus
-    a top-level `code`/`version` (`SPREC_VERSION = 'SPREC-2.0'`, mirroring
-    the backend's own `rcs-reference-data.js` constant -- no shared
-    constant exists across the frontend/backend split).
-  - `birthDate` -- `normalizeBirthDateForPayload` now emits bare
-    `YYYY-MM-DD`, not a full ISO datetime (contract is `format: 'date'`).
-  - Added a `#699` regression test to `ClinicalIntakeWizard.test.jsx`
-    covering all of the above at the unit level (fast, no Docker needed).
+- **Branch `fix/701-intake-wizard-miabis-selectors`** (off
+  `feature/docker-e2e-backend-integration`). Merged at **`f1583abe`**
+  (fix commit `f1ccaa6d`); branch deleted both locally and remotely (no
+  permission denial this time). Fixed `ClinicalIntakeWizard.jsx`:
+  - Added real `sampleType`/`sampleOrigin`/`extractionProtocol`
+    `<Select>` fields sourced from the frontend `specimen.constants.js`
+    mirror, in a new "Classificação MIABIS" subsection of step 2.
+  - Removed the sync effect that overwrote `formData.sampleType` with
+    `formData.sprecSampleType`.
+  - Made all three fields required in the step-2 Zod schema.
+  - Stopped `buildSubmissionPayload` falling back to SPREC axis values
+    for these three fields.
+  - Added a `#701` regression test to `ClinicalIntakeWizard.test.jsx`.
+  - Updated `tests/e2e/intake-wizard.spec.ts`'s clinical-entity-wiring
+    spec to fill the 3 new required selects.
   - Verified against #696's own real-backend Playwright proof (docker
-    compose test stack, brought up fresh this sitting): the
-    `NON_CANONICAL_FIELD` 422 is **completely gone**.
+    compose test stack, brought up fresh this sitting, `--build`): the
+    `sampleType/sampleOrigin/extractionProtocol inválido conforme
+    MIABIS` 422 is **completely gone**.
 
-- **#701 filed** (high severity, same blast radius as #699): once the
-  AJV gate passes, the same real submission now 422s one layer deeper --
-  `sampleType`/`sampleOrigin`/`extractionProtocol` send real SPREC-standard
-  axis codes (e.g. `BLD`, `PL1`, `SAL`), not the app's own closed
-  11/4/4-value MIABIS enum `SampleModel.validate()`
-  (`api/backend/src/models/Sample.js:154-160`) requires. No mapping table
-  exists anywhere in the codebase, and the wizard has no separate UI
-  selector for the MIABIS fields at all. **Genuine design decision, left
-  for Dennis** (posed as 3 options on the issue): build a real
-  SPREC-code -> MIABIS-id mapping table, add separate MIABIS UI
-  selectors, or drop the MIABIS gate for this intake path. `#696`'s red
-  assertion's inline comment now names #701, not #699, per this repo's
-  "RED tests are legitimate deliverables" convention.
+- **#703 filed** (high severity, same blast radius as #699/#701): once
+  the MIABIS gate passes, the same real submission now fails one layer
+  deeper -- `POST /api/samples` 400s with "participantId inválido".
+  Root cause traced and written up in the issue:
+  `PatientIdentityService.js#matchOrUpsertParticipant` treats the
+  wizard's `'placeholder'` participantId (sent for every new patient,
+  #699's own established precedent) as a real, literal id instead of
+  generating one (`matchedParticipantId = participantId || null` only
+  regenerates when `participantId` is *falsy* -- `'placeholder'` is
+  truthy) -- it even inserts a `patients` doc with
+  `participantId: 'placeholder'`. Likely a consequence of #699's own
+  fix, not chased further per this repo's one-bug-per-iteration rule.
+  Suggested fix direction already in the issue (treat a
+  non-`/^\d{8}$/`-matching participantId the same as empty, at both
+  spots in `matchOrUpsertParticipant`). `#696`'s red assertion's inline
+  comment now names #703, not #701.
 
-- **Two pack-repo issues filed** (`DyeAllPies/dyeallpies-skills-pack`),
-  both process/tooling findings, not product bugs:
-  - **#372** -- `branch-guard.cjs` misparses a bare `git branch | grep
-    <pattern>` (read-only listing) as `git branch <name>` (create mode),
-    capturing `"|"` itself as a candidate branch name and blocking the
-    whole command. Confirmed while checking whether `fix/696-...` still
-    existed locally after a `-d` delete.
-  - **#373** -- documents the cherry-pick-the-test-from-another-branch
-    pattern used this sitting (fix-bugs' own overlay names the "test
-    lives elsewhere" exception but not the mechanic).
+- **#702 filed** (unrelated to #696, found during #701's investigation):
+  `import-lgpd.service.js`'s post-validate DB-existence lookups
+  (`sampleTypesCollection.findOne({ description: sampleData.sampleType
+  })`) query by `description` using a value that's already validated as
+  a MIABIS **id** (e.g. `"PLASMA"`), not the seeded doc's `description`
+  field (e.g. `"Plasma"`) -- looks like an always-miss bug. Not
+  reproduced/fixed this sitting, just traced and flagged.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, up to date with origin at
-  `e1108a7a` (the #699 merge commit). Clean tree except this file's
-  rotation and the pre-existing untracked `.claude/skills/`/
-  `api/backend/storage/assays/` (unrelated, not touched this sitting).
+- On `feature/docker-e2e-backend-integration`, pushed to origin at
+  `f1583abe`. Clean tree except the pre-existing untracked
+  `.claude/skills/`/`api/backend/storage/assays/` (unrelated, not
+  touched this sitting).
 - No PR to `main` exists. `main` stays frozen per this repo's convention.
-- `origin/fix/696-intake-wizard-clinical-entities-real-backend-e2e` is
-  now **fully superseded** (confirmed via diff against the integration
-  branch -- only this sitting's #699/#701 comment update differs) but
-  **still exists on the remote** -- local copy deleted, but `git push
-  origin --delete` for it was denied by the auto-mode permission
-  classifier (known repo gotcha, documented in fix-bugs' own "Ending an
-  iteration" section). Harmless; Dennis can delete it manually or grant
-  the permission if he wants this automated.
-- **Docker: DOWN** (torn down at session end via `docker compose
-  --env-file .env.test.example -f compose.test.yml down`, no
-  `--volumes` -- named volumes, including `admin-bootstrap-test`'s
-  completed bootstrap, persisted). This sitting's built images
-  (`backend-app-test`/`frontend-app-test`/etc.) were **removed** by the
-  end-of-session `clean-up` pass (`docker rmi` + `docker builder prune
-  -af`, per `docker-workflow`'s hygiene rule) -- next session's first
-  bring-up will rebuild from scratch (no build cache left either), not
-  reuse an already-fresh image. Re-run the same bring-up recipe next
+- **Docker: DOWN** (torn down via `docker compose --env-file
+  .env.test.example -f compose.test.yml down`, no `--volumes` -- named
+  volumes persisted). This sitting's built images
+  (`backend-app-test`/`frontend-app-test`/etc.) were removed
+  (`docker rmi` + `docker builder prune -af`). Next session's first
+  bring-up rebuilds from scratch. Re-run the same bring-up recipe next
   session (per `docker-workflow`'s bioavanced-v2 overlay) with
-  `--build`; confirm the admin bootstrap/seed data in the preserved
-  volumes before assuming it's still there, per the volume-accumulation
-  gotcha the overlay already documents.
+  `--build`.
 
 ## Recommended next steps
 
-**None queued by Dennis explicitly.** Natural continuation: Dennis
-decides #701's fix direction (SPREC->MIABIS mapping table vs. separate
-UI selectors vs. dropping the gate) -- once decided and built, re-run
-`tests/e2e/intake-wizard.spec.ts -g "Clinical-entity wiring"` against the
-still-up (or freshly-brought-up) test stack to verify the rest of #696's
-own assertions (Encounter/Condition/PhenotypeObservation/
-MedicationExposure creation, including #698's still-separately-open
-OMIM-coding-silently-dropped assertion) actually pass, then close #696.
-Alternative #646 queue pick if not continuing #701/#696 immediately:
-**#674** (RF029 slice 6/6), still blocked on RF027/Wave 4 as of the prior
-sitting's check -- re-check whether that's unblocked before picking.
-Same discipline as every prior slice: branch first, re-invoke the routed
+**None queued by Dennis explicitly.** Natural continuation: pick up
+**#703** via `fix-bugs` -- root cause is already traced and a concrete
+fix direction is written on the issue, so this should be a
+faster-than-usual iteration. Once fixed, re-run
+`tests/e2e/intake-wizard.spec.ts -g "Clinical-entity wiring"` against a
+freshly-brought-up test stack to verify the rest of #696's own
+assertions (Encounter/Condition/PhenotypeObservation/MedicationExposure
+creation, including #698's still-separately-open OMIM-coding
+assertion) actually pass, then close #696. #702 (LGPD lookup bug) is
+available as a smaller, independent pick if preferred instead.
+Alternative #646 queue pick if not continuing #703/#696 immediately:
+**#674** (RF029 slice 6/6), still blocked on RF027/Wave 4 as of two
+sittings ago -- re-check whether that's unblocked before picking. Same
+discipline as every prior slice: branch first, re-invoke the routed
 skill via the Skill tool per issue number before closing anything.
