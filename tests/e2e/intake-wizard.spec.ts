@@ -301,7 +301,10 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     expect(response.ok()).toBe(true);
     const body = await response.json();
     expect(body.success).toBe(true);
-    const participantId = body?.data?.patientMatch?.patientID;
+    // #704: the route's success response has no `data` wrapper --
+    // `patientMatch` is a top-level key (intakeWizard.js's res.json()
+    // literal, ~line 724).
+    const participantId = body?.patientMatch?.patientID;
     expect(participantId).toBeTruthy();
 
     const db = mongoClient.db(mongoDbName);
