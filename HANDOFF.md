@@ -91,7 +91,7 @@ left undocumented:**
   stack" check asked Dennis whether to tear it down rather than leave it
   running unattended; he chose teardown (`docker compose ... down`,
   named volumes untouched). The next #707 pickup needs a fresh
-  `docker compose up` per `docker-workflow`'s recipe, not an assumoption
+  `docker compose up` per `docker-workflow`'s recipe, not an assumption
   the stack is still up.
 
 ## Recommended next steps
