@@ -23,6 +23,7 @@ const familyHistoryServicePath = require.resolve('../../src/services/family-hist
 const procedureServicePath = require.resolve('../../src/services/procedure.service');
 const clinicalObservationServicePath = require.resolve('../../src/services/clinical-observation.service');
 const clinicalOutcomeServicePath = require.resolve('../../src/services/clinical-outcome.service');
+const derivedScoreServicePath = require.resolve('../../src/services/derived-score.service');
 const activeCodeValidatorPath = require.resolve('../../src/ingestion/activeCodeValidator');
 const routePath = require.resolve('../../src/routes/intakeWizard.js');
 
@@ -52,6 +53,7 @@ const allPaths = [
   procedureServicePath,
   clinicalObservationServicePath,
   clinicalOutcomeServicePath,
+  derivedScoreServicePath,
   activeCodeValidatorPath,
   routePath,
 ];
@@ -195,6 +197,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       procedures: makeInsertCapturingCollection(),
       clinicalObservations: makeInsertCapturingCollection(),
       clinicalOutcomes: makeInsertCapturingCollection(),
+      derivedScores: makeInsertCapturingCollection(),
       ...makeActiveCodeCollections(),
     };
 
@@ -496,5 +499,49 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
 
     expect(res.status).toBe(200);
     expect(collections.clinicalOutcomes.docs).toHaveLength(0);
+  });
+
+  it('#713: creates a DerivedScore (CCI) from wizard-collected charlsonConditions that map to real Charlson categories', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        charlsonConditions: ['copd', 'ckd', 'hypertension'],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.derivedScores.docs).toHaveLength(1);
+    expect(collections.derivedScores.docs[0]).toMatchObject({
+      scoreType: { code: 'cci', display: 'Charlson Comorbidity Index' },
+      scoreValue: 3,
+      algorithmVersion: 'CCI-original',
+    });
+    const componentCodes = collections.derivedScores.docs[0].scoreComponents.map((c) => c.condition.code);
+    expect(componentCodes.sort()).toEqual(['chronicPulmonaryDisease', 'renalDisease']);
+  });
+
+  it('#713: does not create a DerivedScore when no reported condition maps to a real Charlson category, and does not fail the intake', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        charlsonConditions: ['hypertension', 'smoking'],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.derivedScores.docs).toHaveLength(0);
+  });
+
+  it('#713: does not create a DerivedScore when charlsonConditions is absent, and does not fail the intake', async () => {
+    const { res, collections } = await runIntake(VALID_PAYLOAD);
+
+    expect(res.status).toBe(200);
+    expect(collections.derivedScores.docs).toHaveLength(0);
   });
 });

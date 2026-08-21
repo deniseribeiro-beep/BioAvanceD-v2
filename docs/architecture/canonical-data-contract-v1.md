@@ -1222,11 +1222,31 @@ stored as given, matching the model's own precedent).
 (`DerivedScoreModel`, `derived-score.service.js`). Same "dict-02 has no
 `participantId` row for this entity" note as `ClinicalOutcome` above.
 
-**Not yet landed (follow-up tracked as #697, now narrowed to
-`DerivedScore` alone — see #713):** `ClinicalObservation` was wired in
-#711, `ClinicalOutcome` in #712 (both above). `DerivedScore` remains the
-only one of the three with no live caller — it would need a real
-Charlson-scoring algorithm, not just a data mapping, tracked as #713.
+**Wired in #713 (RF005 clinical-UI slice, tracker #707 — final of the 6
+sub-slices):** a real original-1987 Charlson Comorbidity Index
+implementation (`charlsonComorbidityIndex.js`), computed from the
+intake wizard's already-existing `charlsonConditions` checklist. That
+checklist (`CLINICAL_COMORBIDITIES` in
+`intake-dictionaries.constants.ts`) predates this slice and was never
+the real 19-category Charlson set — it's a general comorbidity/risk-
+factor checklist (hypertension, obesity, smoking, alcohol/antibiotic/
+insulin/antiviral use, etc.) that only partially overlaps real Charlson
+categories. Rather than inventing weights for non-Charlson items —
+which would misrepresent `algorithmVersion: 'CCI-original'` — only the
+checklist slugs that genuinely map to a real 1987 Charlson category are
+scored: `diabetesType1`/`diabetesType2` (collapsed into one `diabetes`
+category, weight 1 — the original index counts diabetes once, not once
+per type), `copd` (`chronicPulmonaryDisease`, weight 1), `ckd`
+(`renalDisease`, weight 2). The rest of the checklist stays in
+`clinicalData.charlsonComorbidities` as before but doesn't participate
+in the index — matching dict-05_REFERENCIAS.md REF-033's own caution to
+use CCI "somente se... permanecer no escopo clínico associado."
+`recordClinicalEntities` (`intakeWizard.js`) creates one `DerivedScore`
+per submission when at least one reported condition maps to a real
+category (skipped entirely, not created with a zero score, when none
+do — dict-02 ELM-0259 requires `scoreComponents` non-empty).
+
+All 6 of #707's clinical-UI sub-slices (#708-713) are now landed.
 
 ### AllergyIntolerance
 

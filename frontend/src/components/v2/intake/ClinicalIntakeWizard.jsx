@@ -3650,6 +3650,38 @@ export default function ClinicalIntakeWizard(props) {
               </div>
             </div>
 
+            {/* #713: comorbidity/risk-factor checklist -- formData already had
+                a boolean field per item (and buildCharlsonConditions/
+                buildSubmissionPayload's charlsonConditions mapping already
+                had its own unit test, #522) but no checkbox ever rendered
+                to let a user actually check one; charlsonConditions was
+                therefore always empty from a real submission. This closes
+                that gap so the real CCI algorithm (#713) has real input to
+                score from a live submission, not just from a hand-built
+                unit-test payload. */}
+            <div className="clinical-subsection space-y-4" data-testid="wizard-comorbidities-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.comorbidities', 'Comorbidades e fatores de risco')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {clinicalComorbidityDefinitions.map((item) => {
+                  const slug = getDictionarySlug(item);
+                  if (!slug) return null;
+                  return (
+                    <label key={slug} className="flex items-center gap-2 text-sm text-gray-700">
+                      <input
+                        type="checkbox"
+                        data-testid={`wizard-comorbidity-${slug}`}
+                        checked={Boolean(formData[slug])}
+                        onChange={handleFieldChange(slug)}
+                      />
+                      {getDictionaryLabel(item)}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="clinical-subsection space-y-4" data-testid="wizard-suggested-biomarkers-section">
               <div className="border-b border-gray-200 pb-3 section-title-block">
                 <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.hpoPhenotypes', 'Fenótipos HPO sugeridos pela doença')}</h4>
