@@ -2,7 +2,7 @@
 
 **Written:** 2026-08-21. Docker is on (inherited stack from a prior session, left running -- see "Repo state" below).
 
-## Still inside the rabbit hole: #646 -> #668 -> #674 -> #716 (RF027, slices 1-2/4 landed, 2 remain)
+## Still inside the rabbit hole: #646 -> #668 -> #674 -> #716 (RF027, slices 1-3/4 landed, 1 remains)
 
 **Tracker chain, re-derived fresh this sitting from the issue threads
 themselves (not from an even-earlier handoff's summary):** #646 (Wave 3
