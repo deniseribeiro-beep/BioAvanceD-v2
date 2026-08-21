@@ -164,7 +164,7 @@ test.describe('Participant identity segregation (RF005/RNF007) — real backend 
   });
 });
 
-test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF005 AC4-6 wiring against a live stack; extended by #708 for AllergyIntolerance, #709 for FamilyHistory, #710 for Procedure, #711 for ClinicalObservation)', () => {
+test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF005 AC4-6 wiring against a live stack; extended by #708 for AllergyIntolerance, #709 for FamilyHistory, #710 for Procedure, #711 for ClinicalObservation, #712 for ClinicalOutcome)', () => {
   test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
   const orphaCode = 'ORPHA:558';
@@ -217,6 +217,17 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
   const observationValue = '13.2';
   const observationUnit = 'g/dL';
   const observationEffectiveDate = '2026-01-15';
+  // #712: ClinicalOutcome -- unlike the other 5 entities in this describe
+  // block, dict-02's own row set for this entity has no free-text/display
+  // field (only outcomeType, a 7-value CodeableConcept, and outcomeDate) to
+  // disambiguate this run's fixture from a prior run's leftover row in the
+  // persistent test-stack Mongo volume (the same fixture-accumulation
+  // gotcha every other entity here works around via a uniquely-suffixed
+  // display value). outcomeDate is instead derived from a timestamp into a
+  // unique-per-run calendar date, since outcomeType alone can't disambiguate.
+  const outcomeType = 'remission';
+  const outcomeDateSeed = Date.now();
+  const outcomeDate = new Date(Date.UTC(2020, 0, 1 + (outcomeDateSeed % 9000))).toISOString().slice(0, 10);
 
   let mongoClient: MongoClient;
 
@@ -359,6 +370,13 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await page.getByTestId('wizard-add-observation').click();
     await expect(page.getByTestId('wizard-observation-item-0')).toBeVisible();
 
+    // Longitudinal outcome (#712) -- manual-entry, no dictionary picker
+    // (no longitudinal-outcome UI existed in the wizard before this slice).
+    await page.getByTestId('wizard-outcome-type').selectOption(outcomeType);
+    await page.getByTestId('wizard-outcome-date').fill(outcomeDate);
+    await page.getByTestId('wizard-add-outcome').click();
+    await expect(page.getByTestId('wizard-outcome-item-0')).toBeVisible();
+
     const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
     await page.getByTestId('wizard-submit-button').click();
     const response = await submissionResponse;
@@ -491,6 +509,20 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
       value: observationValue,
       unit: { text: observationUnit },
       observationStatus: 'final',
+    });
+
+    // #712: ClinicalOutcome -- dict-02 ELM-0252..0254, manual-entry (no
+    // longitudinal-outcome UI existed before this slice). No participantId
+    // field exists on this entity (dict-02's own gap, matching #691's
+    // model) and no free-text display field either -- queried by the
+    // (outcomeType, outcomeDate) pair this run's fixture uniquely derived.
+    const outcomes = await db.collection('clinicalOutcomes').find({
+      'outcomeType.code': outcomeType,
+      outcomeDate: new Date(outcomeDate),
+    }).toArray();
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({
+      outcomeType: { code: outcomeType },
     });
   });
 });

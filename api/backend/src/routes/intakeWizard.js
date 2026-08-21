@@ -17,6 +17,7 @@ const allergyIntoleranceService = require('../services/allergy-intolerance.servi
 const familyHistoryService = require('../services/family-history.service');
 const procedureService = require('../services/procedure.service');
 const clinicalObservationService = require('../services/clinical-observation.service');
+const clinicalOutcomeService = require('../services/clinical-outcome.service');
 const logger = require('../utils/logger');
 const { validate } = require('../contracts/canonical/v1');
 
@@ -76,13 +77,12 @@ const LOINC_OBSERVATION_SYSTEM_URI = 'http://loinc.org';
  * a materially bigger behavioral change than this additive slice intends.
  *
  * Scope note: originally only the 4 entities with real source data in this
- * wizard's payload were wired here. #708/#709/#710/#711 (RF005 clinical-UI
- * slices, tracker #707) add AllergyIntolerance/FamilyHistory/Procedure/
- * ClinicalObservation, now that the wizard has real fields for each.
- * ClinicalOutcome/DerivedScore remain unwired (or, for DerivedScore,
- * would need an actual Charlson-scoring algorithm, not just a data
- * mapping) -- each tracked as its own follow-up (#707's sibling
- * sub-issues) rather than fabricated here.
+ * wizard's payload were wired here. #708/#709/#710/#711/#712 (RF005
+ * clinical-UI slices, tracker #707) add AllergyIntolerance/FamilyHistory/
+ * Procedure/ClinicalObservation/ClinicalOutcome, now that the wizard has
+ * real fields for each. DerivedScore remains unwired -- it needs an
+ * actual Charlson-scoring algorithm, not just a data mapping -- tracked
+ * as its own follow-up (#713) rather than fabricated here.
  */
 async function recordClinicalEntities(db, { participantId, clinicalData, pharmacologyData, registeredAt }) {
   let encounterId = null;
@@ -242,6 +242,26 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
       logger.error(`Falha ao registrar ClinicalObservation (${loincCode}) para o intake wizard:`, observationError.message || observationError);
     }
   }
+
+  // #712: ELM-0252..0254 ClinicalOutcome -- manual-entry longitudinal-
+  // outcome list (progressão/remissão/recidiva/resposta/toxicidade/
+  // hospitalização/óbito). Like AllergyIntolerance/FamilyHistory/
+  // Procedure above, dict-02's own row set for this entity has no
+  // participantId field -- not invented here, matches #691's model.
+  const clinicalOutcomes = Array.isArray(clinicalData?.clinicalOutcomes) ? clinicalData.clinicalOutcomes : [];
+  for (const entry of clinicalOutcomes) {
+    const outcomeTypeCode = String(entry?.outcomeType || '').trim();
+    const outcomeDate = String(entry?.outcomeDate || '').trim();
+    if (!outcomeTypeCode || !outcomeDate) continue;
+    try {
+      await clinicalOutcomeService.createClinicalOutcome(db, {
+        outcomeType: { code: outcomeTypeCode },
+        outcomeDate,
+      });
+    } catch (outcomeError) {
+      logger.error(`Falha ao registrar ClinicalOutcome (${outcomeTypeCode}) para o intake wizard:`, outcomeError.message || outcomeError);
+    }
+  }
 }
 
 const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
@@ -364,6 +384,9 @@ function buildClinicalData(data = {}) {
     // clinicalDataSchema's own note on the naming collision with the
     // existing free-text clinical-notes field below.
     observationRecords: normalizeArray(clinical.observationRecords),
+    // #712: ELM-0252..0254 ClinicalOutcome -- manual-entry longitudinal-
+    // outcome list.
+    clinicalOutcomes: normalizeArray(clinical.clinicalOutcomes),
   };
 }
 

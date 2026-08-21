@@ -41,6 +41,14 @@ describe('intakeWizard helpers', () => {
       phenotypes: ['p1'],
       charlsonComorbidities: ['c1'],
       biomarkerValues: { foo: 1 },
+      // #708-711 added these array fields to buildClinicalData's output;
+      // this test's `toEqual` (full-shape) expectation was never updated
+      // for them until #712 (which adds clinicalOutcomes) surfaced the gap.
+      allergies: [],
+      familyHistories: [],
+      procedures: [],
+      observationRecords: [],
+      clinicalOutcomes: [],
     });
   });
 

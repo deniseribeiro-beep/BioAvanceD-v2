@@ -180,6 +180,25 @@ const clinicalDataSchema = {
         }
       }
     },
+    // #712 (RF005 clinical-UI slice, tracker #707): manual-entry
+    // longitudinal-outcome list -- dict-02 ELM-0252..0254's ClinicalOutcome
+    // entity (outcomeType a CodeableConcept over the dictionary's 7
+    // categories -- progressão/remissão/recidiva/resposta/toxicidade/
+    // hospitalização/óbito, mapped to English slugs here; outcomeDate
+    // required). Unlike the other 5 clinical-UI slices, no UI existed for
+    // this entity before #712 -- this schema addition is new, not a
+    // mapping of an already-collected field.
+    clinicalOutcomes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          outcomeType: { type: 'string' },
+          outcomeDate: { type: 'string' }
+        }
+      }
+    },
     pharmacologyData: {
       type: 'object',
       additionalProperties: false,
