@@ -1109,4 +1109,66 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
       retentionPolicyId,
     });
   });
+
+  // #650 (RF015 follow-up, qualidade domain) — the 4th and final of the 4
+  // domains named in the issue. A real non-conformance open
+  // (nonconformance.service.js's open, RF025's own "Ensaios e qualidade"
+  // AC#5 trigger) now also fires dispatchNotification. affectedEntityIds
+  // has no referential check (format-only validation), so no assay/sample
+  // fixture is needed here, unlike specimen-quality-inventory.spec.ts's own
+  // RF025 non-conformance test which builds a real assay first.
+  test('a real non-conformance open creates a rule-driven notification (RF015 qualidade domain)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const ruleRes = await request.post(`${apiBaseURL}/api/notification-rules`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        eventType: 'nonconformance_opened',
+        channels: ['in_app'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: ['nonconformanceType', 'affectedEntityIds'],
+        maxDeliveryMinutes: 2,
+      },
+    });
+    expect(ruleRes.ok(), await ruleRes.text()).toBeTruthy();
+    const rule = (await ruleRes.json()).data;
+
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const openRes = await request.post(`${apiBaseURL}/api/nonconformances`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        nonconformanceType: 'deviation',
+        detectedAt: new Date().toISOString(),
+        description: 'RF015 qualidade e2e fixture',
+        affectedEntityIds: [`rf015qual-${suffix}`],
+      },
+    });
+    expect(openRes.status(), await openRes.text()).toBe(201);
+    const nonconformance = (await openRes.json()).data;
+
+    const findNotification = async () => {
+      const res = await request.get(
+        `${apiBaseURL}/api/notifications?eventType=nonconformance_opened&limit=50`,
+        { headers: { Authorization: `Bearer ${admin.token}` } }
+      );
+      if (!res.ok()) return null;
+      const body = await res.json();
+      return (body.data || []).find((n: any) => n.sourceEventId === nonconformance.nonconformanceId) || null;
+    };
+
+    await expect.poll(findNotification, { timeout: 15_000 }).toBeTruthy();
+    const notification = await findNotification();
+
+    expect(notification.ruleId).toBe(rule._id);
+    expect(notification.status).toBe('delivered');
+    expect(notification.deliveredChannel).toBe('in_app');
+    expect(notification.sourceEventType).toBe('Nonconformance');
+    expect(notification.sourceEventId).toBe(nonconformance.nonconformanceId);
+    expect(notification.payload).toEqual({
+      nonconformanceType: 'deviation',
+      affectedEntityIds: [`rf015qual-${suffix}`],
+    });
+  });
 });

@@ -1,5 +1,7 @@
 const NonconformanceModel = require('../models/Nonconformance');
 const { getCollection } = require('../utils/collectionResolver');
+const notificationDispatchService = require('./notificationDispatch.service');
+const logger = require('../utils/logger');
 
 class NonconformanceService {
   /** AC#5: abre a não conformidade. */
@@ -12,6 +14,26 @@ class NonconformanceService {
     const collection = await getCollection(db, 'nonconformances');
     const document = NonconformanceModel.create(payload);
     await collection.insertOne(document);
+
+    // #650 (RF015, qualidade domain) - fire-and-forget, same shape as
+    // dispositionAction.service.js's governança call: a missing/
+    // misconfigured NotificationRule must never block or delay opening the
+    // nonconformance itself. Fires on every successful open (no rare-branch
+    // gate here, unlike segurança/consentimento) -- an explicit .catch()
+    // keeps a notification-engine failure from surfacing as an unhandled
+    // rejection on the common path.
+    void notificationDispatchService.dispatchNotification(db, {
+      eventType: 'nonconformance_opened',
+      sourceEventType: 'Nonconformance',
+      sourceEventId: document.nonconformanceId,
+      payload: {
+        nonconformanceType: document.nonconformanceType,
+        affectedEntityIds: document.affectedEntityIds
+      }
+    }).catch((error) => {
+      logger.error('[NOTIFICATION_DISPATCH] Falha ao disparar notificação de nonconformance:', error.message || error);
+    });
+
     return document;
   }
 

@@ -1,8 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const nonconformanceService = require('../../../src/services/nonconformance.service');
+const notificationDispatchService = require('../../../src/services/notificationDispatch.service');
+
+afterEach(() => { vi.restoreAllMocks(); });
 
 /**
  * Real query-matching fake (exact-match findOne/find/sort, insertOne,
@@ -168,6 +171,35 @@ describe('nonconformance.service', () => {
 
       expect(verified.status).toBe('corrective_action_recorded');
       expect(verified.closureDate).toBeNull();
+    });
+  });
+
+  describe('#650 (RF015 qualidade) dispatches a nonconformance_opened notification', () => {
+    it('dispatches when a nonconformance is opened', async () => {
+      const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+      const db = createFakeDb();
+
+      const opened = await nonconformanceService.open(db, basePayload());
+
+      expect(dispatchSpy).toHaveBeenCalledWith(db, {
+        eventType: 'nonconformance_opened',
+        sourceEventType: 'Nonconformance',
+        sourceEventId: opened.nonconformanceId,
+        payload: {
+          nonconformanceType: 'deviation',
+          affectedEntityIds: ['assay-1']
+        }
+      });
+    });
+
+    it('does NOT dispatch when the payload fails validation', async () => {
+      const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+      const db = createFakeDb();
+
+      await expect(
+        nonconformanceService.open(db, basePayload({ affectedEntityIds: [] }))
+      ).rejects.toThrow(/affectedEntityIds/);
+      expect(dispatchSpy).not.toHaveBeenCalled();
     });
   });
 
