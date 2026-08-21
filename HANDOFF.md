@@ -3,111 +3,95 @@
 **Written:** 2026-08-21, continuing the same rabbit hole under Dennis's
 "Continue rabbit hole" instruction this sitting. Docker is on.
 
-## Rabbit-hole state: STILL INSIDE #646 -- #696 NOT closed, now blocked on #706 (needs Dennis's design call) -- STOP HERE
+## Rabbit-hole state: STILL INSIDE #646 -- #696's own sub-chain is now fully resolved -- other #646 members remain queued
 
 **Tracker: #646** (Wave 3 kickoff -- RF014/015/016/017/024/025/026/029).
-This sitting picked up **#705** (the queue member #696 was blocked on)
-and fixed it. Verifying that fix against #696's own real-backend
-Playwright proof surfaced yet another blocker one layer deeper, filed as
-**#706** -- and unlike #701/#703/#704/#705, this one is a genuine design
-fork, not a mechanical fix: it needs Dennis's read on what RF005 AC#4's
-"somente" (only) wording means for a multi-coding entity. #696 itself
-remains **not closed** -- it is still a legitimate red test, now blocked
-by #706.
+Last sitting's blocker, **#706**, needed Dennis's design call on whether
+`createCondition`'s all-or-nothing gate is RF005 AC#4's intended reading
+for a multi-coding Condition. This sitting got that answer (confirmed:
+all-or-nothing is intentional, corroborated by `canonical-data-contract-
+v1.md`'s own #690 landing note, written before #698 or #706 existed),
+then found and fixed the actual remaining blocker underneath it -- #698
+(OMIM code format mismatch) -- and **closed all three: #706, #698, #696**.
+#696's entire real-backend Playwright proof now passes.
+
+**#646 itself stays open** -- #696 was one queue member among several
+(RF014/015/016/017/024/025/026/029 still queued/unstarted), not the whole
+tracker.
 
 ## What landed this sitting
 
-- **#705 fixed and merged** (`fix/705-seed-active-terminology-concept-cleanup`
-  -> `26b60679`, fix commit `b9905c67`): `seedParticipant.ts`'s
-  `seedActiveTerminologyConcept` inserted a new `releaseStatus: 'active'`
-  `referenceDatasetReleases` doc per call without ever deactivating the
-  prior one, violating the same at-most-one-active-release-per-datasetCode
-  invariant `activeCodeValidator.checkActiveCode` fails closed on
-  (`ambiguous_active_release`) and the real importer's own `promote()`
-  guarantees. Fixed in two parts: (1) `seedActiveTerminologyConcept` now
-  supersedes any existing active release for the same `datasetCode`
-  before inserting, mirroring `promote()`; (2) new
-  `cleanupActiveTerminologyConcepts()`, wired into #696's `afterAll`,
-  deletes the `e2e-696-*` fixtures the test itself inserts. Also ran a
-  one-time cleanup directly against the live Docker Mongo volume (56
-  stale docs removed across `referenceDatasetReleases`/
-  `terminologyConcepts` -- more than the 42 estimated when #705 was
-  filed, since #703/#704's own verification runs added a few more before
-  this sitting started).
+- **#706 resolved (no code change of its own, closed with regression
+  coverage):** confirmed via `docs/architecture/canonical-data-contract-
+  v1.md:1057-1067` (the actively-maintained contract, not an archived
+  snapshot) that `createCondition`'s all-or-nothing gate was documented
+  as intentional when #690 landed -- months before #698 or #706 existed.
+  Added a short addendum to `condition.service.js`'s own comment citing
+  this, plus a dedicated regression test in `condition.service.test.js`
+  (`#706: rejects the whole write when one of several codings is
+  invalid...`) locking in the behavior.
 
-- **Verified #705's fix live** against the same Docker test stack
-  (already up from before this sitting, not rebuilt): re-ran
-  `tests/e2e/intake-wizard.spec.ts -g "Clinical-entity wiring"` (#696's
-  own real-backend proof). Confirmed via `db.referenceDatasetReleases
-  .aggregate` that exactly one active release now exists per
-  `datasetCode` (was 15 each for ORPHA/ICD10/OMIM/HPO before), and the
-  `ambiguous_active_release` failures are gone from the backend log.
-  Ran an unrelated describe block in the same spec file
-  ("Participant identity segregation") against the merged tree as a
-  regression check -- both tests passed.
+- **#698 fixed and merged** (`fix/698-omim-prefix-mismatch` ->
+  `8cc786fe`, fix commit `67f1b8fc`): `intakeWizard.js#buildClinicalData`
+  passed the wizard's always-prefixed `OMIM:<digits>` straight into
+  `conditionCoding` with no stripping, unlike `buildPharmacologyData`'s
+  `atcCode`, which already strips `^ATC:/i`. Applied the same fix to
+  `omimCode`. Reproduced red first (new unit test in
+  `intakeWizard.clinicalEntities.test.js`), confirmed fail, then fixed.
+  Un-weakened every #698-pinned assertion: the new unit test, plus
+  `tests/e2e/intake-wizard.spec.ts`'s `conditions`/OMIM assertions
+  (previously asserting the buggy silent-drop behavior, now asserting
+  the OMIM coding is present in RF028's bare-digit format).
 
-- **#706 filed** (design-fork bug, needs Dennis's call): the same live
-  run that proved #705 then failed on `conditions` coming back empty --
-  but for a different reason than #705's scope covered. Backend log
-  shows `Falha ao registrar Condition ... conditionCoding[https://www
-  .omim.org|OMIM:154700] ... status: unknown` (this part is #698's
-  already-known OMIM-prefix-mismatch gap). What's new: confirmed via
-  direct Mongo query (`db.conditions.find({}).toArray().length` was `0`
-  for this run) that `condition.service.js#createCondition` does **not**
-  silently drop the invalid OMIM coding and persist the rest, as #698's
-  own "Impact" section claimed -- it rejects the **entire** Condition
-  write when any single `conditionCoding` entry is invalid
-  (`validateActiveCodes` fails the whole batch; `createCondition` never
-  sets `allowControlledReview`, and its own code comment says "AC#4
-  reads 'somente' (only) -- no controlled-review escape hatch here").
-  Traced to `df03c2b4` (#690) -- the only commit touching this file, and
-  its all-or-nothing shape reads as deliberate, not a regression. Posted
-  a correction to #698's own impact section (comment on #698) since that
-  issue's documented consequence no longer matches the code. #706 itself
-  stays open, pending Dennis: is `createCondition`'s all-or-nothing gate
-  the intended reading of AC#4 for multi-coding entities, or should each
-  coding be individually gated (matching what #698 assumed)? Whichever
-  direction, #696's own assertions (`conditions.toHaveLength(1)` +
-  OMIM-absent) will need rewriting to match -- not attempted here, since
-  it depends on the answer.
+- **#696 closed:** with #698 fixed, all three condition codings (ORPHA/
+  ICD-10/OMIM) resolve active, so `createCondition` succeeds and every
+  downstream assertion passes. Verified live: `npm run test:e2e:docker
+  -- tests/e2e/intake-wizard.spec.ts` -- all 6 tests in the file pass,
+  including the sibling "Participant identity segregation" describe
+  block (regression check). #696 needed no code change of its own; it
+  was blocked in sequence by #699/#701/#703/#704/#705/#698/#706, all now
+  resolved.
+
+- **Gotcha hit and already-documented, not newly discovered:** the first
+  post-fix live run still showed the pre-fix OMIM error -- `backend-app-
+  test` is `build:`-only (`compose.test.yml`, `Dockerfile.dev`, no
+  source bind mount), so a backend source edit needs a targeted rebuild
+  (`docker compose --env-file .env.test.example -f compose.test.yml up
+  -d --build --wait backend-app-test`) before it's live. Already recorded
+  in `docker-workflow`'s `local-env/bioavanced-v2.md` ("`backend-app-test`
+  has the identical build-not-mount shape as `frontend-app-test`") --
+  followed it, no skill update needed.
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed to origin at
-  `26b60679`. Clean tree except the pre-existing untracked
+  `8cc786fe`. Clean tree except the pre-existing untracked
   `.claude/skills/`/`api/backend/storage/assays/` (unrelated, not
   touched this sitting).
 - No PR to `main` exists. `main` stays frozen per this repo's convention.
-- **Docker: UP.** Same stack, now with #705's fix's cleanup applied to
-  the live volume (all accumulated `e2e-696-*` fixtures removed).
-  Deliberately **not** torn down -- #696 is still open and the natural
-  next step (once #706 is resolved) will want to re-run its Playwright
-  proof against this same stack. If it does get torn down before that
-  happens, re-run the bring-up recipe with `--build`.
+- `fix/698-omim-prefix-mismatch` merged, deleted both local and remote.
+- **Docker: UP.** Same stack, `backend-app-test` rebuilt this sitting
+  (now serving the #698 fix). Deliberately **not** torn down -- #646's
+  remaining queue members may still want it, and tearing down a stack
+  this session didn't start is a judgment call for whoever picks up next
+  based on what they're doing, not a default.
 
 ## Recommended next steps
 
-**None queued by Dennis explicitly, and the natural next step is
-blocked on his input.** #706 needs a design-call answer (all-or-nothing
-Condition write vs. per-coding gating) before any code or test-assertion
-change can proceed -- this is not something to guess at. Once Dennis
-answers on #706: fix `condition.service.js` (or confirm current
-behavior is correct and just needs documenting), rewrite #696's
-`conditions`/OMIM assertions to match, re-run the same Playwright proof,
-and see how far the rest of #696's own assertions (`phenotypeObservations`,
-`medicationExposures` -- these weren't reached this run since the test
-throws on the `conditions` assertion first) actually get. Close #696
-once all its own assertions pass; file whatever blocks next if not.
+**None queued by Dennis explicitly for #646's remaining members.**
+#696/#706/#698's whole sub-chain is done. The natural #646 queue pick,
+per the previous sitting's own note (not re-verified this sitting):
+**#674** (RF029 slice 6/6), last known blocked on RF027/Wave 4 -- check
+whether that's unblocked before picking. Same discipline as every prior
+slice: branch first, re-invoke the routed skill via the Skill tool per
+issue number before closing anything.
 
-Rabbit-hole budget so far this hole: #701 (~3pts) + #703 (~3pts) + #704
-(~1pt) + #705 (~5pts, multi-part: fixture fix + afterAll cleanup +
-one-time volume cleanup) = ~12/10 -- already over the advisory budget,
-which is the other reason this sitting stopped here even setting #706's
-own blocked status aside.
-
-Alternative #646 queue pick if not continuing #696/#706 (e.g. if Dennis
-hasn't answered #706 yet): **#674** (RF029 slice 6/6), still blocked on
-RF027/Wave 4 as of several sittings ago -- re-check whether that's
-unblocked before picking. Same discipline as every prior slice: branch
-first, re-invoke the routed skill via the Skill tool per issue number
-before closing anything.
+Rabbit-hole budget: prior sittings already totaled ~12/10 (over the
+advisory budget) before this one started. This sitting added #706
+(~2pts, design confirmation + regression test) + #698 (~5pts, fix +
+2 new tests + e2e rewrite + Docker rebuild + live verify) + #696 (~1pt,
+verification-only close) = ~8 more points, cumulative well past budget.
+This is a natural stopping point (a full sub-chain closed clean), not
+just a budget cutoff -- but worth flagging to Dennis if the next sitting
+is expected to keep going deep into #646 rather than wrapping the
+tracker soon.
