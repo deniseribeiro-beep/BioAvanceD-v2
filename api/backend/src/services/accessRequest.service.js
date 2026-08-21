@@ -1,3 +1,4 @@
+const { ObjectId } = require('mongodb');
 const AccessRequestModel = require('../models/AccessRequest');
 const { getCollection } = require('../utils/collectionResolver');
 
@@ -50,6 +51,16 @@ class AccessRequestService {
    * já usa para Sample/Consent/Patient). Nenhum AccessPolicy dedicado
    * existe neste repositório ainda — o status do Study é o proxy real e
    * verificável disponível hoje para essa terceira perna da AC.
+   *
+   * #661: 'file' items (SampleFile) always carry the specimenId they were
+   * uploaded against, so they resolve to a real participant the same way a
+   * 'specimen' item does. 'dataset' items don't get the same treatment —
+   * dict-02_DICIONARIO.md models Dataset (ELM-0416–0423, categoria "FAIR e
+   * publicação") purely as a citable, published artifact (DataCite/RO-Crate
+   * fields: doi, license, distributionFiles), with no participant-linkage
+   * field at all. That's this repo's own data model declaring datasets
+   * de-identified-by-design, not an oversight — participantId/consentValid
+   * stay null (non-blocking) for them, same as before #661.
    */
   async evaluateCompatibility(db, accessRequestId) {
     const collection = await getCollection(db, 'accessRequests');
@@ -61,9 +72,11 @@ class AccessRequestService {
     const samples = await getCollection(db, 'samples');
     const consents = await getCollection(db, 'consents');
     const terminologyConcepts = await getCollection(db, 'terminologyConcepts');
-    // Study has no CANONICAL_COLLECTIONS entry — master-data.routes.js
-    // itself reads it straight off the raw driver, same as here.
+    // Study/SampleFile have no CANONICAL_COLLECTIONS entry — master-data.routes.js
+    // and sample-file.controller.js already read them straight off the raw
+    // driver, same as here.
     const studies = db.collection('studies');
+    const sampleFiles = db.collection('sample_files');
 
     const study = await studies.findOne({ studyId: accessRequest.studyId });
     const studyActive = !!study && study.studyStatus === 'active';
@@ -77,6 +90,17 @@ class AccessRequestService {
       duoCompatible = !!concept && concept.conceptStatus === 'active';
     }
 
+    const resolveConsent = async (resolvedParticipantId) => {
+      if (!resolvedParticipantId) {
+        // Item references a specimen/file that doesn't resolve to a real
+        // participant — don't default to "consent ok", that would silently
+        // approve compatibility for a nonexistent item.
+        return false;
+      }
+      const consent = await consents.findOne({ participantId: resolvedParticipantId, status: 'ACTIVE' });
+      return !!consent;
+    };
+
     const consentCompatibility = [];
     for (const item of accessRequest.requestedItems) {
       let participantId = null;
@@ -85,16 +109,18 @@ class AccessRequestService {
       if (item.itemType === 'specimen') {
         const sample = await samples.findOne({ specimenId: item.itemId });
         participantId = sample?.participantId || null;
-        if (participantId) {
-          const consent = await consents.findOne({ participantId, status: 'ACTIVE' });
-          consentValid = !!consent;
-        } else {
-          // Item references a specimen that doesn't resolve to a real
-          // sample — don't default to "consent ok", that would silently
-          // approve compatibility for a nonexistent item.
-          consentValid = false;
-        }
+        consentValid = await resolveConsent(participantId);
+      } else if (item.itemType === 'file') {
+        const file = ObjectId.isValid(item.itemId)
+          ? await sampleFiles.findOne({ _id: new ObjectId(item.itemId) })
+          : null;
+        const sample = file?.specimenId ? await samples.findOne({ specimenId: file.specimenId }) : null;
+        participantId = sample?.participantId || null;
+        consentValid = await resolveConsent(participantId);
       }
+      // 'dataset' items: intentionally left untouched — participantId/
+      // consentValid stay null (non-blocking), per #661's de-identified-
+      // by-design conclusion documented on evaluateCompatibility above.
 
       const compatible = consentValid !== false && duoCompatible !== false && studyActive;
 
