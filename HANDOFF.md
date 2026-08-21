@@ -114,11 +114,15 @@ direction -- not something a test-loop/fix-bugs iteration can guess at.
 - **Docker: DOWN** (torn down at session end via `docker compose
   --env-file .env.test.example -f compose.test.yml down`, no
   `--volumes` -- named volumes, including `admin-bootstrap-test`'s
-  completed bootstrap and this sitting's two `backend-app-test`/
-  `frontend-app-test` rebuilds (already fresh, reflect the #699 fix),
-  all persisted). Re-run the same bring-up recipe next session (per
-  `docker-workflow`'s bioavanced-v2 overlay); confirm before assuming
-  the bootstrap/images are still fresh, per the volume-accumulation
+  completed bootstrap, persisted). This sitting's built images
+  (`backend-app-test`/`frontend-app-test`/etc.) were **removed** by the
+  end-of-session `clean-up` pass (`docker rmi` + `docker builder prune
+  -af`, per `docker-workflow`'s hygiene rule) -- next session's first
+  bring-up will rebuild from scratch (no build cache left either), not
+  reuse an already-fresh image. Re-run the same bring-up recipe next
+  session (per `docker-workflow`'s bioavanced-v2 overlay) with
+  `--build`; confirm the admin bootstrap/seed data in the preserved
+  volumes before assuming it's still there, per the volume-accumulation
   gotcha the overlay already documents.
 
 ## Recommended next steps
