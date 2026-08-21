@@ -1106,6 +1106,91 @@ in-memory `TerminologyConcept`/`ReferenceDatasetRelease` fake, not a
 canned stub). Both land together with #693's intake-wizard integration,
 per #677's slice breakdown.
 
+### ClinicalObservation
+
+- `observationId` (internal identity, dict-02 ELM-0219; assigned via
+  `crypto.randomUUID()` in `ClinicalObservationModel.create`, #691)
+- `participantId` (reference to `Participant`, dict-02 P1X-0077)
+- `observationCoding` (`Coding`, 1..1, dict-02 ELM-0220 — LOINC. Same
+  `{ systemUri, code, version, display }` shape as `Condition.
+  conditionCoding`/`PhenotypeObservation.hpoCoding`)
+- `value` / `unit` (dict-02 ELM-0221/0222, choice/Coding — "preservar
+  valor original," stored as given)
+- `normalizedValue` (Quantity, dict-02 ELM-0223 — "não sobrescrever o
+  original": a distinct field from `value`, never derived by overwriting
+  it)
+- `referenceRange` (`BackboneElement[]`, dict-02 ELM-0224 — "não assumir
+  universalidade," stored as given)
+- `interpretation` (`CodeableConcept[]`, dict-02 ELM-0225)
+- `effectiveDateTime` / `issuedDateTime` (dict-02 ELM-0226/0227)
+- `observationStatus` (dict-02 ELM-0228, FHIR ObservationStatus vocab,
+  stored as given)
+- `method` (CodeableConcept, dict-02 ELM-0229)
+- `deviceId` (0..1, reference to `Device` — dict-02 ELM-0230. Unlike
+  `diagnosticReportId` below, a real `devices` collection exists
+  (`Device.schema.js`), so `clinical-observation.service.js#
+  createClinicalObservation` hard-checks this reference when supplied,
+  via `assertReferencesExist` — RF029 AC#2's own machinery, #669)
+- `specimenId` (0..1, reference to `Specimen`/`samples` — dict-02
+  ELM-0231, same hard-check treatment as `deviceId`)
+- `diagnosticReportId` (0..1, reference to `DiagnosticReport` — stays
+  unenforced, no `DiagnosticReport` entity exists in this repo, dict-02
+  ELM-0232)
+- `encounterId` (0..1, reference to `Encounter`/#689, dict-02 P1X-0078 —
+  joinable-but-not-enforced)
+
+**Landed in #691 (RF005 clinical-data slice 3/5, tracked under #677):**
+the entity/collection (`clinicalObservations`) exists
+(`ClinicalObservationModel`, `clinical-observation.service.js#
+createClinicalObservation`/`getClinicalObservationsForParticipant`/
+`getClinicalObservationById`). `specimenId`/`deviceId` are hard-checked
+against the real `samples`/`devices` collections at create time — the
+first entity in this domain to enforce a reference rather than leave it
+joinable-but-unenforced, per #691's own scope.
+
+### ClinicalOutcome
+
+- `outcomeId` (internal identity, dict-02 ELM-0252; assigned via
+  `crypto.randomUUID()` in `ClinicalOutcomeModel.create`, #691)
+- `outcomeType` (CodeableConcept, dict-02 ELM-0253 — progressão/remissão/
+  recidiva/resposta/toxicidade/hospitalização/óbito, stored as given)
+- `outcomeDate` (dict-02 ELM-0254)
+
+**Landed in #691:** the entity/collection (`clinicalOutcomes`) exists
+(`ClinicalOutcomeModel`, `clinical-outcome.service.js`). **Note:**
+dict-02's own row set for this entity has no `participantId` field
+(unlike every other entity in this domain) — not invented here, matches
+#691's own issue scope exactly. A future slice adding subject linkage
+would be a design call beyond what the dictionary defines today, not an
+oversight in this one.
+
+### DerivedScore
+
+- `derivedScoreId` (internal identity; assigned via `crypto.randomUUID()`
+  in `DerivedScoreModel.create`, #691 — dict-02 has no explicit ID field
+  for this entity, same generated-identity convention as every other
+  entity in this contract)
+- `scoreType` (CodeableConcept, dict-02 ELM-0255 — e.g. Charlson
+  Comorbidity Index)
+- `scoreValue` (decimal, dict-02 ELM-0256)
+- `algorithmVersion` (dict-02 ELM-0257)
+- `lookbackPeriod` (0..1, Duration/Period, dict-02 ELM-0258, stored as
+  given)
+- `scoreComponents` (`BackboneElement[]`, 1..*, dict-02 ELM-0259 —
+  "nunca armazenar somente o escore final": `DerivedScoreModel` rejects
+  an empty array even when every other field is present, same
+  required-non-empty-array enforcement as `Condition.conditionCoding`)
+
+**Landed in #691:** the entity/collection (`derivedScores`) exists
+(`DerivedScoreModel`, `derived-score.service.js`). Same "dict-02 has no
+`participantId` row for this entity" note as `ClinicalOutcome` above.
+
+**Not yet landed for any of the three entities above (follow-up tracked
+under #693, slice 5/5):** no live caller creates a `ClinicalObservation`,
+`ClinicalOutcome`, or `DerivedScore` yet. Same native-only proof bar as
+#689/#690 — real-backend e2e proof is deferred to #693's intake-wizard
+integration.
+
 ### Consent
 
 - `consentId` (internal identity of the consent instance, distinct from
