@@ -13,6 +13,7 @@ const encounterService = require('../services/encounter.service');
 const conditionService = require('../services/condition.service');
 const phenotypeObservationService = require('../services/phenotype-observation.service');
 const medicationExposureService = require('../services/medication-exposure.service');
+const allergyIntoleranceService = require('../services/allergy-intolerance.service');
 const logger = require('../utils/logger');
 const { validate } = require('../contracts/canonical/v1');
 
@@ -32,6 +33,13 @@ const OMIM_SYSTEM_URI = 'https://www.omim.org';
 const ICD10_SYSTEM_URI = 'http://hl7.org/fhir/sid/icd-10';
 const HPO_SYSTEM_URI = 'http://purl.obolibrary.org/obo/hp.owl';
 const ATC_SYSTEM_URI = 'http://www.whocc.no/atc';
+// #708: DCB is the only allergen coding system with a real reference
+// importer in this repo (reference-data/reference-imports/sources/dcb.js)
+// -- dict-02's ELM-0247 allows "DCB/SNOMED subset" but no SNOMED importer
+// exists here, so the wizard's manual-entry allergen field is coded
+// against DCB only, same "code what's actually importable" precedent as
+// ICD-10-only for diagnosisCidCode above.
+const DCB_SYSTEM_URI = 'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb';
 
 /**
  * RF005 AC4-6 (#693, RF005 clinical-data slice 5/5): additively creates
@@ -55,12 +63,14 @@ const ATC_SYSTEM_URI = 'http://www.whocc.no/atc';
  * (manual-entry mode), so making that a hard submission failure would be
  * a materially bigger behavioral change than this additive slice intends.
  *
- * Scope note: only the 4 entities with real source data in this wizard's
- * current payload are wired here. ClinicalObservation/ClinicalOutcome/
- * DerivedScore/AllergyIntolerance/FamilyHistory/Procedure have no
- * corresponding UI fields (or, for DerivedScore, would need an actual
- * Charlson-scoring algorithm, not just a data mapping) -- tracked as a
- * separate follow-up rather than fabricated here.
+ * Scope note: originally only the 4 entities with real source data in this
+ * wizard's payload were wired here. #708 (RF005 clinical-UI slice, tracker
+ * #707) adds AllergyIntolerance, now that the wizard has a real allergen
+ * field of its own. ClinicalObservation/ClinicalOutcome/DerivedScore/
+ * FamilyHistory/Procedure remain unwired (or, for DerivedScore, would need
+ * an actual Charlson-scoring algorithm, not just a data mapping) -- each
+ * tracked as its own follow-up (#707's sibling sub-issues) rather than
+ * fabricated here.
  */
 async function recordClinicalEntities(db, { participantId, clinicalData, pharmacologyData, registeredAt }) {
   let encounterId = null;
@@ -130,6 +140,25 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
       });
     } catch (medicationError) {
       logger.error('Falha ao registrar MedicationExposure para o intake wizard:', medicationError.message || medicationError);
+    }
+  }
+
+  const allergies = Array.isArray(clinicalData?.allergies) ? clinicalData.allergies : [];
+  for (const allergy of allergies) {
+    const allergenCode = String(allergy?.allergenCode || '').trim();
+    if (!allergenCode) continue;
+    try {
+      const reactionText = String(allergy?.reaction || '').trim();
+      await allergyIntoleranceService.createAllergyIntolerance(db, {
+        allergenCoding: {
+          systemUri: DCB_SYSTEM_URI,
+          code: allergenCode,
+          display: String(allergy?.allergenName || '').trim() || undefined,
+        },
+        reaction: reactionText ? [{ manifestation: reactionText }] : [],
+      });
+    } catch (allergyError) {
+      logger.error(`Falha ao registrar AllergyIntolerance (${allergenCode}) para o intake wizard:`, allergyError.message || allergyError);
     }
   }
 }
@@ -243,6 +272,8 @@ function buildClinicalData(data = {}) {
     phenotypes: normalizeArray(clinical.diseasePhenotypes),
     charlsonComorbidities: normalizeArray(clinical.charlsonConditions),
     biomarkerValues: normalizeObject(clinical.biomarkersValues),
+    // #708: ELM-0246..0248 AllergyIntolerance -- manual-entry allergen list.
+    allergies: normalizeArray(clinical.allergies),
   };
 }
 

@@ -164,7 +164,7 @@ test.describe('Participant identity segregation (RF005/RNF007) — real backend 
   });
 });
 
-test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF005 AC4-6 wiring against a live stack)', () => {
+test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF005 AC4-6 wiring against a live stack; extended by #708 for AllergyIntolerance)', () => {
   test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
   const orphaCode = 'ORPHA:558';
@@ -181,6 +181,15 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
   const diseaseLabel = `RF005 e2e Marfan-like disease ${Date.now()}`;
   const phenotypeLabel = 'Seizure';
   const medicationName = `rf005-e2e-captopril-${Date.now()}`;
+  // #708: AllergyIntolerance's allergenCoding is DCB-coded but, unlike
+  // Condition/PhenotypeObservation, allergy-intolerance.service.js doesn't
+  // gate on activeCodeValidator (#708's own scope note) -- no
+  // TerminologyConcept fixture is needed for this to persist, only a
+  // uniquely-named display value so this test's own assertion doesn't pick
+  // up a prior run's fixture from the persistent test-stack Mongo volume.
+  const allergenCode = '03730';
+  const allergenName = `RF005 e2e allergen #708 ${Date.now()}`;
+  const allergyReaction = 'Urticária';
 
   let mongoClient: MongoClient;
 
@@ -291,6 +300,13 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await page.getByTestId('wizard-medication-option-0').click();
     await page.locator('input[type="date"]').first().fill('2026-01-15');
 
+    // Allergy/intolerance (#708) -- manual-entry, no dictionary picker.
+    await page.getByTestId('wizard-allergy-name').fill(allergenName);
+    await page.getByTestId('wizard-allergy-code').fill(allergenCode);
+    await page.getByTestId('wizard-allergy-reaction').fill(allergyReaction);
+    await page.getByTestId('wizard-add-allergy').click();
+    await expect(page.getByTestId('wizard-allergy-item-0')).toBeVisible();
+
     const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
     await page.getByTestId('wizard-submit-button').click();
     const response = await submissionResponse;
@@ -353,5 +369,21 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
       display: medicationName,
     });
     expect(medicationExposures[0].medicationStatus).toBe('active');
+
+    // #708: AllergyIntolerance -- dict-02 ELM-0246..0248, DCB-coded,
+    // manual-entry (no picker), same additive best-effort call as the
+    // other 4 entities above.
+    const allergyIntolerances = await db.collection('allergyIntolerances').find({
+      'allergenCoding.display': allergenName,
+    }).toArray();
+    expect(allergyIntolerances).toHaveLength(1);
+    expect(allergyIntolerances[0]).toMatchObject({
+      allergenCoding: {
+        systemUri: 'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb',
+        code: allergenCode,
+        display: allergenName,
+      },
+      reaction: [{ manifestation: allergyReaction }],
+    });
   });
 });

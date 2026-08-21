@@ -18,6 +18,7 @@ const encounterServicePath = require.resolve('../../src/services/encounter.servi
 const conditionServicePath = require.resolve('../../src/services/condition.service');
 const phenotypeObservationServicePath = require.resolve('../../src/services/phenotype-observation.service');
 const medicationExposureServicePath = require.resolve('../../src/services/medication-exposure.service');
+const allergyIntoleranceServicePath = require.resolve('../../src/services/allergy-intolerance.service');
 const activeCodeValidatorPath = require.resolve('../../src/ingestion/activeCodeValidator');
 const routePath = require.resolve('../../src/routes/intakeWizard.js');
 
@@ -42,6 +43,7 @@ const allPaths = [
   conditionServicePath,
   phenotypeObservationServicePath,
   medicationExposureServicePath,
+  allergyIntoleranceServicePath,
   activeCodeValidatorPath,
   routePath,
 ];
@@ -180,6 +182,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       conditions: makeInsertCapturingCollection(),
       phenotypeObservations: makeInsertCapturingCollection(),
       medicationExposures: makeInsertCapturingCollection(),
+      allergyIntolerances: makeInsertCapturingCollection(),
       ...makeActiveCodeCollections(),
     };
 
@@ -304,5 +307,39 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     expect(collections.conditions.docs).toHaveLength(1);
     const omimCoding = collections.conditions.docs[0].conditionCoding.find((c) => c.systemUri === 'https://www.omim.org');
     expect(omimCoding).toMatchObject({ systemUri: 'https://www.omim.org', code: '154700' });
+  });
+
+  it('#708: creates an AllergyIntolerance from a wizard-collected allergen entry, DCB-coded', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        allergies: [{ allergenName: 'Dipirona', allergenCode: '03730', reaction: 'Urticária' }],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.allergyIntolerances.docs).toHaveLength(1);
+    expect(collections.allergyIntolerances.docs[0]).toMatchObject({
+      allergenCoding: { systemUri: 'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb', code: '03730', display: 'Dipirona' },
+      reaction: [{ manifestation: 'Urticária' }],
+    });
+  });
+
+  it('#708: skips an allergen entry with no DCB code, and does not fail the intake', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        allergies: [{ allergenName: 'Dipirona', allergenCode: '', reaction: 'Urticária' }],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.allergyIntolerances.docs).toHaveLength(0);
   });
 });

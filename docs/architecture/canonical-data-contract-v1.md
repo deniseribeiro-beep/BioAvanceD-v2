@@ -1220,6 +1220,18 @@ the entity/collection (`allergyIntolerances`) exists
 "dict-02 has no `participantId` row for this entity" note as
 `ClinicalOutcome`/`DerivedScore` above.
 
+**Wired in #708 (RF005 clinical-UI slice, tracker #707):** the intake
+wizard now has a real, manual-entry allergen field (no DCB dictionary
+picker exists in this repo, same "accept manual entry" precedent the
+wizard's diagnosis codes already use) — `recordClinicalEntities`
+(`intakeWizard.js`) additively creates one `AllergyIntolerance` per
+wizard-collected allergy entry, coded against DCB only (`allergenCoding.
+systemUri`), since no SNOMED reference importer exists in this repo
+despite dict-02 allowing "DCB/SNOMED subset". Unlike `Condition`/
+`PhenotypeObservation`, `allergy-intolerance.service.js` does not gate on
+`activeCodeValidator` (RF005 AC#4) — a known, deliberately-scoped-out gap
+flagged during #708, not fixed here.
+
 ### FamilyHistory
 
 - `familyHistoryId` (internal identity; assigned via

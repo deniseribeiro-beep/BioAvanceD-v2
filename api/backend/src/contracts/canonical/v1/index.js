@@ -99,6 +99,23 @@ const clinicalDataSchema = {
     diseaseBiomarkers: { type: 'array' },
     biomarkersValues: { type: 'object' },
     diagnosisDefinition: { type: 'string' },
+    // #708 (RF005 clinical-UI slice, tracker #707): manual-entry allergen
+    // list -- dict-02 ELM-0246..0248's AllergyIntolerance (allergenCoding
+    // DCB/SNOMED-coded, reaction free text), same "no picker exists,
+    // accept manual entry" precedent the wizard's diagnosis codes already
+    // use (intakeWizard.js's recordClinicalEntities doc comment).
+    allergies: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          allergenName: { type: 'string' },
+          allergenCode: { type: 'string' },
+          reaction: { type: 'string' }
+        }
+      }
+    },
     pharmacologyData: {
       type: 'object',
       additionalProperties: false,

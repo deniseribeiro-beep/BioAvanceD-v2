@@ -364,6 +364,7 @@ const initialState = {
   diseaseBiomarkers: [],
   biomarkers_values: {},
   phenotypes: [], // [{ hpoId, label }]
+  allergies: [], // [{ allergenName, allergenCode, reaction }]
   treatmentStatus: '',
   medicationName: '',
   medicationCode: '',
@@ -1058,6 +1059,7 @@ function createClinicalStepSchema(t, clinicalItems = []) {
     selectedConsentTemplateId: z.string().trim().optional().or(z.literal('')),
     diseasePhenotypes: z.array(z.any()).optional(),
     diseaseBiomarkers: z.array(z.any()).optional(),
+    allergies: z.array(z.any()).optional(),
     biomarkers_values: z.record(z.string()).optional(),
     treatmentStatus: z.string().trim().optional().or(z.literal('')),
     medicationName: z.string().trim().max(180, t('wizard.validation.medicationNameTooLong', 'Medication name is too long')).optional().or(z.literal('')),
@@ -1483,6 +1485,7 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
     diseaseBiomarkers: Array.isArray(formData.diseaseBiomarkers) ? formData.diseaseBiomarkers : [],
     biomarkersValues: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
     diagnosisDefinition: String(formData.diagnosisDefinition || '').trim(),
+    allergies: Array.isArray(formData.allergies) ? formData.allergies : [],
     pharmacologyData: {
       treatmentStatus: String(formData.treatmentStatus || '').trim(),
       medicationName: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
@@ -1585,6 +1588,7 @@ export default function ClinicalIntakeWizard(props) {
   const [medicationResults, setMedicationResults] = useState([]);
   const [medicationLoading, setMedicationLoading] = useState(false);
   const [medicationError, setMedicationError] = useState('');
+  const [allergyDraft, setAllergyDraft] = useState({ allergenName: '', allergenCode: '', reaction: '' });
   const [isConsentPreviewOpen, setIsConsentPreviewOpen] = useState(false);
   const [isBiomarkerRequestOpen, setIsBiomarkerRequestOpen] = useState(false);
   const [isBiomarkerRequestSubmitting, setIsBiomarkerRequestSubmitting] = useState(false);
@@ -2118,6 +2122,34 @@ export default function ClinicalIntakeWizard(props) {
     setFormData((previous) => ({
       ...previous,
       [field]: value,
+    }));
+  };
+
+  const handleAllergyDraftChange = (field) => (event) => {
+    const value = event.target.value;
+    setAllergyDraft((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const handleAddAllergy = () => {
+    const allergenName = String(allergyDraft.allergenName || '').trim();
+    const allergenCode = String(allergyDraft.allergenCode || '').trim();
+    const reaction = String(allergyDraft.reaction || '').trim();
+    if (!allergenName || !allergenCode) {
+      return;
+    }
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      allergies: [...(Array.isArray(previous.allergies) ? previous.allergies : []), { allergenName, allergenCode, reaction }],
+    }));
+    setAllergyDraft({ allergenName: '', allergenCode: '', reaction: '' });
+  };
+
+  const handleRemoveAllergy = (index) => {
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      allergies: (Array.isArray(previous.allergies) ? previous.allergies : []).filter((_, itemIndex) => itemIndex !== index),
     }));
   };
 
@@ -3068,6 +3100,78 @@ export default function ClinicalIntakeWizard(props) {
                     onChange={handleFieldChange('washoutEndDate')}
                   />
                 </div>
+              )}
+            </div>
+
+            <div className="clinical-subsection space-y-4" data-testid="wizard-allergies-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.allergiesIntolerances', 'Alergias e Intolerâncias')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Input
+                  id="allergyName"
+                  name="allergyName"
+                  data-testid="wizard-allergy-name"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.allergyName', 'Substância/Agente causador')}
+                  value={allergyDraft.allergenName}
+                  onChange={handleAllergyDraftChange('allergenName')}
+                  placeholder={t('wizard.placeholders.allergyName', 'Ex.: Dipirona')}
+                />
+                <Input
+                  id="allergyCode"
+                  name="allergyCode"
+                  data-testid="wizard-allergy-code"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.allergyCode', 'Código DCB')}
+                  value={allergyDraft.allergenCode}
+                  onChange={handleAllergyDraftChange('allergenCode')}
+                  placeholder={t('wizard.placeholders.allergyCode', 'Ex.: 03730')}
+                />
+                <Input
+                  id="allergyReaction"
+                  name="allergyReaction"
+                  data-testid="wizard-allergy-reaction"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.allergyReaction', 'Reação/manifestação')}
+                  value={allergyDraft.reaction}
+                  onChange={handleAllergyDraftChange('reaction')}
+                  placeholder={t('wizard.placeholders.allergyReaction', 'Ex.: Urticária')}
+                />
+              </div>
+              <Button
+                type="button"
+                data-testid="wizard-add-allergy"
+                variant="secondary"
+                onClick={handleAddAllergy}
+                disabled={!String(allergyDraft.allergenName || '').trim() || !String(allergyDraft.allergenCode || '').trim()}
+              >
+                {t('wizard.actions.addAllergy', 'Adicionar alergia')}
+              </Button>
+              {Array.isArray(formData.allergies) && formData.allergies.length > 0 && (
+                <ul className="allergy-list space-y-2" data-testid="wizard-allergy-list">
+                  {formData.allergies.map((allergy, index) => (
+                    <li
+                      key={`${allergy.allergenCode}-${index}`}
+                      data-testid={`wizard-allergy-item-${index}`}
+                      className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2"
+                    >
+                      <span>
+                        <span className="font-semibold text-gray-800">{allergy.allergenName}</span>
+                        <span className="ml-2 text-sm text-gray-500">DCB: {allergy.allergenCode}</span>
+                        {allergy.reaction && <span className="ml-2 text-sm text-gray-500">— {allergy.reaction}</span>}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid={`wizard-remove-allergy-${index}`}
+                        className="text-red-600 hover:text-red-800 text-sm"
+                        onClick={() => handleRemoveAllergy(index)}
+                      >
+                        {t('wizard.actions.removeAllergy', 'Remover')}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
 
