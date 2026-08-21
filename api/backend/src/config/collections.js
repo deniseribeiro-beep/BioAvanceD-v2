@@ -16,6 +16,7 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   foundationDataRuns: env.COLL_FOUNDATION_DATA_RUNS || 'foundationDataRuns',
   participantIdentities: env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities',
   rcsAssessments: env.COLL_RCS_ASSESSMENTS || 'rcsAssessments',
+  encounters: env.COLL_ENCOUNTERS || 'encounters',
   specimenPreanalytics: env.COLL_SPECIMEN_PREANALYTICS || 'specimenPreanalytics',
   quarantineActions: env.COLL_QUARANTINE_ACTIONS || 'quarantineActions',
   referenceDatasetReleases: env.COLL_REFERENCE_DATASET_RELEASES || 'referenceDatasetReleases',

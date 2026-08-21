@@ -994,6 +994,37 @@ fix. Same shape as #392's already-resolved fluid/solid relabeling gap;
 `frontend/src/constants/sprecDictionary.js`'s dictionaries are the
 likely fix per that precedent, not new parsing.
 
+### Encounter
+
+- `encounterId` (internal identity, dict-02 ELM-0194; assigned at creation
+  via `crypto.randomUUID()` in `EncounterModel.create`, #689 — same
+  pattern as `PatientConsentModel.consentId`)
+- `participantId` (reference to `Participant`/`ParticipantIdentity`, dict-02
+  ELM-0195)
+- `encounterType` (CodeableConcept, dict-02 ELM-0196 — stored as given,
+  string or coded object, same "not forced into one shape" precedent
+  `QuarantineAction.reasonCodes` uses for its own CodeableConcept[])
+- `encounterPeriod` (`{ start, end }`, dict-02 ELM-0197 — `end: null` means
+  open-ended, same convention `TemperaturePolicy.effectivePeriod` uses)
+- `serviceProvider` (0..1, reference to `Organization`, dict-02 ELM-0198)
+- `encounterLocation` (0..*, references to `Location`, dict-02 ELM-0199)
+
+**Landed in #689 (RF005 clinical-data slice 1/5, tracked under #677):** the
+entity/collection (`encounters`) exists (`EncounterModel`,
+`encounter.service.js#createEncounter`/`getEncountersForParticipant`/
+`getEncounterById`) — the foundational "visit/interaction context" entity
+the domain's other slices (Condition/PhenotypeObservation/
+ClinicalObservation, #690/#691) optionally reference via `encounterId`
+(0..1, joinable-but-not-enforced, same pattern as `equipmentId`/
+`thresholdProfileId` elsewhere in this contract). No hard schema-level
+dependency in either direction.
+
+**Not yet landed (follow-up tracked under #693, slice 5/5):** no live
+caller creates an `Encounter` yet — `intakeWizard.js` doesn't wire this
+entity in, and there is no real-backend e2e proof beyond this slice's own
+native-only service/model tests. Both land together with #693's
+intake-wizard integration, per #677's slice breakdown.
+
 ### Consent
 
 - `consentId` (internal identity of the consent instance, distinct from
