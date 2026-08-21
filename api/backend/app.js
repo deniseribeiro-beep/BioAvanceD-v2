@@ -313,6 +313,11 @@ app.use("/api/omics-qualifications", createMasterDataRouter({
   idField: "omicsQualificationId",
   model: require("./src/models/OmicsQualification")
 }));
+app.use("/api/omics-runs", createMasterDataRouter({
+  collectionName: "omicsRuns",
+  idField: "omicsRunId",
+  model: require("./src/models/OmicsRun")
+}));
 app.use("/api/equipment", require("./src/interface/routes/equipment.routes"));
 app.use("/api/organizations", require("./src/interface/routes/organization.routes"));
 app.use("/api/storage", require("./src/interface/routes/storage.routes"));

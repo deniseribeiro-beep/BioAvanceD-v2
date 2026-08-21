@@ -469,3 +469,105 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect((await expiredCheck.json()).data).toMatchObject({ allowed: false, reason: 'expired' });
   });
 });
+
+test.describe('Workflows and omics data (RF027) — real backend', () => {
+  test('registers a workflow run, links an input file, qualifies the assay, and records a genomic reference (AC#1/2/3/4/5/6)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const sampleID = await createRealSample(request, admin.token);
+
+    // A real, already-uploaded scientific file (RF007) to link as the
+    // workflow run's input — RF027 AC#3 links to files that already
+    // exist elsewhere, it doesn't own new file bytes (#716 slice 2/4).
+    const fileContent = Buffer.from('RF027 e2e fixture — deterministic raw sequencing bytes for input linkage');
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        file: {
+          // sample-file.controller.js's fileFilter only allows
+          // .raw/.zip/.csv/.xls/.xlsx/.pdf/.txt — .fastq isn't in that
+          // list, so this uses .raw (matches the "raw sequencing data"
+          // fixture content, and is the closest allowed extension).
+          name: 'reads.raw',
+          mimeType: 'application/octet-stream',
+          buffer: fileContent,
+        },
+      },
+    });
+    expect(upload.status()).toBe(201);
+    const fileID = (await upload.json()).data._id;
+
+    // AC#1/2/4: register the workflow, version, container image,
+    // parameters/dependencies, and start/end/executor/status.
+    const startedAt = new Date().toISOString();
+    const createRun = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        workflowId: 'variant-calling-pipeline',
+        workflowVersion: '2.3.1',
+        createdBy: `User/${admin.user._id}`,
+        containerImageDigest: 'sha256:e2e0000000000000000000000000000000000000000000000000000000000',
+        softwareDependencies: [{ name: 'bwa', version: '0.7.17' }],
+        parameters: { threads: 8 },
+        startedAt,
+        completedAt: new Date().toISOString(),
+        runStatus: 'succeeded',
+      },
+    });
+    expect(createRun.status()).toBe(201);
+    const runBody = await createRun.json();
+    expect(runBody.data.workflowId).toBe('variant-calling-pipeline');
+    expect(runBody.data.createdBy).toBe(`User/${admin.user._id}`);
+    const workflowRunId = runBody.data.workflowRunId;
+
+    // AC#3: link the real, already-uploaded file as an input.
+    const link = await request.post(`${apiBaseURL}/api/workflow-runs/${workflowRunId}/files`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { fileId: fileID, direction: 'input' },
+    });
+    expect(link.status()).toBe(200);
+    expect((await link.json()).data.inputFileIds).toContain(fileID);
+
+    // AC#6: qualification for the assay this run's outputs feed into.
+    const qualification = await request.post(`${apiBaseURL}/api/omics-qualifications`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        targetAssay: 'RNA-seq',
+        qcRuleSetVersion: 'RNA_QC_1.0',
+        qcMetrics: [{ metric: 'RIN', value: 8.2 }],
+        qualificationDecision: 'eligible',
+      },
+    });
+    expect(qualification.status()).toBe(201);
+    expect((await qualification.json()).data.qualificationDecision).toBe('eligible');
+
+    // AC#5: genomic reference, "quando aplicável" — this run is a
+    // genomics-modality run, so it applies here.
+    const omicsRun = await request.post(`${apiBaseURL}/api/omics-runs`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        modality: 'genomics',
+        referenceAssembly: 'GRCh38',
+        fileLinks: [{ role: 'variant', fileId: fileID }],
+      },
+    });
+    expect(omicsRun.status()).toBe(201);
+    const omicsRunBody = await omicsRun.json();
+    expect(omicsRunBody.data.modality).toBe('genomics');
+    expect(omicsRunBody.data.referenceAssembly).toBe('GRCh38');
+  });
+
+  test('registers an omics run without a genomic reference when not applicable (AC#5 "quando aplicável")', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const omicsRun = await request.post(`${apiBaseURL}/api/omics-runs`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { modality: 'proteomics' },
+    });
+    expect(omicsRun.status()).toBe(201);
+    expect((await omicsRun.json()).data.referenceAssembly).toBeNull();
+  });
+});
