@@ -1,113 +1,99 @@
 # HANDOFF
 
-**Written:** 2026-08-21. Docker is on (inherited stack from a prior session, left running -- see "Repo state" below).
+**Written:** 2026-08-21. Docker is on (inherited stack from an earlier session, left running -- see "Repo state" below).
 
-## Still inside the rabbit hole: #646 -> #668 -> #674 (RF027/#716 closed this sitting, #674 unblocked but its own scope unstarted)
+## Exited the rabbit hole: #646 -> #668 -> #674 chain is done; #646 itself stays open on a separate, unrelated item
 
-**Tracker chain, re-derived fresh this sitting from the issue threads
-themselves (not from an even-earlier handoff's summary):** #646 (Wave 3
-kickoff) is **not** actually closed/unrelated as an earlier handoff
-claimed -- its own comment thread already established #668 (RF029
-tracker) and, through #668, #674 (RF029 slice 6/6) as live descendants.
-#674 was the one open item left in #646's queue, blocked on **RF027**
-("Workflows e dados ômicos") not existing yet -- explicitly Wave 4,
-lowest-urgency, per `E2E_TRACEABILITY_PLAN.md`.
-
-**Dennis explicitly chose to pull RF027 forward this sitting.** Filed
-**#716** as RF027's own tracking issue, split into 4 slices (all landed
-and closed this sitting -- see "What landed" below), scoped from
-`docs/docs-7-31-2026/1-Requisitos-Funcionais-e-Nao-Funcionais.md:638-651`
-and `dict-02_DICIONARIO.md` ELM-0326-0356.
-
-**Important distinction for whoever picks this up next: #716's closure
-does NOT close #674.** #674's own scope (read its body fresh, don't
-trust this summary) is wiring the 3 entities RF027 built
-(`WorkflowRun`/`OmicsQualification`/`OmicsRun`) through #668's RF029
-ingestion-gateway foundation -- `canonical.v1.workflow`/
-`canonical.v1.omicsQualification`/`canonical.v1.omicsRun` schemas + a
-probe-only real-backend proof in `pipeline-continuity.spec.ts`, the same
-pattern #669-673 used for their own entities (dict-02 telemetry/file/
-assay/dataset). That's separate work from building RF027 itself, and it
-was **not started this sitting** -- #674 is now unblocked (its
-dependency exists) but still needs its own iteration. #668 and #646 both
-stay open on #674 for this reason.
-
-**Filed this sitting, both still open:**
-- [**#721**](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/721):
-  dict-02's 2 remaining "Dados ômicos e imagens" entities
-  (ImagingStudy/ImagingDerivedData, ELM-0353-0356, DICOM-specific
-  structured metadata) weren't folded into `OmicsRun` -- structurally
-  different from the 5 modalities `OmicsRun` covers (file-reference
-  bundles), so absorbing them would've misrepresented their real shape.
-  Not blocking #716's own closure -- RF027's own AC#5/#6 are both
-  satisfied without it.
-- [**dyeallpies-skills-pack#380**](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/380):
-  a process-sequencing gap -- `rabbit-hole`'s tracker-opening step ran
-  before `build-loop`'s own multi-item-tracking precedent was in
-  context, which let this sitting initially mis-split RF027 into 4
-  separate issue numbers (#717-720) before self-correcting mid-sitting
-  (closed those 4, folded the breakdown into #716's own body instead).
+**#668 (RF029's own tracking issue) is closed -- all 6/6 slices landed.**
+This sitting picked up exactly where the last one left off (#674, the
+final slice, was the only remaining item once RF027/#716 unblocked it
+last sitting) and finished it. Re-derived the chain fresh from the issue
+threads themselves rather than trusting the prior handoff's summary, per
+`rabbit-hole`'s own discipline -- and that paid off directly: the prior
+handoff claimed "#646 has no other open items beyond the #668/#674
+chain," which turned out to be **stale/wrong**. #646 (Wave 3 tracker)
+has a second, unrelated open descendant, **#697** (RF005's remaining 6
+clinical entities), self-scoped months ago as "marker, not urgent,
+pending a product call on new intake-wizard UI scope." Not picked up
+this sitting -- it needs Dennis's steer on that UI-scope question, not
+just implementation effort. **#646 stays open on #697 alone.**
 
 ## What landed this sitting
 
-**#716 (RF027) closed, all 4 slices merged to
-`feature/docker-e2e-backend-integration`, pushed at `e77f2024`:**
+**#674 (RF029 slice 6/6) closed**, merged to
+`feature/docker-e2e-backend-integration` (not yet pushed -- see below):
 
-- **1/4 WorkflowRun foundation** (AC#1/2/4) -- model + master-data route
-  at `/api/workflow-runs`. AC#4's "executor" reuses BaseRecord's shared
-  `createdBy` field (ELM-0007) rather than inventing new vocabulary.
-  Merge `0d719166`.
-- **2/4 Input/output file linkage** (AC#3) -- this repo has no unified
-  DataFile collection (files are per-parent: `sample_files`/
-  `assayFiles`/`datasetFiles`), so linkage is a dedicated endpoint
-  (`/api/workflow-runs/:workflowRunId/files`) resolving an existing
-  file's id across all three. Merge `c732ed63`.
-- **3/4 OmicsQualification** (AC#6) -- model + master-data route at
-  `/api/omics-qualifications`, same shape as slice 1. Merge `33751b01`.
-- **4/4 OmicsRun** (AC#5) + real-backend e2e proof for the whole
-  tracker -- a single modality-discriminated model (genomics/
-  transcriptomics/proteomics/metabolomics/microbiome) covering 5 of
-  dict-02's 7 "Dados ômicos e imagens" entities (imaging carved out to
-  #721). New "Workflows and omics data (RF027)" describe block in
-  `scientific-data-access.spec.ts` (RF027's own mapped file per
-  `E2E_TRACEABILITY_PLAN.md:225`), 2/2 passing against the real Docker
-  test stack (`backend-app-test` rebuilt first to pick up all 4
-  slices' backend source changes -- build-not-mount gotcha). Full
-  `scientific-data-access.spec.ts` re-run clean: 11/11. Merge `e77f2024`.
+- Added `canonical.v1.workflow` / `canonical.v1.omicsQualification` /
+  `canonical.v1.omicsRun` to `api/backend/src/contracts/canonical/v1/index.js`,
+  mirroring RF027's (#716) `WorkflowRunModel`/`OmicsQualificationModel`/
+  `OmicsRunModel.validate()` field-for-field.
+- Wired all 3 through RF029 slice 1's ingestion gateway (#669), same
+  probe-only pattern slices 2-5 established -- **no new production
+  ingestion routes**; `/api/workflow-runs`, `/api/omics-qualifications`,
+  `/api/omics-runs` stay untouched.
+- `OmicsQualification.targetAssay` is this slice's one FK-checked
+  reference (against the real `assays` collection, via a new
+  `seedAssay()` fixture in `tests/e2e/helpers/seedParticipant.ts`) --
+  same "one cheaply-seedable reference" scope #673 applied to Assay's
+  own `studyId`. Workflow has no referenceable collection of its own;
+  OmicsRun's `fileLinks` stays unreferenced for the same
+  cross-collection-file-resolution reason `canonical.v1.file`'s own
+  `specimenId`-only check already applies.
+- 15 new unit tests (`api/backend/tests/unit/ingestion/workflowOmicsSchema.test.js`)
+  + 7 new real-backend e2e tests (new block in `pipeline-continuity.spec.ts`),
+  all green on the first run against a rebuilt `backend-app-test`.
+- Also fixed `E2E_TRACEABILITY_PLAN.md`'s **RF027 row**, which was still
+  stale (said MISSING) from before #716 actually landed last sitting --
+  fixed in the same pass as RF029's own row going to DONE (6/6).
 
-152/152 native unit+integration tests across all 4 slices. All 4
-per-slice branches (`test/716-rf027-*`) merged `--no-ff` and deleted
-locally; none pushed remotely. AC#7 (no AI/XAI) verified throughout as a
-completeness check, nothing built touches AI/XAI surface.
+Merges: `ae5aaaf8`/`74f42d4d` (the slice itself), `d13dc971`/`81baed03`
+(the doc fix), all on `feature/docker-e2e-backend-integration`.
 
-**One self-caught process error, already fixed:** two `gh issue edit
-716 --body-file /tmp/...` calls silently failed to persist a checklist
-edit (the issue body reverted) -- traced to `/tmp` path unreliability on
-this Windows/Git-Bash setup, the exact failure mode `dennis-windows`'s
-"Use the session scratchpad, never /tmp" section already documents.
-Re-did the edit via the scratchpad path and confirmed it landed. No
-skill fix needed -- the guidance was already correct.
+**Filed #722** (bug, playwright): running the *full*
+`pipeline-continuity.spec.ts` file (not just this slice's own new
+block) surfaced 2 pre-existing failures, unrelated to #674's own
+change -- RF029 slices 1/6 and 2/6's own "real active code" tests
+depend on the `reference-data-bootstrap-hpo-test` chain having actually
+run against the stack (for a real, non-fabricated `HP:0000001` concept).
+This stack instance never ran that chain (confirmed: zero such
+containers ever created, zero active HPO releases in Mongo) -- the
+documented bring-up recipe only covers the core service list, not the
+16-source reference-data-bootstrap chain. Not a code regression; a
+test-design fragility (depends on operational history of the stack
+instance, not on the code under test). Not fixed this sitting -- out of
+#674's own scope, touches earlier foundation-slice (#669/#670) test
+design.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed to origin at
-  `e77f2024` (plus this handoff rotation, pushed after). No PR to
-  `main` exists; `main` stays frozen per convention.
-- **Docker: UP**, inherited from a prior session, still running.
-  `backend-app-test` was rebuilt this sitting (`--build`) to pick up
-  slices 1-4's backend source changes and is healthy as of the e2e run
-  above. Confirm it's still healthy (`docker ps`) before trusting it in
-  a future session, and rebuild again before any further e2e run if
-  more backend source has changed since.
+- On `feature/docker-e2e-backend-integration`, **4 commits ahead of
+  origin, not pushed** (this repo's convention: work locally, push only
+  on Dennis's explicit say-so). No PR to `main` exists; `main` stays
+  frozen per convention.
+- **Docker: UP**, same inherited stack, still running (12/12 containers
+  healthy as of this sitting's end). `backend-app-test` was rebuilt this
+  sitting (`--build`) to pick up the new contract-schema source and is
+  healthy as of the e2e run above. Confirm it's still healthy
+  (`docker ps`) before trusting it in a future session, and rebuild
+  again before any further e2e run if more backend source has changed
+  since.
+- Two untracked paths present all sitting, not touched: `.claude/skills/`
+  and `api/backend/storage/assays/` -- pre-existing, not created by this
+  session.
 
 ## Recommended next steps
 
-Dennis didn't name a specific next issue. The direct continuation of
-this sitting's own thread is **#674's own remaining scope** (RF029
-ingestion-gateway wiring for the 3 entities RF027 just built) --
-re-read #674 and #668 fresh before starting, since this file's summary
-of them will go stale. Otherwise:
-- [**#721**](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/721)
-  (imaging entities carve-out) -- smaller, well-scoped, not urgent.
-- **#646** itself has no other open items beyond the #668/#674 chain as
-  of this sitting -- re-derive fresh, don't assume from this summary.
+Dennis didn't name a specific next issue. None queued. Options surfaced
+this sitting, not picked:
+- **#697** (RF005's remaining 6 clinical entities, #646's own last open
+  descendant) -- needs Dennis's product-scope call on new intake-wizard
+  UI first, not just build effort. Ask before picking this up.
+- **#722** (the reference-data-bootstrap-chain test fragility just
+  filed) -- self-contained, no product decision needed, could be picked
+  up directly.
+- **#721** (imaging entities carve-out from RF027/OmicsRun) -- smaller,
+  well-scoped, not urgent, still open from an earlier sitting.
+- **#664** (Assay's own link fields are format-only, no referential
+  integrity on the real route) -- still open, flagged again by #673 and
+  #674's own gateway-only reference checks; bigger than one slice per
+  its own scope note.
