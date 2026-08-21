@@ -62,6 +62,14 @@ export async function seedSensorWithPolicy(
     minTemp,
     maxTemp,
     hysteresis: 0.5,
+    // #678 dict-02 ThresholdProfile alignment -- inserted via raw driver
+    // (no API/Mongoose write path for this collection exists), so these
+    // don't come from TemperaturePolicy.schema.js's own defaults and must
+    // be set explicitly here to keep e2e-seeded policies dict-02-complete.
+    metricType: 'temperature',
+    ruleVersion: '1.0.0',
+    effectivePeriod: { start: new Date(), end: null },
+    minimumDuration: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   });
@@ -163,6 +171,12 @@ export async function seedSensorWithFreezerSample(
     minTemp,
     maxTemp,
     hysteresis: 0.5,
+    // #678 dict-02 ThresholdProfile alignment -- see seedSensorWithPolicy's
+    // own comment above for why these are set explicitly here.
+    metricType: 'temperature',
+    ruleVersion: '1.0.0',
+    effectivePeriod: { start: new Date(), end: null },
+    minimumDuration: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   });
