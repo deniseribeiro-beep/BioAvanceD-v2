@@ -16,6 +16,11 @@ const { validateActiveCodes } = require('../ingestion/activeCodeValidator');
  * AC#4 reads "somente" (only) -- no controlled-review escape hatch here,
  * unlike ingestionGateway's `allowControlledReview` (that's RF029's own
  * AC, not RF005's).
+ *
+ * #706 confirmed this all-or-nothing gate is the intended reading of
+ * AC#4 for a multi-coding Condition -- not a bug, and not a case for
+ * per-coding gating -- per canonical-data-contract-v1.md's own #690
+ * landing note, written before either #698 or #706 existed.
  */
 async function createCondition(db, data) {
   const condition = ConditionModel.create(data);

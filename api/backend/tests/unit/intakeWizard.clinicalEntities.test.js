@@ -57,6 +57,7 @@ function clearCache() {
 
 const ORPHA_SYSTEM_URI = 'http://www.orpha.net';
 const HPO_SYSTEM_URI = 'http://purl.obolibrary.org/obo/hp.owl';
+const OMIM_SYSTEM_URI = 'https://www.omim.org';
 
 /**
  * Real query-matching fake for the two RF029 active-code-check collections
@@ -68,10 +69,13 @@ function makeActiveCodeCollections() {
   const terminologyConcepts = [
     { systemUri: ORPHA_SYSTEM_URI, code: 'ORPHA:558', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-orpha' },
     { systemUri: HPO_SYSTEM_URI, code: 'HP:0000822', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-hpo' },
+    // #698: RF028's real OMIM importer stores bare digits, no "OMIM:" prefix.
+    { systemUri: OMIM_SYSTEM_URI, code: '154700', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-omim' },
   ];
   const referenceDatasetReleases = [
     { referenceDatasetReleaseId: 'release-orpha', datasetCode: 'ORPHA', releaseStatus: 'active' },
     { referenceDatasetReleaseId: 'release-hpo', datasetCode: 'HPO', releaseStatus: 'active' },
+    { referenceDatasetReleaseId: 'release-omim', datasetCode: 'OMIM', releaseStatus: 'active' },
   ];
   return {
     terminologyConcepts: {
@@ -289,5 +293,16 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(collections.conditions.docs).toHaveLength(0);
+  });
+
+  it('#698: strips the wizard\'s always-prefixed "OMIM:<digits>" down to RF028\'s bare-digit storage format before building conditionCoding', async () => {
+    const payload = { ...VALID_PAYLOAD, diagnosis: { orphaCode: 'ORPHA:558', omimCode: 'OMIM:154700' } };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.conditions.docs).toHaveLength(1);
+    const omimCoding = collections.conditions.docs[0].conditionCoding.find((c) => c.systemUri === 'https://www.omim.org');
+    expect(omimCoding).toMatchObject({ systemUri: 'https://www.omim.org', code: '154700' });
   });
 });

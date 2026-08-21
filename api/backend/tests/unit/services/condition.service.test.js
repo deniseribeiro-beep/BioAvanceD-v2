@@ -59,6 +59,21 @@ describe('condition.service', () => {
       await expect(createCondition(db, {})).rejects.toThrow('participantId é obrigatório para Condition');
       expect(db.collections.conditions?.docs || []).toHaveLength(0);
     });
+
+    it('#706: rejects the whole write when one of several codings is invalid, even though the others are active (RF005 AC#4\'s "somente" gates the write, not a per-coding drop)', async () => {
+      const db = createFakeDb(activeConceptAndRelease());
+
+      await expect(
+        createCondition(db, {
+          participantId: 'PART-1',
+          conditionCoding: [
+            { systemUri: SYSTEM_URI, code: CODE },
+            { systemUri: 'http://www.orpha.net', code: 'ORPHA:DOES-NOT-EXIST' },
+          ],
+        })
+      ).rejects.toThrow(/não pertence a uma release de referência ativa/);
+      expect(db.collections.conditions?.docs || []).toHaveLength(0);
+    });
   });
 
   describe('getConditionsForParticipant', () => {
