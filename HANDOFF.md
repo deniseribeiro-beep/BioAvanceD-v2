@@ -1,147 +1,120 @@
 # HANDOFF
 
-**Written:** 2026-08-21, continuing the same rabbit hole under Dennis's
-repeated "Keep descending" / "Next slice" instructions this sitting.
-Docker is on.
+**Written:** 2026-08-21. Docker is on.
 
-## Rabbit-hole state: STILL INSIDE #646 -> #707 -- 4/6 sub-slices landed (#708-711), 2 remain (#712, #713)
+## Rabbit-hole EXIT: #646 -> #707 closed at the #707 level -- all 6 sub-slices landed
 
 **Tracker: #646** (Wave 3 kickoff) -> **#707** (RF005: wire remaining 6
 clinical-data entities into real intake-wizard UI + a real CCI
-algorithm).
+algorithm) -> **closed this sitting**.
 
-This sitting picked up and landed four sub-slices via `build-loop`, back
-to back:
+This sitting continued directly from the prior handoff's state (4/6
+done: #708-711 already landed) and finished the remaining two:
 
-- **#708 (AllergyIntolerance):** manual-entry allergen field (name + DCB
-  code + reaction). Merged `b4889219`.
-- **#709 (FamilyHistory):** manual-entry family-history field
-  (relationship select + condition name + ORPHA code + onset). Merged
-  `fdfe6349`.
-- **#710 (Procedure):** manual-entry procedure field (name + code +
-  required performed date + optional body-site text), coded against a
-  newly-invented local system URI. Merged `d61993e2`.
-- **#711 (ClinicalObservation):** manual-entry lab-result field (test
-  name + LOINC code + value + unit + required effective date), coded
-  against the real `http://loinc.org` systemUri (a genuine RF028
-  importer exists). Merged `9a7efb2b`.
+- **#712 (ClinicalOutcome):** no longitudinal-outcome UI existed in the
+  wizard before this -- added a manual-entry outcome field (`Select`
+  over dict-02's 7 outcomeType categories, mapped to English slugs,
+  plus a required outcome date) to `ClinicalIntakeWizard.jsx`, wired
+  additively via `recordClinicalEntities`. Also had to add
+  `clinicalOutcomes` to `contracts/canonical/v1/index.js`'s
+  `clinicalDataSchema` AJV contract -- a second, independent validation
+  gate from `buildClinicalData`, missed on the first pass, caught by a
+  422 `NON_CANONICAL_FIELD` mid-work. Also fixed a pre-existing broken
+  `toEqual` test in `intakeWizard.helpers.test.js` that #708-711 never
+  updated for their own added fields. Merged `cdaddcd4`.
+- **#713 (real Charlson Comorbidity Index + DerivedScore):** implemented
+  the original-1987 CCI as a new pure module
+  (`api/backend/src/services/charlsonComorbidityIndex.js`), wired into
+  `recordClinicalEntities` to create a `DerivedScore`. The wizard's
+  existing `charlsonConditions` checklist (12 items) predates this
+  slice and was never the real 19-category Charlson set -- only
+  `diabetesType1`/`diabetesType2` (collapsed to one "diabetes"
+  category, weight 1), `copd` (weight 1), and `ckd` (weight 2)
+  genuinely map to real Charlson categories; the rest are correctly
+  excluded from the score (dict-05 REF-033's own caution). **Also
+  discovered and fixed inline, since it blocked #713's own DoD:** the
+  wizard had formData fields, a schema, and even a pre-existing unit
+  test (#522) for the comorbidity checklist, but literally no checkbox
+  ever rendered in the JSX -- `charlsonConditions` was always empty
+  from a real submission. Added the missing checkbox grid. Merged
+  `7daa068f`.
 
-All four followed the identical shape: `clinicalDataSchema` gained the
-new array field, `buildClinicalData`/`recordClinicalEntities` wired it
-additively (best-effort, never fails the intake), 2 new native-only
-unit cases each in `intakeWizard.clinicalEntities.test.js`, and #696's
-real-backend Playwright spec
-(`tests/e2e/intake-wizard.spec.ts`'s "Clinical-entity wiring" describe
-block) extended once per slice to submit+assert the new entity
-alongside the others from one live submission. All four merged, closed,
-progress-commented on #707 (1/6 -> 2/6 -> 3/6 -> 4/6).
+All four #708-711 progress comments, plus two more (5/6, 6/6), landed
+on #707 across this sitting and the prior one. #707 closed with a
+summary naming all 6 merge commits.
 
-**Known gaps, flagged not fixed, filed as issues rather than silently
-left undocumented:**
-- [**#714**](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/714):
-  none of the three manually-coded entities' services
-  (`allergy-intolerance`/`family-history`/`procedure.service.js`) gate
-  their coded field on `activeCodeValidator` (RF005 AC#4) --
-  pre-existing since #692. One issue, three follow-up comments (not
-  three duplicates); Procedure's comment flags a real nuance (its code
-  has no real `ReferenceDatasetRelease` to gate against at all).
-- [**dyeallpies-skills-pack#377**](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/377):
-  a transient post-Docker-rebuild Playwright flakiness hit once (during
-  #709's verification) -- resolved on retry, didn't recur in #710/#711's
-  verification.
-- [**dyeallpies-skills-pack#378**](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/378):
-  #711's natural field name (`clinicalObservations`) turned out to
-  already exist as an unrelated free-text notes field in the same
-  schema/formData -- caught before it caused a real bug, but a genuine
-  recurring risk for #712/#713's still-open slices, which wire into the
-  identical growing payload.
+**#707's own parent chain, checked fresh (not assumed from the prior
+handoff's narrative):** #697 (the issue #707 split from) was already
+closed. **#646 ("Wave 3 kickoff," scoped to RF014/015/016/017/024/025/
+026/029) does NOT actually list #707/RF005 as one of its own items** --
+its body was re-read fresh this sitting and RF005 doesn't appear
+anywhere in it. The prior handoff's "#646 -> #707" framing was a loose
+rabbit-hole lineage note, not a real tracking relationship. **#646
+stays open, completely untouched this sitting, with its own unrelated
+scope** -- picking it up next is a fresh, unrelated rabbit hole, not a
+continuation of anything landed here.
+
+**New issues filed this sitting:**
+- [**#715**](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/715):
+  the real CCI only scores 3 of the original index's 19 categories
+  today, because the wizard's checklist only collects data for those 3
+  -- a completeness follow-up, not a correctness bug (the score is
+  accurate for what it can compute). Not blocking, doesn't reopen #713.
+- [**dyeallpies-skills-pack#379**](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/379):
+  `build-loop`'s own `local-env` overlay already documented the exact
+  fix for the #712 AJV-schema miss above, but this session never read
+  that overlay before starting -- a session-friction report about the
+  skill's structure, not a product issue.
 
 ## What landed this sitting
 
-- 4 merge commits (`b4889219`, `fdfe6349`, `d61993e2`, `9a7efb2b`) on
-  `feature/docker-e2e-backend-integration`.
-- #708, #709, #710, #711 closed. #707 progress-commented four times
-  (1/6, 2/6, 3/6, 4/6).
-- **#714** filed and broadened via two follow-up comments (now covers
-  all 3 manually-coded entities' gap).
-- Two skills-pack friction reports filed:
-  [#377](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/377)
-  (post-rebuild e2e flakiness) and
-  [#378](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/378)
-  (schema-key naming-collision risk, directly relevant to #712/#713).
-- The `resolve-issue` pre-close routing gate needed a fresh invocation
-  immediately before each `gh issue close` call, all four times --
-  mechanical, cost extra Skill calls, didn't block anything. Not
-  re-reported (already noted after #709, same shape, no new
-  information).
+- 2 merge commits (`cdaddcd4`, `7daa068f`) on
+  `feature/docker-e2e-backend-integration`, pushed to origin.
+- #712, #713 closed. #707 (tracker) closed. Both per-issue branches
+  (`test/712-...`, `test/713-...`) merged `--no-ff` and deleted
+  locally; neither was ever pushed remotely.
+- #715 filed (product follow-up). dyeallpies-skills-pack#379 filed
+  (skills-pack friction report).
+- Full native backend unit suite run twice this sitting (once per
+  slice), green both times: 6623/6623 after #712, 6637/6637 after
+  #713.
+- Two real-backend Playwright proofs, one per slice, both 1/1 passing
+  against the Docker test stack (`compose.test.yml`, `--build` for
+  `backend-app-test`/`frontend-app-test` each time, since both slices
+  touched backend and/or frontend source).
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed to origin at
-  `9a7efb2b`. All four per-issue branches (`test/708-...` through
-  `test/711-...`) were merged `--no-ff` and deleted locally (none was
-  ever pushed remotely).
-- No PR to `main` exists. `main` stays frozen per this repo's convention.
-- **Docker: DOWN.** `backend-app-test`/`frontend-app-test` were rebuilt
-  with `--build` four times this sitting (once per slice) to pick up
-  source changes, and every e2e run happened against that stack. It was
-  inherited (already up ~2h before this session started, not spun up by
-  this session) -- at session end, with the rabbit hole paused and
-  #712/#713 not being picked up immediately, `clean-up`'s "inherited
-  stack" check asked Dennis whether to tear it down rather than leave it
-  running unattended; he chose teardown (`docker compose ... down`,
-  named volumes untouched). The next #707 pickup needs a fresh
-  `docker compose up` per `docker-workflow`'s recipe, not an assumption
-  the stack is still up.
+  `7daa068f`. No PR to `main` exists. `main` stays frozen per this
+  repo's convention.
+- **Docker: UP.** The test stack was rebuilt twice this sitting
+  (`--build` for `backend-app-test`/`frontend-app-test`, once per
+  slice). Mid-sitting, after #712 landed, Dennis was asked whether to
+  tear it down and explicitly chose to leave it running (anticipating
+  #713's pickup, which then happened in the same sitting). It is still
+  up at session end -- the next session should confirm it's still
+  healthy (`docker ps`) rather than assume, and rebuild
+  `backend-app-test`/`frontend-app-test` again before trusting it
+  reflects any newer source changes (build-not-mount gotcha,
+  `docker-workflow`'s BioAvanceD-v2 overlay).
 
 ## Recommended next steps
 
-**#707's 2 remaining sub-slices (#712, #713) are the live queue** --
-both confirmed genuinely different-shaped from #708-711 (read each
-issue's own body fresh, not just #707's tracking summary, before
-starting either):
+No specific issue was named by Dennis for the next session -- none
+queued. For reference, what's currently open and relevant:
 
-- **#712 (ClinicalOutcome):** "No longitudinal-outcome UI exists in the
-  intake wizard today (progression/remission/relapse/etc.) -- unlike the
-  other 5 slices, this one needs genuinely new frontend fields, not just
-  a backend mapping." Model/service already exist (#691) -- read
-  `docs/architecture/canonical-data-contract-v1.md`'s ClinicalOutcome
-  section for the field list before designing the UI. **Before naming
-  any new formData/schema field for this slice, grep for the exact name
-  first** -- see dyeallpies-skills-pack#378 above; this payload has 40+
-  existing keys and at least one (`clinicalObservations`) doesn't
-  obviously map to any dict-02 entity.
-- **#713 (DerivedScore/CCI):** explicitly NOT a UI-wiring slice like the
-  other 5 -- "the wizard already collects `charlsonConditions` ... but
-  nothing computes the actual Charlson Comorbidity Index numeric score
-  -- that needs a real weighted-scoring algorithm (each condition has a
-  defined CCI weight), not just a data mapping." Dennis already
-  confirmed (2026-08-21, per the issue body) to implement the real
-  algorithm rather than leave `charlsonComorbidities` as the informal
-  array it is today. Needs a documented CCI weight table + standard
-  summation, wired to create a `DerivedScore` with `scoreComponents`
-  populated per component condition (dict-02 ELM-0259 requires this
-  non-empty -- "nunca armazenar somente o escore final"). Definition of
-  done explicitly calls for a real-backend Playwright proof that a
-  submission with known comorbidities produces the *correct numeric
-  score* -- this is a correctness-of-computation proof, not just a
-  wiring-exists proof like #708-712's specs.
-
-No dependency between #712/#713; pick either. Both are expected to take
-meaningfully longer than #708-711 did.
-
-**New, separate from #707:** #714 (three entities' missing RF005 AC#4
-gate) -- ordinary backlog, not part of #707's queue.
-
-#674 stays parked on RF027 (Wave 4, not started, out of scope) -- unless
-Dennis pulls it forward, untouched.
-
-Rabbit-hole budget: this sitting spent ~12pts (four full build-loop
-slices, each new UI + backend wiring + schema + 2 unit tests + 1
-extended e2e spec + 2 docs + issue filing/broadening, plus two
-skills-pack friction reports). Cumulative total was already well past
-the ~10pt advisory budget before this sitting started, and this
-sitting alone now exceeds the full advisory budget on its own. 2 slices
-remain (#712, #713), both explicitly larger/differently-shaped than the
-four just landed -- strongly worth an explicit check-in with Dennis
-before continuing, more so than the last three rotations.
+- [**#714**](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/714)
+  (from a prior sitting, untouched this one): three manually-coded
+  entities (`AllergyIntolerance`/`FamilyHistory`/`Procedure`) don't
+  gate their coded fields on `activeCodeValidator` per RF005 AC#4 --
+  ordinary backlog.
+- [**#715**](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/715)
+  (filed this sitting): extend the wizard's comorbidity checklist to
+  cover more of the real 19 Charlson categories -- smaller, well-scoped.
+- **#646** (Wave 3 kickoff: RF014/015/016/017/024/025/026/029) remains
+  open, completely untouched across this sitting and the prior ones --
+  a fresh pickup here is unrelated to everything #707's rabbit hole
+  covered.
+- #674 stays parked on RF027 (Wave 4, not started, out of scope) --
+  unless Dennis pulls it forward, untouched.
