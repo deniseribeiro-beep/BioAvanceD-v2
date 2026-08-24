@@ -77,15 +77,15 @@ at the generator level -- out of #730's scope, filed separately.
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed and up to date
-  with origin as of `ada79ee8` (the #730 merge commit). This HANDOFF
-  rotation is the only uncommitted change as this file is written --
-  commit it before ending the sitting.
-- Docker: **up** this sitting (`compose.test.yml`'s core services +
-  `admin-bootstrap-test`, brought up specifically to verify #730). Left
-  running -- not torn down, in case the next sitting continues straight
-  into #723 while it's still warm. If picking this back up later than
-  immediately, expect it to be down again and follow
-  `docker-workflow`'s local-env overlay's startup recipe.
+  with origin as of `9642ee22` (this HANDOFF rotation).
+- Docker: brought up this sitting (`compose.test.yml`'s core services +
+  `admin-bootstrap-test`) to verify #730, then torn down (`docker
+  compose down`, no `-v`) as part of this sitting's own end-of-session
+  cleanup -- no queued continuation or explicit "leave it running"
+  actually justified keeping it up. `mongodb-test-data` and the other
+  named volumes are untouched, so re-bringing the stack up next sitting
+  follows `docker-workflow`'s local-env overlay's normal startup recipe,
+  same as any cold start.
 - Two untracked paths present, not touched: `.claude/skills/` and
   `api/backend/storage/assays/` -- pre-existing, carried forward again.
 - No open PR; nothing pushed to `main`; `main` stays frozen.
