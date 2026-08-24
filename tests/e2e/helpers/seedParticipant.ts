@@ -70,6 +70,8 @@ export interface SeededStorageBox {
   rackId: string;
   shelfId: string;
   freezerId: string;
+  equipmentId: string;
+  containerID: string;
 }
 
 /**
@@ -127,7 +129,7 @@ export async function seedStorageBoxLocation(): Promise<SeededStorageBox> {
     updatedAt: new Date(),
   });
 
-  await db.collection('equipment').insertOne({
+  const equipmentResult = await db.collection('equipment').insertOne({
     equipmentID: containerID,
     status: 'operational',
     createdAt: new Date(),
@@ -144,7 +146,35 @@ export async function seedStorageBoxLocation(): Promise<SeededStorageBox> {
     rackId: rackResult.insertedId.toString(),
     shelfId: shelfResult.insertedId.toString(),
     freezerId: freezerResult.insertedId.toString(),
+    equipmentId: equipmentResult.insertedId.toString(),
+    containerID,
   };
+}
+
+/**
+ * #724: deletes every doc a single seedStorageBoxLocation() call created
+ * -- storageContainers (freezer/shelf/rack), the storageBox, the
+ * equipment row, and the sensor row -- by the ids/containerID that call
+ * returned. Call from the owning spec's afterAll.
+ *
+ * Root cause of #724 (521+ accumulated `equipment` debris rows in the
+ * shared mongodb-test-data volume): seedStorageBoxLocation() never
+ * returned an id for the equipment/sensor docs it created, so no caller
+ * could ever target them for cleanup -- unlike organization/collection
+ * fixtures, which already clean up per-test (see human-showcase.spec.ts's
+ * Wave 2 finally block). This is the missing counterpart.
+ */
+export async function cleanupStorageBoxLocation(seeded: SeededStorageBox): Promise<void> {
+  const db = await getDb();
+  await db.collection('storageBoxes').deleteOne({ _id: new ObjectId(seeded.boxId) });
+  await db.collection('storageContainers').deleteMany({
+    _id: { $in: [seeded.rackId, seeded.shelfId, seeded.freezerId].map((id) => new ObjectId(id)) },
+  });
+  await db.collection('equipment').deleteOne({ _id: new ObjectId(seeded.equipmentId) });
+  // The sensor doc has no id of its own in SeededStorageBox -- it shares
+  // containerID (via its locationId field) with the equipment doc, so
+  // that's what identifies it for deletion instead.
+  await db.collection('sensors').deleteMany({ locationId: seeded.containerID });
 }
 
 /**
