@@ -519,6 +519,39 @@ export interface Organization {
   website?: string | null;
 }
 
+// #726 (RF008 AC#6) — ReportTemplate, api/backend/src/models/ReportTemplate.js
+export const REPORT_TEMPLATE_HANDLER_KEYS = [
+  'samplesByPatient',
+  'patient',
+  'sample',
+  'sampleAnalysis',
+  'temperature',
+  'sensor',
+  'equipment',
+  'result',
+  'withdrawalHistory',
+  'tissueOriginHistory',
+  'extracellularNetwork',
+  'accessLogs',
+] as const;
+
+export type ReportTemplateHandlerKey = typeof REPORT_TEMPLATE_HANDLER_KEYS[number];
+
+export interface ReportTemplate {
+  _id?: string;
+  code: string;
+  name: string;
+  description?: string | null;
+  handlerKey: ReportTemplateHandlerKey | string;
+  handlerOptions?: Record<string, unknown>;
+  isSystemDefined: boolean;
+  templateStatus: 'active' | 'retired';
+  createdBy?: string | null;
+  updatedBy?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 // RF020 / MIABIS Collection (ELM-0039..0052) — dict-02_DICIONARIO.md
 export interface Collection {
   _id?: string; // MongoDB ID

@@ -30,6 +30,7 @@ const SystemManagementPage = lazy(() => import('./views/SystemManagementPage'));
 const ReportsPage = lazy(() => import('./views/ReportsPage'));
 const ReportViewPage = lazy(() => import('./views/ReportViewPage'));
 const ReportQueryPage = lazy(() => import('./views/ReportQueryPage'));
+const ReportTemplatesPage = lazy(() => import('./views/ReportTemplatesPage'));
 const QualityDescriptionPage = lazy(() => import('./views/QualityDescriptionPage'));
 const ImportForm = lazy(() => import('./components/v2/ImportForm'));
 const BackupPage = lazy(() => import('./views/BackupPage'));
@@ -115,6 +116,9 @@ function App() {
                   <Route path="/logs" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><LogsPage /></ProtectedRoute>} />
                   <Route path="/logs/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><LogDetailPage /></ProtectedRoute>} />
                   <Route path="/reports" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportsPage /></ProtectedRoute>} />
+                  {/* #726 (RF008 AC#6): template management is Coordenador+Administrador
+                      only (manageReportTemplates), narrower than /reports' own view-only gate. */}
+                  <Route path="/reports/templates" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ReportTemplatesPage /></ProtectedRoute>} />
                   <Route path="/reports/query/:type" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportQueryPage /></ProtectedRoute>} />
                   <Route path="/reports/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportViewPage /></ProtectedRoute>} />
                   <Route path="/quality-descriptions" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionPage /></ProtectedRoute>} />
