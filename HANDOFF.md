@@ -1,8 +1,7 @@
 # HANDOFF
 
 **Written:** 2026-08-24. **Still inside a rabbit hole** (tracker **#725**)
--- stopped at this sitting's ~10-point complexity budget
-(`rabbit-hole` skill's Step 5), not because the queue is empty. Re-read
+-- one queue item (#727) resolved this sitting, three remain. Re-read
 #725 for current queue membership before resuming rather than trusting
 this snapshot alone.
 
@@ -10,90 +9,104 @@ this snapshot alone.
 
 Tracker: **#725** ("Rabbit-hole tracker: RF008/RF013 backend gaps +
 equipment fixture cleanup (seeds #723, #724)"), open. This sitting ran
-**without Docker** (daemon torn down/cold, by instruction) -- both seed
-issues' own Definitions of Done need Docker (a green `test:e2e:docker`
-run for #723; a live-Mongo-verified fix for #724), so neither closes
-regardless of how much backend work landed.
+**without Docker** (daemon down/cold) -- the one Docker-dependent queue
+item (#730) still wasn't picked up.
 
-Queue: **#723** (open, progress-commented, 3 pieces resolved/corrected +
-3 split off), **#724** (open, foundational fix landed + 1 piece split
-off). Two more issues surfaced and filed but are **not** queue members
-(unrelated findings, filed separately per the ordinary case-4 rule, not
-folded into #725): **#729** (tests/e2e has no real typecheck coverage --
-missing `@types/node`), and the three #723 splits **#726/#727/#728**
-count as descendants of #723 and *are* in scope if picked up.
+Queue: **#726** (RF008 AC#6, report templates -- design calls resolved,
+not started), **#728** (RF013 AC#5/AC#6, backup-policy entity -- design
+call resolved, not started), **#730** (wire `cleanupStorageBoxLocation()`
+into ~5 real spec callers -- Docker-dependent, not started).
 
 ## What landed this sitting
 
-**RF013 AC#1/AC#3** (persisted backup run-history + checksum) --
-`feature/docker-e2e-backend-integration` @ `ddd9154c`. `backup.service.js`
-now computes a deterministic sha256 checksum per backup run (in
-`manifest.json` for both mongodump and JSON-fallback paths -- mongodump
-never wrote a manifest before this) and persists one `backupHistory` doc
-per run via the caller's already-connected db (no new MongoClient
-connection -- no-op when no db passed, zero behavior change for
-pre-existing callers). `db` threaded through `POST /perform` and the
-daily cron job. `GET /list` merges persisted status/checksum onto the
-filesystem listing. 71 tests green (native, no Docker).
+**#727 (RF013 AC#4, sandboxed controlled restore testing) -- closed.**
+`feature/docker-e2e-backend-integration` @ `ddd545fe` (merge of
+`test/727-sandboxed-restore-test` @ `0cb21472`). `backup.service.js`'s
+`restoreBackup()` was the only restore path and it's live/destructive
+(`mongorestore --drop` against the configured db). New
+`testRestoreBackup()`: restores into a disposable scratch database
+(`<dbName>_restoretest_<timestamp>`, remapped via mongorestore's
+`--nsFrom`/`--nsTo` so the live db is never touched), verifies the
+backup's own checksum against its `manifest.json` first (RNF010:
+"validado por checksum"), tears the scratch db down after. Falls back to
+a JSON restore into the same scratch db when `mongorestore` is
+unavailable. New route `POST /api/backup/restore-test/:fileName`, same
+`manageBackup` RBAC as the existing restore route. Persists one
+`restoreTestHistory` doc per run (mirrors #723's `backupHistory`
+pattern). 67/67 tests (36 unit + 31 integration), native -- no Docker,
+mocked exec/MongoClient per this repo's backend-internal-slice proof
+bar.
 
-**RF008 AC#5** -- corrected, not a gap: `app.js:194`'s global
-`auditRequest` middleware already logs every export request (action,
-entity, full path incl. type/format, actor, status, duration). No code
-change; commented the correction on #723.
+**Docs-first check resolved most of #726/#727/#728's "needs Dennis's
+design call" framing before asking anything** (per `resolve-issue`'s
+own docs-first-before-`AskUserQuestion` rule, prompted mid-session by
+Dennis: "Design calls might have answers in updated docs"). Findings
+recorded as comments on #726/#727/#728 directly:
+- RNF010 already settles restore-test *validation* as checksum-based
+  (not row-count/diff) and gives the RPO/RTO/retention/encryption
+  numbers for #728's backup policy -- only the entity schema, RBAC, and
+  cron-hot-reload mechanism were genuinely open for #728; only the
+  restore-test *target* (scratch vs. namespace) was genuinely open for
+  #727.
+- #726 (report templates) had nothing settled in docs -- full design
+  call, now resolved with Dennis (see below).
+- New 79-entity Polyglot Persistence data model doc
+  (`docs/docs-7-31-2026/manuscript/2.2-Additional_file_2_...docx`) has
+  no `ReportTemplate` entity and no `BackupPolicy` entity -- confirmed
+  absent, not just unsearched.
 
-**#724 root cause + foundational fix** --
-`feature/docker-e2e-backend-integration` @ `d9bb4955`.
-`seedStorageBoxLocation()` (`tests/e2e/helpers/seedParticipant.ts`)
-never returned an id for the equipment/sensor docs it creates, so no
-caller could ever clean them up -- the actual cause of the 521+-row
-equipment debris. Added `equipmentId`/`containerID` to its return type
-and a new `cleanupStorageBoxLocation()` export. Purely additive,
-typechecks clean (`tsc --noEmit -p tsconfig.json`: 88 pre-existing
-`@types/node`-noise errors before and after -- see #729 -- zero new
-ones; frontend's `tsc` binary works against the root tsconfig, no
-install needed: `./frontend/node_modules/.bin/tsc --noEmit -p
-tsconfig.json`).
+**Design calls resolved with Dennis this sitting** (recorded as
+comments on each issue):
+- **#726**: existing hardcoded report types migrate into the new
+  `ReportTemplate` model as seeded rows (one code path, no permanent
+  legacy special-casing). Backend + frontend UI both in scope for this
+  one issue (not split into a follow-up). RBAC: Coordenador +
+  Administrador can create/edit templates.
+- **#727**: restore-test target is a disposable scratch database (see
+  "What landed" above -- already built).
+- **#728**: scope includes live cron hot-reload --
+  `scheduler.service.js`'s `startBackupSchedule` must pick up
+  `BackupPolicy` changes without a process restart, in addition to the
+  entity/CRUD/audit-log work.
 
-**Follow-ups filed this sitting** (all reference their originating
-issue): **#726** (RF008 AC#6, report-template model -- needs Dennis's
-design call), **#727** (RF013 AC#4, sandboxed restore test mode -- needs
-Dennis's design call, safety-relevant), **#728** (RF013 AC#5,
-backup-policy entity + UI -- needs Dennis's design call), **#730**
-(wire `cleanupStorageBoxLocation()` into #724's ~5 real spec callers +
-verify against live Mongo -- Docker-dependent, lists every confirmed
-call site), **#729** (tangential finding, not a queue member: no
-`@types/node` anywhere in the repo, so `tests/e2e/`'s own tsconfig
-can't usefully typecheck -- found while verifying the #724 fix above).
+**#731 filed** (found during this session's `wrap-up` audit, not
+folded into #725): my #727 close comment named periodic restore-test
+scheduling as a deferred follow-up without a tracking issue --
+`wrap-up`'s shipping-addendum check #10 caught it. Small, not a design
+call: `scheduler.service.js`'s existing `startBackupSchedule` pattern
+generalizes directly.
 
 ## Not yet done -- still inside #725
 
-- **#726/#727/#728**: none started -- each needs Dennis's product/design
-  call before any code, per this repo's convention for entity/UI/safety
-  decisions.
-- **#730**: none started -- needs Docker up to safely edit and verify
-  the 5 real-backend spec files it lists.
-- No other #723/#724 pieces remain unaddressed; #725's remaining known
-  members are exactly #726/#727/#728/#730 above, all blocked on either
-  Dennis's input or Docker being available -- **not** blocked on more
-  investigation.
+- **#726**: design calls resolved (see above), no code written yet.
+  Needs: `ReportTemplate` entity + seed migration of existing hardcoded
+  types + CRUD routes/RBAC + frontend UI. Likely too big for one
+  iteration -- consider `divide-and-conquer` when picked up (backend
+  entity/CRUD as a landable first slice, UI separately).
+- **#728**: design call resolved (see above), no code written yet.
+  Needs: `BackupPolicy` entity (fields per RNF010's settled numbers) +
+  admin CRUD + audit-log wiring (existing `auditLogger` pattern) +
+  `scheduler.service.js` cron hot-reload.
+- **#730**: none started -- needs Docker up to safely edit/verify the 5
+  real-backend spec files it lists.
+- **#731**: none started -- small, not blocked on anything (see above).
+  Not an #725 queue member (filed as an ordinary found-gap per
+  `wrap-up`'s case-4 rule, same as #729 before it).
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed through `d9bb4955`.
-- Docker: still down this sitting, by instruction -- next session
-  needing it starts cold (see the 2026-08-21 predecessor note this
-  file's prior rotation carried, now superseded by this one -- if a
-  fresh cold-rebuild procedure is needed, that predecessor context is
-  in this file's git history, not restated here).
+- On `feature/docker-e2e-backend-integration`, pushed through `ddd545fe`.
+- Docker: down this sitting (never brought up -- #727 followed this
+  repo's "backend-internal slice" proof bar, mocked exec/MongoClient,
+  same precedent as #723/#724's prior-sitting work).
 - Two untracked paths present, not touched: `.claude/skills/` and
   `api/backend/storage/assays/` -- pre-existing.
 - No open PR; nothing pushed to `main`; `main` stays frozen.
 
 ## Recommended next steps
 
-Resuming #725 means: either pick up #726/#727/#728 (each needs Dennis's
-design call first -- these are genuine product decisions, not something
-to implement unilaterally), or #730 once Docker is available (edit +
-run the 5 real-backend specs it names, confirm nothing broke). Dennis
-hasn't picked a specific one yet this sitting -- none queued beyond what
-#725 already lists.
+None queued beyond what #725 already lists. Resuming #725 means picking
+up #726 or #728 (both have their design calls resolved now -- ready to
+implement, size each with `divide-and-conquer` if it grows past one
+iteration) or #730 once Docker is available. #731 is small and
+Docker-free, pickable anytime independent of #725.
