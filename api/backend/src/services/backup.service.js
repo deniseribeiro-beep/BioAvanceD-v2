@@ -5,8 +5,32 @@ const { exec } = require('child_process');
 const { MongoClient } = require('mongodb');
 const logger = require('../utils/logger');
 const env = require('../config/env');
+const backupPolicyService = require('./backup-policy.service');
 
 const DEFAULT_RETENTION_DAYS = 30;
+
+// #728: retention now prefers the admin-editable BackupPolicy over the
+// static env var -- runBackup(db) resolves this once per run and threads
+// it through to whichever cleanup path performBackup takes, so a policy
+// edit is the thing actually governing how long backups are kept, not
+// just a stored-but-unused field. Falls back to the env var (then the
+// hardcoded default) when db isn't available -- existing callers that
+// don't pass one (or run outside a request/scheduler context) keep the
+// prior env-only behavior exactly.
+async function resolveRetentionDays(db) {
+  if (!db) return Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
+
+  try {
+    const policy = await backupPolicyService.getPolicy(db);
+    if (Number.isFinite(Number(policy?.retentionDays))) {
+      return Number(policy.retentionDays);
+    }
+  } catch (error) {
+    logger.error('Erro ao buscar política de retenção de backup, usando padrão:', error.message);
+  }
+
+  return Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
+}
 
 // #723 (RF013 AC#3): sha256 over every file under dirPath, recursively,
 // in a deterministic (sorted) order -- so the same backup contents
@@ -251,7 +275,7 @@ async function writeJsonBackup(backupDir, mongoUri) {
   }
 }
 
-async function performBackup() {
+async function performBackup(retentionDaysOverride) {
   const mongoUri = env.MONGO_URI;
   if (!mongoUri) {
     logger.warn('Backup ignorado: MONGO_URI não configurado.');
@@ -282,7 +306,7 @@ async function performBackup() {
       'utf8'
     );
 
-    const retentionDays = Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
+    const retentionDays = Number.isFinite(Number(retentionDaysOverride)) ? Number(retentionDaysOverride) : Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
     await cleanupOldBackups(baseDir, retentionDays);
 
     return { success: true, path: backupDir, mode: 'mongodump', checksum };
@@ -295,7 +319,7 @@ async function performBackup() {
         logger.warn('mongodump indisponível. Usando fallback de backup em JSON.');
         const fallbackResult = await writeJsonBackup(backupDir, mongoUri);
 
-        const retentionDays = Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
+        const retentionDays = Number.isFinite(Number(retentionDaysOverride)) ? Number(retentionDaysOverride) : Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
         await cleanupOldBackups(baseDir, retentionDays);
 
         logger.info(`✅ Backup fallback concluído: ${backupDir}`);
@@ -319,7 +343,8 @@ async function performBackup() {
 // existing callers that don't pass one keep their prior behavior exactly.
 async function runBackup(db) {
   const startedAt = new Date();
-  const result = await performBackup();
+  const retentionDays = await resolveRetentionDays(db);
+  const result = await performBackup(retentionDays);
 
   await recordBackupHistory(db, {
     startedAt,

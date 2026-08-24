@@ -337,6 +337,81 @@ describe('backup.service', () => {
     });
   });
 
+  // #728: retentionDays now prefers the admin-editable BackupPolicy
+  // (backup-policy.service.js) over env.BACKUP_RETENTION_DAYS when a db is
+  // passed -- cleanupOldBackups's maxAge is the observable proof, since
+  // that's the only place retentionDays actually flows into behavior.
+  describe('runBackup retention resolution (#728, RF013 AC#5/AC#6)', () => {
+    // 45 days old: stale under a 5- or 30-day retention, not stale under 90.
+    const STALE_UNDER_30_NOT_90 = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000);
+    const staleFolderName = STALE_UNDER_30_NOT_90.toISOString().slice(0, 10);
+
+    function mockBaseDirListing(baseDir) {
+      vi.spyOn(fs.promises, 'readdir').mockImplementation((dirPath) => {
+        if (String(dirPath) === baseDir) {
+          return Promise.resolve([{ name: staleFolderName, isDirectory: () => true }]);
+        }
+        return Promise.resolve([]);
+      });
+    }
+
+    function dbWithPolicy(policy) {
+      const backupPolicyFindOne = vi.fn().mockResolvedValue(policy);
+      const historyInsertOne = vi.fn().mockResolvedValue({ insertedId: 'history-1' });
+      return {
+        collection: vi.fn((name) => {
+          if (name === 'backup_policy') return { findOne: backupPolicyFindOne };
+          return { insertOne: historyInsertOne };
+        }),
+      };
+    }
+
+    it('uses the policy retentionDays (not the env var) when a db is passed', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-policy-retention-1');
+      env.BACKUP_RETENTION_DAYS = '30';
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      mockBaseDirListing(env.BACKUP_DIR);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(fs.promises, 'rm').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+
+      const backupService = freshBackupService();
+      const db = dbWithPolicy({ retentionDays: 90 });
+      await backupService.runBackup(db);
+
+      // A 45-day-old dated folder is stale under the env var's 30-day
+      // retention but not under the policy's 90 -- proves 90 (the
+      // policy's value), not 30 (the env var), is what actually governed
+      // cleanup.
+      expect(fs.promises.rm).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the env var when the policy lookup fails', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-policy-retention-2');
+      env.BACKUP_RETENTION_DAYS = '5';
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      mockBaseDirListing(env.BACKUP_DIR);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(fs.promises, 'rm').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+
+      const backupService = freshBackupService();
+      const db = { collection: vi.fn(() => { throw new Error('db unavailable'); }) };
+      await backupService.runBackup(db);
+
+      // 5-day env-var retention against a 45-day-old folder -- stale, gets removed.
+      expect(fs.promises.rm).toHaveBeenCalled();
+    });
+  });
+
   describe('cleanupOldBackups', () => {
     it('does nothing when the base dir does not exist', async () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(false);
