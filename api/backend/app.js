@@ -346,6 +346,7 @@ app.use("/api/access", require("./src/interface/routes/access.routes"));
 app.use("/api/security", require("./src/interface/routes/security.routes"));
 app.use("/api/user/security", require("./src/interface/routes/user-security.routes"));
 app.use("/api/backup", require("./src/interface/routes/backup.routes"));
+app.use("/api/backup-policy", require("./src/interface/routes/backupPolicy.routes"));
 app.use("/api/import-lgpd", require("./src/interface/routes/import-lgpd.routes"));
 app.use("/api/compliance", require("./src/interface/routes/compliance.routes"));
 app.use("/api/cids", require("./src/interface/routes/cid.routes"));

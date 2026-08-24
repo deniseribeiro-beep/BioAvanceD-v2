@@ -16,6 +16,7 @@ const logger = require('../../src/utils/logger');
 const env = require('../../src/config/env');
 const backupService = require('../../src/services/backup.service');
 const retentionSweepService = require('../../src/services/retentionSweep.service');
+const backupPolicyService = require('../../src/services/backup-policy.service');
 const scheduler = require('../../src/services/scheduler.service');
 
 function makeCollection(overrides = {}) {
@@ -372,5 +373,46 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
       expect.stringContaining('Sincronização legada de consentimento removida')
     );
     expect(cronScheduleSpy).not.toHaveBeenCalled();
+  });
+
+  // #728 (RF013 AC#5/AC#6): the "no restart" half of the design call --
+  // an admin's BackupPolicy edit must re-create the running cron task
+  // against the new cronExpression without the process restarting.
+  describe('reloadBackupSchedule (#728)', () => {
+    it('stops the previously running backup task and re-schedules with the policy cronExpression', async () => {
+      scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      const originalBackupTask = scheduledTasks[1];
+
+      vi.spyOn(backupPolicyService, 'getPolicy').mockResolvedValue({ cronExpression: '0 5 * * *' });
+
+      await scheduler.reloadBackupSchedule({});
+
+      expect(originalBackupTask.stop).toHaveBeenCalledTimes(1);
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(4); // 3 from initScheduler + this reload
+      expect(cronScheduleSpy.mock.calls[3][0]).toBe('0 5 * * *');
+      expect(loggerInfoSpy).toHaveBeenCalledWith(expect.stringContaining('Backup diário reagendado (0 5 * * *)'));
+    });
+
+    it('falls back to env.BACKUP_CRON when the policy has no cronExpression', async () => {
+      scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      vi.spyOn(backupPolicyService, 'getPolicy').mockResolvedValue({});
+
+      await scheduler.reloadBackupSchedule({});
+
+      expect(cronScheduleSpy.mock.calls[3][0]).toBe('0 3 * * *');
+    });
+
+    it('falls back to env.BACKUP_CRON and logs an error when the policy lookup rejects', async () => {
+      scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      vi.spyOn(backupPolicyService, 'getPolicy').mockRejectedValue(new Error('policy lookup failed'));
+
+      await scheduler.reloadBackupSchedule({});
+
+      expect(cronScheduleSpy.mock.calls[3][0]).toBe('0 3 * * *');
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        'Erro ao recarregar política de backup, mantendo agendamento anterior:',
+        'policy lookup failed'
+      );
+    });
   });
 });

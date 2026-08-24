@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 const env = require('../config/env');
 const backupService = require('./backup.service');
 const retentionSweepService = require('./retentionSweep.service');
+const backupPolicyService = require('./backup-policy.service');
 
 const DEFAULT_STALE_MINUTES = 20;
 
@@ -126,19 +127,56 @@ function startTemperatureMonitor(db) {
   logger.info(`⏱️ Monitoramento de temperatura agendado (${cronExpr})`);
 }
 
-function startBackupSchedule(db) {
-  const cronExpr = env.BACKUP_CRON || '0 3 * * *';
-  const timezone = process.env.TZ || 'America/Sao_Paulo';
-
-  backupTask = cron.schedule(cronExpr, async () => {
+// #728: boot-time schedule still resolves from env.BACKUP_CRON only (not
+// the persisted BackupPolicy) -- keeps startup synchronous, matching every
+// existing caller/test of initScheduler. reloadBackupSchedule below is the
+// actual "policy changes apply without a restart" mechanism the design
+// call asked for; it's invoked explicitly by backupPolicy.routes.js right
+// after a policy update, not on every boot.
+function scheduleBackupTask(db, cronExpr, timezone) {
+  return cron.schedule(cronExpr, async () => {
     try {
       await backupService.runBackup(db);
     } catch (error) {
       logger.error('Erro ao executar backup agendado:', error.message);
     }
   }, { timezone });
+}
+
+function startBackupSchedule(db) {
+  const cronExpr = env.BACKUP_CRON || '0 3 * * *';
+  const timezone = process.env.TZ || 'America/Sao_Paulo';
+
+  backupTask = scheduleBackupTask(db, cronExpr, timezone);
 
   logger.info(`🗂️ Backup diário agendado (${cronExpr})`);
+}
+
+// #728 (RF013 AC#5/AC#6): re-creates the running backup cron task against
+// the current BackupPolicy's cronExpression -- called by
+// backupPolicy.routes.js's PUT handler right after a successful update, so
+// an admin's schedule change takes effect immediately, no process restart.
+// Falls back to env.BACKUP_CRON if the policy lookup fails (db down,
+// unexpected error) rather than leaving the schedule unset.
+async function reloadBackupSchedule(db) {
+  const timezone = process.env.TZ || 'America/Sao_Paulo';
+  let cronExpr = env.BACKUP_CRON || '0 3 * * *';
+
+  try {
+    const policy = await backupPolicyService.getPolicy(db);
+    if (policy?.cronExpression) {
+      cronExpr = policy.cronExpression;
+    }
+  } catch (error) {
+    logger.error('Erro ao recarregar política de backup, mantendo agendamento anterior:', error.message);
+  }
+
+  if (backupTask) {
+    backupTask.stop();
+  }
+
+  backupTask = scheduleBackupTask(db, cronExpr, timezone);
+  logger.info(`🗂️ Backup diário reagendado (${cronExpr})`);
 }
 
 function startConsentSyncSchedule() {
@@ -181,5 +219,6 @@ module.exports = {
   initScheduler,
   stopScheduler,
   startConsentSyncSchedule,
-  checkStaleTemperatureReadings
+  checkStaleTemperatureReadings,
+  reloadBackupSchedule
 };
