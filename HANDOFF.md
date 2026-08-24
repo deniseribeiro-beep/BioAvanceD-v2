@@ -1,81 +1,99 @@
 # HANDOFF
 
-**Written:** 2026-08-24, mid-session. **Still inside a rabbit hole**
-(tracker **#725**) -- this note will rotate again before the session
-ends; if you're picking this up cold, re-read #725 for current queue
-membership rather than trusting this snapshot alone.
+**Written:** 2026-08-24. **Still inside a rabbit hole** (tracker **#725**)
+-- stopped at this sitting's ~10-point complexity budget
+(`rabbit-hole` skill's Step 5), not because the queue is empty. Re-read
+#725 for current queue membership before resuming rather than trusting
+this snapshot alone.
 
 ## Rabbit-hole state
 
 Tracker: **#725** ("Rabbit-hole tracker: RF008/RF013 backend gaps +
-equipment fixture cleanup (seeds #723, #724)"), open. Session is running
-**without Docker** (daemon torn down/cold, per Dennis's instruction this
-sitting) against a ~10-point complexity budget (`rabbit-hole` skill's
-Step 5 pacing table).
+equipment fixture cleanup (seeds #723, #724)"), open. This sitting ran
+**without Docker** (daemon torn down/cold, by instruction) -- both seed
+issues' own Definitions of Done need Docker (a green `test:e2e:docker`
+run for #723; a live-Mongo-verified fix for #724), so neither closes
+regardless of how much backend work landed.
 
-Queue: **#723** (Wave 4 e2e kickoff, RF008/RF013), **#724** (equipment
-fixture accumulation). Both stay open regardless of what lands here --
-neither's own Definition of Done is achievable without Docker this
-sitting (#723 needs a green `test:e2e:docker` run; #724's fix needs a
-real Mongo to verify against).
+Queue: **#723** (open, progress-commented, 3 pieces resolved/corrected +
+3 split off), **#724** (open, foundational fix landed + 1 piece split
+off). Two more issues surfaced and filed but are **not** queue members
+(unrelated findings, filed separately per the ordinary case-4 rule, not
+folded into #725): **#729** (tests/e2e has no real typecheck coverage --
+missing `@types/node`), and the three #723 splits **#726/#727/#728**
+count as descendants of #723 and *are* in scope if picked up.
 
-## What landed this sitting so far
+## What landed this sitting
 
-**RF013 AC#1/AC#3 (persisted backup run-history + checksum)**, on
-`feature/docker-e2e-backend-integration` (merged, pushed --
-`ddd9154c`): `backup.service.js` now computes a deterministic sha256
-checksum over every backup run (embedded in `manifest.json` for both the
-mongodump and JSON-fallback paths -- mongodump never wrote a manifest at
-all before this) and persists one `backupHistory` doc per run via the
-caller's already-connected db (no new MongoClient connection -- a no-op
-when no db is passed, so every pre-existing `runBackup()` call site
-stayed unaffected). Threaded `db` through from `backup.routes.js`'s
-`POST /perform` and `scheduler.service.js`'s cron job (mirroring how
-`startTemperatureMonitor`/`startRetentionSweepSchedule` already receive
-it). `GET /list` now merges persisted status/checksum onto the
-filesystem listing. Verified native-only: 71 tests green across
-`backup.service.test.js`, `backup.api.test.js`, `scheduler.service.test.js`.
-Frontend `BackupPage.tsx` doesn't yet surface `status`/`checksum` in its
-table -- the API contract carries the data now; wiring the UI column is
-a small, explicitly-deferred fast-follow, not filed as its own issue
-(too small to need one; note it here if you pick this up).
+**RF013 AC#1/AC#3** (persisted backup run-history + checksum) --
+`feature/docker-e2e-backend-integration` @ `ddd9154c`. `backup.service.js`
+now computes a deterministic sha256 checksum per backup run (in
+`manifest.json` for both mongodump and JSON-fallback paths -- mongodump
+never wrote a manifest before this) and persists one `backupHistory` doc
+per run via the caller's already-connected db (no new MongoClient
+connection -- no-op when no db passed, zero behavior change for
+pre-existing callers). `db` threaded through `POST /perform` and the
+daily cron job. `GET /list` merges persisted status/checksum onto the
+filesystem listing. 71 tests green (native, no Docker).
 
-**RF008 AC#5 (export audit log) -- turned out to be a non-gap, not yet
-written up.** `#723`'s own gap list said no audit-log write exists in
-`reports.routes.js`'s export paths -- true by literal grep, but
-`app.js:194` already mounts a global `auditRequest` middleware
-(`audit.middleware.js`) on every request, which logs action=EXPORT,
-entity=Report, full path (carries report type + format), status, actor,
-duration for both `/export` and `/export/pdf`. This needs a corrective
-comment on #723 (case 3: confirmed, no change needed) -- **not done
-yet**, next step if resuming here.
+**RF008 AC#5** -- corrected, not a gap: `app.js:194`'s global
+`auditRequest` middleware already logs every export request (action,
+entity, full path incl. type/format, actor, status, duration). No code
+change; commented the correction on #723.
 
-## Not yet done this sitting (queue still open)
+**#724 root cause + foundational fix** --
+`feature/docker-e2e-backend-integration` @ `d9bb4955`.
+`seedStorageBoxLocation()` (`tests/e2e/helpers/seedParticipant.ts`)
+never returned an id for the equipment/sensor docs it creates, so no
+caller could ever clean them up -- the actual cause of the 521+-row
+equipment debris. Added `equipmentId`/`containerID` to its return type
+and a new `cleanupStorageBoxLocation()` export. Purely additive,
+typechecks clean (`tsc --noEmit -p tsconfig.json`: 88 pre-existing
+`@types/node`-noise errors before and after -- see #729 -- zero new
+ones; frontend's `tsc` binary works against the root tsconfig, no
+install needed: `./frontend/node_modules/.bin/tsc --noEmit -p
+tsconfig.json`).
 
-- Comment on #723 with the RF008 AC#5 correction above.
-- File follow-up issues (referencing #723) for the 3 gaps that need
-  Dennis's product/design call rather than a mechanical backend fix:
-  RF008 AC#6 (user-defined report template model, currently hardcoded
-  string-matching in `buildPreviewData`), RF013 AC#4 (sandboxed restore
-  test mode -- `/restore` is currently a live destructive `--drop`),
-  RF013 AC#5 (backup-policy entity + admin UI -- currently static env
-  vars, no entity/audit at all).
-- Progress-comment on #723 itself once the above lands (build-loop's
-  own precedent: a multi-item requirement worked in one sitting stays
-  under one tracked issue with progress comments, not split into a new
-  issue per gap -- confirmed against build-loop's overlay before
-  filing anything).
-- #724 (equipment fixture cleanup) not yet started.
+**Follow-ups filed this sitting** (all reference their originating
+issue): **#726** (RF008 AC#6, report-template model -- needs Dennis's
+design call), **#727** (RF013 AC#4, sandboxed restore test mode -- needs
+Dennis's design call, safety-relevant), **#728** (RF013 AC#5,
+backup-policy entity + UI -- needs Dennis's design call), **#730**
+(wire `cleanupStorageBoxLocation()` into #724's ~5 real spec callers +
+verify against live Mongo -- Docker-dependent, lists every confirmed
+call site), **#729** (tangential finding, not a queue member: no
+`@types/node` anywhere in the repo, so `tests/e2e/`'s own tsconfig
+can't usefully typecheck -- found while verifying the #724 fix above).
+
+## Not yet done -- still inside #725
+
+- **#726/#727/#728**: none started -- each needs Dennis's product/design
+  call before any code, per this repo's convention for entity/UI/safety
+  decisions.
+- **#730**: none started -- needs Docker up to safely edit and verify
+  the 5 real-backend spec files it lists.
+- No other #723/#724 pieces remain unaddressed; #725's remaining known
+  members are exactly #726/#727/#728/#730 above, all blocked on either
+  Dennis's input or Docker being available -- **not** blocked on more
+  investigation.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, pushed through `ddd9154c`.
-- Docker: still down this sitting, by instruction -- don't bring it up.
+- On `feature/docker-e2e-backend-integration`, pushed through `d9bb4955`.
+- Docker: still down this sitting, by instruction -- next session
+  needing it starts cold (see the 2026-08-21 predecessor note this
+  file's prior rotation carried, now superseded by this one -- if a
+  fresh cold-rebuild procedure is needed, that predecessor context is
+  in this file's git history, not restated here).
 - Two untracked paths present, not touched: `.claude/skills/` and
   `api/backend/storage/assays/` -- pre-existing.
+- No open PR; nothing pushed to `main`; `main` stays frozen.
 
 ## Recommended next steps
 
-Continue the #725 rabbit hole: finish #723's remaining pieces above,
-then move to #724. Budget spent so far: ~3-4 points (one medium-large
-backend slice) of the ~10-point sitting budget.
+Resuming #725 means: either pick up #726/#727/#728 (each needs Dennis's
+design call first -- these are genuine product decisions, not something
+to implement unilaterally), or #730 once Docker is available (edit +
+run the 5 real-backend specs it names, confirm nothing broke). Dennis
+hasn't picked a specific one yet this sitting -- none queued beyond what
+#725 already lists.
