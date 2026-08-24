@@ -94,8 +94,9 @@ at the generator level -- out of #730's scope, filed separately.
 
 None queued beyond what #725 already lists: **#723** is the only
 remaining item. Resuming #725 means picking up #723's real-backend
-Playwright spec work for RF008/RF013 (Docker is already up as of this
-writing, may need re-bringing-up depending on elapsed time). Once #723
-closes, #725's own upward-cascade check (`resolve-issue`'s close
-discipline) applies -- confirm no further split is pending before
-closing the tracker itself.
+Playwright spec work for RF008/RF013 -- Docker is down (torn down at
+end of this sitting), bring it back up per `docker-workflow`'s
+local-env overlay's normal startup recipe. Once #723 closes, #725's
+own upward-cascade check (`resolve-issue`'s close discipline) applies
+-- confirm no further split is pending before closing the tracker
+itself.
