@@ -4,7 +4,9 @@ import {
   createRealParticipant,
   seedActiveConsent,
   seedStorageBoxLocation,
+  cleanupStorageBoxLocation,
   closeSeedDb,
+  type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 
@@ -38,7 +40,12 @@ function validSampleFields() {
 }
 
 test.describe('Sample storage lifecycle (#321) — real backend, withTransaction proof', () => {
+  const seededStorageBoxes: SeededStorageBox[] = [];
+
   test.afterAll(async () => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
     await closeSeedDb();
   });
 
@@ -54,6 +61,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     // boxA's own A1 slot still being occupied.
     const boxA = await seedStorageBoxLocation();
     const boxB = await seedStorageBoxLocation();
+    seededStorageBoxes.push(boxA, boxB);
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -152,6 +160,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
 
     const occupiedBox = await seedStorageBoxLocation();
     const freeBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(occupiedBox, freeBox);
 
     // Sample 1 occupies occupiedBox/A1 from creation onward.
     const create1 = await request.post(`${apiBaseURL}/api/samples`, {
