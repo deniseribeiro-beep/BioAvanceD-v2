@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const cp = require('child_process');
 const mongodb = require('mongodb');
 const logger = require('../../../src/utils/logger');
@@ -611,6 +612,248 @@ describe('backup.service', () => {
       const result = await backupService.restoreBackup(path.join('C:', 'tmp', 'backup'));
 
       expect(result).toEqual({ success: false, error: 'permission denied' });
+    });
+  });
+
+  // #727 (RF013 AC#4): "controlled restore testing" -- restoreBackup() is
+  // the only restore path and it's live/destructive (--drop against the
+  // configured db). testRestoreBackup() proves a backup is restorable by
+  // restoring into a disposable scratch database (never the live one),
+  // then tearing the scratch db down -- see backup.service.js's own header
+  // comment for the design-call rationale.
+  describe('testRestoreBackup', () => {
+    // sha256 of zero files hashed -- computeDirChecksum's own deterministic
+    // digest when fs.promises.readdir resolves to [] (mirrors the existing
+    // runBackup checksum tests' approach above).
+    const emptyDirChecksum = crypto.createHash('sha256').digest('hex');
+
+    it('returns an error result when MONGO_URI is not configured', async () => {
+      env.MONGO_URI = undefined;
+      const backupService = freshBackupService();
+
+      const result = await backupService.testRestoreBackup('/some/backup');
+
+      expect(result).toEqual({ success: false, error: 'MONGO_URI não configurado' });
+    });
+
+    it('returns an error result when the backup path does not exist', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup('/missing/backup');
+
+      expect(result).toEqual({ success: false, error: 'Backup não encontrado' });
+    });
+
+    it('restores into a disposable scratch db (nsFrom/nsTo, never the live db) and tears it down', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const backupPath = path.join('C:', 'tmp', '2026-01-01');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) {
+          return JSON.stringify({ dbName: 'mydb', checksum: emptyDirChecksum });
+        }
+        throw new Error(`unexpected readFile: ${p}`);
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'restored', ''));
+
+      const dropDatabase = vi.fn().mockResolvedValue();
+      const fakeScratchDb = { listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'patients' }]) })), dropDatabase };
+      const fakeClient = {
+        connect: vi.fn().mockResolvedValue(),
+        db: vi.fn(() => fakeScratchDb),
+        close: vi.fn().mockResolvedValue()
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(backupPath);
+
+      expect(result.success).toBe(true);
+      expect(result.mode).toBe('mongorestore');
+      expect(result.checksumVerified).toBe(true);
+      expect(result.restoredCollections).toBe(1);
+      expect(result.scratchDb).toMatch(/^mydb_restoretest_\d+$/);
+
+      expect(cp.exec).toHaveBeenCalledWith(
+        expect.stringContaining(`--nsFrom="mydb.*" --nsTo="${result.scratchDb}.*"`),
+        { windowsHide: true },
+        expect.any(Function)
+      );
+      // never the live-restore command shape (no bare --drop against mydb)
+      expect(cp.exec).not.toHaveBeenCalledWith(
+        expect.stringContaining('--nsInclude="mydb.*"'),
+        expect.any(Object),
+        expect.any(Function)
+      );
+      expect(fakeClient.db).toHaveBeenCalledWith(result.scratchDb);
+      expect(dropDatabase).toHaveBeenCalled();
+    });
+
+    it('reports checksumVerified=false when the manifest checksum does not match the recomputed one', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) {
+          return JSON.stringify({ dbName: 'mydb', checksum: 'stale-checksum-from-a-tampered-backup' });
+        }
+        throw new Error(`unexpected readFile: ${p}`);
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'restored', ''));
+
+      const fakeDb = { listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })), dropDatabase: vi.fn().mockResolvedValue() };
+      const fakeClient = { connect: vi.fn().mockResolvedValue(), db: vi.fn(() => fakeDb), close: vi.fn().mockResolvedValue() };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'));
+
+      expect(result.success).toBe(true);
+      expect(result.checksumVerified).toBe(false);
+    });
+
+    it('reports checksumVerified=false when there is no manifest at all', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+
+      vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('manifest.json'));
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'restored', ''));
+
+      const fakeDb = { listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })), dropDatabase: vi.fn().mockResolvedValue() };
+      const fakeClient = { connect: vi.fn().mockResolvedValue(), db: vi.fn(() => fakeDb), close: vi.fn().mockResolvedValue() };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'));
+
+      expect(result.success).toBe(true);
+      expect(result.checksumVerified).toBe(false);
+    });
+
+    it('falls back to a JSON restore into the scratch db when mongorestore binary is missing, and still drops the scratch db', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      const backupPath = path.join('C:', 'tmp', 'backup-restoretest-1');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) {
+          return JSON.stringify({ dbName: 'mydb', checksum: emptyDirChecksum, collections: [{ file: 'patients.json' }] });
+        }
+        return JSON.stringify([{ _id: 1, name: 'a' }]);
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb({ message: 'mongorestore: not found' }, '', 'not found');
+      });
+
+      const fakeCollection = { deleteMany: vi.fn().mockResolvedValue(), insertMany: vi.fn().mockResolvedValue() };
+      const dropDatabase = vi.fn().mockResolvedValue();
+      const fakeDb = { collection: vi.fn(() => fakeCollection), dropDatabase };
+      const fakeClient = {
+        connect: vi.fn().mockResolvedValue(),
+        db: vi.fn(() => fakeDb),
+        close: vi.fn().mockResolvedValue()
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(backupPath);
+
+      expect(result.success).toBe(true);
+      expect(result.mode).toBe('json-fallback');
+      expect(result.scratchDb).toMatch(/^mydb_restoretest_\d+$/);
+      expect(fakeDb.collection).toHaveBeenCalledWith('patients');
+      expect(dropDatabase).toHaveBeenCalled();
+    });
+
+    it('returns a generic failure result when mongorestore fails for a non-missing-binary reason (checksumVerified still reported)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) {
+          return JSON.stringify({ dbName: 'mydb', checksum: emptyDirChecksum });
+        }
+        throw new Error(`unexpected readFile: ${p}`);
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb({ message: 'permission denied' }, '', '');
+      });
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'));
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('permission denied');
+      expect(result.checksumVerified).toBe(true);
+    });
+
+    function fakeHistoryDb() {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'restore-test-history-1' });
+      return { db: { collection: vi.fn(() => ({ insertOne })) }, insertOne };
+    }
+
+    it('does not touch the db when none is passed', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) return JSON.stringify({ dbName: 'mydb', checksum: emptyDirChecksum });
+        throw new Error('unexpected');
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+      const fakeDb = { listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })), dropDatabase: vi.fn().mockResolvedValue() };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return { connect: vi.fn().mockResolvedValue(), db: vi.fn(() => fakeDb), close: vi.fn().mockResolvedValue() }; });
+
+      const backupService = freshBackupService();
+      await expect(backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'))).resolves.toMatchObject({ success: true });
+    });
+
+    it('records a success restoreTestHistory entry when db is passed', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) return JSON.stringify({ dbName: 'mydb', checksum: emptyDirChecksum });
+        throw new Error('unexpected');
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+      const fakeDb = { listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })), dropDatabase: vi.fn().mockResolvedValue() };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return { connect: vi.fn().mockResolvedValue(), db: vi.fn(() => fakeDb), close: vi.fn().mockResolvedValue() }; });
+
+      const backupService = freshBackupService();
+      const { db, insertOne } = fakeHistoryDb();
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'), db);
+
+      expect(db.collection).toHaveBeenCalledWith('restoreTestHistory');
+      expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'success',
+        mode: 'mongorestore',
+        checksumVerified: true,
+        scratchDb: result.scratchDb,
+      }));
+    });
+
+    it('records an error restoreTestHistory entry when db is passed and the test restore fails', async () => {
+      env.MONGO_URI = undefined;
+
+      const backupService = freshBackupService();
+      const { db, insertOne } = fakeHistoryDb();
+      await backupService.testRestoreBackup('/some/backup', db);
+
+      expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'error',
+        error: 'MONGO_URI não configurado',
+      }));
     });
   });
 });

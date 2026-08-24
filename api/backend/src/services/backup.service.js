@@ -95,7 +95,7 @@ function runCommand(command) {
   });
 }
 
-async function restoreFromJsonBackup(backupPath, mongoUri) {
+async function restoreFromJsonBackup(backupPath, mongoUri, targetDbName) {
   const manifestPath = path.join(backupPath, 'manifest.json');
   const hasManifest = fs.existsSync(manifestPath);
 
@@ -105,7 +105,7 @@ async function restoreFromJsonBackup(backupPath, mongoUri) {
     manifest = JSON.parse(rawManifest);
   }
 
-  const dbName = manifest?.dbName || resolveDatabaseName(mongoUri);
+  const dbName = targetDbName || manifest?.dbName || resolveDatabaseName(mongoUri);
   const client = new MongoClient(mongoUri);
 
   try {
@@ -374,9 +374,135 @@ async function restoreBackup(backupPath) {
   }
 }
 
+// #727 (RF013 AC#4): persists controlled-restore-test run history, mirroring
+// recordBackupHistory's optional-db, best-effort pattern.
+async function recordRestoreTestHistory(db, entry) {
+  if (!db) return;
+  try {
+    await db.collection('restoreTestHistory').insertOne(entry);
+  } catch (error) {
+    logger.error('Erro ao registrar histórico de teste de restauração:', error.message);
+  }
+}
+
+async function dropScratchDatabase(mongoUri, dbName) {
+  const client = new MongoClient(mongoUri);
+  try {
+    await client.connect();
+    await client.db(dbName).dropDatabase();
+  } finally {
+    await client.close();
+  }
+}
+
+async function countScratchCollections(mongoUri, dbName) {
+  const client = new MongoClient(mongoUri);
+  try {
+    await client.connect();
+    const collections = await client.db(dbName).listCollections({}, { nameOnly: true }).toArray();
+    return collections.length;
+  } catch (_) {
+    return null;
+  } finally {
+    await client.close();
+  }
+}
+
+// #727 (RF013 AC#4): "controlled restore testing" -- restoreBackup() is the
+// only restore path today and it's live/destructive (--drop against the
+// configured database). This restores a backup into a disposable scratch
+// database instead (named `<dbName>_restoretest_<timestamp>`, remapped via
+// mongorestore's --nsFrom/--nsTo so the live db is never touched), verifies
+// the backup's own checksum against its manifest first (RNF010: "validado
+// por checksum"), then tears the scratch database down.
+async function runControlledRestoreTest(backupPath) {
+  const mongoUri = env.MONGO_URI;
+  if (!mongoUri) {
+    return { success: false, error: 'MONGO_URI não configurado' };
+  }
+
+  if (!backupPath || !fs.existsSync(backupPath)) {
+    return { success: false, error: 'Backup não encontrado' };
+  }
+
+  const manifestPath = path.join(backupPath, 'manifest.json');
+  let manifest = null;
+  if (fs.existsSync(manifestPath)) {
+    try {
+      manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8'));
+    } catch (_) {
+      manifest = null;
+    }
+  }
+
+  const recomputedChecksum = await computeDirChecksum(backupPath);
+  const checksumVerified = !!(manifest && manifest.checksum && manifest.checksum === recomputedChecksum);
+
+  const sourceDbName = (manifest && manifest.dbName) || resolveDatabaseName(mongoUri);
+  const scratchDb = `${sourceDbName}_restoretest_${Date.now()}`;
+
+  const command = `mongorestore --uri="${mongoUri}" --drop --nsFrom="${sourceDbName}.*" --nsTo="${scratchDb}.*" "${backupPath}"`;
+
+  try {
+    await runCommand(command);
+    const restoredCollections = await countScratchCollections(mongoUri, scratchDb);
+    await dropScratchDatabase(mongoUri, scratchDb);
+
+    return {
+      success: true,
+      testedFrom: path.basename(backupPath),
+      testedAt: new Date(),
+      mode: 'mongorestore',
+      scratchDb,
+      checksumVerified,
+      restoredCollections
+    };
+  } catch (err) {
+    const details = err && err.error ? err.error.message : err?.message;
+    const restoreBinaryMissing = /mongorestore: not found|is not recognized|ENOENT/i.test(String(details || ''));
+
+    if (restoreBinaryMissing) {
+      try {
+        logger.warn('mongorestore indisponível. Usando fallback de teste de restauração em JSON.');
+        const fallback = await restoreFromJsonBackup(backupPath, mongoUri, scratchDb);
+        await dropScratchDatabase(mongoUri, scratchDb);
+        return { ...fallback, scratchDb, checksumVerified };
+      } catch (fallbackError) {
+        const fallbackDetails = fallbackError?.message || String(fallbackError);
+        logger.error('Erro no fallback de teste de restauração JSON:', fallbackDetails);
+        return { success: false, error: fallbackDetails, checksumVerified };
+      }
+    }
+
+    return { success: false, error: details || 'Erro ao testar restauração', checksumVerified };
+  }
+}
+
+// #727 (RF013 AC#4): thin wrapper so every testRestoreBackup() call persists
+// exactly one restoreTestHistory entry, same pattern as runBackup/
+// recordBackupHistory above.
+async function testRestoreBackup(backupPath, db) {
+  const startedAt = new Date();
+  const result = await runControlledRestoreTest(backupPath);
+
+  await recordRestoreTestHistory(db, {
+    startedAt,
+    completedAt: new Date(),
+    status: result.success ? 'success' : 'error',
+    mode: result.mode || null,
+    scratchDb: result.scratchDb || null,
+    checksumVerified: typeof result.checksumVerified === 'boolean' ? result.checksumVerified : null,
+    restoredCollections: typeof result.restoredCollections === 'number' ? result.restoredCollections : null,
+    error: result.error || null
+  });
+
+  return result;
+}
+
 module.exports = {
   runBackup,
   cleanupOldBackups,
   getBackupBaseDir,
-  restoreBackup
+  restoreBackup,
+  testRestoreBackup
 };

@@ -401,3 +401,97 @@ describe('POST /api/backup/restore/:fileName', () => {
     fs.rmSync(baseDir, { recursive: true, force: true });
   });
 });
+
+// #727 (RF013 AC#4): sandboxed/controlled restore test route -- mirrors
+// POST /restore/:fileName's auth/lookup shape, but calls testRestoreBackup
+// (scratch db, never the live one) instead of restoreBackup.
+describe('POST /api/backup/restore-test/:fileName', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).post('/api/backup/restore-test/backup-2026-06-30');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for non-admin', async () => {
+    const res = await request(app)
+      .post('/api/backup/restore-test/backup-2026-06-30')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 404 when backup file not found', async () => {
+    vi.spyOn(backupService, 'getBackupBaseDir').mockReturnValue('/nonexistent/path/backups');
+
+    const res = await request(app)
+      .post('/api/backup/restore-test/backup-2026-06-30')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 400 fileName inválido when the param reduces to an empty basename', async () => {
+    const res = await request(app)
+      .post('/api/backup/restore-test/%2F')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('fileName inválido');
+  });
+
+  it('tests restore successfully and passes the app db through to backupService.testRestoreBackup', async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-restoretest-'));
+    fs.writeFileSync(path.join(baseDir, 'backup-2026-06-30'), 'dump-contents');
+    vi.spyOn(backupService, 'getBackupBaseDir').mockReturnValue(baseDir);
+    const testRestoreSpy = vi.spyOn(backupService, 'testRestoreBackup').mockResolvedValue({
+      success: true,
+      mode: 'mongorestore',
+      scratchDb: 'bioavanced_restoretest_123',
+      checksumVerified: true,
+    });
+
+    const res = await request(app)
+      .post('/api/backup/restore-test/backup-2026-06-30')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.scratchDb).toBe('bioavanced_restoretest_123');
+    expect(testRestoreSpy).toHaveBeenCalledWith(
+      path.join(baseDir, 'backup-2026-06-30'),
+      app.locals.db
+    );
+
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  it('returns 400 when testRestoreBackup reports failure', async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-restoretest-'));
+    fs.writeFileSync(path.join(baseDir, 'backup-2026-06-30'), 'dump-contents');
+    vi.spyOn(backupService, 'getBackupBaseDir').mockReturnValue(baseDir);
+    vi.spyOn(backupService, 'testRestoreBackup').mockResolvedValue({ success: false, error: 'checksum inválido' });
+
+    const res = await request(app)
+      .post('/api/backup/restore-test/backup-2026-06-30')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  it('returns 500 when testRestoreBackup throws', async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-restoretest-'));
+    fs.writeFileSync(path.join(baseDir, 'backup-2026-06-30'), 'dump-contents');
+    vi.spyOn(backupService, 'getBackupBaseDir').mockReturnValue(baseDir);
+    vi.spyOn(backupService, 'testRestoreBackup').mockRejectedValue(new Error('mongorestore failed'));
+
+    const res = await request(app)
+      .post('/api/backup/restore-test/backup-2026-06-30')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(500);
+    expect(res.body.success).toBe(false);
+
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+});
