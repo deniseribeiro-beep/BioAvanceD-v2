@@ -2,12 +2,11 @@
 // modelos de relatório sem depender de uma lista fixa"): a Coordenador/
 // Administrador-defined report type, so a new report can be added without a
 // code change to reports.routes.js's buildPreviewData dispatcher.
-// `handlerKey` names which existing internal data-fetch handler a template
-// runs against (buildPreviewData's own dispatch still owns the actual query
-// logic per handler -- wiring buildPreviewData to look templates up by
-// `code` instead of its current typeIncludes/normalizeTypeValue
-// string-matching is deliberately left for a follow-up slice on this same
-// issue, not done here). No dict-02 entity exists for this (confirmed
+// `handlerKey` names which internal REPORT_HANDLERS entry a template
+// dispatches to -- buildPreviewData looks templates up by `code` (via
+// toTemplateCode's camelCase->snake_case normalization of the incoming
+// `:type`), then runs the matching handler; each handler still owns its own
+// query logic. No dict-02 entity exists for this (confirmed
 // absent, see #726) -- field naming follows BaseRecord's provenance shape
 // (ELM-0006..ELM-0009: createdAt/createdBy/updatedAt/updatedBy,
 // Reference-shaped as `User/<id>`) and ConsentTemplate's templateStatus

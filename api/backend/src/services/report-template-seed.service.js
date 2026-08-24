@@ -4,25 +4,33 @@ const ReportTemplateModel = require('../models/ReportTemplate');
  * #726 (RF008 AC#6): the existing hardcoded report types
  * (reports.routes.js's buildPreviewData typeIncludes/normalizeTypeValue
  * chain) migrated onto the ReportTemplate model as seeded, system-defined
- * rows -- one row per branch that chain currently handles. `handlerKey`
- * mirrors the branch each type dispatches to today; `handlerOptions` carries
- * the one branch-local flag buildPreviewData reads beyond the type itself
- * (the temperature branch's report-vs-control `mode`). These rows are the
- * "migrate existing types into the model" half of #726's design call --
- * repointing buildPreviewData's own dispatch to read templates instead of
- * string-matching `type` is a separate, not-yet-done follow-up slice on the
- * same issue (see ReportTemplate.js's header comment).
+ * rows -- one row per branch that chain used to handle. `handlerKey` names
+ * the handler function buildPreviewData now dispatches to via
+ * REPORT_HANDLERS; `handlerOptions` carries the one branch-local flag a
+ * handler reads beyond the type itself (temperature's report-vs-control
+ * `mode`). `code` is the dispatch key buildPreviewData looks templates up
+ * by (via toTemplateCode's camelCase->snake_case normalization) -- each one
+ * here is deliberately the snake_case form of the matching frontend
+ * `REPORT_TYPE_DEFINITIONS` `key` (report.constants.js), not the old
+ * typeIncludes chain's free-form Portuguese/English matching, since that's
+ * what the live frontend actually sends as `:type`. `audit` is a second row
+ * onto the same `accessLogs` handlerKey as `access_logs` -- the frontend
+ * exposes both as distinct menu entries (fallbackType 'Auditoria' vs 'Logs
+ * de acesso') that the old typeIncludes(['log','audit','acesso','access'])
+ * chain already collapsed onto the same `logs`-collection query; preserved
+ * as-is here rather than treated as a taxonomy bug to fix in this slice.
  */
 const SYSTEM_REPORT_TEMPLATES = [
   { code: 'samples_by_patient', name: 'Amostras por Paciente', handlerKey: 'samplesByPatient' },
-  { code: 'patient', name: 'Pacientes', handlerKey: 'patient' },
-  { code: 'sample', name: 'Amostras', handlerKey: 'sample' },
+  { code: 'patients', name: 'Pacientes', handlerKey: 'patient' },
+  { code: 'samples', name: 'Amostras', handlerKey: 'sample' },
   { code: 'sample_analysis', name: 'Análise das Amostras', handlerKey: 'sampleAnalysis' },
-  { code: 'temperature_report', name: 'Relatório de Temperatura', handlerKey: 'temperature', handlerOptions: { mode: 'report' } },
+  { code: 'temperature', name: 'Relatório de Temperatura', handlerKey: 'temperature', handlerOptions: { mode: 'report' } },
   { code: 'temperature_control', name: 'Controle de Temperatura', handlerKey: 'temperature', handlerOptions: { mode: 'control' } },
-  { code: 'sensor', name: 'Sensores', handlerKey: 'sensor' },
+  { code: 'sensors', name: 'Sensores', handlerKey: 'sensor' },
   { code: 'equipment', name: 'Equipamentos', handlerKey: 'equipment' },
-  { code: 'result', name: 'Resultados', handlerKey: 'result' },
+  { code: 'results', name: 'Resultados', handlerKey: 'result' },
+  { code: 'audit', name: 'Auditoria', handlerKey: 'accessLogs' },
   { code: 'withdrawal_history', name: 'Histórico de Retirada', handlerKey: 'withdrawalHistory' },
   { code: 'tissue_origin_history', name: 'Origem de Tecido', handlerKey: 'tissueOriginHistory' },
   { code: 'extracellular_network', name: 'Rede Extracelular', handlerKey: 'extracellularNetwork' },

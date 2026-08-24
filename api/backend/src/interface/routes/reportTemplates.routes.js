@@ -158,10 +158,10 @@ router.delete('/:id', requirePermission('manageReportTemplates'), async (req, re
       return res.status(404).json({ success: false, error: 'Modelo de relatório não encontrado' });
     }
 
-    // Seeded rows back the report types already in production use
-    // (reports.routes.js's buildPreviewData) -- removing one would break
-    // report generation for that type until buildPreviewData is repointed
-    // onto templates (see ReportTemplate.js's header comment).
+    // Seeded rows back the report types already in production use --
+    // reports.routes.js's buildPreviewData dispatches by looking these up
+    // via `code`, so removing one would break report generation for that
+    // type outright.
     if (existing.isSystemDefined) {
       return res.status(400).json({ success: false, error: 'Modelos de relatório do sistema não podem ser removidos' });
     }

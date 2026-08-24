@@ -2,12 +2,24 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const express = require('express');
 const request = require('supertest');
+const { SYSTEM_REPORT_TEMPLATES } = require('../../src/services/report-template-seed.service');
 
 const modulePaths = {
   auth: require.resolve('../../src/infrastructure/middleware/auth'),
   rbac: require.resolve('../../src/infrastructure/middleware/rbac'),
   controller: require.resolve('../../src/interface/routes/reports.routes'),
 };
+
+// #726: buildPreviewData now dispatches by looking up a ReportTemplate via
+// `code` -- every test app in this file needs the real system-defined rows
+// available under 'reportTemplates' for its preview/export/generate
+// requests (keyed by the same `code` values report-template-seed.service.js
+// seeds in production) to resolve to a handler at all.
+const REPORT_TEMPLATE_DOCS = SYSTEM_REPORT_TEMPLATES.map((entry) => ({ ...entry, templateStatus: 'active' }));
+
+function findReportTemplate(filter = {}) {
+  return REPORT_TEMPLATE_DOCS.find((doc) => Object.entries(filter).every(([key, value]) => doc[key] === value)) || null;
+}
 
 function setCachedModule(modulePath, exportsObject) {
   require.cache[modulePath] = {
@@ -84,6 +96,7 @@ function buildDb(seedReports = []) {
   const db = {
     collection(name) {
       if (name === 'reports') return reportsCollection;
+      if (name === 'reportTemplates') return { findOne: async (filter) => findReportTemplate(filter) };
       if (rbacCollections[name]) {
         const docs = rbacCollections[name];
         return {
@@ -129,7 +142,7 @@ const DEFAULT_RBAC_COLLECTIONS = {
 
 function buildCollectionDb(collections = {}) {
   const capturedQueries = {};
-  const mergedCollections = { ...DEFAULT_RBAC_COLLECTIONS, ...collections };
+  const mergedCollections = { reportTemplates: REPORT_TEMPLATE_DOCS, ...DEFAULT_RBAC_COLLECTIONS, ...collections };
 
   const db = {
     collection(name) {
@@ -155,6 +168,10 @@ function buildCollectionDb(collections = {}) {
         async distinct(field, query = {}) {
           capturedQueries[`${name}.distinct`] = query;
           return [...new Set(docs.map((doc) => doc[field]).filter((value) => value !== undefined))];
+        },
+        async findOne(filter = {}) {
+          capturedQueries[`${name}.findOne`] = filter;
+          return docs.find((doc) => Object.entries(filter).every(([key, value]) => doc[key] === value)) || null;
         },
       };
     },
@@ -373,7 +390,7 @@ describe('Reports API integration', () => {
 
       const testApp = appWithDb(db);
       const response = await request(testApp)
-        .post('/api/reports/samplesbypatient/preview')
+        .post('/api/reports/samples_by_patient/preview')
         .send({ filters: { orphaCode: 'ORPHA:558' } });
 
       expect(response.status).toBe(200);
@@ -396,7 +413,7 @@ describe('Reports API integration', () => {
 
       const testApp = appWithDb(db);
       const response = await request(testApp)
-        .post('/api/reports/samplesbypatient/preview')
+        .post('/api/reports/samples_by_patient/preview')
         .send({ filters: {} });
 
       expect(response.status).toBe(200);
@@ -420,7 +437,7 @@ describe('Reports API integration', () => {
       });
 
       const testApp = appWithDb(db);
-      const response = await request(testApp).post('/api/reports/amostra/preview').send({
+      const response = await request(testApp).post('/api/reports/samples/preview').send({
         filters: {
           atcCode: 'ATC:N02',
           treatmentStatus: 'em tratamento',
@@ -457,7 +474,7 @@ describe('Reports API integration', () => {
 
       const testApp = appWithDb(db);
       const response = await request(testApp)
-        .post('/api/reports/temperatura/preview')
+        .post('/api/reports/temperature/preview')
         .send({ filters: { criticalAlertsOnly: 'true', startDate: '2026-01-01', endDate: '2026-01-31' } });
 
       expect(response.status).toBe(200);
@@ -473,7 +490,7 @@ describe('Reports API integration', () => {
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
-        .post('/api/reports/withdrawal%20history/preview')
+        .post('/api/reports/withdrawal_history/preview')
         .send({ filters: { startDate: '2026-01-01', endDate: '2026-01-31' } });
 
       expect(response.status).toBe(200);
@@ -487,7 +504,7 @@ describe('Reports API integration', () => {
       });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/extracellularnetwork/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/extracellular_network/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(response.body.data.total).toBe(1);
@@ -503,7 +520,7 @@ describe('Reports API integration', () => {
       });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/sampleanalysis/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/sample_analysis/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(response.body.data.total).toBe(2);
@@ -527,7 +544,7 @@ describe('Reports API integration', () => {
       });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/sampleanalysis/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/sample_analysis/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(response.body.data.analysis.find((item) => item.sampleID === 'S1').status).toBe('depleted');
@@ -544,13 +561,13 @@ describe('Reports API integration', () => {
       });
       const testApp = appWithDb(db);
 
-      const sensorRes = await request(testApp).post('/api/reports/sensor/preview').send({ filters: {} });
+      const sensorRes = await request(testApp).post('/api/reports/sensors/preview').send({ filters: {} });
       expect(sensorRes.body.data.total).toBe(1);
 
-      const equipRes = await request(testApp).post('/api/reports/equipamento/preview').send({ filters: {} });
+      const equipRes = await request(testApp).post('/api/reports/equipment/preview').send({ filters: {} });
       expect(equipRes.body.data.total).toBe(2);
 
-      const resultRes = await request(testApp).post('/api/reports/resultado/preview').send({ filters: {} });
+      const resultRes = await request(testApp).post('/api/reports/results/preview').send({ filters: {} });
       expect(resultRes.body.data.total).toBe(1);
     });
 
@@ -577,7 +594,7 @@ describe('Reports API integration', () => {
       });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).get('/api/reports/equipamento/export');
+      const response = await request(testApp).get('/api/reports/equipment/export');
 
       expect(response.status).toBe(200);
       const lines = response.text.split('\n');

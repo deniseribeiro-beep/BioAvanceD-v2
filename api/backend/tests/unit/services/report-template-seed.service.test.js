@@ -53,7 +53,7 @@ describe('report-template-seed.service', () => {
     const { templates } = await seedReportTemplates(db);
 
     const control = templates.find((t) => t.code === 'temperature_control');
-    const report = templates.find((t) => t.code === 'temperature_report');
+    const report = templates.find((t) => t.code === 'temperature');
     expect(control.handlerKey).toBe('temperature');
     expect(control.handlerOptions).toEqual({ mode: 'control' });
     expect(report.handlerKey).toBe('temperature');
@@ -85,12 +85,12 @@ describe('report-template-seed.service', () => {
     const db = createFakeDb();
 
     await seedReportTemplates(db);
-    const seededDoc = db.collections.reportTemplates.docs.find((t) => t.code === 'sample');
+    const seededDoc = db.collections.reportTemplates.docs.find((t) => t.code === 'samples');
     seededDoc.name = 'Amostras (renomeado pelo Coordenador)';
 
     await seedReportTemplates(db);
 
-    const stillEdited = db.collections.reportTemplates.docs.find((t) => t.code === 'sample');
+    const stillEdited = db.collections.reportTemplates.docs.find((t) => t.code === 'samples');
     expect(stillEdited.name).toBe('Amostras (renomeado pelo Coordenador)');
   });
 });
