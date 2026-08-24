@@ -114,4 +114,35 @@ router.post('/restore/:fileName', async (req, res) => {
   }
 });
 
+// #727 (RF013 AC#4): controlled/sandboxed restore test -- restores into a
+// disposable scratch database (never the live one restore/:fileName above
+// targets), so it's safe to run whenever, unlike the destructive live path.
+router.post('/restore-test/:fileName', async (req, res) => {
+  try {
+    const fileName = path.basename(req.params.fileName || '');
+    if (!fileName) {
+      return res.status(400).json({ success: false, error: 'fileName inválido' });
+    }
+
+    const baseDir = backupService.getBackupBaseDir();
+    const backupPath = path.join(baseDir, fileName);
+    if (!fs.existsSync(backupPath)) {
+      return res.status(404).json({ success: false, error: 'Backup não encontrado' });
+    }
+
+    const result = await backupService.testRestoreBackup(backupPath, req.app.locals.db);
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error || 'Erro ao testar restauração', data: result });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    logger.error('Erro ao testar restauração de backup:', error.message || error);
+    return res.status(500).json({ success: false, error: 'Erro ao testar restauração de backup', message: error.message || String(error) });
+  }
+});
+
 module.exports = router;
