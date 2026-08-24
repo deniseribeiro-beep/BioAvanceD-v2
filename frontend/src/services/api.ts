@@ -21,6 +21,7 @@ import {
   PhoneCodeEntry,
   Organization,
   Collection,
+  ReportTemplate,
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
 
@@ -519,6 +520,16 @@ export const organizationService = {
   create: (data: Partial<Organization>) => api.post<Organization>('/organizations', data),
   update: (id: string, data: Partial<Organization>) => api.put<Organization>(`/organizations/${id}`, data),
   delete: (id: string) => api.delete(`/organizations/${id}`),
+};
+
+// #726 (RF008 AC#6): admin-editable report templates, replacing
+// reports.routes.js's old fixed string-matching dispatch.
+export const reportTemplateService = {
+  getAll: () => api.get('/report-templates'),
+  getOne: (id: string) => api.get(`/report-templates/${id}`),
+  create: (data: Partial<ReportTemplate>) => api.post('/report-templates', data),
+  update: (id: string, data: Partial<ReportTemplate>) => api.put(`/report-templates/${id}`, data),
+  delete: (id: string) => api.delete(`/report-templates/${id}`),
 };
 
 // ========== COLLECTION SERVICES (RF020, MIABIS Collection) ==========
