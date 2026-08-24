@@ -754,6 +754,14 @@ export const backupService = {
   restoreBackup: (fileName: string) => api.post(`/backup/restore/${fileName}`),
 };
 
+// #728 (RF013 AC#5/AC#6): admin-editable backup policy (retention/
+// frequency/encryption/RPO/RTO), distinct from the operational
+// perform/list/restore calls above.
+export const backupPolicyService = {
+  getPolicy: () => api.get('/backup-policy'),
+  updatePolicy: (data: any) => api.put('/backup-policy', data),
+};
+
 // ========== CONSENT SERVICES ==========
 // TCLE builder should use only ConsentTemplate endpoints for create/update/read
 export const consentService = {
