@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { realLogin } from '../e2e/helpers/realAuth';
-import { createRealParticipant, seedStorageBoxLocation, closeSeedDb } from '../e2e/helpers/seedParticipant';
+import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocation, closeSeedDb, type SeededStorageBox } from '../e2e/helpers/seedParticipant';
 
 // Not a coverage spec — a human-paced showcase reel for Denise, recorded via
 // `playwright.showcase.config.ts` (video: 'on', single worker, real backend).
@@ -161,6 +161,7 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
     const equipmentDescription = `Showcase Freezer ${Date.now()}`;
     let originalSecurityConfig: Record<string, any> | null = null;
     let equipmentIdToDelete: string | null = null;
+    let seededStorageBox: SeededStorageBox | null = null;
 
     try {
       // 1. Real admin login. RF003 itself (rejected + corrected password)
@@ -228,7 +229,8 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
       // 4. Real sample labeling through the real UI. (RF016, #655/#646)
       // Fixture setup only -- not shown on camera.
       const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-      const { boxId, positionCode } = await seedStorageBoxLocation();
+      seededStorageBox = await seedStorageBoxLocation();
+      const { boxId, positionCode } = seededStorageBox;
       const sampleCreate = await request.post(`${apiBaseURL}/api/samples`, {
         headers: { Authorization: `Bearer ${admin.token}` },
         data: {
@@ -297,6 +299,9 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
         await request.delete(`${apiBaseURL}/api/equipment/${equipmentIdToDelete}`, {
           headers: { Authorization: `Bearer ${admin.token}` },
         }).catch(() => {});
+      }
+      if (seededStorageBox) {
+        await cleanupStorageBoxLocation(seededStorageBox).catch(() => {});
       }
     }
   });

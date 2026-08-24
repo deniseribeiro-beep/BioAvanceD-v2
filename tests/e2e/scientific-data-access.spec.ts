@@ -4,10 +4,12 @@ import { realLogin } from './helpers/realAuth';
 import {
   createRealParticipant,
   seedStorageBoxLocation,
+  cleanupStorageBoxLocation,
   seedStudy,
   seedActiveConsent,
   seedDuoConcept,
   closeSeedDb,
+  type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 
@@ -30,9 +32,13 @@ function validSampleFields() {
   };
 }
 
+const seededStorageBoxes: SeededStorageBox[] = [];
+
 async function createRealSample(request: any, token: string): Promise<string> {
   const participant = await createRealParticipant(request, apiBaseURL!, token);
-  const { boxId, positionCode } = await seedStorageBoxLocation();
+  const seededStorageBox = await seedStorageBoxLocation();
+  seededStorageBoxes.push(seededStorageBox);
+  const { boxId, positionCode } = seededStorageBox;
 
   const create = await request.post(`${apiBaseURL}/api/samples`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -48,6 +54,9 @@ async function createRealSample(request: any, token: string): Promise<string> {
 }
 
 test.afterAll(async () => {
+  await Promise.all(
+    seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+  );
   await closeSeedDb();
 });
 

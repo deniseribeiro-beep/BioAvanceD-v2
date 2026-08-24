@@ -4,12 +4,14 @@ import {
   createRealParticipant,
   seedActiveConsent,
   seedStorageBoxLocation,
+  cleanupStorageBoxLocation,
   retireStorageBox,
   setStorageContainerStatus,
   seedStudy,
   seedProtocol,
   seedCollectionEntity,
   closeSeedDb,
+  type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 
@@ -43,6 +45,14 @@ test.describe('Specimen registration (RF004) — real backend, negative paths', 
   // consent-state blocking) needs a real participant fixture, which needs a
   // consentTemplateId with no clean API seed path today — carried forward,
   // not forced into this slice (see issue #287's follow-up).
+  const seededStorageBoxes: SeededStorageBox[] = [];
+
+  test.afterAll(async () => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
+    await closeSeedDb();
+  });
 
   test('rejects specimen creation when participantId does not exist (criterion 1)', async ({ request }) => {
     const admin = await realLogin(request);
@@ -50,7 +60,9 @@ test.describe('Specimen registration (RF004) — real backend, negative paths', 
     // field together, boxId/positionCode included — without a valid pair
     // here the route rejects on that before ever reaching the participantId
     // lookup this criterion is proving, masking the intended 404 with 422.
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
 
     const response = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -132,7 +144,12 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
   // Real participant + consent template + operational location/sensor,
   // seeded directly against the test stack's Mongo (see
   // helpers/seedParticipant.ts — no API seed path exists for any of these).
+  const seededStorageBoxes: SeededStorageBox[] = [];
+
   test.afterAll(async () => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
     await closeSeedDb();
   });
 
@@ -144,7 +161,9 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     // collide on the same occupancyGrid slot (#474) and the second legitimately
     // 409s, which isn't what this criterion (specimenId uniqueness) is testing.
     const create = async () => {
-      const { boxId, positionCode } = await seedStorageBoxLocation();
+      const seededStorageBox = await seedStorageBoxLocation();
+      seededStorageBoxes.push(seededStorageBox);
+      const { boxId, positionCode } = seededStorageBox;
       return request.post(`${apiBaseURL}/api/samples`, {
         headers: { Authorization: `Bearer ${admin.token}` },
         data: {
@@ -187,7 +206,9 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
   test('records SPREC variables on a successful create (criterion 5)', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
 
     const sprec = {
       preCentrifugation: 'A',
@@ -225,7 +246,9 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
   }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
     // Deliberately not calling seedActiveConsent — a freshly-created
     // participant has none, per patient.service.js (consent is a separate
     // `consents` collection, not set at patient creation).
@@ -278,14 +301,21 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
   // — not arbitrary client-supplied text. No CRUD API exists yet for any of
   // the three, so the referent is seeded directly against Mongo (same
   // pattern as seedStorageBoxLocation).
+  const seededStorageBoxes: SeededStorageBox[] = [];
+
   test.afterAll(async () => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
     await closeSeedDb();
   });
 
   test('rejects a create when studyId does not resolve to a real Study', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
 
     const response = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -306,7 +336,9 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
   test('rejects a create when protocolId does not resolve to a real Protocol', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
 
     const response = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -327,7 +359,9 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
   test('rejects a create when collectionId does not resolve to a real Collection', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
 
     const response = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -348,7 +382,9 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
   test('accepts and persists a create whose study/protocol/collection references all resolve', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
 
     const studyId = `study-${Date.now()}`;
     const protocolId = `protocol-${Date.now()}`;
@@ -387,14 +423,21 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
 test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible protocol and study rejection (#591, #592)', () => {
   // Existence alone isn't enough — sample.service.js also rejects when the
   // referenced Study/Protocol resolves but isn't active/approved (#591).
+  const seededStorageBoxes: SeededStorageBox[] = [];
+
   test.afterAll(async () => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
     await closeSeedDb();
   });
 
   test('rejects a create when the referenced study is not active', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
     const studyId = `study-inactive-${Date.now()}`;
     await seedStudy(studyId, { studyStatus: 'closed-to-accrual' });
 
@@ -417,7 +460,9 @@ test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible prot
   test('rejects a create when the referenced protocol is not approved', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
     const protocolId = `protocol-draft-${Date.now()}`;
     await seedProtocol(protocolId, { approvalStatus: 'draft' });
 
@@ -440,7 +485,9 @@ test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible prot
   test('accepts a create when the referenced study/protocol are active/approved', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
     const studyId = `study-active-${Date.now()}`;
     const protocolId = `protocol-approved-${Date.now()}`;
     await seedStudy(studyId, { studyStatus: 'active' });
@@ -474,14 +521,21 @@ test.describe('Chain of custody (RF006) — real backend', () => {
   // bug #294 found elsewhere in updateSample (PUT /api/samples/:id never
   // matched any sample), needed here to seed a blocked lifecycle status
   // through the real API rather than writing to Mongo directly.
+  const seededStorageBoxes: SeededStorageBox[] = [];
+
   test.afterAll(async () => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
     await closeSeedDb();
   });
 
   async function seedWithdrawableSample(request: import('@playwright/test').APIRequestContext, admin: { token: string }) {
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
     await seedActiveConsent(participant.participantId);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -658,14 +712,21 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
   // were the dual-write bridge (#405), removed in #408. No dedicated
   // quarantine route exists — release, like RF006's blocked-status
   // seeding, goes through the generic update route.
+  const seededStorageBoxes: SeededStorageBox[] = [];
+
   test.afterAll(async () => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
     await closeSeedDb();
   });
 
   async function seedQuarantinableSample(request: import('@playwright/test').APIRequestContext, admin: { token: string }) {
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
     await seedActiveConsent(participant.participantId);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -826,13 +887,20 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
 // DataMatrix/QR) and AC#4/#6 (batch generation, audit + reprint tracking)
 // are all proven below against the real backend.
 test.describe('Sample labeling (RF016) — real backend', () => {
+  const seededStorageBoxes: SeededStorageBox[] = [];
+
   test.afterAll(async () => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
     await closeSeedDb();
   });
 
   async function createRealSample(request: any, token: string): Promise<{ sampleID: string; barcode: string }> {
     const participant = await createRealParticipant(request, apiBaseURL!, token);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -929,7 +997,12 @@ test.describe('Sample labeling (RF016) — real backend', () => {
 // This proves the redirect: the real page now renders the real bwip-js
 // Code128/DataMatrix/QR images and drives the ported ZPL print-job route.
 test.describe('Sample labeling (RF016) — through the real UI (#655)', () => {
+  const seededStorageBoxes: SeededStorageBox[] = [];
+
   test.afterAll(async () => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
     await closeSeedDb();
   });
 
@@ -943,7 +1016,9 @@ test.describe('Sample labeling (RF016) — through the real UI (#655)', () => {
     const admin = await login(page, request);
 
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1007,13 +1082,20 @@ test.describe('Sample labeling (RF016) — through the real UI (#655)', () => {
 // exact hierarchy seedStorageBoxLocation (mirroring the real createSample
 // path) actually writes.
 test.describe('Storage location availability (RF017 AC#7) — real backend', () => {
+  const seededStorageBoxes: SeededStorageBox[] = [];
+
   test.afterAll(async () => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
     await closeSeedDb();
   });
 
   test('rejects position validation against a RETIRED storage box (criterion 7)', async ({ request }) => {
     const admin = await realLogin(request);
-    const { boxId } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId } = seededStorageBox;
     await retireStorageBox(boxId);
 
     const res = await request.get(`${apiBaseURL}/api/storage/validate/${boxId}/A1`, {
@@ -1031,6 +1113,7 @@ test.describe('Storage location availability (RF017 AC#7) — real backend', () 
 
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
     const origin = await seedStorageBoxLocation();
+    seededStorageBoxes.push(origin);
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
@@ -1044,6 +1127,7 @@ test.describe('Storage location availability (RF017 AC#7) — real backend', () 
     const sampleId = (await create.json()).data.sampleID;
 
     const destination = await seedStorageBoxLocation();
+    seededStorageBoxes.push(destination);
     await retireStorageBox(destination.boxId);
 
     const res = await request.post(`${apiBaseURL}/api/storage/move`, {
@@ -1059,7 +1143,9 @@ test.describe('Storage location availability (RF017 AC#7) — real backend', () 
   // #655: proven for the first time -- see the updated scope note above.
   test('rejects position validation when the box\'s rack is under MAINTENANCE (ancestor-level, criterion 7)', async ({ request }) => {
     const admin = await realLogin(request);
-    const { boxId, rackId } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, rackId } = seededStorageBox;
     await setStorageContainerStatus(rackId, 'MAINTENANCE');
 
     const res = await request.get(`${apiBaseURL}/api/storage/validate/${boxId}/A1`, {
@@ -1078,7 +1164,9 @@ test.describe('Storage location availability (RF017 AC#7) — real backend', () 
   // before the $exists fix (MongoStorageRepository.js#checkLocationBlocked).
   test('stays available when the box\'s ancestor containers have no status field set (criterion 7, negative case)', async ({ request }) => {
     const admin = await realLogin(request);
-    const { boxId } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId } = seededStorageBox;
 
     const res = await request.get(`${apiBaseURL}/api/storage/validate/${boxId}/A1`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1103,7 +1191,28 @@ test.describe('Storage location availability (RF017 AC#7) — real backend', () 
 // embedded rather than a separate collection (Nonconformance.js's own
 // header comment).
 test.describe('Assay quality — reagents, equipment, controls, non-conformance (RF025) — real backend', () => {
-  test.afterAll(async () => {
+  const seededStorageBoxes: SeededStorageBox[] = [];
+  // #730: the equipment created here is a direct POST /api/equipment, not
+  // through seedStorageBoxLocation() -- cleaned up via the API (like
+  // human-showcase.spec.ts's own equipment fixture), not cleanupStorageBoxLocation.
+  const equipmentIdsToDelete: string[] = [];
+
+  test.afterAll(async ({ request }) => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
+    if (equipmentIdsToDelete.length > 0) {
+      const admin = await realLogin(request).catch(() => null);
+      if (admin) {
+        await Promise.all(
+          equipmentIdsToDelete.map((id) =>
+            request.delete(`${apiBaseURL}/api/equipment/${id}`, {
+              headers: { Authorization: `Bearer ${admin.token}` },
+            }).catch(() => {})
+          )
+        );
+      }
+    }
     await closeSeedDb();
   });
 
@@ -1116,7 +1225,9 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     await seedStudy(studyId);
     await seedProtocol(protocolId);
 
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
     const sampleRes = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
@@ -1136,7 +1247,14 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
       data: { equipmentDescription: `RF025 thermocycler ${suffix}`, name: `Thermocycler ${suffix}`, type: 'Analytical', status: 'Active' },
     });
     expect(equipmentRes.status(), await equipmentRes.text()).toBe(201);
-    const equipmentID = (await equipmentRes.json()).data.equipmentID;
+    const equipmentCreated = (await equipmentRes.json()).data;
+    const equipmentID = equipmentCreated.equipmentID;
+    // Delete by Mongo _id, not equipmentID -- generateUniqueEquipmentID
+    // (equipmentIDGenerator.js) can hand back a non-numeric equipmentID
+    // when the collection holds string-typed equipmentID debris (see
+    // seedStorageBoxLocation's own equipment fixture), which the DELETE
+    // route's ObjectId-then-numeric-equipmentID fallback can't resolve.
+    equipmentIdsToDelete.push(String(equipmentCreated._id));
 
     // #664: laboratoryId now resolves to a real Organization.
     const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
@@ -1183,7 +1301,9 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
   // placeholder strings this file used before that referential check existed.
   async function seedRealAssayLinkage(request: any, admin: any) {
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const { boxId, positionCode } = await seedStorageBoxLocation();
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
     const sampleRes = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
