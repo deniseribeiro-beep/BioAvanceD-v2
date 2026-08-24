@@ -19,9 +19,9 @@ router.use(authenticate);
 // whether the caller's role was actually granted manageBackup.
 router.use(requirePermission('manageBackup'));
 
-router.post('/perform', async (_req, res) => {
+router.post('/perform', async (req, res) => {
   try {
-    const result = await backupService.runBackup();
+    const result = await backupService.runBackup(req.app.locals.db);
     if (!result.success) {
       return res.status(400).json({ success: false, error: result.error || 'Não foi possível executar backup', data: result });
     }
@@ -36,9 +36,27 @@ router.post('/perform', async (_req, res) => {
   }
 });
 
-router.get('/list', async (_req, res) => {
+router.get('/list', async (req, res) => {
   try {
     const baseDir = backupService.getBackupBaseDir();
+
+    // #723 (RF013 AC#1): merge persisted run-history (state/result) onto
+    // the filesystem listing, keyed by absolute path. Best-effort -- a
+    // history read failure still leaves the filesystem listing usable.
+    let historyByPath = {};
+    const db = req.app.locals.db;
+    if (db) {
+      try {
+        const historyEntries = await db.collection('backupHistory').find({}).sort({ startedAt: -1 }).toArray();
+        historyByPath = historyEntries.reduce((acc, entry) => {
+          if (entry.path && !acc[entry.path]) acc[entry.path] = entry;
+          return acc;
+        }, {});
+      } catch (historyError) {
+        logger.error('Erro ao carregar histórico de backups:', historyError.message);
+      }
+    }
+
     if (!fs.existsSync(baseDir)) {
       return res.status(200).json({ success: true, data: [] });
     }
@@ -48,12 +66,15 @@ router.get('/list', async (_req, res) => {
       .map((entry) => {
         const fullPath = path.join(baseDir, entry.name);
         const stats = fs.statSync(fullPath);
+        const history = historyByPath[fullPath] || null;
         return {
           fileName: entry.name,
           path: fullPath,
           size: getDirSizeSync(fullPath),
           createdAt: stats.birthtime,
-          modifiedAt: stats.mtime
+          modifiedAt: stats.mtime,
+          status: history ? history.status : null,
+          checksum: history ? history.checksum : null
         };
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());

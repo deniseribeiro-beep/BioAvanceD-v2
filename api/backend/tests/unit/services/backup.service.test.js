@@ -78,6 +78,7 @@ describe('backup.service', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(false);
       vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
       vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
 
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
         cb(null, 'ok stdout', '');
@@ -88,6 +89,15 @@ describe('backup.service', () => {
 
       expect(result.success).toBe(true);
       expect(result.path).toContain(env.BACKUP_DIR);
+      expect(result.mode).toBe('mongodump');
+      // #723 (RF013 AC#3): fs.promises.readdir is mocked to [] above, so
+      // this is the sha256 of zero files -- a deterministic 64-hex digest.
+      expect(result.checksum).toMatch(/^[0-9a-f]{64}$/);
+      expect(fs.promises.writeFile).toHaveBeenCalledWith(
+        expect.stringContaining('manifest.json'),
+        expect.stringContaining('"type": "mongodump"'),
+        'utf8'
+      );
       expect(cp.exec).toHaveBeenCalledWith(
         expect.stringContaining('mongodump --uri="mongodb://localhost:27017/test"'),
         { windowsHide: true },
@@ -105,6 +115,7 @@ describe('backup.service', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(false);
       vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
       vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
 
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
         cb(null, 'ok', '');
@@ -221,6 +232,107 @@ describe('backup.service', () => {
 
       expect(result).toEqual({ success: false, error: 'authentication failed' });
       expect(logger.error).toHaveBeenCalledWith('Erro ao executar backup:', 'authentication failed');
+    });
+  });
+
+  // #723 (RF013 AC#1): runBackup(db) persists one history entry per run,
+  // regardless of which internal branch produced the result -- this is
+  // the actual gap #723 named ("no persisted run-status/result history").
+  describe('runBackup history persistence (#723, RF013 AC#1/AC#3)', () => {
+    function fakeHistoryDb() {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'history-1' });
+      return { db: { collection: vi.fn(() => ({ insertOne })) }, insertOne };
+    }
+
+    it('does not touch the db when none is passed (backward-compatible default)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-history-1');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+
+      const backupService = freshBackupService();
+      await expect(backupService.runBackup()).resolves.toMatchObject({ success: true });
+    });
+
+    it('records a success history entry with the run checksum when db is passed', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-history-2');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+
+      const backupService = freshBackupService();
+      const { db, insertOne } = fakeHistoryDb();
+      const result = await backupService.runBackup(db);
+
+      expect(db.collection).toHaveBeenCalledWith('backupHistory');
+      expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'success',
+        mode: 'mongodump',
+        path: result.path,
+        checksum: result.checksum,
+      }));
+    });
+
+    it('records an error history entry (no checksum) when the backup fails', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-history-3');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb({ message: 'authentication failed' }, '', 'auth error');
+      });
+
+      const backupService = freshBackupService();
+      const { db, insertOne } = fakeHistoryDb();
+      await backupService.runBackup(db);
+
+      expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'error',
+        error: 'authentication failed',
+        checksum: null,
+      }));
+    });
+
+    it('records a skipped history entry when MONGO_URI is not configured', async () => {
+      env.MONGO_URI = undefined;
+
+      const backupService = freshBackupService();
+      const { db, insertOne } = fakeHistoryDb();
+      await backupService.runBackup(db);
+
+      expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({ status: 'skipped' }));
+    });
+
+    it('does not fail the backup when the history write itself throws', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-history-4');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+
+      const backupService = freshBackupService();
+      const db = { collection: vi.fn(() => ({ insertOne: vi.fn().mockRejectedValue(new Error('history db down')) })) };
+
+      const result = await backupService.runBackup(db);
+
+      expect(result.success).toBe(true);
+      expect(logger.error).toHaveBeenCalledWith('Erro ao registrar histórico de backup:', 'history db down');
     });
   });
 

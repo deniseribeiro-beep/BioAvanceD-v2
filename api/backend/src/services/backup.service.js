@@ -1,11 +1,62 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { exec } = require('child_process');
 const { MongoClient } = require('mongodb');
 const logger = require('../utils/logger');
 const env = require('../config/env');
 
 const DEFAULT_RETENTION_DAYS = 30;
+
+// #723 (RF013 AC#3): sha256 over every file under dirPath, recursively,
+// in a deterministic (sorted) order -- so the same backup contents
+// always produce the same checksum regardless of filesystem iteration
+// order. Returns null (rather than throwing) when the directory can't
+// be read, since checksum computation is completion *evidence*, not a
+// precondition for the backup itself having succeeded.
+async function computeDirChecksum(dirPath) {
+  const hash = crypto.createHash('sha256');
+
+  async function walk(currentPath, relativePath) {
+    const entries = await fs.promises.readdir(currentPath, { withFileTypes: true });
+    const sorted = [...entries].sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of sorted) {
+      const entryPath = path.join(currentPath, entry.name);
+      const entryRelative = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        await walk(entryPath, entryRelative);
+      } else if (entry.isFile()) {
+        const content = await fs.promises.readFile(entryPath);
+        hash.update(entryRelative);
+        hash.update(content);
+      }
+    }
+  }
+
+  try {
+    await walk(dirPath, '');
+  } catch (error) {
+    logger.warn(`Não foi possível calcular checksum de ${dirPath}: ${error.message}`);
+    return null;
+  }
+
+  return hash.digest('hex');
+}
+
+// #723 (RF013 AC#1): persists run-status/result history so `/list` can
+// show state/date/result of executions instead of only reflecting
+// filesystem directories. Reuses the caller's already-connected app db
+// (no new MongoClient connection) -- a no-op when db isn't provided
+// (e.g. existing callers/tests that don't pass one), so this is purely
+// additive and never blocks the backup itself on a failed history write.
+async function recordBackupHistory(db, entry) {
+  if (!db) return;
+  try {
+    await db.collection('backupHistory').insertOne(entry);
+  } catch (error) {
+    logger.error('Erro ao registrar histórico de backup:', error.message);
+  }
+}
 
 function ensureDirSync(dirPath) {
   if (!fs.existsSync(dirPath)) {
@@ -179,6 +230,9 @@ async function writeJsonBackup(backupDir, mongoUri) {
       });
     }
 
+    const checksum = await computeDirChecksum(backupDir);
+    manifest.checksum = checksum;
+
     await fs.promises.writeFile(
       path.join(backupDir, 'manifest.json'),
       JSON.stringify(manifest, null, 2),
@@ -189,14 +243,15 @@ async function writeJsonBackup(backupDir, mongoUri) {
       success: true,
       path: backupDir,
       mode: 'json-fallback',
-      collections: manifest.collections.length
+      collections: manifest.collections.length,
+      checksum
     };
   } finally {
     await client.close();
   }
 }
 
-async function runBackup() {
+async function performBackup() {
   const mongoUri = env.MONGO_URI;
   if (!mongoUri) {
     logger.warn('Backup ignorado: MONGO_URI não configurado.');
@@ -215,10 +270,22 @@ async function runBackup() {
     await runCommand(command);
     logger.info(`✅ Backup concluído: ${backupDir}`);
 
+    const checksum = await computeDirChecksum(backupDir);
+    await fs.promises.writeFile(
+      path.join(backupDir, 'manifest.json'),
+      JSON.stringify({
+        createdAt: new Date().toISOString(),
+        dbName: resolveDatabaseName(mongoUri),
+        type: 'mongodump',
+        checksum
+      }, null, 2),
+      'utf8'
+    );
+
     const retentionDays = Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
     await cleanupOldBackups(baseDir, retentionDays);
 
-    return { success: true, path: backupDir };
+    return { success: true, path: backupDir, mode: 'mongodump', checksum };
   } catch (err) {
     const details = err && err.error ? err.error.message : err?.message;
     const dumpBinaryMissing = /mongodump: not found|is not recognized|ENOENT/i.test(String(details || ''));
@@ -243,6 +310,28 @@ async function runBackup() {
     logger.error('Erro ao executar backup:', details || 'Erro desconhecido');
     return { success: false, error: details || 'Erro ao executar backup' };
   }
+}
+
+// #723 (RF013 AC#1/AC#3): thin wrapper so every runBackup() call --
+// whichever internal branch it takes -- records exactly one history
+// entry, instead of scattering recordBackupHistory calls across each
+// branch of performBackup(). `db` is optional (see recordBackupHistory);
+// existing callers that don't pass one keep their prior behavior exactly.
+async function runBackup(db) {
+  const startedAt = new Date();
+  const result = await performBackup();
+
+  await recordBackupHistory(db, {
+    startedAt,
+    completedAt: new Date(),
+    status: result.success ? 'success' : (result.skipped ? 'skipped' : 'error'),
+    mode: result.mode || null,
+    path: result.path || null,
+    checksum: result.checksum || null,
+    error: result.error || null
+  });
+
+  return result;
 }
 
 async function restoreBackup(backupPath) {

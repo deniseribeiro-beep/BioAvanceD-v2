@@ -126,13 +126,13 @@ function startTemperatureMonitor(db) {
   logger.info(`⏱️ Monitoramento de temperatura agendado (${cronExpr})`);
 }
 
-function startBackupSchedule() {
+function startBackupSchedule(db) {
   const cronExpr = env.BACKUP_CRON || '0 3 * * *';
   const timezone = process.env.TZ || 'America/Sao_Paulo';
 
   backupTask = cron.schedule(cronExpr, async () => {
     try {
-      await backupService.runBackup();
+      await backupService.runBackup(db);
     } catch (error) {
       logger.error('Erro ao executar backup agendado:', error.message);
     }
@@ -165,7 +165,7 @@ function startRetentionSweepSchedule(db) {
 
 function initScheduler({ db, neo4jDriver }) {
   startTemperatureMonitor(db);
-  startBackupSchedule();
+  startBackupSchedule(db);
   startConsentSyncSchedule({ db, neo4jDriver });
   startRetentionSweepSchedule(db);
 }

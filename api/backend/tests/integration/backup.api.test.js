@@ -129,6 +129,18 @@ describe('POST /api/backup/perform', () => {
     expect(res.body.success).toBe(true);
   });
 
+  // #723 (RF013 AC#1): runBackup must receive the app's db so it can
+  // persist run-history -- a regression here silently drops that history.
+  it('passes the app db through to backupService.runBackup', async () => {
+    const runBackupSpy = vi.spyOn(backupService, 'runBackup').mockResolvedValue({ success: true, path: '/backups/2026-06-30' });
+
+    await request(app)
+      .post('/api/backup/perform')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(runBackupSpy).toHaveBeenCalledWith(app.locals.db);
+  });
+
   it('returns 400 when backup fails', async () => {
     vi.spyOn(backupService, 'runBackup').mockResolvedValue({ success: false, error: 'Disco cheio' });
 
@@ -213,6 +225,40 @@ describe('GET /api/backup/list', () => {
     expect(res.body.data.map((d) => d.fileName)).toEqual(['backup-new', 'backup-old']);
     expect(res.body.data.find((d) => d.fileName === 'backup-old').size).toBe(10);
     expect(res.body.data.find((d) => d.fileName === 'backup-new').size).toBe(20);
+
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  // #723 (RF013 AC#1): /list must surface persisted state/result, not
+  // just the filesystem directory listing -- this is the actual gap
+  // #723 named ("only reflects filesystem directories").
+  it('merges persisted backupHistory status/checksum onto matching directory entries', async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-list-history-'));
+    const dirPath = path.join(baseDir, 'backup-1');
+    fs.mkdirSync(dirPath);
+    fs.writeFileSync(path.join(dirPath, 'a.bson'), 'x');
+
+    vi.spyOn(backupService, 'getBackupBaseDir').mockReturnValue(baseDir);
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      backupHistory: createCollectionMock({
+        find: vi.fn(() => ({
+          sort: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue([
+            { path: dirPath, status: 'success', checksum: 'abc123', startedAt: new Date() },
+          ]),
+        })),
+      }),
+    });
+
+    const res = await request(app)
+      .get('/api/backup/list')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(200);
+    const entry = res.body.data.find((d) => d.fileName === 'backup-1');
+    expect(entry.status).toBe('success');
+    expect(entry.checksum).toBe('abc123');
 
     fs.rmSync(baseDir, { recursive: true, force: true });
   });
