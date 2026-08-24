@@ -238,6 +238,7 @@ app.use("/api/quality", require("./src/interface/routes/quality.routes"));
 app.use("/api/import", require("./src/interface/routes/import.routes"));
 app.use("/api/results", require("./src/interface/routes/result.routes"));
 app.use("/api/reports", require("./src/interface/routes/reports.routes"));
+app.use("/api/report-templates", require("./src/interface/routes/reportTemplates.routes"));
 app.use("/api/logs", require("./src/interface/routes/logs.routes"));
 app.use("/api/audit", require("./src/interface/routes/audit.routes"));
 app.use("/api/analysis-files", require("./src/interface/routes/analysis-file.routes"));
