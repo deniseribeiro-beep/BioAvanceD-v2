@@ -39,17 +39,22 @@ async function nextReportId(reportsCollection) {
   return max + 1;
 }
 
-function typeIncludes(type, patterns) {
-  const value = String(type || '').toLowerCase();
-  return patterns.some((pattern) => value.includes(pattern));
-}
-
-function normalizeTypeValue(rawType = '') {
+// #726 (RF008 AC#6): converts an incoming `:type`/`reportType` value into a
+// ReportTemplate `code` lookup key -- e.g. 'samplesByPatient' (the live
+// frontend's REPORT_TYPE_DEFINITIONS `key`, report.constants.js) becomes
+// 'samples_by_patient', matching report-template-seed.service.js's system
+// rows. Replaces the old typeIncludes/normalizeTypeValue free-form
+// Portuguese/English substring matching -- buildPreviewData now dispatches
+// by exact `code` lookup, not fuzzy string matching, per #726's design call.
+function toTemplateCode(rawType = '') {
   return decodeURIComponent(String(rawType || ''))
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '');
+    .trim()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
 }
 
 function buildDateQuery(filters = {}) {
@@ -240,77 +245,68 @@ async function getMatchingPatientIds(samplesCollection, sampleQuery) {
     : [];
 }
 
+// #341 (RF003 AC#3): only report types rooted in the samples/patients
+// collections (plus, per #621, Result — scoped via a join through its
+// linked Sample's collectionSite; per #634/#635/#636, Sensor/Equipment/
+// Temperature — scoped directly by their own organizationId) carry an
+// organization reference to scope by — confirmed with Dennis 2026-08-18.
+// access-log/withdrawal-history report types, and saved Report documents
+// themselves, have no organization concept anywhere yet and are
+// deliberately left unscoped (see the follow-up filed alongside this
+// issue, #621, and its #629/#634-#637 split). Keyed by `handlerKey` now
+// (#726), not by string-matching `type` — same membership as before.
+const SCOPED_HANDLER_KEYS = new Set([
+  'samplesByPatient',
+  'patient',
+  'sample',
+  'sampleAnalysis',
+  'temperature',
+  'sensor',
+  'equipment',
+  'result',
+  'tissueOriginHistory',
+  'extracellularNetwork',
+]);
+
+function unknownTypeResult(rawType) {
+  return {
+    total: 0,
+    message: 'Tipo de relatório disponível, mas sem pré-visualização específica para este formato.',
+    type: decodeURIComponent(rawType || '').toLowerCase(),
+  };
+}
+
+// #726 (RF008 AC#6): buildPreviewData now dispatches by looking up a
+// ReportTemplate via `code` (toTemplateCode's normalization of the
+// incoming `:type`/`reportType`) instead of the old typeIncludes/
+// normalizeTypeValue free-form string-matching chain -- one code path, per
+// the design call. A `code` with no matching *active* ReportTemplate row
+// (unknown type, or a retired one) falls back to the same
+// no-preview-available shape the old chain returned for an unrecognized
+// type, rather than a hard error.
 async function buildPreviewData(db, rawType, filters = {}) {
   // #341: local copy — this function may attach organizationScope below;
   // the /generate route persists its own `filters` object verbatim onto
   // the stored Report document afterward, so mutating the caller's object
   // in place would leak resolved org IDs into that stored snapshot.
   filters = { ...filters };
-  const type = decodeURIComponent(rawType || '').toLowerCase();
-  const normalizedType = normalizeTypeValue(rawType);
-  const isSamplesByPatient =
-    normalizedType === 'samplesbypatient' ||
-    typeIncludes(type, ['amostras por paciente', 'samples by patient']);
+  const code = toTemplateCode(rawType);
+  const template = code
+    ? await db.collection('reportTemplates').findOne({ code, templateStatus: 'active' })
+    : null;
 
-  const isTemperatureControl =
-    normalizedType === 'temperaturecontrol' ||
-    typeIncludes(type, ['controle de temperatura', 'temperature control']);
+  if (!template) {
+    return unknownTypeResult(rawType);
+  }
 
-  const isWithdrawalHistory =
-    normalizedType === 'withdrawalhistory' ||
-    typeIncludes(type, ['historico de retirada', 'withdrawal history', 'retirada']);
+  const handlerKey = template.handlerKey;
+  const handlerOptions = template.handlerOptions && typeof template.handlerOptions === 'object' ? template.handlerOptions : {};
+  const handler = REPORT_HANDLERS[handlerKey];
+  if (!handler) {
+    return unknownTypeResult(rawType);
+  }
 
-  const isAccessLogs =
-    normalizedType === 'accesslogs' ||
-    typeIncludes(type, ['logs de acesso', 'access logs']);
-
-  const isSampleAnalysis =
-    normalizedType === 'sampleanalysis' ||
-    typeIncludes(type, ['analise das amostras', 'sample analysis']);
-
-  const isTissueOriginHistory =
-    normalizedType === 'tissueoriginhistory' ||
-    typeIncludes(type, ['origem de tecido', 'tissue origin']);
-
-  const isExtracellularNetwork =
-    normalizedType === 'extracellularnetwork' ||
-    typeIncludes(type, ['rede extracelular', 'extracellular network']);
-
-  const isResult = typeIncludes(type, ['resultado', 'result']);
-
-  // #634/#635/#636: Sensor/Equipment/Temperature.organizationId now all
-  // exist (split from #621/#629) — every one moved from the unscoped
-  // bucket below into the scoped one.
-  const isSensorReportType = typeIncludes(type, ['sensor']);
-  const isEquipmentReportType = typeIncludes(type, ['equipamento', 'equipment']);
-  const isTemperatureReportType = typeIncludes(type, ['temperatura', 'temperature']);
-
-  // #341 (RF003 AC#3): only report types rooted in the samples/patients
-  // collections (plus, per #621, Result — scoped via a join through its
-  // linked Sample's collectionSite; per #634/#635/#636, Sensor/Equipment/
-  // Temperature — scoped directly by their own organizationId) carry an
-  // organization reference to scope by — confirmed with Dennis
-  // 2026-08-18. access-log/withdrawal-history report types, and saved
-  // Report documents themselves, have no organization concept anywhere
-  // yet and are deliberately left unscoped (see the follow-up filed
-  // alongside this issue, #621, and its #629/#634-#637 split). An
-  // org-less caller only hard-403s when requesting one of the scoped
-  // types below, not universally — resolveUserOrganizationScope is
-  // deliberately only called (a real DB round-trip) when the type
-  // actually needs it, not on every report request regardless of type.
-  const isScopedReportType =
-    isSamplesByPatient ||
-    isSampleAnalysis ||
-    isTissueOriginHistory ||
-    isExtracellularNetwork ||
-    isResult ||
-    isSensorReportType ||
-    isEquipmentReportType ||
-    isTemperatureReportType ||
-    typeIncludes(type, ['paciente', 'patient']) ||
-    typeIncludes(type, ['amostra', 'sample']);
-
-  if (isScopedReportType) {
+  if (SCOPED_HANDLER_KEYS.has(handlerKey)) {
     const organizationScope = await resolveUserOrganizationScope(db, filters.userAccountId);
     if (!isOrganizationScopeUsable(organizationScope)) {
       const scopeError = new Error('Sem organização atribuída');
@@ -320,365 +316,394 @@ async function buildPreviewData(db, rawType, filters = {}) {
     filters.organizationScope = organizationScope;
   }
 
-  if (isSamplesByPatient) {
-    const patientsCollection = resolveCollection(db, ['patients', 'pacientes']);
-    const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
-    const sampleQuery = await buildSampleQuery(db, filters);
-    const matchingPatientIds = await getMatchingPatientIds(samplesCollection, sampleQuery);
+  return handler(db, filters, handlerOptions);
+}
 
-    const patientQueryParts = [];
-    // RF005/RNF007 (#574): keyword search no longer resolves against
-    // ParticipantIdentity.patientName (civil identity) -- RF008's own
-    // filter list doesn't include name search, RNF002 AC#2 forbids the
-    // full-collection decrypt-and-scan a substring search over encrypted
-    // patientName would require, and RNF007 AC#4 requires reports to
-    // omit/pseudonymize direct identifiers by default. The keyword filter
-    // still matches the pseudonymized participantId itself, which isn't
-    // civil identity.
-    if (filters.keyword) {
-      patientQueryParts.push({ participantId: { $regex: String(filters.keyword), $options: 'i' } });
-    }
+async function handleSamplesByPatient(db, filters) {
+  const patientsCollection = resolveCollection(db, ['patients', 'pacientes']);
+  const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+  const sampleQuery = await buildSampleQuery(db, filters);
+  const matchingPatientIds = await getMatchingPatientIds(samplesCollection, sampleQuery);
 
-    const orphaCode = normalizeFilterText(filters.orphaCode || filters.orpha || filters.disease);
-    if (orphaCode) {
-      const cleanedOrpha = orphaCode.replace(/^ORPHA:/i, '');
-      patientQueryParts.push({
-        $or: [
-          { orphaCode: cleanedOrpha },
-          { orphaCode: toRegex(cleanedOrpha) },
-          { 'icdReference.ORPHA': toRegex(cleanedOrpha) },
-          { diagnosticHypothesis: toRegex(cleanedOrpha) },
-        ],
-      });
-    }
+  const patientQueryParts = [];
+  // RF005/RNF007 (#574): keyword search no longer resolves against
+  // ParticipantIdentity.patientName (civil identity) -- RF008's own
+  // filter list doesn't include name search, RNF002 AC#2 forbids the
+  // full-collection decrypt-and-scan a substring search over encrypted
+  // patientName would require, and RNF007 AC#4 requires reports to
+  // omit/pseudonymize direct identifiers by default. The keyword filter
+  // still matches the pseudonymized participantId itself, which isn't
+  // civil identity.
+  if (filters.keyword) {
+    patientQueryParts.push({ participantId: { $regex: String(filters.keyword), $options: 'i' } });
+  }
 
-    if (matchingPatientIds.length > 0) {
-      patientQueryParts.push({ participantId: { $in: matchingPatientIds } });
-    }
-
-    // #341: patientQueryParts is otherwise empty when no keyword/orphaCode
-    // filter is given and no sample matched — filtering only through
-    // matchingPatientIds (itself derived from the now-scoped sampleQuery)
-    // isn't enough on its own, since an empty matchingPatientIds leaves
-    // patientQuery unfiltered ({}), which would leak every organization's
-    // patients. Filter the patients collection directly too.
-    if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
-      patientQueryParts.push({ clinicalUnitId: { $in: filters.organizationScope.organizationIds } });
-    }
-
-    const patientQuery = patientQueryParts.length > 0 ? { $and: patientQueryParts } : {};
-    const patients = await patientsCollection.find(patientQuery).limit(20).toArray();
-    const patientIds = patients.map((patient) => patient.participantId).filter(Boolean);
-    const sampleFilter = { ...(Object.keys(sampleQuery).length > 0 ? sampleQuery : {}) };
-    const samples = patientIds.length
-      ? await samplesCollection.find({
-          $and: [
-            { participantId: { $in: patientIds } },
-            ...(Object.keys(sampleFilter).length > 0 ? [sampleFilter] : []),
-          ],
-        }).toArray()
-      : [];
-
-    const groupedSamples = samples.reduce((acc, sample) => {
-      const key = String(sample.participantId || '');
-      if (!key) {
-        return acc;
-      }
-      if (!acc[key]) {
-        acc[key] = [];
-      }
-      acc[key].push(sample);
-      return acc;
-    }, {});
-
-    const enrichedPatients = patients.map((patient) => {
-      const key = String(patient.participantId || '');
-      const patientSamples = groupedSamples[key] || [];
-      const limitedSamples = patientSamples.slice(0, 10);
-      return {
-        ...patient,
-        sampleCount: patientSamples.length,
-        samples: limitedSamples,
-        samplesLimited: patientSamples.length > limitedSamples.length,
-      };
+  const orphaCode = normalizeFilterText(filters.orphaCode || filters.orpha || filters.disease);
+  if (orphaCode) {
+    const cleanedOrpha = orphaCode.replace(/^ORPHA:/i, '');
+    patientQueryParts.push({
+      $or: [
+        { orphaCode: cleanedOrpha },
+        { orphaCode: toRegex(cleanedOrpha) },
+        { 'icdReference.ORPHA': toRegex(cleanedOrpha) },
+        { diagnosticHypothesis: toRegex(cleanedOrpha) },
+      ],
     });
-
-    return {
-      total: enrichedPatients.length,
-      patients: enrichedPatients,
-      previewLimited: enrichedPatients.length >= 20,
-    };
   }
 
-  if (typeIncludes(type, ['paciente', 'patient'])) {
-    const collection = resolveCollection(db, ['patients', 'pacientes']);
-    const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
-    const sampleQuery = await buildSampleQuery(db, filters);
-    const matchingPatientIds = await getMatchingPatientIds(samplesCollection, sampleQuery);
+  if (matchingPatientIds.length > 0) {
+    patientQueryParts.push({ participantId: { $in: matchingPatientIds } });
+  }
 
-    const patientQueryParts = [];
-    // RF005/RNF007 (#574): keyword search no longer resolves against
-    // ParticipantIdentity.patientName (civil identity) -- see this file's
-    // isSamplesByPatient branch above for the full rationale. The keyword
-    // filter still matches the pseudonymized participantId itself.
-    if (filters.keyword) {
-      patientQueryParts.push({ participantId: { $regex: String(filters.keyword), $options: 'i' } });
-    }
+  // #341: patientQueryParts is otherwise empty when no keyword/orphaCode
+  // filter is given and no sample matched — filtering only through
+  // matchingPatientIds (itself derived from the now-scoped sampleQuery)
+  // isn't enough on its own, since an empty matchingPatientIds leaves
+  // patientQuery unfiltered ({}), which would leak every organization's
+  // patients. Filter the patients collection directly too.
+  if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
+    patientQueryParts.push({ clinicalUnitId: { $in: filters.organizationScope.organizationIds } });
+  }
 
-    const orphaCode = normalizeFilterText(filters.orphaCode || filters.orpha || filters.disease);
-    if (orphaCode) {
-      const cleanedOrpha = orphaCode.replace(/^ORPHA:/i, '');
-      patientQueryParts.push({
-        $or: [
-          { orphaCode: cleanedOrpha },
-          { orphaCode: toRegex(cleanedOrpha) },
-          { 'icdReference.ORPHA': toRegex(cleanedOrpha) },
-          { diagnosticHypothesis: toRegex(cleanedOrpha) },
+  const patientQuery = patientQueryParts.length > 0 ? { $and: patientQueryParts } : {};
+  const patients = await patientsCollection.find(patientQuery).limit(20).toArray();
+  const patientIds = patients.map((patient) => patient.participantId).filter(Boolean);
+  const sampleFilter = { ...(Object.keys(sampleQuery).length > 0 ? sampleQuery : {}) };
+  const samples = patientIds.length
+    ? await samplesCollection.find({
+        $and: [
+          { participantId: { $in: patientIds } },
+          ...(Object.keys(sampleFilter).length > 0 ? [sampleFilter] : []),
         ],
-      });
-    }
+      }).toArray()
+    : [];
 
-    if (matchingPatientIds.length > 0) {
-      patientQueryParts.push({ participantId: { $in: matchingPatientIds } });
-    }
-
-    // #341: same direct-filter necessity as the samplesByPatient branch
-    // above — matchingPatientIds alone doesn't guarantee patientQuery
-    // stays restricted when it's empty.
-    if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
-      patientQueryParts.push({ clinicalUnitId: { $in: filters.organizationScope.organizationIds } });
-    }
-
-    const query = patientQueryParts.length > 0 ? { $and: patientQueryParts } : {};
-    const patients = await collection.find(query).limit(50).toArray();
-    const total = await collection.countDocuments(query);
-    return { total, patients, previewLimited: total > 50 };
-  }
-
-  if (isSampleAnalysis) {
-    const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
-    const resultsCollection = resolveCollection(db, ['results']);
-    const sampleAnalysisQuery =
-      filters.organizationScope && filters.organizationScope.scope === 'organization'
-        ? { collectionSite: { $in: filters.organizationScope.organizationIds } }
-        : {};
-    const samples = await samplesCollection.find(sampleAnalysisQuery).limit(100).toArray();
-
-    // #633: `sample.sampleID` doesn't exist on the canonical Sample
-    // model (only `specimenId` does) -- this join reads specimenId, the
-    // same field Result.specimenId references (Result.js, #628).
-    const sampleIds = samples.map((sample) => sample.specimenId).filter((specimenId) => specimenId !== undefined && specimenId !== null);
-    const results = sampleIds.length
-      ? await resultsCollection.find({ specimenId: { $in: sampleIds } }).toArray()
-      : [];
-
-    const groupedResults = results.reduce((acc, result) => {
-      const key = String(result.specimenId || '');
-      if (!key) {
-        return acc;
-      }
-      if (!acc[key]) {
-        acc[key] = [];
-      }
-      acc[key].push(result);
+  const groupedSamples = samples.reduce((acc, sample) => {
+    const key = String(sample.participantId || '');
+    if (!key) {
       return acc;
-    }, {});
+    }
+    if (!acc[key]) {
+      acc[key] = [];
+    }
+    acc[key].push(sample);
+    return acc;
+  }, {});
 
-    const analysis = samples.map((sample) => {
-      const key = String(sample.specimenId || '');
-      const sampleResults = groupedResults[key] || [];
-      return {
-        sampleID: sample.specimenId || sample._id,
-        barcode: sample.barcode || null,
-        sampleType: sample.sampleType || null,
-        patientID: sample.participantId || null,
-        // #539: derives from the canonical specimenStatus (dict-02
-        // ELM-0123) instead of the legacy currentStatus/status fields
-        // canonical-data-contract-v1.md bans.
-        status: SampleModel.resolveSpecimenStatus(sample),
-        resultCount: sampleResults.length,
-        hasResults: sampleResults.length > 0,
-      };
-    });
-
-    const withResults = analysis.filter((item) => item.hasResults).length;
-    const withoutResults = analysis.length - withResults;
+  const enrichedPatients = patients.map((patient) => {
+    const key = String(patient.participantId || '');
+    const patientSamples = groupedSamples[key] || [];
+    const limitedSamples = patientSamples.slice(0, 10);
     return {
-      total: analysis.length,
-      analysis,
-      withResults,
-      withoutResults,
-      previewLimited: analysis.length >= 100,
+      ...patient,
+      sampleCount: patientSamples.length,
+      samples: limitedSamples,
+      samplesLimited: patientSamples.length > limitedSamples.length,
     };
-  }
-
-  if (typeIncludes(type, ['amostra', 'sample'])) {
-    const collection = resolveCollection(db, ['samples', 'amostras']);
-    const sampleQuery = await buildSampleQuery(db, filters);
-    const samples = await collection.find(sampleQuery).limit(100).toArray();
-    const total = await collection.countDocuments(sampleQuery);
-    return { total, samples, previewLimited: total > 100 };
-  }
-
-  if (isTemperatureReportType) {
-    const collection = resolveCollection(db, ['temperature', 'temperatures']);
-    const dateRange = buildDateQuery(filters);
-    const queryParts = [];
-    if (dateRange) {
-      queryParts.push({ $or: [{ timestamp: dateRange }, { dateTime: dateRange }] });
-    }
-
-    if (isTruthyFilter(filters.criticalAlertsOnly)) {
-      queryParts.push({
-        $or: [
-          { readingStatus: { $regex: 'critical|alert', $options: 'i' } },
-          { severity: { $regex: 'critical|alert', $options: 'i' } },
-          { alertType: { $regex: 'critical', $options: 'i' } },
-          { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
-        ],
-      });
-    }
-
-    // #636 (F3-G09): org-scoped caller sees only readings whose
-    // organizationId is one of their scoped organizations.
-    if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
-      queryParts.push({ organizationId: { $in: filters.organizationScope.organizationIds } });
-    }
-
-    const query = queryParts.length > 0 ? { $and: queryParts } : {};
-    const temperatures = await collection.find(query).sort({ timestamp: -1, dateTime: -1 }).limit(100).toArray();
-    const total = await collection.countDocuments(query);
-
-    const values = temperatures
-      .map((entry) => Number(entry.temperatureValue))
-      .filter((value) => Number.isFinite(value));
-
-    const statistics = values.length
-      ? {
-          average: values.reduce((sum, value) => sum + value, 0) / values.length,
-          min: Math.min(...values),
-          max: Math.max(...values),
-          alerts: temperatures.filter((entry) =>
-            String(entry.readingStatus || '').toLowerCase().includes('alert') ||
-            String(entry.readingStatus || '').toLowerCase().includes('critical')
-          ).length,
-        }
-      : undefined;
-
-    return {
-      total,
-      temperatures,
-      statistics,
-      mode: isTemperatureControl ? 'control' : 'report',
-      previewLimited: total > 100,
-    };
-  }
-
-  if (isSensorReportType) {
-    const collection = resolveCollection(db, ['sensors']);
-    const query =
-      filters.organizationScope && filters.organizationScope.scope === 'organization'
-        ? { organizationId: { $in: filters.organizationScope.organizationIds } }
-        : {};
-    const sensors = await collection.find(query).limit(100).toArray();
-    const total = await collection.countDocuments(query);
-    return { total, sensors, previewLimited: total > 100 };
-  }
-
-  if (isEquipmentReportType) {
-    const collection = resolveCollection(db, ['equipment']);
-    const query =
-      filters.organizationScope && filters.organizationScope.scope === 'organization'
-        ? { organizationId: { $in: filters.organizationScope.organizationIds } }
-        : {};
-    const equipment = await collection.find(query).limit(100).toArray();
-    const total = await collection.countDocuments(query);
-    return { total, equipment, previewLimited: total > 100 };
-  }
-
-  if (isResult) {
-    const collection = resolveCollection(db, ['results']);
-    let query = {};
-    if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
-      // #621: Result has no organization reference of its own — derive
-      // scope via a join through its linked Sample's collectionSite.
-      // #628: Result.specimenId is now the sole canonical shape (every
-      // write path writes it, and the #628 migration backfilled existing
-      // documents) — a single-shape match, not the dual _id/specimenId
-      // check #621 originally needed while the field was still stale.
-      const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
-      const scopedSamples = await samplesCollection
-        .find({ collectionSite: { $in: filters.organizationScope.organizationIds } })
-        .toArray();
-      const scopedSpecimenIds = scopedSamples
-        .map((sample) => sample.specimenId)
-        .filter((value) => value !== undefined && value !== null)
-        .map((value) => String(value));
-      query = { specimenId: { $in: scopedSpecimenIds } };
-    }
-    const results = await collection.find(query).limit(100).toArray();
-    const total = await collection.countDocuments(query);
-    return { total, results, previewLimited: total > 100 };
-  }
-
-  if (isWithdrawalHistory) {
-    // #620: 'withdrawals'/'withdrawalHistory' is never written by any write
-    // path — the real withdrawal record lives in the sample movement
-    // ledger (sample.service.js#withdrawSample writes type: 'withdraw'),
-    // the same source GET /:id/movements already surfaces per-sample.
-    const collection = resolveCollection(db, ['sample_movements', 'sampleMovements']);
-    const dateRange = buildDateQuery(filters);
-    const query = dateRange
-      ? { type: 'withdraw', createdAt: dateRange }
-      : { type: 'withdraw' };
-
-    const withdrawals = await collection.find(query).sort({ createdAt: -1 }).limit(100).toArray();
-    const total = await collection.countDocuments(query);
-    return { total, withdrawals, previewLimited: total > 100 };
-  }
-
-  if (isTissueOriginHistory || isExtracellularNetwork) {
-    const collection = resolveCollection(db, ['samples', 'amostras']);
-    const baseQuery = isExtracellularNetwork
-      ? {
-          $or: [
-            { linkedProject: { $regex: 'extracel', $options: 'i' } },
-            { sampleOrigin: { $regex: 'extracel', $options: 'i' } },
-          ],
-        }
-      : {
-          $or: [{ sampleOrigin: { $exists: true, $ne: null } }, { linkedProject: { $exists: true, $ne: null } }],
-        };
-    const query =
-      filters.organizationScope && filters.organizationScope.scope === 'organization'
-        ? { $and: [baseQuery, { collectionSite: { $in: filters.organizationScope.organizationIds } }] }
-        : baseQuery;
-
-    const samples = await collection.find(query).sort({ registrationDate: -1, createdAt: -1 }).limit(100).toArray();
-    const total = await collection.countDocuments(query);
-    return { total, samples, previewLimited: total > 100 };
-  }
-
-  if (typeIncludes(type, ['log', 'audit', 'acesso', 'access']) || isAccessLogs) {
-    const collection = resolveCollection(db, ['logs']);
-    const query = {};
-
-    const dateQuery = buildDateQuery(filters);
-    if (dateQuery) {
-      query.$or = [{ dateTime: dateQuery }, { timestamp: dateQuery }];
-    }
-
-    const logs = await collection.find(query).sort({ dateTime: -1, timestamp: -1 }).limit(200).toArray();
-    const total = await collection.countDocuments(query);
-    return { total, logs, previewLimited: total > 200 };
-  }
+  });
 
   return {
-    total: 0,
-    message: 'Tipo de relatório disponível, mas sem pré-visualização específica para este formato.',
-    type,
+    total: enrichedPatients.length,
+    patients: enrichedPatients,
+    previewLimited: enrichedPatients.length >= 20,
   };
 }
+
+async function handlePatient(db, filters) {
+  const collection = resolveCollection(db, ['patients', 'pacientes']);
+  const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+  const sampleQuery = await buildSampleQuery(db, filters);
+  const matchingPatientIds = await getMatchingPatientIds(samplesCollection, sampleQuery);
+
+  const patientQueryParts = [];
+  // RF005/RNF007 (#574): keyword search no longer resolves against
+  // ParticipantIdentity.patientName (civil identity) -- see
+  // handleSamplesByPatient's identical comment for the full rationale. The
+  // keyword filter still matches the pseudonymized participantId itself.
+  if (filters.keyword) {
+    patientQueryParts.push({ participantId: { $regex: String(filters.keyword), $options: 'i' } });
+  }
+
+  const orphaCode = normalizeFilterText(filters.orphaCode || filters.orpha || filters.disease);
+  if (orphaCode) {
+    const cleanedOrpha = orphaCode.replace(/^ORPHA:/i, '');
+    patientQueryParts.push({
+      $or: [
+        { orphaCode: cleanedOrpha },
+        { orphaCode: toRegex(cleanedOrpha) },
+        { 'icdReference.ORPHA': toRegex(cleanedOrpha) },
+        { diagnosticHypothesis: toRegex(cleanedOrpha) },
+      ],
+    });
+  }
+
+  if (matchingPatientIds.length > 0) {
+    patientQueryParts.push({ participantId: { $in: matchingPatientIds } });
+  }
+
+  // #341: same direct-filter necessity as handleSamplesByPatient above —
+  // matchingPatientIds alone doesn't guarantee patientQuery stays
+  // restricted when it's empty.
+  if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
+    patientQueryParts.push({ clinicalUnitId: { $in: filters.organizationScope.organizationIds } });
+  }
+
+  const query = patientQueryParts.length > 0 ? { $and: patientQueryParts } : {};
+  const patients = await collection.find(query).limit(50).toArray();
+  const total = await collection.countDocuments(query);
+  return { total, patients, previewLimited: total > 50 };
+}
+
+async function handleSampleAnalysis(db, filters) {
+  const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+  const resultsCollection = resolveCollection(db, ['results']);
+  const sampleAnalysisQuery =
+    filters.organizationScope && filters.organizationScope.scope === 'organization'
+      ? { collectionSite: { $in: filters.organizationScope.organizationIds } }
+      : {};
+  const samples = await samplesCollection.find(sampleAnalysisQuery).limit(100).toArray();
+
+  // #633: `sample.sampleID` doesn't exist on the canonical Sample
+  // model (only `specimenId` does) -- this join reads specimenId, the
+  // same field Result.specimenId references (Result.js, #628).
+  const sampleIds = samples.map((sample) => sample.specimenId).filter((specimenId) => specimenId !== undefined && specimenId !== null);
+  const results = sampleIds.length
+    ? await resultsCollection.find({ specimenId: { $in: sampleIds } }).toArray()
+    : [];
+
+  const groupedResults = results.reduce((acc, result) => {
+    const key = String(result.specimenId || '');
+    if (!key) {
+      return acc;
+    }
+    if (!acc[key]) {
+      acc[key] = [];
+    }
+    acc[key].push(result);
+    return acc;
+  }, {});
+
+  const analysis = samples.map((sample) => {
+    const key = String(sample.specimenId || '');
+    const sampleResults = groupedResults[key] || [];
+    return {
+      sampleID: sample.specimenId || sample._id,
+      barcode: sample.barcode || null,
+      sampleType: sample.sampleType || null,
+      patientID: sample.participantId || null,
+      // #539: derives from the canonical specimenStatus (dict-02
+      // ELM-0123) instead of the legacy currentStatus/status fields
+      // canonical-data-contract-v1.md bans.
+      status: SampleModel.resolveSpecimenStatus(sample),
+      resultCount: sampleResults.length,
+      hasResults: sampleResults.length > 0,
+    };
+  });
+
+  const withResults = analysis.filter((item) => item.hasResults).length;
+  const withoutResults = analysis.length - withResults;
+  return {
+    total: analysis.length,
+    analysis,
+    withResults,
+    withoutResults,
+    previewLimited: analysis.length >= 100,
+  };
+}
+
+async function handleSample(db, filters) {
+  const collection = resolveCollection(db, ['samples', 'amostras']);
+  const sampleQuery = await buildSampleQuery(db, filters);
+  const samples = await collection.find(sampleQuery).limit(100).toArray();
+  const total = await collection.countDocuments(sampleQuery);
+  return { total, samples, previewLimited: total > 100 };
+}
+
+async function handleTemperature(db, filters, handlerOptions = {}) {
+  const collection = resolveCollection(db, ['temperature', 'temperatures']);
+  const dateRange = buildDateQuery(filters);
+  const queryParts = [];
+  if (dateRange) {
+    queryParts.push({ $or: [{ timestamp: dateRange }, { dateTime: dateRange }] });
+  }
+
+  if (isTruthyFilter(filters.criticalAlertsOnly)) {
+    queryParts.push({
+      $or: [
+        { readingStatus: { $regex: 'critical|alert', $options: 'i' } },
+        { severity: { $regex: 'critical|alert', $options: 'i' } },
+        { alertType: { $regex: 'critical', $options: 'i' } },
+        { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
+      ],
+    });
+  }
+
+  // #636 (F3-G09): org-scoped caller sees only readings whose
+  // organizationId is one of their scoped organizations.
+  if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
+    queryParts.push({ organizationId: { $in: filters.organizationScope.organizationIds } });
+  }
+
+  const query = queryParts.length > 0 ? { $and: queryParts } : {};
+  const temperatures = await collection.find(query).sort({ timestamp: -1, dateTime: -1 }).limit(100).toArray();
+  const total = await collection.countDocuments(query);
+
+  const values = temperatures
+    .map((entry) => Number(entry.temperatureValue))
+    .filter((value) => Number.isFinite(value));
+
+  const statistics = values.length
+    ? {
+        average: values.reduce((sum, value) => sum + value, 0) / values.length,
+        min: Math.min(...values),
+        max: Math.max(...values),
+        alerts: temperatures.filter((entry) =>
+          String(entry.readingStatus || '').toLowerCase().includes('alert') ||
+          String(entry.readingStatus || '').toLowerCase().includes('critical')
+        ).length,
+      }
+    : undefined;
+
+  return {
+    total,
+    temperatures,
+    statistics,
+    // #726: mode now comes from the matched ReportTemplate's own
+    // handlerOptions (report-template-seed.service.js seeds distinct
+    // 'temperature'/'temperature_control' rows against this one handler)
+    // instead of re-matching the incoming type string.
+    mode: handlerOptions.mode === 'control' ? 'control' : 'report',
+    previewLimited: total > 100,
+  };
+}
+
+async function handleSensor(db, filters) {
+  const collection = resolveCollection(db, ['sensors']);
+  const query =
+    filters.organizationScope && filters.organizationScope.scope === 'organization'
+      ? { organizationId: { $in: filters.organizationScope.organizationIds } }
+      : {};
+  const sensors = await collection.find(query).limit(100).toArray();
+  const total = await collection.countDocuments(query);
+  return { total, sensors, previewLimited: total > 100 };
+}
+
+async function handleEquipment(db, filters) {
+  const collection = resolveCollection(db, ['equipment']);
+  const query =
+    filters.organizationScope && filters.organizationScope.scope === 'organization'
+      ? { organizationId: { $in: filters.organizationScope.organizationIds } }
+      : {};
+  const equipment = await collection.find(query).limit(100).toArray();
+  const total = await collection.countDocuments(query);
+  return { total, equipment, previewLimited: total > 100 };
+}
+
+async function handleResult(db, filters) {
+  const collection = resolveCollection(db, ['results']);
+  let query = {};
+  if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
+    // #621: Result has no organization reference of its own — derive
+    // scope via a join through its linked Sample's collectionSite.
+    // #628: Result.specimenId is now the sole canonical shape (every
+    // write path writes it, and the #628 migration backfilled existing
+    // documents) — a single-shape match, not the dual _id/specimenId
+    // check #621 originally needed while the field was still stale.
+    const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+    const scopedSamples = await samplesCollection
+      .find({ collectionSite: { $in: filters.organizationScope.organizationIds } })
+      .toArray();
+    const scopedSpecimenIds = scopedSamples
+      .map((sample) => sample.specimenId)
+      .filter((value) => value !== undefined && value !== null)
+      .map((value) => String(value));
+    query = { specimenId: { $in: scopedSpecimenIds } };
+  }
+  const results = await collection.find(query).limit(100).toArray();
+  const total = await collection.countDocuments(query);
+  return { total, results, previewLimited: total > 100 };
+}
+
+async function handleWithdrawalHistory(db, filters) {
+  // #620: 'withdrawals'/'withdrawalHistory' is never written by any write
+  // path — the real withdrawal record lives in the sample movement
+  // ledger (sample.service.js#withdrawSample writes type: 'withdraw'),
+  // the same source GET /:id/movements already surfaces per-sample.
+  const collection = resolveCollection(db, ['sample_movements', 'sampleMovements']);
+  const dateRange = buildDateQuery(filters);
+  const query = dateRange
+    ? { type: 'withdraw', createdAt: dateRange }
+    : { type: 'withdraw' };
+
+  const withdrawals = await collection.find(query).sort({ createdAt: -1 }).limit(100).toArray();
+  const total = await collection.countDocuments(query);
+  return { total, withdrawals, previewLimited: total > 100 };
+}
+
+async function handleTissueOriginHistory(db, filters) {
+  const collection = resolveCollection(db, ['samples', 'amostras']);
+  const baseQuery = {
+    $or: [{ sampleOrigin: { $exists: true, $ne: null } }, { linkedProject: { $exists: true, $ne: null } }],
+  };
+  const query =
+    filters.organizationScope && filters.organizationScope.scope === 'organization'
+      ? { $and: [baseQuery, { collectionSite: { $in: filters.organizationScope.organizationIds } }] }
+      : baseQuery;
+
+  const samples = await collection.find(query).sort({ registrationDate: -1, createdAt: -1 }).limit(100).toArray();
+  const total = await collection.countDocuments(query);
+  return { total, samples, previewLimited: total > 100 };
+}
+
+async function handleExtracellularNetwork(db, filters) {
+  const collection = resolveCollection(db, ['samples', 'amostras']);
+  const baseQuery = {
+    $or: [
+      { linkedProject: { $regex: 'extracel', $options: 'i' } },
+      { sampleOrigin: { $regex: 'extracel', $options: 'i' } },
+    ],
+  };
+  const query =
+    filters.organizationScope && filters.organizationScope.scope === 'organization'
+      ? { $and: [baseQuery, { collectionSite: { $in: filters.organizationScope.organizationIds } }] }
+      : baseQuery;
+
+  const samples = await collection.find(query).sort({ registrationDate: -1, createdAt: -1 }).limit(100).toArray();
+  const total = await collection.countDocuments(query);
+  return { total, samples, previewLimited: total > 100 };
+}
+
+async function handleAccessLogs(db, filters) {
+  const collection = resolveCollection(db, ['logs']);
+  const query = {};
+
+  const dateQuery = buildDateQuery(filters);
+  if (dateQuery) {
+    query.$or = [{ dateTime: dateQuery }, { timestamp: dateQuery }];
+  }
+
+  const logs = await collection.find(query).sort({ dateTime: -1, timestamp: -1 }).limit(200).toArray();
+  const total = await collection.countDocuments(query);
+  return { total, logs, previewLimited: total > 200 };
+}
+
+// #726: one entry per ReportTemplate.HANDLER_KEYS value -- buildPreviewData
+// dispatches here by the matched template's `handlerKey`, not by
+// re-matching the incoming type string.
+const REPORT_HANDLERS = {
+  samplesByPatient: handleSamplesByPatient,
+  patient: handlePatient,
+  sample: handleSample,
+  sampleAnalysis: handleSampleAnalysis,
+  temperature: handleTemperature,
+  sensor: handleSensor,
+  equipment: handleEquipment,
+  result: handleResult,
+  withdrawalHistory: handleWithdrawalHistory,
+  tissueOriginHistory: handleTissueOriginHistory,
+  extracellularNetwork: handleExtracellularNetwork,
+  accessLogs: handleAccessLogs,
+};
 
 function toCsvRows(previewData) {
   const collectionCandidates = [
@@ -713,7 +738,7 @@ router.get('/', authenticate, requirePermission('viewReports'), async (req, res)
     // #637: mirrors the same inline hard-403/filter pattern buildPreviewData
     // already uses for scoped report types -- not requireOrganizationScope
     // middleware, since this router resolves org scope by hand throughout
-    // (see buildPreviewData's own isScopedReportType block).
+    // (see buildPreviewData's own SCOPED_HANDLER_KEYS check).
     const organizationScope = await resolveUserOrganizationScope(db, req.user?.userID || req.user?._id);
     if (!isOrganizationScopeUsable(organizationScope)) {
       return res.status(403).json({ error: 'Sem organização atribuída', message: 'Seu usuário não possui organização atribuída para acessar este recurso' });

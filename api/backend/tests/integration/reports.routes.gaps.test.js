@@ -2,12 +2,19 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const express = require('express');
 const request = require('supertest');
+const { SYSTEM_REPORT_TEMPLATES } = require('../../src/services/report-template-seed.service');
 
 const modulePaths = {
   auth: require.resolve('../../src/infrastructure/middleware/auth'),
   rbac: require.resolve('../../src/infrastructure/middleware/rbac'),
   controller: require.resolve('../../src/interface/routes/reports.routes'),
 };
+
+// #726: see the identical constant in reports.api.test.js — buildPreviewData
+// now dispatches by looking up a ReportTemplate via `code`, so every test
+// app in this file needs the real system-defined rows available under
+// 'reportTemplates'.
+const REPORT_TEMPLATE_DOCS = SYSTEM_REPORT_TEMPLATES.map((entry) => ({ ...entry, templateStatus: 'active' }));
 
 function setCachedModule(modulePath, exportsObject) {
   require.cache[modulePath] = {
@@ -34,7 +41,7 @@ const DEFAULT_RBAC_COLLECTIONS = {
 
 function buildCollectionDb(collections = {}) {
   const capturedQueries = {};
-  const mergedCollections = { ...DEFAULT_RBAC_COLLECTIONS, ...collections };
+  const mergedCollections = { reportTemplates: REPORT_TEMPLATE_DOCS, ...DEFAULT_RBAC_COLLECTIONS, ...collections };
 
   const db = {
     collection(name) {
@@ -259,7 +266,7 @@ describe('reports.routes.js gaps', () => {
       });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/amostra/preview').send({
+      const response = await request(testApp).post('/api/reports/samples/preview').send({
         filters: {
           sprecSampleType: 'whole blood',
           sprecPrimaryContainer: 'edta tube',
@@ -284,7 +291,7 @@ describe('reports.routes.js gaps', () => {
 
     it('normaliza treatmentStatus WASHOUT e releaseStatus QUARANTINE/BLOCKED', async () => {
       const { db: dbWashout, capturedQueries: capturedWashout } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
-      const washoutResponse = await request(appWithDb(dbWashout)).post('/api/reports/amostra/preview').send({
+      const washoutResponse = await request(appWithDb(dbWashout)).post('/api/reports/samples/preview').send({
         filters: { treatmentStatus: 'lavagem', status: 'em quarentena' },
       });
       expect(washoutResponse.status).toBe(200);
@@ -296,7 +303,7 @@ describe('reports.routes.js gaps', () => {
       );
 
       const { db: dbBlocked, capturedQueries: capturedBlocked } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
-      const blockedResponse = await request(appWithDb(dbBlocked)).post('/api/reports/amostra/preview').send({
+      const blockedResponse = await request(appWithDb(dbBlocked)).post('/api/reports/samples/preview').send({
         filters: { status: 'bloqueada' },
       });
       expect(blockedResponse.status).toBe(200);
@@ -315,7 +322,7 @@ describe('reports.routes.js gaps', () => {
     });
     const testApp = appWithDb(db);
 
-    const response = await request(testApp).post('/api/reports/paciente/preview').send({ filters: { keyword: 'Ana' } });
+    const response = await request(testApp).post('/api/reports/patients/preview').send({ filters: { keyword: 'Ana' } });
 
     expect(response.status).toBe(200);
     expect(response.body.data.total).toBe(2);
@@ -337,7 +344,7 @@ describe('reports.routes.js gaps', () => {
     });
     const testApp = appWithDb(db);
 
-    const response = await request(testApp).post('/api/reports/paciente/preview').send({ filters: { keyword: 'P1' } });
+    const response = await request(testApp).post('/api/reports/patients/preview').send({ filters: { keyword: 'P1' } });
 
     expect(response.status).toBe(200);
     expect(capturedQueries.participantIdentities).toBeUndefined();
@@ -360,7 +367,7 @@ describe('reports.routes.js gaps', () => {
     });
     const testApp = appWithDb(db);
 
-    const response = await request(testApp).post('/api/reports/sampleanalysis/preview').send({ filters: {} });
+    const response = await request(testApp).post('/api/reports/sample_analysis/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
     const row = response.body.data.analysis.find((item) => item.barcode === 'B1');
@@ -379,7 +386,7 @@ describe('reports.routes.js gaps', () => {
     });
     const testApp = appWithDb(db);
 
-    const response = await request(testApp).post('/api/reports/sampleanalysis/preview').send({ filters: {} });
+    const response = await request(testApp).post('/api/reports/sample_analysis/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
     expect(response.body.data.total).toBe(2);
@@ -396,7 +403,7 @@ describe('reports.routes.js gaps', () => {
     });
     const testApp = appWithDb(db);
 
-    const response = await request(testApp).post('/api/reports/sampleanalysis/preview').send({ filters: {} });
+    const response = await request(testApp).post('/api/reports/sample_analysis/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
     expect(response.body.data.analysis.find((item) => item.sampleID === 'SPEC-1').patientID).toBe('P1');
@@ -408,7 +415,7 @@ describe('reports.routes.js gaps', () => {
     });
     const testApp = appWithDb(db);
 
-    const response = await request(testApp).post('/api/reports/temperatura/preview').send({ filters: {} });
+    const response = await request(testApp).post('/api/reports/temperature/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
     expect(response.body.data.mode).toBe('report');
@@ -446,6 +453,9 @@ describe('reports.routes.js gaps', () => {
     it('cai para o segundo candidato quando o primeiro collection() retorna falsy', async () => {
       const db = {
         collection(name) {
+          if (name === 'reportTemplates') {
+            return { findOne: async (filter) => REPORT_TEMPLATE_DOCS.find((doc) => Object.entries(filter).every(([key, value]) => doc[key] === value)) || null };
+          }
           if (name === 'patients') return undefined;
           if (name === 'pacientes') {
             return {
@@ -480,7 +490,7 @@ describe('reports.routes.js gaps', () => {
       };
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/paciente/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/patients/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(response.body.data.total).toBe(1);
@@ -490,7 +500,7 @@ describe('reports.routes.js gaps', () => {
       const db = { collection: () => undefined };
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/sensor/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/sensors/preview').send({ filters: {} });
 
       expect(response.status).toBe(500);
     });
@@ -505,7 +515,7 @@ describe('reports.routes.js gaps', () => {
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
-        .post('/api/reports/withdrawal%20history/preview')
+        .post('/api/reports/withdrawal_history/preview')
         .send({ filters: { startDate: '2026-01-01' } });
 
       expect(response.status).toBe(200);
@@ -517,7 +527,7 @@ describe('reports.routes.js gaps', () => {
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
-        .post('/api/reports/withdrawal%20history/preview')
+        .post('/api/reports/withdrawal_history/preview')
         .send({ filters: { endDate: '2026-01-31' } });
 
       expect(response.status).toBe(200);
@@ -530,7 +540,7 @@ describe('reports.routes.js gaps', () => {
     const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
     const testApp = appWithDb(db);
 
-    const response = await request(testApp).post('/api/reports/amostra/preview').send({
+    const response = await request(testApp).post('/api/reports/samples/preview').send({
       filters: { treatmentStatus: 'foo bar', status: 'baz qux' },
     });
 
@@ -554,7 +564,7 @@ describe('reports.routes.js gaps', () => {
     const testApp = appWithDb(db);
 
     const response = await request(testApp)
-      .post('/api/reports/samplesbypatient/preview')
+      .post('/api/reports/samples_by_patient/preview')
       .send({ filters: { keyword: 'Ana', atcCode: 'ATC:N02' } });
 
     expect(response.status).toBe(200);
@@ -571,7 +581,7 @@ describe('reports.routes.js gaps', () => {
     const testApp = appWithDb(db);
 
     const response = await request(testApp)
-      .post('/api/reports/paciente/preview')
+      .post('/api/reports/patients/preview')
       .send({ filters: { orphaCode: 'ORPHA:558', atcCode: 'ATC:N02' } });
 
     expect(response.status).toBe(200);
@@ -585,7 +595,7 @@ describe('reports.routes.js gaps', () => {
     });
     const testApp = appWithDb(db);
 
-    const response = await request(testApp).post('/api/reports/sampleanalysis/preview').send({ filters: {} });
+    const response = await request(testApp).post('/api/reports/sample_analysis/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
     expect(response.body.data.analysis[0].hasResults).toBe(true);
@@ -602,7 +612,7 @@ describe('reports.routes.js gaps', () => {
     const testApp = appWithDb(db);
 
     const response = await request(testApp)
-      .post('/api/reports/samplesbypatient/preview')
+      .post('/api/reports/samples_by_patient/preview')
       .send({ filters: {} });
 
     expect(response.status).toBe(200);
@@ -626,7 +636,7 @@ describe('reports.routes.js gaps', () => {
     const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
     const testApp = appWithDb(db);
 
-    const response = await request(testApp).post('/api/reports/amostra/preview').send({
+    const response = await request(testApp).post('/api/reports/samples/preview').send({
       filters: { treatmentStatus: 'inicial' },
     });
 
@@ -642,7 +652,7 @@ describe('reports.routes.js gaps', () => {
     });
     const testApp = appWithDb(db);
 
-    const response = await request(testApp).post('/api/reports/tissueoriginhistory/preview').send({ filters: {} });
+    const response = await request(testApp).post('/api/reports/tissue_origin_history/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
     expect(response.body.data.total).toBe(1);
@@ -653,7 +663,7 @@ describe('reports.routes.js gaps', () => {
     const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
     const testApp = appWithDb(db);
 
-    const response = await request(testApp).post('/api/reports/withdrawal%20history/preview').send({ filters: {} });
+    const response = await request(testApp).post('/api/reports/withdrawal_history/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
     expect(capturedQueries.sample_movements).toEqual({ type: 'withdraw' });
@@ -668,7 +678,7 @@ describe('reports.routes.js gaps', () => {
       });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/withdrawal%20history/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/withdrawal_history/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(response.body.data.total).toBe(1);
@@ -682,7 +692,7 @@ describe('reports.routes.js gaps', () => {
       const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
       const testApp = appWithDb(db);
 
-      await request(testApp).post('/api/reports/withdrawal%20history/preview').send({ filters: {} });
+      await request(testApp).post('/api/reports/withdrawal_history/preview').send({ filters: {} });
 
       expect(capturedQueries.withdrawals).toBeUndefined();
     });
@@ -713,15 +723,15 @@ describe('reports.routes.js gaps', () => {
     };
 
     it.each([
-      ['amostra', '/api/reports/amostra/preview'],
-      ['paciente', '/api/reports/paciente/preview'],
-      ['samplesbypatient', '/api/reports/samplesbypatient/preview'],
-      ['sampleanalysis', '/api/reports/sampleanalysis/preview'],
-      ['tissueoriginhistory', '/api/reports/tissueoriginhistory/preview'],
-      ['resultado', '/api/reports/resultado/preview'],
-      ['sensor', '/api/reports/sensor/preview'],
-      ['equipamento', '/api/reports/equipamento/preview'],
-      ['temperatura', '/api/reports/temperatura/preview'],
+      ['amostra', '/api/reports/samples/preview'],
+      ['paciente', '/api/reports/patients/preview'],
+      ['samplesbypatient', '/api/reports/samples_by_patient/preview'],
+      ['sampleanalysis', '/api/reports/sample_analysis/preview'],
+      ['tissueoriginhistory', '/api/reports/tissue_origin_history/preview'],
+      ['resultado', '/api/reports/results/preview'],
+      ['sensor', '/api/reports/sensors/preview'],
+      ['equipamento', '/api/reports/equipment/preview'],
+      ['temperatura', '/api/reports/temperature/preview'],
     ])('%s: 403 quando o usuário não tem nenhuma organização atribuída', async (_label, path) => {
       const { db } = buildCollectionDb(NO_ASSIGNMENT_RBAC);
       const testApp = appWithDb(db);
@@ -742,7 +752,7 @@ describe('reports.routes.js gaps', () => {
       const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ sampleID: 'S1', collectionSite: 'org-1' }] });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/amostra/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/samples/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(capturedQueries.samples.$and).toEqual(
@@ -754,7 +764,7 @@ describe('reports.routes.js gaps', () => {
       const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, sensors: [{ sensorId: 'S1', organizationId: 'org-1' }] });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/sensor/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/sensors/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(capturedQueries.sensors).toEqual({ organizationId: { $in: ['org-1'] } });
@@ -764,7 +774,7 @@ describe('reports.routes.js gaps', () => {
       const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, equipment: [{ equipmentID: 1, organizationId: 'org-1' }] });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/equipamento/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/equipment/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(capturedQueries.equipment).toEqual({ organizationId: { $in: ['org-1'] } });
@@ -774,7 +784,7 @@ describe('reports.routes.js gaps', () => {
       const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, temperature: [{ sensorId: 'S1', organizationId: 'org-1' }] });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/temperatura/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/temperature/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(capturedQueries.temperature).toEqual({ $and: [{ organizationId: { $in: ['org-1'] } }] });
@@ -784,7 +794,7 @@ describe('reports.routes.js gaps', () => {
       const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, patients: [{ patientID: 'P1', clinicalUnitId: 'org-1' }] });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/paciente/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/patients/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(capturedQueries.patients.$and).toEqual(
@@ -796,7 +806,7 @@ describe('reports.routes.js gaps', () => {
       const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ sampleID: 'S1', sampleOrigin: 'Fígado', collectionSite: 'org-1' }] });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/tissueoriginhistory/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/tissue_origin_history/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(capturedQueries.samples.$and).toEqual(
@@ -808,7 +818,7 @@ describe('reports.routes.js gaps', () => {
       const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/amostra/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/samples/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(capturedQueries.samples).toEqual({});
@@ -827,7 +837,7 @@ describe('reports.routes.js gaps', () => {
       });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/resultado/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/results/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(capturedQueries.samples).toEqual({ collectionSite: { $in: ['org-1'] } });
@@ -838,7 +848,7 @@ describe('reports.routes.js gaps', () => {
       const { db, capturedQueries } = buildCollectionDb({ results: [{ specimenId: 'SPX-1' }] });
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/resultado/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/results/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(capturedQueries.results).toEqual({});
