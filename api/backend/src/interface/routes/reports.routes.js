@@ -5,6 +5,7 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const ReportsModel = require('../../models/Reports');
 const { SampleModel } = require('../../models/Sample');
+const { SPECIMEN_TYPE_IDS, SAMPLE_ORIGIN_IDS } = require('../../config/constants/specimen.constants');
 const logger = require('../../utils/logger');
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
@@ -775,6 +776,72 @@ const REPORT_HANDLERS = {
   accessLogs: handleAccessLogs,
 };
 
+// #732 (RF008 AC#1/AC#6): GET /:type/filters used to ignore its own
+// `:type` and return one hardcoded 4-entry list for every report type --
+// its handler's first parameter was even named `_req`. The catalog below
+// is keyed by the same ReportTemplate `handlerKey` buildPreviewData
+// dispatches on, and each entry lists what that handler actually consumes,
+// so a filter UI built against this endpoint can be trusted. Keep it in
+// step with the handlers: a filter listed here that no handler reads is
+// the same lie in a new place.
+const DATE_RANGE_FILTERS = [
+  { name: 'startDate', label: 'Data inicial', type: 'date' },
+  { name: 'endDate', label: 'Data final', type: 'date' },
+];
+
+// Everything buildSampleQuery honours, in AC#1's own order where they
+// overlap (periodo, colecao, tipo, origem, estado, localizacao) followed by
+// the clinical/pharmacology/SPREC/quality dimensions it also supports.
+const SAMPLE_QUERY_FILTERS = [
+  ...DATE_RANGE_FILTERS,
+  { name: 'collectionId', label: 'Coleção', type: 'text' },
+  { name: 'sampleType', label: 'Tipo de amostra', type: 'select', options: [...SPECIMEN_TYPE_IDS] },
+  { name: 'sampleOrigin', label: 'Origem', type: 'select', options: [...SAMPLE_ORIGIN_IDS] },
+  // #531: the public vocabulary normalizeReleaseStatus accepts, which it
+  // then maps onto canonical specimenStatus values.
+  { name: 'status', label: 'Estado', type: 'select', options: ['AVAILABLE', 'QUARANTINE', 'BLOCKED'] },
+  { name: 'storageBoxId', label: 'Caixa de armazenamento', type: 'text' },
+  { name: 'storagePosition', label: 'Posição na caixa', type: 'text' },
+  { name: 'orphaCode', label: 'Código ORPHA', type: 'text' },
+  { name: 'atcCode', label: 'Código ATC', type: 'text' },
+  { name: 'treatmentStatus', label: 'Status de tratamento', type: 'select', options: ['NAIVE', 'ON_TREATMENT', 'WASHOUT'] },
+  { name: 'qualityCategory', label: 'Categoria de qualidade (RCS)', type: 'text' },
+  { name: 'sprecMatrixType', label: 'SPREC — matriz', type: 'text' },
+  { name: 'sprecSampleType', label: 'SPREC — tipo de amostra', type: 'text' },
+  { name: 'sprecPrimaryContainer', label: 'SPREC — recipiente primário', type: 'text' },
+  { name: 'sprecPreCentrifugation', label: 'SPREC — pré-centrifugação', type: 'text' },
+  { name: 'sprecCentrifugation', label: 'SPREC — centrifugação', type: 'text' },
+  { name: 'sprecSecondCentrifugation', label: 'SPREC — segunda centrifugação', type: 'text' },
+  { name: 'sprecPostCentrifugationDelay', label: 'SPREC — atraso pós-centrifugação', type: 'text' },
+  { name: 'sprecLongTermStorage', label: 'SPREC — armazenamento de longo prazo', type: 'text' },
+];
+
+const PATIENT_ROOTED_FILTERS = [
+  // RF005/RNF007 (#574): matches the pseudonymized participantId only,
+  // never civil identity.
+  { name: 'keyword', label: 'Participante (ID pseudonimizado)', type: 'text' },
+  ...SAMPLE_QUERY_FILTERS,
+];
+
+// An empty list is a real answer, not a gap: handleSensor, handleEquipment,
+// handleResult, handleSampleAnalysis, handleTissueOriginHistory and
+// handleExtracellularNetwork read nothing off `filters` except the
+// organizationScope the server resolves for itself.
+const FILTER_CATALOG = {
+  samplesByPatient: PATIENT_ROOTED_FILTERS,
+  patient: PATIENT_ROOTED_FILTERS,
+  sample: SAMPLE_QUERY_FILTERS,
+  sampleAnalysis: [],
+  temperature: [...DATE_RANGE_FILTERS, { name: 'criticalAlertsOnly', label: 'Somente alertas críticos', type: 'checkbox' }],
+  sensor: [],
+  equipment: [],
+  result: [],
+  withdrawalHistory: DATE_RANGE_FILTERS,
+  tissueOriginHistory: [],
+  extracellularNetwork: [],
+  accessLogs: DATE_RANGE_FILTERS,
+};
+
 function toCsvRows(previewData) {
   const collectionCandidates = [
     previewData?.patients,
@@ -947,16 +1014,27 @@ router.delete('/:id', authenticate, requirePermission('viewReports'), async (req
   }
 });
 
-router.get('/:type/filters', authenticate, requirePermission('viewReports'), async (_req, res) => {
+router.get('/:type/filters', authenticate, requirePermission('viewReports'), async (req, res) => {
   try {
-    const filters = [
-      { name: 'startDate', label: 'Data Inicial', type: 'date' },
-      { name: 'endDate', label: 'Data Final', type: 'date' },
-      { name: 'status', label: 'Status', type: 'select', options: ['Ativo', 'Inativo'] },
-      { name: 'keyword', label: 'Palavra-chave', type: 'text' },
-    ];
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ error: 'Banco de dados não disponível' });
+    }
 
-    return res.status(200).json({ filters });
+    // #732: resolve the type the same way buildPreviewData does -- by
+    // ReportTemplate `code` -- so a custom template created through #726's
+    // CRUD screen gets a catalog too, not just the 14 system rows.
+    const code = toTemplateCode(req.params.type);
+    const template = code
+      ? await db.collection('reportTemplates').findOne({ code, templateStatus: 'active' })
+      : null;
+
+    if (!template) {
+      return res.status(404).json({ error: 'Tipo de relatório desconhecido', reportType: code });
+    }
+
+    const filters = FILTER_CATALOG[template.handlerKey] || [];
+    return res.status(200).json({ filters, reportType: template.code, handlerKey: template.handlerKey });
   } catch (error) {
     return res.status(500).json({ error: 'Erro ao obter filtros', message: error.message });
   }
