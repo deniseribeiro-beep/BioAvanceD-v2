@@ -114,15 +114,24 @@ class ImportAsyncService {
     const fieldMapping = {
       // patientId aliases
       patientid: 'patientID',
-      idpaciente: 'patientID',
+      // #770: `idpaciente` was listed twice here. Both copies assigned the
+      // same value, so the duplicate was inert -- but it is the same
+      // rename-collision tell that started this family at #758, so it goes.
       idpaciente: 'patientID',
       // sampleType aliases
       sampletype: 'sampleType',
       tipoamostra: 'sampleType',
       // collection/registration date aliases
-      collectiondate: 'registrationDate',
-      datacoleta: 'registrationDate',
-      registerdate: 'registrationDate',
+      // #770: these three targeted 'registrationDate', a name e2549bee
+      // canonicalized away. Two independent sources settle the canonical
+      // spelling: canonical-fields.arch.test.js lists both registrationDate
+      // and registerDate in ASPIRATIONAL_FORBIDDEN, and sample.routes.js
+      // rejects both at the API boundary as NON_CANONICAL_FIELD. The keys on
+      // the left are user-facing CSV column names and stay as they are --
+      // only the canonical target changes.
+      collectiondate: 'registeredAt',
+      datacoleta: 'registeredAt',
+      registerdate: 'registeredAt',
       // location aliases
       locationid: 'locationID',
       idlocalizacao: 'locationID',

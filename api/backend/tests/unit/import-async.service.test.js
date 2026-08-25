@@ -94,8 +94,29 @@ describe('import-async.service', () => {
     it('maps known aliases to canonical field names', () => {
       expect(service.canonicalizeHeader('idPaciente')).toBe('patientID');
       expect(service.canonicalizeHeader('Tipo Amostra')).toBe('sampleType');
-      expect(service.canonicalizeHeader('Data Coleta')).toBe('registrationDate');
+      // #770: was 'registrationDate', a name sample.routes.js rejects at the
+      // API boundary as NON_CANONICAL_FIELD and canonical-fields.arch.test.js
+      // lists in ASPIRATIONAL_FORBIDDEN. Sample.js:38 declares `registeredAt`.
+      expect(service.canonicalizeHeader('Data Coleta')).toBe('registeredAt');
       expect(service.canonicalizeHeader('Eppendorf Well')).toBe('wellPosition');
+    });
+
+    // #770: all three date aliases targeted the same non-canonical name, so
+    // pinning only one of them would let the other two drift back.
+    it('maps every date-column alias to registeredAt', () => {
+      expect(service.canonicalizeHeader('Collection Date')).toBe('registeredAt');
+      expect(service.canonicalizeHeader('Data Coleta')).toBe('registeredAt');
+      expect(service.canonicalizeHeader('Register Date')).toBe('registeredAt');
+    });
+
+    // #770: the map carried `idpaciente: 'patientID'` twice -- the same
+    // duplicate-key tell that started this family at #758. Both copies
+    // assigned the same value, so removing one is behaviour-invariant; this
+    // pins the surviving mapping so the dedupe cannot silently drop it.
+    it('still maps idPaciente after the duplicate key was removed', () => {
+      expect(service.canonicalizeHeader('idPaciente')).toBe('patientID');
+      expect(service.canonicalizeHeader('ID Paciente')).toBe('patientID');
+      expect(service.canonicalizeHeader('patientId')).toBe('patientID');
     });
 
     it('falls back to trimmed original string when no alias matches', () => {
