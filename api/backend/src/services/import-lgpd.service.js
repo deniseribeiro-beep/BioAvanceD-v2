@@ -1000,12 +1000,15 @@ class ImportLGPDService {
             continue;
           }
 
-          // Validações específicas - verifica se os valores existem no banco
+          // Validações específicas - verifica se os valores existem no banco.
           // (SampleModel.validate() above already confirmed sampleType/sampleOrigin/extractionProtocol
           // are valid per SampleModel.validateXxx, so only the findOne lookup can fail here)
+          // #702: consultado por `id`. Estes campos carregam o id MIABIS
+          // ("PLASMA"), enquanto `description` guarda o rótulo humano
+          // ("Plasma") -- consultar por description com um id nunca casava.
           if (sampleData.sampleType) {
             const sampleTypesCollection = db.collection('sampleTypes');
-            const validSampleType = await sampleTypesCollection.findOne({ description: sampleData.sampleType });
+            const validSampleType = await sampleTypesCollection.findOne({ id: sampleData.sampleType });
             if (!validSampleType) {
               results.errors.push({
                 row: rowNumber,
@@ -1018,7 +1021,7 @@ class ImportLGPDService {
 
           if (sampleData.sampleOrigin) {
             const sampleOriginsCollection = db.collection('sampleOrigins');
-            const validOrigin = await sampleOriginsCollection.findOne({ description: sampleData.sampleOrigin });
+            const validOrigin = await sampleOriginsCollection.findOne({ id: sampleData.sampleOrigin });
             if (!validOrigin) {
               results.errors.push({
                 row: rowNumber,
@@ -1031,7 +1034,7 @@ class ImportLGPDService {
 
           if (sampleData.extractionProtocol) {
             const extractionProtocolsCollection = db.collection('extractionProtocols');
-            const validProtocol = await extractionProtocolsCollection.findOne({ description: sampleData.extractionProtocol });
+            const validProtocol = await extractionProtocolsCollection.findOne({ id: sampleData.extractionProtocol });
             if (!validProtocol) {
               results.errors.push({
                 row: rowNumber,
