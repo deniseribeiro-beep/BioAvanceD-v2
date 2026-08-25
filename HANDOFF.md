@@ -82,7 +82,7 @@ bootstrap chain is exactly what the overlay's fixture-accumulation
 gotchas predict. Not closed; the cheap experiment that would settle it is
 a second consecutive run against the same volumes.
 
-**The stack is still up.** Nothing was torn down — see Cleanup below.
+**The stack was torn down at Dennis's request** at the end of the sitting — see Cleanup below.
 
 ## Filed this sitting, all open
 
@@ -118,7 +118,10 @@ reads as classifier-only but hook gates block identically), **#414**
 and controllers are not siblings), **#416** (**bare-vitest guard is
 inconsistent** — the broader run passed, the narrower subset blocked),
 **#417** (conventions' "root-level vitest" claim is false; the "don't
-use `npx tsc`" rule is now fixable at source). Earlier: #404-#411.
+use `npx tsc`" rule is now fixable at source), **#418** (the overlay's
+"known pre-existing gate failures" list is stated unconditionally but is
+actually volume-state-dependent — all three passed here). Earlier:
+#404-#411.
 
 ## Repo state
 
@@ -140,16 +143,21 @@ use `npx tsc`" rule is now fixable at source). Earlier: #404-#411.
   explicitly.
 - No open PR; nothing pushed to `main`; `main` stays frozen.
 
-## Cleanup still owed
+## Cleanup — done
 
-**The full `compose.test.yml` stack is still running** (12 services up,
-18 bootstrap containers `Exited (0)`) and images were built this
-sitting. Teardown was deliberately left to Dennis since he turned Docker
-on and may want the stack for #765. When done:
-`docker compose --env-file .env.test.example -f compose.test.yml down`
-(add `--volumes` only for a genuinely from-scratch next run — note the
-fresh-volume state is what made #744/#745/#746 pass), then
-`docker builder prune -af`.
+Dennis asked for teardown at the end of the sitting.
+`docker compose --env-file .env.test.example -f compose.test.yml down` ran
+clean (all containers and the network removed), and
+`docker builder prune -af` reclaimed 1.034GB, leaving 0B.
+
+**The four named volumes were deliberately kept** (`down` without
+`--volumes`): `mongodb-test-data`, `neo4j-test-data`,
+`influxdb-test-data`, `redis-test-data`. Note the consequence — this
+gate ran on *fresh* volumes, which is what made #744/#745/#746 pass. The
+next run inherits this run's fixtures, so those seven tests may well fail
+again. A genuinely from-scratch run needs
+`docker volume rm` on the four above (or `down --volumes`) first, and
+then a full re-bootstrap.
 
 ## Carried forward, re-confirmed this sitting
 
