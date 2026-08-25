@@ -136,6 +136,18 @@ still no predictor). Earlier: #404-#418.
   branch (safe to delete); `test/377-docs-on-main` and
   `test/human-showcase-video` are **not** merged. #599 is intentionally
   open, held by the CI milestone's sequencing.
+- **Three stale *remote* branches with no local counterpart** — surfaced
+  by this sitting's `clean-up` branch check, not previously recorded in
+  any handoff: `origin/fix/696-intake-wizard-clinical-entities-real-backend-e2e`,
+  `origin/fix/705-seed-active-terminology-concept-cleanup`,
+  `origin/fix/project-issues-stabilization`. **Left alone deliberately.**
+  They predate this session, so `clean-up`'s scope rule (delete only what
+  this session created) puts them out of scope, and its authorship check
+  applies — a fully-merged branch can still be a collaborator's own
+  reference copy. Precedent: BioAvanceD-v2#332, where 5 of 13 stale
+  remote branches about to be deleted on merge+closed state alone turned
+  out to be someone else's work. Verify merge status *and* per-commit
+  authorship before deleting any of them.
 - **Native suites:** one known red, unchanged — `backup.service.test.js`'s
   legacy-JSON restore assertion (**#752**, red since #738 merged). It is
   *not* caused by this sitting's work; #765's own tests are green
