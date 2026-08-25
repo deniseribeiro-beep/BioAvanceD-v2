@@ -203,3 +203,92 @@ describe('ImportLGPDService.validateFileFormat', () => {
     });
   });
 });
+
+// ──────────────────────────────────────────────────────────
+// getQuarantineBatch (#794, RNF011 AC#4 -- reading a quarantine batch back)
+//
+// The type filter is the part worth unit-testing: both importers share
+// `import_batches`, so a reader keyed on `_id` alone serves the other path's
+// batch to whoever holds the wrong permission (#799 tracks exactly that in the
+// FHIR reader). A mock that ignored the filter could not see the difference,
+// so this one actually matches -- same lesson as #797.
+// ──────────────────────────────────────────────────────────
+describe('ImportLGPDService.getQuarantineBatch', () => {
+  const LGPD_BATCH = {
+    _id: '64b7f9c2e4b0a1d2c3e4f5a6',
+    type: 'LGPD_SAMPLE_CSV',
+    source: 'LGPD',
+    status: 'QUARANTINED',
+  };
+  const FHIR_BATCH = {
+    _id: '64b7f9c2e4b0a1d2c3e4f5b7',
+    type: 'FHIR_BUNDLE',
+    source: 'FHIR',
+    status: 'STAGED',
+  };
+
+  function makeDb(batches, records = []) {
+    const batchesCollection = {
+      findOne: vi.fn(async (filter = {}) =>
+        batches.find((b) =>
+          Object.entries(filter).every(([k, v]) => String(b[k]) === String(v))
+        ) || null
+      ),
+    };
+    const recordsCollection = {
+      find: vi.fn(() => ({ sort: () => ({ toArray: async () => records }) })),
+    };
+    return {
+      collection: (name) => (name === 'import_batches' ? batchesCollection : recordsCollection),
+      _batches: batchesCollection,
+    };
+  }
+
+  it('returns the batch and its staged rows', async () => {
+    const rows = [{ rowNumber: 3, status: 'ERROR' }];
+    const db = makeDb([LGPD_BATCH], rows);
+
+    const result = await service.getQuarantineBatch(db, LGPD_BATCH._id);
+
+    expect(result.batch).toMatchObject({ type: 'LGPD_SAMPLE_CSV', status: 'QUARANTINED' });
+    expect(result.records).toEqual(rows);
+  });
+
+  it('scopes the lookup to LGPD batches, so a FHIR batch id is not found', async () => {
+    const db = makeDb([FHIR_BATCH]);
+
+    await expect(service.getQuarantineBatch(db, FHIR_BATCH._id)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+
+    // And the discriminator really was part of the query, not just absent
+    // from the fixture.
+    expect(db._batches.findOne.mock.calls[0][0]).toMatchObject({ type: 'LGPD_SAMPLE_CSV' });
+  });
+
+  it('404s an id that matches no batch', async () => {
+    const db = makeDb([]);
+
+    await expect(service.getQuarantineBatch(db, LGPD_BATCH._id)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+  });
+
+  it('400s a malformed id instead of letting a BSON cast throw as a 500', async () => {
+    const db = makeDb([LGPD_BATCH]);
+
+    await expect(service.getQuarantineBatch(db, 'not-an-object-id')).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(db._batches.findOne).not.toHaveBeenCalled();
+  });
+
+  it('400s an empty id without querying', async () => {
+    const db = makeDb([LGPD_BATCH]);
+
+    await expect(service.getQuarantineBatch(db, undefined)).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(db._batches.findOne).not.toHaveBeenCalled();
+  });
+});

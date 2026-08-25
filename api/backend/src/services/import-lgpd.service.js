@@ -875,6 +875,58 @@ class ImportLGPDService {
    *
    * Returns the batch id, or null when there was nothing to quarantine.
    */
+  /**
+   * Le um lote de quarentena LGPD e as linhas rejeitadas dele (#794, RNF011
+   * AC#4 -- "sem correcao silenciosa").
+   *
+   * O #787 fez as linhas rejeitadas sobreviverem; nada conseguia le-las de
+   * volta, entao a quarentena so era acessivel consultando o Mongo direto.
+   * Espelha o `getBatch` do caminho FHIR (`fhir-import-staging.service.js`):
+   * mesmas duas colecoes, mesma forma lote-mais-linhas, mesmo 404 via
+   * `error.statusCode`, mesma ordenacao por rowNumber.
+   *
+   * Diferenca deliberada em relacao ao original: filtra tambem por
+   * `type: 'LGPD_SAMPLE_CSV'`. As duas rotas de importacao compartilham
+   * `import_batches`, e um leitor que filtra so por `_id` entrega o lote da
+   * outra rota a quem tem a permissao errada -- as linhas em quarentena
+   * carregam identificadores civis. O leitor FHIR ainda tem esse vazamento;
+   * esta rastreado no #799 e nao e reproduzido aqui.
+   *
+   * Um id malformado e 400, nao um cast de BSON estourando como 500.
+   */
+  async getQuarantineBatch(db, batchIdRaw) {
+    // ObjectId e exigido inline neste arquivo (ver linhas 503/803), nao no topo.
+    const { ObjectId } = require('mongodb');
+    const raw = String(batchIdRaw || '').trim();
+
+    if (!ObjectId.isValid(raw)) {
+      const error = new Error('Identificador de lote de importacao invalido.');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const batchId = new ObjectId(raw);
+
+    const batch = await db.collection('import_batches').findOne({
+      _id: batchId,
+      type: 'LGPD_SAMPLE_CSV',
+    });
+
+    if (!batch) {
+      const error = new Error('Lote de quarentena LGPD nao encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const records = await db
+      .collection('import_staging_records')
+      .find({ batchId })
+      .sort({ rowNumber: 1 })
+      .toArray();
+
+    return { batch, records };
+  }
+
   async quarantineRejectedSampleRows(db, { fileName = null, rows = [], results, actor = {} } = {}) {
     const rejected = Array.isArray(results?.errors) ? results.errors : [];
     if (rejected.length === 0) return null;

@@ -50,6 +50,31 @@ export async function findLgpdQuarantinedRows(batchId: string) {
     .toArray();
 }
 
+// #794: seeds a batch of the OTHER import type, so a test can assert that the
+// LGPD batch route refuses it. Both importers share `import_batches`, so a
+// reader that filters on `_id` alone serves whichever batch it is handed --
+// see #799 for that same leak in the FHIR direction.
+export async function seedForeignImportBatch(): Promise<string> {
+  const db = await getDb();
+  const now = new Date();
+  const result = await db.collection('import_batches').insertOne({
+    type: 'FHIR_BUNDLE',
+    source: 'FHIR',
+    status: 'STAGED',
+    fileName: 'e2e-794-foreign-batch.json',
+    counts: { total: 0, success: 0, errors: 0 },
+    createdBy: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return String(result.insertedId);
+}
+
+export async function removeForeignImportBatch(batchId: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('import_batches').deleteOne({ _id: new ObjectId(batchId) });
+}
+
 export async function findStagingRecordBySpecimenId(specimenId: string) {
   const db = await getDb();
   return db.collection('import_staging_records').findOne({ 'normalized.specimenId': specimenId });

@@ -246,9 +246,18 @@ rejection — assert 422 on malformed payloads in every intake spec;
 **AC#4 (staging/quarentena) is separate and is now covered on both
 import paths** — the FHIR one by `interop-monitoring.spec.ts` per RF011's
 row above, and the LGPD sample import by
-`lgpd-sample-import.spec.ts`'s two RNF011 AC#4 cases as of #787, which
+`lgpd-sample-import.spec.ts`'s RNF011 AC#4 cases as of #787, which
 read the quarantined batch and row back out of Mongo rather than
-trusting the response),
+trusting the response. The criterion's second half — "**sem correção
+silenciosa**", i.e. the operator can actually see what was rejected — is
+covered as of #794 slice 1 by
+`GET /api/import-lgpd/batches/:batchId` and the three further cases in
+that same spec, which read the batch back through the API rather than
+through Mongo. Note the mount: LGPD routes are under `/api/import-lgpd`
+(`app.js:350`), not `/api/import/lgpd`. Still open on this criterion:
+the UI surface and the correct-and-resubmit step (#794 items 2 and 3),
+retaining the uploaded source file (#792), and retention for
+`import_staging_records` (#793)),
 RNF018 (multi-layer validation — same), RNF019 (outbox durability —
 assert in `pipeline-continuity`), RNF021 (session lifecycle — assert in
 `auth-access-security`), RNF024 (FHIR boundary side-effect-free —

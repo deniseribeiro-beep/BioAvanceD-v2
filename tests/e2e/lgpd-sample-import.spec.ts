@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
 import { createRealParticipant, closeSeedDb } from './helpers/seedParticipant';
-import { findLgpdQuarantineBatch, findLgpdQuarantinedRows, closeFhirImportDb } from './helpers/queryFhirImport';
+import { findLgpdQuarantineBatch, findLgpdQuarantinedRows, closeFhirImportDb, seedForeignImportBatch, removeForeignImportBatch } from './helpers/queryFhirImport';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -245,5 +245,96 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     // Nothing was rejected, so there is nothing to review -- an empty batch
     // would be noise in whatever queue eventually consumes these.
     expect(body.data.stagingBatchId).toBeNull();
+  });
+
+  // #794 slice 1 (RNF011 AC#4, second half): "sem correção silenciosa".
+  //
+  // #787 made rejected rows survive; it gave nobody a way to look at them.
+  // The rows were reachable only by querying Mongo directly -- which is
+  // exactly what the test above does, and why that test passing was not
+  // enough to call the criterion met. A quarantine nobody can open is a
+  // well-organised log, not staging.
+  //
+  // Mirrors GET /api/import/fhir/batches/:id, the path that already
+  // satisfies this for the FHIR importer. Note the mount: LGPD routes live
+  // under /api/import-lgpd (app.js:350), NOT /api/import/lgpd -- the latter
+  // would land inside the FHIR router.
+  test('RNF011 AC#4: a quarantined batch is readable back through the API, not only via Mongo', async ({ request }) => {
+    const admin = await realLogin(request);
+    const good = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const bad = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const response = await importSamples(request, admin.token, [
+      `${good.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
+      `${bad.participantId},NOT_A_REAL_SAMPLE_TYPE,${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
+    ]);
+    expect(response.status()).toBe(200);
+    const batchId = String((await response.json()).data.stagingBatchId);
+
+    const read = await request.get(`${apiBaseURL}/api/import-lgpd/batches/${batchId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+
+    expect(read.status(), 'the quarantine batch must be readable through the API').toBe(200);
+    const payload = await read.json();
+
+    expect(payload.success).toBe(true);
+    expect(payload.batch).toMatchObject({
+      type: 'LGPD_SAMPLE_CSV',
+      source: 'LGPD',
+      status: 'QUARANTINED',
+    });
+    expect(payload.batch.counts).toMatchObject({ total: 2, success: 1, errors: 1 });
+
+    // The rejected rows, with enough detail to actually correct them --
+    // the error AND the original values, same as the Mongo-side assertions.
+    expect(payload.records).toHaveLength(1);
+    expect(payload.records[0]).toMatchObject({ status: 'ERROR', rowNumber: 3 });
+    expect(JSON.stringify(payload.records[0].errors)).toMatch(/sampleType/i);
+    expect(String(payload.records[0].row.participantId)).toBe(String(bad.participantId));
+    expect(payload.records[0].row.sampleType).toBe('NOT_A_REAL_SAMPLE_TYPE');
+  });
+
+  test('an unknown batch id is a 404, and a malformed one does not 500 (#794)', async ({ request }) => {
+    const admin = await realLogin(request);
+
+    const missing = await request.get(`${apiBaseURL}/api/import-lgpd/batches/64b7f9c2e4b0a1d2c3e4f5a6`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(missing.status()).toBe(404);
+    // Assert the SHAPE, not just the code: before this route existed, Express
+    // 404'd unknown paths with an empty body, so a status-only assertion
+    // passed vacuously and proved nothing.
+    expect(await missing.json()).toMatchObject({ success: false });
+
+    // A non-ObjectId path segment must be a client error, not an unhandled
+    // BSON cast blowing up as a 500.
+    const malformed = await request.get(`${apiBaseURL}/api/import-lgpd/batches/not-an-object-id`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect([400, 404]).toContain(malformed.status());
+    expect(await malformed.json()).toMatchObject({ success: false });
+  });
+
+  test('the LGPD batch route refuses a FHIR batch id, mirroring #799 (#794)', async ({ request }) => {
+    const admin = await realLogin(request);
+
+    // A batch of the other type must 404 here rather than being served by
+    // whichever reader happens to be asked. #799 tracks the same leak in the
+    // opposite direction, which this route deliberately does not reproduce.
+    const fhirBatchId = await seedForeignImportBatch();
+
+    try {
+      const read = await request.get(`${apiBaseURL}/api/import-lgpd/batches/${fhirBatchId}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+
+      expect(read.status(), 'a FHIR batch must not be readable through the LGPD route').toBe(404);
+      expect(await read.json()).toMatchObject({ success: false });
+    } finally {
+      // This fixture is not created by any import, so nothing else will clean
+      // it up -- the named volumes persist across sessions (docker-workflow).
+      await removeForeignImportBatch(fhirBatchId);
+    }
   });
 });
