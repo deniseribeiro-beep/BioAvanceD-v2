@@ -12,6 +12,7 @@ const portManager = require("./src/utils/portManager");
 const env = require("./src/config/env");
 const { initScheduler } = require("./src/services/scheduler.service");
 const { initializeSecuritySystem } = require("./src/infrastructure/middleware/integrationSecurityMiddleware");
+const { seedReportTemplates } = require("./src/services/report-template-seed.service");
 
 let httpServerInstance = null;
 
@@ -54,6 +55,22 @@ async function startServer() {
     logger.info("🔐 Ativando sistema de segurança e conformidade LGPD...");
     await initializeSecuritySystem(app, db);
     logger.info("✅ Sistema de segurança ativado com sucesso");
+
+    // #737: reports.routes.js's buildPreviewData (#726) dispatches only via a
+    // ReportTemplate lookup by code -- with the system rows missing, every
+    // report type returns the no-preview fallback and CSV export is empty.
+    // Guaranteed at boot (idempotent by code; a later hand-edit to a seeded
+    // row survives) instead of a script a human has to remember -- the same
+    // self-sufficiency #437 gave the RBAC catalog. Not the essential
+    // reference-data seed (seed-boundary.arch.test.js keeps that off the
+    // boot path by contract): 14 config rows, no manifest, no data files.
+    // Non-fatal: a seed failure is logged and the server still starts.
+    try {
+      const { templates } = await seedReportTemplates(db);
+      logger.info(`📄 Modelos de relatório do sistema garantidos: ${templates.length}`);
+    } catch (seedError) {
+      logger.error("Erro ao semear modelos de relatório:", seedError.message);
+    }
 
     // Iniciar scheduler (backup + monitoramento + sync de consentimento)
     try {

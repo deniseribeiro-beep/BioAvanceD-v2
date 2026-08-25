@@ -580,3 +580,58 @@ test.describe('Workflows and omics data (RF027) — real backend', () => {
     expect((await omicsRun.json()).data.referenceAssembly).toBeNull();
   });
 });
+
+// RF008 (Relatórios) — Wave 4 kickoff (#723). The report pipeline
+// (reports.routes.js) already existed; this block proves it end to end
+// against the real backend, criterion by criterion, and files what it
+// can't prove as red-first gaps rather than writing around them.
+test.describe('Reports (RF008) — real backend', () => {
+  // #737: buildPreviewData (#726) dispatches only via a ReportTemplate
+  // lookup by `code` -- if the 14 system rows aren't there, every report
+  // type silently returns the no-preview fallback and CSV export is empty.
+  // Nothing seeded them on any live stack before #737 wired the idempotent
+  // seed into server.js's boot path (this assertion was red: `data: []`).
+  // Codes mirror report-template-seed.service.js's SYSTEM_REPORT_TEMPLATES
+  // (hardcoded here rather than imported -- tests/e2e never requires
+  // backend source, see #729).
+  const SYSTEM_REPORT_TEMPLATE_CODES = [
+    'samples_by_patient',
+    'patients',
+    'samples',
+    'sample_analysis',
+    'temperature',
+    'temperature_control',
+    'sensors',
+    'equipment',
+    'results',
+    'audit',
+    'withdrawal_history',
+    'tissue_origin_history',
+    'extracellular_network',
+    'access_logs',
+  ];
+
+  test('the system report templates exist on the running stack without a manual seed step (#737)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const response = await request.get(`${apiBaseURL}/api/report-templates`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+
+    const templates = (await response.json()).data as Array<{
+      code: string;
+      isSystemDefined?: boolean;
+      templateStatus: string;
+    }>;
+    const activeSystemCodes = templates
+      .filter((template) => template.isSystemDefined && template.templateStatus === 'active')
+      .map((template) => template.code);
+
+    for (const code of SYSTEM_REPORT_TEMPLATE_CODES) {
+      expect(activeSystemCodes, `system report template "${code}" is missing`).toContain(code);
+    }
+  });
+});

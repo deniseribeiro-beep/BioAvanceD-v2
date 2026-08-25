@@ -32,6 +32,7 @@
     "kill-port": "node scripts/kill-port.js",
     "check-ports": "node scripts/check-ports.js",
     "admin:create-first": "node src/scripts/createFirstAdmin.js",
+    "seed:report-templates": "node src/scripts/seedReportTemplates.js",
     "user:create-admin": "npm run admin:create-first",
     "lab:test": "node scripts/lab-test-notifications.js",
     "iot:simulate": "node scripts/iot-simulator.js",
