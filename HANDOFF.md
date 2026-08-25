@@ -101,22 +101,28 @@ and #442.
 
 ## Docker
 
-**Stack was still UP at the end of this sitting; the teardown decision is
-Dennis's** — `clean-up` runs at session end and will surface it. Record
-both axes (pack #445):
+**The stack is DOWN and the four named volumes were dropped.** Dennis
+chose a full teardown at the `clean-up` checkpoint, so **the next sitting
+starts cold on purpose** — this is not an abandoned environment, and
+there is no warm stack to inherit. Record both axes (pack #445):
 
-- **Services:** 12 core, healthy, up since ~19:26 on 2026-08-25.
+- **Services:** none running. The 12-service stack was up from ~19:26
+  until the end of this sitting, then `docker compose ... down`, verified
+  by `docker ps` rather than the compose exit code.
 - **Bootstrap:** `admin-bootstrap-test` **and** the full 17-service
   reference-data chain ran this sitting; all 18 one-shots verified
   `Exited (0)` via `docker ps -a`, never by the compose exit code.
-- **`backend-app-test` was rebuilt three times** and carries **#788,
-  #790 and #794**. Build-not-mount: **any further `api/backend/src`
-  change needs another rebuild before an e2e run**, or a stale image
-  serves old code with no error.
-- **Volumes:** the four named fixture volumes are untouched. A
-  from-scratch gate needs `docker volume rm` on
-  `bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data` first, then
-  the whole bootstrap chain again.
+- **`backend-app-test` was rebuilt three times** this sitting and its
+  image still carries **#788, #790 and #794** (the image was kept; only
+  containers and volumes went). Build-not-mount: **any further
+  `api/backend/src` change needs another rebuild before an e2e run**, or
+  a stale image serves old code with no error.
+- **Volumes:** all four (`bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data`)
+  were **removed**, clearing e2e fixture data accumulated across several
+  prior sittings. **A next sitting therefore needs the full startup from
+  scratch**: the 12-service recipe with `--build`, then
+  `admin-bootstrap-test`, then the whole 17-service reference-data chain
+  — the chain is not optional now, since nothing is seeded.
 - `playwright-runner` was never started. **Stop it before any host-side
   run if that changes** (pack #437).
 - `lgpd-sample-import.spec.ts` ran **four times**, green each time,
