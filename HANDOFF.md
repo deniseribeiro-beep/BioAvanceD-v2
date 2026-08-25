@@ -171,7 +171,18 @@ is the one red in the native suite).
   **total < success + errors**, and those numbers reach
   `auditLogger.logImport`. `importPatients` in the same file is correct.
 
+- **#787** — **RNF011 AC#4 is unmet on the LGPD import path**: rejected
+  rows live only in the HTTP response and the uploaded file is deleted
+  immediately after, so a partial import loses both the rejected rows
+  and the source file. Zero occurrences of `staging`/`quarantine` in
+  `import-lgpd.service.js`. The **FHIR path already satisfies the same
+  AC** (`fhir-import-staging.service.js`, proven by e2e per
+  `E2E_TRACEABILITY_PLAN.md`'s RF011 row) — so this is one import path
+  having it and the other not, and the one missing it is the path a
+  technician uses for bulk intake.
+
 #785 and #786 were both found **by #759's new spec**, on its first run.
+#787 came from the docs check Dennis asked for on #772.
 
 ## Filed this sitting — skills-pack
 
