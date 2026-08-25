@@ -500,13 +500,21 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
       let consentMessage = '';
       let canUse = false;
 
-      // Buscar paciente
-      const patient = await patientsCollection.findOne({ 
-        $or: [
-          { patientID: sample.patientID },
-          { _id: sample.patientID }
-        ]
-      });
+      // Buscar paciente pelo identificador canonico da amostra.
+      // #788: isto lia `sample.patientID`, um campo que nenhum escritor grava
+      // (Sample.js:31 declara `participantId`; RegisterSample.js e
+      // import-lgpd.service.js gravam so esse). Patient.js tambem nao tem
+      // `patientID` em CANONICAL_FIELDS, entao as duas pernas do $or eram
+      // mortas. Como `undefined` serializa para null, a consulta degenerava
+      // para `{ patientID: null }`, que casa com QUALQUER paciente -- o
+      // findOne devolvia um arbitrario e o selo de consentimento de toda
+      // amostra vinha do consentimento de um paciente sem relacao com ela.
+      // O guard abaixo e parte do conserto: sem identificador nao se monta
+      // filtro, para que a consulta nunca possa degenerar desse jeito.
+      const participantId = String(sample?.participantId ?? '').trim();
+      const patient = participantId
+        ? await patientsCollection.findOne({ participantId })
+        : null;
 
       if (patient) {
         // Verificar se há consentimento ativo

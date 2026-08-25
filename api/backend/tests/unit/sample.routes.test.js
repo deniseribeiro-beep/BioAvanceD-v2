@@ -1315,7 +1315,7 @@ describe('sample.routes', () => {
 
     it('enriches samples with consent info when a patient and active consent exist', async () => {
       const listSamples = vi.fn().mockResolvedValue({
-        samples: [{ patientID: 'P1' }],
+        samples: [{ participantId: '53117577' }],
         total: 1,
       });
       const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
@@ -1341,7 +1341,7 @@ describe('sample.routes', () => {
 
     it('marks consent as pending when a patient exists with no active consent and consents are already tracked', async () => {
       const listSamples = vi.fn().mockResolvedValue({
-        samples: [{ patientID: 'P1' }],
+        samples: [{ participantId: '53117577' }],
         total: 1,
       });
       const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
@@ -1367,7 +1367,7 @@ describe('sample.routes', () => {
 
     it('blocks use when the patient cannot be found (fail-closed, matches MongoPatientConsentReadRepository)', async () => {
       const listSamples = vi.fn().mockResolvedValue({
-        samples: [{ patientID: 'MISSING' }],
+        samples: [{ participantId: '00000000' }],
         total: 1,
       });
       const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
@@ -1387,6 +1387,107 @@ describe('sample.routes', () => {
       );
     });
 
+    // #788: the consent badge was computed from `sample.patientID`. No writer
+    // sets that field -- Sample.js:31 declares `participantId`, and both
+    // RegisterSample.js and import-lgpd.service.js write only that. Patient.js's
+    // CANONICAL_FIELDS has no `patientID` either, so BOTH legs of the old
+    // `$or` were dead. `undefined` serialises to null, so the query degenerated
+    // to `{ patientID: null }`, which matches every patient document -- findOne
+    // then returned an arbitrary one and every sample was badged from that
+    // unrelated patient's consent record (confirmed against the Docker stack:
+    // 7/7 patients lacked `patientID`; a sample for participant 53117577 was
+    // badged from patient 64404470).
+    //
+    // Every consent fixture above resolves `patientsCollection.findOne` to a
+    // fixed value regardless of the filter it is handed, so the broken query
+    // was structurally invisible to them. These two use a stub that actually
+    // matches, against patient documents shaped like the real ones.
+    function matchesFilter(doc, filter) {
+      return Object.entries(filter).every(([key, value]) => {
+        if (key === '$or') return value.some((sub) => matchesFilter(doc, sub));
+        if (value && typeof value === 'object' && Array.isArray(value.$in)) {
+          return value.$in.some((candidate) => String(candidate) === String(doc[key]));
+        }
+        return doc[key] === value;
+      });
+    }
+
+    function matchingCollection(docs) {
+      return {
+        findOne: vi.fn(async (filter = {}) => docs.find((doc) => matchesFilter(doc, filter)) || null),
+        countDocuments: vi.fn(async () => docs.length),
+      };
+    }
+
+    it('resolves the consent badge from the sample own participant, not an arbitrary patient (#788)', async () => {
+      const listSamples = vi.fn().mockResolvedValue({
+        samples: [{ _id: 'sample-1', participantId: '53117577' }],
+        total: 1,
+      });
+      const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
+
+      // Deliberately ordered so an unfiltered/degenerate query finds the WRONG
+      // patient first -- which is what the live database does.
+      const patientsCollection = matchingCollection([
+        { _id: 'patient-unrelated', participantId: '64404470' },
+        { _id: 'patient-real', participantId: '53117577' },
+      ]);
+      const consentsCollection = matchingCollection([
+        { patientId: 'patient-real', status: 'ACTIVE' },
+      ]);
+      const db = {
+        collection: (name) => (name === 'patients' ? patientsCollection : consentsCollection),
+      };
+      const app = buildApp(router, db);
+
+      const res = await request(app).get('/api/samples');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data[0]).toEqual(
+        expect.objectContaining({
+          consentValid: true,
+          consentMessage: 'TCLE Assinado',
+          canUse: true,
+          consentReasonCode: null,
+        })
+      );
+      // The identifier actually queried must be the sample's own.
+      expect(JSON.stringify(patientsCollection.findOne.mock.calls[0][0])).toContain('53117577');
+    });
+
+    it('fails closed when a sample carries no participant identifier, instead of matching an arbitrary patient (#788)', async () => {
+      const listSamples = vi.fn().mockResolvedValue({
+        samples: [{ _id: 'sample-2' }],
+        total: 1,
+      });
+      const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
+
+      // This patient HAS an active consent. A degenerate `{ field: null }`
+      // filter matches it, which would badge an unidentified specimen as
+      // usable -- asserting a consent that does not exist for it.
+      const patientsCollection = matchingCollection([
+        { _id: 'patient-unrelated', participantId: '64404470' },
+      ]);
+      const consentsCollection = matchingCollection([
+        { patientId: 'patient-unrelated', status: 'ACTIVE' },
+      ]);
+      const db = {
+        collection: (name) => (name === 'patients' ? patientsCollection : consentsCollection),
+      };
+      const app = buildApp(router, db);
+
+      const res = await request(app).get('/api/samples');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data[0]).toEqual(
+        expect.objectContaining({
+          consentValid: false,
+          canUse: false,
+          consentReasonCode: 'PATIENT_NOT_FOUND',
+        })
+      );
+    });
+
     it('returns 500 when listSamples throws', async () => {
       const listSamples = vi.fn().mockRejectedValue(new Error('db down'));
       const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
@@ -1402,7 +1503,7 @@ describe('sample.routes', () => {
       const listSamples = vi.fn().mockResolvedValue({
         samples: [{
           _id: 'sample-1',
-          patientID: 'P1',
+          participantId: '53117577',
           specimenId: 'SPEC-1',
           storageLocation: { boxId, boxName: 'Box A', position: 'A1' },
         }],
@@ -1449,7 +1550,7 @@ describe('sample.routes', () => {
 
     it('maps resolvedStorageLocation/currentSpecimenPreanalytics to null when a sample has no location or profile', async () => {
       const listSamples = vi.fn().mockResolvedValue({
-        samples: [{ _id: 'sample-2', patientID: 'P1', specimenId: 'SPEC-2' }],
+        samples: [{ _id: 'sample-2', participantId: '53117577', specimenId: 'SPEC-2' }],
         total: 1,
       });
       const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
