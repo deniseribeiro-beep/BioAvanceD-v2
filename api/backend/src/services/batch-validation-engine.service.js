@@ -295,9 +295,19 @@ class BatchValidationEngine {
       origemdadadacoleta: 'sampleOrigin',
       extractionprotocol: 'extractionProtocol',
       protocolodeextracao: 'extractionProtocol',
-      registerdate: 'registrationDate',
-      registrationdate: 'registrationDate',
-      datacoleta: 'registrationDate',
+      // #767: these three used to target 'registrationDate'. e2549bee
+      // renamed parseSampleRow's registerDate/registrationDate fallback to
+      // the canonical registeredAt, and import-lgpd.service.js has contained
+      // zero occurrences of 'registrationDate' ever since -- so the mapped
+      // value was never read and every batch-imported sample fell through to
+      // `registeredAt = new Date()`. Same failure mode as the #525 note
+      // below, on the date column. The header keys stay as they are: those
+      // are the user-facing CSV column names and remain correct. Only the
+      // target changes, to the name canonical-fields.arch.test.js and
+      // sample.routes.js both already treat as the canonical one.
+      registerdate: 'registeredAt',
+      registrationdate: 'registeredAt',
+      datacoleta: 'registeredAt',
       // #525: no target field on purpose. import-lgpd.service.js#parseSampleRow
       // never reads a `locationID` key (#459/#462: CSV rows carry the
       // canonical boxId/positionCode pair directly, "no legacy field aliases
