@@ -907,6 +907,16 @@ class ImportLGPDService {
         const rowNumber = i + 2; // +2 porque linha 1 é header e arrays começam em 0
         let sampleData = null;
 
+        // #786: counted here, at the top of the loop body, rather than at the
+        // bottom. Every rejected row leaves via a `continue`, so a
+        // bottom-of-loop increment skipped it entirely and a partially-failed
+        // import reported total < success + errors -- numbers that
+        // import-lgpd.controller.js passes straight to auditLogger.logImport.
+        // importPatientsSmart already counts in this position; importPatients
+        // counts just after its empty-row guard. importSamples has no
+        // empty-row guard, so before the try is the equivalent spot.
+        results.total++;
+
         try {
           // Parse dos dados do CSV/Excel
           sampleData = this.parseSampleRow(row);
@@ -1244,8 +1254,6 @@ class ImportLGPDService {
             data: { participantId: sampleData?.participantId || null }
           });
         }
-
-        results.total++;
       }
 
       // Log sanitizado (sem dados sensíveis)
