@@ -3,8 +3,9 @@
 **Written:** 2026-08-25 (fifth sitting of the day). Dennis asked for a
 fresh group of 5-10 issues and confirmed **Docker is on**. Ran
 `issue-loop` **queue mode** over a self-picked 9-issue queue. **Three
-closed, six remain** — the queue is paused mid-run at the point where the
-native-verifiable work ends, not because anything blocked.
+closed, a fourth (#757) merged but deliberately left open, five remain**
+— the queue is paused mid-run at the point where the native-verifiable
+work ends, not because anything blocked.
 
 The three closed complete the **`e2549bee` rename family**, which the
 previous sitting had paused on pending a decision from Dennis. His "pick
@@ -45,6 +46,26 @@ branch deleted local + remote (3/3 remote deletions succeeded, no prompt).
   sweep as "more of the same."
 - **#770** (`c093b5df`, merged `0df33522`) — three CSV date-header
   aliases repointed at `registeredAt`; duplicate `idpaciente` key removed.
+
+**#757 (`3074c147`, merged `5581466b`) is merged but INTENTIONALLY STILL
+OPEN**, and its branch `fix/757-fixture-numeric-equipment-id` is
+intentionally still present local + remote. `seedStorageBoxLocation()`
+wrote a `RF004-e2e-EQ-<ts>` string into two fields both declared numeric
+— `StorageContainer.containerID` (`type: Number`) and
+`Equipment.equipmentID` (rejects a non-number). A raw `insertOne`
+bypassed both. #757 only knew about the equipment half; the two **cannot
+be typed independently**, because `sample.service.js:244` joins them
+(`equipmentID: { $in: buildIdVariants(freezer.containerID) }`, the RF004
+gate). Type settled by three sources: both schemas plus
+`legacy-location-migration-mapping.md:26`/`:97`.
+
+**Why it is open:** the fixture only executes under Playwright against a
+live stack. Typecheck and unit suites prove nothing else broke; they
+cannot prove the thing the fix is for. **Close it only when these five
+specs go green at the Docker gate** — `intake-wizard`,
+`sample-files-section-ui`, `sample-storage-lifecycle`,
+`scientific-data-access`, `specimen-quality-inventory`. If they are red,
+the analysis in the issue comment is where to restart.
 
 ## #770's trace was wrong — read this before trusting an issue body here
 
@@ -89,6 +110,15 @@ traces, which read as more authoritative, not less.
   that does not exist. Delete-vs-wire-in is the owner's call; the backend
   it targets is live and tested, so it reads as "never mounted" rather
   than "abandoned."
+- **#774** — `Equipment.EQUIPMENT_STATUS` (allow-list:
+  `Calibrado/Maintenance/Active/Inactive/Needs Calibration`) and
+  `BLOCKED_EQUIPMENT_STATUSES` (deny-list, **triplicated** across
+  `sample.service.js:31`, `intakeWizard.js:292`,
+  `import-lgpd.service.js:36`) share **no vocabulary**. The fixture's
+  `status: 'operational'` is in neither — it passes the RF004 gate
+  precisely because it is unrecognized, while the model would refuse to
+  persist it. `error`/`retired` are blocked but cannot be produced.
+  Needs a decision, not a type fix.
 - **#773** — the same `canonicalizeHeader` map still targets `patientID`,
   also on `ASPIRATIONAL_FORBIDDEN`. **Deliberately not folded into #770**:
   different rename family (#146), and only one corroborating source was
@@ -99,8 +129,17 @@ traces, which read as more authoritative, not less.
 *query filter*; the file that hid #769 had already done that and still
 could not see it, because the bug was in the `.sort()` spec one method
 over), **#425** (the routing-gate displacement below), **#426** (the
-issue-body-trace gap above). Commented a 5th remote-delete data point on
-**#410** (tally now 3 denials / 5 successes, still no predictor).
+issue-body-trace gap above), **#427** (`branch-guard.cjs` blocks a bare
+read-only `git branch` when the next command is newline-separated — it
+reads the following command's first token as a start-point; `&&` is
+fine, newline is not), **#428** (`handoff` gives no rotation cadence for
+a long multi-iteration run, so "once at the end" is a plausible reading
+that leaves the note stale the whole time — the Stop checkpoint had to
+fire this sitting because of it), **#429** (`fix-bugs` has no
+close-discipline branch for a fix whose only proof runs at a gate that
+has not happened yet — the `Refs`/merge/leave-open pattern used for #757
+was improvised). Commented a 5th remote-delete data point on **#410**
+(tally now 3 denials / 5 successes, still no predictor).
 
 ## Process note worth carrying — the routing gate fired for real
 
@@ -123,8 +162,12 @@ invoke the actual route before the first edit.**
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration` at `0df33522`, pushed, in
-  sync. No `fix/` branches from this sitting remain, local or remote.
+- On `feature/docker-e2e-backend-integration` at `5581466b`, pushed, in
+  sync. **`fix/757-fixture-numeric-equipment-id` is retained local +
+  remote on purpose** — `clean-up`'s branch domain only deletes a merged
+  branch once its issue is closed, and #757 is deliberately open pending
+  the Docker gate. Delete it when #757 closes. The other three fix
+  branches from this sitting are gone, local and remote.
 - **Four older local branches**, unchanged for four sittings:
   `fix/599-ci-trigger-integration-branch` and
   `fix/599-hold-ci-trigger-for-milestone` are merged into the integration
@@ -170,29 +213,25 @@ Dennis authorized "a group of 5-10 issues, Docker on" but **did not name
 individual numbers** — the nine below were picked from the 51 open,
 filtered to what is resolvable without a call from him or Denise.
 
-**Done:** #769, #768, #770.
+**Done:** #769, #768, #770. **#757 merged, awaiting live proof** (above).
 
 **Remaining, in the intended order:**
 
-1. **#757** — `seedStorageBoxLocation()` writes a string `containerID`
-   into numeric `equipmentID`. The *cause* of #736. Its "which option is
-   right depends on what `containerID` is meant to be" is traceable in
-   the codebase, not an owner call.
-2. **#756** — four sibling ID generators carry #736's string-concat bug
+1. **#756** — four sibling ID generators carry #736's string-concat bug
    latently. One-line `$type: 'number'` filter each; generalize
    `makeEquipmentDbMock` over the field name rather than writing four.
    **Do not reuse the pre-existing `makeDbMock`** — it ignores its query
    filter, which is exactly why the existing tests could not see this.
-3. **#755** — architecture guard for `env.<NAME>` reads with no `env.js`
+2. **#755** — architecture guard for `env.<NAME>` reads with no `env.js`
    declaration. Note the author's warning: exclude `process.env.<NAME>`
    or the sweep produces ~75 false positives.
-4. **#754** — document the five schedule cron vars in `.env.*.example`.
+3. **#754** — document the five schedule cron vars in `.env.*.example`.
    Confirm each default against the code; the issue's list was read off
    `||` fallbacks, not audited.
-5. **#658** — `backend-unit-runner` has no `docs/` mount, so
+4. **#658** — `backend-unit-runner` has no `docs/` mount, so
    `dictionary:validate` ENOENTs. **Docker-verifiable now.** Worth doing
    before #599 lands, or #599 becomes an instant red build.
-6. **#766** — restore-test asserts a *collection* count, not a document
+5. **#766** — restore-test asserts a *collection* count, not a document
    count. Needs `runControlledRestoreTest` to report one and
    `restoreTestHistory` to carry it. **Docker-verifiable.**
 
@@ -225,14 +264,18 @@ a stretch item that would use the Docker stack well.
 
 ## Recommended next steps
 
-**Continue the queue at #757**, per the ordering above — Dennis's "pick
+**Continue the queue at #756**, per the ordering above — Dennis's "pick
 5-10, Docker on" is a standing instruction and the run is paused
-mid-queue, not blocked. Nothing in items 1-6 needs a decision from him.
+mid-queue, not blocked. Nothing in items 1-5 needs a decision from him.
+
+**The Docker gate now owes three confirmations, not one:** #757's five
+specs (above), #658, and #766. Batch them into the single cold rebuild
+rather than paying it per item.
 
 **#765 remains closed but unproven in a container.** Its e2e assertion
 (`pipeline-continuity.spec.ts:1214`) is the real proof and re-runs at the
 next Docker gate. If it does not go green there, reopen #765. #766 (queue
-item 6) touches that exact assertion, so the two want doing together.
+item 5) touches that exact assertion, so the two want doing together.
 
 `ship-integration-branch` remains premature — #752 still needs a decision
 on intended behaviour, and the Docker gate has not run since #738's
