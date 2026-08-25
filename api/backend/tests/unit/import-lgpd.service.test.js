@@ -325,6 +325,32 @@ describe('ImportLGPDService', () => {
       expect(result.registeredAt.getTime()).toBeLessThanOrEqual(after);
     });
 
+    // #758: the only registeredAt coverage was the default-to-now path above,
+    // which is exactly why a rename collision in the mapping could sit here
+    // undetected -- an empty row takes the same branch whether the mapping is
+    // right or not. This pins the positive case: a supplied date must survive
+    // to the output, and must not be quietly replaced by today.
+    it('carries a supplied registeredAt through to the output instead of defaulting to now', () => {
+      const result = importLgpdService.parseSampleRow({ registeredAt: '15/03/2024' });
+
+      expect(result.registeredAt).toBeInstanceOf(Date);
+      expect(result.registeredAt.getFullYear()).toBe(2024);
+      expect(result.registeredAt.getMonth()).toBe(2); // March, 0-indexed
+      expect(result.registeredAt.getDate()).toBe(15);
+    });
+
+    // #758: e2549bee renamed both arms of a two-alias fallback
+    // (registerDate/registrationDate) to the same canonical name, leaving a
+    // dead `else if` in the parse and a duplicate key in the output literal.
+    // Both were behaviour-invariant, but this pins the shape so a future
+    // rename cannot reintroduce a second date key without a test noticing.
+    it('emits exactly one registration-date key on the parsed row', () => {
+      const result = importLgpdService.parseSampleRow({ registeredAt: '15/03/2024' });
+
+      const dateKeys = Object.keys(result).filter((k) => /^regist/i.test(k));
+      expect(dateKeys).toEqual(['registeredAt']);
+    });
+
     it('only accepts a whitelisted set of pharmacology treatmentStatus values', () => {
       const valid = importLgpdService.parseSampleRow({ treatmentStatus: 'TREATED' });
       expect(valid.pharmacologyData.treatmentStatus).toBe('TREATED');
