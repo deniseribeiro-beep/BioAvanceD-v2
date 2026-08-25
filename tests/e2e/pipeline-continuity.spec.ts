@@ -1309,8 +1309,9 @@ test.describe('Backup and restore (RF013) — real backend', () => {
 
   // The Administrador-facing leg (RF013's primary actor): BackupPage drives
   // POST /perform and GET /list for real, and the policy section drives
-  // PUT /backup-policy. Status/checksum columns are not rendered yet (#740),
-  // so the UI proof stops at "the run appears in the table".
+  // PUT /backup-policy. Since #740 the table also renders the run's status
+  // and checksum, so the UI proof reaches AC#1's "estado ... e resultado"
+  // and AC#3's checksum evidence rather than stopping at row presence.
   test('an Administrador runs a backup and edits the policy through the real UI (/backup)', async ({ page, request }) => {
     const admin = await realLogin(request);
     const headers = { Authorization: `Bearer ${admin.token}` };
@@ -1334,7 +1335,17 @@ test.describe('Backup and restore (RF013) — real backend', () => {
       const newRuns = after.filter((entry) => !before.some((old) => old.fileName === entry.fileName));
       expect(newRuns.length).toBeGreaterThanOrEqual(1);
       expect(newRuns[0].status).toBe('success');
-      await expect(page.locator('.backups-table tbody tr', { hasText: newRuns[0].fileName })).toBeVisible();
+      const newRow = page.locator('.backups-table tbody tr', { hasText: newRuns[0].fileName });
+      await expect(newRow).toBeVisible();
+
+      // #740 (RF013 AC#1/AC#3): the run's state and its checksum evidence
+      // must be visible to the Administrador, not merely present in the API
+      // payload asserted above.
+      await expect(newRow.locator('.backup-status-badge')).toHaveText('Sucesso');
+      await expect(newRow.locator('.backup-status-badge')).toHaveAttribute('data-status', 'success');
+      const checksumCell = newRow.locator('.backup-checksum');
+      await expect(checksumCell).toHaveAttribute('title', newRuns[0].checksum);
+      await expect(checksumCell).toHaveText(`${newRuns[0].checksum.slice(0, 12)}…`);
 
       await page.locator('#backup-policy-retention').fill(String(newRetention));
       await page.getByRole('button', { name: 'Salvar Política' }).click();
