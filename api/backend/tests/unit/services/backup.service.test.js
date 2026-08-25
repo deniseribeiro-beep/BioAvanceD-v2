@@ -761,7 +761,15 @@ describe('backup.service', () => {
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'restored', ''));
 
       const dropDatabase = vi.fn().mockResolvedValue();
-      const fakeScratchDb = { listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'patients' }]) })), dropDatabase };
+      // #766: countScratchContents now also counts documents, so the scratch
+      // db mock needs collection().countDocuments(). listCollections is
+      // called with { type: 'collection' } to exclude views -- a view's
+      // countDocuments would double-count its source collection's rows.
+      const fakeScratchDb = {
+        listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'patients' }]) })),
+        collection: vi.fn(() => ({ countDocuments: vi.fn().mockResolvedValue(7) })),
+        dropDatabase
+      };
       const fakeClient = {
         connect: vi.fn().mockResolvedValue(),
         db: vi.fn(() => fakeScratchDb),
@@ -776,6 +784,16 @@ describe('backup.service', () => {
       expect(result.mode).toBe('mongorestore');
       expect(result.checksumVerified).toBe(true);
       expect(result.restoredCollections).toBe(1);
+      // #766: the collection count alone is satisfied by a restore that
+      // creates every collection and populates none -- one step milder than
+      // the #765 no-op, and the same class of silent success. This is what
+      // distinguishes them, and what #731's weekly unattended run needs in
+      // its history record to be diagnostic rather than merely present.
+      expect(result.restoredDocuments).toBe(7);
+      expect(fakeScratchDb.listCollections).toHaveBeenCalledWith(
+        { type: 'collection' },
+        { nameOnly: true }
+      );
       expect(result.scratchDb).toMatch(/^mydb_restoretest_\d+$/);
 
       expect(cp.exec).toHaveBeenCalledWith(
