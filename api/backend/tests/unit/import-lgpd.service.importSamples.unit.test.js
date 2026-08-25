@@ -94,8 +94,17 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
   const sampleOriginsCollection = { findOne: vi.fn().mockResolvedValue(sampleOriginFound ? { id: 'VENOUS_BLOOD', description: 'Sangue Venoso Periferico' } : null) };
   const extractionProtocolsCollection = { findOne: vi.fn().mockResolvedValue(protocolFound ? { id: 'TUBE_EDTA', description: 'Tubo EDTA (Tampa Roxa)' } : null) };
   const amostrasCollection = {
-    // Backs generateUniqueBarcode's own lookup for the last barcode of the year.
-    find: vi.fn(() => ({ sort: () => ({ limit: () => ({ toArray: async () => [] }) }) })),
+    // Backs generateUniqueBarcode's own lookup for the year's existing codes,
+    // which is a plain find().toArray() since #775 -- chainable so the
+    // sort()/limit() callers in this suite keep working too.
+    find: vi.fn(() => {
+      const cursor = {
+        sort: () => cursor,
+        limit: () => cursor,
+        toArray: async () => []
+      };
+      return cursor;
+    }),
     findOne: vi.fn().mockResolvedValue(null),
   };
   // AllocateSampleUseCase's audit trail (MongoAuditRepository) and
