@@ -12,9 +12,6 @@
     "test:coverage": "npm --prefix api/backend run test:coverage && npm --prefix frontend run test:coverage",
     "lint": "npm --prefix frontend run lint && npm --prefix api/backend run lint",
     "typecheck": "npm --prefix frontend run typecheck && npm --prefix api/backend run typecheck && npm run typecheck:e2e",
-    "test:browser": "vitest",
-    "test:browser:watch": "vitest --watch",
-    "test:browser:run": "vitest run",
     "test:e2e": "playwright test",
     "test:e2e:docker": "cross-env PLAYWRIGHT_BASE_URL=http://localhost:5173 PLAYWRIGHT_API_BASE_URL=http://localhost:3000 PLAYWRIGHT_SKIP_WEBSERVER=1 playwright test",
     "typecheck:e2e": "tsc --noEmit -p tsconfig.json"
