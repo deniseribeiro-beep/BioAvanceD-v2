@@ -92,7 +92,12 @@ function makeActiveCodeCollections() {
   return {
     terminologyConcepts: {
       findOne: async (filter) => terminologyConcepts.find((c) => c.systemUri === filter.systemUri && c.code === filter.code && (!filter.version || c.version === filter.version)) || null,
-      find: async (filter) => ({
+      // #763: synchronous and chainable, mirroring the real driver -- the
+      // same correction #694 made to the shared ingestion fake. The old
+      // `async find()` resolving to a bare `{ toArray }` only worked
+      // against the two-step `await collection.find(f)` form, which is
+      // what kept that workaround alive in product code long after #694.
+      find: (filter) => ({
         toArray: async () => terminologyConcepts.filter((c) => c.systemUri === filter.systemUri && c.code === filter.code),
       }),
     },

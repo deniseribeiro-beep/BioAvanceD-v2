@@ -46,8 +46,7 @@ async function createCondition(db, data) {
 /** All conditions for a participant. */
 async function getConditionsForParticipant(db, participantId) {
   const collection = await getCollection(db, 'conditions');
-  const cursor = await collection.find({ participantId: String(participantId) });
-  return cursor.toArray();
+  return collection.find({ participantId: String(participantId) }).toArray();
 }
 
 /** One condition by its own conditionId (not Mongo's _id). */
