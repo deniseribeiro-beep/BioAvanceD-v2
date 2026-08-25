@@ -4,6 +4,9 @@ const os = require('os');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const engine = require('../../src/services/batch-validation-engine.service');
+// #768: the specimen fallback leg is asserted against a document built by the
+// real model, not a hand-shaped literal -- see the collectedAt tests below.
+const { SampleModel } = require('../../src/models/Sample');
 const patientService = require('../../src/services/patient.service');
 
 describe('BatchValidationEngine.normalizeHeader', () => {
@@ -414,14 +417,62 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
     expect(payloads[0].sampleID).toBe('BC-9');
   });
 
-  it('uses collectedAt from the specimen registrationDate when the row has no date fields', () => {
+  // #768: this used to pass a specimen shaped `{ registrationDate }` -- a
+  // shape Sample.create() never produces. It passed while proving nothing,
+  // because it hand-built the only input that could reach a leg no real
+  // document satisfies. Sample.js:38 declares `registeredAt` as the only
+  // (required) date field, and Sample.create() always populates it, so
+  // `registeredAt` is what the specimen leg has to read.
+  it('uses collectedAt from the specimen registeredAt when the row has no date fields', () => {
     const { payloads } = engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'alphaGal:1' },
       {},
-      { registrationDate: '2026-02-01T00:00:00.000Z' }
+      { registeredAt: '2026-02-01T00:00:00.000Z' }
     );
 
     expect(payloads[0].collectedAt.toISOString()).toBe('2026-02-01T00:00:00.000Z');
+  });
+
+  // The regression guard the old test could not be: a specimen built by the
+  // real model, not hand-shaped to fit the fallback chain. persistSample
+  // passes createSample()'s return value straight in as `specimen`, so this
+  // is the document shape the leg actually receives in production.
+  it('reads the specimen date from a document built by Sample.create()', () => {
+    const specimen = SampleModel.create({
+      specimenId: 'SPEC-768',
+      participantId: 'P-768',
+      sampleType: 'plasma',
+      sampleOrigin: 'blood',
+      extractionProtocol: 'EP-1',
+      quantity: 10,
+      registeredAt: '2026-02-01T00:00:00.000Z',
+    });
+
+    expect(specimen.registeredAt).toBeInstanceOf(Date);
+    expect(specimen.registrationDate).toBeUndefined();
+    expect(specimen.registerDate).toBeUndefined();
+
+    const { payloads } = engine.buildBiomarkerObservationPayloads(
+      { biomarkers: 'alphaGal:1' },
+      {},
+      specimen
+    );
+
+    expect(payloads[0].collectedAt.toISOString()).toBe('2026-02-01T00:00:00.000Z');
+  });
+
+  // The rawRow legs stay: persistSample hands buildBiomarkerObservationPayloads
+  // the *un-canonicalized* CSV row (buildSampleRow is what maps headers), so a
+  // file whose column is literally spelled `registrationDate` reaches them.
+  // Unlike the specimen legs, these are real user input, not a dead name.
+  it('still honours a raw CSV column literally named registrationDate', () => {
+    const { payloads } = engine.buildBiomarkerObservationPayloads(
+      { biomarkers: 'alphaGal:1', registrationDate: '2026-03-05T00:00:00.000Z' },
+      {},
+      {}
+    );
+
+    expect(payloads[0].collectedAt.toISOString()).toBe('2026-03-05T00:00:00.000Z');
   });
 });
 
