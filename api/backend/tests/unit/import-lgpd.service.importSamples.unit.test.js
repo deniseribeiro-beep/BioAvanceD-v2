@@ -138,7 +138,19 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     }),
   };
 
+  // #787 (RNF011 AC#4): rejected rows are staged into the same two
+  // collections the FHIR import path already uses, so the shapes stay
+  // comparable across the two import paths.
+  const importBatchesCollection = {
+    insertOne: vi.fn().mockResolvedValue({ insertedId: 'batch-1' }),
+  };
+  const importStagingRecordsCollection = {
+    insertMany: vi.fn().mockResolvedValue({ insertedCount: 1 }),
+  };
+
   const collections = {
+    import_batches: importBatchesCollection,
+    import_staging_records: importStagingRecordsCollection,
     samples: samplesCollection,
     patients: patientsCollection,
     sampleTypes: sampleTypesCollection,
@@ -165,7 +177,7 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     },
   };
 
-  return { db, samplesCollection, patientsCollection, rcsAssessmentsCollection, specimenPreanalyticsCollection };
+  return { db, samplesCollection, patientsCollection, rcsAssessmentsCollection, specimenPreanalyticsCollection, importBatchesCollection, importStagingRecordsCollection };
 }
 
 describe('ImportLGPDService.importSamples', () => {
@@ -174,9 +186,11 @@ describe('ImportLGPDService.importSamples', () => {
   let patientsCollection;
   let rcsAssessmentsCollection;
   let specimenPreanalyticsCollection;
+  let importBatchesCollection;
+  let importStagingRecordsCollection;
 
   beforeEach(() => {
-    ({ db, samplesCollection, patientsCollection, rcsAssessmentsCollection, specimenPreanalyticsCollection } = makeDb());
+    ({ db, samplesCollection, patientsCollection, rcsAssessmentsCollection, specimenPreanalyticsCollection, importBatchesCollection, importStagingRecordsCollection } = makeDb());
 
     vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant').mockResolvedValue(MATCHED_PATIENT);
     vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
@@ -752,6 +766,113 @@ describe('ImportLGPDService.importSamples', () => {
     expect(inserted.sampleType).toBe('PLASMA');
     expect(inserted.sampleOrigin).toBe('VENOUS_BLOOD');
     expect(inserted.extractionProtocol).toBe('TUBE_EDTA');
+  });
+
+  // #787 (RNF011 AC#4, Crítica): "Importações inválidas são colocadas em
+  // staging ou quarentena, sem correção silenciosa."
+  //
+  // Before this, a rejected row was pushed onto an in-memory results.errors
+  // array, returned in the HTTP response as data.errorsDetails, and then
+  // gone -- and import-lgpd.controller.js deletes the uploaded file
+  // immediately afterwards. An operator who imported 500 rows, got 40
+  // rejections and closed the tab had lost both the rows and the file, while
+  // the half that did import was already canonically persisted.
+  //
+  // The FHIR import path already satisfies this AC via
+  // fhir-import-staging.service.js, so the shape here deliberately mirrors
+  // it: the same `import_batches` + `import_staging_records` collections,
+  // with the batch discriminated by `type`/`source` (the FHIR batch doc
+  // already carries 'FHIR_BUNDLE'/'FHIR', so the schema was built to hold
+  // more than one import path).
+  describe('#787 (RNF011 AC#4): rejected rows are staged, not discarded', () => {
+    it('stages a rejected row into import_staging_records under a batch', async () => {
+      vi.spyOn(service, 'readFile').mockResolvedValue([
+        VALID_ROW,
+        { ...VALID_ROW, treatmentStatus: 'TREATED', atcCode: 'NOT-A-CODE' },
+      ]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'lote-2026.csv' });
+
+      // The valid row still imports; staging is additive to the existing
+      // behaviour, not a replacement for it.
+      expect(result.success).toBe(1);
+      expect(result.errors).toHaveLength(1);
+
+      expect(importBatchesCollection.insertOne).toHaveBeenCalledTimes(1);
+      expect(importBatchesCollection.insertOne.mock.calls[0][0]).toMatchObject({
+        type: 'LGPD_SAMPLE_CSV',
+        source: 'LGPD',
+        status: 'QUARANTINED',
+        fileName: 'lote-2026.csv',
+        counts: { total: 2, success: 1, errors: 1 },
+      });
+
+      expect(importStagingRecordsCollection.insertMany).toHaveBeenCalledTimes(1);
+      const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
+      expect(staged).toHaveLength(1);
+      expect(staged[0]).toMatchObject({
+        batchId: 'batch-1',
+        rowNumber: 3,
+        status: 'ERROR',
+      });
+      expect(JSON.stringify(staged[0].errors)).toMatch(/atcCode/);
+    });
+
+    it('returns the staging batch id so the response points at the quarantined rows', async () => {
+      vi.spyOn(service, 'readFile').mockResolvedValue([
+        { ...VALID_ROW, treatmentStatus: 'TREATED', atcCode: 'NOT-A-CODE' },
+      ]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+      // "sem correção silenciosa" cuts both ways: the rows have to be kept,
+      // and the caller has to be told where they went.
+      expect(result.stagingBatchId).toBe('batch-1');
+    });
+
+    it('preserves the rejected row data, not just the error message', async () => {
+      vi.spyOn(service, 'readFile').mockResolvedValue([
+        { ...VALID_ROW, treatmentStatus: 'TREATED', atcCode: 'NOT-A-CODE' },
+      ]);
+
+      await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+      const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
+      // The whole point of quarantine over a log line: the row can be
+      // corrected and re-submitted, which needs the original values.
+      expect(staged[0].row).toBeDefined();
+      expect(staged[0].row.atcCode).toBe('NOT-A-CODE');
+    });
+
+    it('does not open a staging batch when every row imports cleanly', async () => {
+      vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+      expect(result.success).toBe(1);
+      expect(result.errors).toHaveLength(0);
+      // Quarantine is for invalid imports only -- a clean file should not
+      // leave an empty batch behind for someone to review.
+      expect(importBatchesCollection.insertOne).not.toHaveBeenCalled();
+      expect(importStagingRecordsCollection.insertMany).not.toHaveBeenCalled();
+      expect(result.stagingBatchId).toBeNull();
+    });
+
+    it('does not fail the import when staging itself rejects', async () => {
+      importBatchesCollection.insertOne.mockRejectedValueOnce(new Error('mongo down'));
+      vi.spyOn(service, 'readFile').mockResolvedValue([
+        VALID_ROW,
+        { ...VALID_ROW, treatmentStatus: 'TREATED', atcCode: 'NOT-A-CODE' },
+      ]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+      // Losing the quarantine copy must not also lose the rows that did
+      // import -- the response is still the primary record either way.
+      expect(result.success).toBe(1);
+      expect(result.errors).toHaveLength(1);
+      expect(result.stagingBatchId).toBeNull();
+    });
   });
 });
 

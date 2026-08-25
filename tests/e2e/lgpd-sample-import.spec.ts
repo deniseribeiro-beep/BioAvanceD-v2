@@ -1,6 +1,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
 import { createRealParticipant, closeSeedDb } from './helpers/seedParticipant';
+import { findLgpdQuarantineBatch, findLgpdQuarantinedRows, closeFhirImportDb } from './helpers/queryFhirImport';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -45,6 +46,9 @@ function importSamples(request: APIRequestContext, token: string, rows: string[]
 test.describe('LGPD sample import against the real backend (#759)', () => {
   test.afterAll(async () => {
     await closeSeedDb();
+    // #787: the quarantine assertions open a second Mongo client via
+    // queryFhirImport.ts -- close it too or the run hangs on an open handle.
+    await closeFhirImportDb();
   });
 
   test('imports a row with valid MIABIS ids, and the sample is queryable afterwards', async ({ request }) => {
@@ -166,5 +170,80 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     expect(body.data.success + body.data.errors).toBe(2); // rows actually accounted for
     expect(body.data.errorsDetails).toHaveLength(1);
     expect(body.data.errorsDetails[0].participantId).toBe(String(bad.participantId));
+  });
+
+  // #787 (RNF011 AC#4, Crítica): "Importações inválidas são colocadas em
+  // staging ou quarentena, sem correção silenciosa."
+  //
+  // This is the acceptance criterion the FHIR import path already satisfied
+  // and this one did not. The proof deliberately does not stop at the
+  // response's own stagingBatchId -- that would only show the API claims to
+  // have quarantined the row. It reads the batch and the rejected row back
+  // out of Mongo, because the whole point of the requirement is that the
+  // row outlives the HTTP response.
+  test('RNF011 AC#4: a rejected row is quarantined and survives the response', async ({ request }) => {
+    const admin = await realLogin(request);
+    const good = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const bad = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const response = await importSamples(request, admin.token, [
+      `${good.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
+      `${bad.participantId},NOT_A_REAL_SAMPLE_TYPE,${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
+    ]);
+
+    expect(response.status()).toBe(200);
+    const body = await response.json();
+
+    expect(body.data.errors).toBe(1);
+    const batchId = body.data.stagingBatchId;
+    expect(batchId, 'a partially-failed import must report where the rejected rows went').toBeTruthy();
+
+    // The batch, read from Mongo rather than from the response.
+    const batch = await findLgpdQuarantineBatch(String(batchId));
+    expect(batch, `no import_batches document for ${batchId}`).toBeTruthy();
+    expect(batch).toMatchObject({
+      type: 'LGPD_SAMPLE_CSV',
+      source: 'LGPD',
+      status: 'QUARANTINED',
+    });
+    // Mirrors the FHIR path's own batch shape, which carries counts.
+    expect(batch?.counts).toMatchObject({ total: 2, success: 1, errors: 1 });
+
+    // The rejected row itself.
+    const quarantined = await findLgpdQuarantinedRows(String(batchId));
+    expect(quarantined).toHaveLength(1);
+    expect(quarantined[0]).toMatchObject({ status: 'ERROR', rowNumber: 3 });
+    expect(JSON.stringify(quarantined[0].errors)).toMatch(/sampleType/i);
+
+    // Not just the error text -- the original values, which is what makes a
+    // quarantined row correctable and re-submittable rather than merely
+    // auditable.
+    expect(quarantined[0].row).toBeTruthy();
+    expect(String(quarantined[0].row.participantId)).toBe(String(bad.participantId));
+    expect(quarantined[0].row.sampleType).toBe('NOT_A_REAL_SAMPLE_TYPE');
+
+    // And the row that imported cleanly is NOT quarantined -- quarantine is
+    // for invalid rows, not a copy of the whole file.
+    expect(
+      quarantined.some((r) => String(r.row?.participantId) === String(good.participantId)),
+      'a row that imported successfully must not be quarantined'
+    ).toBe(false);
+  });
+
+  test('RNF011 AC#4: a clean import leaves no quarantine batch behind', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const response = await importSamples(request, admin.token, [
+      `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
+    ]);
+
+    expect(response.status()).toBe(200);
+    const body = await response.json();
+
+    expect(body.data).toMatchObject({ total: 1, success: 1, errors: 0 });
+    // Nothing was rejected, so there is nothing to review -- an empty batch
+    // would be noise in whatever queue eventually consumes these.
+    expect(body.data.stagingBatchId).toBeNull();
   });
 });

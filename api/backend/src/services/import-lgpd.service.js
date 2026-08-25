@@ -855,6 +855,89 @@ class ImportLGPDService {
    * @param {Object} file - Arquivo a ser importado
    * @param {Object} options - Opções de importação { startBoxId, autoIncrement }
    */
+
+  /**
+   * #787 (RNF011 AC#4, Crítica): "Importações inválidas são colocadas em
+   * staging ou quarentena, sem correção silenciosa."
+   *
+   * Deliberately mirrors the FHIR import path, which already satisfies this
+   * same acceptance criterion (`fhir-import-staging.service.js`, proven
+   * end-to-end by `interop-monitoring.spec.ts`): the same two collections,
+   * `import_batches` and `import_staging_records`, and the same
+   * batch-plus-per-row shape. The FHIR batch document already discriminates
+   * itself with `type: 'FHIR_BUNDLE'` / `source: 'FHIR'`, so that schema was
+   * built to hold more than one import path -- this is the second.
+   *
+   * Like that service, this reaches for `db.collection(...)` directly rather
+   * than `getCollection`: neither collection is registered in
+   * `CANONICAL_COLLECTIONS`, and the FHIR path set the precedent.
+   *
+   * Best-effort by design. If quarantining fails, the import still returns
+   * whatever it accomplished -- losing the review copy must not also lose
+   * the rows that did import. The failure is logged and `stagingBatchId`
+   * comes back null, so a caller can tell the difference between "nothing
+   * was rejected" and "rejections were not preserved".
+   *
+   * Returns the batch id, or null when there was nothing to quarantine.
+   */
+  async quarantineRejectedSampleRows(db, { fileName = null, rows = [], results, actor = {} } = {}) {
+    const rejected = Array.isArray(results?.errors) ? results.errors : [];
+    if (rejected.length === 0) return null;
+
+    try {
+      const now = new Date();
+
+      const batchDoc = {
+        type: 'LGPD_SAMPLE_CSV',
+        source: 'LGPD',
+        status: 'QUARANTINED',
+        fileName: fileName ? String(fileName) : null,
+        counts: {
+          total: results.total,
+          success: results.success,
+          errors: rejected.length,
+        },
+        createdBy: actor?.userID || actor?.userId || null,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      const batchResult = await db.collection('import_batches').insertOne(batchDoc);
+      const batchId = batchResult.insertedId;
+
+      const stagedRecords = rejected.map((rejection) => ({
+        batchId,
+        // rowNumber is the spreadsheet row (header is 1, data starts at 2),
+        // the same numbering results.errors already uses. rows[] is
+        // zero-based over the data rows, hence the -2.
+        rowNumber: rejection.row,
+        status: 'ERROR',
+        errors: rejection.errors || [],
+        validationErrors: rejection.errors || [],
+        // The original row as read from the file. Without it a quarantined
+        // record can be reviewed but not corrected and re-submitted, which
+        // is the whole reason to quarantine rather than log.
+        row: rows[rejection.row - 2] || null,
+        normalized: rejection.data || null,
+        createdAt: now,
+        updatedAt: now,
+      }));
+
+      await db.collection('import_staging_records').insertMany(stagedRecords);
+
+      logger.warn(
+        `[IMPORT_LGPD] ${stagedRecords.length} linha(s) rejeitada(s) colocadas em quarentena (batch ${batchId})`
+      );
+
+      return batchId;
+    } catch (stagingError) {
+      logger.error(
+        'Falha ao colocar linhas rejeitadas em quarentena (RNF011 AC#4):',
+        stagingError.message || stagingError
+      );
+      return null;
+    }
+  }
   async importSamples(db, file, options = {}) {
     const { startBoxId = null, autoIncrement = false, groupFields = {}, neo4jDriver = null, actor = {} } = options;
     const results = {
@@ -1256,6 +1339,20 @@ class ImportLGPDService {
         }
       }
 
+      // #787 (RNF011 AC#4, Crítica): "Importações inválidas são colocadas em
+      // staging ou quarentena, sem correção silenciosa." Until now a rejected
+      // row lived only in the HTTP response, and the controller deletes the
+      // uploaded file immediately afterwards -- so an operator who imported
+      // 500 rows, got 40 rejections and closed the tab had lost both the rows
+      // and the file, while the half that did import was already canonically
+      // persisted.
+      const stagingBatchId = await this.quarantineRejectedSampleRows(db, {
+        fileName: file?.originalname || null,
+        rows,
+        results,
+        actor,
+      });
+
       // Log sanitizado (sem dados sensíveis)
       logger.info(`Importação de amostras concluída: ${results.success}/${results.total} registros importados com sucesso`);
 
@@ -1263,7 +1360,8 @@ class ImportLGPDService {
         total: results.total,
         success: results.success,
         errors: results.errors,
-        importedSampleIds: results.importedSampleIds
+        importedSampleIds: results.importedSampleIds,
+        stagingBatchId
       };
 
     } catch (error) {

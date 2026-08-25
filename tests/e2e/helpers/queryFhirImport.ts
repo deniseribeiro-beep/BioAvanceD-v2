@@ -29,6 +29,27 @@ export async function closeFhirImportDb(): Promise<void> {
   }
 }
 
+/**
+ * #787 (RNF011 AC#4): the LGPD sample import's quarantine, which writes
+ * into the same two collections as the FHIR path above. Reads the batch and
+ * its rejected rows back out of Mongo, so an e2e spec can prove the rows
+ * actually survived the HTTP response rather than trusting the response's
+ * own stagingBatchId.
+ */
+export async function findLgpdQuarantineBatch(batchId: string) {
+  const db = await getDb();
+  return db.collection('import_batches').findOne({ _id: new ObjectId(batchId) });
+}
+
+export async function findLgpdQuarantinedRows(batchId: string) {
+  const db = await getDb();
+  return db
+    .collection('import_staging_records')
+    .find({ batchId: new ObjectId(batchId) })
+    .sort({ rowNumber: 1 })
+    .toArray();
+}
+
 export async function findStagingRecordBySpecimenId(specimenId: string) {
   const db = await getDb();
   return db.collection('import_staging_records').findOne({ 'normalized.specimenId': specimenId });
