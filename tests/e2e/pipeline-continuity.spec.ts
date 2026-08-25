@@ -1212,6 +1212,11 @@ test.describe('Backup and restore (RF013) — real backend', () => {
       expect(result.scratchDb).toMatch(/_restoretest_\d+$/);
       expect(result.scratchDb).not.toBe(process.env.E2E_MONGO_DB || 'bioavanced_test');
       expect(result.restoredCollections ?? result.collections).toBeGreaterThan(0);
+      // #766: the collection count alone is satisfied by a restore that
+      // creates every collection and populates none -- one step milder than
+      // the #765 no-op this assertion originally caught, and the same class
+      // of silent success. The document count is what distinguishes them.
+      expect(result.restoredDocuments ?? result.documents).toBeGreaterThan(0);
 
       const databases = await listDatabaseNames();
       expect(databases).not.toContain(result.scratchDb);

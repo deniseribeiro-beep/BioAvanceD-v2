@@ -200,6 +200,8 @@ async function restoreFromJsonBackup(backupPath, mongoUri, targetDbName) {
     const db = client.db(dbName);
 
     let jsonFiles = [];
+    let restoredDocuments = 0;
+
     if (manifest?.collections && Array.isArray(manifest.collections)) {
       jsonFiles = manifest.collections
         .map((entry) => entry?.file)
@@ -227,6 +229,10 @@ async function restoreFromJsonBackup(backupPath, mongoUri, targetDbName) {
 
       if (Array.isArray(docs) && docs.length > 0) {
         await collection.insertMany(docs, { ordered: false });
+        // #766: tallied here rather than re-counted afterwards -- this path
+        // also serves the live restoreBackup(), where re-reading the target
+        // database to count would race anything already writing to it.
+        restoredDocuments += docs.length;
       }
     }
 
@@ -235,7 +241,8 @@ async function restoreFromJsonBackup(backupPath, mongoUri, targetDbName) {
       restoredFrom: path.basename(backupPath),
       restoredAt: new Date(),
       mode: 'json-fallback',
-      collections: jsonFiles.length
+      collections: jsonFiles.length,
+      documents: restoredDocuments
     };
   } finally {
     await client.close();
@@ -502,14 +509,35 @@ async function dropScratchDatabase(mongoUri, dbName) {
   }
 }
 
-async function countScratchCollections(mongoUri, dbName) {
+// #766: a collection count alone cannot distinguish "restored everything"
+// from "created every collection and populated none of them" -- one step
+// milder than the #765 no-op this assertion caught, and the same class of
+// silent success. Returns both in one pass rather than growing a sibling
+// function, so the two counts can never be taken against different
+// connections or a half-dropped scratch db.
+//
+// nameOnly is dropped from listCollections: the document count needs the
+// real collection names to iterate, which nameOnly still provides, but the
+// call now also filters out views -- countDocuments() on a view is legal but
+// would double-count the underlying collection's rows.
+async function countScratchContents(mongoUri, dbName) {
   const client = new MongoClient(mongoUri);
   try {
     await client.connect();
-    const collections = await client.db(dbName).listCollections({}, { nameOnly: true }).toArray();
-    return collections.length;
+    const db = client.db(dbName);
+    const collections = await db
+      .listCollections({ type: 'collection' }, { nameOnly: true })
+      .toArray();
+
+    let documents = 0;
+    for (const { name } of collections) {
+      // eslint-disable-next-line no-await-in-loop
+      documents += await db.collection(name).countDocuments();
+    }
+
+    return { collections: collections.length, documents };
   } catch (_) {
-    return null;
+    return { collections: null, documents: null };
   } finally {
     await client.close();
   }
@@ -568,7 +596,8 @@ async function runControlledRestoreTest(backupPath) {
 
   try {
     await runCommand(command);
-    const restoredCollections = await countScratchCollections(mongoUri, scratchDb);
+    const { collections: restoredCollections, documents: restoredDocuments } =
+      await countScratchContents(mongoUri, scratchDb);
 
     return {
       success: true,
@@ -577,7 +606,8 @@ async function runControlledRestoreTest(backupPath) {
       mode: 'mongorestore',
       scratchDb,
       checksumVerified,
-      restoredCollections
+      restoredCollections,
+      restoredDocuments
     };
   } catch (err) {
     const details = err && err.error ? err.error.message : err?.message;
@@ -587,7 +617,17 @@ async function runControlledRestoreTest(backupPath) {
       try {
         logger.warn('mongorestore indisponível. Usando fallback de teste de restauração em JSON.');
         const fallback = await restoreFromJsonBackup(backupPath, mongoUri, scratchDb);
-        return { ...fallback, scratchDb, checksumVerified };
+        // #766: normalise the fallback's `collections`/`documents` onto the
+        // same `restored*` names the mongorestore path reports, so callers
+        // and the restoreTestHistory entry see one shape regardless of which
+        // path ran.
+        return {
+          ...fallback,
+          scratchDb,
+          checksumVerified,
+          restoredCollections: fallback.collections ?? null,
+          restoredDocuments: fallback.documents ?? null
+        };
       } catch (fallbackError) {
         const fallbackDetails = fallbackError?.message || String(fallbackError);
         logger.error('Erro no fallback de teste de restauração JSON:', fallbackDetails);
@@ -616,6 +656,11 @@ async function testRestoreBackup(backupPath, db) {
     scratchDb: result.scratchDb || null,
     checksumVerified: typeof result.checksumVerified === 'boolean' ? result.checksumVerified : null,
     restoredCollections: typeof result.restoredCollections === 'number' ? result.restoredCollections : null,
+    // #766: #731's weekly unattended run is the real consumer of this
+    // history -- a collection count that never moves looks identical to a
+    // healthy one, so the document count is what makes the record diagnostic
+    // rather than merely present.
+    restoredDocuments: typeof result.restoredDocuments === 'number' ? result.restoredDocuments : null,
     error: result.error || null
   });
 
