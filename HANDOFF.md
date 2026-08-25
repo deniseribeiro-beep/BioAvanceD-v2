@@ -1,72 +1,68 @@
 # HANDOFF
 
-**Written:** 2026-08-25 (end of sitting). **Still inside a rabbit hole**
-(tracker **#725**). This sitting closed **#737** and **#742** (both split
-off #723 mid-work), landed and merged **#723's** RF008/RF013 real-backend
-specs, ran #723's full-suite gate twice, and stopped at the pacing
-budget (~12 points spent of ~10) with **#723 left open pending Dennis's
-call** on its Definition of Done -- see below.
+**Written:** 2026-08-25 (mid-sitting rotation, after #745). **Still inside
+a rabbit hole** (tracker **#725**). Dennis said "Docker is on, continue
+rabbit hole" without ruling on #723's Definition of Done, so this sitting
+is landing the three gate blockers (#745 done, #746 and #744 next) to make
+#723's gate literally green under either reading, then closing #723,
+then #743, then #725.
 
 ## Rabbit-hole state
 
 Tracker: **#725**, open. Members closed across all sittings: #724, #726,
-#727, #728, #730, #737, #742. Remaining members:
+#727, #728, #730, #737, #742, and (this sitting) **#745** -- merged
+`d27c74e3`, `seedActiveTerminologyConcept` now stamps the real releases it
+supersedes and cleanup restores them; verified live, no more hand repair
+of HPO/ORPHA/ICD10/OMIM after `intake-wizard.spec.ts`.
 
-- **#723** -- specs done and merged (`d0e6d1ec`), traceability rows
-  DONE. Gate: **193/200 green** single-worker on the full
-  `compose.test.yml` stack (core + admin bootstrap + foundation +
-  16-source reference chain). The 7 failures are pre-existing, test-only,
-  unrelated to RF008/RF013, each filed with root cause: **#744** (×4,
-  `inline-storage-movement.spec.ts` missing a mock for
-  `GET /samples/:id/files`), **#745** (×2, `seedActiveTerminologyConcept`
-  supersedes the real HPO/ORPHA/ICD10/OMIM releases and never restores
-  them), **#746** (×1, intake-wizard's fixed CPF → 409). **Decision
-  needed from Dennis:** close #723 as "green modulo filed pre-existing
-  failures" (my recommendation), or land #744/#745/#746 first. Comment
-  with the full triage table is on #723.
+Remaining, in order:
+
+- **#746** -- `intake-wizard.spec.ts` (#696 block) fixed CPF
+  `11144477735` → 409 on a persistent volume. Test-only: generate a
+  checksum-valid unique CPF per run. Not started. `test/<slug>` branch,
+  `test-loop` route (invoke it via the Skill tool before the first edit
+  -- the edit gate demands it per issue; pack #405).
+- **#744** -- `inline-storage-movement.spec.ts` ×4: add
+  `page.route('**/api/samples/*/files**')` → `{success:true,data:[]}`
+  next to the other four background mocks in `openPanelForSample`.
+  Confirmed this sitting that `/samples/:id/files` (from
+  `SampleFilesSection`) is the only unmocked mount-time call on
+  `SampleDetailsPage`. Not started.
+- **#723** -- specs merged (`d0e6d1ec`), last gate 193/200. Once #746 and
+  #744 land: rerun the full gate single-worker (recipe below), expect
+  200/200, close #723 with the numbers.
 - **#743** -- Wave 4 showcase reel (RF008 `/reports` → export, RF013
-  `/backup`), split off #723's DoD. Not started; needs Docker.
+  `/backup`), per `e2e-showcase-video`. Not started; needs the stack.
 
-Once both resolve, run #725's upward-cascade check and close it naming
-every member above.
+Then #725's upward-cascade check and close it naming every member above.
 
-## Findings filed this sitting (not queue members)
-
-BioAvanceD-v2: #738 (no mongodump/mongorestore in the Docker image →
-lossy JSON fallback always), #739 (RF008 AC#1: only `status` of six
-filter dimensions wired), #740 (BackupPage doesn't render
-status/checksum), #741 (patient-list narrowing only when the sample
-filter matched something), #744/#745/#746 (above). Skills-pack: #398
-(Rule-0 hook false positives), #399 (where a new seed belongs), #400
-(playwright-specs overlay gotchas), #401 (long heredocs fail in the Bash
-tool), #402 (handoff-checkpoint misses Bash-written rotations), #403
-(docker-workflow overlay recipe omits the bootstrap chain; `--workers=1`;
-known gate failures).
+Pacing: ~2 of ~10 points spent this sitting (#745).
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed, up to date with
-  origin as of `7e97cbe0` (#742 merge) plus this rotation. No fix/test
-  branches left; none were ever pushed as remotes.
-- **Docker is DOWN** -- `compose.test.yml` torn down at end of sitting
-  (`compose down`, no `-v`; `bioavanced-test_*` named volumes intact;
-  `docker builder prune -af` reclaimed 1.45GB). The volume's reference
-  releases were repaired by hand after the last run (#745 poisons them
-  on every `intake-wizard.spec.ts` run -- repair recipe is in #745 and
-  pack #403). Next bring-up: the overlay recipe **plus** the bootstrap
-  chain (`foundation-bootstrap-test` + all `reference-data-bootstrap-*-test`)
-  if a full gate is intended, and `--build` for backend/frontend if
-  source changed.
+  origin @ `d27c74e3` plus this rotation. No fix/test branches left.
+- **Docker stack is UP** (brought up this sitting with `--build`):
+  `compose.test.yml` core services + `admin-bootstrap-test` +
+  `foundation-bootstrap-test` + all 16 `reference-data-bootstrap-*-test`
+  (every one-shot `Exited (0)`), `playwright-runner` stopped. The four
+  real reference releases are `active`.
+- Host Playwright run against it (per-spec or full gate):
+  `PLAYWRIGHT_BASE_URL=http://localhost:5173 PLAYWRIGHT_API_BASE_URL=http://localhost:3000 PLAYWRIGHT_SKIP_WEBSERVER=1 TEST_USER=admin TEST_PASS=Admin@123 E2E_MONGO_URI="mongodb://localhost:27017?directConnection=true" E2E_MONGO_DB=bioavanced_test E2E_NEO4J_DATABASE=neo4j TEST_SUPPORT_SECRET=e2e-test-support-secret npx playwright test [spec] --workers=1`
 - Two untracked paths present, not touched: `.claude/skills/` and
   `api/backend/storage/assays/` -- pre-existing, carried forward again.
 - No open PR; nothing pushed to `main`; `main` stays frozen.
 
+## Filed this sitting (not queue members)
+
+Skills-pack: #404 (docker-workflow overlay's "known gate failures as of
+2026-08-25" paragraph + #745 hand-repair recipe now stale), #405
+(rabbit-hole re-entry doesn't say to invoke the routed loop skill per
+popped item; edit gate blocks).
+
 ## Recommended next steps
 
-1. Dennis decides #723's close (see above); close it with the gate
-   numbers if yes.
-2. Optionally work #744/#745/#746 as ordinary `test-branch` items --
-   all three are small, test-only, and together make the gate literally
-   green (#745 first: it's the one that corrupts shared data).
-3. #743 (showcase reel) when Docker is on again.
-4. Then close #725.
+1. #746, then #744 (both small, test-only).
+2. Full gate rerun → close #723.
+3. #743 showcase reel.
+4. Close #725.
