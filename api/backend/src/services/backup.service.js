@@ -38,6 +38,15 @@ async function resolveRetentionDays(db) {
 // order. Returns null (rather than throwing) when the directory can't
 // be read, since checksum computation is completion *evidence*, not a
 // precondition for the backup itself having succeeded.
+//
+// #742: the run's own top-level manifest.json is never part of the
+// checksummed payload -- it's the checksum's carrier. performBackup/
+// writeJsonBackup compute the checksum *before* writing the manifest into
+// the same directory, while runControlledRestoreTest recomputes it
+// *after*; without this exclusion the two walks see different file sets
+// and checksumVerified was structurally always false.
+const CHECKSUM_MANIFEST_FILE = 'manifest.json';
+
 async function computeDirChecksum(dirPath) {
   const hash = crypto.createHash('sha256');
 
@@ -45,6 +54,7 @@ async function computeDirChecksum(dirPath) {
     const entries = await fs.promises.readdir(currentPath, { withFileTypes: true });
     const sorted = [...entries].sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of sorted) {
+      if (!relativePath && entry.name === CHECKSUM_MANIFEST_FILE) continue;
       const entryPath = path.join(currentPath, entry.name);
       const entryRelative = relativePath ? `${relativePath}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
