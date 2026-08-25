@@ -102,6 +102,29 @@ function getBackupBaseDir() {
   return env.BACKUP_DIR || path.join(__dirname, '..', '..', 'backups');
 }
 
+// #731 (RNF010 AC#5): the periodic restore test needs "the backup to
+// verify" without duplicating backup.routes.js's /list handler, which does
+// a richer job (it merges backupHistory per path for the UI). This is the
+// narrow question -- which backup directory is newest -- and nothing else.
+// Returns null when the base directory does not exist yet or holds no
+// backup directories, which is the normal state before the first run.
+function getLatestBackupPath() {
+  const baseDir = getBackupBaseDir();
+  if (!fs.existsSync(baseDir)) {
+    return null;
+  }
+
+  const dirs = fs.readdirSync(baseDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const fullPath = path.join(baseDir, entry.name);
+      return { fullPath, birthtime: fs.statSync(fullPath).birthtime };
+    })
+    .sort((a, b) => new Date(b.birthtime).getTime() - new Date(a.birthtime).getTime());
+
+  return dirs.length > 0 ? dirs[0].fullPath : null;
+}
+
 function formatDateFolder(date = new Date()) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -538,6 +561,7 @@ module.exports = {
   runBackup,
   cleanupOldBackups,
   getBackupBaseDir,
+  getLatestBackupPath,
   restoreBackup,
   testRestoreBackup
 };

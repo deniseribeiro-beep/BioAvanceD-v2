@@ -220,7 +220,8 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
   const originalEnv = {
     TEMP_MONITOR_CRON: env.TEMP_MONITOR_CRON,
     BACKUP_CRON: env.BACKUP_CRON,
-    RETENTION_SWEEP_CRON: env.RETENTION_SWEEP_CRON
+    RETENTION_SWEEP_CRON: env.RETENTION_SWEEP_CRON,
+    RESTORE_TEST_CRON: env.RESTORE_TEST_CRON
   };
 
   beforeEach(() => {
@@ -239,6 +240,7 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     env.TEMP_MONITOR_CRON = undefined;
     env.BACKUP_CRON = undefined;
     env.RETENTION_SWEEP_CRON = undefined;
+    env.RESTORE_TEST_CRON = undefined;
   });
 
   afterEach(() => {
@@ -247,16 +249,19 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     env.TEMP_MONITOR_CRON = originalEnv.TEMP_MONITOR_CRON;
     env.BACKUP_CRON = originalEnv.BACKUP_CRON;
     env.RETENTION_SWEEP_CRON = originalEnv.RETENTION_SWEEP_CRON;
+    env.RESTORE_TEST_CRON = originalEnv.RESTORE_TEST_CRON;
   });
 
-  it('schedules the temperature monitor, backup, and retention sweep jobs; legacy consent sync is a no-op', () => {
+  it('schedules the temperature monitor, backup, retention sweep and restore-test jobs; legacy consent sync is a no-op', () => {
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
 
-    // temperature monitor + backup + retention sweep; startConsentSyncSchedule is a logged no-op stub.
-    expect(cronScheduleSpy).toHaveBeenCalledTimes(3);
+    // temperature monitor + backup + retention sweep + restore test (#731);
+    // startConsentSyncSchedule is a logged no-op stub.
+    expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
     expect(cronScheduleSpy.mock.calls[0][0]).toBe('*/10 * * * *');
     expect(cronScheduleSpy.mock.calls[1][0]).toBe('0 3 * * *');
     expect(cronScheduleSpy.mock.calls[2][0]).toBe('0 4 * * *');
+    expect(cronScheduleSpy.mock.calls[3][0]).toBe('0 5 * * 0');
     expect(loggerInfoSpy).toHaveBeenCalledWith(
       expect.stringContaining('Sincronização legada de consentimento removida')
     );
@@ -266,21 +271,95 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     env.TEMP_MONITOR_CRON = '*/5 * * * *';
     env.BACKUP_CRON = '0 1 * * *';
     env.RETENTION_SWEEP_CRON = '0 2 * * *';
+    env.RESTORE_TEST_CRON = '30 6 * * 1';
 
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
 
-    expect(cronScheduleSpy).toHaveBeenCalledTimes(3);
+    expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
     expect(cronScheduleSpy.mock.calls[0][0]).toBe('*/5 * * * *');
     expect(cronScheduleSpy.mock.calls[1][0]).toBe('0 1 * * *');
     expect(cronScheduleSpy.mock.calls[2][0]).toBe('0 2 * * *');
+    expect(cronScheduleSpy.mock.calls[3][0]).toBe('30 6 * * 1');
   });
 
   it('stopScheduler stops all previously scheduled tasks', () => {
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
     scheduler.stopScheduler();
 
-    expect(scheduledTasks).toHaveLength(3);
+    expect(scheduledTasks).toHaveLength(4);
     scheduledTasks.forEach((task) => expect(task.stop).toHaveBeenCalledTimes(1));
+  });
+
+  // #731 (RF013 AC#4 / RNF010 AC#5 "Testes de restauração são executados
+  // periodicamente e validados por checksum"): #727 built testRestoreBackup
+  // but left it admin-triggered only. These cover the schedule itself.
+  describe('#731: restore-test schedule', () => {
+    it('runs the most recent backup through testRestoreBackup and logs the checksum verdict', async () => {
+      const latestSpy = vi
+        .spyOn(backupService, 'getLatestBackupPath')
+        .mockReturnValue('/backups/2026-08-25');
+      const testRestoreSpy = vi
+        .spyOn(backupService, 'testRestoreBackup')
+        .mockResolvedValue({ success: true, checksumVerified: true, restoredCollections: 12 });
+
+      const db = {};
+      scheduler.initScheduler({ db, neo4jDriver: null });
+      await scheduledTasks[3].fn();
+
+      expect(latestSpy).toHaveBeenCalledTimes(1);
+      expect(testRestoreSpy).toHaveBeenCalledWith('/backups/2026-08-25', db);
+      expect(loggerInfoSpy).toHaveBeenCalledWith(expect.stringContaining('Teste de restauração'));
+    });
+
+    it('warns and does not call testRestoreBackup when no backup exists yet', async () => {
+      vi.spyOn(backupService, 'getLatestBackupPath').mockReturnValue(null);
+      const testRestoreSpy = vi.spyOn(backupService, 'testRestoreBackup').mockResolvedValue({});
+
+      scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      await scheduledTasks[3].fn();
+
+      expect(testRestoreSpy).not.toHaveBeenCalled();
+      expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Nenhum backup'));
+    });
+
+    it('does nothing when db is missing', async () => {
+      const latestSpy = vi.spyOn(backupService, 'getLatestBackupPath').mockReturnValue('/backups/x');
+      const testRestoreSpy = vi.spyOn(backupService, 'testRestoreBackup').mockResolvedValue({});
+
+      scheduler.initScheduler({ db: null, neo4jDriver: null });
+      await scheduledTasks[3].fn();
+
+      expect(latestSpy).not.toHaveBeenCalled();
+      expect(testRestoreSpy).not.toHaveBeenCalled();
+    });
+
+    // A failed restore test is a reliability signal, not a crash: the cron
+    // callback must swallow it the same way every sibling schedule does.
+    it('logs and swallows an error thrown by testRestoreBackup', async () => {
+      vi.spyOn(backupService, 'getLatestBackupPath').mockReturnValue('/backups/x');
+      vi.spyOn(backupService, 'testRestoreBackup').mockRejectedValue(new Error('scratch db unreachable'));
+
+      scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      await expect(scheduledTasks[3].fn()).resolves.toBeUndefined();
+
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Erro no teste de restauração'),
+        'scratch db unreachable'
+      );
+    });
+
+    // A restore test that completes but fails checksum verification is the
+    // exact condition RNF010 AC#5 exists to detect -- it must not be logged
+    // as a routine success.
+    it('warns when the restore completed but the checksum did not verify', async () => {
+      vi.spyOn(backupService, 'getLatestBackupPath').mockReturnValue('/backups/x');
+      vi.spyOn(backupService, 'testRestoreBackup').mockResolvedValue({ success: true, checksumVerified: false });
+
+      scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      await scheduledTasks[3].fn();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringContaining('checksum'));
+    });
   });
 
   it('retention sweep task callback runs the sweep and logs the result when db is present', async () => {
@@ -388,8 +467,8 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
       await scheduler.reloadBackupSchedule({});
 
       expect(originalBackupTask.stop).toHaveBeenCalledTimes(1);
-      expect(cronScheduleSpy).toHaveBeenCalledTimes(4); // 3 from initScheduler + this reload
-      expect(cronScheduleSpy.mock.calls[3][0]).toBe('0 5 * * *');
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(5); // 4 from initScheduler + this reload
+      expect(cronScheduleSpy.mock.calls[4][0]).toBe('0 5 * * *');
       expect(loggerInfoSpy).toHaveBeenCalledWith(expect.stringContaining('Backup diário reagendado (0 5 * * *)'));
     });
 
@@ -399,7 +478,7 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
 
       await scheduler.reloadBackupSchedule({});
 
-      expect(cronScheduleSpy.mock.calls[3][0]).toBe('0 3 * * *');
+      expect(cronScheduleSpy.mock.calls[4][0]).toBe('0 3 * * *');
     });
 
     it('falls back to env.BACKUP_CRON and logs an error when the policy lookup rejects', async () => {
@@ -408,7 +487,7 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
 
       await scheduler.reloadBackupSchedule({});
 
-      expect(cronScheduleSpy.mock.calls[3][0]).toBe('0 3 * * *');
+      expect(cronScheduleSpy.mock.calls[4][0]).toBe('0 3 * * *');
       expect(loggerErrorSpy).toHaveBeenCalledWith(
         'Erro ao recarregar política de backup, mantendo agendamento anterior:',
         'policy lookup failed'
