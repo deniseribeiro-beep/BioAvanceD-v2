@@ -22,11 +22,16 @@ describe('config/env - schedule cron overrides (#749)', () => {
   // Every cron expression scheduler.service.js reads off the env module.
   // RETENTION_SWEEP_CRON was the one that was never registered; the rest are
   // the controls that prove the test itself works.
+  //
+  // #778: CONSENT_SYNC_CRON was in this list and should not have been --
+  // startConsentSyncSchedule has been a stub since the legacy consent sync
+  // was replaced by the canonical outbox, so the scheduler never read it.
+  // Its declaration is gone from env.js; asserting it here would pin a knob
+  // that configures nothing, which is the state #778 removed.
   const CRON_KEYS = [
     'BACKUP_CRON',
     'RESTORE_TEST_CRON',
     'TEMP_MONITOR_CRON',
-    'CONSENT_SYNC_CRON',
     'RETENTION_SWEEP_CRON'
   ];
 
