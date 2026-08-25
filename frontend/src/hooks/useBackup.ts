@@ -1,12 +1,21 @@
 import { useState } from 'react';
 import { backupService } from '../services/api';
 
+// #740 (RF013 AC#1/AC#3): `status` and `checksum` come from the persisted
+// backupHistory run record GET /api/backup/list merges onto the filesystem
+// listing by path (backup.routes.js). Both are null for a backup directory
+// with no matching history row, which is a real case -- the listing is
+// filesystem-rooted, history is merged in best-effort.
+export type BackupRunStatus = 'success' | 'error' | 'skipped';
+
 export interface Backup {
   fileName: string;
   path: string;
   size: number;
   createdAt: Date;
   modifiedAt: Date;
+  status?: BackupRunStatus | string | null;
+  checksum?: string | null;
 }
 
 export function useBackup() {

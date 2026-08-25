@@ -283,6 +283,41 @@
 	flex-wrap: wrap;
 }
 
+/* #740 (RF013 AC#1/AC#3): the run status and checksum columns. Status is a
+   badge keyed off the persisted run result; `unknown` covers a backup
+   directory with no matching backupHistory row. */
+.backup-status-badge {
+	display: inline-block;
+	padding: 0.15rem 0.55rem;
+	border-radius: var(--radius-control);
+	font-size: 0.78rem;
+	font-weight: 600;
+	border: 1px solid var(--border);
+	color: var(--text-secondary);
+}
+
+.backup-status-badge[data-status="success"] {
+	color: var(--success);
+	border-color: var(--success);
+}
+
+.backup-status-badge[data-status="error"] {
+	color: var(--danger);
+	border-color: var(--danger);
+}
+
+.backup-status-badge[data-status="skipped"] {
+	color: var(--info);
+	border-color: var(--info);
+}
+
+.backup-checksum {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 0.8rem;
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
 @media (max-width: 960px) {
 	.backup-content {
 		grid-template-columns: 1fr;

@@ -45,6 +45,33 @@ export function validateBackupPolicyDraft(draft: Partial<BackupPolicy>): string[
   return errors;
 }
 
+// #740 (RF013 AC#1 "Exibir estado, data e resultado das execuções"): the
+// run status is rendered as a badge, so it needs an i18n key rather than
+// the raw backend value. Anything the backend doesn't emit -- including the
+// null a directory with no history row carries -- resolves to the unknown
+// key rather than being echoed verbatim into the UI. Exported for
+// BackupPage.test.tsx.
+const BACKUP_STATUS_KEYS: Record<string, string> = {
+  success: 'backup.statusSuccess',
+  error: 'backup.statusError',
+  skipped: 'backup.statusSkipped',
+};
+
+export function resolveBackupStatusKey(status?: string | null): string {
+  return BACKUP_STATUS_KEYS[String(status || '')] || 'backup.statusUnknown';
+}
+
+// #740 (RF013 AC#3 "Registrar checksum e evidência de conclusão"): a sha256
+// digest is 64 characters and would blow the column out, so the cell shows a
+// prefix and carries the full value in its `title`.
+const CHECKSUM_PREFIX_LENGTH = 12;
+
+export function formatChecksum(checksum?: string | null): string {
+  const value = String(checksum || '');
+  if (!value) return '—';
+  return value.length > CHECKSUM_PREFIX_LENGTH ? `${value.slice(0, CHECKSUM_PREFIX_LENGTH)}…` : value;
+}
+
 export default function BackupPage() {
   const { t } = useLanguage();
   const { user } = useAuth();
@@ -217,6 +244,8 @@ export default function BackupPage() {
                     <th>{t('backup.fileName')}</th>
                     <th>{t('backup.size')}</th>
                     <th>{t('backup.createdAt')}</th>
+                    <th>{t('backup.status')}</th>
+                    <th>{t('backup.checksum')}</th>
                     <th>{t('backup.actions')}</th>
                   </tr>
                 </thead>
@@ -226,6 +255,14 @@ export default function BackupPage() {
                       <td>{backup.fileName}</td>
                       <td>{formatFileSize(backup.size)}</td>
                       <td>{formatDate(backup.createdAt)}</td>
+                      <td>
+                        <span className="backup-status-badge" data-status={backup.status || 'unknown'}>
+                          {t(resolveBackupStatusKey(backup.status))}
+                        </span>
+                      </td>
+                      <td className="backup-checksum" title={backup.checksum || undefined}>
+                        {formatChecksum(backup.checksum)}
+                      </td>
                       <td>
                         <Button
                           variant="secondary"
