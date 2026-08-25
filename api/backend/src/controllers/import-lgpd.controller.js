@@ -83,6 +83,35 @@ class ImportLGPDController {
     };
   }
 
+  /**
+   * GET /api/import-lgpd/batches/:batchId (#794, RNF011 AC#4)
+   *
+   * Le de volta um lote de quarentena criado pelo #787. Sem isto as linhas
+   * rejeitadas sobrevivem mas ninguem consegue revisa-las -- o que e um log
+   * bem organizado, nao staging.
+   */
+  async getQuarantineBatch(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+
+      const { batch, records } = await importLGPDService.getQuarantineBatch(db, req.params.batchId);
+
+      return res.status(200).json({ success: true, batch, records });
+    } catch (error) {
+      const status = error?.statusCode || 500;
+      if (status >= 500) {
+        logger.error('Erro ao ler lote de quarentena LGPD:', error.message || error);
+      }
+      return res.status(status).json({
+        success: false,
+        error: status >= 500 ? 'Erro ao ler lote de quarentena' : error.message,
+      });
+    }
+  }
+
   async listSmartImportReports(req, res) {
     try {
       const db = req.app.locals.db;

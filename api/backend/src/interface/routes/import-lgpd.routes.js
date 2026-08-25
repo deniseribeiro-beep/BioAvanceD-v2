@@ -45,6 +45,17 @@ router.post('/amostras',
   importLGPDController.importSamples.bind(importLGPDController)
 );
 
+// Leitura de lote em quarentena (#794, RNF011 AC#4)
+// Mesma permissao que a importacao que produz o lote -- quem pode importar
+// amostras pode revisar as linhas que a importacao rejeitou. Nao introduz
+// permissao nova de proposito: uma permissao nova nao chega a uma stack ja
+// semeada sem re-seed explicito do catalogo RBAC.
+router.get('/batches/:batchId',
+  authenticate,
+  requirePermission('createSample'),
+  importLGPDController.getQuarantineBatch.bind(importLGPDController)
+);
+
 // Download de templates - Pacientes Excel
 router.get('/pacientes/template/xlsx',
   authenticate,
