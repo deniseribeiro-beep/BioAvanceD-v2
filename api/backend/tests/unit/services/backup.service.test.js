@@ -526,7 +526,7 @@ describe('backup.service', () => {
       expect(result.mode).toBe('mongorestore');
       expect(result.restoredFrom).toBe('2026-01-01');
       expect(cp.exec).toHaveBeenCalledWith(
-        expect.stringContaining('mongorestore --uri="mongodb://localhost:27017/test" --drop'),
+        expect.stringContaining('mongorestore --uri="mongodb://localhost:27017/" --drop'),
         { windowsHide: true },
         expect.any(Function)
       );
@@ -548,6 +548,29 @@ describe('backup.service', () => {
         expect.any(Object),
         expect.any(Function)
       );
+    });
+
+    // #765: mongorestore reads a database path component in --uri as an
+    // implicit --db, which switches it into the single-database use-case
+    // where it expects .bson files directly in the directory it is given.
+    // `mongodump --out` writes <dir>/<dbName>/*.bson, so mongorestore finds
+    // a subdirectory where it wants BSON, skips it, and exits 0 having
+    // restored nothing -- the caller's success path then reports success.
+    // The URI handed to mongorestore must therefore carry no default db.
+    it('hands mongorestore a URI with no default database, keeping the query string (#765)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/bioavanced_test?replicaSet=rs0';
+      env.MONGO_DB = 'bioavanced_test';
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'restored', ''));
+
+      const backupService = freshBackupService();
+      await backupService.restoreBackup(path.join('C:', 'tmp', '2026-01-01'));
+
+      const command = cp.exec.mock.calls[0][0];
+      expect(command).toContain('mongorestore --uri="mongodb://localhost:27017/?replicaSet=rs0"');
+      expect(command).not.toContain('27017/bioavanced_test');
+      // --nsInclude is what actually scopes the restore; it must survive.
+      expect(command).toContain('--nsInclude="bioavanced_test.*"');
     });
 
     it('falls back to JSON restore via manifest.json when mongorestore binary is missing', async () => {
@@ -768,6 +791,46 @@ describe('backup.service', () => {
       );
       expect(fakeClient.db).toHaveBeenCalledWith(result.scratchDb);
       expect(dropDatabase).toHaveBeenCalled();
+    });
+
+    // #765, restore-test half. Same root cause as the restoreBackup case
+    // above: with a default db in the URI, --nsFrom/--nsTo never get a
+    // chance to match because no namespaces are ever read, so the scratch
+    // db stays empty and restoredCollections comes back 0 with success:true.
+    it('hands mongorestore a URI with no default database, keeping the query string (#765)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/mydb?replicaSet=rs0';
+      env.MONGO_DB = 'mydb';
+      const backupPath = path.join('C:', 'tmp', '2026-01-01');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (fp) => {
+        if (String(fp).endsWith('manifest.json')) {
+          return JSON.stringify({ dbName: 'mydb', checksum: emptyDirChecksum });
+        }
+        throw new Error(`unexpected readFile: ${fp}`);
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'restored', ''));
+
+      const fakeScratchDb = {
+        listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'patients' }]) })),
+        dropDatabase: vi.fn().mockResolvedValue()
+      };
+      const fakeClient = {
+        connect: vi.fn().mockResolvedValue(),
+        db: vi.fn(() => fakeScratchDb),
+        close: vi.fn().mockResolvedValue()
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(backupPath);
+
+      const command = cp.exec.mock.calls[0][0];
+      expect(command).toContain('mongorestore --uri="mongodb://localhost:27017/?replicaSet=rs0"');
+      expect(command).not.toContain('27017/mydb');
+      // the namespace remap is what keeps the live db untouched; it must survive.
+      expect(command).toContain(`--nsFrom="mydb.*" --nsTo="${result.scratchDb}.*"`);
     });
 
     // #742: the neighbouring tests mock fs.promises.readdir to [] on both the
