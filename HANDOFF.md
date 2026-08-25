@@ -2,9 +2,9 @@
 
 **INTERIM — SESSION IN PROGRESS, NOT A FINAL HANDOFF.**
 
-**Written:** 2026-08-25 (seventh sitting of the day), after queue item 1
+**Written:** 2026-08-25 (seventh sitting of the day), after queue item 2
 of 5. Dennis asked for the next group of issues and confirmed **Docker
-is on**. This file is a mid-run snapshot; **4 of 5 queue items remain**
+is on**. This file is a mid-run snapshot; **3 of 5 queue items remain**
 and the session is still going. Do not read it as the sitting's final
 word.
 
@@ -23,14 +23,13 @@ context across `import-lgpd.service.js`, `sample.routes.js`, and
 | # | What | Route | Status |
 |---|---|---|---|
 | **785** | samples list `patientID` filter never applied | fix-bugs | **closed** |
-| **786** | `results.total` under-counts a partial import | fix-bugs | pending |
-| **780** | `log.service.js` unvalidated `sortBy` sort spec | fix-bugs | pending |
+| **786** | `results.total` under-counts a partial import | fix-bugs | **closed** |
+| **780** | `log.service.js` unvalidated `sortBy` sort spec | fix-bugs | **next** |
 | **782** | intake wizard 200 when every clinical entity failed | fix-bugs | pending |
 | **787** | RNF011 AC#4 staging/quarantine for the LGPD import | build-loop | pending |
 
 Ordered smallest-first with #787 last: it is the Docker-gated build with a
-real-backend test, and #786 corrects a counter in the same file #787 will
-restructure.
+real-backend test.
 
 **Deliberately excluded, all still open:** #779 (owner's call on sequence
 gaps), #772 (researched last sitting — a one-line decision for Denise),
@@ -40,77 +39,101 @@ gaps), #772 (researched last sitting — a one-line decision for Denise),
 on the board — any authenticated user, including the lowest-privilege
 role, can revoke any patient's consent by enumerating a Mongo `_id`, and
 `authConsent.js` then blocks that participant's data. Left out because
-the fix depends on RF010/RF021's intended actor model (admin-gated vs.
-self-service-with-ownership-check), a product call. A docs check might
-settle it the way #772's did. Dennis was offered the swap and has not
-taken it.
+the fix depends on RF010/RF021's intended actor model, a product call. A
+docs check might settle it the way #772's did. Dennis was offered the
+swap and has not taken it.
 
 ## Item 1 — #785, closed
 
-`21070172` → merged `9c3074bf`. Branch deleted local **and remote**
-(remote deletion succeeded with no prompt — another data point for
-pack #410).
+`21070172` → merged `9c3074bf`. Branch deleted local and remote.
 
 `GET /api/samples` built `patientID: req.query.patientID` while
-`listSamples` reads only `filters.participantId`. It failed in the worst
-direction: a 200 with a full page of other participants' samples.
+`listSamples` reads only `filters.participantId` — a 200 with a full page
+of other participants' samples.
 
-- **The issue's suggested fix was wrong and was deliberately not
-  taken.** It proposed `req.query.participantId || req.query.patientID`.
-  But `validateCreateSamplePayload`, 360 lines above in the same file,
-  rejects `patientID` with a **422 NON_CANONICAL_FIELD** — it is on the
-  create path's explicit non-canonical list. Re-admitting it as a query
-  alias would have the same endpoint family accept a name its sibling
-  refuses and would move the participantId migration (#773/#146)
-  backwards. **Re-running the trace instead of trusting the body is what
-  caught this.**
+- **The issue's suggested fix was wrong and was deliberately not taken.**
+  It proposed `req.query.participantId || req.query.patientID`. But
+  `validateCreateSamplePayload`, in the same file, rejects `patientID`
+  with a **422 NON_CANONICAL_FIELD**. Re-admitting it as a query alias
+  would move the participantId migration (#773/#146) backwards.
+  **Re-running the trace instead of trusting the body caught this.**
 - No compatibility burden: **no caller sends either name.**
-  `frontend/src/services/api.ts:278` is a bare `api.get('/samples')` with
-  no params, and nothing in `frontend/` or `tests/e2e/` sends a filter to
-  this endpoint.
-- The reproduction was a new **route-boundary** test — the service layer
-  was already correct and well covered; the whole bug lived in the key
-  the route handed over. Confirmed red first: the call went through with
-  a `patientID: undefined` entry and no `participantId` key at all.
+- The reproduction was a new **route-boundary** test; the service layer
+  was already correct and well covered.
+
+## Item 2 — #786, closed
+
+`cd98a160` → merged `c42fc8de`. Branch deleted local and remote.
+
+`results.total++` sat at the bottom of the per-row loop, after the
+try/catch. **Seven** `continue` paths reject a row before reaching it, so
+a partial import reported `total < success + errors` — numbers passed
+straight to `auditLogger.logImport`.
+
+- **The under-count was specific to the `continue` paths.** Because the
+  increment was after the try/catch rather than inside the try, a row
+  that *threw* was still counted. That is why the numbers looked
+  plausible on files that either fully succeeded or fully threw.
+- **Matched `importPatientsSmart`'s placement, not `importPatients`'.**
+  The issue said to match `importPatients`, which increments after an
+  empty-row guard — but `importSamples` has no such guard, so before the
+  `try` is the true analogue.
+- **`importPatientsSmart` was already correct** (the issue flagged it as
+  a suspect third copy); so is `importPatients`. Only `importSamples` was
+  wrong.
+- The completion log line can finally show a partial failure — it reads
+  `success/total`, so it previously printed `1/1`, `5/5`, `0/0`, never
+  `5/7`.
+- No existing test asserted `result.total` at all, which is how this
+  survived.
 
 ## Pending deferred proof — read before the gate
 
-`tests/e2e/lgpd-sample-import.spec.ts` was **un-weakened** this
-iteration. #759's spec had worked around #785 with client-side matching
-and an explicit "do not simplify this back to a server-side filter until
-#785 is fixed" comment. It now queries through the real filter and
-asserts **every** returned row belongs to the requested participant.
+`tests/e2e/lgpd-sample-import.spec.ts` now carries **three** un-weakened
+assertions that have never been executed, because they only run against
+the Docker stack:
 
-**That assertion has not run yet** — it only executes against the Docker
-stack. It is scheduled for this sitting's gate (running anyway for #787).
-#785 was closed on the native proof because the fix itself is fully
-proven natively; **if the gate comes back red on that spec, reopen #785.**
+1. **#785** — the samples list is now queried through the real
+   `?participantId=` filter, asserting every returned row belongs to the
+   requested participant.
+2. **#786** — a wholly-rejected one-row file must report
+   `{ total: 1, success: 0, errors: 1 }`.
+3. **#786** — a mixed two-row file must report
+   `{ total: 2, success: 1, errors: 1 }`.
+
+All three previously asserted the *wrong* values on purpose so the spec
+would not go red when the fixes landed. **Both issues were closed on
+their native proofs; if the gate comes back red on this spec, reopen the
+corresponding issue.**
 
 ## Filed this sitting so far
 
 - **#788** — `GET /api/samples` computes every sample's consent badge
-  from `sample.patientID`, a field **no writer sets**
-  (`RegisterSample.js:128` writes `participantId`; `Sample.js:31`
-  declares only `participantId`; `import-lgpd.service.js` has zero
-  occurrences). So the per-row patient lookup degenerates to matching on
-  null for both legs. **Third instance of the #533/#785 class in that one
-  handler.** Includes a static-trace caveat: the observable prediction
-  (every row `PATIENT_NOT_FOUND`) has **not** been checked against a live
-  stack — worth doing at this sitting's gate.
+  from `sample.patientID`, a field **no writer sets**. **Third instance
+  of the #533/#785 class in that one handler.** Static trace only — the
+  prediction that every row returns `PATIENT_NOT_FOUND` has **not** been
+  checked live; worth doing at this sitting's gate.
 - **#789** — the mechanism behind #533/#785: `GET /api/samples` silently
   ignores non-canonical query params while `POST /api/samples` 422s them.
-  Split out of #785 so it does not only live on a closed thread.
+- **#790** — `importSamples` has no empty-row guard while
+  `importPatients` has two, so a trailing blank row (routine Excel
+  output) becomes a spurious identity-resolution rejection. Deliberately
+  not folded into #786: skipping a row is a behaviour change, not a
+  counting fix.
 - **pack #440** — `fix-bugs`' un-weaken-pinned-tests step and its
   native-only verification contract don't compose when the pinned test is
-  an e2e spec. Improvised a resolution this iteration (close on the
-  native proof, flag the deferred assertion here and in the close
-  comment); it would not generalize to a sitting with no gate planned.
+  an e2e spec.
+- **pack #441** — a branch guard parses the file descriptor in `2>&1` as
+  a `git push` target and blocks a correct push.
+- **pack #434 comment** — `routing-gate.cjs` is re-armed by tracker reads
+  for other issues, including in a *different repository*.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration` at `9c3074bf` + this
+- On `feature/docker-e2e-backend-integration` at `c42fc8de` + this
   rotation, pushed, in sync. **No `fix/` branches from this sitting
-  remain**, local or remote.
+  remain**, local or remote (both remote deletions succeeded with no
+  prompt — two more data points for pack #410).
 - Untracked and deliberately untouched: `.claude/skills/` and
   `api/backend/storage/assays/`. **Never `git add -A`** — every commit
   this sitting named its files explicitly.
@@ -123,9 +146,8 @@ proven natively; **if the gate comes back red on that spec, reopen #785.**
   `origin/test/377-docs-on-main`. They predate this session, so
   `clean-up`'s scope rule excludes them. **Verify merge status *and*
   per-commit authorship before deleting** (precedent #332).
-- **Native suites: the known #752 red is unchanged and pre-existing**
-  (`backup.service.test.js`'s legacy-JSON restore assertion). Not
-  re-checked this sitting.
+- **Native suites: the known #752 red is unchanged and pre-existing.**
+  Not re-checked this sitting.
 - No open PR; nothing pushed to `main`; `main` stays frozen.
 
 ## Docker
@@ -139,15 +161,15 @@ data. A genuinely from-scratch gate needs `docker volume rm` on
 Carried forward, re-confirmed across three prior sittings:
 
 - **The gate recipe in `docker-workflow`'s overlay is accurate as
-  written** — 12 core services (with `--build` when `api/backend/src` was
-  touched, which it now has been), then `admin-bootstrap-test`, then the
-  17-service reference-data chain.
-- Host Playwright command (unchanged): see the previous rotation's
-  verbatim line — `PLAYWRIGHT_BASE_URL`, `PLAYWRIGHT_API_BASE_URL`,
-  `PLAYWRIGHT_SKIP_WEBSERVER=1`, `TEST_USER=admin`, `TEST_PASS=Admin@123`,
-  the `directConnection=true` Mongo URI, `E2E_MONGO_DB=bioavanced_test`,
-  `E2E_NEO4J_DATABASE=neo4j`, `TEST_SUPPORT_SECRET=e2e-test-support-secret`,
-  then `npx playwright test [spec] --workers=1`.
+  written** — 12 core services (with `--build`, since `api/backend/src`
+  has been touched twice this sitting), then `admin-bootstrap-test`, then
+  the 17-service reference-data chain.
+- Host Playwright command: see the sixth sitting's rotation for the
+  verbatim line (`PLAYWRIGHT_BASE_URL`, `PLAYWRIGHT_API_BASE_URL`,
+  `PLAYWRIGHT_SKIP_WEBSERVER=1`, `TEST_USER`/`TEST_PASS`, the
+  `directConnection=true` Mongo URI, `E2E_MONGO_DB=bioavanced_test`,
+  `E2E_NEO4J_DATABASE=neo4j`, `TEST_SUPPORT_SECRET`, then
+  `npx playwright test [spec] --workers=1`).
 - **Stop `playwright-runner` before any host-side run**, and **one
   workload at a time against one stack, whoever starts it** (pack #437).
 - `TaskStop` on a backgrounded `docker compose` reports success while
@@ -155,27 +177,27 @@ Carried forward, re-confirmed across three prior sittings:
 
 ## Working rules holding this sitting
 
-- **Do not push escapes through the Bash layer.** Confirmed twice more
-  this iteration: a large heredoc for this very file died with
-  `unexpected EOF while looking for matching quote` and had to be written
-  with the `Write` tool instead. Use `Write`/`Edit` for file content and
-  the `Grep` tool for patterns.
-- **Never chain gated steps in one compound command.** A
+- **Do not push escapes through the Bash layer.** A large heredoc for
+  this very file died with `unexpected EOF while looking for matching
+  quote`; it is written with the `Write` tool instead. Use `Write`/`Edit`
+  for file content and the `Grep` tool for patterns. Short heredocs for
+  issue bodies have been fine.
+- **Never chain gated steps in one compound command.** Hit twice: a
   `cat > body.md <<EOF ... && gh issue create` died as one unit to the
-  missing-`--label` hook, taking the heredoc with it, so the retry failed
-  on a file that had never been written.
-- **`routing-gate.cjs` is re-armed by tracker reads for other issues,
-  including in a different repository.** Closing #785 was blocked because
-  intervening `gh issue list`/`create` calls (some against the *pack*
-  repo) reset the gate; the fix is a fresh `fix-bugs` Skill invocation.
+  missing-`--label` hook (taking the heredoc with it, so the retry failed
+  on a file that had never been written), and a
+  `git add && git commit && git push -q 2>&1 | tail` died to pack #441's
+  false positive with nothing committed.
+- **`routing-gate.cjs` re-arms between the fix and the close.** Both
+  closes this sitting needed a fresh `fix-bugs` Skill invocation first.
+  Budget for it as a normal step of the ending sequence, not a surprise.
 
 ## Recommended next steps
 
-**Continue the queue — #786 is next**, then #780, #782, #787. Nothing
-about the remaining four has changed as a result of item 1.
+**Continue the queue — #780 is next**, then #782, #787.
 
-Then the Docker gate, which must cover: the un-weakened
-`lgpd-sample-import.spec.ts` assertion (above), #787's new real-backend
-test, and — worth the extra minute — a live check of **#788**'s
-prediction that every `GET /api/samples` row comes back
+Then the Docker gate, which must cover: the **three** un-weakened
+`lgpd-sample-import.spec.ts` assertions listed above, #787's new
+real-backend test, and — worth the extra minute — a live check of
+**#788**'s prediction that every `GET /api/samples` row comes back
 `PATIENT_NOT_FOUND`.
