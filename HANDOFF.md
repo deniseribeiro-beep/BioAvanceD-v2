@@ -78,8 +78,15 @@ serves LGPD quarantine batches — with civil identifiers — to a different
 permission), **#800** (self-report: both import batch readers check
 permission but not ownership; same class as #684).
 
-**Pack:** #444, #445, #446, #447, #448, #449, plus refinements on #410
-and #442.
+**Pack:** #444, #445, #446, #447, #448, #449, **#450**, plus refinements
+on #410 and #442.
+
+**Closed-issue follow-through:** #785 and #786 were closed in the
+*previous* sitting on native proofs, each leaving e2e assertions that had
+never executed. This sitting's gate ran them green, and that result is
+now recorded on both threads — the standing instruction was to reopen
+them on a red gate, so the green outcome needed the same record. Neither
+needs reopening.
 
 ## Repo state
 
