@@ -1,6 +1,11 @@
 FROM node:22-alpine
 
-RUN apk add --no-cache openssl
+# #738 (RF013 AC#3): without mongodb-tools there is no mongodump/mongorestore
+# in the image, so backup.service.js always took its dumpBinaryMissing branch
+# and the JSON fallback -- written as a degraded-mode safety net -- was the
+# only path that ever ran on a container. Alpine community carries
+# mongodb-tools (100.9.4-r10 on v3.21, 100.12.0-r5 on v3.22).
+RUN apk add --no-cache openssl mongodb-tools
 
 WORKDIR /app
 
