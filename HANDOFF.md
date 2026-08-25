@@ -150,6 +150,12 @@ Dennis asked for teardown at the end of the sitting.
 clean (all containers and the network removed), and
 `docker builder prune -af` reclaimed 1.034GB, leaving 0B.
 
+**Every `bioavanced-test-*` image was also removed** — the 6 this sitting
+built, plus the 18 bootstrap-chain images from a prior sitting, on
+Dennis's explicit say-so. Only upstream base images (mongo, neo4j, redis,
+influxdb, mosquitto, mailpit) remain. **The next Docker gate therefore
+pays a full cold rebuild of all 24 images**, not just the app ones.
+
 **The four named volumes were deliberately kept** (`down` without
 `--volumes`): `mongodb-test-data`, `neo4j-test-data`,
 `influxdb-test-data`, `redis-test-data`. Note the consequence — this
