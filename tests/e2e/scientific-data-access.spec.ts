@@ -694,13 +694,11 @@ test.describe('Reports (RF008) — real backend', () => {
     expect(availableBody.data.patients[0].participantId).toBe(participantId);
     expect(availableBody.data.patients[0].sampleCount).toBe(1);
 
-    // Same participant, a status the fresh specimen is not in: the fresh
-    // specimen must not come back. Whether the participant row itself is
-    // still listed depends on data outside this test (#741:
-    // handleSamplesByPatient narrows the patient list to owners of matching
-    // samples only when the sample filter matched *something* in the
-    // collection), so the property asserted is "zero of my samples", not
-    // the row's presence.
+    // Same participant, a status the fresh specimen is not in. Since #741
+    // the patient list is narrowed to owners of matching samples whenever
+    // a sample-level filter is active -- regardless of whether that filter
+    // matched anything elsewhere in the collection -- so the participant
+    // row itself must be absent, not merely carry sampleCount 0.
     const quarantined = await previewReport(request, admin.token, 'samples_by_patient', {
       keyword: participantId,
       status: 'QUARANTINE',
@@ -708,7 +706,7 @@ test.describe('Reports (RF008) — real backend', () => {
     expect(quarantined.ok(), await quarantined.text()).toBe(true);
     const quarantinedBody = await quarantined.json();
     const patient = quarantinedBody.data.patients.find((entry: any) => entry.participantId === participantId);
-    expect(patient ? patient.sampleCount : 0).toBe(0);
+    expect(patient, 'a participant with no quarantined specimen must not appear').toBeUndefined();
   });
 
   // AC#2: "Restringir os dados conforme AccessPolicy, papel e consentimento."

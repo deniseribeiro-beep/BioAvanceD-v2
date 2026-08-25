@@ -573,6 +573,63 @@ describe('reports.routes.js gaps', () => {
     expect(p1.sampleCount).toBe(1);
   });
 
+  // #741: an *active* sample-level filter that matches no sample at all
+  // must still narrow the patient list (`$in: []`), the same way the #341
+  // org-scope guard already refuses to let an empty id list mean
+  // "unfiltered". Gating the `$in` push on matchingPatientIds being
+  // non-empty made the filter silently stop applying whenever nothing
+  // matched, so "patients with quarantined samples" on a database with no
+  // quarantined specimens returned the entire patient directory.
+  it('samplesbypatient: filtro de amostra sem correspondência restringe pacientes a $in vazio', async () => {
+    const { db, capturedQueries } = buildCollectionDb({
+      patients: [{ participantId: 'P1' }, { participantId: 'P2' }],
+      samples: [],
+    });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp)
+      .post('/api/reports/samples_by_patient/preview')
+      .send({ filters: { status: 'QUARANTINE' } });
+
+    expect(response.status).toBe(200);
+    expect(capturedQueries.patients.$and).toEqual(
+      expect.arrayContaining([{ participantId: { $in: [] } }])
+    );
+  });
+
+  it('paciente: filtro de amostra sem correspondência restringe pacientes a $in vazio', async () => {
+    const { db, capturedQueries } = buildCollectionDb({
+      patients: [{ participantId: 'P1' }, { participantId: 'P2' }],
+      samples: [],
+    });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp)
+      .post('/api/reports/patients/preview')
+      .send({ filters: { status: 'QUARANTINE' } });
+
+    expect(response.status).toBe(200);
+    expect(capturedQueries.patients.$and).toEqual(
+      expect.arrayContaining([{ participantId: { $in: [] } }])
+    );
+  });
+
+  // #741: the complementary half — with no sample-level filter active at
+  // all, an empty matchingPatientIds must NOT become `$in: []`, or every
+  // unfiltered patients report would return nothing.
+  it('paciente: sem filtro de amostra não injeta $in vazio', async () => {
+    const { db, capturedQueries } = buildCollectionDb({
+      patients: [{ participantId: 'P1' }],
+      samples: [],
+    });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp).post('/api/reports/patients/preview').send({ filters: {} });
+
+    expect(response.status).toBe(200);
+    expect(capturedQueries.patients).toEqual({});
+  });
+
   it('paciente: com orphaCode (sem keyword) e matchingPatientIds não vazio', async () => {
     const { db } = buildCollectionDb({
       patients: [{ participantId: 'P1', patientName: 'Ana' }],

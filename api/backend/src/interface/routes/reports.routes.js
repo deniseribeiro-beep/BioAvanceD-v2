@@ -351,7 +351,17 @@ async function handleSamplesByPatient(db, filters) {
     });
   }
 
-  if (matchingPatientIds.length > 0) {
+  // #741: gate on whether a sample-level filter is *active*, not on
+  // whether it happened to match anything. An empty matchingPatientIds
+  // means "no patient owns a matching sample" when sampleQuery is
+  // non-empty, and only means "no sample filter was given" when it is
+  // empty -- getMatchingPatientIds returns [] for both. Gating on the id
+  // list made an unmatched filter silently stop applying to the patient
+  // list, so e.g. status=QUARANTINE on a database with no quarantined
+  // specimens returned every patient instead of none. Same reasoning as
+  // the #341 org-scope guard below: an empty list must not mean
+  // unfiltered.
+  if (Object.keys(sampleQuery).length > 0) {
     patientQueryParts.push({ participantId: { $in: matchingPatientIds } });
   }
 
@@ -437,7 +447,10 @@ async function handlePatient(db, filters) {
     });
   }
 
-  if (matchingPatientIds.length > 0) {
+  // #741: same active-filter gate as handleSamplesByPatient above --
+  // an unmatched sample-level filter must yield no patients, not every
+  // patient.
+  if (Object.keys(sampleQuery).length > 0) {
     patientQueryParts.push({ participantId: { $in: matchingPatientIds } });
   }
 
