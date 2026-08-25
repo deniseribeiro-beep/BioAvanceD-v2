@@ -458,14 +458,27 @@ class BatchValidationEngine {
     const specimenObjectId = specimen?._id ? String(specimen._id).trim() : null;
     const patientIdentifier = String(patient?.patientID || rawRow.patientID || '').trim();
     const patientObjectId = patient?._id ? String(patient._id).trim() : null;
+    // #768: the specimen legs used to read `registrationDate`/`registerDate`,
+    // names e2549bee canonicalized away. Sample.js:38 declares `registeredAt`
+    // as the only (required) date field and Sample.create() always populates
+    // it, so neither old leg could ever fire -- a biomarker row with no date
+    // column skipped straight past the specimen to `new Date()` and the
+    // observation was stamped with import time instead of the specimen's
+    // registration date. Both dead legs are dropped rather than kept
+    // alongside the fix: unlike the rawRow legs below they are unreachable
+    // under any input, since `specimen` is createSample()'s return value.
+    //
+    // The rawRow legs stay. persistSample passes the *un-canonicalized* CSV
+    // row here (buildSampleRow is what maps headers), so a file whose column
+    // is literally spelled `registrationDate` still reaches them -- those are
+    // real user input, not a dead internal name.
     const collectedAt = this.parseDateValue(
       rawRow.collectedAt
       || rawRow.effectiveDateTime
       || rawRow.issuedAt
       || rawRow.registrationDate
       || rawRow.registerDate
-      || specimen?.registrationDate
-      || specimen?.registerDate
+      || specimen?.registeredAt
       || new Date()
     ) || new Date();
 
