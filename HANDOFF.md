@@ -295,10 +295,16 @@ for `docker build`, confirmed again for `compose run`.
 **None queued** — the queue Dennis authorized is complete and he named
 no successor.
 
-Strongest candidates from what this sitting filed: **#786** (the audit
-trail records incoherent import totals — small fix, compliance-relevant)
-and **#785** (a sample list filter that silently returns other
-participants' samples). **#772** needs Denise, not more tracing.
+Strongest candidates from what this sitting filed: **#787** (RNF011
+AC#4 unmet — rejected import rows and the source file are both lost;
+Crítica-backed and the one with a requirement behind it), **#786** (the
+audit trail records incoherent import totals — small fix,
+compliance-relevant) and **#785** (a sample list filter that silently
+returns other participants' samples).
+
+**#772 is now a one-line decision for Denise, not a research task** —
+delete both dead hooks unless she wants the validation preview; the
+evidence and the reasoning are on the issue.
 
 **`ship-integration-branch` is closer still.** The Docker gate is green
 from scratch and the queue is clear. The remaining blocker is unchanged:
