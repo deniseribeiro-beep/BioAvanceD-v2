@@ -286,6 +286,25 @@ function resolveDatabaseName(mongoUri) {
   }
 }
 
+// #765: mongorestore treats a database path component in --uri as an implicit
+// --db, which puts it in its single-database use-case where it expects .bson
+// files *directly* in the directory it is given. `mongodump --out` writes
+// <dir>/<dbName>/*.bson, so mongorestore finds a subdirectory where it wants
+// BSON, logs "don't know what to do with subdirectory", skips it, and exits 0
+// having restored nothing -- and exit 0 means runCommand resolves, so both
+// restore callers take their success path while the database is untouched.
+// Stripping the default db puts mongorestore back in its full-dump use-case,
+// where --nsInclude / --nsFrom+--nsTo do the scoping instead. Query options
+// (replicaSet, authSource, TLS flags) must survive, so this rewrites only the
+// path component and leaves the authority and query string byte-for-byte --
+// a URL round-trip would risk re-encoding credentials and mangles a
+// comma-separated replica-set host list. mongodump is deliberately NOT run
+// through this: it needs the db context to produce the layout above.
+function stripDefaultDatabase(mongoUri) {
+  if (!mongoUri) return mongoUri;
+  return String(mongoUri).replace(/^(mongodb(?:\+srv)?:\/\/[^/?]*)(?:\/[^?]*)?/, '$1/');
+}
+
 async function writeJsonBackup(backupDir, mongoUri) {
   const dbName = resolveDatabaseName(mongoUri);
   const client = new MongoClient(mongoUri);
@@ -433,7 +452,7 @@ async function restoreBackup(backupPath) {
   }
 
   const dbArg = env.MONGO_DB ? ` --nsInclude="${env.MONGO_DB}.*"` : '';
-  const command = `mongorestore --uri="${mongoUri}" --drop${dbArg} "${backupPath}"`;
+  const command = `mongorestore --uri="${stripDefaultDatabase(mongoUri)}" --drop${dbArg} "${backupPath}"`;
 
   try {
     await runCommand(command);
@@ -529,7 +548,7 @@ async function runControlledRestoreTest(backupPath) {
   const sourceDbName = (manifest && manifest.dbName) || resolveDatabaseName(mongoUri);
   const scratchDb = `${sourceDbName}_restoretest_${Date.now()}`;
 
-  const command = `mongorestore --uri="${mongoUri}" --drop --nsFrom="${sourceDbName}.*" --nsTo="${scratchDb}.*" "${backupPath}"`;
+  const command = `mongorestore --uri="${stripDefaultDatabase(mongoUri)}" --drop --nsFrom="${sourceDbName}.*" --nsTo="${scratchDb}.*" "${backupPath}"`;
 
   // #750: the scratch database has to come down on every exit path, not just
   // the two success ones. mongorestore (and the JSON fallback) writes
