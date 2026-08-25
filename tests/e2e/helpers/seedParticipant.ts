@@ -389,6 +389,13 @@ export async function seedDuoConcept(code: string, options: { conceptStatus?: st
  * normalization) — not what the intake wizard's own code-formatting
  * helpers produce, which is what #696 found actually diverges for OMIM.
  */
+/**
+ * #745: marker stamped onto the real `referenceDatasetReleases` docs that
+ * `seedActiveTerminologyConcept` supersedes, so `cleanupActiveTerminologyConcepts`
+ * can restore exactly those (and nothing the real importer superseded).
+ */
+const SUPERSEDED_BY_E2E_MARK = 'e2e-696-seedActiveTerminologyConcept';
+
 export async function seedActiveTerminologyConcept(
   systemUri: string,
   code: string,
@@ -406,9 +413,19 @@ export async function seedActiveTerminologyConcept(
   // the prior active release, never leaving two active at once. This
   // fixture skipped that step, so every run left the previous run's
   // release active too. Mirror promote()'s own supersede behavior here.
+  //
+  // #745: on a stack whose reference-data bootstrap chain has run, the
+  // release this supersedes is the *real* HPO/ORPHA/ICD10/OMIM release,
+  // and `cleanupActiveTerminologyConcepts` only deleted this fixture's own
+  // rows -- leaving the datasetCode with zero active releases and every
+  // later active-code check (`pipeline-continuity`'s RF029 block) failing
+  // `inactive_release`, permanently on a persistent volume. Stamp what we
+  // supersede so cleanup can flip it back. A stamp on the doc (not an
+  // in-memory list) also lets a later run repair a crashed run that never
+  // reached its `afterAll`.
   await db.collection('referenceDatasetReleases').updateMany(
     { datasetCode, releaseStatus: 'active' },
-    { $set: { releaseStatus: 'superseded', updatedAt: new Date() } }
+    { $set: { releaseStatus: 'superseded', supersededByE2E: SUPERSEDED_BY_E2E_MARK, updatedAt: new Date() } }
   );
 
   await db.collection('referenceDatasetReleases').insertOne({
@@ -464,6 +481,17 @@ export async function cleanupActiveTerminologyConcepts(): Promise<void> {
   await db.collection('terminologyConcepts').deleteMany({
     terminologyConceptId: { $regex: /^e2e-696-/ },
   });
+  // #745: put back whatever real release(s) seedActiveTerminologyConcept
+  // superseded, now that the fixture release that replaced them is gone.
+  // Runs after the deleteMany above on purpose: a fixture release that
+  // itself got superseded by a second seed call in the same run is stamped
+  // too, and must not be resurrected. Matches every stamped doc (not only
+  // this run's), so it also repairs a prior run that crashed before its
+  // own afterAll.
+  await db.collection('referenceDatasetReleases').updateMany(
+    { supersededByE2E: SUPERSEDED_BY_E2E_MARK, releaseStatus: 'superseded' },
+    { $set: { releaseStatus: 'active', updatedAt: new Date() }, $unset: { supersededByE2E: '' } }
+  );
 }
 
 /**
