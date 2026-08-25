@@ -13,7 +13,12 @@ function buildMockToken(payload: Record<string, unknown>): string {
   return `${base64url(header)}.${base64url(payload)}.mock-signature`;
 }
 
-export interface MockUser {
+// #729: a `type` alias rather than an `interface` on purpose. Only a type
+// alias gets an implicit index signature, so only it satisfies the
+// `Record<string, unknown>` that buildMockToken takes. As an interface this
+// was a real type error, invisible under the 91 missing-global errors that
+// preceded it.
+export type MockUser = {
   id: number;
   username: string;
   name: string;

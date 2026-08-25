@@ -3,7 +3,13 @@
     "target": "ES2020",
     "module": "CommonJS",
     "moduleResolution": "node",
-    "lib": ["ES2020"],
+    // #729: DOM is needed because Playwright spec/helper code runs browser-side
+    // callbacks (page.evaluate / page.addInitScript touch window, localStorage).
+    "lib": ["ES2020", "DOM"],
+    // #729: @types/node supplies process/Buffer/console/setTimeout plus the
+    // node builtins the helpers import (crypto, fs). Without it every file
+    // here failed on global names alone, which drowned out real type errors.
+    "types": ["node"],
     "allowJs": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
