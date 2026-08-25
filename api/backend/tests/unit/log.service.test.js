@@ -310,6 +310,64 @@ describe('LogService', () => {
       expect(collection.sort).toHaveBeenCalledWith({ action: 1 });
     });
 
+    // #780: sortBy came straight off the request into the sort spec with no
+    // validation. Mongo treats a key no document carries as equal across
+    // every document, so on this paginated query an unrecognized field did
+    // not produce "unsorted results" -- it produced the WRONG PAGE, with a
+    // 200 and a plausible body, and no way for the caller to tell.
+    it('ignores a sortBy naming a field no log document carries, falling back to the default ordering (#780)', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, { sortBy: 'dateTimeX' });
+
+      expect(collection.sort).toHaveBeenCalledWith({ dateTime: -1, timestamp: -1 });
+      expect(collection.sort).not.toHaveBeenCalledWith(
+        expect.objectContaining({ dateTimeX: expect.anything() })
+      );
+    });
+
+    // A dotted path and a $-prefixed name are the two shapes the issue asked
+    // someone to confirm are inert in this driver position. The allow-list
+    // dissolves the question rather than answering it: neither can reach the
+    // sort spec at all now.
+    it('ignores a dotted or $-prefixed sortBy rather than passing it to the driver (#780)', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, { sortBy: 'metadata.userID' });
+      expect(collection.sort).toHaveBeenCalledWith({ dateTime: -1, timestamp: -1 });
+
+      const other = makeCollection();
+      await logService.getLogs(makeDb(other), { sortBy: '$natural' });
+      expect(other.sort).toHaveBeenCalledWith({ dateTime: -1, timestamp: -1 });
+    });
+
+    // severity is the real field name; the issue's suggested allow-list
+    // guessed `level`, which no log document has. The list is derived from
+    // Log.js's own document builder for exactly that reason.
+    it('accepts severity, a real field from the Log model (#780)', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, { sortBy: 'severity', sortOrder: 'asc' });
+
+      expect(collection.sort).toHaveBeenCalledWith({ severity: 1 });
+    });
+
+    // The fallback has to be observable, or it is the same silent-acceptance
+    // class the bug was (cf. #789). The effective ordering comes back in the
+    // response so a caller can tell what was actually applied.
+    it('reports the effective ordering in the response, including on fallback (#780)', async () => {
+      const collection = makeCollection();
+
+      const rejected = await logService.getLogs(makeDb(collection), { sortBy: 'nope', sortOrder: 'asc' });
+      expect(rejected).toMatchObject({ sortBy: 'dateTime', sortOrder: 'desc' });
+
+      const accepted = await logService.getLogs(makeDb(makeCollection()), { sortBy: 'action', sortOrder: 'asc' });
+      expect(accepted).toMatchObject({ sortBy: 'action', sortOrder: 'asc' });
+    });
+
     it('builds a userId $or filter from userId/userID/user aliases', async () => {
       const collection = makeCollection();
       const db = makeDb(collection);
