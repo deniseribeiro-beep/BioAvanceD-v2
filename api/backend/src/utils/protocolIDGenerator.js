@@ -8,8 +8,14 @@ async function generateUniqueProtocolID(db, collectionName = 'extractionProtocol
     const collection = db.collection(collectionName);
     
     const lastItem = await collection
+      // #756: restrito a protocolID numérico, espelhando a correção de #736 em
+      // equipmentIDGenerator. Na ordenação BSON do MongoDB toda string vem
+      // depois de qualquer número, então um protocolID string é devolvido
+      // primeiro por sort: { protocolID: -1 } e o incremento vira concatenação
+      // de string em vez de soma -- corrompendo o gerador permanentemente
+      // para essa collection, já que o valor corrompido também é string.
       .findOne(
-        {},
+        { protocolID: { $type: 'number' } },
         { 
           sort: { protocolID: -1 },
           projection: { protocolID: 1 }
