@@ -314,6 +314,24 @@ class AuthService {
         throw new Error(statusMessages[normalizedStatus] || 'Usuário não pode fazer login');
       }
 
+      // #683 (RF003): bloqueio de MFA por força bruta. O contador acima grava
+      // mfaLocked após 5 códigos errados, mas nada lia a flag: a tentativa
+      // seguinte era processada normalmente, mfaFailedAttempts continuava
+      // subindo além de 5, e um código correto ainda autenticava. Só um
+      // Administrador libera, pelo reset-mfa (user.routes.js), que já zera a
+      // flag.
+      //
+      // Fica depois da verificação de senha, no mesmo ponto da checagem de
+      // status acima: quem não sabe a senha não deve conseguir distinguir uma
+      // conta bloqueada de qualquer outra.
+      //
+      // dict-02 P1X-0201 (mfaLockedUntil) é 0..1 Condicional, 'quando a
+      // política usar duração' -- não há política de duração aqui, então o
+      // bloqueio não expira sozinho.
+      if (user.mfaLocked) {
+        throw new Error('MFA bloqueado devido a muitas tentativas falhas');
+      }
+
       // Verifica se é admin
       // #426: resolve via UserRoleAssignment -> Role, não accessType/roleName
       // direto (a fonte de verdade desde #421).
