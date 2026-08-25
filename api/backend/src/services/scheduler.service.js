@@ -11,6 +11,7 @@ let temperatureTask = null;
 let backupTask = null;
 let consentSyncTask = null;
 let retentionSweepTask = null;
+let restoreTestTask = null;
 
 function normalizeDate(value) {
   if (!value) return null;
@@ -201,11 +202,58 @@ function startRetentionSweepSchedule(db) {
   logger.info(`⏱️ Sweep de retenção agendado (${cronExpr})`);
 }
 
+// #731 (RF013 AC#4 / RNF010 AC#5: "Testes de restauração são executados
+// periodicamente e validados por checksum"). #727 built the sandboxed
+// capability -- backupService.testRestoreBackup(), which restores into a
+// scratch database and never touches the live one -- but left it
+// admin-triggered only via POST /api/backup/restore-test/:fileName. This is
+// the "periodicamente" half.
+//
+// Weekly rather than daily, and offset past the daily backup (03:00) and
+// retention sweep (04:00): a restore test spins up and tears down a scratch
+// database and replays every collection, so it is materially heavier than
+// either. RNF010 AC#5 says "periodicamente" without naming a cadence, so
+// this is a defensible default rather than a specified one -- override with
+// RESTORE_TEST_CRON.
+function startRestoreTestSchedule(db) {
+  const cronExpr = env.RESTORE_TEST_CRON || '0 5 * * 0';
+  const timezone = process.env.TZ || 'America/Sao_Paulo';
+
+  restoreTestTask = cron.schedule(cronExpr, async () => {
+    try {
+      if (!db) return;
+
+      const backupPath = backupService.getLatestBackupPath();
+      if (!backupPath) {
+        logger.warn('Nenhum backup disponível para o teste de restauração periódico');
+        return;
+      }
+
+      const result = await backupService.testRestoreBackup(backupPath, db);
+
+      // The checksum verdict is the point of the exercise (RNF010 AC#5
+      // "validados por checksum"), so a run that restored cleanly but
+      // failed verification must not read as a routine success.
+      if (result?.success && result?.checksumVerified === false) {
+        logger.warn(`Teste de restauração concluído sem validação de checksum: ${backupPath}`);
+        return;
+      }
+
+      logger.info(`♻️ Teste de restauração executado: ${JSON.stringify(result)}`);
+    } catch (error) {
+      logger.error('Erro no teste de restauração periódico:', error.message);
+    }
+  }, { timezone });
+
+  logger.info(`⏱️ Teste de restauração agendado (${cronExpr})`);
+}
+
 function initScheduler({ db, neo4jDriver }) {
   startTemperatureMonitor(db);
   startBackupSchedule(db);
   startConsentSyncSchedule({ db, neo4jDriver });
   startRetentionSweepSchedule(db);
+  startRestoreTestSchedule(db);
 }
 
 function stopScheduler() {
@@ -213,6 +261,7 @@ function stopScheduler() {
   if (backupTask) backupTask.stop();
   if (consentSyncTask) consentSyncTask.stop();
   if (retentionSweepTask) retentionSweepTask.stop();
+  if (restoreTestTask) restoreTestTask.stop();
 }
 
 module.exports = {
