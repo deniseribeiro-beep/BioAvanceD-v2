@@ -34,11 +34,14 @@ All changes were test-only or docs; no product source was touched.
 - On `feature/docker-e2e-backend-integration`, pushed, up to date with
   origin @ `6d5d676a` plus this rotation. No fix/test branches left (all
   merged `--no-ff` and deleted).
-- **Docker stack is UP** and healthy: `compose.test.yml` core services +
-  `admin-bootstrap-test` + `foundation-bootstrap-test` + all 16
-  `reference-data-bootstrap-*-test` (each `Exited (0)`),
-  `playwright-runner` stopped. Tear it down if the next sitting doesn't
-  need it (`compose down`, no `-v` -- keep the named volumes).
+- **Docker is DOWN** -- the stack was brought up this sitting (core
+  services + `admin-bootstrap-test` + `foundation-bootstrap-test` + all 16
+  `reference-data-bootstrap-*-test`, each `Exited (0)`) and torn down at
+  end of sitting per `clean-up` (`compose down`, no `-v`; the four
+  `bioavanced-test_*` named volumes are intact, and `docker builder prune
+  -af` reclaimed 879MB). Next bring-up: the `docker-workflow` overlay's
+  recipe **plus** the bootstrap chain for a full gate, and `--build` for
+  backend/frontend if source changed.
 - Volume hygiene verified after the full gate: the four real reference
   releases still `active`, `storageBoxes` back to 0, no `e2e-696-*` rows.
   Nothing needs hand repair anymore.
