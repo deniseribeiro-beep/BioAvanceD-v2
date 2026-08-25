@@ -1102,9 +1102,11 @@ test.describe('Ingestion gateway — workflows, omics data (RF029 slice 6/6) —
 // #723's docker-free sittings added the pieces the criteria needed
 // (run-history + checksum, the sandboxed restore test #727, the audited
 // BackupPolicy entity #728). This block proves the whole thing end to end
-// against the real stack. Note the containerized backend ships no
-// mongodump/mongorestore (#738), so every run below takes the JSON
-// fallback path -- the assertions accept either mode deliberately.
+// against the real stack. Since #738 the backend image installs
+// mongodb-tools, so a backup takes the intended mongodump path rather than
+// the JSON fallback -- which means the backend image must be rebuilt
+// (`--build`) for this block to pass, and a `json-fallback` mode here is a
+// real signal that it wasn't.
 test.describe('Backup and restore (RF013) — real backend', () => {
   async function listDatabaseNames(): Promise<string[]> {
     const client = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
@@ -1124,7 +1126,10 @@ test.describe('Backup and restore (RF013) — real backend', () => {
     expect(response.status(), await response.text()).toBe(200);
     const body = await response.json();
     expect(body.success).toBe(true);
-    expect(['mongodump', 'json-fallback']).toContain(body.data.mode);
+    // #738: mongodump is now present in the image, so the fallback must not
+    // be what runs. The fallback is no longer lossy either (it serializes
+    // with canonical Extended JSON), but it is still the degraded path.
+    expect(body.data.mode, 'backend image is missing mongodb-tools -- rebuild it').toBe('mongodump');
     expect(body.data.path).toBeTruthy();
     const fileName = String(body.data.path).split(/[\\/]/).pop()!;
     return { ...body.data, fileName };

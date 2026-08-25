@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { exec } = require('child_process');
-const { MongoClient } = require('mongodb');
+const { MongoClient, BSON } = require('mongodb');
 const logger = require('../utils/logger');
 const env = require('../config/env');
 const backupPolicyService = require('./backup-policy.service');
@@ -152,6 +152,36 @@ function runCommand(command) {
   });
 }
 
+// #738 (RF013 AC#3): the JSON fallback was written as a degraded-mode
+// safety net, but the Docker images ship no mongodump/mongorestore, so on
+// every containerized deployment it is the *only* path. JSON.stringify /
+// JSON.parse do not round-trip BSON: ObjectId _ids and refs came back as
+// 24-character strings and Dates as ISO strings, so after a restore every
+// `findOne({ _id: new ObjectId(id) })` and every date-range query in the
+// app would silently stop matching. AC#3's checksum is computed over the
+// JSON files, so it could not catch the corruption either.
+//
+// Extended JSON in canonical mode (`relaxed: false`) wraps values in their
+// type ($oid, $date, $numberDecimal, ...) so the round trip is lossless.
+// Reached through the driver's own BSON re-export rather than requiring
+// `bson` directly -- bson is a transitive dependency here, not a declared
+// one, so requiring it by name would depend on npm's hoisting.
+// Both helpers are exported for backup.service.jsonFallback.test.js.
+function serializeBackupDocs(docs) {
+  // Signature is (value, replacer, space, options) -- `space` is
+  // positional, so passing an `indent` key inside the options object is
+  // silently ignored and the file comes out on one line.
+  return BSON.EJSON.stringify(docs, null, 2, { relaxed: false });
+}
+
+// EJSON.parse reads plain JSON too -- a document with no $-prefixed type
+// wrappers comes back exactly as JSON.parse would return it. That is what
+// keeps backups written before this change restorable: as lossily as they
+// always were, but without erroring.
+function parseBackupDocs(raw) {
+  return BSON.EJSON.parse(raw, { relaxed: false });
+}
+
 async function restoreFromJsonBackup(backupPath, mongoUri, targetDbName) {
   const manifestPath = path.join(backupPath, 'manifest.json');
   const hasManifest = fs.existsSync(manifestPath);
@@ -190,7 +220,7 @@ async function restoreFromJsonBackup(backupPath, mongoUri, targetDbName) {
       const fullPath = path.join(backupPath, fileName);
 
       const raw = await fs.promises.readFile(fullPath, 'utf8');
-      const docs = JSON.parse(raw);
+      const docs = parseBackupDocs(raw);
 
       const collection = db.collection(collectionName);
       await collection.deleteMany({});
@@ -279,7 +309,7 @@ async function writeJsonBackup(backupDir, mongoUri) {
       const fileName = `${name}.json`;
       const filePath = path.join(backupDir, fileName);
 
-      await fs.promises.writeFile(filePath, JSON.stringify(docs, null, 2), 'utf8');
+      await fs.promises.writeFile(filePath, serializeBackupDocs(docs), 'utf8');
       manifest.collections.push({
         name,
         count: docs.length,
@@ -562,6 +592,8 @@ module.exports = {
   cleanupOldBackups,
   getBackupBaseDir,
   getLatestBackupPath,
+  serializeBackupDocs,
+  parseBackupDocs,
   restoreBackup,
   testRestoreBackup
 };
