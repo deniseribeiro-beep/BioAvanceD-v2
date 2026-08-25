@@ -224,6 +224,63 @@ async function buildSampleQuery(db, filters = {}) {
     conditions.push({ specimenStatus: releaseStatusToSpecimenStatus(releaseStatus) });
   }
 
+  // #739 (RF008 AC#1): "Aplicar filtros por periodo, colecao, tipo, origem,
+  // estado e localizacao." `estado` is the releaseStatus -> specimenStatus
+  // condition just above; the remaining five are wired here. Until this,
+  // buildSampleQuery honoured only `estado`, and the other five were
+  // accepted by the route and silently ignored -- so
+  // `GET /:type/export?startDate=...` returned the whole unfiltered set
+  // with no error, which is the worse half of the gap.
+  const dateQuery = buildDateQuery(filters);
+  if (dateQuery) {
+    // Sample.registeredAt is the required registration date; createdAt is
+    // the technical fallback for rows that predate it (imports, legacy).
+    // Same two-field $or shape handleAccessLogs already uses for
+    // dateTime/timestamp.
+    conditions.push({ $or: [{ registeredAt: dateQuery }, { createdAt: dateQuery }] });
+  }
+
+  const collectionId = normalizeFilterText(filters.collectionId || filters.collection);
+  if (collectionId) {
+    conditions.push({ collectionId });
+  }
+
+  // sampleType/sampleOrigin are MIABIS controlled-vocabulary ids
+  // (specimen.constants.js: PLASMA, VENOUS_BLOOD, ...), stored verbatim by
+  // SampleModel.create after validating against those id lists -- so an
+  // exact match on the upper-cased value, the same shape qualityCategory
+  // uses above, not a regex. Deliberately no bare `type` alias: the route
+  // param that selects the report is also called `type`, and the export
+  // routes spread req.query straight into filters.
+  const sampleType = normalizeFilterText(filters.sampleType || filters.specimenType).toUpperCase();
+  if (sampleType) {
+    conditions.push({ sampleType });
+  }
+
+  const sampleOrigin = normalizeFilterText(filters.sampleOrigin || filters.origin).toUpperCase();
+  if (sampleOrigin) {
+    conditions.push({ sampleOrigin });
+  }
+
+  // `localizacao` is the storageLocation.boxId/position snapshot Sample
+  // carries (IStorageRepository.js's own framing), not a StorageAssignment
+  // join. An unparseable boxId fails closed with a never-matching
+  // condition rather than being dropped -- dropping it would be #741's
+  // failure mode one dimension over.
+  const storageBoxId = normalizeFilterText(filters.storageBoxId || filters.boxId);
+  if (storageBoxId) {
+    conditions.push({
+      'storageLocation.boxId': /^[0-9a-f]{24}$/i.test(storageBoxId)
+        ? new ObjectId(storageBoxId)
+        : { $in: [] },
+    });
+  }
+
+  const storagePosition = normalizeFilterText(filters.storagePosition || filters.position);
+  if (storagePosition) {
+    conditions.push({ 'storageLocation.position': storagePosition });
+  }
+
   // #341 (RF003 AC#3): org-scoped caller's sample-rooted report queries
   // only see samples whose collectionSite is one of their scoped
   // organizations, same field/pattern #340 wired into listSamples.
