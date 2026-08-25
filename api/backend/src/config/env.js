@@ -104,6 +104,10 @@ module.exports = {
   BACKUP_DIR: process.env.BACKUP_DIR,
   BACKUP_CRON: process.env.BACKUP_CRON,
   BACKUP_RETENTION_DAYS: process.env.BACKUP_RETENTION_DAYS,
+  // #749: read by scheduler.service.js#startRetentionSweepSchedule since it
+  // was written, but never registered here -- so the override was dead and
+  // the sweep was pinned to its 0 4 * * * fallback no matter what was set.
+  RETENTION_SWEEP_CRON: process.env.RETENTION_SWEEP_CRON,
   RESTORE_TEST_CRON: process.env.RESTORE_TEST_CRON,
   TEMP_MONITOR_CRON: process.env.TEMP_MONITOR_CRON,
   TEMP_STALE_MINUTES: process.env.TEMP_STALE_MINUTES,
