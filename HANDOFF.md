@@ -121,10 +121,31 @@ is the one red in the native suite).
   (`App.tsx:129`) via `uploadBatch()` → `POST /import/batch` +
   `BatchProgressViewer` polling `GET /import/status/:jobId`. So this is
   a **superseded parallel implementation**, not unfinished wiring.
-  - The narrowed question: **should the import screen validate a file
-    before uploading it?** `useAsyncImport` posts to `/import/validate`,
-    a step `ImportForm` does not perform. Either way both hooks go; what
-    differs is whether a validation step gets built into the live form.
+  - **Dennis then asked whether the decision was already answered
+    somewhere. Partly — and the answer moved the default to "delete".**
+    Checked, in order: `docs/docs-7-31-2026/` (newest batch) then
+    `docs-7-27-2026/`, `docs/architecture/`, both root plan docs,
+    milestones, the tracker `--state all`, and git history.
+    - **RNF011** (Qualidade de dados, **F1-F3, Crítica**, identical in
+      both batches) already requires imported data be *validated before
+      canonical persistence*, with invalid imports staged or
+      quarantined. It does **not** say that must be a pre-upload screen —
+      server-side rejection satisfies it on its face.
+    - **RNF032** (staging/validação/quarentena/limiar) is scoped
+      **F2 — referências**, and **RNF024 AC#5** to the FHIR boundary —
+      neither governs this path. **No RF covers this UI at all**: RF028
+      is reference-data import, RF029 operational/scientific ingestion.
+    - **No prior decision in the tracker**, open or closed — #770's
+      thread traced the mechanism and explicitly stopped short.
+    - **Git is the closest thing to recorded intent:** Denise added
+      `useAsyncImport.ts` **2025-12-11** and the superseding
+      `ImportForm.jsx` **2026-03-24**, three months later. The hook's
+      one later touch (`ddc54ac1`) is a mechanical
+      `startLocationID`→`startBoxId` rename inside backend migration
+      #459 — **not** evidence anyone considers it live.
+  - **Recommendation: delete both hooks** unless Denise says the
+    validation preview is still wanted. The requirement that *does*
+    exist is missing somewhere else — see **#787**.
   - #700 (`HPOAutocomplete.jsx`) may have the same resolution — check
     before treating it as an independent call.
 
