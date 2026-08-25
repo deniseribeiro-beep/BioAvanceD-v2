@@ -1,93 +1,91 @@
 # HANDOFF
 
-**INTERIM — SESSION IN PROGRESS, NOT A FINAL HANDOFF.**
+**Written:** 2026-08-25, end of the eighth sitting of the day. The
+self-picked 4-item queue is **empty — all items resolved**. This is the
+definitive rotation for this sitting.
 
-**Written:** 2026-08-25 (eighth sitting of the day), after queue item 3
-of 4. Dennis asked for the next group of issues and confirmed **Docker
-is on**. **1 of 4 queue items remains** and the session is still going.
-Do not read this as the sitting's final word.
+## What this sitting did
 
-## The queue
-
-Self-picked this sitting, explicitly numbered in the `issue-loop`
-invocation's args so `queue-continue-checkpoint.cjs` can see it. Theme:
-**finish RNF011 AC#4, and stop the sample list from lying about
+Dennis asked for the next group of issues and confirmed **Docker on**.
+Theme: **finish RNF011 AC#4, and stop the sample list from lying about
 consent.**
 
-| # | What | Route | Status |
+| # | What | Route | Outcome |
 |---|---|---|---|
-| **0** | the inherited Docker gate | gate | **done, green** |
+| **0** | the inherited Docker gate | gate | **green, 5/5** |
 | **787** | RNF011 AC#4 LGPD import quarantine | build-loop | **closed** (code had merged `00fee0a8`) |
 | **788** | consent badge read from a field no writer sets | fix-bugs | **closed** `28629279` / merged `8547134e` |
 | **790** | no empty-row guard in the import loops | fix-bugs | **closed** `f4259f6b` / merged `d08bc87d` |
-| **794** | slice 1: `GET /api/import/lgpd/batches/:batchId` | build-loop | **next, last item** |
+| **794** | quarantine unreadable — slice 1 of 3 | build-loop | **slice landed** `8dca6f95` / merged `0521f96c`; **issue deliberately still OPEN** |
 
-**Deliberately excluded, all still open:** **#789**, **#793**, **#792** —
-each blocked on a decision by its own body.
+### The gate (item 0)
 
-**Flagged to Dennis, not queued:** **#684** — any authenticated user can
-revoke any patient's consent by enumerating a Mongo `_id`. Highest
-severity on the board, still blocked on RF010/RF021's actor model.
-Offered twice this sitting as a swap; not taken.
+**The inherited stack was up but NOT gate-ready** — `docker ps -a` showed
+no `admin-bootstrap-test` and no reference-data chain at all. Fixed in
+~50 s. Then `lgpd-sample-import.spec.ts` ran 5/5, executing for the first
+time the **three assertions deferred from #785/#786** plus #787's two new
+quarantine cases. **No reopens** — both prior closes confirmed live.
 
-## The issue-body reliability pattern, updated
+### #788 — the issue understated its own severity
 
-Four of the five bodies read this sitting and last were wrong somewhere;
-**#790's was accurate in every particular** — the first that held. So the
-rule is *check*, not *distrust*: re-running the trace is cheap and has
-now both caught four errors and confirmed one body clean.
-
-- **#788** understated its own severity (below).
-- **#790** — verified correct: `importPatients` guards twice then counts;
-  `importSamples` and `importPatientsSmart` neither guard nor wait.
-
-**#794's body is the one still unverified. Re-trace it before sizing.**
-
-## What #788 actually was
-
-Not the `PATIENT_NOT_FOUND` it predicted. Every row returned
-`NO_ACTIVE_CONSENT`, meaning the lookup **matched a patient — the wrong
-one**. All 7 patient docs lack `patientID`, so `{ patientID: null }`
-matched all of them and `findOne` returned whichever came first: every
-sample on every page badged from one arbitrary patient's consent record.
-Direction of failure decided by document order, not data. The second new
-unit test shows the sharp end: **before the fix, a sample with no
+Predicted every row returning `PATIENT_NOT_FOUND`. Reality: every row
+returned `NO_ACTIVE_CONSENT`, i.e. the lookup **matched a patient — the
+wrong one**. All 7 patient docs lack `patientID`, so `{ patientID: null }`
+matched all of them and `findOne` returned whichever came first. Every
+sample on every page was badged from one arbitrary patient's consent
+record, with the direction of failure decided by document order. The
+sharp end, from the new unit test: **before the fix, a sample with no
 participant identifier at all returned `canUse: true`, "TCLE Assinado".**
 
-Fixed by keying on `sample.participantId` **and** guarding the
-missing-value case so the filter cannot degenerate to `{ field: null }`.
-
-## What #790 was
+### #790 — the first body that held
 
 `importSamples` and `importPatientsSmart` had no empty-row guard;
-`importPatients` had two. A trailing blank row — normal Excel output —
-became a spurious identity-resolution rejection, and **since #787 was
-also quarantined as if it were a real data problem**. Now one shared
-`isEmptyRow(row)` in all three loops, called **before** the
-`results.total` increment so #786's `total === success + errors`
-invariant is untouched. Chose silent skipping (the file's established
-behaviour); the alternative is filed as **#798**.
+`importPatients` had two. Now one shared `isEmptyRow(row)` in all three,
+**before** the `results.total` increment so #786's
+`total === success + errors` invariant is untouched. Chose silent
+skipping (the file's established behaviour); the alternative is **#798**.
+
+### #794 slice 1
+
+`GET /api/import-lgpd/batches/:batchId` — the quarantine is now readable
+through the API, not only via Mongo. **Two corrections to the body:** its
+proposed path `/api/import/lgpd/...` doesn't match this repo (LGPD mounts
+at `/api/import-lgpd`, `app.js:350`; `/api/import` is the FHIR router),
+and "gated to whoever may import" resolves to the **existing**
+`createSample` permission — deliberately not a new one, since a new
+permission never reaches an already-seeded stack without an explicit
+`seedRbacCatalog.js` re-seed.
+
+## The issue-body reliability pattern
+
+**Five of six bodies read across this queue were wrong somewhere; #790's
+was the one that held.** The rule is *check*, not *distrust* — re-running
+the trace is cheap and has now caught five errors and confirmed one body
+clean. #788's error was in the direction of **understating** severity,
+which is the dangerous direction.
 
 ## Filed this sitting
 
 **Product:** **#795** (`POST /api/samples` writes `Paciente ID:
 undefined` into the RF004 audit trail and drops the key from its 201
 body), **#796** (`persistConsentDeliveryFailure` is a permanent no-op —
-both callers pass `participantId`, it reads `patientID`/`patientId`/`id`,
-so consent-delivery failures are recorded nowhere), **#797** (520
-filter-ignoring `findOne` mocks across 56 files — the #771 blindness one
-method over, and what kept #788 green through five tests covering it),
-**#798** (blank rows now dropped with no signal, so a truncated upload
-looks identical to a clean one).
+both callers pass `participantId`, it reads `patientID`/`patientId`/`id`),
+**#797** (520 filter-ignoring `findOne` mocks across 56 files — the #771
+blindness one method over, and what kept #788 green through five tests
+covering it), **#798** (blank rows now dropped with no signal),
+**#799** (`GET /api/import/fhir/batches/:id` has no type filter, so it
+serves LGPD quarantine batches — with civil identifiers — to a different
+permission), **#800** (self-report: both import batch readers check
+permission but not ownership; same class as #684).
 
-**Pack:** **#444**, **#445**, **#446**, **#447**, **#448**, plus
-refinements on **#442** and **#410**.
+**Pack:** #444, #445, #446, #447, #448, #449, plus refinements on #410
+and #442.
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, **in sync with origin**.
-- No `fix/` branches outstanding — both this sitting's were deleted local
-  **and** remote, no prompt either time.
+- **No `fix/` or `test/` branches outstanding** — all three created this
+  sitting were deleted local *and* remote, no prompt any time.
 - Untracked and deliberately untouched: `.claude/skills/` and
   `api/backend/storage/assays/`. **Never `git add -A`.**
 - Older local branches unchanged: `fix/599-ci-trigger-integration-branch`
@@ -103,25 +101,26 @@ refinements on **#442** and **#410**.
 
 ## Docker
 
-**On, authorized by Dennis. Stack is UP and gate-ready** — record both
-axes, per pack #445:
+**Stack was still UP at the end of this sitting; the teardown decision is
+Dennis's** — `clean-up` runs at session end and will surface it. Record
+both axes (pack #445):
 
 - **Services:** 12 core, healthy, up since ~19:26 on 2026-08-25.
 - **Bootstrap:** `admin-bootstrap-test` **and** the full 17-service
-  reference-data chain have run this sitting; all 18 one-shots verified
-  `Exited (0)` via `docker ps -a`, not by the compose exit code.
-- **`backend-app-test` has been rebuilt twice**, and currently carries
-  **both** #788's and #790's fixes. It is build-not-mount: **any further
-  `api/backend/src` change needs another rebuild before an e2e run**, or
-  the stale image serves old code with no error.
+  reference-data chain ran this sitting; all 18 one-shots verified
+  `Exited (0)` via `docker ps -a`, never by the compose exit code.
+- **`backend-app-test` was rebuilt three times** and carries **#788,
+  #790 and #794**. Build-not-mount: **any further `api/backend/src`
+  change needs another rebuild before an e2e run**, or a stale image
+  serves old code with no error.
 - **Volumes:** the four named fixture volumes are untouched. A
   from-scratch gate needs `docker volume rm` on
   `bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data` first, then
   the whole bootstrap chain again.
-- `playwright-runner` has never been started on this stack. **Stop it
-  before any host-side run if that changes** (pack #437).
-- `lgpd-sample-import.spec.ts` has been run **twice** this sitting, 5/5
-  both times — once as the gate, once as #790's regression check.
+- `playwright-runner` was never started. **Stop it before any host-side
+  run if that changes** (pack #437).
+- `lgpd-sample-import.spec.ts` ran **four times**, green each time,
+  finishing at **8/8** after #794's three new cases.
 - Host Playwright command (verbatim, works):
   `PLAYWRIGHT_BASE_URL=http://localhost:5173 PLAYWRIGHT_API_BASE_URL=http://localhost:3000 PLAYWRIGHT_SKIP_WEBSERVER=1 TEST_USER=admin TEST_PASS=Admin@123 E2E_MONGO_URI="mongodb://localhost:27017?directConnection=true" E2E_MONGO_DB=bioavanced_test E2E_NEO4J_DATABASE=neo4j TEST_SUPPORT_SECRET=e2e-test-support-secret npx playwright test [spec] --workers=1`
 - **Hand-seeding Mongo needs the logical→physical name map** (pack #447):
@@ -130,40 +129,44 @@ axes, per pack #445:
   Seeding the wrong name does not error — it creates a stray collection
   and the verification reads as a failed fix.
 
-## Working rules holding this sitting
+## Working rules confirmed this sitting
 
 - **`gh issue close` has NO `--body-file` flag** — post the long comment
   first with `gh issue comment --body-file`, then close separately.
 - **A hook-blocked Bash call writes none of its files; the block is
   atomic over the whole tool call — the separator is irrelevant.**
-  Framing this as an `&&`-chaining rule is too narrow.
+  Framing it as an `&&`-chaining rule is too narrow.
 - **Every `gh issue create` must carry `--label`** (pack #148 hook).
-- **Splicing a block into a file: take the anchor line number from
-  `awk 'NR>=A && NR<=B {printf "%d|%s\n", NR, $0}'`, never by counting
-  `sed -n 'A,Bp'` output by eye** (pack #448). An off-by-one nests the
-  block inside the preceding test — valid syntax, so nothing errors; the
-  only symptom is a quietly reduced collected-test count. Recovery is
-  `git checkout --` and re-splicing, not repairing by index. Cost one
-  full reset this sitting.
-- **The routing gate's re-arm is NOT an unconditional per-iteration
-  tax** (correction to what this file has been claiming; see pack #442).
-  It re-arms only when a `gh issue view`/`list` happens *after* the
-  routed-skill invocation. #788's close re-armed it because the
-  iteration duplicate-checked the tracker before filing #795; #790's
-  close did not, and went through first try. Budget the extra
-  invocation for iterations that file a found-bug issue.
+- **Splice anchors come from `awk 'NR>=A && NR<=B {printf "%d|%s\n", NR,
+  $0}'`, never from eyeballed `sed -n` output** (pack #448). An
+  off-by-one nests the block inside the preceding test — valid syntax, so
+  nothing errors; the only symptom is a quietly reduced collected-test
+  count. Recovery is `git checkout --` and re-splicing, not repairing by
+  index. Cost one full reset.
+- **A negative-path test on a not-yet-built endpoint passes vacuously**
+  (pack #449) — an unregistered route 404s just like the handler would.
+  **Read which tests passed in the red run, not just that one failed**,
+  and assert the response *shape*, not the status alone.
+- **The routing gate's re-arm is NOT a flat per-iteration tax** — it
+  re-arms only when a `gh issue view`/`list` happens *after* the routed
+  skill call. #788's close re-armed (the iteration duplicate-checked the
+  tracker before filing #795); #790's and #794's did not.
 
 ## Recommended next steps
 
-**Finish the queue — #794 slice 1 is the last item**, routed to
-`build-loop`.
+**None queued — Dennis has not named the next group.** When he does,
+these are the strongest candidates, in the order I'd argue for them:
 
-Its body proposes three pieces and says item 1 alone is independently
-landable: `GET /api/import/lgpd/batches/:batchId` returning the batch and
-its quarantined rows, RBAC-gated to whoever may import. That is the
-slice. The FHIR path is the stated reference —
-`GET /api/import/fhir/batches/:id`, covered by `interop-monitoring.spec.ts`
-— so mirror it rather than inventing a shape, the same way #787 mirrored
-`fhir-import-staging.service.js`. Docker is on and the stack is warm, so
-the real-backend test `build-loop` wants is cheap to run; remember the
-`backend-app-test` rebuild first.
+1. **#684** — offered twice this sitting and not taken. Still the
+   highest-severity item on the board: any authenticated user can revoke
+   any patient's consent by enumerating a Mongo `_id`. Blocked on
+   RF010/RF021's actor model, a product call. **#800 filed this sitting
+   is the same class**, so a single decision about object-ownership
+   scoping would now unblock both.
+2. **#799** — a concrete, small, security-relevant fix (add the type
+   filter to the FHIR reader) with no design question attached.
+3. **#794 items 2 and 3** — the UI surface and correct-and-resubmit, to
+   finish RNF011 AC#4 properly.
+4. **#797** — the filter-ignoring mock sweep, which is what let #788 hide
+   behind five green tests. Pair with #781, which proposes the same
+   drawer for the sort-capturing helper.
