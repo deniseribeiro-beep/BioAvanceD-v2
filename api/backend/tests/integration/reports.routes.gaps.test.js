@@ -41,6 +41,10 @@ const DEFAULT_RBAC_COLLECTIONS = {
 
 function buildCollectionDb(collections = {}) {
   const capturedQueries = {};
+  // #769: the sort spec used to be swallowed by the stub below, which is
+  // why nothing here could see a handler ordering on a field no document
+  // carries. Captured per collection, same shape as capturedQueries.
+  const capturedSorts = {};
   const mergedCollections = { reportTemplates: REPORT_TEMPLATE_DOCS, ...DEFAULT_RBAC_COLLECTIONS, ...collections };
 
   const db = {
@@ -51,7 +55,8 @@ function buildCollectionDb(collections = {}) {
           capturedQueries[name] = query;
           const chain = {
             toArray: async () => docs,
-            sort() {
+            sort(spec) {
+              capturedSorts[name] = spec;
               return chain;
             },
             limit() {
@@ -84,7 +89,7 @@ function buildCollectionDb(collections = {}) {
     },
   };
 
-  return { db, capturedQueries };
+  return { db, capturedQueries, capturedSorts };
 }
 
 function buildThrowingDb() {
@@ -1265,6 +1270,65 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.reportID).toBe(1);
+    });
+  });
+
+  // #769: both handlers sorted on `registrationDate`, a name `e2549bee`
+  // canonicalized away -- Sample.js:38 declares `registeredAt` as the only
+  // (required) date field. Mongo treats an absent sort key as equal across
+  // documents, so the primary key contributed nothing and ordering fell
+  // through to the `createdAt` tiebreaker. Combined with .limit(100) that
+  // returns the wrong 100 rows, not the right 100 misordered, and
+  // `registeredAt` is back-datable where `createdAt` is not -- so the two
+  // genuinely differ on any historical import.
+  describe('#769: RF008 sample handlers order by the canonical registeredAt', () => {
+    const EXPECTED_SORT = { registeredAt: -1, createdAt: -1 };
+
+    it('tissueOriginHistory sorts by registeredAt, not registrationDate', async () => {
+      const { db, capturedSorts } = buildCollectionDb({
+        samples: [{ specimenId: 'SPEC-1', sampleOrigin: 'oral_mucosa' }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/tissue_origin_history/preview')
+        .send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedSorts.samples).toEqual(EXPECTED_SORT);
+    });
+
+    it('extracellularNetwork sorts by registeredAt, not registrationDate', async () => {
+      const { db, capturedSorts } = buildCollectionDb({
+        samples: [{ specimenId: 'SPEC-1', linkedProject: 'extracelular' }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/extracellular_network/preview')
+        .send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedSorts.samples).toEqual(EXPECTED_SORT);
+    });
+
+    // The createdAt tiebreaker is deliberate, not incidental: it is the
+    // documented technical fallback for rows that predate registeredAt
+    // (imports, legacy), the same reasoning buildSampleQuery's own
+    // two-field $or carries at reports.routes.js:237.
+    it('keeps createdAt as the secondary key on both handlers', async () => {
+      for (const code of ['tissue_origin_history', 'extracellular_network']) {
+        const { db, capturedSorts } = buildCollectionDb({
+          samples: [{ specimenId: 'SPEC-1', sampleOrigin: 'extracelular' }],
+        });
+
+        const response = await request(appWithDb(db))
+          .post(`/api/reports/${code}/preview`)
+          .send({ filters: {} });
+
+        expect(response.status).toBe(200);
+        expect(Object.keys(capturedSorts.samples)).toEqual(['registeredAt', 'createdAt']);
+      }
     });
   });
 });
