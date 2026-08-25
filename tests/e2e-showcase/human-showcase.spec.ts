@@ -306,3 +306,149 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
     }
   });
 });
+
+test.describe('Human-paced e2e showcase reel — Wave 4 (#743)', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  test('login, RF008 report templates + CSV export via the real UI, RF013 backup run and policy edit', async ({ page, request }) => {
+    const testUser = process.env.TEST_USER || 'admin';
+    const testPass = process.env.TEST_PASS || 'Admin@123';
+
+    let seededStorageBox: SeededStorageBox | null = null;
+    let originalRetentionDays: number | null = null;
+    let templateCodeToDelete: string | null = null;
+
+    // Pin the UI language before any goto -- i18n/index.ts#initLanguage reads
+    // `app_language` before the browser locale, and every label this reel
+    // clicks (and the narration relies on) is the pt-BR one.
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+
+    try {
+      // 1. Real admin login. RF003 is fully demoed in the Wave 2 reel --
+      // just enough here to reach an authenticated session.
+      await page.goto('/login');
+      await expect(page.getByTestId('login-page')).toBeVisible();
+      await beat(page, MEDIUM);
+      await page.getByTestId('login-username-input').fill(testUser);
+      await beat(page, SMALL);
+      await page.getByTestId('login-password-input').fill(testPass);
+      await beat(page, SMALL);
+      await page.getByTestId('login-submit-button').click();
+      await page.waitForURL('**/system-management');
+      await expect(page.getByTestId('system-management-page')).toBeVisible();
+      await beat(page, LARGE);
+
+      const admin = await realLogin(request);
+      const headers = { Authorization: `Bearer ${admin.token}` };
+
+      // Real data behind the report -- a participant plus a stored sample,
+      // the same fixture shape scientific-data-access.spec.ts's own RF008 UI
+      // test uses, so the exported CSV has a real row in it rather than only
+      // a header.
+      const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+      seededStorageBox = await seedStorageBoxLocation();
+      const createSample = await request.post(`${apiBaseURL}/api/samples`, {
+        headers,
+        data: {
+          participantId: participant.participantId,
+          sampleType: 'PLASMA',
+          sampleOrigin: 'VENOUS_BLOOD',
+          extractionProtocol: 'TUBE_EDTA',
+          quantity: 5,
+          quality: 'GOOD',
+          linkedProject: 'Wave 4 showcase project',
+          registeredAt: new Date().toISOString(),
+          boxId: seededStorageBox.boxId,
+          positionCode: seededStorageBox.positionCode,
+        },
+      });
+      expect([201, 202]).toContain(createSample.status());
+
+      // 2. RF008 AC#6 -- report templates are a real, user-editable model,
+      // not a fixed list (#726). Show the catalogue, then create one.
+      await page.goto('/reports/templates');
+      await expect(page.getByTestId('report-templates-page')).toBeVisible();
+      await beat(page, LARGE);
+      await expect(page.getByTestId('report-templates-table')).toBeVisible();
+      await beat(page, MEDIUM);
+
+      const templateCode = `showcase_w4_${Date.now()}`;
+      await page.getByTestId('new-report-template-button').click();
+      await expect(page.getByTestId('report-template-form')).toBeVisible();
+      await beat(page, MEDIUM);
+      await page.getByTestId('report-template-code-input').fill(templateCode);
+      await beat(page, SMALL);
+      await page.getByTestId('report-template-name-input').fill('Amostras por Paciente (showcase)');
+      await beat(page, SMALL);
+      await page.getByTestId('report-template-description-input').fill('Modelo criado ao vivo para a demonstracao da Wave 4');
+      await beat(page, SMALL);
+      await page.getByTestId('report-template-handler-key-select').selectOption('samplesByPatient');
+      await beat(page, SMALL);
+      await page.getByTestId('report-template-form-submit').click();
+      await expect(page.getByTestId('report-templates-table')).toContainText(templateCode, { timeout: 10_000 });
+      templateCodeToDelete = templateCode;
+      await beat(page, LARGE);
+
+      // 3. RF008 AC#4 -- a controlled export in an enabled format, driven
+      // entirely through the UI: card -> query page -> real CSV download.
+      await page.goto('/reports');
+      const card = page.locator('.report-card', { hasText: 'Amostras por Paciente' }).first();
+      await expect(card).toBeVisible();
+      await beat(page, MEDIUM);
+      await card.getByRole('button', { name: 'Gerar Relatório' }).click();
+      await expect(page).toHaveURL(/\/reports\/query\/samplesByPatient$/);
+      await beat(page, LARGE);
+
+      const [download] = await Promise.all([
+        page.waitForEvent('download'),
+        page.getByRole('button', { name: 'Exportar' }).click(),
+      ]);
+      expect(download.suggestedFilename()).toMatch(/^relatorio_.*\.csv$/);
+      await beat(page, LARGE);
+
+      // 4. RF013 -- an Administrador runs a backup and edits the policy.
+      const policyBefore = (await (await request.get(`${apiBaseURL}/api/backup-policy`, { headers })).json()).data;
+      originalRetentionDays = Number(policyBefore.retentionDays);
+      const newRetention = originalRetentionDays + 2;
+
+      await page.goto('/backup');
+      await expect(page.getByRole('heading', { name: 'Gerenciamento de Backup' })).toBeVisible();
+      await beat(page, LARGE);
+
+      await page.locator('.create-backup-button').click();
+      await expect(page.locator('.status-message.success')).toBeVisible({ timeout: 15_000 });
+      await beat(page, MEDIUM);
+      await expect(page.locator('.backups-table tbody tr').first()).toBeVisible();
+      await beat(page, LARGE);
+
+      await page.locator('#backup-policy-retention').fill(String(newRetention));
+      await beat(page, SMALL);
+      await page.getByRole('button', { name: 'Salvar Política' }).click();
+      await expect(page.getByText('Política de backup atualizada com sucesso!')).toBeVisible({ timeout: 10_000 });
+      await beat(page, LARGE);
+    } finally {
+      // Same restore-what-the-reel-changed discipline as the Wave 3 block:
+      // the policy is a global singleton, and the template/sample/box rows
+      // would otherwise accumulate on the shared volume.
+      const admin = await realLogin(request).catch(() => null);
+      if (admin && originalRetentionDays !== null) {
+        await request.put(`${apiBaseURL}/api/backup-policy`, {
+          headers: { Authorization: `Bearer ${admin.token}` },
+          data: { retentionDays: originalRetentionDays },
+        }).catch(() => {});
+      }
+      if (admin && templateCodeToDelete) {
+        await request.delete(`${apiBaseURL}/api/report-templates/${templateCodeToDelete}`, {
+          headers: { Authorization: `Bearer ${admin.token}` },
+        }).catch(() => {});
+      }
+      if (seededStorageBox) {
+        await cleanupStorageBoxLocation(seededStorageBox).catch(() => {});
+      }
+    }
+  });
+});
