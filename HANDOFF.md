@@ -1,47 +1,61 @@
 # HANDOFF
 
-**Written:** 2026-08-25 (mid-sitting rotation, after #745). **Still inside
+**Written:** 2026-08-25 (mid-sitting rotation, after #746/#747). **Still inside
 a rabbit hole** (tracker **#725**). Dennis said "Docker is on, continue
 rabbit hole" without ruling on #723's Definition of Done, so this sitting
-is landing the three gate blockers (#745 done, #746 and #744 next) to make
+is landing the gate blockers (#745, #746, #747 done; #744 next) to make
 #723's gate literally green under either reading, then closing #723,
 then #743, then #725.
 
 ## Rabbit-hole state
 
 Tracker: **#725**, open. Members closed across all sittings: #724, #726,
-#727, #728, #730, #737, #742, and (this sitting) **#745** -- merged
-`d27c74e3`, `seedActiveTerminologyConcept` now stamps the real releases it
-supersedes and cleanup restores them; verified live, no more hand repair
-of HPO/ORPHA/ICD10/OMIM after `intake-wizard.spec.ts`.
+#727, #728, #730, #737, #742, and this sitting **#745**, **#746**,
+**#747**.
+
+This sitting so far (~5 of ~10 pacing points):
+
+- **#745** (`d27c74e3`) -- `seedActiveTerminologyConcept` now stamps the
+  real releases it supersedes and cleanup restores them; no more hand
+  repair of HPO/ORPHA/ICD10/OMIM after `intake-wizard.spec.ts`.
+- **#746 + #747** (`6f4492df`) -- `intake-wizard.spec.ts` is 6/6 green on
+  two consecutive live runs. #746: generated checksum-valid unique CPF
+  (`tests/e2e/helpers/cpf.ts`) instead of the fixed `11144477735`. #747
+  (filed and closed in the same slice): with that 409 gone the submission
+  still 409'd from `resolveAutomaticLocation` -- the block seeded no
+  StorageBox and had been living on another spec's debris until #730's
+  cleanup wiring removed it; it now seeds and releases its own. The
+  submission assertion also reports status + body now, so the next
+  rejection names itself instead of reading as a bare `false`.
 
 Remaining, in order:
 
-- **#746** -- `intake-wizard.spec.ts` (#696 block) fixed CPF
-  `11144477735` → 409 on a persistent volume. Test-only: generate a
-  checksum-valid unique CPF per run. Not started. `test/<slug>` branch,
-  `test-loop` route (invoke it via the Skill tool before the first edit
-  -- the edit gate demands it per issue; pack #405).
 - **#744** -- `inline-storage-movement.spec.ts` ×4: add
   `page.route('**/api/samples/*/files**')` → `{success:true,data:[]}`
-  next to the other four background mocks in `openPanelForSample`.
-  Confirmed this sitting that `/samples/:id/files` (from
-  `SampleFilesSection`) is the only unmocked mount-time call on
-  `SampleDetailsPage`. Not started.
-- **#723** -- specs merged (`d0e6d1ec`), last gate 193/200. Once #746 and
-  #744 land: rerun the full gate single-worker (recipe below), expect
-  200/200, close #723 with the numbers.
+  next to the other four background mocks in `openPanelForSample`
+  (`tests/e2e/inline-storage-movement.spec.ts`, ~line 85-115). Confirmed
+  this sitting by reading `SampleDetailsPage.tsx` that
+  `/samples/:id/files` (fired by `SampleFilesSection`'s mount effect) is
+  the only unmocked mount-time call left. Not started.
+- **#723** -- specs merged (`d0e6d1ec`), last gate 193/200. Once #744
+  lands: rerun the full gate single-worker (recipe below), expect
+  200/200, close #723 with the numbers. Dennis never had to rule on the
+  "green modulo filed failures" question -- landing #745/#746/#747/#744
+  makes it moot.
 - **#743** -- Wave 4 showcase reel (RF008 `/reports` → export, RF013
   `/backup`), per `e2e-showcase-video`. Not started; needs the stack.
 
 Then #725's upward-cascade check and close it naming every member above.
 
-Pacing: ~2 of ~10 points spent this sitting (#745).
+Per-item discipline that bit this sitting: each popped item needs its
+routed loop skill (`test-loop` here) invoked via the Skill tool **before
+its first edit** -- the edit gate is per-issue-number and blocks
+otherwise (filed as pack #405).
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, pushed, up to date with
-  origin @ `d27c74e3` plus this rotation. No fix/test branches left.
+  origin @ `6f4492df` plus this rotation. No fix/test branches left.
 - **Docker stack is UP** (brought up this sitting with `--build`):
   `compose.test.yml` core services + `admin-bootstrap-test` +
   `foundation-bootstrap-test` + all 16 `reference-data-bootstrap-*-test`
@@ -55,14 +69,17 @@ Pacing: ~2 of ~10 points spent this sitting (#745).
 
 ## Filed this sitting (not queue members)
 
-Skills-pack: #404 (docker-workflow overlay's "known gate failures as of
+BioAvanceD-v2: none beyond #747 (which became a queue member and closed).
+Skills-pack: #406 (`npx tsc` at the repo root runs a prank package and
+exits 0 -- a filtered-output check reads as a clean typecheck; use `npm
+run typecheck` or `node frontend/node_modules/typescript/bin/tsc`), #404 (docker-workflow overlay's "known gate failures as of
 2026-08-25" paragraph + #745 hand-repair recipe now stale), #405
 (rabbit-hole re-entry doesn't say to invoke the routed loop skill per
 popped item; edit gate blocks).
 
 ## Recommended next steps
 
-1. #746, then #744 (both small, test-only).
+1. #744 (small, test-only).
 2. Full gate rerun → close #723.
 3. #743 showcase reel.
 4. Close #725.
