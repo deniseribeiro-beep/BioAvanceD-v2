@@ -71,7 +71,17 @@ export interface SeededStorageBox {
   shelfId: string;
   freezerId: string;
   equipmentId: string;
-  containerID: string;
+  /**
+   * #757: numeric, not a string. StorageContainer.js declares
+   * `containerID: { type: Number }` and Equipment.js rejects a
+   * non-numeric `equipmentID` outright ("equipmentID deve ser um
+   * número"); legacy-location-migration-mapping.md:26/97 settles that
+   * the two are the same value ("keyed by `containerID` =
+   * `Equipment.equipmentID`", "both plain numbers"). This fixture used
+   * a `RF004-e2e-EQ-<ts>` string, which a raw insertOne let past both
+   * schemas.
+   */
+  containerID: number;
 }
 
 /**
@@ -87,7 +97,12 @@ export interface SeededStorageBox {
 export async function seedStorageBoxLocation(): Promise<SeededStorageBox> {
   const db = await getDb();
   const suffix = Date.now();
-  const containerID = `RF004-e2e-EQ-${suffix}`;
+  // #757: numeric -- see SeededStorageBox.containerID. The same value is
+  // written to StorageContainer.containerID and Equipment.equipmentID
+  // because sample.service.js's RF004 gate joins on exactly that equality
+  // (`freezer.containerID === Equipment.equipmentID`, line 244), so the
+  // two cannot be given different types independently.
+  const containerID = suffix;
   const positionCode = 'A1';
 
   const freezerResult = await db.collection('storageContainers').insertOne({

@@ -102,11 +102,19 @@ function makeEquipmentDbMock(docs) {
 }
 
 describe('generateUniqueEquipmentID with string-typed debris (#736)', () => {
-  // seedStorageBoxLocation() in tests/e2e/helpers/seedParticipant.ts inserts
-  // equipment fixtures with `equipmentID: containerID`, a string. Reproduced
-  // live against a compose.test.yml stack: POST /api/equipment with no
-  // explicit equipmentID came back with 'RF004-e2e-EQ-17876028463111' -- the
-  // string concatenated with 1, not a number incremented by 1.
+  // The original source was seedStorageBoxLocation() in
+  // tests/e2e/helpers/seedParticipant.ts, which inserted equipment fixtures
+  // with `equipmentID: containerID`, a string. Reproduced live against a
+  // compose.test.yml stack: POST /api/equipment with no explicit equipmentID
+  // came back with 'RF004-e2e-EQ-17876028463111' -- the string concatenated
+  // with 1, not a number incremented by 1.
+  //
+  // #757 has since fixed that fixture to write a numeric id, so it is no
+  // longer a live producer of this debris. These tests stay regardless: the
+  // numeric filter guards the generator against a string equipmentID from
+  // *any* source, and nothing stops a raw insertOne from bypassing
+  // Equipment.js's own "equipmentID deve ser um número" check the way that
+  // fixture did.
   const stringDebris = 'RF004-e2e-EQ-1787602846311';
 
   it('returns a numeric next id, not a concatenated string, when string debris is present', async () => {
