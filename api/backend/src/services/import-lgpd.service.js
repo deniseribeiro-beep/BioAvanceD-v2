@@ -1436,10 +1436,12 @@ class ImportLGPDService {
   parseSampleRow(row) {
     const { parseQualityMIABIS } = require('../utils/qualityMIABISValidator');
     // Parse de data de registro
+    // #758: this was a two-alias fallback (row.registerDate, then
+    // row.registrationDate) until e2549bee renamed both arms to the same
+    // canonical name, leaving an else-if whose condition could never differ
+    // from the if. The producer side of that collision is #767.
     let registeredAt = null;
     if (row.registeredAt) {
-      registeredAt = this.parseBirthDate(row.registeredAt);
-    } else if (row.registeredAt) {
       registeredAt = this.parseBirthDate(row.registeredAt);
     }
     if (!registeredAt) {
@@ -1507,7 +1509,6 @@ class ImportLGPDService {
       sampleOrigin: this.normalizeCatalogValue(row.sampleOrigin, SAMPLE_ORIGINS),
       extractionProtocol: this.normalizeCatalogValue(row.extractionProtocol, EXTRACTION_PROTOCOLS),
       barcode: row.barcode ? String(row.barcode).trim() : null, // RF004 - barcode como string
-      registeredAt: registeredAt,
       registeredAt: registeredAt,
       quantity: row.quantity ? parseFloat(row.quantity) : null,
       quality: parseQualityMIABIS(row.quality), // Valida e converte para id MIABIS canônico
