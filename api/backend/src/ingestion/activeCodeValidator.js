@@ -59,8 +59,7 @@ async function checkActiveCode(db, { systemUri, code, version = null }) {
     return buildResult(concept, await resolveRelease(releases, concept));
   }
 
-  const cursor = await concepts.find({ systemUri, code });
-  const candidates = await cursor.toArray();
+  const candidates = await concepts.find({ systemUri, code }).toArray();
   if (candidates.length === 0) {
     return buildResult(null, null);
   }

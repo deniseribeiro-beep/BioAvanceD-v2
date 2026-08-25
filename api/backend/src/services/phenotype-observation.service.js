@@ -32,16 +32,14 @@ async function createPhenotypeObservation(db, data) {
 /** All phenotype observations for a participant. */
 async function getPhenotypeObservationsForParticipant(db, participantId) {
   const collection = await getCollection(db, 'phenotypeObservations');
-  const cursor = await collection.find({ participantId: String(participantId) });
-  return cursor.toArray();
+  return collection.find({ participantId: String(participantId) }).toArray();
 }
 
 /** All phenotype observations recorded within a given encounter (P1X-0075). */
 async function getPhenotypeObservationsForEncounter(db, encounterId) {
   if (!encounterId) return [];
   const collection = await getCollection(db, 'phenotypeObservations');
-  const cursor = await collection.find({ encounterId: String(encounterId) });
-  return cursor.toArray();
+  return collection.find({ encounterId: String(encounterId) }).toArray();
 }
 
 module.exports = {
