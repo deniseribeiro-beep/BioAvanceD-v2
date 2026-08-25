@@ -259,6 +259,82 @@ describe('AuthService.processLogin', () => {
     );
   });
 
+  // #683: mfaLocked was written by the 5-failed-attempts path above and read
+  // by nothing in the login path -- auth.routes.js only displays it on a
+  // status screen. So the 'lockout' never denied anything: the next attempt
+  // was processed as if nothing had happened, mfaFailedAttempts kept climbing
+  // past 5, and a correct code still logged the user straight in.
+  //
+  // dict-02 P1X-0200 makes mfaLocked a 1..1 Core boolean ('Indica bloqueio
+  // específico do segundo fator'). Its companion mfaLockedUntil (P1X-0201) is
+  // 0..1 Condicional -- 'quando a política usar duração' -- so a timed
+  // auto-unlock is explicitly optional and no duration policy exists here.
+  // The flag alone is therefore the whole contract: locked until an admin
+  // clears it via the existing reset-mfa path.
+  describe('mfaLocked enforcement (#683)', () => {
+    it('refuses a locked account even when the MFA code is correct', async () => {
+      vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+      vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
+      const db = makeDb();
+      const user = { ...BASE_USER, mfaEnabled: true, mfaSecret: 'SECRET', mfaLocked: true, mfaFailedAttempts: 5 };
+
+      await expect(
+        authService.processLogin(db, user, 'pw', '123456', db.collection(), {})
+      ).rejects.toThrow(/MFA bloqueado/);
+    });
+
+    it('refuses a locked account before any MFA processing, so failed attempts stop climbing', async () => {
+      vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+      vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(false);
+      const collectionApi = { findOne: vi.fn(), updateOne: vi.fn().mockResolvedValue({}), find: vi.fn(), insertOne: vi.fn() };
+      const db = makeDb(collectionApi);
+      const user = { ...BASE_USER, mfaEnabled: true, mfaSecret: 'SECRET', mfaLocked: true, mfaFailedAttempts: 7 };
+
+      await expect(
+        authService.processLogin(db, user, 'pw', '000000', db.collection(), {})
+      ).rejects.toThrow(/MFA bloqueado/);
+
+      expect(collectionApi.updateOne).not.toHaveBeenCalledWith(
+        { _id: user._id },
+        { $set: { mfaFailedAttempts: 8 } }
+      );
+    });
+
+    it('refuses a locked account that also has no MFA code supplied, instead of asking for one', async () => {
+      vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+      const db = makeDb();
+      const user = { ...BASE_USER, mfaEnabled: true, mfaSecret: 'SECRET', mfaLocked: true };
+
+      await expect(
+        authService.processLogin(db, user, 'pw', null, db.collection(), {})
+      ).rejects.toThrow(/MFA bloqueado/);
+    });
+
+    it('still refuses a wrong password with the generic credentials error, not the lock message', async () => {
+      // The gate sits after password verification, matching where the status
+      // guard already sits. A locked account must not be distinguishable from
+      // any other account to someone who does not know the password.
+      vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+      const db = makeDb();
+      const user = { ...BASE_USER, mfaEnabled: true, mfaSecret: 'SECRET', mfaLocked: true };
+
+      await expect(
+        authService.processLogin(db, user, 'wrong', null, db.collection(), {})
+      ).rejects.toThrow(/Credenciais inválidas/);
+    });
+
+    it('lets an unlocked account through as before', async () => {
+      vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+      vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
+      const db = makeDb({ findOne: vi.fn(), updateOne: vi.fn().mockResolvedValue({}), find: vi.fn(), insertOne: vi.fn().mockResolvedValue({ insertedId: { toString: () => 'sess-1' } }) });
+      const user = { ...BASE_USER, mfaEnabled: true, mfaSecret: 'SECRET', mfaLocked: false, mfaFailedAttempts: 2 };
+
+      const result = await authService.processLogin(db, user, 'pw', '123456', db.collection(), {});
+
+      expect(result.token).toBeTruthy();
+    });
+  });
+
   it('logs in successfully without MFA when not enabled', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     const db = makeDb();
