@@ -541,7 +541,11 @@ describe('import-lgpd.controller', () => {
         total: 2,
         success: 1,
         errors: 1,
-        errorsDetails: [{ row: 2, errors: ['dup barcode'], participantId: '12345678' }]
+        errorsDetails: [{ row: 2, errors: ['dup barcode'], participantId: '12345678' }],
+        // #787 (RNF011 AC#4): the response now points at the quarantine
+        // batch holding the rejected rows. Null here because this test's
+        // stubbed service result carries no stagingBatchId.
+        stagingBatchId: null
       });
     });
 

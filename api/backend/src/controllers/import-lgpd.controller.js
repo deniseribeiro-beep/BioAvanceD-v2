@@ -578,7 +578,13 @@ class ImportLGPDController {
             row: err.row,
             errors: err.errors,
             participantId: err.data?.participantId || null // Apenas ID, sem dados sensíveis
-          }))
+          })),
+          // #787 (RNF011 AC#4): where the rejected rows were quarantined.
+          // The response is no longer the only copy -- this points at the
+          // import_batches document holding them. Null when nothing was
+          // rejected, and also null if quarantining itself failed, which is
+          // logged server-side.
+          stagingBatchId: results.stagingBatchId ? String(results.stagingBatchId) : null
         }
       });
 
