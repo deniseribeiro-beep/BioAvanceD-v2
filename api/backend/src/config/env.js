@@ -111,9 +111,6 @@ module.exports = {
   RESTORE_TEST_CRON: process.env.RESTORE_TEST_CRON,
   TEMP_MONITOR_CRON: process.env.TEMP_MONITOR_CRON,
   TEMP_STALE_MINUTES: process.env.TEMP_STALE_MINUTES,
-  ENABLE_CONSENT_SYNC: process.env.ENABLE_CONSENT_SYNC === 'true' || process.env.ENABLE_CONSENT_SYNC === '1',
-  CONSENT_SYNC_CRON: process.env.CONSENT_SYNC_CRON,
-  CONSENT_SYNC_BATCH_SIZE: process.env.CONSENT_SYNC_BATCH_SIZE,
 
   // Notification
   APP_DOMAIN: process.env.APP_DOMAIN,
