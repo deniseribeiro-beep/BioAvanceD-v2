@@ -66,14 +66,24 @@ describe('generateUniqueEquipmentID', () => {
 // the filter and reproduces MongoDB's BSON sort order, in which every string
 // sorts above every number, so `sort: { equipmentID: -1 }` returns a
 // string-typed row ahead of any numeric one.
-function makeEquipmentDbMock(docs) {
+// #756: generalized over the id field name. #736 added this as
+// makeEquipmentDbMock (hardcoded to `equipmentID`); the four sibling
+// generators need the identical fake keyed on originID/protocolID/
+// qualityID/sampleTypeID, so the field is now a parameter rather than
+// four near-copies. makeEquipmentDbMock stays below as a thin wrapper so
+// #736's own tests read unchanged.
+//
+// Deliberately NOT makeDbMock (above): that one ignores its query filter
+// entirely and returns canned results in call order, which is precisely
+// why the pre-existing tests could not see this class of bug.
+function makeIdDbMock(field, docs) {
   const typeRank = (value) => (typeof value === 'number' ? 1 : 2);
 
-  const matches = (doc, filter) => Object.entries(filter).every(([field, condition]) => {
+  const matches = (doc, filter) => Object.entries(filter).every(([f, condition]) => {
     if (condition && typeof condition === 'object' && '$type' in condition) {
-      return condition.$type === 'number' && typeof doc[field] === 'number';
+      return condition.$type === 'number' && typeof doc[f] === 'number';
     }
-    return doc[field] === condition;
+    return doc[f] === condition;
   });
 
   const queries = [];
@@ -83,13 +93,14 @@ function makeEquipmentDbMock(docs) {
       queries.push(filter);
       let found = docs.filter((doc) => matches(doc, filter));
 
-      const direction = options.sort && options.sort.equipmentID;
+      // MongoDB's BSON sort order: every string sorts above every number.
+      const direction = options.sort && options.sort[field];
       if (direction) {
         found = [...found].sort((a, b) => {
-          const byType = typeRank(a.equipmentID) - typeRank(b.equipmentID);
+          const byType = typeRank(a[field]) - typeRank(b[field]);
           if (byType !== 0) return direction === -1 ? -byType : byType;
-          if (a.equipmentID === b.equipmentID) return 0;
-          const byValue = a.equipmentID < b.equipmentID ? -1 : 1;
+          if (a[field] === b[field]) return 0;
+          const byValue = a[field] < b[field] ? -1 : 1;
           return direction === -1 ? -byValue : byValue;
         });
       }
@@ -99,6 +110,10 @@ function makeEquipmentDbMock(docs) {
   };
 
   return { db: { collection: () => collection }, collection };
+}
+
+function makeEquipmentDbMock(docs) {
+  return makeIdDbMock('equipmentID', docs);
 }
 
 describe('generateUniqueEquipmentID with string-typed debris (#736)', () => {
@@ -317,4 +332,56 @@ describe('generateUniqueSpecimenId', () => {
     await generateUniqueSpecimenId(db, 'custom_samples');
     expect(usedName).toBe('custom_samples');
   });
+});
+
+// #756: the four sibling generators carry #736's bug latently -- same
+// findOne/sort/`+ 1` shape, no numeric filter. #736 fixed only
+// equipmentIDGenerator, because that was the one with a proven live
+// writer (the e2e fixture, since fixed in #757).
+//
+// Each field's only write outside its own generator is an unvalidated
+// pass-through in the model (SampleOrigin.js:27, ExtractionProtocol.js:27,
+// QualityDescription.js:29, SampleType.js:27), so a caller passing a
+// string writes a string -- and from that point the generator is
+// corrupted permanently for that collection, because the corrupted value
+// is itself a string and stays at the top of the descending BSON sort,
+// growing one character per create.
+describe('#756: sibling ID generators are immune to string-typed debris', () => {
+  const CASES = [
+    { name: 'originID', field: 'originID', run: generateUniqueOriginID },
+    { name: 'protocolID', field: 'protocolID', run: generateUniqueProtocolID },
+    { name: 'qualityID', field: 'qualityID', run: generateUniqueQualityID },
+    { name: 'sampleTypeID', field: 'sampleTypeID', run: generateUniqueSampleTypeID },
+  ];
+
+  for (const { name, field, run } of CASES) {
+    describe(name, () => {
+      const debris = `LEGACY-${name}-9`;
+
+      it('returns a numeric next id, not a concatenated string', async () => {
+        const { db } = makeIdDbMock(field, [{ [field]: 3 }, { [field]: debris }]);
+
+        const id = await run(db);
+
+        expect(id).toBe(4);
+        expect(typeof id).toBe('number');
+      });
+
+      it('restricts the last-id lookup to numeric values', async () => {
+        const { db, collection } = makeIdDbMock(field, [{ [field]: 3 }, { [field]: debris }]);
+
+        await run(db);
+
+        expect(collection.queries[0]).toEqual({ [field]: { $type: 'number' } });
+      });
+
+      it('starts at 1 when the collection holds nothing but string debris', async () => {
+        const { db } = makeIdDbMock(field, [{ [field]: debris }]);
+
+        const id = await run(db);
+
+        expect(id).toBe(1);
+      });
+    });
+  }
 });

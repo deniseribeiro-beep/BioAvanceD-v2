@@ -14,8 +14,14 @@ async function generateUniqueQualityID(db, collectionName = 'qualityDescriptions
     
     // Busca o último qualityID
     const lastQuality = await qualityCollection
+      // #756: restrito a qualityID numérico, espelhando a correção de #736 em
+      // equipmentIDGenerator. Na ordenação BSON do MongoDB toda string vem
+      // depois de qualquer número, então um qualityID string é devolvido
+      // primeiro por sort: { qualityID: -1 } e o incremento vira concatenação
+      // de string em vez de soma -- corrompendo o gerador permanentemente
+      // para essa collection, já que o valor corrompido também é string.
       .findOne(
-        {},
+        { qualityID: { $type: 'number' } },
         { 
           sort: { qualityID: -1 },
           projection: { qualityID: 1 }

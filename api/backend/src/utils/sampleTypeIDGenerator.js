@@ -8,8 +8,14 @@ async function generateUniqueSampleTypeID(db, collectionName = 'sampleTypes') {
     const collection = db.collection(collectionName);
     
     const lastItem = await collection
+      // #756: restrito a sampleTypeID numérico, espelhando a correção de #736 em
+      // equipmentIDGenerator. Na ordenação BSON do MongoDB toda string vem
+      // depois de qualquer número, então um sampleTypeID string é devolvido
+      // primeiro por sort: { sampleTypeID: -1 } e o incremento vira concatenação
+      // de string em vez de soma -- corrompendo o gerador permanentemente
+      // para essa collection, já que o valor corrompido também é string.
       .findOne(
-        {},
+        { sampleTypeID: { $type: 'number' } },
         { 
           sort: { sampleTypeID: -1 },
           projection: { sampleTypeID: 1 }
