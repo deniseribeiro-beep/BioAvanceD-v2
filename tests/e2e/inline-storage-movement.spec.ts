@@ -98,6 +98,19 @@ async function openPanelForSample(page: import('@playwright/test').Page, sample:
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, data: [] }) });
   });
 
+  // #744: SampleDetailsPage mounts SampleFilesSection (#647, added after
+  // #611's mock list above), whose mount effect fires
+  // GET /api/samples/:id/files (api.ts sampleService.listFiles). Unmocked,
+  // it 401s against a real backend on mockLogin's unsigned token and the
+  // global response interceptor force-logs-out mid-test -- the same
+  // mechanism #611 documented, one endpoint later. Scoped to the files
+  // sub-route only, for the same reason the bare '**/api/samples' route
+  // above is scoped: a broader pattern would also swallow sibling
+  // sub-routes and fulfill them with the wrong envelope.
+  await page.route('**/api/samples/*/files**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, data: [] }) });
+  });
+
   // InlineStorageMovementPanel also resolves current location via
   // GET /storage/sample/:sampleId on mount (#495) — unmocked for whichever
   // sample id the caller didn't set up its own route for, this 401s the
