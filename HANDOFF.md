@@ -1,19 +1,19 @@
 # HANDOFF
 
-**Written:** 2026-08-25 (mid-sitting rotation, after #746/#747). **Still inside
+**Written:** 2026-08-25 (mid-sitting rotation, after #744; gate in flight). **Still inside
 a rabbit hole** (tracker **#725**). Dennis said "Docker is on, continue
 rabbit hole" without ruling on #723's Definition of Done, so this sitting
-is landing the gate blockers (#745, #746, #747 done; #744 next) to make
+is landing the gate blockers (#744, #745, #746, #747 -- all done) to make
 #723's gate literally green under either reading, then closing #723,
 then #743, then #725.
 
 ## Rabbit-hole state
 
 Tracker: **#725**, open. Members closed across all sittings: #724, #726,
-#727, #728, #730, #737, #742, and this sitting **#745**, **#746**,
-**#747**.
+#727, #728, #730, #737, #742, and this sitting **#744**, **#745**,
+**#746**, **#747**.
 
-This sitting so far (~5 of ~10 pacing points):
+This sitting so far (~7 of ~10 pacing points):
 
 - **#745** (`d27c74e3`) -- `seedActiveTerminologyConcept` now stamps the
   real releases it supersedes and cleanup restores them; no more hand
@@ -28,18 +28,18 @@ This sitting so far (~5 of ~10 pacing points):
   submission assertion also reports status + body now, so the next
   rejection names itself instead of reading as a bare `false`.
 
+- **#744** (`49ca8eac`) -- `inline-storage-movement.spec.ts` now mocks
+  `GET /samples/:id/files` (`SampleFilesSection`, mounted by #647 after
+  #611's mock list); 4/4 in both mocked and live-stack modes. Re-checked
+  `SampleDetailsPage.tsx`: no other unmocked mount-time call remains.
+
 Remaining, in order:
 
-- **#744** -- `inline-storage-movement.spec.ts` ×4: add
-  `page.route('**/api/samples/*/files**')` → `{success:true,data:[]}`
-  next to the other four background mocks in `openPanelForSample`
-  (`tests/e2e/inline-storage-movement.spec.ts`, ~line 85-115). Confirmed
-  this sitting by reading `SampleDetailsPage.tsx` that
-  `/samples/:id/files` (fired by `SampleFilesSection`'s mount effect) is
-  the only unmocked mount-time call left. Not started.
 - **#723** -- specs merged (`d0e6d1ec`), last gate 193/200. Once #744
-  lands: rerun the full gate single-worker (recipe below), expect
-  200/200, close #723 with the numbers. Dennis never had to rule on the
+  lands: **the full single-worker gate is running now** (log:
+  `$TEMP/claude/gate.log`); close #723 with its numbers. If this sitting
+  ended before it finished, just rerun it -- the stack is up and all four
+  blockers are merged. Dennis never had to rule on the
   "green modulo filed failures" question -- landing #745/#746/#747/#744
   makes it moot.
 - **#743** -- Wave 4 showcase reel (RF008 `/reports` → export, RF013
