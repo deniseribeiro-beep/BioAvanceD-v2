@@ -60,6 +60,93 @@ describe('generateUniqueEquipmentID', () => {
   });
 });
 
+// #736: makeDbMock above ignores its query filter entirely -- it returns
+// canned results in call order no matter what was asked for -- which is
+// exactly why the existing tests could not see this bug. This fake honours
+// the filter and reproduces MongoDB's BSON sort order, in which every string
+// sorts above every number, so `sort: { equipmentID: -1 }` returns a
+// string-typed row ahead of any numeric one.
+function makeEquipmentDbMock(docs) {
+  const typeRank = (value) => (typeof value === 'number' ? 1 : 2);
+
+  const matches = (doc, filter) => Object.entries(filter).every(([field, condition]) => {
+    if (condition && typeof condition === 'object' && '$type' in condition) {
+      return condition.$type === 'number' && typeof doc[field] === 'number';
+    }
+    return doc[field] === condition;
+  });
+
+  const queries = [];
+  const collection = {
+    queries,
+    findOne: vi.fn(async (filter = {}, options = {}) => {
+      queries.push(filter);
+      let found = docs.filter((doc) => matches(doc, filter));
+
+      const direction = options.sort && options.sort.equipmentID;
+      if (direction) {
+        found = [...found].sort((a, b) => {
+          const byType = typeRank(a.equipmentID) - typeRank(b.equipmentID);
+          if (byType !== 0) return direction === -1 ? -byType : byType;
+          if (a.equipmentID === b.equipmentID) return 0;
+          const byValue = a.equipmentID < b.equipmentID ? -1 : 1;
+          return direction === -1 ? -byValue : byValue;
+        });
+      }
+
+      return found[0] ?? null;
+    })
+  };
+
+  return { db: { collection: () => collection }, collection };
+}
+
+describe('generateUniqueEquipmentID with string-typed debris (#736)', () => {
+  // seedStorageBoxLocation() in tests/e2e/helpers/seedParticipant.ts inserts
+  // equipment fixtures with `equipmentID: containerID`, a string. Reproduced
+  // live against a compose.test.yml stack: POST /api/equipment with no
+  // explicit equipmentID came back with 'RF004-e2e-EQ-17876028463111' -- the
+  // string concatenated with 1, not a number incremented by 1.
+  const stringDebris = 'RF004-e2e-EQ-1787602846311';
+
+  it('returns a numeric next id, not a concatenated string, when string debris is present', async () => {
+    const { db } = makeEquipmentDbMock([{ equipmentID: 3 }, { equipmentID: stringDebris }]);
+
+    const id = await generateUniqueEquipmentID(db);
+
+    expect(id).toBe(4);
+    expect(typeof id).toBe('number');
+  });
+
+  it('restricts the last-id lookup to numeric equipmentID values', async () => {
+    const { db, collection } = makeEquipmentDbMock([{ equipmentID: 3 }, { equipmentID: stringDebris }]);
+
+    await generateUniqueEquipmentID(db);
+
+    expect(collection.queries[0]).toEqual({ equipmentID: { $type: 'number' } });
+  });
+
+  it('starts at 1 when the collection holds nothing but string debris', async () => {
+    const { db } = makeEquipmentDbMock([{ equipmentID: stringDebris }]);
+
+    const id = await generateUniqueEquipmentID(db);
+
+    expect(id).toBe(1);
+  });
+
+  it('still increments past a taken id when debris is present', async () => {
+    const { db } = makeEquipmentDbMock([
+      { equipmentID: 3 },
+      { equipmentID: 4 },
+      { equipmentID: stringDebris }
+    ]);
+
+    const id = await generateUniqueEquipmentID(db);
+
+    expect(id).toBe(5);
+  });
+});
+
 // ── generateUniqueOriginID ─────────────────────────────────
 
 describe('generateUniqueOriginID', () => {
