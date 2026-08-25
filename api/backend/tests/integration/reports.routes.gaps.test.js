@@ -573,6 +573,114 @@ describe('reports.routes.js gaps', () => {
     expect(p1.sampleCount).toBe(1);
   });
 
+  // #732: GET /:type/filters accepted a `:type` param and ignored it --
+  // the handler's own first argument was named `_req` -- returning the same
+  // hardcoded 4-entry list for every report type, with a `status` option
+  // set ('Ativo'/'Inativo') that matches nothing the query layer accepts.
+  // The catalog now resolves the type to its ReportTemplate handlerKey and
+  // returns what that handler actually consumes.
+  describe('#732: GET /:type/filters is per-type', () => {
+    it('um tipo enraizado em amostras devolve as seis dimensoes do AC#1', async () => {
+      const { db } = buildCollectionDb({});
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/samples/filters');
+
+      expect(response.status).toBe(200);
+      expect(response.body.handlerKey).toBe('sample');
+      const names = response.body.filters.map((entry) => entry.name);
+      expect(names).toEqual(
+        expect.arrayContaining([
+          'startDate',
+          'endDate',
+          'collectionId',
+          'sampleType',
+          'sampleOrigin',
+          'status',
+          'storageBoxId',
+        ])
+      );
+
+      // The status options must be the vocabulary normalizeReleaseStatus
+      // actually accepts (#531), not the old 'Ativo'/'Inativo' pair.
+      const status = response.body.filters.find((entry) => entry.name === 'status');
+      expect(status.options).toEqual(['AVAILABLE', 'QUARANTINE', 'BLOCKED']);
+
+      // Selects must carry the real MIABIS id vocabularies.
+      const sampleType = response.body.filters.find((entry) => entry.name === 'sampleType');
+      expect(sampleType.options).toContain('PLASMA');
+      const sampleOrigin = response.body.filters.find((entry) => entry.name === 'sampleOrigin');
+      expect(sampleOrigin.options).toContain('VENOUS_BLOOD');
+    });
+
+    it('um tipo enraizado em pacientes acrescenta keyword', async () => {
+      const { db } = buildCollectionDb({});
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/samples_by_patient/filters');
+
+      expect(response.status).toBe(200);
+      expect(response.body.handlerKey).toBe('samplesByPatient');
+      expect(response.body.filters.map((entry) => entry.name)).toContain('keyword');
+    });
+
+    it('um relatorio de temperatura devolve periodo e criticalAlertsOnly, nao filtros de amostra', async () => {
+      const { db } = buildCollectionDb({});
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/temperature/filters');
+
+      expect(response.status).toBe(200);
+      const names = response.body.filters.map((entry) => entry.name);
+      expect(names).toEqual(['startDate', 'endDate', 'criticalAlertsOnly']);
+      expect(names).not.toContain('sampleType');
+    });
+
+    // handleSensor/handleEquipment/handleResult/handleTissueOriginHistory/
+    // handleExtracellularNetwork read nothing off `filters` except the
+    // organizationScope the server resolves itself. An empty catalog is the
+    // truthful answer -- four generic fields that are silently ignored is
+    // strictly worse for anyone building a filter UI.
+    it('um tipo que nao consome filtro nenhum devolve uma lista vazia', async () => {
+      const { db } = buildCollectionDb({});
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/equipment/filters');
+
+      expect(response.status).toBe(200);
+      expect(response.body.filters).toEqual([]);
+      expect(response.body.handlerKey).toBe('equipment');
+    });
+
+    it('tipos diferentes nao devolvem mais o mesmo catalogo', async () => {
+      const { db } = buildCollectionDb({});
+      const testApp = appWithDb(db);
+
+      const samples = await request(testApp).get('/api/reports/samples/filters');
+      const logs = await request(testApp).get('/api/reports/access_logs/filters');
+
+      expect(samples.status).toBe(200);
+      expect(logs.status).toBe(200);
+      expect(logs.body.filters).not.toEqual(samples.body.filters);
+      expect(logs.body.filters.map((entry) => entry.name)).toEqual(['startDate', 'endDate']);
+    });
+
+    it('um tipo desconhecido devolve 404', async () => {
+      const { db } = buildCollectionDb({});
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/nao_existe/filters');
+
+      expect(response.status).toBe(404);
+    });
+
+    it('sem banco devolve 503', async () => {
+      const response = await request(appWithDb(null)).get('/api/reports/samples/filters');
+
+      expect(response.status).toBe(503);
+    });
+  });
+
   // #739 (RF008 AC#1): "Aplicar filtros por periodo, colecao, tipo, origem,
   // estado e localizacao." Only `estado` (status -> specimenStatus) was
   // wired into buildSampleQuery; the other five were accepted by the API

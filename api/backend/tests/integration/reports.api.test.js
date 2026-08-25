@@ -255,15 +255,19 @@ describe('Reports API integration', () => {
     expect(mockDb.reports[2].generatedBy).toBe('user-1');
   });
 
-  it('GET /api/reports/:type/filters retorna opções padrão', async () => {
+  // #732: this used to assert one hardcoded list that every `:type`
+  // returned. The catalog is now resolved per report type through the
+  // template's handlerKey, so `audit` gets the accessLogs handler's own
+  // filters -- a date range, and nothing else, because handleAccessLogs
+  // reads nothing else off `filters`.
+  it('GET /api/reports/:type/filters devolve o catálogo do handler do tipo', async () => {
     const response = await request(app).get('/api/reports/audit/filters');
 
     expect(response.status).toBe(200);
+    expect(response.body.handlerKey).toBe('accessLogs');
     expect(response.body.filters).toEqual([
-      { name: 'startDate', label: 'Data Inicial', type: 'date' },
-      { name: 'endDate', label: 'Data Final', type: 'date' },
-      { name: 'status', label: 'Status', type: 'select', options: ['Ativo', 'Inativo'] },
-      { name: 'keyword', label: 'Palavra-chave', type: 'text' },
+      { name: 'startDate', label: 'Data inicial', type: 'date' },
+      { name: 'endDate', label: 'Data final', type: 'date' },
     ]);
   });
 
