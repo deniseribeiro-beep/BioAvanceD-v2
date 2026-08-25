@@ -108,7 +108,12 @@ and **#434** (`routing-gate.cjs` re-armed by tracker reads in a
 
 ## Docker
 
-**On, authorized by Dennis for this sitting. Nothing started yet.**
+**On, authorized by Dennis for this sitting. The 12-service core stack
+is UP and deliberately left running** — all healthy, brought up ~19:27
+on 2026-08-25, inherited by the next sitting rather than started by it.
+Dennis confirmed at the `clean-up` checkpoint to leave it up for the
+pending gate, so a next session finds a warm stack on purpose, not an
+abandoned one. The four named fixture volumes are untouched.
 
 The four named volumes still hold the previous sitting's e2e fixture
 data. A genuinely from-scratch gate needs `docker volume rm` on
