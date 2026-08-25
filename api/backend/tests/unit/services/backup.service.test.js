@@ -770,6 +770,46 @@ describe('backup.service', () => {
       expect(dropDatabase).toHaveBeenCalled();
     });
 
+    // #742: the neighbouring tests mock fs.promises.readdir to [] on both the
+    // write and verify sides, which is exactly why they never saw the real
+    // mismatch -- a genuine backup directory contains the manifest.json the
+    // write side wrote *after* computing the checksum. Real temp directory,
+    // no fs mocks: the manifest carries the digest over the data files only,
+    // and the verify walk must reproduce it despite manifest.json now being
+    // present alongside them.
+    it('verifies the manifest checksum against a real backup directory that contains manifest.json itself (#742)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const os = require('os');
+      const backupPath = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-742-'));
+      try {
+        const samplesJson = JSON.stringify([{ specimenId: '1' }]);
+        await fs.promises.writeFile(path.join(backupPath, 'samples.json'), samplesJson, 'utf8');
+        // What performBackup/writeJsonBackup store: sha256 over the data
+        // files (relative name + content, sorted), computed before the
+        // manifest exists.
+        const dataOnlyChecksum = crypto.createHash('sha256').update('samples.json').update(Buffer.from(samplesJson)).digest('hex');
+        await fs.promises.writeFile(
+          path.join(backupPath, 'manifest.json'),
+          JSON.stringify({ dbName: 'mydb', type: 'json-fallback', checksum: dataOnlyChecksum }),
+          'utf8'
+        );
+
+        vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'restored', ''));
+        const fakeScratchDb = { listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'samples' }]) })), dropDatabase: vi.fn().mockResolvedValue() };
+        const fakeClient = { connect: vi.fn().mockResolvedValue(), db: vi.fn(() => fakeScratchDb), close: vi.fn().mockResolvedValue() };
+        vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+        const backupService = freshBackupService();
+        const result = await backupService.testRestoreBackup(backupPath);
+
+        expect(result.success).toBe(true);
+        expect(result.checksumVerified).toBe(true);
+      } finally {
+        await fs.promises.rm(backupPath, { recursive: true, force: true });
+      }
+    });
+
     it('reports checksumVerified=false when the manifest checksum does not match the recomputed one', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.MONGO_DB = 'mydb';

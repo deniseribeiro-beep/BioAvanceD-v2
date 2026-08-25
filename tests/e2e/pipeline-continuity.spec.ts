@@ -1199,11 +1199,11 @@ test.describe('Backup and restore (RF013) — real backend', () => {
       expect(restoreTest.status(), await restoreTest.text()).toBe(200);
       const result = (await restoreTest.json()).data;
       expect(result.success).toBe(true);
-      // #742: the manifest's checksum is computed before manifest.json is
-      // written, but the verification recomputes over the directory with
-      // manifest.json in it -- checksumVerified is structurally always
-      // false today. Pinned to the buggy value; flip to `true` with the fix.
-      expect(result.checksumVerified).toBe(false);
+      // RNF010 "validado por checksum": the manifest's stored digest matches
+      // the recomputed one (was structurally never true before #742 --
+      // computeDirChecksum now excludes the top-level manifest.json on both
+      // the write and verify sides).
+      expect(result.checksumVerified).toBe(true);
       expect(result.scratchDb).toMatch(/_restoretest_\d+$/);
       expect(result.scratchDb).not.toBe(process.env.E2E_MONGO_DB || 'bioavanced_test');
       expect(result.restoredCollections ?? result.collections).toBeGreaterThan(0);
