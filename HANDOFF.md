@@ -1,312 +1,181 @@
 # HANDOFF
 
-**Written:** 2026-08-25 (sixth sitting of the day). Dennis asked for a
-group of issues with **Docker on**, explicitly to exercise the
-skills-pack updates that landed at the end of the previous sitting. Ran
-`issue-loop` **queue mode** over a self-picked, explicitly-numbered
-7-issue queue and took it to the end.
+**INTERIM — SESSION IN PROGRESS, NOT A FINAL HANDOFF.**
 
-**6 of 7 closed; the 7th is open on a decision only Denise can make.**
-**The Docker gate ran from scratch and was green.**
+**Written:** 2026-08-25 (seventh sitting of the day), after queue item 1
+of 5. Dennis asked for the next group of issues and confirmed **Docker
+is on**. This file is a mid-run snapshot; **4 of 5 queue items remain**
+and the session is still going. Do not read it as the sitting's final
+word.
 
 ## The queue
 
-Numbers were named directly in the `issue-loop` invocation's args so
-`queue-continue-checkpoint.cjs` could see the queue — that hook only
-recognizes a closed, explicit list. Classification ran **once up front
-for the whole list**, per queue mode's closed-explicit-list rule.
+Self-picked, explicitly numbered in the `issue-loop` invocation's args so
+`queue-continue-checkpoint.cjs` can see it. Classification ran **once up
+front for the whole list**, per queue mode's closed-explicit-list rule.
 
-| # | What | Route | Outcome |
+Theme: **accepted-but-unenforced request parameters, and partial failures
+that report as success**, on the LGPD import and sample/log query paths.
+Four of the five came out of #759's e2e spec last sitting, so they share
+context across `import-lgpd.service.js`, `sample.routes.js`, and
+`sample.service.js`.
+
+| # | What | Route | Status |
 |---|---|---|---|
-| **775** | `generateUniqueBarcode` ceiling past 999/year | fix-bugs | closed |
-| **771** | arch guard over `.sort({...})` keys | unit-test-loop | closed |
-| **772** | `useAsyncImport.ts` dead code | resolve-issue | **open — Denise's call** |
-| **763** | drop inert two-step `find()` workaround | resolve-issue | closed |
-| **764** | delete dead root `test:browser*` scripts | resolve-issue | closed |
-| **778** | delete dead consent-sync env declarations | resolve-issue | closed |
-| **759** | e2e spec for the LGPD sample-import path | e2e-test-loop | closed |
+| **785** | samples list `patientID` filter never applied | fix-bugs | **closed** |
+| **786** | `results.total` under-counts a partial import | fix-bugs | pending |
+| **780** | `log.service.js` unvalidated `sortBy` sort spec | fix-bugs | pending |
+| **782** | intake wizard 200 when every clinical entity failed | fix-bugs | pending |
+| **787** | RNF011 AC#4 staging/quarantine for the LGPD import | build-loop | pending |
 
-Each landed as its own `fix/`/`test/` branch, merged `--no-ff`, closed,
-branch deleted local + remote (**5/5 remote deletions succeeded, no
-prompt** — five more data points for pack #410).
+Ordered smallest-first with #787 last: it is the Docker-gated build with a
+real-backend test, and #786 corrects a counter in the same file #787 will
+restructure.
 
-**Deliberately excluded from the queue, all still open:** #774 and #753
-(each needs Denise's call), #752 (needs Dennis's behaviour decision, and
-is the one red in the native suite).
+**Deliberately excluded, all still open:** #779 (owner's call on sequence
+gaps), #772 (researched last sitting — a one-line decision for Denise),
+#774/#752/#761/#751/#753 (each blocked on a decision).
 
-## What closed
+**Flagged to Dennis, not queued:** **#684** is the highest-severity item
+on the board — any authenticated user, including the lowest-privilege
+role, can revoke any patient's consent by enumerating a Mongo `_id`, and
+`authConsent.js` then blocks that participant's data. Left out because
+the fix depends on RF010/RF021's intended actor model (admin-gated vs.
+self-service-with-ownership-check), a product call. A docs check might
+settle it the way #772's did. Dennis was offered the swap and has not
+taken it.
 
-- **#775** (`bab7abf5` → `1ea99f5a`) — the year's highest barcode was
-  found with `sort: { barcode: -1 }` on a *string*, so `BR-2026-999`
-  outranked `BR-2026-1000` and generation threw **permanently from the
-  1002nd sample of a calendar year**. Took option 2 (numeric max in JS):
-  format and existing rows untouched. The two-attempt race guard became
-  a bounded 10-attempt loop.
-  - **The format question the issue left to the owner was settled by
-    docs, not by a decision** — `dict-02` ELM-0116 constrains
-    `barcodeValue` only to a unique string.
-  - **A test asserting the numeric max needs a *gap* to discriminate.**
-    With only `1000` present the buggy code also returns `1001`, by
-    collision-bump luck. Use `...999` + `1005`.
+## Item 1 — #785, closed
 
-- **#771** (`556d3a05` → `07eb4f4b`) — new
-  `tests/architecture/sort-keys.arch.test.js`. Architecture suite
-  **70/70** (was 65).
-  - **The issue's stated design was not buildable as written.** It asked
-    for "a field the target model declares", but only **14 of the 85**
-    files in `src/models` are mongoose schemas; the rest are validator
-    classes declaring no field list, and the audit-chain and outbox
-    collections have *no model file at all* while sorting on real
-    fields. A models-only vocabulary flags every one of those.
-  - Invariant used instead: **a query must not order on a field nothing
-    writes** — object-literal keys + `x.field = ...` + schema paths,
-    **with sort specs blanked out of that sweep** so a spec cannot vouch
-    for its own keys.
-  - **Proven before being trusted:** `registrationDate`/`registerDate`
-    are absent from the vocabulary, so #769 would have failed here with
-    no mock changes.
-  - **Its synthetic-source test caught a live defect in the guard on the
-    first run** — the key extractor sliced onto the opening `{`, so the
-    anchor never matched, zero keys came out, and the main assertion
-    passed by seeing nothing. **Any future static guard needs its own
-    does-it-still-match test.**
-  - 110 sort specs, 47 distinct keys, **zero offenders** — a regression
-    guard, not a bug sweep.
+`21070172` → merged `9c3074bf`. Branch deleted local **and remote**
+(remote deletion succeeded with no prompt — another data point for
+pack #410).
 
-- **#763** (`0ce355aa` → `8e86e99c`) — the four two-step `find()` sites
-  rewritten to the chained form.
-  - **The issue's premise was wrong: the workaround was not inert.** A
-    *second* fake still had the pre-#694 `async find()` shape
-    (`intakeWizard.clinicalEntities.test.js:95`). The chained form broke
-    it, and `recordClinicalEntities`' per-entity try/catch swallowed the
-    throw — the intake returned **200 with no Condition recorded**, and
-    the test failed as `expected [] to have a length of 1`, not as an
-    error. Fake now matches the driver; a tree-wide sweep confirms **no
-    other `async find()` stub remains**.
+`GET /api/samples` built `patientID: req.query.patientID` while
+`listSamples` reads only `filters.participantId`. It failed in the worst
+direction: a 200 with a full page of other participants' samples.
 
-- **#764** (`e0815beb` → `4cfb73c1`) — the three dead root
-  `test:browser*` scripts deleted, after re-verifying all three
-  conditions (no root `vitest` dep, no config, no root test files).
+- **The issue's suggested fix was wrong and was deliberately not
+  taken.** It proposed `req.query.participantId || req.query.patientID`.
+  But `validateCreateSamplePayload`, 360 lines above in the same file,
+  rejects `patientID` with a **422 NON_CANONICAL_FIELD** — it is on the
+  create path's explicit non-canonical list. Re-admitting it as a query
+  alias would have the same endpoint family accept a name its sibling
+  refuses and would move the participantId migration (#773/#146)
+  backwards. **Re-running the trace instead of trusting the body is what
+  caught this.**
+- No compatibility burden: **no caller sends either name.**
+  `frontend/src/services/api.ts:278` is a bare `api.get('/samples')` with
+  no params, and nothing in `frontend/` or `tests/e2e/` sends a filter to
+  this endpoint.
+- The reproduction was a new **route-boundary** test — the service layer
+  was already correct and well covered; the whole bug lived in the key
+  the route handed over. Confirmed red first: the call went through with
+  a `patientID: undefined` entry and no `participantId` key at all.
 
-- **#778** (`fa627d42` → `1da295e2`) — the three dead consent-sync env
-  declarations removed.
-  - **The issue missed one reference:** `tests/unit/config/env.test.js`
-    listed `CONSENT_SYNC_CRON` among "every cron expression
-    `scheduler.service.js` reads off the env module" — it never read that
-    one. **The declaration and the test pinning it were mutually
-    reinforcing**, and it is the same false premise #754 nearly
-    published to the `.env.*.example` files.
+## Pending deferred proof — read before the gate
 
-- **#759** (`24e7dcd1` → `1bc290f4`) — new
-  `tests/e2e/lgpd-sample-import.spec.ts`, three tests against the live
-  stack. The valid-row test is the **#702 guard**: it pushes real MIABIS
-  ids through the reference lookup and reads the sample back through the
-  API, so under #702's bug the row is rejected and it fails.
-  - **Assertion order matters here:** `errorsDetails` is asserted before
-    the counts, because #702 returned a well-formed 200 with the
-    rejections *inside* it.
-  - **The obvious negative test does not reach #702's code path.**
-    `SampleModel.validate` (MIABIS constants) rejects an unknown
-    `sampleType` *before* the seeded-reference lookup at
-    `import-lgpd.service.js:1011`, with a message that does not echo the
-    input. Only the positive test covers that path.
+`tests/e2e/lgpd-sample-import.spec.ts` was **un-weakened** this
+iteration. #759's spec had worked around #785 with client-side matching
+and an explicit "do not simplify this back to a server-side filter until
+#785 is fixed" comment. It now queries through the real filter and
+asserts **every** returned row belongs to the requested participant.
 
-## Open, with a decision owed
+**That assertion has not run yet** — it only executes against the Docker
+stack. It is scheduled for this sitting's gate (running anyway for #787).
+#785 was closed on the native proof because the fix itself is fully
+proven natively; **if the gate comes back red on that spec, reopen #785.**
 
-- **#772** — re-traced from scratch; **two of the body's factual claims
-  are wrong**. The `useImportJob.ts:286` comment is *accurate*
-  (`useAsyncImport.ts:3` imports it), and `useImportJob` is not "the hook
-  actually wired up" — **nothing imports either; they are dead as a
-  pair**. The live import UI is `components/v2/ImportForm.jsx`
-  (`App.tsx:129`) via `uploadBatch()` → `POST /import/batch` +
-  `BatchProgressViewer` polling `GET /import/status/:jobId`. So this is
-  a **superseded parallel implementation**, not unfinished wiring.
-  - **Dennis then asked whether the decision was already answered
-    somewhere. Partly — and the answer moved the default to "delete".**
-    Checked, in order: `docs/docs-7-31-2026/` (newest batch) then
-    `docs-7-27-2026/`, `docs/architecture/`, both root plan docs,
-    milestones, the tracker `--state all`, and git history.
-    - **RNF011** (Qualidade de dados, **F1-F3, Crítica**, identical in
-      both batches) already requires imported data be *validated before
-      canonical persistence*, with invalid imports staged or
-      quarantined. It does **not** say that must be a pre-upload screen —
-      server-side rejection satisfies it on its face.
-    - **RNF032** (staging/validação/quarentena/limiar) is scoped
-      **F2 — referências**, and **RNF024 AC#5** to the FHIR boundary —
-      neither governs this path. **No RF covers this UI at all**: RF028
-      is reference-data import, RF029 operational/scientific ingestion.
-    - **No prior decision in the tracker**, open or closed — #770's
-      thread traced the mechanism and explicitly stopped short.
-    - **Git is the closest thing to recorded intent:** Denise added
-      `useAsyncImport.ts` **2025-12-11** and the superseding
-      `ImportForm.jsx` **2026-03-24**, three months later. The hook's
-      one later touch (`ddc54ac1`) is a mechanical
-      `startLocationID`→`startBoxId` rename inside backend migration
-      #459 — **not** evidence anyone considers it live.
-  - **Recommendation: delete both hooks** unless Denise says the
-    validation preview is still wanted. The requirement that *does*
-    exist is missing somewhere else — see **#787**.
-  - #700 (`HPOAutocomplete.jsx`) may have the same resolution — check
-    before treating it as an independent call.
+## Filed this sitting so far
 
-## Filed this sitting — product
-
-- **#779** — #775's fix reads the year's whole barcode set per sample
-  creation; `import-lgpd.service.js:1133` calls it **per row**.
-- **#780** — `log.service.js:289` builds its sort spec from an
-  **unvalidated `filters.sortBy` request parameter** on a *paginated*
-  query.
-- **#781** — #771's option 1 (shared cursor-mock helper).
-- **#782** — the intake wizard returns **200 even when every clinical
-  entity failed to record**; only signal is a server-side log line.
-- **#783** — four more root devDependencies with no reference anywhere.
-- **#784** — the inverse of #755's guard (every declared env key is read
-  somewhere). Deliberately not built: needs an allow-list, and that
-  allow-list is the real design question.
-- **#785** — **`GET /api/samples` accepts a `patientID` filter that
-  `listSamples` never reads**, so it silently returns everything. Second
-  instance of the class the adjacent #533 comment documents.
-- **#786** — `importSamples`' `results.total` counts only rows reaching
-  the end of the loop, so a partially-failed import reports
-  **total < success + errors**, and those numbers reach
-  `auditLogger.logImport`. `importPatients` in the same file is correct.
-
-- **#787** — **RNF011 AC#4 is unmet on the LGPD import path**: rejected
-  rows live only in the HTTP response and the uploaded file is deleted
-  immediately after, so a partial import loses both the rejected rows
-  and the source file. Zero occurrences of `staging`/`quarantine` in
-  `import-lgpd.service.js`. The **FHIR path already satisfies the same
-  AC** (`fhir-import-staging.service.js`, proven by e2e per
-  `E2E_TRACEABILITY_PLAN.md`'s RF011 row) — so this is one import path
-  having it and the other not, and the one missing it is the path a
-  technician uses for bulk intake.
-
-#785 and #786 were both found **by #759's new spec**, on its first run.
-#787 came from the docs check Dennis asked for on #772.
-
-## Filed this sitting — skills-pack
-
-**#432** (`full-suite-guard` blocks a genuinely targeted one-file vitest
-run when the downstream pipe is `grep -B5 -A 20 "FAIL\|Unhandled\|Error"`
-— deterministic, reproduced twice), **#433** + comment (backslash
-stripping is **not** confined to `node -e`: a quoted heredoc wrote `\d`
-where the source needed `\\d`, which in a JS template literal collapses
-to a literal `d` — a regex that compiles and matches **nothing**; also
-hit as a bash `grep` `Trailing backslash` and a heredoc dying with
-`unexpected EOF`), **#434** + refinement (`resolve-issue`'s mandated
-pre-close `gh issue view --json state` re-arms `routing-gate.cjs`; the
-check only matters on the *default* branch, so it is unnecessary in this
-repo), **#435** (the `bioavanced-v2-conventions` bullet describing the
-now-deleted `test:browser*` scripts is stale), **#436** (spec-inventory
-entry for the new e2e spec + two gotchas), **#437** (`docker-workflow`'s
-don't-poll advice collides with the stack-contention gotcha — see below).
-Plus a data-point comment on **#426**.
-
-**Working rule that held up all sitting: do not push escapes through the
-Bash layer at all.** `Grep` tool for patterns, `Write`/`Edit` for file
-content, `[0-9]` instead of `\d`.
-
-## The Docker gate — what actually ran
-
-Genuinely from scratch: all four named volumes removed first, 12 core
-services cold-rebuilt with `--build`, `admin-bootstrap-test`, then the
-full 17-service reference-data chain — **all 18 one-shot services
-`Exited (0)`**.
-
-| Check | Result |
-|---|---|
-| Full e2e suite, `--workers=1` | **202 passed, 1 failed** |
-| The 1 failure (`tcle-dinamico.spec.ts:19`) | **my own contention** — re-run in isolation **4/4 green**, including that exact test |
-| `backend-unit-runner` | **exit 0**; architecture 69/70 in-container (the documented `.github/workflows/` skip), `dictionary:validate` 929/929, no ENOENT — #658's mount still holding |
-
-**The contention was self-inflicted and worth not repeating:** I started
-`backend-unit-runner` while the e2e suite was still running, filling the
-wait per `docker-workflow`'s don't-poll rule. Filed as pack #437 — the
-existing gotcha is written only about the auto-started
-`playwright-runner`, so "is that stopped?" reads as the whole
-requirement. It is not: **one workload at a time against one stack,
-whoever starts it.**
-
-`TaskStop` on the backgrounded `docker compose run` reported success
-while `docker ps` still showed the container `Up` — already documented
-for `docker build`, confirmed again for `compose run`.
+- **#788** — `GET /api/samples` computes every sample's consent badge
+  from `sample.patientID`, a field **no writer sets**
+  (`RegisterSample.js:128` writes `participantId`; `Sample.js:31`
+  declares only `participantId`; `import-lgpd.service.js` has zero
+  occurrences). So the per-row patient lookup degenerates to matching on
+  null for both legs. **Third instance of the #533/#785 class in that one
+  handler.** Includes a static-trace caveat: the observable prediction
+  (every row `PATIENT_NOT_FOUND`) has **not** been checked against a live
+  stack — worth doing at this sitting's gate.
+- **#789** — the mechanism behind #533/#785: `GET /api/samples` silently
+  ignores non-canonical query params while `POST /api/samples` 422s them.
+  Split out of #785 so it does not only live on a closed thread.
+- **pack #440** — `fix-bugs`' un-weaken-pinned-tests step and its
+  native-only verification contract don't compose when the pinned test is
+  an e2e spec. Improvised a resolution this iteration (close on the
+  native proof, flag the deferred assertion here and in the close
+  comment); it would not generalize to a sitting with no gate planned.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration` at `1bc290f4` + this
-  rotation, pushed, in sync. **No `fix/`/`test/` branches from this
-  sitting remain**, local or remote.
-- **Four older local branches**, unchanged for six sittings:
+- On `feature/docker-e2e-backend-integration` at `9c3074bf` + this
+  rotation, pushed, in sync. **No `fix/` branches from this sitting
+  remain**, local or remote.
+- Untracked and deliberately untouched: `.claude/skills/` and
+  `api/backend/storage/assays/`. **Never `git add -A`** — every commit
+  this sitting named its files explicitly.
+- Older local branches unchanged (seven sittings now):
   `fix/599-ci-trigger-integration-branch` and
   `fix/599-hold-ci-trigger-for-milestone` are merged (safe to delete);
-  `test/377-docs-on-main` and `test/human-showcase-video` are **not**
-  merged. #599 is intentionally open, held by the CI milestone.
-- **Two stale *remote* branches** with no local counterpart, still left
-  alone deliberately: `origin/fix/705-seed-active-terminology-concept-cleanup`
-  and `origin/test/377-docs-on-main`. They predate this session, so
+  `test/377-docs-on-main` and `test/human-showcase-video` are not merged.
+- Two stale *remote* branches still left alone deliberately:
+  `origin/fix/705-seed-active-terminology-concept-cleanup` and
+  `origin/test/377-docs-on-main`. They predate this session, so
   `clean-up`'s scope rule excludes them. **Verify merge status *and*
-  per-commit authorship before deleting** (precedent #332: 5 of 13 were
-  a collaborator's work).
+  per-commit authorship before deleting** (precedent #332).
 - **Native suites: the known #752 red is unchanged and pre-existing**
   (`backup.service.test.js`'s legacy-JSON restore assertion). Not
-  re-checked this sitting — last sitting confirmed it against a stashed
-  tree. Architecture suite **70/70** natively.
-- Two untracked paths still deliberately untouched: `.claude/skills/`
-  and `api/backend/storage/assays/`. **Never `git add -A`** — every
-  commit this sitting named its files explicitly.
+  re-checked this sitting.
 - No open PR; nothing pushed to `main`; `main` stays frozen.
 
-## Docker / cleanup
+## Docker
 
-- **Stack torn down** (`docker compose down`), 0 containers, all **25**
-  session-built `bioavanced-test-*` images removed, builder cache pruned
-  with `-af` (**1.208GB → 0B**).
-- **The four named volumes were left in place** — they are the caching
-  design and `docker-workflow` forbids clearing them as routine hygiene.
-  **But they now hold this sitting's e2e fixture data.** A genuinely
-  from-scratch gate needs `docker volume rm` on
-  `bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data` first, as
-  was done at the start of this one.
-- **WSL2 vhdx is 14.53GB physical against ~3.75GB logical** (~10.8GB of
-  air) — essentially unchanged from last sitting's 13.93GB. Still short
-  of the "34GB behind 4GB" bar `docker-workflow` sets for a reset, and a
-  reset wipes base images. Flagged, not acted on.
-- 6 base images (2.839GB) left: not session-built, and machine-wide
-  prunes need Dennis's fresh consent.
-- Session scratch files removed.
+**On, authorized by Dennis for this sitting. Nothing started yet.**
 
-## Carried forward, re-confirmed this sitting
+The four named volumes still hold the previous sitting's e2e fixture
+data. A genuinely from-scratch gate needs `docker volume rm` on
+`bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data` first.
+
+Carried forward, re-confirmed across three prior sittings:
 
 - **The gate recipe in `docker-workflow`'s overlay is accurate as
-  written** — 12 core services (with `--build`, since this sitting
-  touched `api/backend/src`), then `admin-bootstrap-test`, then the
-  17-service chain. Used verbatim, worked first time. Third sitting
-  running.
-- Host Playwright command (unchanged, still correct):
-  `PLAYWRIGHT_BASE_URL=http://localhost:5173 PLAYWRIGHT_API_BASE_URL=http://localhost:3000 PLAYWRIGHT_SKIP_WEBSERVER=1 TEST_USER=admin TEST_PASS=Admin@123 E2E_MONGO_URI="mongodb://localhost:27017?directConnection=true" E2E_MONGO_DB=bioavanced_test E2E_NEO4J_DATABASE=neo4j TEST_SUPPORT_SECRET=e2e-test-support-secret npx playwright test [spec] --workers=1`
-- **Stop `playwright-runner` before any host-side run** — and now also:
-  don't start anything else against the stack mid-run (pack #437).
-- **Routes and controllers are not siblings** — `src/interface/routes/`
-  vs `src/controllers/`.
-- Older open findings from earlier sittings: #733, #734, #735.
+  written** — 12 core services (with `--build` when `api/backend/src` was
+  touched, which it now has been), then `admin-bootstrap-test`, then the
+  17-service reference-data chain.
+- Host Playwright command (unchanged): see the previous rotation's
+  verbatim line — `PLAYWRIGHT_BASE_URL`, `PLAYWRIGHT_API_BASE_URL`,
+  `PLAYWRIGHT_SKIP_WEBSERVER=1`, `TEST_USER=admin`, `TEST_PASS=Admin@123`,
+  the `directConnection=true` Mongo URI, `E2E_MONGO_DB=bioavanced_test`,
+  `E2E_NEO4J_DATABASE=neo4j`, `TEST_SUPPORT_SECRET=e2e-test-support-secret`,
+  then `npx playwright test [spec] --workers=1`.
+- **Stop `playwright-runner` before any host-side run**, and **one
+  workload at a time against one stack, whoever starts it** (pack #437).
+- `TaskStop` on a backgrounded `docker compose` reports success while
+  `docker ps` still shows the container `Up`.
+
+## Working rules holding this sitting
+
+- **Do not push escapes through the Bash layer.** Confirmed twice more
+  this iteration: a large heredoc for this very file died with
+  `unexpected EOF while looking for matching quote` and had to be written
+  with the `Write` tool instead. Use `Write`/`Edit` for file content and
+  the `Grep` tool for patterns.
+- **Never chain gated steps in one compound command.** A
+  `cat > body.md <<EOF ... && gh issue create` died as one unit to the
+  missing-`--label` hook, taking the heredoc with it, so the retry failed
+  on a file that had never been written.
+- **`routing-gate.cjs` is re-armed by tracker reads for other issues,
+  including in a different repository.** Closing #785 was blocked because
+  intervening `gh issue list`/`create` calls (some against the *pack*
+  repo) reset the gate; the fix is a fresh `fix-bugs` Skill invocation.
 
 ## Recommended next steps
 
-**None queued** — the queue Dennis authorized is complete and he named
-no successor.
+**Continue the queue — #786 is next**, then #780, #782, #787. Nothing
+about the remaining four has changed as a result of item 1.
 
-Strongest candidates from what this sitting filed: **#787** (RNF011
-AC#4 unmet — rejected import rows and the source file are both lost;
-Crítica-backed and the one with a requirement behind it), **#786** (the
-audit trail records incoherent import totals — small fix,
-compliance-relevant) and **#785** (a sample list filter that silently
-returns other participants' samples).
-
-**#772 is now a one-line decision for Denise, not a research task** —
-delete both dead hooks unless she wants the validation preview; the
-evidence and the reasoning are on the issue.
-
-**`ship-integration-branch` is closer still.** The Docker gate is green
-from scratch and the queue is clear. The remaining blocker is unchanged:
-**#752** still needs a decision on intended behaviour, and it is the one
-red in the native suite.
+Then the Docker gate, which must cover: the un-weakened
+`lgpd-sample-import.spec.ts` assertion (above), #787's new real-backend
+test, and — worth the extra minute — a live check of **#788**'s
+prediction that every `GET /api/samples` row comes back
+`PATIENT_NOT_FOUND`.
