@@ -87,9 +87,12 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
   const patientsCollection = {
     updateOne: vi.fn().mockResolvedValue({}),
   };
-  const sampleTypesCollection = { findOne: vi.fn().mockResolvedValue(sampleTypeFound ? { description: 'PLASMA' } : null) };
-  const sampleOriginsCollection = { findOne: vi.fn().mockResolvedValue(sampleOriginFound ? { description: 'VENOUS_BLOOD' } : null) };
-  const extractionProtocolsCollection = { findOne: vi.fn().mockResolvedValue(protocolFound ? { description: 'TUBE_EDTA' } : null) };
+  // #702: these mirror the real seeded documents -- `id` is the MIABIS id,
+  // `description` the human label. They used to carry the id in `description`,
+  // which matched the buggy lookup instead of the data it queries.
+  const sampleTypesCollection = { findOne: vi.fn().mockResolvedValue(sampleTypeFound ? { id: 'PLASMA', description: 'Plasma' } : null) };
+  const sampleOriginsCollection = { findOne: vi.fn().mockResolvedValue(sampleOriginFound ? { id: 'VENOUS_BLOOD', description: 'Sangue Venoso Periferico' } : null) };
+  const extractionProtocolsCollection = { findOne: vi.fn().mockResolvedValue(protocolFound ? { id: 'TUBE_EDTA', description: 'Tubo EDTA (Tampa Roxa)' } : null) };
   const amostrasCollection = {
     // Backs generateUniqueBarcode's own lookup for the last barcode of the year.
     find: vi.fn(() => ({ sort: () => ({ limit: () => ({ toArray: async () => [] }) }) })),
@@ -886,5 +889,90 @@ describe('ImportLGPDService.getNextAvailableStorageSlot (#459)', () => {
 
     const result = await service.getNextAvailableStorageSlot(db, String(new ObjectId()), 1);
     expect(result).toBeNull();
+  });
+});
+
+// ──────────────────────────────────────────────────────────
+// #702: the reference-data lookups in importSamples.
+//
+// makeDb() above stubs the three reference collections with
+// `findOne: vi.fn().mockResolvedValue({ description: 'PLASMA' })` -- a
+// fabricated document whose `description` holds the *id*, and a findOne that
+// ignores its filter entirely. Both halves of that stub hide this bug: the
+// shape matches the buggy query rather than the real seed data, and no
+// filter is ever evaluated, so the lookup cannot miss.
+//
+// These tests use the real seed file (miabis.min.json) as the collection
+// contents and a findOne that actually applies the filter.
+// ──────────────────────────────────────────────────────────
+describe('ImportLGPDService.importSamples reference-data lookups (#702)', () => {
+  const miabis = require('../../src/reference-data/miabis.min.json');
+
+  let db;
+
+  // Replaces the three reference collections' stubs with the real seeded
+  // documents -- `{ id: 'PLASMA', description: 'Plasma', code: ... }` -- behind
+  // a findOne that honours the filter it is given.
+  function useRealReferenceData(database) {
+    for (const name of ['sampleTypes', 'sampleOrigins', 'extractionProtocols']) {
+      const docs = miabis[name];
+      const collection = database.collection(name);
+      collection.findOne = vi.fn(async (filter = {}) =>
+        docs.find((doc) => Object.entries(filter).every(([field, value]) => doc[field] === value)) ?? null);
+    }
+  }
+
+  beforeEach(() => {
+    ({ db } = makeDb());
+    useRealReferenceData(db);
+
+    vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant').mockResolvedValue(MATCHED_PATIENT);
+    vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+      governance_status: 1,
+      final_grade: 'A',
+      category: 'A',
+      score: 90,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('imports a row whose sampleType/sampleOrigin/extractionProtocol are valid MIABIS ids', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    // Before the fix every one of these rows was rejected with
+    // 'não encontrado no banco de dados', because the lookup asked for
+    // { description: 'PLASMA' } against a document whose description is 'Plasma'.
+    expect(result.errors).toEqual([]);
+    expect(result.success).toBe(1);
+  });
+
+  it('looks the three reference collections up by id, not by description', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(db.collection('sampleTypes').findOne).toHaveBeenCalledWith({ id: 'PLASMA' });
+    expect(db.collection('sampleOrigins').findOne).toHaveBeenCalledWith({ id: 'VENOUS_BLOOD' });
+    expect(db.collection('extractionProtocols').findOne).toHaveBeenCalledWith({ id: 'TUBE_EDTA' });
+  });
+
+  it('still rejects a row whose sampleType is not in the seeded reference data', async () => {
+    // SampleModel.validate() screens unknown ids first, so reaching the
+    // lookup's own miss path needs an id it accepts but the seed lacks.
+    // Proving the reject path is not dead is the point: the fix must not
+    // turn an always-miss into an always-hit.
+    const collection = db.collection('sampleTypes');
+    collection.findOne = vi.fn().mockResolvedValue(null);
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors[0]).toMatch(/não encontrado no banco de dados/);
   });
 });
