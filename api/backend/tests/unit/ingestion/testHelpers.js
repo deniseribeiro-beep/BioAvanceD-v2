@@ -35,9 +35,40 @@ function createFakeCollection(seedDocs = []) {
       const candidates = sortDocs(docs.filter((doc) => matches(doc, filter)), options.sort);
       return candidates[0] || null;
     },
-    async find(filter = {}) {
-      const found = docs.filter((doc) => matches(doc, filter));
-      return { toArray: async () => found };
+    // #694: synchronous, returning a chainable cursor -- the real driver's
+    // shape. This used to be `async find()` resolving to a bare
+    // `{ toArray }`, which `await collection.find(f)` tolerated (awaiting a
+    // non-thenable is a passthrough) but which broke the chained
+    // `collection.find(f).toArray()` form the rest of the codebase uses, and
+    // offered no `.sort()` at all. Filtering is deferred to toArray() so the
+    // cursor stays lazy the way a real one is.
+    find(filter = {}, options = {}) {
+      let sortSpec = options.sort || null;
+      let skipCount = 0;
+      let limitCount = null;
+
+      const cursor = {
+        sort(spec) {
+          sortSpec = spec;
+          return cursor;
+        },
+        skip(count) {
+          skipCount = count;
+          return cursor;
+        },
+        limit(count) {
+          limitCount = count;
+          return cursor;
+        },
+        async toArray() {
+          let found = sortDocs(docs.filter((doc) => matches(doc, filter)), sortSpec);
+          if (skipCount) found = found.slice(skipCount);
+          if (limitCount !== null) found = found.slice(0, limitCount);
+          return found;
+        },
+      };
+
+      return cursor;
     },
     async insertOne(doc) {
       docs.push(doc);
