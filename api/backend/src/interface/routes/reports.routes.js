@@ -721,7 +721,7 @@ async function handleTissueOriginHistory(db, filters) {
       ? { $and: [baseQuery, { collectionSite: { $in: filters.organizationScope.organizationIds } }] }
       : baseQuery;
 
-  const samples = await collection.find(query).sort({ registrationDate: -1, createdAt: -1 }).limit(100).toArray();
+  const samples = await collection.find(query).sort({ registeredAt: -1, createdAt: -1 }).limit(100).toArray();
   const total = await collection.countDocuments(query);
   return { total, samples, previewLimited: total > 100 };
 }
@@ -739,7 +739,7 @@ async function handleExtracellularNetwork(db, filters) {
       ? { $and: [baseQuery, { collectionSite: { $in: filters.organizationScope.organizationIds } }] }
       : baseQuery;
 
-  const samples = await collection.find(query).sort({ registrationDate: -1, createdAt: -1 }).limit(100).toArray();
+  const samples = await collection.find(query).sort({ registeredAt: -1, createdAt: -1 }).limit(100).toArray();
   const total = await collection.countDocuments(query);
   return { total, samples, previewLimited: total > 100 };
 }
