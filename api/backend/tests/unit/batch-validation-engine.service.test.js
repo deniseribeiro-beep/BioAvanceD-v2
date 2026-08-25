@@ -44,6 +44,33 @@ function createDb(patientsByFilter = {}) {
 }
 
 describe('batch-validation-engine.service#buildSampleRow', () => {
+  // #767: the same failure mode #525 documents for locationID, on the date
+  // column. e2549bee renamed parseSampleRow's registerDate/registrationDate
+  // fallback to the canonical registeredAt, but the header map here kept
+  // pointing at 'registrationDate' -- a name import-lgpd.service.js has
+  // contained zero occurrences of ever since. buildSampleRow is a pure
+  // remap and persistSample feeds its output straight into parseSampleRow,
+  // so the mapped value was never read and every batch-imported sample fell
+  // through to `registeredAt = new Date()`. Asserted end-to-end across the
+  // two functions rather than on the mapped key alone, because the mapped
+  // key being "right" is exactly what was wrong -- it was right for a
+  // consumer that no longer existed.
+  it('maps every CSV date header onto the field parseSampleRow actually reads (#767)', () => {
+    const importLGPDService = require('../../src/services/import-lgpd.service');
+
+    ['registerdate', 'registrationdate', 'datacoleta'].forEach((header) => {
+      const mapped = batchValidationEngine.buildSampleRow({
+        [header]: '15/03/2024',
+        sampleType: 'Sangue',
+      });
+      const parsed = importLGPDService.parseSampleRow(mapped);
+
+      expect(parsed.registeredAt.getFullYear(), `header: ${header}`).toBe(2024);
+      expect(parsed.registeredAt.getMonth(), `header: ${header}`).toBe(2); // March, 0-indexed
+      expect(parsed.registeredAt.getDate(), `header: ${header}`).toBe(15);
+    });
+  });
+
   // #525: `locationid`/`idlocalizacao` headers used to map onto a
   // `locationID` field that import-lgpd.service.js#parseSampleRow never
   // reads (#459/#462 dropped the legacy field from runtime persistence in
