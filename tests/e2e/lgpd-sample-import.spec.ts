@@ -70,18 +70,27 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     // A 200 with success: 1 still only proves the import *reported* a
     // success. Read it back through the API to prove it persisted.
     //
-    // Deliberately not `?patientID=<id>`: that filter is accepted by the
-    // route and silently never applied by listSamples (#785), so relying
-    // on it would make this assertion pass for a sample belonging to
-    // anyone. Fetch a page and match here instead — do not "simplify"
-    // this back to a server-side filter until #785 is fixed.
-    const list = await request.get(`${apiBaseURL}/api/samples?limit=200`, {
-      headers: { Authorization: `Bearer ${admin.token}` },
-    });
+    // #785 is fixed: the route now builds the canonical participantId key,
+    // so this asserts through the real server-side filter. That makes this
+    // block a regression guard for #785 as well as a persistence check --
+    // under the bug the filter was dropped and the response was an
+    // unfiltered page, which the every-row assertion below would catch.
+    const list = await request.get(
+      `${apiBaseURL}/api/samples?participantId=${encodeURIComponent(participant.participantId)}&limit=200`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
 
     expect(list.status()).toBe(200);
     const listBody = await list.json();
     const samples = (listBody?.data?.samples ?? listBody?.data ?? []) as Array<Record<string, unknown>>;
+
+    // Every row must belong to the requested participant -- this is the
+    // assertion the dropped filter would fail.
+    expect(samples.length).toBeGreaterThan(0);
+    expect(
+      samples.map((sample) => String(sample.participantId)),
+      'the participantId filter returned samples belonging to someone else'
+    ).toEqual(samples.map(() => String(participant.participantId)));
 
     const imported = samples.find(
       (sample) => String(sample.participantId) === String(participant.participantId)
