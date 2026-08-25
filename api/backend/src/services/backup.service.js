@@ -531,10 +531,25 @@ async function runControlledRestoreTest(backupPath) {
 
   const command = `mongorestore --uri="${mongoUri}" --drop --nsFrom="${sourceDbName}.*" --nsTo="${scratchDb}.*" "${backupPath}"`;
 
+  // #750: the scratch database has to come down on every exit path, not just
+  // the two success ones. mongorestore (and the JSON fallback) writes
+  // collection by collection, so a run that fails partway has already put
+  // documents in it, and the name is timestamped -- every failed run used to
+  // leave its own distinct orphan behind. #731 made these runs weekly and
+  // unattended, which turns that into an unbounded set of them.
+  const dropScratch = async () => {
+    try {
+      await dropScratchDatabase(mongoUri, scratchDb);
+    } catch (dropError) {
+      // A teardown failure must never mask the restore's own error. Log the
+      // scratch name so an operator can clean it up by hand.
+      logger.error(`Erro ao remover a base de teste ${scratchDb}:`, dropError?.message || String(dropError));
+    }
+  };
+
   try {
     await runCommand(command);
     const restoredCollections = await countScratchCollections(mongoUri, scratchDb);
-    await dropScratchDatabase(mongoUri, scratchDb);
 
     return {
       success: true,
@@ -553,7 +568,6 @@ async function runControlledRestoreTest(backupPath) {
       try {
         logger.warn('mongorestore indisponível. Usando fallback de teste de restauração em JSON.');
         const fallback = await restoreFromJsonBackup(backupPath, mongoUri, scratchDb);
-        await dropScratchDatabase(mongoUri, scratchDb);
         return { ...fallback, scratchDb, checksumVerified };
       } catch (fallbackError) {
         const fallbackDetails = fallbackError?.message || String(fallbackError);
@@ -563,6 +577,8 @@ async function runControlledRestoreTest(backupPath) {
     }
 
     return { success: false, error: details || 'Erro ao testar restauração', checksumVerified };
+  } finally {
+    await dropScratch();
   }
 }
 

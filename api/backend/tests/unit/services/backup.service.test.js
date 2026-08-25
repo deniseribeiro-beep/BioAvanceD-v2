@@ -890,7 +890,7 @@ describe('backup.service', () => {
       expect(dropDatabase).toHaveBeenCalled();
     });
 
-    it('returns a generic failure result when mongorestore fails for a non-missing-binary reason (checksumVerified still reported)', async () => {
+    it('returns a generic failure result when mongorestore fails for a non-missing-binary reason (checksumVerified still reported), and still drops the scratch db (#750)', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
@@ -904,12 +904,95 @@ describe('backup.service', () => {
         cb({ message: 'permission denied' }, '', '');
       });
 
+      const dropDatabase = vi.fn().mockResolvedValue();
+      const fakeDb = { listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })), dropDatabase };
+      const fakeClient = { connect: vi.fn().mockResolvedValue(), db: vi.fn(() => fakeDb), close: vi.fn().mockResolvedValue() };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
       const backupService = freshBackupService();
       const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'));
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('permission denied');
       expect(result.checksumVerified).toBe(true);
+      // #750: mongorestore restores collection by collection, so a run that
+      // fails partway has already written into the scratch db. The teardown
+      // used to run only on the two success paths, leaving one timestamped
+      // orphan per failed run -- and #731 made those runs weekly, unattended.
+      expect(dropDatabase).toHaveBeenCalled();
+    });
+
+    it('drops the scratch db when the JSON fallback itself throws after already writing into it (#750)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      const backupPath = path.join('C:', 'tmp', 'backup-restoretest-fallback-fail');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) {
+          return JSON.stringify({
+            dbName: 'mydb',
+            checksum: emptyDirChecksum,
+            collections: [{ file: 'patients.json' }, { file: 'samples.json' }]
+          });
+        }
+        return JSON.stringify([{ _id: 1, name: 'a' }]);
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb({ message: 'mongorestore: not found' }, '', 'not found');
+      });
+
+      // First collection lands, second blows up -- documents are already in
+      // the scratch database by the time the fallback's catch runs.
+      const insertMany = vi.fn()
+        .mockResolvedValueOnce()
+        .mockRejectedValueOnce(new Error('insertMany falhou no meio da restauracao'));
+      const fakeCollection = { deleteMany: vi.fn().mockResolvedValue(), insertMany };
+      const dropDatabase = vi.fn().mockResolvedValue();
+      const fakeDb = { collection: vi.fn(() => fakeCollection), dropDatabase };
+      const fakeClient = { connect: vi.fn().mockResolvedValue(), db: vi.fn(() => fakeDb), close: vi.fn().mockResolvedValue() };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(backupPath);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('insertMany falhou');
+      expect(fakeDb.collection).toHaveBeenCalledWith('patients');
+      expect(dropDatabase).toHaveBeenCalled();
+    });
+
+    it('does not let a failing scratch-db drop mask the real restore error (#750)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) {
+          return JSON.stringify({ dbName: 'mydb', checksum: emptyDirChecksum });
+        }
+        throw new Error(`unexpected readFile: ${p}`);
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb({ message: 'permission denied' }, '', '');
+      });
+
+      const dropDatabase = vi.fn().mockRejectedValue(new Error('dropDatabase indisponivel'));
+      const fakeDb = { listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })), dropDatabase };
+      const fakeClient = { connect: vi.fn().mockResolvedValue(), db: vi.fn(() => fakeDb), close: vi.fn().mockResolvedValue() };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'));
+
+      // The teardown failure is logged (with the scratch name, so an operator
+      // can clean up by hand) but never replaces the restore's own error.
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('permission denied');
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('mydb_restoretest_'),
+        expect.stringContaining('dropDatabase indisponivel')
+      );
     });
 
     function fakeHistoryDb() {
