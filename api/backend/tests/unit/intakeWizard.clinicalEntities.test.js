@@ -154,7 +154,10 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
    * real getCollection and every `getCollection(db, key)` call 404s against
    * this test's hand-built `db.collection()` raw fallback.
    */
-  async function runIntake(payload) {
+  // #782: `failCollections` makes a named entity collection reject on insert,
+  // so the outcome summary the wizard now returns can be asserted on a real
+  // failure. Defaults to none, so every existing caller is unaffected.
+  async function runIntake(payload, { failCollections = [] } = {}) {
     clearCache();
 
     const notificationServiceModule = require(notificationServicePath);
@@ -205,6 +208,15 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       derivedScores: makeInsertCapturingCollection(),
       ...makeActiveCodeCollections(),
     };
+
+    for (const key of failCollections) {
+      collections[key] = {
+        docs: [],
+        insertOne: vi.fn(async () => {
+          throw new Error(`insert rejeitado (${key})`);
+        }),
+      };
+    }
 
     const collectionResolverModule = require(collectionResolverPath);
     collectionResolverModule.getCollection = vi.fn(async (_db, key) => {
@@ -548,5 +560,64 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
 
     expect(res.status).toBe(200);
     expect(collections.derivedScores.docs).toHaveLength(0);
+  });
+
+  // #782: the wizard returned an unqualified 200 whether every clinical
+  // entity recorded or none did -- each write is wrapped in its own
+  // try/catch that logs and continues, and the response said nothing. For a
+  // biobank the missing rows are clinical annotations on a specimen already
+  // in a freezer, so the moment to re-enter them has passed by the time
+  // anyone reads a server log.
+  //
+  // The best-effort design itself is deliberate and unchanged; what these
+  // pin is that the outcome is now *reported*.
+  it('#782: reports what was recorded on a clean intake', async () => {
+    const { res } = await runIntake(VALID_PAYLOAD);
+
+    expect(res.status).toBe(200);
+    expect(res.body.clinicalEntities).toBeDefined();
+    expect(res.body.clinicalEntities.failed).toEqual([]);
+    expect(res.body.clinicalEntities.recorded).toMatchObject({
+      Encounter: 1,
+      Condition: 1,
+      PhenotypeObservation: 1,
+      MedicationExposure: 1,
+    });
+  });
+
+  it('#782: reports a per-entity failure instead of an unqualified success', async () => {
+    const { res, collections } = await runIntake(VALID_PAYLOAD, { failCollections: ['conditions'] });
+
+    // Still a 200 and still a successful intake -- that is the deliberate
+    // best-effort behaviour, and this fix does not change it.
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(collections.conditions.docs).toHaveLength(0);
+
+    // ...but the caller is now told, rather than having to read a log line.
+    expect(res.body.clinicalEntities.failed).toHaveLength(1);
+    expect(res.body.clinicalEntities.failed[0]).toMatchObject({ entity: 'Condition' });
+    expect(res.body.clinicalEntities.failed[0].error).toMatch(/insert rejeitado/);
+
+    // The entities that did record are still reported as recorded, which is
+    // what makes "specimen saved, 1 of 4 not recorded" expressible.
+    expect(res.body.clinicalEntities.recorded).toMatchObject({ Encounter: 1, PhenotypeObservation: 1 });
+    expect(res.body.clinicalEntities.recorded.Condition).toBeUndefined();
+  });
+
+  it('#782: reports every failure when all clinical entities fail, while the intake still returns 200', async () => {
+    const { res } = await runIntake(VALID_PAYLOAD, {
+      failCollections: ['encounters', 'conditions', 'phenotypeObservations', 'medicationExposures'],
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.clinicalEntities.recorded).toEqual({});
+    expect(res.body.clinicalEntities.failed.map((f) => f.entity).sort()).toEqual([
+      'Condition',
+      'Encounter',
+      'MedicationExposure',
+      'PhenotypeObservation',
+    ]);
   });
 });

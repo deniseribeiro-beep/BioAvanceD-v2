@@ -86,6 +86,25 @@ const LOINC_OBSERVATION_SYSTEM_URI = 'http://loinc.org';
  * for each. All 6 sibling slices are now wired.
  */
 async function recordClinicalEntities(db, { participantId, clinicalData, pharmacologyData, registeredAt }) {
+  // #782: every write below is best-effort by design (see the doc comment
+  // above) and that is not in dispute -- a phenotype that fails to record
+  // should not fail an entire specimen intake. What was missing was any
+  // signal to the caller. The only trace of a failure was a server-side
+  // logger.error line, so the wizard returned an unqualified 200 whether all
+  // ten entity types recorded or none did: the operator saw success and moved
+  // on, while the clinical annotations for a specimen already in a freezer
+  // were quietly absent.
+  //
+  // This collects per-entity outcomes and returns them. It deliberately
+  // changes nothing about what is attempted, what fails, or what persists.
+  const outcome = { recorded: {}, failed: [] };
+  const recorded = (entity) => {
+    outcome.recorded[entity] = (outcome.recorded[entity] || 0) + 1;
+  };
+  const failed = (entity, error, reference = null) => {
+    outcome.failed.push({ entity, reference, error: error?.message || String(error) });
+  };
+
   let encounterId = null;
 
   try {
@@ -95,7 +114,9 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
       encounterPeriod: { start: registeredAt },
     });
     encounterId = encounter.encounterId;
+    recorded('Encounter');
   } catch (encounterError) {
+    failed('Encounter', encounterError);
     logger.error('Falha ao registrar Encounter para o intake wizard:', encounterError.message || encounterError);
   }
 
@@ -112,7 +133,9 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
         clinicalStatus: 'active',
         recordedDate: registeredAt,
       });
+      recorded('Condition');
     } catch (conditionError) {
+      failed('Condition', conditionError);
       logger.error('Falha ao registrar Condition para o intake wizard:', conditionError.message || conditionError);
     }
   }
@@ -129,7 +152,9 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
         effectiveDateTime: registeredAt,
         encounterId,
       });
+      recorded('PhenotypeObservation');
     } catch (phenotypeError) {
+      failed('PhenotypeObservation', phenotypeError, hpoId);
       logger.error(`Falha ao registrar PhenotypeObservation (${hpoId}) para o intake wizard:`, phenotypeError.message || phenotypeError);
     }
   }
@@ -151,7 +176,9 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
         medicationStatus,
         medicationPeriod,
       });
+      recorded('MedicationExposure');
     } catch (medicationError) {
+      failed('MedicationExposure', medicationError, pharmacologyData.atcCode || null);
       logger.error('Falha ao registrar MedicationExposure para o intake wizard:', medicationError.message || medicationError);
     }
   }
@@ -170,7 +197,9 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
         },
         reaction: reactionText ? [{ manifestation: reactionText }] : [],
       });
+      recorded('AllergyIntolerance');
     } catch (allergyError) {
+      failed('AllergyIntolerance', allergyError, allergenCode);
       logger.error(`Falha ao registrar AllergyIntolerance (${allergenCode}) para o intake wizard:`, allergyError.message || allergyError);
     }
   }
@@ -193,7 +222,9 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
         : [];
 
       await familyHistoryService.createFamilyHistory(db, { relationship, familyCondition });
+      recorded('FamilyHistory');
     } catch (familyHistoryError) {
+      failed('FamilyHistory', familyHistoryError, relationship);
       logger.error(`Falha ao registrar FamilyHistory (${relationship}) para o intake wizard:`, familyHistoryError.message || familyHistoryError);
     }
   }
@@ -214,7 +245,9 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
         performed,
         bodySite: bodySiteText ? [{ text: bodySiteText }] : [],
       });
+      recorded('Procedure');
     } catch (procedureError) {
+      failed('Procedure', procedureError, procedureCode);
       logger.error(`Falha ao registrar Procedure (${procedureCode}) para o intake wizard:`, procedureError.message || procedureError);
     }
   }
@@ -239,7 +272,9 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
         effectiveDateTime: effectiveDate,
         observationStatus: 'final',
       });
+      recorded('ClinicalObservation');
     } catch (observationError) {
+      failed('ClinicalObservation', observationError, loincCode);
       logger.error(`Falha ao registrar ClinicalObservation (${loincCode}) para o intake wizard:`, observationError.message || observationError);
     }
   }
@@ -259,7 +294,9 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
         outcomeType: { code: outcomeTypeCode },
         outcomeDate,
       });
+      recorded('ClinicalOutcome');
     } catch (outcomeError) {
+      failed('ClinicalOutcome', outcomeError, outcomeTypeCode);
       logger.error(`Falha ao registrar ClinicalOutcome (${outcomeTypeCode}) para o intake wizard:`, outcomeError.message || outcomeError);
     }
   }
@@ -282,10 +319,14 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
         algorithmVersion: CCI_ALGORITHM_VERSION,
         scoreComponents,
       });
+      recorded('DerivedScore');
     } catch (scoreError) {
+      failed('DerivedScore', scoreError, CCI_SCORE_TYPE);
       logger.error('Falha ao registrar DerivedScore (CCI) para o intake wizard:', scoreError.message || scoreError);
     }
   }
+
+  return outcome;
 }
 
 const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
@@ -861,7 +902,8 @@ async function handleIntakeWizard(req, res) {
 
     // #693 (RF005 AC4-6): additive real-entity recording, best-effort --
     // see recordClinicalEntities' own doc comment for scope/rationale.
-    await recordClinicalEntities(db, {
+    // #782: outcomes are now returned and surfaced in the response below.
+    const clinicalEntitiesOutcome = await recordClinicalEntities(db, {
       participantId: allocatedSample.participantId,
       clinicalData: sampleToPersist.clinicalData,
       pharmacologyData: sampleToPersist.pharmacologyData,
@@ -919,6 +961,12 @@ async function handleIntakeWizard(req, res) {
       // MongoStorageRepository.findCurrentStorageAssignment().
       storageAssignment: createdSample.storageAssignment || null,
       label: buildLabelLinks(allocatedSample),
+      // #782: the intake stays a 200 whatever happened to the clinical
+      // entities -- that best-effort design is deliberate. What changes is
+      // that the caller is now told, so a UI can say "specimen saved, 1
+      // phenotype not recorded" instead of an unqualified success. `failed`
+      // is empty on a clean intake, so the common case reads the same.
+      clinicalEntities: clinicalEntitiesOutcome,
       data,
       sample: allocatedSample,
     });
