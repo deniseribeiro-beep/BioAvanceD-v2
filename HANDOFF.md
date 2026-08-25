@@ -1,212 +1,106 @@
 # HANDOFF
 
-**Written:** 2026-08-25 (fifth sitting of the day). Dennis asked for a
-group of 5-10 issues with **Docker on**, then twice pushed the session to
-keep going. Ran `issue-loop` **queue mode** over a self-picked 9-issue
-queue and took it to the end.
+**INTERIM — session in progress, not the final word.** Written
+2026-08-25 (sixth sitting of the day) after **queue item 1 of 7**.
+Dennis asked for a group of issues with **Docker on**, explicitly to
+exercise the skills-pack updates that landed at the end of the previous
+sitting. Running `issue-loop` **queue mode** over a self-picked,
+explicitly-numbered 7-issue queue.
 
-**All 9 closed. The Docker gate ran, from scratch, and was green.** This
-is the first sitting in several where the gate actually executed rather
-than being owed forward.
+## The queue
 
-## What closed
+Named directly in the `issue-loop` invocation's args so
+`queue-continue-checkpoint.cjs` can actually see it (that hook only
+recognizes a closed, explicit list):
 
-Each landed as its own `fix/<slug>` branch, merged `--no-ff`, closed,
-branch deleted local + remote (9/9 remote deletions succeeded, no prompt).
+| # | What | Route | State |
+|---|---|---|---|
+| **775** | `generateUniqueBarcode` ceiling past 999/year | fix-bugs | **closed** |
+| 771 | arch test over `.sort({...})` literals | unit-test-loop | open |
+| 772 | `useAsyncImport.ts` dead code | resolve-issue | open |
+| 763 | drop inert two-step `find()` workaround | resolve-issue | open |
+| 764 | delete dead root `test:browser*` scripts | resolve-issue | open |
+| 778 | delete dead consent-sync env declarations | resolve-issue | open |
+| 759 | e2e spec for the LGPD sample-import path | e2e-test-loop | open |
 
-**The `e2549bee` rename family — now fully closed** (#758/#767 last
-sitting, these three this one):
+Classification was done **once up front for the whole list**, per queue
+mode's closed-explicit-list rule. #759 is deliberately last so Docker
+comes up once and rolls straight into the full gate.
 
-- **#769** (`5bb10207` → `ac3d1c3e`) — two RF008 report handlers sorted
-  samples on `registrationDate`, absent from every document, so ordering
-  fell through to `createdAt` and `.limit(100)` returned **the wrong 100
-  rows**, not the right 100 misordered. **Not upstream drift** —
-  `origin/main`'s newest commit for that file *is* `e2549bee` and main's
-  copy carries the same bug.
-- **#768** (`ad77495f` → `9901194a`) — the `collectedAt` specimen legs
-  were dead, so biomarker rows with no date column got **import time**.
-  The two leg pairs are **genuinely different**: the `specimen` legs are
-  unreachable and were deleted; the **`rawRow` legs are live** (a CSV
-  column literally spelled `registrationDate` reaches them) and were kept
-  with their own test, which was green before the fix — that is what
-  proved the distinction. **Do not sweep them away later as "more of the
-  same."**
-- **#770** (`c093b5df` → `0df33522`) — three CSV date aliases repointed;
-  duplicate `idpaciente` key removed.
+**Deliberately excluded, all still open:** #774 and #753 (each needs
+Denise's call on which vocabulary / where a sweep lives), #752 (needs
+Dennis's behaviour decision, and is the one red in the native suite).
 
-**The #736 string-concat family:**
+## Closed this sitting
 
-- **#757** (`3074c147` → `5581466b`) — `seedStorageBoxLocation()` wrote a
-  `RF004-e2e-EQ-<ts>` string into **two** fields both declared numeric.
-  The issue knew only about `equipmentID`; `StorageContainer.js:6`
-  declares `containerID: { type: Number }` too, and they **cannot be
-  typed independently** because `sample.service.js:244` joins them.
-- **#756** (`b2a3bbc2` → `65444411`) — the four sibling ID generators got
-  #736's `$type: 'number'` filter. `makeEquipmentDbMock` generalized to
-  `makeIdDbMock(field, docs)` rather than copied four times.
+- **#775** (`bab7abf5` → merged `1ea99f5a`) — `generateUniqueBarcode`
+  found the year's maximum with `sort: { barcode: -1 }` on a *string*,
+  so `BR-2026-999` outranked `BR-2026-1000` and generation threw
+  permanently from the 1002nd sample of a calendar year. Took the
+  issue's option 2 (numeric max in JS), which preserves the
+  `BR-YYYY-NNN` format and needs no migration. The two-attempt race
+  guard became a bounded 10-attempt loop.
+  - **The format question the issue left to the owner was settled by
+    docs, not by a decision**: `dict-02` ELM-0116 constrains
+    `barcodeValue` only to a unique string ("GS1/DataMatrix/Code128
+    conforme política"). No fixed shape is mandated.
+  - **None of the pre-existing mocks could see this bug** — each
+    answered the year's highest-barcode lookup with whatever the test
+    handed back, discarding the ordering. That is #771's class exactly,
+    which is the next queue item. The new tests use a fake that orders
+    the way the driver does (binary string sort).
+  - **A test asserting the numeric max needs a *gap* to discriminate.**
+    With only `1000` present, the buggy code also returns `1001`, by
+    collision-bump luck. With `...999` + `1005`, correct is `1006` and
+    the old code returns `1000` — a code *below* one that exists.
 
-**Guards and docs:**
+## Filed this sitting
 
-- **#755** (`b61d976a` → `2e6da724`) — new
-  `tests/architecture/env-declarations.arch.test.js`: three guards
-  against an `env.<NAME>` read env.js never declares.
-- **#777** (`32c6ee72` → `93bca8b0`) — **defect in #755's own guard**,
-  found an hour later: it walked `src/` only, missing `app.js` and
-  `server.js`, both real `config/env` importers.
-- **#754** (`e8107e32` → `51d2965a`) — the schedule cron variables
-  documented in the example files.
-
-**Docker-proven:**
-
-- **#658** (`a7a4f016` → `9cffa8dc`) — `backend-unit-runner` had no
-  `docs/` mount. Mount point is **`/docs`, not `/app/docs`**: in-container
-  `__dirname` is `/app/scripts` and `REPO_ROOT`'s `../../..` clamps at the
-  filesystem root.
-- **#766** (`3a1159b0` → `bc2c86a0`) — restore test now reports a
-  **document** count, not just a collection count, on both the
-  mongorestore and JSON-fallback paths, normalized onto one shape.
-
-## The Docker gate — what actually ran
-
-Genuinely from scratch: all four named volumes removed first, 24 images
-cold-rebuilt, 12 core services + `admin-bootstrap-test` + the full
-17-service reference-data chain (all `Exited (0)`).
-
-| Check | Result |
-|---|---|
-| `backend-unit-runner` (#658) | **exit 0**, `dictionary:validate` verified 929/929 elements, no ENOENT |
-| `pipeline-continuity.spec.ts` (#766, #765) | **58/58 passed** |
-| The five `seedStorageBoxLocation` specs (#757) | **70/70 passed** |
-
-**#765's carried-forward caveat is resolved.** Two handoffs said "if
-`pipeline-continuity.spec.ts:1214` does not go green at the next gate,
-reopen #765." It went green. **Do not reopen #765.**
-
-**#757's proof is the join, not the absence of failure.** Four of the five
-specs push `boxId`/`positionCode` through `createSample` (61 references in
-`specimen-quality-inventory` alone), each hitting the RF004 equipment
-join. Zero occurrences of `não está cadastrado` in the Playwright output
-*or* `backend-app-test`'s container logs across the whole run.
-
-## Filed this sitting, all open
-
-- **#771** — **165 sort-swallowing mock sites across 80 test files**. The
-  whole "query orders on a field nothing writes" class is structurally
-  invisible to the backend suite. **The suggested fix is an architecture
-  test over `.sort({...})` literals in `src/`, not upgrading 80 test
-  files** — it catches the product half directly and would have caught
-  #769 with no mock changes. Bigger than a queue item.
-- **#772** — `useAsyncImport.ts` is dead code (imported by nothing), and
-  `useImportJob.ts:286` claims a caller relationship that does not exist.
-- **#773** — `canonicalizeHeader` still targets `patientID`. Deliberately
-  not folded into #770: different rename family (#146), only one
-  corroborating source available.
-- **#774** — `Equipment.EQUIPMENT_STATUS` (allow-list) and
-  `BLOCKED_EQUIPMENT_STATUSES` (deny-list, **triplicated** across three
-  files) share **no vocabulary**. The e2e fixture's `status: 'operational'`
-  is in neither and passes the gate *because* it is unrecognized.
-- **#775** — `generateUniqueBarcode` **throws permanently from the 1002nd
-  sample of a calendar year**: `padStart(3,'0')` overflows to 4 digits and
-  `'BR-2026-999'` sorts above `'BR-2026-1000'` lexicographically. For a
-  biobank that is an ordinary year, and it fails late.
-- **#776** — the four sibling generators have **no caller in `src/`**;
-  their models promise auto-generation nothing performs.
-- **#778** — `ENABLE_CONSENT_SYNC` / `CONSENT_SYNC_CRON` /
-  `CONSENT_SYNC_BATCH_SIZE` are declared but the schedule they configure
-  was deleted. The mirror image of #749.
-
-**Skills-pack** (`DyeAllPies/dyeallpies-skills-pack`): **#424** (mock
-bullet names only query filters, not `.sort()`), **#425**
-(`verify-intent` returning "not drift" reads as the routing decision),
-**#426** (an issue body's file-and-line traces are treated as fact, not
-hypothesis), **#427** (`branch-guard.cjs` blocks a bare read-only `git
-branch` when the next command is newline-separated), **#428** (`handoff`
-has no rotation cadence for multi-iteration runs), **#429** (`fix-bugs`
-has no close-discipline branch for a fix only provable at a deferred
-gate), **#430** (**queue mode stops and asks permission** — Dennis's
-two-tier session-end proposal is on the thread), **#431** (`npx node
---test` downloads a Node distribution). Also two substantial comments on
-**#419** and a consolidated tally on **#410**.
+- **#779** (product) — the fix reads the year's whole barcode set per
+  sample creation: index-usable prefix scan, but O(codes this year), and
+  `import-lgpd.service.js:1133` calls it **per row**, so a 5,000-row
+  import pays it 5,000 times. Options are a numeric sequence field or an
+  atomic counter (the latter also removes the race the retry loop
+  absorbs). Not urgent; split out so it does not live only on a closed
+  thread.
+- **Skills-pack #432** — `full-suite-guard` blocks a *genuinely
+  targeted* one-file vitest run when the downstream pipe is
+  `grep -B5 -A 20 "FAIL\|Unhandled\|Error"`. Identical run with
+  `| tail -3` is allowed. **Deterministic, reproduced twice.** The block
+  message is the full-suite lecture, which misdirects: the vitest half
+  is already minimal, the grep is what has to change.
+- **Skills-pack #433** — backslash stripping is **not** confined to
+  `node -e` (pack #419). A quoted heredoc (`cat > f <<'EOF'`) wrote
+  `\d` where the source needed `\d`; inside a JS template literal that
+  collapses to a literal `d`, producing a regex that compiles, throws
+  nothing, and **matches nothing**. Under auto mode heredocs are the
+  primary edit path, so the blast radius is a whole session's edits.
+  **Workaround that worked: avoid the backslash entirely — `[0-9]` for
+  `\d`** (valid in both JS `RegExp` and Mongo `$regex`), or write via a
+  `python - <<'PY'` string replace.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration` at the #766 merge, pushed,
-  in sync. **No `fix/` branches from this sitting remain**, local or
-  remote.
-- **Four older local branches**, unchanged for five sittings:
-  `fix/599-ci-trigger-integration-branch` and
-  `fix/599-hold-ci-trigger-for-milestone` are merged (safe to delete);
-  `test/377-docs-on-main` and `test/human-showcase-video` are **not**
-  merged. #599 is intentionally open, held by the CI milestone.
-- **Two stale *remote* branches** with no local counterpart, still left
-  alone deliberately: `origin/fix/705-seed-active-terminology-concept-cleanup`
-  and `origin/test/377-docs-on-main`. They predate this session, so
-  `clean-up`'s scope rule excludes them, and its authorship check applies
-  — precedent #332, where 5 of 13 turned out to be a collaborator's work.
-  **Verify merge status *and* per-commit authorship before deleting.**
-- **Native suites: one known red, unchanged** — `backup.service.test.js`'s
-  legacy-JSON restore assertion (**#752**). Confirmed present on the
-  unmodified tree by stashing this sitting's changes and re-running, so it
-  is definitively not from this work. Architecture suite is **65/65**.
-- Two untracked paths still deliberately untouched: `.claude/skills/` and
-  `api/backend/storage/assays/`. **Never `git add -A`** — every commit
-  this sitting named its files explicitly.
-- No open PR; nothing pushed to `main`; `main` stays frozen.
-
-## Docker / cleanup
-
-- **Stack torn down** (`docker compose down`), 0 containers, all 25
-  session-built `bioavanced-test-*` images removed, builder cache pruned
-  with `-af` (1.208GB reclaimed, now 0B).
-- **The four named volumes were left in place** — they are the caching
-  design and `docker-workflow` forbids clearing them as routine hygiene.
-  **But they now hold this sitting's e2e fixture data.** A genuinely
-  from-scratch gate needs `docker volume rm` on
-  `bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data` first, as was
-  done at the start of this one.
-- **WSL2 vhdx is 13.93GB physical against ~3.7GB logical** (~10GB of air).
-  Short of the "34GB behind 4GB" bar `docker-workflow` sets for a reset,
-  and a reset wipes base images — flagged, not acted on.
-- 6 base images (2.839GB) left: not session-built, and machine-wide prunes
-  need Dennis's fresh consent.
-
-## Carried forward, re-confirmed this sitting
-
-- **The gate recipe in `docker-workflow`'s overlay is accurate as
-  written** — 12 core services, then `admin-bootstrap-test`, then the
-  17-service chain. Used verbatim, worked first time.
-- Host Playwright command (unchanged, still correct):
-  `PLAYWRIGHT_BASE_URL=http://localhost:5173 PLAYWRIGHT_API_BASE_URL=http://localhost:3000 PLAYWRIGHT_SKIP_WEBSERVER=1 TEST_USER=admin TEST_PASS=Admin@123 E2E_MONGO_URI="mongodb://localhost:27017?directConnection=true" E2E_MONGO_DB=bioavanced_test E2E_NEO4J_DATABASE=neo4j TEST_SUPPORT_SECRET=e2e-test-support-secret npx playwright test [spec] --workers=1`
-- **`npm run test:smoke` selects by *working-tree diff*** — it reports
-  "nothing to run" once a merge is committed. Useful before committing,
-  useless after. Read its file list, not its exit code (#752 red).
-- **One architecture test is deliberately SKIPped in-container** (the
-  `.github/workflows/` reachability check) — so 64 pass in-container vs
-  65 natively is correct, not a stale image. Its own skip message says so.
-- **Two independent sources settle canonical field names:**
-  `canonical-fields.arch.test.js` and `sample.routes.js`'s
-  `NON_CANONICAL_FIELD` rejection.
-- **Routes and controllers are not siblings** — `src/interface/routes/`
-  vs `src/controllers/`.
-- **`node -e` with a regex is unsafe here** — backslashes are stripped
-  above the quoting layer and can produce a pattern that parses fine and
-  matches *nothing*, which reads as a valid negative result. One sweep
-  this sitting reported 100/100 env keys as dead before being caught.
-  Use a script file, or `chr(92)`. (pack#419)
-- Older open findings from earlier sittings: #733, #734, #735.
+- On `feature/docker-e2e-backend-integration` at `1ea99f5a`, pushed, in
+  sync. `fix/775-barcode-sequence-ceiling` deleted local **and remote**
+  (remote delete succeeded with no prompt — another data point for pack
+  #410's tally).
+- **Docker has not been started yet this sitting.** The four named
+  volumes still hold the *previous* sitting's e2e fixture data, so a
+  genuinely from-scratch gate needs `docker volume rm` on
+  `bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data` first.
+- Native suites: **the known #752 red is unchanged and pre-existing**
+  (`backup.service.test.js`'s legacy-JSON restore assertion). Not
+  re-checked this sitting; last sitting confirmed it against a stashed
+  tree.
+- Four older local branches and two stale remote branches unchanged —
+  see the previous handoff's reasoning (authorship check required before
+  deleting the remotes; precedent #332).
+- Two untracked paths still deliberately untouched: `.claude/skills/`
+  and `api/backend/storage/assays/`. **Never `git add -A`.**
 
 ## Recommended next steps
 
-**None queued** — the queue Dennis authorized is complete and he named no
-successor.
-
-For whoever picks it up, the strongest candidates from what this sitting
-filed are **#775** (a hard production ceiling at ~1000 samples/year, in
-the core sample-creation path) and **#771** (the 165-mock blind spot,
-whose suggested arch-test fix would retroactively cover the whole
-`e2549bee` family's query-side failures).
-
-**`ship-integration-branch` is now closer than it has been.** The Docker
-gate is green and #738's follow-ups are proven. The remaining blocker is
-**#752** — it still needs a decision on intended behaviour, and it is the
-one red in the native suite.
+**Continue the queue at #771** — the session is not over. If this
+sitting is picked up cold, the six open queue members above are the
+work, in that order, with the Docker gate after #759.
