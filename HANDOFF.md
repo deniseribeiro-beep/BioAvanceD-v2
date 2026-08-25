@@ -2,161 +2,193 @@
 
 **INTERIM — SESSION IN PROGRESS, NOT A FINAL HANDOFF.**
 
-**Written:** 2026-08-25 (seventh sitting of the day), after queue item 4
-of 5. Dennis asked for the next group of issues and confirmed **Docker
-is on**. **1 of 5 queue items remains** (#787, plus the Docker gate) and
-the session is still going. Do not read this as the sitting's final word.
+**Written:** 2026-08-25 (eighth sitting of the day), after queue item 1
+of 4. Dennis asked for the next group of issues and confirmed **Docker
+is on**. **3 of 4 queue items remain** and the session is still going.
+Do not read this as the sitting's final word.
 
 ## The queue
 
-Self-picked, explicitly numbered in the `issue-loop` invocation's args so
-`queue-continue-checkpoint.cjs` can see it. Theme: **accepted-but-
-unenforced request parameters, and partial failures that report as
-success**, on the LGPD import and sample/log query paths.
+Self-picked this sitting, explicitly numbered in the `issue-loop`
+invocation's args so `queue-continue-checkpoint.cjs` can see it. Theme:
+**finish RNF011 AC#4, and stop the sample list from lying about
+consent** — all four items sit on the LGPD-import / sample-list path the
+last two sittings have been living in.
 
 | # | What | Route | Status |
 |---|---|---|---|
-| **785** | samples list `patientID` filter never applied | fix-bugs | **closed** `9c3074bf` |
-| **786** | `results.total` under-counts a partial import | fix-bugs | **closed** `c42fc8de` |
-| **780** | `log.service.js` unvalidated `sortBy` sort spec | fix-bugs | **closed** `de5e2ab7` |
-| **782** | intake wizard 200 when every clinical entity failed | fix-bugs | **closed** `d653d7e3` |
-| **787** | RNF011 AC#4 staging/quarantine for the LGPD import | build-loop | **next** |
+| **0** | the inherited Docker gate | gate | **done, green** |
+| **787** | RNF011 AC#4 LGPD import quarantine | build-loop | **closed** (code was already merged `00fee0a8`) |
+| **788** | consent badge read from `sample.patientID`, a field no writer sets | fix-bugs | **next** |
+| **790** | `importSamples` has no empty-row guard | fix-bugs | queued |
+| **794** | slice 1: `GET /api/import/lgpd/batches/:batchId` | build-loop | queued |
 
-Each closed issue has a full write-up on its own thread. Not duplicated
-here.
-
-**A pattern that held in all four:** the issue body's suggested fix or
-factual claim was wrong or incomplete in some respect, and re-running the
-trace instead of trusting it is what caught the problem every time.
-
-- **#785** proposed re-admitting a field the create path 422s.
-- **#786** pointed at the wrong sibling importer to copy, and its
-  under-count turned out to be specific to the `continue` paths (a row
-  that *threw* was already counted).
-- **#780**'s suggested allow-list named `level`, a field no log document
-  has (it is `severity`).
-- **#782** described four entities with catches; there are **ten**.
-
-**Assume #787's body needs the same treatment.**
-
-**Deliberately excluded, all still open:** #779, #772, #774, #752, #761,
-#751, #753 — each blocked on a decision or explicitly deferred by its own
-body.
+**Deliberately excluded, all still open:** **#789** (its own body says
+which of three options to take is a product call), **#793** (`question`
+— retention for `import_staging_records`), **#792** (its body says it
+should be decided together with #793).
 
 **Flagged to Dennis, not queued:** **#684** — highest-severity item on
 the board; any authenticated user can revoke any patient's consent by
-enumerating a Mongo `_id`. Left out because the fix depends on
-RF010/RF021's intended actor model, a product call. Dennis was offered
-the swap and has not taken it.
+enumerating a Mongo `_id`. Still blocked on RF010/RF021's intended actor
+model, a product call. Offered again this sitting as a swap for #794;
+not taken so far.
 
-## Pending deferred proof — read before the gate
+## What the previous sitting left, and what was actually true
 
-`tests/e2e/lgpd-sample-import.spec.ts` carries **three** un-weakened
-assertions that have never executed (they only run against Docker). All
-three previously asserted the wrong values on purpose so the spec would
-not go red when the fixes landed:
+The inherited `HANDOFF.md` was **one step stale in two places** — worth
+knowing because both were only caught by checking rather than reading:
 
-1. **#785** — the samples list queried through the real `?participantId=`
-   filter, asserting every returned row belongs to that participant.
-2. **#786** — a wholly-rejected one-row file reports
-   `{ total: 1, success: 0, errors: 1 }`.
-3. **#786** — a mixed two-row file reports
-   `{ total: 2, success: 1, errors: 1 }`.
+- It listed **#787 as "next"**. #787's code had in fact been built,
+  committed (`f425848b`) and merged (`00fee0a8`), and three follow-ups
+  (#792/#793/#794) filed off it. Only the *issue* was still open,
+  pending the gate. The last `HANDOFF.md` edit (`cc48fb82`) touched only
+  the Docker paragraph and never refreshed the queue table.
+- It said the branch was **"pushed, in sync"**. It was, and still is,
+  **ahead 2** (`859d3bfa`, `cc48fb82`).
 
-**#785 and #786 were closed on their native proofs. If the gate comes
-back red on this spec, reopen the corresponding issue.** #780 and #782
-have no deferred component.
+## The gate (queue item 0) — green
+
+**The stack was up but was NOT gate-ready.** `docker ps -a` showed no
+`admin-bootstrap-test` container and no reference-data chain containers
+at all — the previous sitting brought up the 12 core services and
+stopped. Without those, every `realLogin` spec 401s and
+`lgpd-sample-import.spec.ts` cannot resolve its seeded MIABIS ids
+(`PLASMA`/`VENOUS_BLOOD`/`TUBE_EDTA`, from `foundation-bootstrap-test`).
+Fixed in ~50 s; filed as pack **#445**, because "warm" was recorded where
+"gate-ready" was meant.
+
+Result, host-side Playwright, `--workers=1`:
+
+```
+5 passed (4.0s)
+```
+
+- **#785's** deferred `?participantId=` assertion — **passed**, first
+  ever execution.
+- **#786's** two deferred `results.total` assertions
+  (`{1,0,1}` and `{2,1,1}`) — **both passed**.
+- **#787's** two new quarantine cases — **passed**.
+
+**No reopens.** #785 and #786's native-proof closes are confirmed live.
+
+## #788 — live-checked, and the issue body is wrong
+
+Its headline prediction (every `GET /api/samples` row returns
+`PATIENT_NOT_FOUND`) is **refuted**. All 4 rows returned
+`NO_ACTIVE_CONSENT`, which per `sample.routes.js:535` means the `findOne`
+**matched a patient**. It resolves to the *wrong* one:
+
+```
+total patients: 7      with no patientID field: 7
+buggy filter returns : participantId "64404470"
+the sample's real one: participantId "53117577"
+```
+
+Every patient lacks `patientID`, so `{ patientID: null }` matches all
+seven and `findOne` returns whichever comes first. **Every sample on
+every page is badged from one arbitrary patient's consent record.**
+
+This is the "or, worse" branch #788 itself flagged, and it is **more**
+severe than what the issue leads with: today that patient has no active
+consent so everything reads `canUse: false` (conservative, and
+indistinguishable from correct), but if the first-yielded patient
+carried an active consent, **every specimen in the biobank would badge
+`canUse: true`**. Which way it fails is decided by document order.
+Full evidence is on the #788 thread.
+
+**The pattern from the last queue held for a fifth time:** the issue
+body was wrong in some respect, and re-running the trace is what caught
+it. This time it was wrong in the direction of *understating* severity.
+**Assume #790's and #794's bodies need the same treatment.**
 
 ## Filed this sitting
 
-**Product:** **#788** (`GET /api/samples` computes every sample's consent
-badge from `sample.patientID`, a field no writer sets — third instance of
-the #533/#785 class in one handler; **static trace only, the live check
-is a gate task**), **#789** (GET silently ignores non-canonical query
-params while POST 422s them — now covering three endpoints and three
-different answers, after #780 added an "echo the effective value back"
-option), **#790** (`importSamples` has no empty-row guard while
-`importPatients` has two), **#791** (nothing in `frontend/src` reads
-#782's new `clinicalEntities` outcome, so the operator still sees an
-unqualified success).
+**Pack:** **#444** (`push-wrapup-checkpoint.cjs` fires on a gh command
+that *failed*, and its message asserts the command succeeded), **#445**
+(a stack left up for a pending gate is recorded as "UP" with no record
+of its bootstrap state), **#446** (#407's fix is correct, filed in the
+right place, and still unreachable two prose pointers deep from a
+`build-loop` iteration — I reproduced both halves of #407 anyway).
 
-**Pack:** **#440**, **#441**, **#442**, plus data-point comments on
-**#433** (heredoc failures are about payload *size*, not only escaping)
-and **#434** (`routing-gate.cjs` re-armed by tracker reads in a
-*different repository*).
+**Product:** none new. #788 gained a substantial live-evidence comment.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration` at `d653d7e3` + this
-  rotation, pushed, in sync. **No `fix/` branches from this sitting
-  remain**, local or remote — all four remote deletions succeeded with no
-  prompt (four more data points for pack #410).
+- On `feature/docker-e2e-backend-integration`, **ahead 2, unpushed**
+  (`859d3bfa`, `cc48fb82`) — inherited, not created this sitting.
+- **Nothing committed to the repo this sitting yet** beyond this
+  rotation. No working-tree edits (`git diff --stat` empty).
 - Untracked and deliberately untouched: `.claude/skills/` and
   `api/backend/storage/assays/`. **Never `git add -A`.**
+- No `fix/` or `build/` branches from this sitting exist yet.
 - Older local branches unchanged: `fix/599-ci-trigger-integration-branch`
   and `fix/599-hold-ci-trigger-for-milestone` are merged (safe to
   delete); `test/377-docs-on-main` and `test/human-showcase-video` are
   not merged.
 - Two stale *remote* branches left alone deliberately (they predate this
-  session, so `clean-up`'s scope rule excludes them):
-  `origin/fix/705-seed-active-terminology-concept-cleanup` and
+  session): `origin/fix/705-seed-active-terminology-concept-cleanup` and
   `origin/test/377-docs-on-main`. **Verify merge status *and* per-commit
   authorship before deleting** (precedent #332).
-- **Native suites:** architecture **70/70**. The known **#752** red is
-  unchanged and pre-existing; not re-checked this sitting.
+- The known **#752** red is unchanged and pre-existing; not re-checked.
 - No open PR; nothing pushed to `main`; `main` stays frozen.
 
 ## Docker
 
-**On, authorized by Dennis for this sitting. The 12-service core stack
-is UP and deliberately left running** — all healthy, brought up ~19:27
-on 2026-08-25, inherited by the next sitting rather than started by it.
-Dennis confirmed at the `clean-up` checkpoint to leave it up for the
-pending gate, so a next session finds a warm stack on purpose, not an
-abandoned one. The four named fixture volumes are untouched.
+**On, authorized by Dennis for this sitting. The stack is UP and now
+genuinely gate-ready** — record both axes, per pack #445:
 
-The four named volumes still hold the previous sitting's e2e fixture
-data. A genuinely from-scratch gate needs `docker volume rm` on
-`bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data` first.
-
-- **The gate recipe in `docker-workflow`'s overlay is accurate as
-  written** — 12 core services with `--build` (`api/backend/src` has been
-  touched four times this sitting), then `admin-bootstrap-test`, then the
-  17-service reference-data chain. Fourth sitting running it.
-- Host Playwright command: see the sixth sitting's rotation in git
-  history for the verbatim env line.
-- **Stop `playwright-runner` before any host-side run**, and **one
-  workload at a time against one stack, whoever starts it** (pack #437).
-- `TaskStop` on a backgrounded `docker compose` reports success while
-  `docker ps` still shows the container `Up`.
+- **Services:** 12 core, all healthy, up since ~19:26 on 2026-08-25
+  (inherited from the previous sitting, not started by this one).
+- **Bootstrap:** `admin-bootstrap-test` **has run** this sitting, and so
+  has the **full 17-service reference-data chain**. All 18 one-shots
+  verified `Exited (0)` via `docker ps -a` — not by the compose exit
+  code, which lies for one-shots.
+- **Volumes:** the four named fixture volumes are untouched and still
+  hold prior sittings' data. The gate was deliberately run **warm**; a
+  genuinely from-scratch run needs `docker volume rm` on
+  `bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data` first, and
+  then the whole bootstrap chain again.
+- `playwright-runner` has never been started on this stack — nothing to
+  stop before a host-side run. **Stop it if that changes**, and keep to
+  **one workload at a time against one stack** (pack #437).
+- Host Playwright command (verbatim, works):
+  `PLAYWRIGHT_BASE_URL=http://localhost:5173 PLAYWRIGHT_API_BASE_URL=http://localhost:3000 PLAYWRIGHT_SKIP_WEBSERVER=1 TEST_USER=admin TEST_PASS=Admin@123 E2E_MONGO_URI="mongodb://localhost:27017?directConnection=true" E2E_MONGO_DB=bioavanced_test E2E_NEO4J_DATABASE=neo4j TEST_SUPPORT_SECRET=e2e-test-support-secret npx playwright test [spec] --workers=1`
+- **#788's and #790's fixes touch `api/backend/src`** — rebuild
+  `backend-app-test` before re-running any spec against them.
+  `backend-app-test` is build-not-mount; a bare `up -d` reuses the stale
+  image and the failure looks like a real bug.
 
 ## Working rules holding this sitting
 
+- **`gh issue close` has NO `--body-file` flag** — it takes `--comment`.
+  Post a long close comment first with `gh issue comment --body-file`,
+  verify, then close in a **separate** command. Tripped this sitting
+  despite being documented in `resolve-issue`; see pack #446.
+- **A hook-blocked Bash call writes none of its files, and the block is
+  atomic over the whole tool call — separator is irrelevant.** A
+  heredoc and a `gh issue create` on two separate newline-separated
+  lines were lost together to the `--label` hook. The repo's own prior
+  note framed this as an `&&`-chaining rule; that framing is too narrow.
+- **Every `gh issue create` must carry `--label`** (pack #148 hook).
 - **Route file content through `Write`, not Bash heredocs, above roughly
-  100 lines.** Three failures this sitting, all `unexpected EOF while
-  looking for matching quote`, all on large payloads; every short heredoc
-  (issue bodies, commit messages) worked. It presents as an escaping bug
-  but is a truncation — don't debug the content, change the tool
-  (pack #433).
-- **Never chain gated steps in one compound command.** Two losses this
-  sitting, including a `cat > body.md <<EOF ... && gh issue create` that
-  died to a hook and took the heredoc with it, so the retry failed on a
-  file that had never been written.
-- **Budget for two re-invocations per iteration:** `routing-gate.cjs`
-  re-arms between the fix and the close (a fresh `fix-bugs` Skill call
-  every time — all four closes needed one), and
-  `push-wrapup-checkpoint` fires again at the close after the audit
-  already ran (pack #442).
+  100 lines** — a truncation, not an escaping bug (pack #433).
+- **Budget for re-invocations:** `routing-gate.cjs` re-arms between the
+  fix and the close, and `push-wrapup-checkpoint` fires again at the
+  close after the audit already ran (pack #442) — and now also fires on
+  commands that *failed* (pack #444).
 
 ## Recommended next steps
 
-**Finish the queue — #787 is the last item**, routed to `build-loop`.
-Mirror the existing `fhir-import-staging.service.js` precedent rather
-than inventing a staging shape; the FHIR path already satisfies the same
-RNF011 AC#4, which is what makes this a one-path-has-it-and-the-other-
-doesn't gap rather than an unimplemented requirement.
+**Continue the queue — #788, then #790, then #794 slice 1.**
 
-Then the Docker gate, which must cover: the **three** un-weakened
-`lgpd-sample-import.spec.ts` assertions above, #787's new real-backend
-test, and a live check of **#788**'s prediction that every
-`GET /api/samples` row comes back `PATIENT_NOT_FOUND`.
+For **#788** specifically, the live check above changes the fix:
+`{ patientID: <value> }` is a **dead leg** against this database (no
+patient document carries the field), so matching should key on
+`participantId`; and the fix must stop a missing value from degenerating
+into `{ field: null }` and silently matching — guard before querying,
+don't just change which value is fed in. The unit fixtures at
+`tests/unit/sample.routes.test.js:1318,1344,1370,1405,1452` build
+`samples: [{ patientID: 'P1' }]`, a shape the product never produces,
+and must be corrected in the same change or they will keep endorsing the
+broken reader.
