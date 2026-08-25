@@ -1,7 +1,7 @@
 # HANDOFF
 
 **INTERIM — session in progress, not the final word.** Written
-2026-08-25 (sixth sitting of the day) after **queue item 5 of 7**.
+2026-08-25 (sixth sitting of the day) after **queue item 6 of 7**.
 Dennis asked for a group of issues with **Docker on**, explicitly to
 exercise the skills-pack updates that landed at the end of the previous
 sitting. Running `issue-loop` **queue mode** over a self-picked,
@@ -21,7 +21,7 @@ list rule.
 | 772 | `useAsyncImport.ts` dead code | resolve-issue | **open — owner's call** |
 | **763** | drop inert two-step `find()` workaround | resolve-issue | **closed** |
 | **764** | delete dead root `test:browser*` scripts | resolve-issue | **closed** |
-| 778 | delete dead consent-sync env declarations | resolve-issue | open |
+| **778** | delete dead consent-sync env declarations | resolve-issue | **closed** |
 | 759 | e2e spec for the LGPD sample-import path | e2e-test-loop | open |
 
 #759 is deliberately last so Docker comes up once and rolls straight
@@ -81,6 +81,18 @@ red in the native suite).
     existing-but-dead. That text is now stale; filed as pack **#435**
     (cannot be edited from this repo — Rule 0).
 
+- **#778** (`fa627d42` → `1da295e2`) — the three dead consent-sync env
+  declarations removed; `startConsentSyncSchedule` has been a stub since
+  the canonical outbox replaced the legacy sync.
+  - **The issue missed one reference:** `tests/unit/config/env.test.js`
+    listed `CONSENT_SYNC_CRON` among "every cron expression
+    `scheduler.service.js` reads off the env module" — it never read
+    that one. **The declaration and the test pinning it were mutually
+    reinforcing**, and it is the same false premise #754 nearly
+    published to the `.env.*.example` files.
+  - Verified by **#755's own arch guard, 4/4** — that is the meaningful
+    check, since it proves nothing reads a now-undeclared key.
+
 ## Open, with a decision owed
 
 - **#772** — re-traced from scratch; **two of the body's factual claims
@@ -118,6 +130,11 @@ red in the native suite).
   root copies of `@vitejs/plugin-react` and `supertest` the sub-packages
   already declare. Candidate list, not a verdict — a text grep cannot
   see a dotfile config or a binary invoked by name.
+- **#784** — the inverse of #755's guard (every *declared* env key is
+  read somewhere). Deliberately not built: the sweep found 11 of 100
+  declared keys with no read, most legitimately so, and the allow-list
+  that implies is the real design question — a guard whose escape hatch
+  reintroduces the bug it guards against is worse than none.
 - **Skills-pack #432** — `full-suite-guard` blocks a genuinely targeted
   one-file vitest run when the downstream pipe is
   `grep -B5 -A 20 "FAIL\|Unhandled\|Error"`. Deterministic, twice.
@@ -130,11 +147,15 @@ red in the native suite).
   - **Working rule, held up all sitting: do not push escapes through the
     Bash layer at all.** `Grep` tool for patterns, `Write`/`Edit` for
     file content, `[0-9]` instead of `\d`.
-- **Skills-pack #434** — `resolve-issue`'s *mandated* pre-close
-  `gh issue view <N> --json state` **re-arms `routing-gate.cjs`**, which
-  then blocks the close and demands a redundant re-invocation of the
-  same skill for the same issue. Structural: every correctly-followed
-  close hits it.
+- **Skills-pack #434** (+ refinement comment) — `resolve-issue`'s
+  *mandated* pre-close `gh issue view <N> --json state` **re-arms
+  `routing-gate.cjs`**, which then blocks the close and demands a
+  redundant re-invocation of the same skill for the same issue.
+  - **Refinement worth knowing here:** that state check only matters
+    when the commit landed on the **default** branch. `main` is frozen
+    and every fix lands on the integration branch, so GitHub cannot
+    auto-close and **the check is unnecessary in this repo** — skipped
+    on #778 with no ill effect.
 - **Skills-pack #435** — the stale `bioavanced-v2-conventions` bullet
   above, with suggested replacement text.
 - **Skills-pack #426 comment** — second confirmation, different shape: a
@@ -142,10 +163,10 @@ red in the native suite).
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration` at `4cfb73c1` + this
-  rotation, pushed, in sync. All four fix/test branches deleted local
-  **and remote** (remote deletes succeeded with no prompt, four for
-  four — data points for pack #410).
+- On `feature/docker-e2e-backend-integration` at `1da295e2` + this
+  rotation, pushed, in sync. All five fix/test branches deleted local
+  **and remote** (remote deletes succeeded with no prompt, five for
+  five — data points for pack #410).
 - **Docker has not been started yet this sitting.** The four named
   volumes still hold the *previous* sitting's e2e fixture data, so a
   genuinely from-scratch gate needs `docker volume rm` on
@@ -160,6 +181,7 @@ red in the native suite).
 
 ## Recommended next steps
 
-**Continue the queue at #778** — the session is not over. If picked up
-cold: #778, then #759 with the Docker gate after it. #772 needs Denise,
-not more tracing.
+**Continue the queue at #759** — the last item, and the only one
+needing Docker. The session is not over. **Docker has still not been
+started this sitting**, so #759's e2e spec plus the full gate are both
+still owed. #772 needs Denise, not more tracing.
