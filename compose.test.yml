@@ -607,6 +607,14 @@ services:
       <<: *test-env
     volumes:
       - ./frontend:/frontend:ro
+      # #658: `current-state:ci` runs `dictionary:validate`, whose SOURCE_MD
+      # resolves to REPO_ROOT/docs/... where REPO_ROOT is
+      # path.join(__dirname, '..', '..', '..'). In-container __dirname is
+      # /app/scripts, so that walks /app/scripts -> /app -> / and clamps at
+      # the filesystem root: the script looks for
+      # /docs/docs-7-27-2026/extracted/dict-02_DICIONARIO.md. Hence /docs,
+      # not /app/docs -- mounting it under the workdir would not be found.
+      - ./docs:/docs:ro
     command: ["npm", "run", "current-state:ci"]
     depends_on:
       mongodb-test:
