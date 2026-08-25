@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
 import * as crypto from 'crypto';
-import { realLogin } from './helpers/realAuth';
+import * as fs from 'fs';
+import { realLogin, seedRealAuth } from './helpers/realAuth';
+import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import {
   createRealParticipant,
   seedStorageBoxLocation,
@@ -611,6 +613,41 @@ test.describe('Reports (RF008) — real backend', () => {
     'access_logs',
   ];
 
+  // The live preview handlers cap their result sets (handleSample: 100,
+  // handleSamplesByPatient: 20 patients) with no deterministic ordering, so
+  // asserting "my freshly created specimen is in the samples report" is
+  // only honest through a filter that narrows the set to it: the
+  // samples_by_patient report + the `keyword` filter, which matches the
+  // pseudonymized participantId (reports.routes.js#handleSamplesByPatient).
+  async function createRealSampleWithParticipant(
+    request: any,
+    token: string
+  ): Promise<{ sampleID: string; participantId: string }> {
+    const participant = await createRealParticipant(request, apiBaseURL!, token);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        boxId,
+        positionCode,
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    return { sampleID: (await create.json()).data.sampleID, participantId: participant.participantId };
+  }
+
+  async function previewReport(request: any, token: string, type: string, filters: Record<string, unknown>) {
+    return request.post(`${apiBaseURL}/api/reports/${type}/preview`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { filters },
+    });
+  }
+
   test('the system report templates exist on the running stack without a manual seed step (#737)', async ({
     request,
   }) => {
@@ -633,5 +670,257 @@ test.describe('Reports (RF008) — real backend', () => {
     for (const code of SYSTEM_REPORT_TEMPLATE_CODES) {
       expect(activeSystemCodes, `system report template "${code}" is missing`).toContain(code);
     }
+  });
+
+  // AC#1 names six filter dimensions (período, coleção, tipo, origem,
+  // estado, localização). Of those, the sample-rooted handlers' shared
+  // buildSampleQuery only wires `estado` (status → canonical
+  // specimenStatus, #531); period/collection/type/origin/location are
+  // silently ignored -- filed as #739, not proven here. This test proves
+  // the one that exists actually narrows the data, both ways.
+  test('applies the status filter to the specimens behind a report (AC#1 — only `estado` is wired, see #739)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const { participantId } = await createRealSampleWithParticipant(request, admin.token);
+
+    const available = await previewReport(request, admin.token, 'samples_by_patient', {
+      keyword: participantId,
+      status: 'AVAILABLE',
+    });
+    expect(available.ok(), await available.text()).toBe(true);
+    const availableBody = await available.json();
+    expect(availableBody.data.total).toBe(1);
+    expect(availableBody.data.patients[0].participantId).toBe(participantId);
+    expect(availableBody.data.patients[0].sampleCount).toBe(1);
+
+    // Same participant, a status the fresh specimen is not in: the fresh
+    // specimen must not come back. Whether the participant row itself is
+    // still listed depends on data outside this test (#741:
+    // handleSamplesByPatient narrows the patient list to owners of matching
+    // samples only when the sample filter matched *something* in the
+    // collection), so the property asserted is "zero of my samples", not
+    // the row's presence.
+    const quarantined = await previewReport(request, admin.token, 'samples_by_patient', {
+      keyword: participantId,
+      status: 'QUARANTINE',
+    });
+    expect(quarantined.ok(), await quarantined.text()).toBe(true);
+    const quarantinedBody = await quarantined.json();
+    const patient = quarantinedBody.data.patients.find((entry: any) => entry.participantId === participantId);
+    expect(patient ? patient.sampleCount : 0).toBe(0);
+  });
+
+  // AC#2: "Restringir os dados conforme AccessPolicy, papel e consentimento."
+  // Three real gates, each proven with the backend's own refusal rather
+  // than the frontend's: no session at all; a genuine non-admin session
+  // (Técnico holds viewReports but has no organization assignment, so
+  // #340/#341's org-scope resolution is 'none' → hard 403 on every
+  // organization-scoped report type and on the saved-reports listing);
+  // and the manageReportTemplates gate (Coordenador+Administrador only,
+  // #726) refusing that same Técnico.
+  test('restricts report data by session, role and organization scope (AC#2)', async ({ request }) => {
+    const admin = await realLogin(request);
+
+    const unauthenticated = await request.post(`${apiBaseURL}/api/reports/samples/preview`, {
+      data: { filters: {} },
+    });
+    expect(unauthenticated.status()).toBe(401);
+
+    const username = `tecnico.rf008.${Date.now()}`;
+    const password = 'Tecnico@123';
+    const registerResponse = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        name: 'RF008 Técnico Fixture',
+        email: `${username}@example.com`,
+        username,
+        password,
+        accessType: 2,
+        roleName: 'Técnico',
+      },
+    });
+    expect(registerResponse.ok(), await registerResponse.text()).toBeTruthy();
+    const tecnico = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
+
+    const scopedPreview = await previewReport(request, tecnico.token, 'samples', {});
+    expect(scopedPreview.status(), await scopedPreview.text()).toBe(403);
+
+    const savedReports = await request.get(`${apiBaseURL}/api/reports`, {
+      headers: { Authorization: `Bearer ${tecnico.token}` },
+    });
+    expect(savedReports.status(), await savedReports.text()).toBe(403);
+
+    const createTemplate = await request.post(`${apiBaseURL}/api/report-templates`, {
+      headers: { Authorization: `Bearer ${tecnico.token}` },
+      data: { code: `rf008_tecnico_${Date.now()}`, name: 'should be refused', handlerKey: 'sample', templateStatus: 'active' },
+    });
+    expect(createTemplate.status(), await createTemplate.text()).toBe(403);
+  });
+
+  // AC#3 / RNF007: patient-rooted reports carry the pseudonymized
+  // participantId, never civil identity -- patientName/birthDate live on
+  // the segregated ParticipantIdentity entity (#561/#575), not on the
+  // Patient document the report handlers read, and the keyword filter
+  // deliberately no longer resolves against names (#574).
+  test('omits civil identity from patient-rooted report data (AC#3, RNF007)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const { participantId } = await createRealSampleWithParticipant(request, admin.token);
+
+    for (const type of ['patients', 'samples_by_patient']) {
+      const preview = await previewReport(request, admin.token, type, { keyword: participantId });
+      expect(preview.ok(), await preview.text()).toBe(true);
+      const body = await preview.json();
+      const patient = body.data.patients.find((entry: any) => entry.participantId === participantId);
+      expect(patient, `${type}: participant ${participantId} not in preview`).toBeTruthy();
+      expect(patient).not.toHaveProperty('patientName');
+      expect(patient).not.toHaveProperty('birthDate');
+      expect(patient).not.toHaveProperty('identityDocument');
+      for (const sample of patient.samples || []) {
+        expect(sample).not.toHaveProperty('patientName');
+      }
+    }
+  });
+
+  // AC#4: the two enabled export formats (CSV via GET /:type/export, PDF via
+  // GET /:type/export/pdf) work against real data; anything else is not a
+  // route at all. AC#5: each export is recorded on the real audit trail --
+  // by the global auditRequest middleware (audit.middleware.js, mounted in
+  // app.js), which logs action=EXPORT / entity=Report with the full path,
+  // not by reports.routes.js itself (see #723's first progress comment).
+  test('exports only in enabled formats and records each export event (AC#4, AC#5)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const { participantId } = await createRealSampleWithParticipant(request, admin.token);
+    const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
+
+    const csv = await request.get(`${apiBaseURL}/api/reports/samples_by_patient/export?keyword=${participantId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(csv.status(), await csv.text()).toBe(200);
+    expect(csv.headers()['content-type']).toContain('text/csv');
+    expect(csv.headers()['content-disposition']).toMatch(/attachment; filename=report_\d+\.csv/);
+    const csvBody = await csv.text();
+    const [header, ...rows] = csvBody.split('\n');
+    expect(header.split(',')).toContain('participantId');
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    expect(csvBody).toContain(participantId);
+
+    const pdf = await request.get(`${apiBaseURL}/api/reports/samples_by_patient/export/pdf?keyword=${participantId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(pdf.status(), await pdf.text()).toBe(200);
+    const pdfBody = await pdf.json();
+    expect(pdfBody.format).toBe('pdf');
+    expect(pdfBody.data.patients.some((entry: any) => entry.participantId === participantId)).toBe(true);
+
+    const disabledFormat = await request.get(`${apiBaseURL}/api/reports/samples_by_patient/export/xlsx`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(disabledFormat.status()).toBe(404);
+
+    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch, 2);
+  });
+
+  // AC#6: "Permitir a criação de novos modelos de relatório sem depender
+  // de uma lista fixa." A template created through the API (#726) is
+  // immediately usable for preview, generation and export under its own
+  // code -- nothing in the dispatch path knows the fixed list any more.
+  test('a report template created at runtime is usable for preview, generation and export (AC#6)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const { participantId } = await createRealSampleWithParticipant(request, admin.token);
+    const code = `rf008_e2e_${Date.now()}`;
+
+    const create = await request.post(`${apiBaseURL}/api/report-templates`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        code,
+        name: 'RF008 e2e custom template',
+        description: 'Created by the RF008 real-backend spec',
+        handlerKey: 'samplesByPatient',
+        templateStatus: 'active',
+      },
+    });
+    expect(create.status(), await create.text()).toBe(201);
+    const templateId = (await create.json()).data._id;
+    expect(templateId).toBeTruthy();
+
+    let reportId: string | null = null;
+    try {
+      const preview = await previewReport(request, admin.token, code, { keyword: participantId });
+      expect(preview.ok(), await preview.text()).toBe(true);
+      const previewBody = await preview.json();
+      expect(previewBody.data.total).toBe(1);
+      expect(previewBody.data.patients[0].participantId).toBe(participantId);
+
+      const generate = await request.post(`${apiBaseURL}/api/reports/generate`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { reportType: code, filters: { keyword: participantId } },
+      });
+      expect(generate.status(), await generate.text()).toBe(201);
+      const generated = await generate.json();
+      reportId = generated._id;
+      expect(generated.reportType).toBe(code);
+      expect(JSON.parse(generated.reportData).patients[0].participantId).toBe(participantId);
+
+      const fetched = await request.get(`${apiBaseURL}/api/reports/${reportId}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      expect(fetched.status(), await fetched.text()).toBe(200);
+      expect((await fetched.json()).reportType).toBe(code);
+
+      const csv = await request.get(`${apiBaseURL}/api/reports/${code}/export?keyword=${participantId}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      expect(csv.status()).toBe(200);
+      expect(await csv.text()).toContain(participantId);
+    } finally {
+      if (reportId) {
+        await request.delete(`${apiBaseURL}/api/reports/${reportId}`, {
+          headers: { Authorization: `Bearer ${admin.token}` },
+        });
+      }
+      const remove = await request.delete(`${apiBaseURL}/api/report-templates/${templateId}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      expect(remove.status(), await remove.text()).toBe(200);
+    }
+  });
+
+  // The operator-facing leg: the only live frontend caller of the report
+  // pipeline today is ReportQueryPage's Exportar button → GET /:type/export
+  // (per #726's dispatch-wiring note), reached from the ReportsPage card
+  // grid. Proves the real UI drives the real backend to a real CSV file.
+  test('an operator reaches a CSV export through the real UI (/reports → query page → download)', async ({
+    page,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    await createRealSampleWithParticipant(request, admin.token);
+
+    // Pin the UI language so the card/button labels below are deterministic
+    // (i18n/index.ts#initLanguage reads `app_language` before the browser
+    // locale) -- the same trap issue #5's Portuguese-label guessing hit.
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, admin);
+
+    await page.goto('/reports');
+    const card = page.locator('.report-card', { hasText: 'Amostras por Paciente' });
+    await expect(card).toBeVisible();
+    await card.getByRole('button', { name: 'Gerar Relatório' }).click();
+    await expect(page).toHaveURL(/\/reports\/query\/samplesByPatient$/);
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Exportar' }).click(),
+    ]);
+    expect(download.suggestedFilename()).toMatch(/^relatorio_.*\.csv$/);
+    const downloadedPath = await download.path();
+    expect(downloadedPath).toBeTruthy();
+    const csv = fs.readFileSync(downloadedPath!, 'utf8');
+    expect(csv.split('\n')[0].split(',')).toContain('participantId');
   });
 });
