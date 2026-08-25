@@ -464,17 +464,12 @@ class ImportLGPDService {
         const rowNumber = i + 2; // +2 porque linha 1 é header e arrays começam em 0
 
         try {
-          // Ignora linhas vazias
-          if (!row || Object.keys(row).length === 0) {
+          // Ignora linhas vazias (#790: as duas verificacoes daqui viraram
+          // isEmptyRow, agora compartilhada pelos tres loops)
+          if (this.isEmptyRow(row)) {
             continue;
           }
-          
-          // Verifica se a linha tem dados válidos (pelo menos um campo não vazio)
-          const hasData = Object.values(row).some(v => v !== null && v !== undefined && String(v).trim() !== '');
-          if (!hasData) {
-            continue;
-          }
-          
+
           results.total++;
 
           // Parse dos dados do CSV/Excel
@@ -990,6 +985,16 @@ class ImportLGPDService {
         const rowNumber = i + 2; // +2 porque linha 1 é header e arrays começam em 0
         let sampleData = null;
 
+        // #790: uma linha em branco nao e uma linha. Sem este guard ela
+        // seguia para parseSampleRow, falhava a resolucao de identidade e
+        // era reportada como "Nao foi possivel resolver a identidade do
+        // paciente para a amostra" -- e, depois do #787, ainda era colocada
+        // em quarentena como se fosse um problema real de dados. Fica antes
+        // do results.total++ para casar com importPatients.
+        if (this.isEmptyRow(row)) {
+          continue;
+        }
+
         // #786: counted here, at the top of the loop body, rather than at the
         // bottom. Every rejected row leaves via a `continue`, so a
         // bottom-of-loop increment skipped it entirely and a partially-failed
@@ -1460,6 +1465,29 @@ class ImportLGPDService {
   }
 
   /**
+   * Linha vazia? (#790)
+   *
+   * Uma planilha exportada do Excel costuma trazer uma ultima linha em
+   * branco -- ou uma linha so com formatacao -- que nao representa dado
+   * nenhum. As duas verificacoes vinham de importPatients e agora valem
+   * para os tres loops de importacao: estrutura vazia, e todos os campos
+   * vazios/whitespace.
+   *
+   * Chame SEMPRE antes de results.total++, para que uma linha em branco
+   * nao conte como linha: ela nao e sucesso nem erro, e a invariante
+   * `total === success + errors` do #786 continua valendo.
+   */
+  isEmptyRow(row) {
+    if (!row || typeof row !== 'object' || Object.keys(row).length === 0) {
+      return true;
+    }
+
+    return !Object.values(row).some(
+      (value) => value !== null && value !== undefined && String(value).trim() !== ''
+    );
+  }
+
+  /**
    * Parse linha CSV/Excel para Patient
    */
   parsePatientRow(row) {
@@ -1850,6 +1878,12 @@ class ImportLGPDService {
     for (let i = 0; i < rows.length; i += 1) {
       const rawRow = rows[i];
       const rowNumber = i + 2;
+
+      // #790: mesmo guard dos outros dois loops, antes de contar a linha.
+      if (this.isEmptyRow(rawRow)) {
+        continue;
+      }
+
       results.total += 1;
 
       try {

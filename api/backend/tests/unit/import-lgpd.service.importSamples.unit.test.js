@@ -289,6 +289,54 @@ describe('ImportLGPDService.importSamples', () => {
     expect(result.total).toBe(1);
   });
 
+  // #790: importSamples had no empty-row guard, while importPatients has two
+  // (`!row || Object.keys(row).length === 0`, then an all-fields-blank check)
+  // before its own results.total++. A trailing blank row -- the normal output
+  // of Excel and of many CSV exporters -- therefore parsed to a sampleData
+  // with no participantId, failed identity resolution, and was reported as
+  // `Nao foi possivel resolver a identidade do paciente para a amostra`.
+  //
+  // These guard the interaction with #786 as much as the skip itself: the
+  // guard sits BEFORE results.total++ (matching importPatients), so a blank
+  // row is not a row at all -- it is not counted, not errored, and #786's
+  // `total === success + errors` invariant still holds.
+  it('skips a trailing blank row instead of rejecting it as an identity failure (#790)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW, {}]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.success).toBe(1);
+    expect(result.total).toBe(1);
+    expect(result.total).toBe(result.success + result.errors.length);
+  });
+
+  it('skips a whitespace-only row, not just a structurally empty one (#790)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      VALID_ROW,
+      { sampleType: '', sampleOrigin: '   ', participantId: '\t', quantity: null, quality: undefined },
+    ]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.success).toBe(1);
+    expect(result.total).toBe(1);
+  });
+
+  // #787 staged rejected rows into quarantine. A blank row is exactly the junk
+  // that should not land there dressed as a real data problem -- the guard
+  // runs before the row can be rejected, so an otherwise-clean file still
+  // reports no quarantine batch.
+  it('does not quarantine a blank row, so an otherwise-clean file opens no staging batch (#790, #787)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW, {}]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.stagingBatchId ?? null).toBeNull();
+  });
+
   // Regression coverage for issue #84: `SampleModel` here must resolve to the
   // hand-written validator class (`require('../models/Sample').SampleModel`),
   // not the mongoose Model (the default export of that same module). Before

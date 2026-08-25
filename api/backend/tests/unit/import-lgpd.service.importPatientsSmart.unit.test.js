@@ -226,6 +226,29 @@ describe('ImportLGPDService.importPatientsSmart', () => {
     expect(result.errors[0].errors[0]).toMatch(/Email inválido/);
   });
 
+  // #790: importPatientsSmart had no empty-row guard either -- importPatients
+  // guarded twice, the other two loops not at all. The shared isEmptyRow()
+  // now runs before results.total += 1 in all three, so a trailing blank row
+  // is not counted, not errored, and does not reach the mapping/parse path.
+  it('skips a trailing blank row without counting or rejecting it (#790)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid(), {}]);
+
+    const result = await service.importPatientsSmart(db, { path: '/x.csv', originalname: 'x.csv' }, { mapping: MAPPING });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.success).toBe(1);
+    expect(result.total).toBe(1);
+  });
+
+  it('skips a whitespace-only row, not just a structurally empty one (#790)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid(), { Nome: '   ', Email: '', cpf: null }]);
+
+    const result = await service.importPatientsSmart(db, { path: '/x.csv', originalname: 'x.csv' }, { mapping: MAPPING });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.total).toBe(1);
+  });
+
   it('records a per-row error when cpf is present and invalid', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid({ cpf: '00000000000' })]);
     const result = await service.importPatientsSmart(
