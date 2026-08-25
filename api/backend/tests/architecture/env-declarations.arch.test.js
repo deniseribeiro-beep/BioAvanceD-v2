@@ -24,8 +24,21 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const BACKEND_SRC = path.resolve(__dirname, '../../src');
+const BACKEND_ROOT = path.resolve(__dirname, '../..');
+const BACKEND_SRC = path.resolve(BACKEND_ROOT, 'src');
 const ENV_MODULE = path.resolve(BACKEND_SRC, 'config/env.js');
+
+// #777: app.js and server.js sit at the backend root, outside src/, and both
+// do `const env = require("./src/config/env")`. Walking src/ alone skipped
+// them -- app.js in particular wires the middleware stack and is a dense,
+// security-relevant reader (`env.AUTH_RATE_LIMIT_RELAXED`, `env.NODE_ENV`
+// at line 219). Listed explicitly rather than widening the walk to the whole
+// backend root, which would pull in tests/ and scripts/ where a local `env`
+// identifier means something else entirely -- the createFirstAdmin.js trap
+// documented below.
+const ROOT_ENTRYPOINTS = ['app.js', 'server.js', 'setup-env.js']
+  .map((name) => path.resolve(BACKEND_ROOT, name))
+  .filter((file) => fs.existsSync(file));
 
 // Requiring env.js and taking Object.keys is deliberate over parsing its
 // source: it stays correct automatically as keys are added, and a key whose
@@ -57,7 +70,7 @@ const ENV_BINDING = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*['
 const ENV_DESTRUCTURED = /(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*['"][^'"]*config\/env['"]\s*\)/;
 
 function filesRequiringEnv() {
-  return walk(BACKEND_SRC)
+  return [...walk(BACKEND_SRC), ...ROOT_ENTRYPOINTS]
     .filter((file) => file !== ENV_MODULE)
     .map((file) => ({ file, content: fs.readFileSync(file, 'utf8') }))
     .filter(({ content }) => REQUIRES_ENV.test(content));
@@ -102,6 +115,24 @@ test('#755: every env.<NAME> read is declared in config/env.js', () => {
       + 'declares them. Add the key to env.js (reading it from process.env) '
       + 'or correct the read:\n  ' + offenders.join('\n  ')
   );
+});
+
+test('#777: the guard still collects both root entrypoints', () => {
+  // This guard's failure mode is under-collecting files, which is invisible
+  // by construction -- a narrowed scope makes every other test here pass
+  // more easily. Pin the two root importers by name so a future refactor
+  // that moves or renames them fails loudly instead of silently shrinking
+  // coverage back to what #777 fixed.
+  const collected = filesRequiringEnv().map(({ file }) => relative(file));
+
+  for (const name of ['app.js', 'server.js']) {
+    assert.ok(
+      collected.includes(name),
+      `${name} imports config/env but the guard did not collect it -- `
+        + `coverage has silently narrowed (see #777). Collected `
+        + `${collected.length} files.`
+    );
+  }
 });
 
 test('#755: config/env is imported under a binding this guard can follow', () => {
