@@ -1509,6 +1509,25 @@ describe('sample.routes', () => {
       expect(res.status).toBe(200);
       expect(listSamples).toHaveBeenCalledWith(db, expect.objectContaining({ organizationScope }));
     });
+
+    // #785: the route built "patientID: req.query.patientID" while
+    // listSamples only ever reads filters.participantId, so the filter was
+    // dropped in flight and the caller got an unfiltered page with a 200.
+    // participantId is the canonical name (Sample.js:31); patientID is the
+    // pre-rename alias validateCreateSamplePayload rejects with a 422
+    // NON_CANONICAL_FIELD, so it is deliberately not accepted as an alias here.
+    it('passes the canonical participantId query filter through to listSamples', async () => {
+      const listSamples = vi.fn().mockResolvedValue({ samples: [], total: 0 });
+      const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
+      const emptyCollection = { findOne: vi.fn().mockResolvedValue(null), countDocuments: vi.fn().mockResolvedValue(0) };
+      const db = { collection: () => emptyCollection };
+      const app = buildApp(router, db);
+
+      const res = await request(app).get('/api/samples?participantId=12345678');
+
+      expect(res.status).toBe(200);
+      expect(listSamples).toHaveBeenCalledWith(db, expect.objectContaining({ participantId: '12345678' }));
+    });
   });
 
   // #646 Wave 3 (RF016 AC#4): batch label generation given a list of

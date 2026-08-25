@@ -462,8 +462,15 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
     // sampleType are) — dropped rather than wired up, since no frontend
     // caller ever sends it (see #533's follow-up for the broader
     // status/currentStatus-vs-specimenStatus trace).
+    // #785: the sibling instance of that same class, three lines below the
+    // note above. The key built here was patientID, which listSamples never
+    // reads, so the participant filter was dropped in flight and the endpoint
+    // answered with an unfiltered page and a 200. participantId is the
+    // canonical name (Sample.js:31, required + indexed); patientID is the
+    // pre-rename alias validateCreateSamplePayload rejects with a 422
+    // NON_CANONICAL_FIELD, so it is not re-admitted here as a query alias.
     const filters = {
-      patientID: req.query.patientID,
+      participantId: req.query.participantId,
       sampleType: req.query.sampleType,
       limit: parseInt(req.query.limit) || 50,
       skip: parseInt(req.query.skip) || 0,
