@@ -10,8 +10,12 @@ import {
   seedLegacyDiagnosisTerminology,
   seedDiseaseDictionaryPhenotypes,
   seedMedicationDictionaryEntry,
+  seedStorageBoxLocation,
+  cleanupStorageBoxLocation,
 } from './helpers/seedParticipant';
+import type { SeededStorageBox } from './helpers/seedParticipant';
 import { seedOrphaPhenotypeGraph, removeOrphaPhenotypeGraph, closeNeo4jDriver } from './helpers/queryNeo4j';
+import { generateValidCpf } from './helpers/cpf';
 import { MongoClient } from 'mongodb';
 
 const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
@@ -230,6 +234,7 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
   const outcomeDate = new Date(Date.UTC(2020, 0, 1 + (outcomeDateSeed % 9000))).toISOString().slice(0, 10);
 
   let mongoClient: MongoClient;
+  let seededStorageBox: SeededStorageBox;
 
   test.beforeAll(async () => {
     mongoClient = new MongoClient(mongoUri);
@@ -237,6 +242,16 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     const db = mongoClient.db(mongoDbName);
 
     await seedActiveConsentTemplate(db);
+
+    // #747: the wizard allocates a physical location automatically
+    // (intakeWizard.js#resolveAutomaticLocation), which 409s unless some
+    // StorageBox has free capacity in a hierarchy ending at a FREEZER with
+    // a ready Equipment + operational Sensor. This block used to pass only
+    // because another spec's seedStorageBoxLocation() debris happened to be
+    // left on the shared volume -- until #730 wired cleanupStorageBoxLocation
+    // into those specs. Seed (and release) our own instead of depending on
+    // another spec's leftovers.
+    seededStorageBox = await seedStorageBoxLocation();
 
     // UI-facing legacy collections (terminologies.routes.js / dictionary.js)
     // — a different set of collections from RF028's canonical
@@ -282,6 +297,12 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     // get cleaned up by anything else — must run before closeSeedDb()
     // closes the connection cleanupActiveTerminologyConcepts reuses.
     await cleanupActiveTerminologyConcepts();
+    // #747/#730: release this block's own storage fixture (and its
+    // equipment/sensor rows) so it doesn't accumulate on the volume --
+    // same ordering constraint as the cleanup above, before closeSeedDb().
+    if (seededStorageBox) {
+      await cleanupStorageBoxLocation(seededStorageBox);
+    }
     await closeSeedDb();
   });
 
@@ -290,16 +311,18 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await page.goto('/next/intake');
     await expect(page.getByTestId('intake-wizard-root')).toBeVisible();
 
-    // Step 1 — demographics. "11144477735" is a checksum-valid CPF (a
-    // commonly used test value — 111.444.777-35) since a purely numeric
-    // document is always routed through the CPF checksum check, never the
-    // passport branch, regardless of digit count.
+    // Step 1 — demographics. The document must be a checksum-valid CPF (a
+    // purely numeric document is always routed through the CPF checksum
+    // check, never the passport branch, regardless of digit count) *and*
+    // unique: #746 — RF005/RNF007 identity uniqueness makes the old fixed
+    // "11144477735" 409 on every run after the first against the persistent
+    // mongodb-test-data volume.
     const suffix = Date.now();
     await page.getByTestId('wizard-full-name').fill(`RF005 e2e #696 patient ${suffix}`);
     await page.getByTestId('wizard-birth-date').fill('01/01/1990');
     await page.getByTestId('wizard-gender').selectOption('F');
     await page.getByTestId('wizard-email').fill(`e2e-696-${suffix}@example.com`);
-    await page.getByTestId('wizard-document').fill('11144477735');
+    await page.getByTestId('wizard-document').fill(generateValidCpf());
     await page.getByTestId('wizard-next-button').click();
 
     // Step 2 — pre-analytical sample. SPREC axis option lists come from a
@@ -400,7 +423,12 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     // the specimen-creation step's /^\d{8}$/ format check failed -- it now
     // treats any non-/^\d{8}$/ participantId the same as no participantId
     // supplied.
-    expect(response.ok()).toBe(true);
+    // Playwright buffers the response body, so reading it as text here does
+    // not consume it for the `.json()` below -- and a failed submission
+    // otherwise reports only `expected true, received false` with no clue
+    // which of the wizard's many server-side validations rejected it.
+    const rawBody = await response.text();
+    expect(response.ok(), `POST /intake-wizard -> ${response.status()}: ${rawBody.slice(0, 500)}`).toBe(true);
     const body = await response.json();
     expect(body.success).toBe(true);
     // #704: the route's success response has no `data` wrapper --
