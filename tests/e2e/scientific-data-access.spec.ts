@@ -673,12 +673,12 @@ test.describe('Reports (RF008) — real backend', () => {
   });
 
   // AC#1 names six filter dimensions (período, coleção, tipo, origem,
-  // estado, localização). Of those, the sample-rooted handlers' shared
-  // buildSampleQuery only wires `estado` (status → canonical
-  // specimenStatus, #531); period/collection/type/origin/location are
-  // silently ignored -- filed as #739, not proven here. This test proves
-  // the one that exists actually narrows the data, both ways.
-  test('applies the status filter to the specimens behind a report (AC#1 — only `estado` is wired, see #739)', async ({
+  // estado, localização). All six are wired into the sample-rooted
+  // handlers' shared buildSampleQuery as of #739 -- `estado` via the
+  // canonical specimenStatus mapping (#531), the other five directly on
+  // Sample's own fields. This test proves two of them narrow real data
+  // both ways: `estado` (status) and `tipo` (sampleType).
+  test('applies the AC#1 filters to the specimens behind a report', async ({
     request,
   }) => {
     const admin = await realLogin(request);
@@ -707,6 +707,29 @@ test.describe('Reports (RF008) — real backend', () => {
     const quarantinedBody = await quarantined.json();
     const patient = quarantinedBody.data.patients.find((entry: any) => entry.participantId === participantId);
     expect(patient, 'a participant with no quarantined specimen must not appear').toBeUndefined();
+
+    // `tipo` (#739): the fixture specimen is PLASMA. Matching type keeps
+    // it; a different valid MIABIS type drops it. Before #739 both calls
+    // returned the same row, because sampleType never reached the query.
+    const plasma = await previewReport(request, admin.token, 'samples_by_patient', {
+      keyword: participantId,
+      sampleType: 'PLASMA',
+    });
+    expect(plasma.ok(), await plasma.text()).toBe(true);
+    const plasmaBody = await plasma.json();
+    expect(plasmaBody.data.patients[0].participantId).toBe(participantId);
+    expect(plasmaBody.data.patients[0].sampleCount).toBe(1);
+
+    const serum = await previewReport(request, admin.token, 'samples_by_patient', {
+      keyword: participantId,
+      sampleType: 'SERUM',
+    });
+    expect(serum.ok(), await serum.text()).toBe(true);
+    const serumBody = await serum.json();
+    expect(
+      serumBody.data.patients.find((entry: any) => entry.participantId === participantId),
+      'a participant with no SERUM specimen must not appear'
+    ).toBeUndefined();
   });
 
   // AC#2: "Restringir os dados conforme AccessPolicy, papel e consentimento."

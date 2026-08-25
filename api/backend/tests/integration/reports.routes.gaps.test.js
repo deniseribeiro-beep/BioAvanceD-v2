@@ -573,6 +573,127 @@ describe('reports.routes.js gaps', () => {
     expect(p1.sampleCount).toBe(1);
   });
 
+  // #739 (RF008 AC#1): "Aplicar filtros por periodo, colecao, tipo, origem,
+  // estado e localizacao." Only `estado` (status -> specimenStatus) was
+  // wired into buildSampleQuery; the other five were accepted by the API
+  // and silently ignored, so e.g. `GET /:type/export?startDate=...`
+  // returned the unfiltered set. Each dimension gets its own captured-query
+  // assertion below, plus the guards that make the new conditions safe.
+  describe('#739: buildSampleQuery honours all six AC#1 filter dimensions', () => {
+    it('periodo: startDate/endDate filtram registeredAt ou createdAt', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ samples: [{ specimenId: 'SPEC-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/samples/preview')
+        .send({ filters: { startDate: '2026-01-01', endDate: '2026-01-31' } });
+
+      expect(response.status).toBe(200);
+      const dateCondition = capturedQueries.samples.$and.find((part) => part.$or);
+      expect(dateCondition).toBeDefined();
+      expect(dateCondition.$or).toHaveLength(2);
+      expect(dateCondition.$or[0].registeredAt.$gte).toEqual(new Date('2026-01-01'));
+      expect(dateCondition.$or[1].createdAt.$gte).toEqual(new Date('2026-01-01'));
+      // buildDateQuery pushes $lte to the very end of the closing day.
+      expect(dateCondition.$or[0].registeredAt.$lte.getHours()).toBe(23);
+    });
+
+    it('colecao: collectionId entra na query', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ samples: [{ specimenId: 'SPEC-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/samples/preview')
+        .send({ filters: { collectionId: 'COL-42' } });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.samples.$and).toEqual(
+        expect.arrayContaining([{ collectionId: 'COL-42' }])
+      );
+    });
+
+    it('tipo e origem: normalizados para os ids MIABIS em caixa alta', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ samples: [{ specimenId: 'SPEC-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/samples/preview')
+        .send({ filters: { sampleType: ' plasma ', sampleOrigin: 'oral_mucosa' } });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.samples.$and).toEqual(
+        expect.arrayContaining([{ sampleType: 'PLASMA' }, { sampleOrigin: 'ORAL_MUCOSA' }])
+      );
+    });
+
+    it('localizacao: storageBoxId vira um ObjectId em storageLocation.boxId', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ samples: [{ specimenId: 'SPEC-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/samples/preview')
+        .send({ filters: { storageBoxId: '507f1f77bcf86cd799439011', storagePosition: 'A1' } });
+
+      expect(response.status).toBe(200);
+      const locationCondition = capturedQueries.samples.$and.find((part) => part['storageLocation.boxId']);
+      expect(locationCondition).toBeDefined();
+      expect(String(locationCondition['storageLocation.boxId'])).toBe('507f1f77bcf86cd799439011');
+      expect(capturedQueries.samples.$and).toEqual(
+        expect.arrayContaining([{ 'storageLocation.position': 'A1' }])
+      );
+    });
+
+    // A boxId that isn't a valid ObjectId must fail closed (match nothing),
+    // not throw a 500 and not silently drop the location filter -- dropping
+    // it is the exact #741 failure mode one dimension over.
+    it('localizacao: storageBoxId invalido nao derruba a rota nem o filtro', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ samples: [{ specimenId: 'SPEC-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/samples/preview')
+        .send({ filters: { storageBoxId: 'not-an-objectid' } });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.samples.$and).toEqual(
+        expect.arrayContaining([{ 'storageLocation.boxId': { $in: [] } }])
+      );
+    });
+
+    // The dimensions must also reach the patient-rooted handlers, which
+    // share buildSampleQuery through getMatchingPatientIds.
+    it('os filtros novos chegam a samples_by_patient pela query de amostras', async () => {
+      const { db, capturedQueries } = buildCollectionDb({
+        patients: [{ participantId: 'P1' }],
+        samples: [{ participantId: 'P1', specimenId: 'SPEC-1' }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/samples_by_patient/preview')
+        .send({ filters: { sampleType: 'SERUM', collectionId: 'COL-7' } });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries['samples.distinct'].$and).toEqual(
+        expect.arrayContaining([{ sampleType: 'SERUM' }, { collectionId: 'COL-7' }])
+      );
+    });
+
+    // Guard against over-filtering: an empty/whitespace value must not
+    // become a condition that matches nothing.
+    it('valores vazios nao viram condicoes', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ samples: [{ specimenId: 'SPEC-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/samples/preview')
+        .send({ filters: { sampleType: '   ', sampleOrigin: '', collectionId: '', storageBoxId: '' } });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.samples).toEqual({});
+    });
+  });
+
   // #741: an *active* sample-level filter that matches no sample at all
   // must still narrow the patient list (`$in: []`), the same way the #341
   // org-scope guard already refuses to let an empty id list mean
