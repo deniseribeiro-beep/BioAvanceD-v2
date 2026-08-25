@@ -120,12 +120,11 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     expect(response.status()).toBe(200);
     const body = await response.json();
 
-    // #786: `total` counts rows that reached the *end* of the loop body, so
-    // a rejected row — which gets there by `continue` — is never counted.
-    // One row in, `total: 0` out. This asserts the current (wrong) value so
-    // the spec does not go red when #786 lands; it is not an endorsement.
-    // The correct value is 1, matching importPatients in the same file.
-    expect(body.data).toMatchObject({ total: 0, success: 0, errors: 1 });
+    // #786 is fixed: the single rejected row is now counted, so a wholly
+    // rejected one-row file reports total 1 rather than 0. Under the bug
+    // rejected rows left the loop by `continue` and never reached the
+    // bottom-of-loop increment.
+    expect(body.data).toMatchObject({ total: 1, success: 0, errors: 1 });
     expect(body.success).toBe(false);
     expect(body.data.errorsDetails[0].row).toBe(2);
 
@@ -159,11 +158,11 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     expect(response.status()).toBe(200);
     const body = await response.json();
 
-    // #786 again, and this is the shape that shows why it matters: the
-    // response reports total 1 for a two-row file, so total < success +
-    // errors. The same numbers reach auditLogger.logImport. Asserted as-is
-    // for now; the correct total is 2.
-    expect(body.data).toMatchObject({ total: 1, success: 1, errors: 1 });
+    // #786 is fixed: a two-row file now reports total 2, and the invariant
+    // total === success + errors holds. This is the shape that showed why it
+    // mattered -- the same three numbers reach auditLogger.logImport, so a
+    // partial import used to be audit-logged with total < rows touched.
+    expect(body.data).toMatchObject({ total: 2, success: 1, errors: 1 });
     expect(body.data.success + body.data.errors).toBe(2); // rows actually accounted for
     expect(body.data.errorsDetails).toHaveLength(1);
     expect(body.data.errorsDetails[0].participantId).toBe(String(bad.participantId));

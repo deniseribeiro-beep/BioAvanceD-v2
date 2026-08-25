@@ -237,6 +237,44 @@ describe('ImportLGPDService.importSamples', () => {
     expect(result.errors[0].errors[0]).toMatch(/atcCode inválido/);
   });
 
+  // #786: results.total was incremented at the BOTTOM of the per-row loop,
+  // after the try/catch. Every validation failure reaches that point via a
+  // `continue`, so rejected rows were counted in results.errors but never in
+  // results.total -- a partially-failed import reported total < success +
+  // errors. Those three numbers are passed straight to
+  // auditLogger.logImport by import-lgpd.controller.js, so the audit record
+  // for a partial import under-counted the rows it actually touched.
+  //
+  // A mixed file is what discriminates: with only-valid or only-invalid rows
+  // the old code still produced a self-consistent-looking pair.
+  it('counts rejected rows in total, so total === success + errors for a partially-failed import (#786)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      VALID_ROW,
+      { ...VALID_ROW, treatmentStatus: 'TREATED', atcCode: 'NOT-A-CODE' },
+    ]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.total).toBe(2);
+    expect(result.total).toBe(result.success + result.errors.length);
+  });
+
+  // The all-rejected case: total must still report the rows that were read,
+  // not zero. Under the bug this returned total: 0 alongside errors: 1.
+  it('counts a wholly-rejected file in total rather than reporting zero (#786)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      { ...VALID_ROW, treatmentStatus: 'TREATED', atcCode: 'NOT-A-CODE' },
+    ]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(result.total).toBe(1);
+  });
+
   // Regression coverage for issue #84: `SampleModel` here must resolve to the
   // hand-written validator class (`require('../models/Sample').SampleModel`),
   // not the mongoose Model (the default export of that same module). Before
