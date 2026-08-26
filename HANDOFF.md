@@ -137,8 +137,12 @@ slice). Recurrence comments on #401 and #398.
 **Never started this sitting. Stack DOWN, volumes still absent, nothing
 seeded.**
 
-- **Services:** none running, none stopped — no `docker` command was issued at
-  all.
+- **Services:** none running, none stopped. **Docker Desktop itself is not
+  running** — verified at the `clean-up` checkpoint, where `docker ps -a`
+  failed with `open //./pipe/dockerDesktopLinuxEngine: The system cannot find
+  the file specified`. That is the engine being down, not a broken install:
+  start Docker Desktop before the first compose command or the error reads
+  like a corrupted setup.
 - **Bootstrap:** none. The four named volumes
   (`bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data`) were dropped at
   the *previous* sitting's teardown and have not been recreated.
