@@ -348,10 +348,17 @@ router.post('/',
           resourceId: sample._id.toString(),
           status: 'success',
           severity: 'info',
-          message: `Amostra criada - Paciente ID: ${sample.patientID}`, // Apenas ID, sem dados sensíveis
+          // #795: `sample.patientID` was undefined at all three read sites in
+          // this handler -- SampleModel.create emits `participantId` and
+          // Sample.js does not declare `patientID`. The audit row therefore
+          // read literally "Paciente ID: undefined" for every sample ever
+          // created, and the payload key serialised away entirely. Unlike
+          // #788's list badge there is no live recomputation to fall back on,
+          // so an audit row written wrong stays wrong.
+          message: `Amostra criada - Participante ID: ${sample.participantId}`, // Apenas ID, sem dados sensíveis
           payload: {
             sampleID: sample._id.toString(),
-            patientID: sample.patientID, // Apenas ID anonimizado
+            participantId: sample.participantId, // Apenas ID anonimizado
             sampleType: sample.sampleType,
             barcode: sample.barcode,
             quality: sample.quality !== undefined && sample.quality !== null ? sample.quality : null // Id MIABIS canônico
@@ -369,7 +376,13 @@ router.post('/',
           : req.t('samples.createSuccess') || 'Amostra criada com sucesso',
         data: {
           sampleID: sample._id.toString(),
-          patientID: sample.patientID, // Apenas ID, sem dados sensíveis (LGPD)
+          // #795: canonical name on the way out, matching the way in --
+          // validateCreateSamplePayload already 422s a request carrying
+          // `patientID` (NON_CANONICAL_FIELD), and the field is on
+          // canonical-data-contract-v1.md's "Legacy Fields Prohibited" list.
+          // Renaming breaks no caller: the value was `undefined`, so
+          // JSON.stringify has always dropped the key from this response.
+          participantId: sample.participantId, // Apenas ID, sem dados sensíveis (LGPD)
           operationMode,
           topology: {
             synced: Boolean(result?.topology?.synced),

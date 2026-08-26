@@ -67,9 +67,14 @@ describe('POST /api/samples - matriz STRICT/PERMISSIVE e contrato de resposta', 
     app.locals.neo4jQuarantineService = null;
     app.locals.topologicalQuarantine = null;
 
+    // #795: this mock used to return `patientID`, which the real
+    // createSample never emits -- SampleModel.create writes `participantId`
+    // and Sample.js does not declare `patientID`. The invented field is what
+    // kept the handler's three `sample.patientID` reads green while every one
+    // of them was undefined in production. Same blindness class as #797.
     vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: '507f1f77bcf86cd799439012',
-      patientID: '12345678',
+      participantId: '12345678',
       sampleType: 'Sangue',
       barcode: 'BR-TEST-0002',
     });
@@ -103,7 +108,7 @@ describe('POST /api/samples - matriz STRICT/PERMISSIVE e contrato de resposta', 
     expect(response.body.partialSuccess).toBe(false);
     expect(response.body.data).toBeDefined();
     expect(typeof response.body.data.sampleID).toBe('string');
-    expect(response.body.data.patientID).toBe('12345678');
+    expect(response.body.data.participantId).toBe('12345678');
     expect(['STRICT', 'PERMISSIVE']).toContain(response.body.data.operationMode);
     expect(response.body.data.operationMode).toBe('STRICT');
     expect(typeof response.body.data.topology.synced).toBe('boolean');

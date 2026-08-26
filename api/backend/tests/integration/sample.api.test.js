@@ -169,4 +169,66 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
     expect(String(response.body.message || '')).toContain('STRICT_MODE_BLOCKED');
     expect(enqueueTopologicalTransaction).not.toHaveBeenCalled();
   });
+
+  // #795: the handler read `sample.patientID` at three sites. Nothing writes
+  // that field -- SampleModel.create emits `participantId` and Sample.js does
+  // not declare `patientID` -- so all three were `undefined`. The audit sites
+  // are the ones that matter: RF004's whole point is an audit trail, and an
+  // audit row reading "Paciente ID: undefined" is not recoverable after the
+  // fact (unlike #788's list badge, there is no live recomputation to fall
+  // back on).
+  //
+  // `patientID` is on canonical-data-contract-v1.md's "Legacy Fields
+  // Prohibited" list, and validateCreateSamplePayload already 422s a *request*
+  // carrying it -- so the canonical name is used on the way out too, not just
+  // the canonical value.
+  describe('#795: RF004 audit trail and 201 body carry the participant identifier', () => {
+    async function createSample() {
+      vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockResolvedValue({ eventId: 'evt-795' });
+
+      return request(app)
+        .post('/api/samples')
+        .set('Authorization', `Bearer ${createAuthToken()}`)
+        .send({
+          participantId: '12345678',
+          sampleType: 'PLASMA',
+          sampleOrigin: 'VENOUS_BLOOD',
+          extractionProtocol: 'TUBE_EDTA',
+          quantity: 1,
+          quality: 'GOOD',
+          registeredAt: new Date().toISOString(),
+          boxId: '507f1f77bcf86cd799439011',
+          positionCode: 'A1',
+          linkedProject: 'Projeto QA',
+        });
+    }
+
+    it('writes the participant id into the audit message, not the string "undefined"', async () => {
+      const response = await createSample();
+      expect(response.status).toBe(201);
+
+      const entry = auditLogger.log.mock.calls.find(([arg]) => arg?.action === 'sample_create')?.[0];
+      expect(entry).toBeTruthy();
+      expect(entry.message).toContain('12345678');
+      expect(entry.message).not.toContain('undefined');
+    });
+
+    it('carries the participant id in the audit payload under its canonical name', async () => {
+      const response = await createSample();
+      expect(response.status).toBe(201);
+
+      const entry = auditLogger.log.mock.calls.find(([arg]) => arg?.action === 'sample_create')?.[0];
+      expect(entry.payload.participantId).toBe('12345678');
+      // The prohibited alias must not come back in through the audit payload.
+      expect(entry.payload).not.toHaveProperty('patientID');
+    });
+
+    it('returns the participant id in the 201 body', async () => {
+      const response = await createSample();
+
+      expect(response.status).toBe(201);
+      expect(response.body.data.participantId).toBe('12345678');
+      expect(response.body.data).not.toHaveProperty('patientID');
+    });
+  });
 });
