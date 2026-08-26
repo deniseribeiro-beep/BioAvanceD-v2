@@ -50,6 +50,16 @@ router.post('/amostras',
 // amostras pode revisar as linhas que a importacao rejeitou. Nao introduz
 // permissao nova de proposito: uma permissao nova nao chega a uma stack ja
 // semeada sem re-seed explicito do catalogo RBAC.
+// Listagem de lotes em quarentena (#794 item 2) -- mesma permissao que a
+// leitura de um lote. E o unico ponto de entrada navegavel: `stagingBatchId`
+// volta na resposta da importacao, mas nenhuma tela chama a importacao LGPD
+// (#808), entao ninguem chega a um lote so pelo id.
+router.get('/batches',
+  authenticate,
+  requirePermission('createSample'),
+  importLGPDController.listQuarantineBatches.bind(importLGPDController)
+);
+
 router.get('/batches/:batchId',
   authenticate,
   requirePermission('createSample'),

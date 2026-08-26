@@ -833,6 +833,15 @@ export const importLGPDService = {
   getSmartImportPatientsMetadata: () => {
     return api.get('/import-lgpd/pacientes/smart-import/metadata');
   },
+  // #794 (RNF011 AC#4): the quarantine surface. #787 made rejected rows
+  // survive and slice 1 made a batch readable by id; these are what let an
+  // operator actually reach one.
+  listQuarantineBatches: (params?: { page?: number; limit?: number }) => {
+    return api.get('/import-lgpd/batches', { params });
+  },
+  getQuarantineBatch: (batchId: string) => {
+    return api.get(`/import-lgpd/batches/${encodeURIComponent(batchId)}`);
+  },
 };
 
 // ========== SECURITY SERVICES ==========

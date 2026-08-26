@@ -112,6 +112,44 @@ class ImportLGPDController {
     }
   }
 
+  /**
+   * GET /api/import-lgpd/batches (#794 item 2, RNF011 AC#4)
+   *
+   * O ponto de entrada navegavel da quarentena. Sem ele so da para abrir um
+   * lote de quem ja conhece o id, e nada no frontend conhece (#808).
+   */
+  async listQuarantineBatches(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+
+      const result = await importLGPDService.listQuarantineBatches(db, {
+        limit: req.query.limit,
+        page: req.query.page,
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: result.batches,
+        pagination: {
+          page: result.page,
+          limit: result.limit,
+          total: result.total,
+          totalPages: result.totalPages,
+        },
+      });
+    } catch (error) {
+      logger.error('Erro ao listar lotes de quarentena LGPD:', error.message || error);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao listar lotes de quarentena',
+        message: error.message,
+      });
+    }
+  }
+
   async listSmartImportReports(req, res) {
     try {
       const db = req.app.locals.db;

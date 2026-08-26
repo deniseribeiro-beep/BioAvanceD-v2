@@ -12,6 +12,7 @@ const LoginPage = lazy(() => import('./views/LoginPage'));
 const Dashboard = lazy(() => import('./views/Dashboard'));
 const PatientsPage = lazy(() => import('./views/PatientsPage'));
 const FhirImportPage = lazy(() => import('./views/FhirImportPage'));
+const ImportQuarantinePage = lazy(() => import('./views/ImportQuarantinePage'));
 const ConsentPage = lazy(() => import('./pages/patient/EConsentPage'));
 const SamplesPage = lazy(() => import('./views/SamplesPage'));
 const SampleDetailsPage = lazy(() => import('./views/SampleDetailsPage'));
@@ -122,6 +123,18 @@ function App() {
                   <Route path="/reports/query/:type" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportQueryPage /></ProtectedRoute>} />
                   <Route path="/reports/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportViewPage /></ProtectedRoute>} />
                   <Route path="/quality-descriptions" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionPage /></ProtectedRoute>} />
+                  {/* #794 item 2 (RNF011 AC#4): the quarantine review surface.
+                      Same roles as /import — the backend gates both the list
+                      and the batch read on createSample, which is the
+                      permission the import itself requires. */}
+                  <Route
+                    path="/import/quarantine"
+                    element={
+                      <ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}>
+                        <ImportQuarantinePage />
+                      </ProtectedRoute>
+                    }
+                  />
                   <Route
                     path="/import"
                     element={
