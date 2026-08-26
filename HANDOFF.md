@@ -1,185 +1,149 @@
 # HANDOFF
 
-**Written:** 2026-08-25, end of the eighth sitting of the day. The
-self-picked 4-item queue is **empty — all items resolved**. This is the
-definitive rotation for this sitting.
+> **INTERIM — THIS SESSION IS STILL RUNNING.** Written after iteration 1 of
+> a self-picked 5-item queue. **1 of 5 resolved, 4 remain.** This is a
+> progress snapshot, not the definitive rotation for the sitting. If you are
+> reading this cold, the session ended unexpectedly mid-queue — treat the
+> remaining four items as untouched and re-verify before assuming anything
+> about them.
 
-## What this sitting did
+**Written:** 2026-08-26, first sitting of the day.
 
-Dennis asked for the next group of issues and confirmed **Docker on**.
-Theme: **finish RNF011 AC#4, and stop the sample list from lying about
-consent.**
+## The queue
 
-| # | What | Route | Outcome |
+Dennis asked for the next 5 issues and left the pick to me. Theme: **make
+the LGPD import quarantine usable, and close out the "field nothing writes"
+cluster.** Docker was *not* authorised for this sitting and has not been
+touched — see Docker below.
+
+| # | Item | Route | State |
 |---|---|---|---|
-| **0** | the inherited Docker gate | gate | **green, 5/5** |
-| **787** | RNF011 AC#4 LGPD import quarantine | build-loop | **closed** (code had merged `00fee0a8`) |
-| **788** | consent badge read from a field no writer sets | fix-bugs | **closed** `28629279` / merged `8547134e` |
-| **790** | no empty-row guard in the import loops | fix-bugs | **closed** `f4259f6b` / merged `d08bc87d` |
-| **794** | quarantine unreadable — slice 1 of 3 | build-loop | **slice landed** `8dca6f95` / merged `0521f96c`; **issue deliberately still OPEN** |
+| **1** | **#799** FHIR reader serves LGPD quarantine batches | fix-bugs | **closed** `5d2e8cfc` / merged `ca8e01d3` |
+| 2 | **#795** `Paciente ID: undefined` in the RF004 audit trail | fix-bugs | not started |
+| 3 | **#796** `persistConsentDeliveryFailure` permanent no-op | fix-bugs | not started |
+| 4 | **#792** import deletes the source file even when rows quarantined | build-loop | not started |
+| 5 | **#794** items 2–3: quarantine UI + correct-and-resubmit | build-loop | not started |
 
-### The gate (item 0)
+**Ordering is load-bearing between 4 and 5:** #792 (retain the uploaded
+file) is a hard dependency of #794 item 3 (correct-and-resubmit) — you
+cannot resubmit a corrected row from a file that has been deleted. Do not
+swap them.
 
-**The inherited stack was up but NOT gate-ready** — `docker ps -a` showed
-no `admin-bootstrap-test` and no reference-data chain at all. Fixed in
-~50 s. Then `lgpd-sample-import.spec.ts` ran 5/5, executing for the first
-time the **three assertions deferred from #785/#786** plus #787's two new
-quarantine cases. **No reopens** — both prior closes confirmed live.
+Classification for all five was done **once, up front**, per `issue-loop`'s
+closed-list rule. Don't re-derive it per item.
 
-### #788 — the issue understated its own severity
+## Iteration 1 — #799
 
-Predicted every row returning `PATIENT_NOT_FOUND`. Reality: every row
-returned `NO_ACTIVE_CONSENT`, i.e. the lookup **matched a patient — the
-wrong one**. All 7 patient docs lack `patientID`, so `{ patientID: null }`
-matched all of them and `findOne` returned whichever came first. Every
-sample on every page was badged from one arbitrary patient's consent
-record, with the direction of failure decided by document order. The
-sharp end, from the new unit test: **before the fix, a sample with no
-participant identifier at all returned `canUse: true`, "TCLE Assinado".**
+`getBatch` discriminated on nothing but `_id`, so every FHIR endpoint
+resolved LGPD quarantine batches. The two paths are gated on different
+permissions (`uploadFiles` vs `createPatient`/`createSample`), and
+quarantined rows carry `row` — the pre-anonymisation spreadsheet line.
 
-### #790 — the first body that held
+**The body's trace was right but understated the blast radius, twice:**
 
-`importSamples` and `importPatientsSmart` had no empty-row guard;
-`importPatients` had two. Now one shared `isEmptyRow(row)` in all three,
-**before** the `results.total` increment so #786's
-`total === success + errors` invariant is untouched. Chose silent
-skipping (the file's established behaviour); the alternative is **#798**.
+1. **`validateBatch` is a write.** It rewrote every record's status, then
+   `refreshBatchCounts` overwrote the batch's own `QUARANTINED` status and
+   replaced the file-level counts (rows in file / rows imported) with FHIR
+   counts over the quarantined rows alone — destroying the record of what
+   the operator submitted.
+2. **`attachExternalDocument` never calls `getBatch` at all** and the body
+   never mentions it. It queried `import_staging_records` directly, then
+   marked the row `COMMITTED` / `RELEASED` / `AVAILABLE` and wrote to
+   `samples` keyed on a `specimenId` an LGPD record does not carry. The
+   pre-fix test run **reproduced this** — the LGPD row came back released.
 
-### #794 slice 1
+Bounded by: `commitBatch` could *not* create patients from LGPD rows
+(quarantined rows always carry errors → never `READY_TO_COMMIT`).
 
-`GET /api/import-lgpd/batches/:batchId` — the quarantine is now readable
-through the API, not only via Mongo. **Two corrections to the body:** its
-proposed path `/api/import/lgpd/...` doesn't match this repo (LGPD mounts
-at `/api/import-lgpd`, `app.js:350`; `/api/import` is the FHIR router),
-and "gated to whoever may import" resolves to the **existing**
-`createSample` permission — deliberately not a new one, since a new
-permission never reaches an already-seeded stack without an explicit
-`seedRbacCatalog.js` re-seed.
+Fix is an allow-list (`type: 'FHIR_BUNDLE'`) via a shared `findFhirBatch`
+helper, 404 not 403. **No migration hazard** — `stageBundle` has stamped the
+type since the file's first commit (`13b96eb0`), checked explicitly for the
+#762 shape.
 
-## The issue-body reliability pattern
-
-**Five of six bodies read across this queue were wrong somewhere; #790's
-was the one that held.** The rule is *check*, not *distrust* — re-running
-the trace is cheap and has now caught five errors and confirmed one body
-clean. #788's error was in the direction of **understating** severity,
-which is the dangerous direction.
+**Proof:** new `fhir-import-staging.batchTypeIsolation.unit.test.js`, 8
+tests. Red run was 7 failed / 1 passed, and the 1 pass is the FHIR
+regression guard that must pass in both states — read per-test, not in
+aggregate. Merged tree: **169/169 green** across 7 suites.
 
 ## Filed this sitting
 
-**Product:** **#795** (`POST /api/samples` writes `Paciente ID:
-undefined` into the RF004 audit trail and drops the key from its 201
-body), **#796** (`persistConsentDeliveryFailure` is a permanent no-op —
-both callers pass `participantId`, it reads `patientID`/`patientId`/`id`),
-**#797** (520 filter-ignoring `findOne` mocks across 56 files — the #771
-blindness one method over, and what kept #788 green through five tests
-covering it), **#798** (blank rows now dropped with no signal),
-**#799** (`GET /api/import/fhir/batches/:id` has no type filter, so it
-serves LGPD quarantine batches — with civil identifiers — to a different
-permission), **#800** (self-report: both import batch readers check
-permission but not ownership; same class as #684).
+**Project:** **#801** (`attachExternalDocument` marks any record
+`COMMITTED`/`RELEASED` with no validation-state check, and ignores
+`matchedCount: 0` on the sample write), **#802** (`validateImportConsentToken`
+is the one query #799 left without the discriminator — inert today because
+its batchId comes from an HMAC-signed token, filed so it isn't recorded only
+on a closed thread).
 
-**Pack:** #444, #445, #446, #447, #448, #449, **#450**, plus refinements
-on #410 and #442.
-
-**Closed-issue follow-through:** #785 and #786 were closed in the
-*previous* sitting on native proofs, each leaving e2e assertions that had
-never executed. This sitting's gate ran them green, and that result is
-now recorded on both threads — the standing instruction was to reopen
-them on a red gate, so the green outcome needed the same record. Neither
-needs reopening.
+**Pack:** **#463** (routing gate blocks a *queue-level* `AskUserQuestion` in
+`issue-loop` queue mode; #382's housekeeping allowlist doesn't reach it, and
+the closed-list rule makes it reproducible every time). Recurrence comments
+on **#401** (heredoc parse failure — auto mode's use-Bash-for-edits rule
+drives straight into it) and **#398** (Rule-0 junction guard blocks
+read-only introspection via **PowerShell**, a surface those issues don't
+name).
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, **in sync with origin**.
-- **No `fix/` or `test/` branches outstanding** — all three created this
-  sitting were deleted local *and* remote, no prompt any time.
+- On `feature/docker-e2e-backend-integration`, **in sync with origin**
+  (`ca8e01d3`). No open PR; `main` frozen and 99 behind — untouched.
+- `fix/799-fhir-batch-type-isolation` deleted local **and** remote. The
+  remote delete succeeded with no prompt (another data point for pack #410's
+  tally, which is still unresolved between #391 and #482).
+- **Correction to the previous handoff:** it claimed "no `fix/` or `test/`
+  branches outstanding." **`test/787-lgpd-import-staging` is still present,
+  local and remote, and is fully merged into the integration branch.** That
+  claim was true only of the three branches created *that* sitting. Safe to
+  delete after the usual authorship check (precedent #332); left alone
+  because it predates this session.
 - Untracked and deliberately untouched: `.claude/skills/` and
   `api/backend/storage/assays/`. **Never `git add -A`.**
 - Older local branches unchanged: `fix/599-ci-trigger-integration-branch`
-  and `fix/599-hold-ci-trigger-for-milestone` are merged (safe to
-  delete); `test/377-docs-on-main` and `test/human-showcase-video` are
-  not merged.
-- Two stale *remote* branches left alone deliberately (they predate this
-  session): `origin/fix/705-seed-active-terminology-concept-cleanup` and
-  `origin/test/377-docs-on-main`. **Verify merge status *and* per-commit
-  authorship before deleting** (precedent #332).
+  and `fix/599-hold-ci-trigger-for-milestone` are merged (safe to delete);
+  `test/377-docs-on-main` and `test/human-showcase-video` are not merged.
 - The known **#752** red is unchanged and pre-existing; not re-checked.
-- No open PR; nothing pushed to `main`; `main` stays frozen.
 
 ## Docker
 
-**The stack is DOWN and the four named volumes were dropped.** Dennis
-chose a full teardown at the `clean-up` checkpoint, so **the next sitting
-starts cold on purpose** — this is not an abandoned environment, and
-there is no warm stack to inherit. Record both axes (pack #445):
+**Still down, still cold — nothing was started this sitting.**
 
-- **Services:** none running. The 12-service stack was up from ~19:26
-  until the end of this sitting, then `docker compose ... down`, verified
-  by `docker ps` rather than the compose exit code.
-- **Bootstrap:** `admin-bootstrap-test` **and** the full 17-service
-  reference-data chain ran this sitting; all 18 one-shots verified
-  `Exited (0)` via `docker ps -a`, never by the compose exit code.
-- **`backend-app-test` was rebuilt three times** this sitting and its
-  image still carries **#788, #790 and #794** (the image was kept; only
-  containers and volumes went). Build-not-mount: **any further
-  `api/backend/src` change needs another rebuild before an e2e run**, or
-  a stale image serves old code with no error.
-- **Volumes:** all four (`bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data`)
-  were **removed**, clearing e2e fixture data accumulated across several
-  prior sittings. **A next sitting therefore needs the full startup from
-  scratch**: the 12-service recipe with `--build`, then
-  `admin-bootstrap-test`, then the whole 17-service reference-data chain
-  — the chain is not optional now, since nothing is seeded.
-- `playwright-runner` was never started. **Stop it before any host-side
-  run if that changes** (pack #437).
-- `lgpd-sample-import.spec.ts` ran **four times**, green each time,
-  finishing at **8/8** after #794's three new cases.
-- Host Playwright command (verbatim, works):
-  `PLAYWRIGHT_BASE_URL=http://localhost:5173 PLAYWRIGHT_API_BASE_URL=http://localhost:3000 PLAYWRIGHT_SKIP_WEBSERVER=1 TEST_USER=admin TEST_PASS=Admin@123 E2E_MONGO_URI="mongodb://localhost:27017?directConnection=true" E2E_MONGO_DB=bioavanced_test E2E_NEO4J_DATABASE=neo4j TEST_SUPPORT_SECRET=e2e-test-support-secret npx playwright test [spec] --workers=1`
-- **Hand-seeding Mongo needs the logical→physical name map** (pack #447):
-  `getCollection(db, 'consents')` reads the collection physically named
-  **`patientConsents`** per `api/backend/src/config/collections.js`.
-  Seeding the wrong name does not error — it creates a stray collection
-  and the verification reads as a failed fix.
+- **Services:** none running. Not started, not stopped.
+- **Bootstrap:** none. The four named volumes were dropped at the *previous*
+  sitting's teardown and have not been recreated, so **nothing is seeded**.
+- A next e2e gate therefore still needs the full sequence from scratch: the
+  12-service recipe with `--build`, then `admin-bootstrap-test`, then the
+  entire 17-service reference-data chain. The chain is not optional.
+- `backend-app-test`'s image still carries #788/#790/#794 from the previous
+  sitting, **but not #799** — this sitting's merge is host-side only.
+  Build-not-mount: any `api/backend/src` change needs a rebuild before an
+  e2e run, or a stale image serves old code with no error.
+- **Docker was deliberately not authorised for this queue.** Verification
+  ran on the documented default — native only, gate end-loaded per
+  `ship-integration-branch`. **Item 5 (#794 items 2–3) is frontend UI and
+  cannot be proven natively**; raise the Docker decision with Dennis when
+  that item comes up, per `docker-workflow`'s per-iteration exception.
 
 ## Working rules confirmed this sitting
 
-- **`gh issue close` has NO `--body-file` flag** — post the long comment
-  first with `gh issue comment --body-file`, then close separately.
-- **A hook-blocked Bash call writes none of its files; the block is
-  atomic over the whole tool call — the separator is irrelevant.**
-  Framing it as an `&&`-chaining rule is too narrow.
-- **Every `gh issue create` must carry `--label`** (pack #148 hook).
-- **Splice anchors come from `awk 'NR>=A && NR<=B {printf "%d|%s\n", NR,
-  $0}'`, never from eyeballed `sed -n` output** (pack #448). An
-  off-by-one nests the block inside the preceding test — valid syntax, so
-  nothing errors; the only symptom is a quietly reduced collected-test
-  count. Recovery is `git checkout --` and re-splicing, not repairing by
-  index. Cost one full reset.
-- **A negative-path test on a not-yet-built endpoint passes vacuously**
-  (pack #449) — an unregistered route 404s just like the handler would.
-  **Read which tests passed in the red run, not just that one failed**,
-  and assert the response *shape*, not the status alone.
-- **The routing gate's re-arm is NOT a flat per-iteration tax** — it
-  re-arms only when a `gh issue view`/`list` happens *after* the routed
-  skill call. #788's close re-armed (the iteration duplicate-checked the
-  tracker before filing #795); #790's and #794's did not.
+- **Anything multi-line or carrying shell metacharacters goes to a file
+  first, never inline into a Bash argument.** Hit twice: a 190-line quoted
+  heredoc failed at parse time, and `gh issue comment --body "..."` failed
+  on an escaped backtick. `--body-file` and the Write tool both worked
+  first try. Broader than pack #419/#433's backslash framing.
+- **The routing gate re-arms on the closed-list body read.** `issue-loop`
+  queue mode tells you to read all N issue bodies up front; that read lands
+  *after* the `issue-loop` call, so the next `AskUserQuestion` blocks. Route
+  the next item first, then ask. Filed as pack #463.
+- **Check the red run per-test, not in aggregate** — the FHIR regression
+  guard was *supposed* to pass in the red run; "8 tests, 1 passed" would
+  have looked like a partial reproduction if read as a total.
 
 ## Recommended next steps
 
-**None queued — Dennis has not named the next group.** When he does,
-these are the strongest candidates, in the order I'd argue for them:
+**Continue the queue at item 2 (#795).** Do not re-pick or re-plan — the
+five were chosen and classified together, and #792 must precede #794.
 
-1. **#684** — offered twice this sitting and not taken. Still the
-   highest-severity item on the board: any authenticated user can revoke
-   any patient's consent by enumerating a Mongo `_id`. Blocked on
-   RF010/RF021's actor model, a product call. **#800 filed this sitting
-   is the same class**, so a single decision about object-ownership
-   scoping would now unblock both.
-2. **#799** — a concrete, small, security-relevant fix (add the type
-   filter to the FHIR reader) with no design question attached.
-3. **#794 items 2 and 3** — the UI surface and correct-and-resubmit, to
-   finish RNF011 AC#4 properly.
-4. **#797** — the filter-ignoring mock sweep, which is what let #788 hide
-   behind five green tests. Pair with #781, which proposes the same
-   drawer for the sort-capturing helper.
+Not in this queue, still the highest-severity item on the board: **#684**
+(any authenticated user can revoke any patient's consent). Blocked on the
+RF010/RF021 actor model, which is a product call for Denise. **#800 and the
+new #801 are the same class** — one decision about object-ownership scoping
+would unblock all three.
