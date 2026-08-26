@@ -254,10 +254,19 @@ covered as of #794 slice 1 by
 `GET /api/import-lgpd/batches/:batchId` and the three further cases in
 that same spec, which read the batch back through the API rather than
 through Mongo. Note the mount: LGPD routes are under `/api/import-lgpd`
-(`app.js:350`), not `/api/import/lgpd`. Still open on this criterion:
-the UI surface and the correct-and-resubmit step (#794 items 2 and 3),
-retaining the uploaded source file (#792), and retention for
-`import_staging_records` (#793)),
+(`app.js:350`), not `/api/import/lgpd`. The operator-facing half is
+covered as of **#794 item 2**: `GET /api/import-lgpd/batches` lists the
+quarantine batches and `/import/quarantine` (`ImportQuarantinePage`,
+linked from the sidebar) shows each batch's rejected rows, their error
+messages and the retained original row. The list route exists because
+`stagingBatchId` never reaches a UI — the LGPD import has no frontend
+caller at all (#808) — so a batch-by-id page alone would have been
+unreachable. Retaining the uploaded source file landed with **#792**
+(`uploads/quarantine/<batchId>`, recorded as `sourceFile` on the batch;
+the page shows retido/não retido per batch). Still open on this
+criterion: correct-and-resubmit (#794 item 3), the source file on a
+*thrown* import (#806), retention duration for both the rows and the
+files (#793), and whether either should be encrypted at rest (#807)),
 RNF018 (multi-layer validation — same), RNF019 (outbox durability —
 assert in `pipeline-continuity`), RNF021 (session lifecycle — assert in
 `auth-access-security`), RNF024 (FHIR boundary side-effect-free —

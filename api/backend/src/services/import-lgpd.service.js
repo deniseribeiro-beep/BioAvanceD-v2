@@ -927,6 +927,49 @@ class ImportLGPDService {
     return { batch, records };
   }
 
+  /**
+   * Lista os lotes de quarentena LGPD, do mais recente para o mais antigo
+   * (#794 item 2, RNF011 AC#4).
+   *
+   * O #794 slice 1 tornou um lote legivel *se voce ja souber o id dele*. Nada
+   * entrega esse id a um operador: `stagingBatchId` volta na resposta da API,
+   * mas a importacao LGPD nao tem nenhum consumidor no frontend (#808), entao
+   * ele nunca chegou a uma tela. Sem listagem nao existe ponto de entrada
+   * navegavel, e uma tela de revisao seria codigo inalcancavel.
+   *
+   * Filtra por `type: 'LGPD_SAMPLE_CSV'` pelo mesmo motivo que
+   * `getQuarantineBatch`: `import_batches` e compartilhada com a importacao
+   * FHIR e as duas rotas tem permissoes diferentes (#799 foi exatamente esse
+   * defeito no sentido oposto).
+   *
+   * Devolve **so o resumo do lote** -- deliberadamente nao le
+   * `import_staging_records`. As linhas carregam `row`, a linha original da
+   * planilha, com identificadores civis (#807); uma listagem nao precisa
+   * deles, e transformar "um lote" em "todos os lotes" seria ampliar a
+   * exposicao na direcao errada.
+   */
+  async listQuarantineBatches(db, { limit = 20, page = 1 } = {}) {
+    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const safePage = Math.max(parseInt(page, 10) || 1, 1);
+    const skip = (safePage - 1) * safeLimit;
+
+    const filter = { type: 'LGPD_SAMPLE_CSV' };
+    const collection = db.collection('import_batches');
+
+    const [batches, total] = await Promise.all([
+      collection.find(filter).sort({ createdAt: -1 }).skip(skip).limit(safeLimit).toArray(),
+      collection.countDocuments(filter),
+    ]);
+
+    return {
+      batches,
+      total,
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.max(Math.ceil(total / safeLimit), 1),
+    };
+  }
+
   async quarantineRejectedSampleRows(db, { fileName = null, rows = [], results, actor = {} } = {}) {
     const rejected = Array.isArray(results?.errors) ? results.errors : [];
     if (rejected.length === 0) return null;

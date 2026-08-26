@@ -15,8 +15,9 @@ import {
   Shield, 
   BarChart3, 
   FileSearch, 
-  Database, 
-  UserCog 
+  Database,
+  UserCog,
+  FileWarning
 } from 'lucide-react';
 import './Sidebar.css';
 
@@ -86,6 +87,10 @@ export default function Sidebar() {
     { path: '/samples', icon: FlaskConical, label: t('navigation.samples') || 'Inventário de Amostras', roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/results', icon: FileText, label: t('navigation.results'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/facility-management', icon: Box, label: t('navigation.facilityManagement'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
+    // #794 item 2 (RNF011 AC#4): without a nav entry the quarantine review
+    // page is reachable only by typing the URL, which is the #659 defect and
+    // would leave the rejected rows about as reachable as they were in Mongo.
+    { path: '/import/quarantine', icon: FileWarning, label: t('navigation.importQuarantine', 'Quarentena de Importação'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/admin/tcle/new', icon: FileText, label: t('navigation.tcleBuilder', 'Construtor de TCLE'), roles: ['Administrador', 'Coordenador'] },
     { path: '/user/security', icon: Shield, label: t('navigation.userSecurity'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
     { path: '/reports', icon: BarChart3, label: t('navigation.reports'), roles: ['Administrador', 'Coordenador', 'Usuário Externo'] },
