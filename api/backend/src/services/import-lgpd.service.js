@@ -2124,6 +2124,71 @@ class ImportLGPDService {
   }
 
   /**
+   * Retem o arquivo enviado quando linhas foram para a quarentena (#792,
+   * RNF011 AC#4 -- "sem correcao silenciosa").
+   *
+   * O #787 fez as linhas rejeitadas sobreviverem; o arquivo de origem
+   * continuava sendo apagado incondicionalmente pelo controller. Os dois nao
+   * se substituem: a linha em quarentena e a visao *interpretada* pelo
+   * sistema, entao ela nao serve justamente para o caso em que o proprio
+   * arquivo e o culpado (delimitador errado, encoding, coluna deslocada) --
+   * ali o registro em staging documenta o erro de leitura, nao a entrada. E
+   * tambem nao e o artefato que um revisor de conformidade pede ao
+   * reconstruir o que o operador enviou.
+   *
+   * O arquivo sai de `uploads/temp/` (que qualquer rotina de limpeza pode
+   * legitimamente esvaziar) para `uploads/quarantine/`, e o nome no disco e o
+   * id do lote -- **nunca** o `originalname`, que vem do cliente e serviria
+   * de vetor de path traversal. O nome original fica so como metadado.
+   *
+   * Best-effort, igual a `quarantineRejectedSampleRows`: perder a copia de
+   * revisao nao pode derrubar uma importacao que ja gravou linhas. Devolve
+   * null em qualquer falha, sempre com log.
+   *
+   * Por quanto tempo esses arquivos ficam retidos e questao aberta no #793,
+   * junto com a retencao das proprias linhas em quarentena.
+   */
+  async retainSourceFileForBatch(db, file, batchId) {
+    try {
+      if (!file?.path || !fs.existsSync(file.path)) return null;
+
+      const originalName = path.basename(String(file.originalname || '')) || 'upload';
+      const extension = path.extname(originalName) || '.dat';
+      const size = fs.statSync(file.path).size;
+
+      const quarantineDir = path.join(path.dirname(file.path), '..', 'quarantine');
+      fs.mkdirSync(quarantineDir, { recursive: true });
+
+      const storedPath = path.join(quarantineDir, `${String(batchId)}${extension}`);
+      fs.renameSync(file.path, storedPath);
+
+      const sourceFile = {
+        storedPath,
+        originalName,
+        size,
+        retainedAt: new Date(),
+      };
+
+      await db.collection('import_batches').updateOne(
+        { _id: batchId },
+        { $set: { sourceFile, updatedAt: sourceFile.retainedAt } }
+      );
+
+      logger.warn(
+        `[IMPORT_LGPD] Arquivo de origem retido para revisao (batch ${batchId}): ${storedPath}`
+      );
+
+      return sourceFile;
+    } catch (retainError) {
+      logger.error(
+        'Falha ao reter arquivo de origem da importacao (RNF011 AC#4):',
+        retainError.message || retainError
+      );
+      return null;
+    }
+  }
+
+  /**
    * Limpa arquivo temporário
    */
   cleanupFile(filePath) {
