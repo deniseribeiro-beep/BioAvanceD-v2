@@ -338,18 +338,50 @@ describe('NotificationService', () => {
       const sendEmailSpy = vi
         .spyOn(notificationService, 'sendEmail')
         .mockResolvedValue({ success: true, channel: 'email', provider: 'resend' });
+      // #796: was `{ patientID: 'P-1', ... }` asserting `metadata: { patientID: 'P-1' }`.
+      // No caller passes `patientID`, so that assertion only held because the
+      // test invented the field the product code was wrongly reading.
       const result = await notificationService.sendConsentEmail(
-        { patientID: 'P-1', patientName: 'Maria', email: 'maria@example.com' },
+        { participantId: '12345678', patientName: 'Maria', email: 'maria@example.com' },
         'http://link'
       );
       expect(sendEmailSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           to: 'maria@example.com',
           notificationType: 'RF_CONSENT_NOTIFICATION',
-          metadata: { patientID: 'P-1' }
+          metadata: { participantId: '12345678' }
         })
       );
       expect(result).toEqual({ channel: 'email', success: true, provider: 'resend' });
+    });
+
+    // #796: every test above hands sendConsentEmail `{ patientID: 'P-1' }`,
+    // a shape neither real caller produces. Both pass `participantId`:
+    //   routes/eConsent.js:31            sendConsentEmail({ participantId, email }, link)
+    //   fhir-import-staging.service.js   sendConsentEmail({ participantId: normalized.participantId, ... })
+    // Driven with the real shape, the compliance record persisted by
+    // sendEmail -> persistComplianceLog carried `patientID: null`, so every
+    // RF_CONSENT_NOTIFICATION ever written had no link back to the
+    // participant it was sent for. Same shape as #795's audit trail, and the
+    // same enabler as #803 (fixture shapes diverging from real callers).
+    it('#796: carries the participant identifier into the compliance record, given the shape real callers pass', async () => {
+      vi.spyOn(notificationService, 'validateFrontendUrl').mockReturnValue(new URL('https://app.example.com'));
+      const sendEmailSpy = vi
+        .spyOn(notificationService, 'sendEmail')
+        .mockResolvedValue({ success: true, channel: 'email', provider: 'resend' });
+
+      await notificationService.sendConsentEmail(
+        { participantId: '12345678', email: 'maria@example.com' },
+        'http://link'
+      );
+
+      expect(sendEmailSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'maria@example.com',
+          notificationType: 'RF_CONSENT_NOTIFICATION',
+          metadata: { participantId: '12345678' }
+        })
+      );
     });
   });
 
