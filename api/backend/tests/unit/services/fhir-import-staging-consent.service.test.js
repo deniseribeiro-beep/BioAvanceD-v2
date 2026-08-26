@@ -77,7 +77,10 @@ describe('fhir-import-staging.service — consent token & external document flow
   });
 
   async function seedBatchAndRecord(recordOverrides = {}) {
-    const batch = await db.collection('import_batches').insertOne({ status: 'STAGED' });
+    // #799: stageBundle stamps `type: 'FHIR_BUNDLE'` on every batch it writes,
+    // and the readers now filter on it (import_batches is shared with the LGPD
+    // quarantine path). An untyped batch is a shape no writer produces.
+    const batch = await db.collection('import_batches').insertOne({ type: 'FHIR_BUNDLE', status: 'STAGED' });
     const record = await db.collection('import_staging_records').insertOne({
       batchId: batch.insertedId,
       rowNumber: 1,

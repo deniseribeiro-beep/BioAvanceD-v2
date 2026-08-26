@@ -23,6 +23,19 @@ const STATUS = Object.freeze({
   COMMITTED: 'COMMITTED',
 });
 
+/**
+ * The discriminator this service owns inside `import_batches` (#799).
+ *
+ * `import_batches` / `import_staging_records` are shared with the LGPD sample
+ * import, which writes `type: 'LGPD_SAMPLE_CSV'` since #787. The two paths are
+ * gated on different permissions -- these routes on `uploadFiles`, every LGPD
+ * route on `createPatient`/`createSample` -- so every query here has to carry
+ * the discriminator, or it serves (and mutates) the other path's data for a
+ * principal that holds neither of its permissions. `import-lgpd.service.js#
+ * getQuarantineBatch` carries the mirror-image filter for the same reason.
+ */
+const FHIR_BATCH_TYPE = 'FHIR_BUNDLE';
+
 function collection(db, name) {
   if (!db || typeof db.collection !== 'function') {
     throw new Error('Banco de dados não disponível');
@@ -597,7 +610,7 @@ async function stageBundle(db, payload, metadata = {}) {
 
   const now = new Date();
   const batchDoc = {
-    type: 'FHIR_BUNDLE',
+    type: FHIR_BATCH_TYPE,
     status: 'STAGED',
     fileName: String(metadata.fileName || 'fhir-bundle.json'),
     source: 'FHIR',
@@ -624,14 +637,25 @@ async function stageBundle(db, payload, metadata = {}) {
   };
 }
 
-async function getBatch(db, batchIdRaw) {
-  const batchId = toObjectId(batchIdRaw);
-  const batch = await collection(db, 'import_batches').findOne({ _id: batchId });
+/**
+ * Resolve a batch this service owns, or 404 (#799).
+ *
+ * 404 rather than 403 deliberately: a FHIR endpoint should not confirm the
+ * existence of a batch belonging to the LGPD import path.
+ */
+async function findFhirBatch(db, batchId) {
+  const batch = await collection(db, 'import_batches').findOne({ _id: batchId, type: FHIR_BATCH_TYPE });
   if (!batch) {
     const error = new Error('Lote de importação FHIR não encontrado.');
     error.statusCode = 404;
     throw error;
   }
+  return batch;
+}
+
+async function getBatch(db, batchIdRaw) {
+  const batchId = toObjectId(batchIdRaw);
+  const batch = await findFhirBatch(db, batchId);
   const records = await collection(db, 'import_staging_records').find({ batchId }).sort({ rowNumber: 1 }).toArray();
   return { batch, records };
 }
@@ -1071,6 +1095,13 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
   const recordId = toObjectId(recordIdRaw);
   const staging = collection(db, 'import_staging_records');
   const samples = collection(db, 'samples');
+
+  // #799: this is the one entry point that never resolves through getBatch, so
+  // it needs the discriminator itself. It is also the most damaging one to
+  // leave open -- it marks the record RELEASED/AVAILABLE and then writes to
+  // `samples` keyed on normalized.specimenId, which an LGPD quarantine record
+  // does not carry.
+  await findFhirBatch(db, batchId);
 
   const record = await staging.findOne({ _id: recordId, batchId });
   if (!record) {
