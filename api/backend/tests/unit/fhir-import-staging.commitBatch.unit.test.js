@@ -61,7 +61,12 @@ describe('fhir-import-staging.service#commitBatch — ParticipantIdentity dual-w
 
   beforeEach(async () => {
     db = createDb();
-    const batch = await db.collection('import_batches').insertOne({ status: 'VALIDATED' });
+    // #799: `type` is not decoration here -- stageBundle has written
+    // `type: 'FHIR_BUNDLE'` since this service's first commit, and the readers
+    // now filter on it so an LGPD quarantine batch cannot be resolved through
+    // a FHIR endpoint. A batch fixture without it is a shape the writer never
+    // produces.
+    const batch = await db.collection('import_batches').insertOne({ type: 'FHIR_BUNDLE', status: 'VALIDATED' });
     batchId = batch.insertedId;
     await db.collection('import_staging_records').insertOne({
       batchId,
