@@ -337,8 +337,14 @@ class NotificationService {
         text: message,
         html: `<p>${message}</p>`,
         notificationType: 'RF_CONSENT_NOTIFICATION',
+        // #796: this read `patientData.patientID`, which neither caller sets
+        // -- routes/eConsent.js and fhir-import-staging.service.js both pass
+        // `participantId`. Every RF_CONSENT_NOTIFICATION compliance record
+        // persisted by sendEmail -> persistComplianceLog therefore carried
+        // `patientID: null`, with no link back to the participant it was
+        // sent for.
         metadata: {
-          patientID: patientData.patientID || null
+          participantId: patientData.participantId || null
         }
       });
 
