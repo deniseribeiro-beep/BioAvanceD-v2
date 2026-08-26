@@ -593,8 +593,17 @@ class ImportLGPDController {
         );
       }
 
-      // Limpa arquivo temporário
-      importLGPDService.cleanupFile(file.path);
+      // #792 (RNF011 AC#4): keep the uploaded file when rows were
+      // quarantined. The staged rows are the system's parsed view, which is
+      // no help for the failure mode where the file itself is at fault, and
+      // is not the artifact a compliance reviewer would ask for. A fully
+      // clean import still deletes it, matching #787's own "no empty batch
+      // for a clean file" decision.
+      if (results.stagingBatchId) {
+        await importLGPDService.retainSourceFileForBatch(db, file, results.stagingBatchId);
+      } else {
+        importLGPDService.cleanupFile(file.path);
+      }
 
       return res.status(200).json({
         success: results.errors.length === 0,
