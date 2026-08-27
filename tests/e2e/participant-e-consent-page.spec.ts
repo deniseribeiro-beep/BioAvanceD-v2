@@ -41,7 +41,11 @@ let adminToken: string;
 const seededParticipantIds: string[] = [];
 
 async function seedParticipant(): Promise<{ participantId: string; email: string }> {
-  const participantId = `822${String(Date.now()).slice(-8)}${seededParticipantIds.length}`;
+  // Exactly 8 digits: validateParticipantId (utils/patientAnonymization.js:26)
+  // gates on /^\d{8}$/ before the patients lookup, so a longer id fails as
+  // "Paciente nao encontrado" no matter what is seeded. Caught by the live
+  // verification of #820, not by any assertion here.
+  const participantId = `8${String(Date.now()).slice(-6)}${seededParticipantIds.length}`;
   const email = `e2e-822-${participantId}@example.test`;
   await db.collection('patients').insertOne({
     participantId,
@@ -112,6 +116,7 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
 
   test.afterAll(async () => {
     if (!client) return;
+    await db.collection('patientConsents').deleteMany({ participantId: { $in: seededParticipantIds } });
     await db.collection('patients').deleteMany({ participantId: { $in: seededParticipantIds } });
     await db.collection('consent_templates').deleteMany({ version: 'e2e-822' });
     await client.close();
@@ -258,7 +263,10 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
     // holds and the participant page's submit is accepted.
     expect(response.status(), await response.text()).toBe(200);
 
-    const consent = await db.collection('consents').findOne({ participantId });
+    // Canonical name is `patientConsents`, not `consents` -- see
+    // config/collections.js's CANONICAL_COLLECTIONS. Same class of trap as the
+    // `consent_templates` one noted in beforeAll.
+    const consent = await db.collection('patientConsents').findOne({ participantId });
     expect(consent).toBeTruthy();
     expect(consent?.consentId).toBeTruthy();
     expect(consent?.status).toBe('ACTIVE');
