@@ -55,6 +55,16 @@ const TOKEN_OPTIONAL_ROUTES = [
   // (routes/eConsent.js:246-247, no `authenticate`).
   '/e-consent/consent-tokens/validate',
   '/e-consent/consent-tokens/accept',
+  // #822: the other two participant-facing pages, on the JWT token system.
+  // Same reasoning as the pair above -- EConsentPage and EConsentImportPage
+  // are entered by emailed link, so the visitor has no session and the token
+  // in the URL is the credential. All four backend routes are public
+  // (routes/eConsent.js:38, 78, 187, 206 -- no `authenticate` middleware).
+  // The import pair is matched by prefix: `/import/fhir/consent/:token` and
+  // `.../accept` both contain this substring.
+  '/e-consent/validate',
+  '/e-consent/update',
+  '/e-consent/import/fhir/consent',
 ];
 
 let isRedirectingToLogin = false;
@@ -833,6 +843,47 @@ export const consentTokenService = {
       '/e-consent/consent-tokens/accept',
       { patientId: participantId, token }
     ),
+};
+
+// #822: the JWT consent-token pair behind EConsentPage, and the FHIR import
+// consent pair behind EConsentImportPage. Both pages previously called raw
+// axios with a relative `/api/...` URL, which resolves against the frontend
+// origin -- nothing proxies /api there in dev, test or prod, so every request
+// returned the SPA's index.html with a 200 and the pages rendered their
+// generic "link inválido" message. Like consentTokenService above, these are
+// unauthenticated and listed in TOKEN_OPTIONAL_ROUTES.
+export type EConsentValidatePayload = {
+  patient: { patientName?: string } | null;
+  template: {
+    id: string;
+    title?: string;
+    permissions: Array<{ key: string; label: string; required?: boolean }>;
+  } | null;
+  responses: Record<string, boolean>;
+};
+
+export type EConsentUpdateEntry = { key: string; status: 'ACCEPTED' | 'REVOKED' };
+
+export type ImportConsentPayload = {
+  success: boolean;
+  batchId?: string;
+  recordId?: string;
+  participantId?: string;
+  patientName?: string;
+  patientEmail?: string;
+  status?: string;
+  consentSigned?: boolean;
+};
+
+export const eConsentService = {
+  validate: (token: string) =>
+    api.get<EConsentValidatePayload>(`/e-consent/validate/${encodeURIComponent(token)}`),
+  update: (token: string, consents: EConsentUpdateEntry[]) =>
+    api.post('/e-consent/update', { token, consents }),
+  validateImportConsent: (token: string) =>
+    api.get<ImportConsentPayload>(`/e-consent/import/fhir/consent/${encodeURIComponent(token)}`),
+  acceptImportConsent: (token: string) =>
+    api.post<ImportConsentPayload>(`/e-consent/import/fhir/consent/${encodeURIComponent(token)}/accept`),
 };
 
 // ========== IMPORT LGPD SERVICES ==========

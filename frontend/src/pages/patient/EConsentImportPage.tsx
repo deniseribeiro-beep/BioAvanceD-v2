@@ -1,44 +1,64 @@
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
 import { useParams } from 'react-router-dom';
+import { ImportConsentPayload, eConsentService } from '../../services/api';
+import { mapEConsentError, mapEConsentSubmitError } from '../../views/eConsentView';
 
-type ImportConsentInfo = {
-  batchId?: string;
-  recordId?: string;
-  patientId?: string;
-  patientName?: string;
-  patientEmail?: string;
-  status?: string;
-  consentSigned?: boolean;
-};
-
+// #822: same defect and same fix as EConsentPage -- this page called raw axios
+// with a relative `/api/...` URL, which resolves against the frontend origin
+// where nothing proxies /api, so both requests returned the SPA's index.html
+// with a 200 and the page rendered its generic "link inválido" message. It now
+// uses the shared `api` client, and both of its routes are in
+// TOKEN_OPTIONAL_ROUTES so the client's no-session interceptor doesn't bounce
+// the participant to /login.
 export default function EConsentImportPage() {
   const { token } = useParams();
-  const [data, setData] = useState<ImportConsentInfo | null>(null);
+  const [data, setData] = useState<ImportConsentPayload | null>(null);
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+
     async function load() {
-      try {
-        const resp = await axios.get(`/api/e-consent/import/fhir/consent/${token}`);
-        setData(resp.data);
-      } catch {
-        setError('Link inválido ou expirado. Solicite novo acesso.');
-      } finally {
+      if (!token) {
+        setError(mapEConsentError(400));
         setLoading(false);
+        return;
+      }
+
+      try {
+        const resp = await eConsentService.validateImportConsent(token);
+        if (!cancelled) setData(resp.data);
+      } catch (err) {
+        if (!cancelled) {
+          setError(mapEConsentError((err as { response?: { status?: number } })?.response?.status));
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     }
+
     load();
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
   async function acceptConsent() {
+    if (!token || submitting) return;
+    setSubmitting(true);
     try {
-      await axios.post(`/api/e-consent/import/fhir/consent/${token}/accept`);
+      const resp = await eConsentService.acceptImportConsent(token);
+      setData(resp.data);
       setSuccess(true);
-    } catch {
-      setError('Erro ao aceitar consentimento de importação.');
+    } catch (err) {
+      setError(
+        mapEConsentSubmitError((err as { response?: { status?: number } })?.response?.status)
+      );
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -52,7 +72,9 @@ export default function EConsentImportPage() {
       <p>Paciente: {data?.patientName || 'Paciente'}</p>
       <p>E-mail: {data?.patientEmail || 'Não informado'}</p>
       <p>Status atual: {data?.status || 'DESCONHECIDO'}</p>
-      <button type="button" onClick={acceptConsent}>Aceitar consentimento</button>
+      <button type="button" onClick={acceptConsent} disabled={submitting}>
+        {submitting ? 'Enviando...' : 'Aceitar consentimento'}
+      </button>
     </div>
   );
 }
