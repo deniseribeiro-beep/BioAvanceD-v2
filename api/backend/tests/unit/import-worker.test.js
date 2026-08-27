@@ -16,6 +16,7 @@ const redisConfigPath = require.resolve('../../src/config/redis');
 const queueConfigPath = require.resolve('../../src/config/queue');
 const validateEnvPath = require.resolve('../../src/config/validateEnv');
 const mongoPath = require.resolve('../../src/database/mongo');
+const mongooseConnectionPath = require.resolve('../../src/infrastructure/database/mongodb/connection');
 const patientWorkerPath = require.resolve('../../src/workers/workers/patient-worker');
 const sampleWorkerPath = require.resolve('../../src/workers/workers/sample-worker');
 const resultWorkerPath = require.resolve('../../src/workers/workers/result-worker');
@@ -34,6 +35,7 @@ let fakeValidateEnv;
 let fakeRedisModule;
 let fakeQueueConfig;
 let fakeMongo;
+let fakeMongooseConnection;
 let fakePatientWorker;
 let fakeSampleWorker;
 let fakeResultWorker;
@@ -123,6 +125,22 @@ function installFakes() {
     filename: mongoPath,
     loaded: true,
     exports: fakeMongo,
+  };
+
+  // #826: the worker needs the Mongoose connection too -- connectDB() above is
+  // the native driver only, and StagingImport (reached via
+  // batch-validation-engine) is a Mongoose model whose writes silently buffer
+  // and time out after 10s without it.
+  fakeMongooseConnection = {
+    connectMongoDB: vi.fn().mockResolvedValue({ readyState: 1 }),
+    getMongoDBConnection: vi.fn(),
+    closeMongoDBConnection: vi.fn().mockResolvedValue(undefined),
+  };
+  require.cache[mongooseConnectionPath] = {
+    id: mongooseConnectionPath,
+    filename: mongooseConnectionPath,
+    loaded: true,
+    exports: fakeMongooseConnection,
   };
 
   fakePatientWorker = { process: vi.fn().mockResolvedValue(makeWorkerResult()) };
@@ -252,6 +270,7 @@ function clearAllCaches() {
   delete require.cache[queueConfigPath];
   delete require.cache[validateEnvPath];
   delete require.cache[mongoPath];
+  delete require.cache[mongooseConnectionPath];
   delete require.cache[patientWorkerPath];
   delete require.cache[sampleWorkerPath];
   delete require.cache[resultWorkerPath];
@@ -289,6 +308,8 @@ describe('workers/import-worker', () => {
       expect(second).toBe(first);
       expect(fakeValidateEnv.validateRedisOnly).toHaveBeenCalledTimes(1);
       expect(fakeMongo.connectDB).toHaveBeenCalledTimes(1);
+      // #826: the Mongoose connection is opened once, alongside the native one.
+      expect(fakeMongooseConnection.connectMongoDB).toHaveBeenCalledTimes(1);
       expect(FakeWorker).toHaveBeenCalledTimes(2); // import-queue + notification-queue, once
     });
 
@@ -299,6 +320,7 @@ describe('workers/import-worker', () => {
 
       await expect(importWorker.initWorker()).rejects.toThrow('Redis não configurado');
       expect(fakeMongo.connectDB).not.toHaveBeenCalled();
+      expect(fakeMongooseConnection.connectMongoDB).not.toHaveBeenCalled();
       expect(fakeLogger.warn).toHaveBeenCalled();
     });
 

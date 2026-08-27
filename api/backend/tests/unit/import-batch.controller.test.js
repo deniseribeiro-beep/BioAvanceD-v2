@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const controller = require('../../src/controllers/import-batch.controller');
 const stagingImportService = require('../../src/services/staging-import.service');
 const logger = require('../../src/utils/logger');
+const mongooseConnection = require('../../src/infrastructure/database/mongodb/connection');
 const fs = require('fs');
 
 function createRes() {
@@ -271,6 +272,26 @@ describe('import-batch.controller', () => {
   });
 
   describe('getBatchImportStatus', () => {
+    // #826: the handler now opens the Mongoose connection before touching
+    // StagingImport, instead of relying on the upload path having done it as a
+    // side effect earlier in the same process. Stub it -- the real one throws
+    // without MONGO_URI, which is not what these tests are about.
+    beforeEach(() => {
+      vi.spyOn(mongooseConnection, 'connectMongoDB').mockResolvedValue({ readyState: 1 });
+    });
+
+    it('connects Mongoose before querying StagingImport', async () => {
+      const req = { params: { jobId: 'job-xyz' } };
+      const res = createRes();
+
+      const StagingImport = require('../../src/models/StagingImport');
+      vi.spyOn(StagingImport, 'findOne').mockResolvedValue(null);
+
+      await controller.getBatchImportStatus(req, res);
+
+      expect(mongooseConnection.connectMongoDB).toHaveBeenCalled();
+    });
+
     it('returns 400 when jobId param is missing', async () => {
       const req = { params: {} };
       const res = createRes();

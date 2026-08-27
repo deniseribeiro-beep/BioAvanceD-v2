@@ -12,6 +12,7 @@ const temperatureWorker = require('./workers/temperature-worker');
 const importAsyncService = require('../services/import-async.service');
 const batchValidationEngine = require('../services/batch-validation-engine.service');
 const { connectDB } = require('../database/mongo');
+const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
 
 // Lazy getter para evitar TDZ/ciclos de require
 const getNotificationService = () => require('../services/notification.service');
@@ -44,6 +45,13 @@ async function initWorker() {
 
     // Conecta ao banco
     db = await connectDB();
+
+    // #826: connectDB() abre apenas a conexão do driver nativo. Os modelos
+    // Mongoose alcançados por este worker (StagingImport, via
+    // batch-validation-engine) precisam da conexão do Mongoose -- sem ela o
+    // Mongoose enfileira cada operação e a rejeita após 10s, o job falha,
+    // retenta indefinidamente e o documento nunca sai de `status: queued`.
+    await connectMongoDB();
 
     // Inicializa Redis (usa instância comum)
     const connection = initRedis();
