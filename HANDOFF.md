@@ -1,7 +1,7 @@
 # HANDOFF
 
 **⚠ INTERIM SNAPSHOT — this session is still running.** Written after
-iteration 1 of a self-picked 5-item queue. **1 of 5 resolved so far, 4
+iteration 2 of a self-picked 5-item queue. **2 of 5 resolved so far, 3
 remain.** This is NOT the definitive rotation for the sitting; if you are
 reading it cold, the sitting ended unexpectedly mid-queue.
 
@@ -11,12 +11,12 @@ Dennis asked for the next 5 issues and left the pick to me, then said
 **"Docker is on"** — the first sitting in a while with the engine
 authorised. Theme: finish the consent-invitation path, make the LGPD
 import usable from the UI, and spend the (expensive) cold Docker
-sequence on the two items that can only be settled with a live stack.
+sequence on the two items only a live stack can settle.
 
 | # | Issue | Route | State |
 |---|---|---|---|
 | 1 | **#805** consent link emails `/patients/undefined/consent` | fix-bugs | **half fixed** `2a374ce1` / merged `2f6bcbd3`; **OPEN**, frontend half is #809 |
-| 2 | **#796** `persistConsentDeliveryFailure` no-op | fix-bugs | not started — **needs a decision from Dennis**, see below |
+| 2 | **#796** `persistConsentDeliveryFailure` no-op | fix-bugs | **closed** `1886a3c8` / merged `10f3710f` |
 | 3 | **#808** LGPD import has no frontend caller | build-loop | not started |
 | 4 | **#794 item 3** correct-and-resubmit | build-loop | not started |
 | 5 | **#722** RF029 tests depend on the bootstrap chain | test-loop | not started |
@@ -24,113 +24,129 @@ sequence on the two items that can only be settled with a live stack.
 #802 was in an earlier draft of the queue and was dropped in favour of
 #796. It remains open and unworked.
 
-## Iteration 1 — #805
+## The theme that has emerged: issue bodies are wrong about *docs*, not just code
+
+Both iterations so far turned on a premise in the issue body being
+false, and in both cases the false premise pointed at the **wrong fix**,
+not merely a mis-scoped one. This is sharper than the existing
+"check, don't distrust" rule and worth carrying forward:
+
+- **#805's "Suggested fix" would have shipped a broken link.** It
+  proposed emitting `/patient/e-consent/${token}`; that page's validator
+  `jwt.verify`s and every caller passes a 64-char random hex from a
+  *different* token system. The link would have 400'd on every use, and
+  no test would have caught it because they all mock `buildConsentLink`
+  out. → pack **#469**: `fix-bugs`' body-skepticism rule covers the
+  defect trace but not the body's *proposed remedy*, and re-tracing the
+  defect *feels* like it discharged the skepticism for both.
+- **#796's "docs say nothing" was wrong.** RF015 AC#3
+  (`docs/docs-7-31-2026/1-Requisitos-Funcionais-e-Nao-Funcionais.md:442`,
+  "Registrar tentativas, falhas, entrega e confirmação") explicitly
+  mandates recording notification failures. The earlier check grepped
+  the **field names**; the requirement is Portuguese prose sharing no
+  identifier with the code. → pack **#470**.
+
+**Operating rule for the rest of this queue and beyond: a "docs are
+silent" conclusion in this repo requires a concept-level search in
+Portuguese, not an identifier grep.** The docs are Portuguese, the code
+is English; they routinely share no token.
+
+## Iteration 1 — #805 (open)
 
 `buildConsentLink` now reads `participantId`, encodes the id segment,
 and throws `CONSENT_PARTICIPANT_ID_REQUIRED` rather than interpolating
-`undefined` into a URL it is about to email.
+`undefined` into a URL it is about to email. Body said four callers;
+there are **six** (it missed `patient.service.js:579` and `:1046`). Body
+said two link builders; there are **three**
+(`fhir-import-staging.service.js:347` builds the import variant).
 
-**The issue body was wrong in three material ways**, continuing the
-streak (this is now seven consecutive bodies found wrong):
+What settled it was the **consuming contract**, not docs:
+`POST /api/e-consent/consent-tokens/{validate,accept}` resolve the
+patient by `{ participantId }`.
 
-- **Six production callers, not four** — it missed
-  `patient.service.js:579` and `:1046`. The second `import-lgpd` site is
-  at `:2111`, not `:2068`.
-- **Three link builders, not two** —
-  `fhir-import-staging.service.js:347` builds
-  `/patient/e-consent/import/${token}` for its own page. The FHIR
-  staging path was never using the broken builder.
-- **Its suggested fix would have shipped a broken fix.** It proposed
-  emitting `/patient/e-consent/${token}`. That page's validator
-  `jwt.verify`s, and every caller passes a 64-char random hex from a
-  *different* token system — the link would have 400'd on every use, and
-  no existing test would have caught it, because they all mock
-  `buildConsentLink` out. Filed as pack **#469**: `fix-bugs`' body-
-  skepticism rule covers the defect trace but not the body's
-  "Suggested fix", and re-tracing the defect *feels* like it discharged
-  the skepticism for both.
+**Still open because the link is still dead.** It now reads
+`/patients/00000042/consent?token=…` and lands on `App.tsx:95`, which
+points that route at `EConsentPage` — an *alias import of the same
+module* as the participant JWT page — behind `ProtectedRoute`, and that
+component reads its token from route params this route does not have.
 
-**What settled the fix** was neither the body nor `docs/`: the consuming
-endpoints `POST /api/e-consent/consent-tokens/{validate,accept}` resolve
-the patient by `{ participantId }`, so it is the only value the path
-segment can carry and still work. Contract over preference — no
-escalation needed.
+### The two-token-system finding (read before touching consent)
 
-**Why #805 is still open:** the link now reads
-`/patients/00000042/consent?token=…` and still lands on `App.tsx:95`,
-which points that route at `EConsentPage` — an *alias import of the same
-module* as the participant JWT page — behind `ProtectedRoute`. That
-component reads its token from route params, and this route has no
-`:token` param. Per `fix-bugs`' bundled-sub-points rule, the unresolved
-half is half the issue's own title, so: `Refs #805`, merged, left open.
-
-## The two-token-system finding (the big one from iteration 1)
-
-Consent invitations run on **two unrelated token systems**:
-
-1. **JWT, manual, works.** `POST /api/e-consent/generate-link` signs
-   `{participantId}` with `CONSENT_SECRET`, **2h** TTL, emails
-   `/patient/e-consent/${token}` → public route → `EConsentPage` →
-   `GET /api/e-consent/validate/:token` (`jwt.verify`). End to end fine.
-   Staff-triggered, one participant at a time.
-2. **Opaque random hex, bulk, no page.** `buildConsentMetadata()` mints
+1. **JWT, manual, works.** `POST /api/e-consent/generate-link`, **2h**
+   TTL, emails `/patient/e-consent/${token}` → public route →
+   `GET /api/e-consent/validate/:token` (`jwt.verify`). Staff-triggered,
+   one participant at a time.
+2. **Opaque random hex, bulk, no page.** `buildConsentMetadata()` →
    `randomBytes(32)`, **7-day** TTL, persisted as Patient's
    `consentToken`/`consentTokenCreatedAt`/`consentTokenExpiresAt` — all
-   four fields **canonical** on `models/Patient.js`. All six
-   `buildConsentLink` callers use it. Its backend is complete
-   (validate + accept, status/expiry checks, proper `ACTIVE` transition).
-   **`grep -rn "consent-tokens" frontend/src` returns nothing.**
+   **canonical** fields. All six `buildConsentLink` callers use it.
+   Backend complete (validate + accept, status/expiry checks, proper
+   `ACTIVE` transition). **Zero frontend callers.**
 
-So `/patients/:id/consent?token=` is the *correct* shape for system 2's
-contract — id in the path, token in the query is exactly what
-validate/accept need. The page was simply never built, and the route was
-wired to system 1's component. **#809** carries the full write-up.
+`/patients/:id/consent?token=` is the *correct* shape for system 2's
+contract. The page was never built. **#809** has the full write-up. Do
+not "unify the builders" without reading it — which system supersedes
+which is Denise's call.
 
-Do not "unify the builders" without reading #809 first — the two systems
-have different TTLs and different trust models, and which (if either)
-supersedes the other is Denise's call.
+## Iteration 2 — #796 (closed)
+
+Deleted `persistConsentDeliveryFailure`. It was broken **twice**: the id
+chain early-returned on every call, *and* its query
+(`{ $or: [{ patientID: ... }, { _id: ... }] }`) would have matched
+nothing even with the id fixed — `patientID` is prohibited and `_id` is
+an ObjectId compared to a string. It also wrote three non-canonical
+fields onto Patient through a raw driver `updateOne`.
+
+Per Dennis's rule ("if it's not in docs and no other system needs it,
+delete it"), the second half held — zero readers repo-wide — but the
+first half did not, per RF015 AC#3 above. So the recording moved to
+where RF015 puts it: **the notification**. `sendEmail`'s provider call
+is now wrapped and a failure persists a `DELIVERY_FAILED` compliance log
+before rethrowing, covering every notification type.
+
+**This closed a real gap the no-op had been hiding:**
+`persistComplianceLog` ran only on the success path, so *every* failed
+notification left no record at all.
 
 ## Filed this sitting so far
 
 **Project:**
 
-- **#809** — the bulk consent-token system has a complete backend and no
-  frontend; `/patients/:id/consent` wired to the JWT page behind
-  `ProtectedRoute`. #805 depends on it.
+- **#809** — bulk consent-token system: complete backend, no frontend.
+  #805 depends on it.
 - **#810** — publishing a consent template wraps its `try` around the
-  `for` rather than the loop body, so **one patient that throws ends the
-  whole notification sweep**: every remaining patient gets no invitation
-  *and* no `consentToken` persisted, and publication still reports
-  success. The only one of the six call sites without per-item error
-  handling. Reachable via a single participant with no email
-  (`CONSENT_RECIPIENT_REQUIRED`), which in a bulk import cohort is not
-  exotic.
+  `for`, so one patient that throws ends the whole sweep: everyone after
+  gets no invitation **and** no `consentToken`, and publication still
+  reports success. Reachable via one participant with no email.
+- **#811** — RF015 AC#3's remaining legs: pre-send validation failures
+  (no recipient resolved yet to record against), "tentativas", and
+  AC#4 escalation.
+- **#812** — `notification_compliance_logs` stores participant emails
+  forever and **no retention policy can even be created for it**:
+  `retentionPolicy.service.js:11` allows only `AuditEvent`/`Log` (#667's
+  limitation). #796 adds failure rows to it. Decide alongside #793.
 
-**Pack:**
-
-- **#468** — a mistyped filename in a targeted `vitest run` is silently
-  ignored: 8 files named, 7 run, exit 0, no warning. Reproduced
-  minimally. Interacts badly with pack#180's "name specific files, not a
-  directory" rule, which is exactly the shape where a typo is likely.
-  **Check the reported `Test Files` count against the number you named.**
-- **#469** — see above.
-- Data point on **#410**: remote branch delete succeeded, no prompt
-  (auto mode, same-session create/push/merge/delete, separate calls).
-  Tally still has no reliable predictor.
+**Pack:** #468 (a mistyped filename in a targeted `vitest run` is
+silently ignored — 8 named, 7 run, exit 0; **check the reported
+`Test Files` count against the number you named**), #469, #470, #471
+(`git grep` over `grep -r` — a stale gitignored `frontend/dist/` dumped
+73KB of minified bundles into context). Counter-case comment on #463:
+the routing gate blocking my first `AskUserQuestion` is *why* RF015 got
+found — worth narrowing #463's fix on **what the question is about**,
+not when it is asked. Data point on #410.
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, **in sync with origin**
-  (`2f6bcbd3`). No open PR; `main` untouched and still 99 behind.
-- `fix/805-consent-link-participant-id` deleted **local and remote**, no
-  prompt.
+  (`10f3710f`). No open PR; `main` untouched and still 99 behind.
+- Both fix branches deleted **local and remote**, no prompt either time.
 - Untracked and deliberately untouched: `.claude/skills/` and
   `api/backend/storage/assays/`. **Never `git add -A`.**
-- Pre-existing branches unchanged from the last handoff:
-  `test/787-lgpd-import-staging` (merged, safe to delete after checking
-  per-commit authorship, precedent #332), `fix/599-*` (both merged),
-  `test/377-docs-on-main` and `test/human-showcase-video` (not merged),
-  plus the two stale remotes left alone deliberately.
+- Pre-existing branches unchanged: `test/787-lgpd-import-staging`
+  (merged, safe to delete after checking per-commit authorship,
+  precedent #332), `fix/599-*` (both merged), `test/377-docs-on-main`
+  and `test/human-showcase-video` (not merged), plus the two stale
+  remotes left alone deliberately.
 - **#752** red is unchanged and pre-existing; not re-checked.
 
 ## Docker
@@ -142,33 +158,27 @@ supersedes the other is Denise's call.
 - **Bootstrap: NONE.** The four named volumes
   (`bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data`) are still
   absent — `docker volume ls` shows no `*test*` volumes at all.
-- A gate therefore still needs the **full cold sequence**: the
-  12-service recipe with `--build`, then `admin-bootstrap-test`, then the
-  entire 17-service reference-data chain. The chain is not optional, and
+- A gate still needs the **full cold sequence**: the 12-service recipe
+  with `--build`, then `admin-bootstrap-test`, then the entire
+  17-service reference-data chain. The chain is not optional, and
   **#722 is specifically about what happens when it is skipped.**
-- **Deliberate sequencing decision:** the rebuild is being held until
-  after items 1–4's backend merges land, because `backend-app-test`'s
-  image is build-not-mount and every merge makes it staler. It was four
-  merges stale at the start of this sitting and is now five
-  (`2f6bcbd3`). Rebuild once, late, then run items 4 and 5's gates
+- **Deliberate sequencing decision:** the rebuild is held until after
+  the backend merges land, because `backend-app-test` is
+  build-not-mount and every merge makes it staler. It was four merges
+  stale at the start of this sitting and is now **six** (`2f6bcbd3`,
+  `10f3710f`). Rebuild once, late, then run items 4 and 5's gates
   against it.
-- **No deferred e2e proof is outstanding from iteration 1.** #805's fix
-  is a pure backend function proven natively; nothing waits on a gate.
+- **No deferred e2e proof is outstanding.** Both fixes so far are pure
+  backend functions proven natively; nothing waits on a gate.
 
 ## Recommended next steps
 
-**Continue the queue — item 2 (#796).** It needs a decision from Dennis
-before any code is written; the routed-skill gate means that question
-must be asked *after* invoking `fix-bugs` for #796, not before.
+**Continue the queue — item 3 (#808).** Note its body predates last
+sitting's work: its own "option 2" (add `GET /api/import-lgpd/batches`
+plus a batch list page) **already shipped** as #794 item 2, so the live
+question is now only option 1 (wire the LGPD import into the UI) vs
+option 3 (delete `importLGPDService` as cruft and treat LGPD import as
+API-only). Apply the docs rule above before concluding anything is
+undocumented.
 
-The three options on the table, with the evidence the body lacked:
-`consentDeliveryStatus`/`FailedAt`/`ErrorCode` are **absent from
-`PatientModel`'s canonical allowlist** and the function reaches Patient
-through a raw driver `updateOne` that bypasses the model, so "just wire
-it up" means writing non-canonical fields onto Patient — what PR 100
-removed. `docs/` mandates nothing here. Options: record it on the
-notification side (my lean), delete it, or add the three fields to the
-allowlist and keep the Patient write.
-
-After that: #808, #794 item 3, then #722 behind the cold Docker
-sequence.
+Then #794 item 3, then #722 behind the cold Docker sequence.
