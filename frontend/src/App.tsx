@@ -14,7 +14,7 @@ const PatientsPage = lazy(() => import('./views/PatientsPage'));
 const FhirImportPage = lazy(() => import('./views/FhirImportPage'));
 const ImportQuarantinePage = lazy(() => import('./views/ImportQuarantinePage'));
 const ImportLGPDPage = lazy(() => import('./views/ImportLGPDPage'));
-const ConsentPage = lazy(() => import('./pages/patient/EConsentPage'));
+const ConsentTokenPage = lazy(() => import('./pages/patient/ConsentTokenPage'));
 const SamplesPage = lazy(() => import('./views/SamplesPage'));
 const SampleDetailsPage = lazy(() => import('./views/SampleDetailsPage'));
 const ResultsPage = lazy(() => import('./views/ResultsPage'));
@@ -58,6 +58,14 @@ function App() {
           <Route path="/patient/e-consent" element={<EConsentLinkPanel />} />
           <Route path="/patient/e-consent/:token" element={<EConsentPage />} />
           <Route path="/patient/e-consent/import/:token" element={<EConsentImportPage />} />
+          {/* #809: the bulk consent-token link (buildConsentLink) lands here. The
+              64-char token in the query string IS the credential, exactly as the
+              JWT is for /patient/e-consent/:token above -- a participant following
+              an emailed invitation has no account to log into, so this route must
+              stay outside ProtectedRoute. It previously pointed at EConsentPage
+              (an alias import of the JWT page) behind ProtectedRoute, which read
+              its token from a route param this URL does not have. */}
+          <Route path="/patients/:id/consent" element={<ConsentTokenPage />} />
           <Route
             path="/next/intake"
             element={
@@ -93,7 +101,6 @@ function App() {
                   <Route path="/patients" element={<ProtectedRoute><PatientsPage /></ProtectedRoute>} />
                   <Route path="/patients/import-fhir" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><FhirImportPage /></ProtectedRoute>} />
                   <Route path="/import/fhir" element={<Navigate to="/patients/import-fhir" replace />} />
-                  <Route path="/patients/:id/consent" element={<ProtectedRoute><ConsentPage /></ProtectedRoute>} />
                   <Route path="samples/custody-reports" element={<ProtectedRoute><SampleCustodyReportsPage /></ProtectedRoute>} />
                   <Route path="samples/withdrawal-return" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><SampleWithdrawalReturnPage /></ProtectedRoute>} />
                   <Route path="samples/:id/label" element={<ProtectedRoute><SampleLabelPage /></ProtectedRoute>} />
