@@ -212,5 +212,28 @@ describe('hpo routes', () => {
       expect(res.body).toEqual({ error: 'Not found' });
       expect(findOne).toHaveBeenCalledWith({ hpoId: 'HP:9999999' });
     });
+
+    // #834 (found by #829's sweep): this handler had no try/catch, so a
+    // rejected findOne -- Mongo unreachable, a driver timeout, a topology
+    // change -- was an unhandled promise rejection, which Node answers by
+    // *exiting the process*. A brief database blip took the whole API down
+    // instead of failing one endpoint. The sibling GET /search handler above
+    // has had a try/catch all along.
+    it('returns 500 when the lookup throws, instead of rejecting unhandled', async () => {
+      const findOne = vi.fn().mockRejectedValue(new Error('connection timed out'));
+      const collection = vi.fn().mockReturnValue({ findOne });
+      const db = { collection };
+
+      delete require.cache[hpoRoutePath];
+      const router = require(hpoRoutePath);
+      const app = express();
+      app.locals.db = db;
+      app.use('/api/hpo', router);
+
+      const res = await request(app).get('/api/hpo/HP:0000118');
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/HPO/i);
+    });
   });
 });
