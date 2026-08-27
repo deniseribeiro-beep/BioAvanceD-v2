@@ -92,6 +92,26 @@ export async function countReferenceDatasetReleasesByDatasetCode(datasetCode: st
   return db.collection('referenceDatasetReleases').countDocuments({ datasetCode });
 }
 
+/**
+ * #722: how many *active* releases a datasetCode has.
+ *
+ * Distinct from countReferenceDatasetReleasesByDatasetCode above, which
+ * counts releases in any state. `activeCodeValidator.checkActiveCode` only
+ * resolves a code against a release whose `releaseStatus` is `active`, so
+ * "a release exists" and "a code will validate" are different questions --
+ * and the second is the one an RF029 ingestion probe actually depends on.
+ *
+ * Used by pipeline-continuity.spec.ts's RF029 blocks to assert their own
+ * precondition explicitly, rather than failing as `expected 'accepted',
+ * received 'quarantined'` on a stack whose reference-data bootstrap chain
+ * was never run -- which reads as a regression and was mistaken for one
+ * during #674's verification.
+ */
+export async function countActiveReferenceDatasetReleasesByDatasetCode(datasetCode: string): Promise<number> {
+  const db = await getDb();
+  return db.collection('referenceDatasetReleases').countDocuments({ datasetCode, releaseStatus: 'active' });
+}
+
 /** Same rationale as countReferenceDatasetReleasesByDatasetCode, for concepts — filtered by systemUri since TerminologyConcept doesn't carry datasetCode directly (dict-02_DICIONARIO.md's logical key is systemUri+code+version). */
 export async function countTerminologyConceptsBySystemUri(systemUri: string): Promise<number> {
   const db = await getDb();
