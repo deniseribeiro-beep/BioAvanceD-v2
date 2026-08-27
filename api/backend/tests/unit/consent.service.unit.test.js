@@ -688,14 +688,37 @@ describe('ConsentService.updateTemplate', () => {
 });
 
 describe('ConsentService.createPolicy', () => {
+  // #835: the id a pending cohort actually points at. These two tests used to
+  // call createPolicy directly with a filter-blind patients.find mock, so they
+  // asserted a notification that could never happen in production -- the sweep
+  // filtered on the just-inserted template's own id. They now go through
+  // updatePolicy, which is the only path that has a prior cohort at all.
+  const PRIOR_POLICY_ID = new ObjectId();
+
   it('creates a policy document and notifies pending patients, resolving patientName via ParticipantIdentity (#561/#564)', async () => {
     const templates = makeCollection({
-      find: vi.fn(() => makeCursor([])), // no prior versions -> v1
+      findOne: vi.fn(async () => ({ _id: PRIOR_POLICY_ID, versionGroupId: 'group-561' })),
+      find: vi.fn(() => makeCursor([{ _id: PRIOR_POLICY_ID }])),
       insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+      updateMany: vi.fn(async () => ({ modifiedCount: 0 })),
     });
-    const pendingPatient = { _id: new ObjectId(), participantId: '10203040', status: 'PENDING_CONSENT' };
+    const pendingPatient = {
+      _id: new ObjectId(),
+      participantId: '10203040',
+      status: 'PENDING_CONSENT',
+      consentTemplateId: PRIOR_POLICY_ID.toString(),
+    };
     const patients = makeCollection({
-      find: vi.fn(() => makeCursor([pendingPatient])),
+      // #835: honours the filter, so a sweep querying the wrong id finds
+      // nobody and fails this test rather than passing it.
+      find: vi.fn((filter = {}) =>
+        makeCursor(
+          Array.isArray(filter?.consentTemplateId?.$in) &&
+            filter.consentTemplateId.$in.includes(pendingPatient.consentTemplateId)
+            ? [pendingPatient]
+            : []
+        )
+      ),
       updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
     });
     const participantIdentities = makeCollection({
@@ -719,11 +742,11 @@ describe('ConsentService.createPolicy', () => {
       granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
     };
 
-    const result = await consentService.createPolicy(db, payload);
+    const result = await consentService.updatePolicy(db, PRIOR_POLICY_ID.toString(), payload);
 
     expect(result._id).toBeDefined();
     expect(result.version).toBe('v1');
-    expect(result.revisionType).toBe('create');
+    expect(result.revisionType).toBe('update');
     expect(templates.insertOne).toHaveBeenCalled();
     expect(notificationService.enqueueConsentNotification).toHaveBeenCalledWith(
       { ...pendingPatient, patientName: 'Maria Silva' },
@@ -743,12 +766,27 @@ describe('ConsentService.createPolicy', () => {
     const ciphertextOnlyIdentity = { ...encrypted, patientName: null };
 
     const templates = makeCollection({
-      find: vi.fn(() => makeCursor([])),
+      findOne: vi.fn(async () => ({ _id: PRIOR_POLICY_ID, versionGroupId: 'group-574' })),
+      find: vi.fn(() => makeCursor([{ _id: PRIOR_POLICY_ID }])),
       insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+      updateMany: vi.fn(async () => ({ modifiedCount: 0 })),
     });
-    const pendingPatient = { _id: new ObjectId(), participantId: '10203040', status: 'PENDING_CONSENT' };
+    const pendingPatient = {
+      _id: new ObjectId(),
+      participantId: '10203040',
+      status: 'PENDING_CONSENT',
+      consentTemplateId: PRIOR_POLICY_ID.toString(),
+    };
     const patients = makeCollection({
-      find: vi.fn(() => makeCursor([pendingPatient])),
+      // #835: filter-honouring, same as the test above.
+      find: vi.fn((filter = {}) =>
+        makeCursor(
+          Array.isArray(filter?.consentTemplateId?.$in) &&
+            filter.consentTemplateId.$in.includes(pendingPatient.consentTemplateId)
+            ? [pendingPatient]
+            : []
+        )
+      ),
       updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
     });
     const participantIdentities = makeCollection({
@@ -772,7 +810,7 @@ describe('ConsentService.createPolicy', () => {
       granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
     };
 
-    await consentService.createPolicy(db, payload);
+    await consentService.updatePolicy(db, PRIOR_POLICY_ID.toString(), payload);
 
     expect(notificationService.enqueueConsentNotification).toHaveBeenCalledWith(
       { ...pendingPatient, patientName: 'Maria Cifrada' },
@@ -788,10 +826,17 @@ describe('ConsentService.createPolicy', () => {
   // invitation and, worse, no consentToken persisted, leaving nothing for a
   // later resend to validate against. The publication still reported success.
   describe('#810 per-patient isolation of the notification sweep', () => {
+    // #835: these carry a consentTemplateId now, and it is the *previous*
+    // policy's id -- which is how a real pending cohort looks, since
+    // Patient.consentTemplateId is assigned at patient creation against a
+    // template that already exists. Without it the sweep correctly finds
+    // nobody.
+    const PREVIOUS_POLICY_ID = new ObjectId();
+
     const THREE_PENDING = () => [
-      { _id: new ObjectId(), participantId: '10203041', status: 'PENDING_CONSENT' },
-      { _id: new ObjectId(), participantId: '10203042', status: 'PENDING_CONSENT' },
-      { _id: new ObjectId(), participantId: '10203043', status: 'PENDING_CONSENT' },
+      { _id: new ObjectId(), participantId: '10203041', status: 'PENDING_CONSENT', consentTemplateId: PREVIOUS_POLICY_ID.toString() },
+      { _id: new ObjectId(), participantId: '10203042', status: 'PENDING_CONSENT', consentTemplateId: PREVIOUS_POLICY_ID.toString() },
+      { _id: new ObjectId(), participantId: '10203043', status: 'PENDING_CONSENT', consentTemplateId: PREVIOUS_POLICY_ID.toString() },
     ];
 
     const POLICY_PAYLOAD = {
@@ -804,11 +849,29 @@ describe('ConsentService.createPolicy', () => {
 
     function setup(pending) {
       const templates = makeCollection({
-        find: vi.fn(() => makeCursor([])),
+        // updatePolicy resolves the previous policy to inherit its
+        // versionGroupId, then the sweep looks up the rest of the lineage.
+        findOne: vi.fn(async () => ({ _id: PREVIOUS_POLICY_ID, versionGroupId: 'group-810' })),
+        find: vi.fn(() => makeCursor([{ _id: PREVIOUS_POLICY_ID }])),
         insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+        updateMany: vi.fn(async () => ({ modifiedCount: 0 })),
       });
       const patients = makeCollection({
-        find: vi.fn(() => makeCursor(pending)),
+        // #835: this used to return `pending` regardless of the filter it was
+        // handed, so the sweep's query -- which could never match anyone in
+        // production -- looked correct here. That is the #797/#771 mock
+        // blindness exactly. It now honours the filter, so a wrong query
+        // fails the test instead of passing it.
+        find: vi.fn((filter = {}) => {
+          const wanted = filter?.consentTemplateId?.$in;
+          if (!Array.isArray(wanted)) return makeCursor([]);
+          return makeCursor(
+            pending.filter(
+              (patient) =>
+                patient.status === filter.status && wanted.includes(patient.consentTemplateId)
+            )
+          );
+        }),
         updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
       });
       const participantIdentities = makeCollection({ findOne: vi.fn(async () => null) });
@@ -835,6 +898,86 @@ describe('ConsentService.createPolicy', () => {
       vi.restoreAllMocks();
     });
 
+    // #835: the sweep filtered on `result.insertedId` -- the id of the template
+    // it had just inserted -- so it matched nobody, ever. These pin the target
+    // it must actually use.
+    it('targets the cohort pending on the previous version, not the id it just created', async () => {
+      const pending = THREE_PENDING();
+      const { db, patients, templates } = setup(pending);
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
+
+      const sweepCall = patients.find.mock.calls.find(([filter]) => filter?.status === 'PENDING_CONSENT');
+      expect(sweepCall).toBeDefined();
+
+      const targeted = sweepCall[0].consentTemplateId.$in.map(String);
+      expect(targeted).toContain(PREVIOUS_POLICY_ID.toString());
+
+      // The decisive assertion: the newly inserted template's own id must not
+      // be what the sweep looks for.
+      const insertedId = String((await templates.insertOne.mock.results[0].value).insertedId);
+      expect(targeted).not.toContain(insertedId);
+
+      expect(
+        notificationService.enqueueConsentNotification.mock.calls.map(([patient]) => patient.participantId)
+      ).toEqual(['10203041', '10203042', '10203043']);
+    });
+
+    it('sweeps the whole version lineage, so someone pending on an older version is still invited', async () => {
+      const olderTemplateId = new ObjectId();
+      const pending = THREE_PENDING();
+      pending[2].consentTemplateId = olderTemplateId.toString();
+
+      const { db } = setup(pending);
+      // The lineage lookup returns both prior versions of this term.
+      db.collection('consent_templates').find = vi.fn(() =>
+        makeCursor([{ _id: PREVIOUS_POLICY_ID }, { _id: olderTemplateId }])
+      );
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
+
+      expect(
+        notificationService.enqueueConsentNotification.mock.calls.map(([patient]) => patient.participantId)
+      ).toEqual(['10203041', '10203042', '10203043']);
+    });
+
+    it('issues nothing for a brand-new term with no predecessor -- nobody can be pending on it', async () => {
+      const pending = THREE_PENDING();
+      const { db, patients } = setup(pending);
+      // A fresh create: no previousPolicyId, and no lineage to inherit.
+      db.collection('consent_templates').find = vi.fn(() => makeCursor([]));
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      await consentService.createPolicy(db, POLICY_PAYLOAD);
+
+      expect(notificationService.enqueueConsentNotification).not.toHaveBeenCalled();
+      // And no query for a cohort was issued at all, rather than one that
+      // silently matches nothing.
+      expect(patients.find.mock.calls.filter(([f]) => f?.status === 'PENDING_CONSENT')).toEqual([]);
+    });
+
+    it('does not sweep on an empty versionGroupId, which would match every template missing the field', async () => {
+      const pending = THREE_PENDING();
+      const { db, templates } = setup(pending);
+      // A pre-versionGroupId template: the lookup must not run at all.
+      templates.findOne = vi.fn(async () => ({ _id: PREVIOUS_POLICY_ID }));
+      const lineageLookup = vi.fn(() => makeCursor([]));
+      templates.find = lineageLookup;
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
+
+      // createPolicy still generates a versionGroupId for the *new* document,
+      // so the lookup may run -- but never with an undefined group id.
+      for (const [filter] of lineageLookup.mock.calls) {
+        if (filter && 'versionGroupId' in filter) {
+          expect(filter.versionGroupId).toBeTruthy();
+        }
+      }
+    });
+
     it('keeps notifying the remaining patients after one of them throws', async () => {
       const pending = THREE_PENDING();
       const { db } = setup(pending);
@@ -845,7 +988,7 @@ describe('ConsentService.createPolicy', () => {
         if (patient.participantId === '10203041') throw new Error('CONSENT_RECIPIENT_REQUIRED');
       });
 
-      await consentService.createPolicy(db, POLICY_PAYLOAD);
+      await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
 
       const notified = notificationService.enqueueConsentNotification.mock.calls.map(
         ([patient]) => patient.participantId
@@ -860,7 +1003,7 @@ describe('ConsentService.createPolicy', () => {
         if (patient.participantId === '10203041') throw new Error('CONSENT_RECIPIENT_REQUIRED');
       });
 
-      await consentService.createPolicy(db, POLICY_PAYLOAD);
+      await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
 
       expect(tokenedParticipants(patients, pending)).toEqual(['10203041', '10203042', '10203043']);
     });
@@ -872,7 +1015,7 @@ describe('ConsentService.createPolicy', () => {
         if (patient.participantId === '10203041') throw new Error('CONSENT_RECIPIENT_REQUIRED');
       });
 
-      await consentService.createPolicy(db, POLICY_PAYLOAD);
+      await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
 
       const notifiedIds = patients.updateOne.mock.calls
         .filter(([, update]) => update?.$set?.consentNotifiedAt !== undefined)
@@ -890,7 +1033,7 @@ describe('ConsentService.createPolicy', () => {
       });
       vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
 
-      await consentService.createPolicy(db, POLICY_PAYLOAD);
+      await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
 
       const notified = notificationService.enqueueConsentNotification.mock.calls.map(
         ([patient]) => patient.participantId
@@ -907,7 +1050,7 @@ describe('ConsentService.createPolicy', () => {
         if (patient.participantId === '10203041') throw new Error('CONSENT_RECIPIENT_REQUIRED');
       });
 
-      const result = await consentService.createPolicy(db, POLICY_PAYLOAD);
+      const result = await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
 
       expect(result.consentNotifications).toEqual({ total: 3, notified: 2, failed: 1 });
     });
@@ -917,7 +1060,7 @@ describe('ConsentService.createPolicy', () => {
       const { db } = setup(pending);
       vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
 
-      const result = await consentService.createPolicy(db, POLICY_PAYLOAD);
+      const result = await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
 
       expect(result.consentNotifications).toEqual({ total: 3, notified: 3, failed: 0 });
     });
