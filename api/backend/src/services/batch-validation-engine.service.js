@@ -830,6 +830,94 @@ class BatchValidationEngine {
     );
   }
 
+  /**
+   * Coloca as linhas rejeitadas em quarentena (#813, RNF011 AC#4 / RF029 AC#6).
+   *
+   * Este e o importador que o operador realmente alcanca (/import ->
+   * POST /api/import/batch). Ate aqui ele classificava as linhas
+   * VALID/PARTIAL/INVALID e empilhava `{row: <numero da linha>, errors}` em
+   * StagingImport.errors -- o campo se chama `row` mas guarda um inteiro,
+   * entao o *dado* da linha rejeitada nunca era persistido. Dava para ler o
+   * que estava errado, nunca para corrigir e reenviar.
+   *
+   * Escreve na mesma dupla de colecoes que a importacao LGPD
+   * (`import_batches` + `import_staging_records`, #787) para que exista uma
+   * so representacao de quarentena, com `type` proprio: os leitores da LGPD
+   * e do FHIR filtram por `type` e nao podem passar a listar lotes deste
+   * importador por acidente (#799 foi exatamente esse defeito).
+   */
+  async quarantineRejectedRows(db, { jobId, dataType, fileName = null, rejected = [], counts = {} } = {}) {
+    if (!Array.isArray(rejected) || rejected.length === 0) return null;
+    if (!db) return null;
+
+    // #807/#814: uma linha de paciente carrega patientName/birthDate/email --
+    // identificadores civis, cifrados em repouso em todo o resto do sistema
+    // (#566). Persistir isso aqui ampliaria um problema conhecido de texto
+    // claro para o caminho mais sensivel, que e justamente o que #814 manda
+    // resolver (via #807) antes de colocar um caminho de pacientes em
+    // quarentena. Amostras sao pseudonimizadas (participantId), e por isso
+    // #787 pode coloca-las em quarentena.
+    if (dataType !== 'samples') {
+      logger.warn(
+        `[BATCH_IMPORT] ${rejected.length} linha(s) de '${dataType}' rejeitadas NAO foram para quarentena: ` +
+        'linhas de paciente carregam identificadores civis e #807 (texto claro em repouso) ainda esta aberto. Ver #814.'
+      );
+      return null;
+    }
+
+    try {
+      const now = new Date();
+
+      const batchResult = await db.collection('import_batches').insertOne({
+        type: 'ASYNC_BATCH_IMPORT',
+        source: 'ASYNC_BATCH',
+        status: 'QUARANTINED',
+        jobId: jobId ? String(jobId) : null,
+        fileName: fileName ? String(fileName) : null,
+        dataType,
+        counts: {
+          total: counts.total ?? null,
+          success: counts.success ?? null,
+          errors: rejected.length,
+        },
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const batchId = batchResult.insertedId;
+
+      await db.collection('import_staging_records').insertMany(
+        rejected.map((rejection) => ({
+          batchId,
+          rowNumber: rejection.rowNumber,
+          status: 'ERROR',
+          errors: rejection.errors || [],
+          validationErrors: rejection.errors || [],
+          // A linha original como foi lida do arquivo. Sem ela o registro em
+          // quarentena pode ser revisado mas nao corrigido e reenviado, que e
+          // a razao de existir quarentena em vez de log.
+          row: rejection.row ?? null,
+          createdAt: now,
+          updatedAt: now,
+        }))
+      );
+
+      logger.warn(
+        `[BATCH_IMPORT] ${rejected.length} linha(s) rejeitada(s) colocadas em quarentena (batch ${batchId})`
+      );
+
+      return batchId;
+    } catch (stagingError) {
+      // A quarentena e um registro anexado a uma importacao que ja rodou;
+      // falhar aqui nao pode transformar uma importacao parcial em falha.
+      logger.error(
+        'Falha ao colocar linhas rejeitadas em quarentena (RNF011 AC#4):',
+        stagingError.message || stagingError
+      );
+      return null;
+    }
+  }
+
   async processBatchImport(db, stagingImportId, job = null) {
     const stagingImport = await StagingImport.findOne({ jobId: stagingImportId });
 
@@ -880,6 +968,9 @@ class BatchValidationEngine {
       },
     });
 
+    // #813: rejected rows, kept with their original data for quarantine.
+    const rejectedRows = [];
+
     const totalChunks = Math.max(1, Math.ceil(rows.length / CHUNK_SIZE));
 
     for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
@@ -919,6 +1010,15 @@ class BatchValidationEngine {
             errors: rowResult.errors,
           };
           result.errors.push(errorEntry);
+          // #813: `errorEntry.row` is the line *number*. Keep the row itself
+          // too, so the quarantine below can persist something an operator
+          // can actually correct and resubmit.
+          rejectedRows.push({
+            rowNumber,
+            row: rawRow,
+            errors: rowResult.errors,
+            classification: rowResult.classification,
+          });
           await StagingImport.updateOne(
             { jobId: stagingImportId },
             { $push: { errors: errorEntry } }
@@ -940,6 +1040,19 @@ class BatchValidationEngine {
       });
     }
 
+    // #813 (RNF011 AC#4 / RF029 AC#6): rejected rows go to staging/quarantine
+    // rather than being discarded once the job document ages out.
+    const quarantineBatchId = await this.quarantineRejectedRows(db, {
+      jobId: stagingImportId,
+      dataType,
+      fileName,
+      rejected: rejectedRows,
+      counts: { total: result.totalRows, success: result.validRows },
+    });
+    if (quarantineBatchId) {
+      result.quarantineBatchId = String(quarantineBatchId);
+    }
+
     const finalStatus = result.invalidRows > 0 && result.validRows === 0 && result.partialRows === 0
       ? 'failed'
       : 'completed';
@@ -955,6 +1068,9 @@ class BatchValidationEngine {
           validRows: result.validRows,
           partialRows: result.partialRows,
           invalidRows: result.invalidRows,
+          // #813: where the rejected rows went, so the job document points at
+          // its own quarantine instead of leaving it orphaned.
+          quarantineBatchId: quarantineBatchId ? String(quarantineBatchId) : null,
         },
       },
     });

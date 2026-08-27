@@ -398,6 +398,80 @@ describe('batch-validation-engine.service processBatchImport', () => {
     expect(finalUpdateCall).toBeTruthy();
   });
 
+
+  // The wiring, not the writer: a quarantine helper nothing calls is exactly
+  // the failure this issue is about one level up. Proves processBatchImport
+  // hands over the *original row objects*, not the line numbers it already had.
+  it('hands the rejected rows, with their data, to the quarantine on a samples import', async () => {
+    const goodRow = { participantId: '12345678', sampleType: 'Sangue', sampleOrigin: 'Coleta', barcode: 'B-1' };
+    const badRow = { participantId: '87654321', sampleType: '', sampleOrigin: 'Coleta', barcode: 'B-2' };
+    const filePath = writeTmpFile('samples.json', JSON.stringify([goodRow, badRow]));
+
+    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
+      jobId: 'job-813-wiring',
+      fileName: 'samples.json',
+      rawData: { storagePath: filePath },
+    });
+    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    vi.spyOn(batchValidationEngine, 'persistSample').mockImplementation(async (db, rawRow) => (
+      rawRow.sampleType
+        ? { classification: 'VALID', errors: [], warnings: [], persistedId: 'sample-1' }
+        : { classification: 'INVALID', errors: ['sampleType é obrigatório'], warnings: [] }
+    ));
+    const quarantineSpy = vi
+      .spyOn(batchValidationEngine, 'quarantineRejectedRows')
+      .mockResolvedValue('batch-813-wiring');
+
+    const result = await batchValidationEngine.processBatchImport({}, 'job-813-wiring');
+
+    expect(result.dataType).toBe('samples');
+    expect(quarantineSpy).toHaveBeenCalledTimes(1);
+
+    const [, payload] = quarantineSpy.mock.calls[0];
+    expect(payload.dataType).toBe('samples');
+    expect(payload.jobId).toBe('job-813-wiring');
+    expect(payload.fileName).toBe('samples.json');
+    expect(payload.rejected).toHaveLength(1);
+    expect(payload.rejected[0]).toMatchObject({
+      rowNumber: 2,
+      errors: ['sampleType é obrigatório'],
+      row: badRow,
+    });
+    // The successful row must not be dragged into quarantine with it.
+    expect(payload.rejected[0].row).not.toEqual(goodRow);
+
+    // And the job document points at its own quarantine rather than orphaning it.
+    expect(result.quarantineBatchId).toBe('batch-813-wiring');
+  });
+
+  it('does not open a quarantine batch when every row succeeded', async () => {
+    const filePath = writeTmpFile('samples-clean.json', JSON.stringify([
+      { participantId: '12345678', sampleType: 'Sangue', sampleOrigin: 'Coleta', barcode: 'B-1' },
+    ]));
+
+    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
+      jobId: 'job-813-clean',
+      fileName: 'samples-clean.json',
+      rawData: { storagePath: filePath },
+    });
+    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    vi.spyOn(batchValidationEngine, 'persistSample').mockResolvedValue({
+      classification: 'VALID', errors: [], warnings: [], persistedId: 'sample-1',
+    });
+    const quarantineSpy = vi.spyOn(batchValidationEngine, 'quarantineRejectedRows');
+
+    const result = await batchValidationEngine.processBatchImport({}, 'job-813-clean');
+
+    expect(result.invalidRows).toBe(0);
+    // Called (unconditionally, with an empty list) but must open no batch --
+    // asserting the *outcome* rather than the call keeps this true whichever
+    // way the guard is arranged.
+    expect(result.quarantineBatchId).toBeUndefined();
+    for (const call of quarantineSpy.mock.calls) {
+      expect(call[1].rejected).toEqual([]);
+    }
+  });
+
   it('marks the job failed when every row is invalid', async () => {
     const filePath = writeTmpFile('patients-invalid.json', JSON.stringify([
       { patientName: 'Sem Dados' },
@@ -475,5 +549,158 @@ describe('batch-validation-engine.service processBatchImport', () => {
     expect(result.validRows).toBe(1);
     expect(result.partialRows).toBe(0);
     expect(result.invalidRows).toBe(0);
+  });
+});
+
+// #813 (RNF011 AC#4 / RF029 AC#6): the importer an operator actually reaches
+// -- /import -> POST /api/import/batch -> this engine -- classified rows
+// VALID/PARTIAL/INVALID and pushed `{row: <line number>, errors}` onto
+// StagingImport.errors. The field is named `row` but holds an integer, so the
+// rejected row's *data* was never persisted anywhere: an operator could read
+// what was wrong with a row but never see, correct or resubmit the row itself.
+// That is "closer to a well-organised log than to staging" (#794).
+describe('#813 quarantine of rejected rows', () => {
+  function quarantineDb() {
+    const importBatches = {
+      insertOne: vi.fn(async () => ({ insertedId: 'batch-813' })),
+    };
+    const stagingRecords = {
+      insertMany: vi.fn(async (docs) => ({ insertedCount: docs.length })),
+    };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'import_batches') return importBatches;
+        if (name === 'import_staging_records') return stagingRecords;
+        return { findOne: vi.fn().mockResolvedValue(null), insertOne: vi.fn(), insertMany: vi.fn() };
+      }),
+    };
+    return { db, importBatches, stagingRecords };
+  }
+
+  const REJECTED = [
+    {
+      rowNumber: 2,
+      row: { participantId: '12345678', sampleType: 'NOPE' },
+      errors: ['sampleType inválido'],
+    },
+    {
+      rowNumber: 5,
+      row: { participantId: '87654321', sampleType: '' },
+      errors: ['sampleType é obrigatório'],
+    },
+  ];
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('writes one import_batches document describing the quarantined batch', async () => {
+    const { db, importBatches } = quarantineDb();
+
+    const batchId = await batchValidationEngine.quarantineRejectedRows(db, {
+      jobId: 'job-813',
+      dataType: 'samples',
+      fileName: 'amostras.csv',
+      rejected: REJECTED,
+      counts: { total: 10, success: 8 },
+    });
+
+    expect(batchId).toBe('batch-813');
+    expect(importBatches.insertOne).toHaveBeenCalledTimes(1);
+    const doc = importBatches.insertOne.mock.calls[0][0];
+    expect(doc).toMatchObject({
+      status: 'QUARANTINED',
+      source: 'ASYNC_BATCH',
+      fileName: 'amostras.csv',
+      jobId: 'job-813',
+      counts: { total: 10, success: 8, errors: 2 },
+    });
+    // #799: import_batches is shared with the LGPD and FHIR importers, whose
+    // readers filter on `type`. A batch from this importer must be
+    // distinguishable, not silently listed as one of theirs.
+    expect(doc.type).toBe('ASYNC_BATCH_IMPORT');
+    expect(doc.type).not.toBe('LGPD_SAMPLE_CSV');
+  });
+
+  it('writes one staging record per rejected row, carrying the original row data', async () => {
+    const { db, stagingRecords } = quarantineDb();
+
+    await batchValidationEngine.quarantineRejectedRows(db, {
+      jobId: 'job-813',
+      dataType: 'samples',
+      fileName: 'amostras.csv',
+      rejected: REJECTED,
+      counts: { total: 10, success: 8 },
+    });
+
+    expect(stagingRecords.insertMany).toHaveBeenCalledTimes(1);
+    const docs = stagingRecords.insertMany.mock.calls[0][0];
+    expect(docs).toHaveLength(2);
+    expect(docs[0]).toMatchObject({
+      batchId: 'batch-813',
+      rowNumber: 2,
+      status: 'ERROR',
+      errors: ['sampleType inválido'],
+      // The whole point: the row itself, not just its line number.
+      row: { participantId: '12345678', sampleType: 'NOPE' },
+    });
+    expect(docs[1].rowNumber).toBe(5);
+    expect(docs[1].row).toEqual({ participantId: '87654321', sampleType: '' });
+  });
+
+  it('writes nothing when no row was rejected', async () => {
+    const { db, importBatches, stagingRecords } = quarantineDb();
+
+    const batchId = await batchValidationEngine.quarantineRejectedRows(db, {
+      jobId: 'job-813',
+      dataType: 'samples',
+      fileName: 'amostras.csv',
+      rejected: [],
+      counts: { total: 10, success: 10 },
+    });
+
+    expect(batchId).toBeNull();
+    expect(importBatches.insertOne).not.toHaveBeenCalled();
+    expect(stagingRecords.insertMany).not.toHaveBeenCalled();
+  });
+
+  // #807/#814: a patient row carries patientName/birthDate/email -- civil
+  // identifiers, which are encrypted at rest everywhere else (#566). Staging
+  // them here would widen a known plaintext-at-rest problem to the most
+  // sensitive of the import paths, which is exactly what #814 says to settle
+  // (via #807) before quarantining a patient path. Samples are pseudonymous
+  // (participantId), which is why #787 was able to quarantine them.
+  it('refuses to quarantine patient rows while #807 is open', async () => {
+    const { db, importBatches, stagingRecords } = quarantineDb();
+
+    const batchId = await batchValidationEngine.quarantineRejectedRows(db, {
+      jobId: 'job-813',
+      dataType: 'patients',
+      fileName: 'pacientes.csv',
+      rejected: [{ rowNumber: 2, row: { patientName: 'Maria', birthDate: '01/01/1990' }, errors: ['x'] }],
+      counts: { total: 3, success: 2 },
+    });
+
+    expect(batchId).toBeNull();
+    expect(importBatches.insertOne).not.toHaveBeenCalled();
+    expect(stagingRecords.insertMany).not.toHaveBeenCalled();
+  });
+
+  // Quarantine is a record-keeping step appended to an import that already
+  // ran. A failure to write it must not turn a partially-successful import
+  // into a failed one -- same posture as the LGPD path's own writer.
+  it('swallows a staging failure instead of failing the import', async () => {
+    const { db, importBatches } = quarantineDb();
+    importBatches.insertOne.mockRejectedValue(new Error('mongo down'));
+
+    await expect(
+      batchValidationEngine.quarantineRejectedRows(db, {
+        jobId: 'job-813',
+        dataType: 'samples',
+        fileName: 'amostras.csv',
+        rejected: REJECTED,
+        counts: { total: 10, success: 8 },
+      })
+    ).resolves.toBeNull();
   });
 });
