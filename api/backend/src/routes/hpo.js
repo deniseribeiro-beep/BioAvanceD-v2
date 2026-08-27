@@ -39,11 +39,21 @@ router.get('/search', async (req, res) => {
 // GET /api/hpo/:id
 router.get('/:id', async (req, res) => {
   const { id } = req.params;
-  const db = req.app.locals.db;
-  const col = db.collection(COLLECTION);
-  const term = await col.findOne({ hpoId: id });
-  if (!term) return res.status(404).json({ error: 'Not found' });
-  res.json(term);
+  // #834: this had no try/catch, so a rejected findOne -- Mongo unreachable, a
+  // driver timeout, a topology change -- was an unhandled promise rejection,
+  // and Node answers those by exiting the process. A brief database blip took
+  // the whole API down rather than failing this one endpoint. Found by the
+  // sweep #829 asked for; GET /search above has had a try/catch all along.
+  try {
+    const db = req.app.locals.db;
+    const col = db.collection(COLLECTION);
+    const term = await col.findOne({ hpoId: id });
+    if (!term) return res.status(404).json({ error: 'Not found' });
+    return res.json(term);
+  } catch (err) {
+    logger.error(`[HPO] Erro ao buscar termo "${id}": ${err.message}`);
+    return res.status(500).json({ error: 'Erro ao buscar termo HPO' });
+  }
 });
 
 module.exports = router;
