@@ -970,7 +970,39 @@ class ImportLGPDService {
     };
   }
 
-  async quarantineRejectedSampleRows(db, { fileName = null, rows = [], results, actor = {} } = {}) {
+  /**
+   * Normaliza as opcoes de importacao para gravacao no lote (#794 item 3).
+   *
+   * `groupFields` vem do caller e acaba num documento que um reenvio le de
+   * volta para montar uma query -- so escalares planos entram, para que nao
+   * seja possivel contrabandear um operador (`{$ne: null}`) para dentro do
+   * lote e ve-lo reaparecer num filtro depois.
+   */
+  sanitizeImportOptions(importOptions = {}) {
+    const groupFields = {};
+    const raw = importOptions?.groupFields;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const [key, value] of Object.entries(raw)) {
+        if (key.startsWith('$') || key.includes('.')) continue;
+        if (value === null) continue;
+        const type = typeof value;
+        if (type === 'string' || type === 'number' || type === 'boolean') {
+          groupFields[key] = value;
+        }
+      }
+    }
+
+    return {
+      startBoxId: importOptions?.startBoxId ? String(importOptions.startBoxId) : null,
+      autoIncrement: Boolean(importOptions?.autoIncrement),
+      groupFields,
+    };
+  }
+
+  async quarantineRejectedSampleRows(
+    db,
+    { fileName = null, rows = [], results, actor = {}, importOptions = {} } = {}
+  ) {
     const rejected = Array.isArray(results?.errors) ? results.errors : [];
     if (rejected.length === 0) return null;
 
@@ -987,6 +1019,16 @@ class ImportLGPDService {
           success: results.success,
           errors: rejected.length,
         },
+        // #794 item 3: the options the rejected rows were imported under.
+        // importSamples places each row with
+        // getNextAvailableStorageSlot(db, startBoxId, results.success) -- the
+        // running success count within this batch is the slot index -- and
+        // reads startBoxId/autoIncrement/groupFields from the caller. Without
+        // them persisted, a corrected row cannot be resubmitted through the
+        // same path that rejected it, because the placement intent no longer
+        // exists anywhere once the request ends. `counts.success` above is
+        // the matching cursor.
+        importOptions: this.sanitizeImportOptions(importOptions),
         createdBy: actor?.userID || actor?.userId || null,
         createdAt: now,
         updatedAt: now,
@@ -1447,6 +1489,7 @@ class ImportLGPDService {
       // and the file, while the half that did import was already canonically
       // persisted.
       const stagingBatchId = await this.quarantineRejectedSampleRows(db, {
+        importOptions: { startBoxId, autoIncrement, groupFields },
         fileName: file?.originalname || null,
         rows,
         results,
