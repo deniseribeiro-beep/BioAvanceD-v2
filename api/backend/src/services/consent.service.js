@@ -506,11 +506,48 @@ class ConsentService {
       const consentNotifications = { total: 0, notified: 0, failed: 0 };
       try {
         const patientsCollection = await getCollection(db, 'patients');
-        // Find all patients with PENDING_CONSENT and consentTemplateId matching this policy _id
-        const pendingPatients = await patientsCollection.find({
-          status: 'PENDING_CONSENT',
-          consentTemplateId: result.insertedId.toString()
-        }).toArray();
+
+        // #835: this used to filter on `result.insertedId` -- the id of the
+        // template inserted one line above -- so it could never match anyone.
+        // Patient.consentTemplateId is assigned at patient creation and is
+        // required (models/Patient.js:27), so a pending participant always
+        // points at a template that already existed. The two sets were
+        // disjoint by construction, and the sweep issued zero invitations on
+        // every publication. #810's hardening of this loop was correct and
+        // simply never had an iteration to run on.
+        //
+        // The cohort to invite is everyone still pending on an *earlier*
+        // version of this same term: the immediate predecessor, plus any other
+        // template sharing the version lineage, so someone enrolled on v1 who
+        // never answered is still invited when v3 publishes.
+        const lineageTemplateIds = new Set();
+        if (previousPolicyId) {
+          lineageTemplateIds.add(previousPolicyId);
+        }
+        // Guard: `find({ versionGroupId: undefined })` matches every document
+        // missing the field, which would sweep unrelated participants. Older
+        // templates predate versionGroupId, so this is reachable.
+        if (versionGroupId) {
+          const lineage = await templatesCollection
+            .find(
+              { versionGroupId, _id: { $ne: result.insertedId } },
+              { projection: { _id: 1 } }
+            )
+            .toArray();
+          for (const template of lineage) {
+            lineageTemplateIds.add(String(template._id));
+          }
+        }
+
+        // A brand-new term with no predecessor genuinely has no cohort --
+        // nobody can be pending on a term that did not exist. Skip explicitly
+        // rather than issuing a query that matches nothing by accident.
+        const pendingPatients = lineageTemplateIds.size === 0
+          ? []
+          : await patientsCollection.find({
+            status: 'PENDING_CONSENT',
+            consentTemplateId: { $in: [...lineageTemplateIds] }
+          }).toArray();
         const notificationService = require('./notification.service');
         const identityCollection = await getCollection(db, 'participantIdentities');
         consentNotifications.total = pendingPatients.length;
