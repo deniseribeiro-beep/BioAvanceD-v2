@@ -17,7 +17,8 @@ import {
   FileSearch, 
   Database,
   UserCog,
-  FileWarning
+  FileWarning,
+  Upload
 } from 'lucide-react';
 import './Sidebar.css';
 
@@ -87,6 +88,11 @@ export default function Sidebar() {
     { path: '/samples', icon: FlaskConical, label: t('navigation.samples') || 'Inventário de Amostras', roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/results', icon: FileText, label: t('navigation.results'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/facility-management', icon: Box, label: t('navigation.facilityManagement'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
+    // #808: the LGPD import's entry point. Same #659 reasoning as the
+    // quarantine entry below -- and without it the only import an operator
+    // can find is /import, which posts to the importer that discards
+    // rejected rows (#813).
+    { path: '/import/lgpd', icon: Upload, label: t('navigation.importLGPD', 'Importação LGPD'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     // #794 item 2 (RNF011 AC#4): without a nav entry the quarantine review
     // page is reachable only by typing the URL, which is the #659 defect and
     // would leave the rejected rows about as reachable as they were in Mongo.
