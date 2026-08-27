@@ -29,6 +29,19 @@ x-test-env: &test-env
   EMAIL_FROM: onboarding@resend.dev
   USER_ANON_SALT: vitest-user-anon-salt
   CONSENT_SECRET: vitest-consent-secret-key
+  # #829: required by NotificationService.getFrontendUrl(), which throws when
+  # it is empty -- and POST /e-consent/generate-link had no try/catch, so that
+  # throw exited the API process. It was set nowhere in this file or
+  # .env.test.example, so that endpoint had never worked on this stack.
+  #
+  # NOT localhost: sendConsentEmail always calls
+  # validateFrontendUrl({ remote: true }), which rejects any non-HTTPS or
+  # loopback host outright -- correctly, since the alternative is emailing a
+  # real participant a link to their own machine. So the test value has to be
+  # an HTTPS non-loopback placeholder; it is never resolved, because the specs
+  # that follow an emailed link strip it to the pathname and navigate relative
+  # to PLAYWRIGHT_BASE_URL.
+  FRONTEND_URL: https://e2e.bioavanced.test
   ALLOW_CLOUD_INTEGRATIONS: "false"
   ALLOW_EXTERNAL_TERMINOLOGY_SYNC: "false"
   ALLOW_EXTERNAL_HPO_LOOKUP: "false"

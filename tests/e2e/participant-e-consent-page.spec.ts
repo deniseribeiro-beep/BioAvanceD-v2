@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { MongoClient, Db } from 'mongodb';
 import { realLogin } from './helpers/realAuth';
+import { consentLinkPath, mintConsentToken } from './helpers/consentJwt';
 
 // #822: real-backend proof for EConsentPage (`/patient/e-consent/:token`), the
 // participant-facing page on the JWT token system -- the link
@@ -20,15 +21,21 @@ import { realLogin } from './helpers/realAuth';
 // entered by emailed URL only and are reachable from no in-app link. This is
 // the missing spec for one of them.
 //
-// The token here is minted by the real endpoint, not hand-signed, so the spec
-// exercises the actual production path an operator triggers.
+// The page tests mint the token directly rather than via the operator
+// endpoint -- see helpers/consentJwt.ts for why that is forced, not preferred.
 //
-// SCOPE: #820 (the submit-side 422 on every signature-less manifestation) is
-// now fixed, so the last test asserts the acceptance is recorded rather than
-// pinning the failure. Its proof here is still deferred on #829 like its two
-// siblings; the fix itself is proven natively (consent.service.unit 122/122,
-// 6 of them red-first) and by a direct signature-less POST against this stack
-// -- see #820's close comment.
+// Writing this spec turned up three issues. Two are fixed and load-bearing for
+// it; the third is why one test is fixme'd:
+//   - #829 (fixed) -- generate-link had no try/catch, so sendConsentEmail's
+//     throw exited the API process. Attempting these tests took the backend
+//     down for the whole suite rather than failing.
+//   - #820 (fixed) -- createPatientConsent 422'd every signature-less
+//     manifestation, which is exactly what this page sends. The acceptance
+//     test asserts the Consent is recorded; it previously pinned the 422.
+//   - #833 (open) -- no email can be sent on this stack at all, so the real
+//     POST /e-consent/generate-link cannot return 200 here. The four tests
+//     about the *page* mint the JWT directly (helpers/consentJwt.ts); the one
+//     test about the *operator endpoint* is fixme'd on #833.
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
 const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
@@ -58,25 +65,11 @@ async function seedParticipant(): Promise<{ participantId: string; email: string
   return { participantId, email };
 }
 
-/** The real production path: an operator generates and emails the link. */
-async function generateConsentLink(
-  request: import('@playwright/test').APIRequestContext,
-  participantId: string,
-  email: string
-): Promise<string> {
-  const response = await request.post(`${apiBaseURL}/api/e-consent/generate-link`, {
-    headers: { Authorization: `Bearer ${adminToken}` },
-    data: { participantId, email },
-  });
-
-  expect(response.status(), await response.text()).toBe(200);
-  const link = (await response.json())?.link;
-  expect(link).toBeTruthy();
-
-  // The link carries the frontend's own origin from FRONTEND_URL; keep only
-  // the path so it resolves against PLAYWRIGHT_BASE_URL.
-  return new URL(link).pathname;
-}
+// NOTE: the link is minted locally rather than via POST /e-consent/generate-link.
+// That endpoint emails the invitation, and no email can be sent on this stack
+// at all (#833) -- so it cannot return 200 here for reasons unrelated to the
+// page under test. The one test that does exercise it is test.fixme'd on #833.
+// See helpers/consentJwt.ts for the full reasoning.
 
 test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- real backend', () => {
   test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set -- run via npm run test:e2e:docker');
@@ -123,23 +116,11 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
     client = null;
   });
 
-  // BLOCKED ON #829 -- not a weakened assertion, an unrunnable fixture.
-  // This test mints its link through the real POST /api/e-consent/generate-link,
-  // which currently *crashes the API process*: the handler has no try/catch, so
-  // sendConsentEmail's throw is an unhandled rejection and Node exits. It throws
-  // every time on this stack because FRONTEND_URL is set nowhere in
-  // .env.test.example or compose.test.yml. Running this does not fail the test,
-  // it takes down the backend for every other spec in the run.
-  //
-  // Deliberately NOT worked around by hand-signing a JWT with CONSENT_SECRET:
-  // going through the operator's real path is the point of the spec. Remove the
-  // fixme when #829 lands.
-  test.fixme('a participant with no session opens the emailed link and sees the real term', async ({
+  test('a participant with no session opens the emailed link and sees the real term', async ({
     page,
-    request,
   }) => {
-    const { participantId, email } = await seedParticipant();
-    const linkPath = await generateConsentLink(request, participantId, email);
+    const { participantId } = await seedParticipant();
+    const linkPath = consentLinkPath(participantId);
 
     await page.goto(linkPath);
 
@@ -156,23 +137,11 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
     await expect(page.getByTestId('e-consent-error')).toHaveCount(0);
   });
 
-  // BLOCKED ON #829 -- not a weakened assertion, an unrunnable fixture.
-  // This test mints its link through the real POST /api/e-consent/generate-link,
-  // which currently *crashes the API process*: the handler has no try/catch, so
-  // sendConsentEmail's throw is an unhandled rejection and Node exits. It throws
-  // every time on this stack because FRONTEND_URL is set nowhere in
-  // .env.test.example or compose.test.yml. Running this does not fail the test,
-  // it takes down the backend for every other spec in the run.
-  //
-  // Deliberately NOT worked around by hand-signing a JWT with CONSENT_SECRET:
-  // going through the operator's real path is the point of the spec. Remove the
-  // fixme when #829 lands.
-  test.fixme('the page renders backend-resolved participant identity, not a hardcoded fallback', async ({
+  test('the page renders backend-resolved participant identity, not a hardcoded fallback', async ({
     page,
-    request,
   }) => {
-    const { participantId, email } = await seedParticipant();
-    const linkPath = await generateConsentLink(request, participantId, email);
+    const { participantId } = await seedParticipant();
+    const linkPath = consentLinkPath(participantId);
 
     await page.goto(linkPath);
 
@@ -229,22 +198,11 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
   // fix is what makes the request reach the backend at all -- before it, the
   // POST also returned index.html with a 200 and the page reported
   // success-shaped silence.
-  // BLOCKED ON #829 -- not a weakened assertion, an unrunnable fixture.
-  // This test mints its link through the real POST /api/e-consent/generate-link,
-  // which currently *crashes the API process*: the handler has no try/catch, so
-  // sendConsentEmail's throw is an unhandled rejection and Node exits. It throws
-  // every time on this stack because FRONTEND_URL is set nowhere in
-  // .env.test.example or compose.test.yml. Running this does not fail the test,
-  // it takes down the backend for every other spec in the run.
-  //
-  // Deliberately NOT worked around by hand-signing a JWT with CONSENT_SECRET:
-  // going through the operator's real path is the point of the spec. Remove the
-  // fixme when #829 lands.
-  test.fixme('a signature-less acceptance is recorded as a Consent (#820, fixed)', async ({
+  test('a signature-less acceptance is recorded as a Consent (#820, fixed)', async ({
     request,
   }) => {
-    const { participantId, email } = await seedParticipant();
-    const linkPath = await generateConsentLink(request, participantId, email);
+    const { participantId } = await seedParticipant();
+    const linkPath = consentLinkPath(participantId);
     const token = linkPath.split('/').pop() as string;
 
     const response = await request.post(`${apiBaseURL}/api/e-consent/update`, {
@@ -275,5 +233,31 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
     expect(consent?.signatureImageBase64).toBeNull();
     expect(consent?.signatureHash).toBeNull();
     expect(consent?.responses).toMatchObject({ 'research-822': true });
+  });
+
+  // BLOCKED ON #833 -- an environment gap, not a weakened assertion.
+  //
+  // This is the only test here that goes through the operator's real path.
+  // It cannot pass on this stack: sendConsentEmail is Resend-only against a
+  // deliberately-dummy RESEND_API_KEY, and the smtp-test (Mailpit) container
+  // beside it is reachable by no backend code path -- so the send fails with
+  // "API key is invalid" and the route correctly reports it.
+  //
+  // Kept rather than deleted because it is the marker for #833, and because
+  // it is what would catch a regression of #829: before that fix, this same
+  // request exited the API process instead of returning a status.
+  test.fixme('an operator can generate and email a consent link (#833)', async ({ request }) => {
+    const { participantId, email } = await seedParticipant();
+
+    const response = await request.post(`${apiBaseURL}/api/e-consent/generate-link`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      data: { participantId, email },
+    });
+
+    expect(response.status(), await response.text()).toBe(200);
+
+    const link = (await response.json())?.link;
+    expect(link).toBeTruthy();
+    expect(new URL(link).pathname).toMatch(/^\/patient\/e-consent\//);
   });
 });
