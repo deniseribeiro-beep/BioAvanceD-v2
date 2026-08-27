@@ -71,6 +71,16 @@ const consentPolicySchema = {
   additionalProperties: true
 };
 
+// #820: the four fields normalizeSignaturePayload owns. Listed once so the
+// normalizer's output cannot be silently merged alongside a caller's raw copy
+// of the same key.
+const SIGNATURE_FIELDS = [
+  'signatureName',
+  'signatureImageBase64',
+  'signatureMimeType',
+  'signatureHash',
+];
+
 const patientConsentSchema = {
   type: 'object',
   required: ['participantId', 'consentTemplateId', 'responses'],
@@ -130,12 +140,24 @@ class ConsentService {
       : 'image/png';
 
     if (!signatureImageBase64) {
-      return {
-        signatureName,
-        signatureImageBase64: '',
-        signatureMimeType,
-        signatureHash: null,
-      };
+      // #820: omit the keys rather than emptying them. They are optional in
+      // patientConsentSchema (absent from its `required` list) but declared
+      // `minLength: 1`, so a present-and-empty value is rejected -- which made
+      // a signature-less manifestation unreachable even though the schema says
+      // it is legal. That is the only production path the participant
+      // e-consent page takes (POST /api/e-consent/update sends no signature at
+      // all), so every acceptance through it 422'd.
+      //
+      // Optional is the intended reading, not a leniency call: dict-02
+      // P1X-0372 `signerDisplayName` is 0..1 Condicional, and RF010 AC#4's
+      // "signatário" is ELM-0107 `signerRole` (a role code), not a captured
+      // signature. PatientConsentModel.validate type-checks these only when
+      // truthy, and PatientConsentModel.create defaults all four to null --
+      // three layers already treat a signature-less consent as legal.
+      //
+      // signatureMimeType is omitted too: declaring 'image/png' for an image
+      // that does not exist records a fact that is not true.
+      return signatureName ? { signatureName } : {};
     }
 
     const maxSignatureLength = 6 * 1024 * 1024;
@@ -701,10 +723,17 @@ class ConsentService {
       }
 
       const normalizedSignature = this.normalizeSignaturePayload(patchedPayload);
-      const normalizedPayload = {
-        ...patchedPayload,
-        ...normalizedSignature,
-      };
+      // #820: normalizeSignaturePayload is the single source of truth for these
+      // four fields, so drop the caller's raw copies before merging its result.
+      // Spreading over them was enough while the normalizer always returned all
+      // four; now that it omits them for a signature-less consent, a caller who
+      // sent an explicit `signatureImageBase64: ''` would otherwise keep it and
+      // hit the same minLength rejection the omission exists to avoid.
+      const normalizedPayload = { ...patchedPayload };
+      for (const field of SIGNATURE_FIELDS) {
+        delete normalizedPayload[field];
+      }
+      Object.assign(normalizedPayload, normalizedSignature);
 
       this.validatePatientConsentPayload(normalizedPayload);
 

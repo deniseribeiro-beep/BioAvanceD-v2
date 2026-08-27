@@ -71,16 +71,51 @@ describe('ConsentService.parseVersionNumber', () => {
 });
 
 describe('ConsentService.normalizeSignaturePayload', () => {
-  it('returns empty signature when no image provided', () => {
+  // #820: these two used to assert the defect -- signatureImageBase64: '',
+  // signatureHash: null and a default mime type were emitted for a consent
+  // with no signature, and patientConsentSchema declares those optional
+  // properties `minLength: 1`, so present-and-empty was rejected. The keys are
+  // now omitted instead. Written before the bug was found, so they carried no
+  // issue marker while asserting the broken behaviour verbatim.
+  it('omits the signature keys entirely when no image is provided, keeping the name', () => {
     const result = consentService.normalizeSignaturePayload({ signatureName: 'Test User' });
-    expect(result.signatureName).toBe('Test User');
-    expect(result.signatureImageBase64).toBe('');
-    expect(result.signatureHash).toBeNull();
+    expect(result).toEqual({ signatureName: 'Test User' });
+    expect('signatureImageBase64' in result).toBe(false);
+    expect('signatureHash' in result).toBe(false);
+    expect('signatureMimeType' in result).toBe(false);
   });
 
-  it('defaults signatureMimeType to image/png', () => {
-    const result = consentService.normalizeSignaturePayload({});
+  it('returns a completely empty object when there is no signature and no name', () => {
+    expect(consentService.normalizeSignaturePayload({})).toEqual({});
+  });
+
+  it('still defaults signatureMimeType to image/png when an image IS provided', () => {
+    // The default belongs to the signature-present branch; declaring a mime
+    // type for an image that does not exist records a fact that is not true.
+    const result = consentService.normalizeSignaturePayload({
+      signatureImageBase64: Buffer.from('img').toString('base64'),
+    });
     expect(result.signatureMimeType).toBe('image/png');
+  });
+
+  it('a signature-less payload passes schema validation -- the whole point of #820', () => {
+    const normalized = consentService.normalizeSignaturePayload({});
+    expect(() =>
+      consentService.validatePatientConsentPayload({
+        participantId: '12345678',
+        consentTemplateId: '000000000000000000000000',
+        responses: { analytics: true },
+        ...normalized,
+      })
+    ).not.toThrow();
+  });
+
+  it('an explicitly-empty signatureImageBase64 is dropped, not preserved as empty', () => {
+    const result = consentService.normalizeSignaturePayload({
+      signatureImageBase64: '',
+      signatureName: '   ',
+    });
+    expect(result).toEqual({});
   });
 
   it('computes sha256 hash when image provided', () => {
@@ -1247,13 +1282,14 @@ describe('ConsentService.createPatientConsent', () => {
     active: true,
     permissions: [{ key: 'analytics', required: false }],
   };
-  // signatureImageBase64/signatureName are optional in the schema, but
-  // normalizeSignaturePayload always sets signatureHash: null and
-  // signatureName/signatureImageBase64: '' when no image is supplied, and the
-  // ajv schema enforces minLength:1 / type:string on those *optional*
-  // properties whenever they are present. So a consent with no signature at
-  // all currently fails schema validation unconditionally - see finding in
-  // report. Work around it here by always supplying a valid signature image.
+  // #820 (fixed): this fixture used to exist as a *workaround* -- a consent
+  // with no signature failed schema validation unconditionally, because
+  // normalizeSignaturePayload emptied rather than omitted the four signature
+  // fields and the ajv schema declares them minLength:1. The signature-less
+  // path is now covered directly by the 'records a consent with no signature
+  // at all' test below; this fixture stays only to exercise the
+  // signature-*bearing* branch, which is a real path too (the operator-side
+  // POST /api/e-consent/consents carries one).
   const validSignature = { signatureImageBase64: Buffer.from('sig').toString('base64'), signatureName: 'Jane Doe' };
 
   afterEach(() => {
@@ -1279,6 +1315,80 @@ describe('ConsentService.createPatientConsent', () => {
       { participantId: '12345678', status: 'ACTIVE' },
       expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED' }) })
     );
+  });
+
+  // #820: the path production actually takes. POST /api/e-consent/update --
+  // the submit handler behind the participant e-consent page -- calls
+  // createPatientConsent with no signature fields at all
+  // (routes/eConsent.js), and every such acceptance used to 422 before
+  // reaching any of the logic below. Covered nowhere until this test: every
+  // other case here spreads validSignature.
+  it('records a consent with no signature at all -- the participant page path', async () => {
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
+    const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
+
+    const result = await consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
+      responses: { analytics: true },
+      ipAddress: '203.0.113.7',
+      userAgent: 'Mozilla/5.0',
+    });
+
+    expect(result.status).toBe('ACTIVE');
+    expect(result.consentId).toBeTruthy();
+    // PatientConsentModel.create's null defaults are what gets persisted --
+    // the record is explicit that there was no signature, rather than carrying
+    // an empty string that reads like a blank one.
+    expect(result.signatureName).toBeNull();
+    expect(result.signatureImageBase64).toBeNull();
+    expect(result.signatureHash).toBeNull();
+    expect(result.signatureMimeType).toBeNull();
+    // Origin evidence is still captured (RF010 AC#4's "origem").
+    expect(result.ipAddress).toBe('203.0.113.7');
+    expect(result.userAgent).toBe('Mozilla/5.0');
+  });
+
+  it('drops a caller-supplied empty signatureImageBase64 instead of 422ing on it', async () => {
+    // Guards the merge side of the fix: normalizeSignaturePayload omitting the
+    // key is not enough on its own, because createPatientConsent spreads the
+    // caller's raw payload underneath it.
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
+    const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
+
+    const result = await consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
+      responses: { analytics: true },
+      signatureImageBase64: '',
+      signatureName: '',
+    });
+
+    expect(result.status).toBe('ACTIVE');
+    expect(result.signatureImageBase64).toBeNull();
+  });
+
+  it('still records the signature when one IS supplied', async () => {
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
+    const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
+
+    const result = await consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
+      responses: { analytics: true },
+      ...validSignature,
+    });
+
+    expect(result.signatureName).toBe('Jane Doe');
+    expect(result.signatureImageBase64).toBe(validSignature.signatureImageBase64);
+    expect(result.signatureHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.signatureMimeType).toBe('image/png');
   });
 
   it('rejects when the patient does not exist', async () => {
