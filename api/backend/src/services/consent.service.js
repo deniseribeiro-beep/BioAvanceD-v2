@@ -481,6 +481,7 @@ class ConsentService {
 
       const result = await templatesCollection.insertOne(document);
       // --- Notify all patients with PENDING_CONSENT for this TCLE ---
+      const consentNotifications = { total: 0, notified: 0, failed: 0 };
       try {
         const patientsCollection = await getCollection(db, 'patients');
         // Find all patients with PENDING_CONSENT and consentTemplateId matching this policy _id
@@ -490,39 +491,82 @@ class ConsentService {
         }).toArray();
         const notificationService = require('./notification.service');
         const identityCollection = await getCollection(db, 'participantIdentities');
+        consentNotifications.total = pendingPatients.length;
         for (const patient of pendingPatients) {
-          // RF005/RNF007 (#561/#564/#574): patientName resolved via
-          // ParticipantIdentity instead of read directly off the Patient
-          // document. decryptIdentity falls back to the ciphertext sibling
-          // once the plaintext field is dropped (#566).
-          const rawIdentity = await identityCollection.findOne({ participantId: patient.participantId });
-          const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
-          const patientWithIdentity = identity ? { ...patient, patientName: identity.patientName } : patient;
+          // #810: this try is per patient, deliberately. It used to wrap the
+          // whole loop, so the first participant who threw ended the entire
+          // sweep -- everyone after them got no invitation and no
+          // consentToken, while the publication still reported success. The
+          // loop body has several reachable throws: enqueueConsentNotification
+          // (queue unavailable, or sendConsentEmail's own
+          // CONSENT_RECIPIENT_REQUIRED for a participant with no e-mail, which
+          // in a bulk import cohort is not exotic), the identity lookup,
+          // decryptIdentity on a malformed record, and the writes themselves.
+          try {
+            // RF005/RNF007 (#561/#564/#574): patientName resolved via
+            // ParticipantIdentity instead of read directly off the Patient
+            // document. decryptIdentity falls back to the ciphertext sibling
+            // once the plaintext field is dropped (#566).
+            const rawIdentity = await identityCollection.findOne({ participantId: patient.participantId });
+            const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
+            const patientWithIdentity = identity ? { ...patient, patientName: identity.patientName } : patient;
 
-          // Generate new consent token for each patient
-          const consentMetadata = notificationService.buildConsentMetadata();
-          const consentLink = notificationService.buildConsentLink(patientWithIdentity, consentMetadata.token);
-          await notificationService.enqueueConsentNotification(patientWithIdentity, consentLink);
-          await patientsCollection.updateOne(
-            { _id: patient._id },
-            {
-              $set: {
-                consentToken: consentMetadata.token,
-                consentTokenCreatedAt: consentMetadata.createdAt,
-                consentTokenExpiresAt: consentMetadata.expiresAt,
-                consentNotifiedAt: new Date(),
-                updatedAt: new Date()
+            // Generate new consent token for each patient
+            const consentMetadata = notificationService.buildConsentMetadata();
+            const consentLink = notificationService.buildConsentLink(patientWithIdentity, consentMetadata.token);
+
+            // #810: persist the token *before* attempting delivery. The link
+            // being emailed is only usable if the database already holds the
+            // token it carries, so this ordering makes the failure mode
+            // "invitation not sent" rather than "invitation sent, token
+            // missing" -- the latter is unrecoverable for the participant,
+            // who holds a link that can never validate.
+            await patientsCollection.updateOne(
+              { _id: patient._id },
+              {
+                $set: {
+                  consentToken: consentMetadata.token,
+                  consentTokenCreatedAt: consentMetadata.createdAt,
+                  consentTokenExpiresAt: consentMetadata.expiresAt,
+                  updatedAt: new Date()
+                }
               }
-            }
+            );
+
+            await notificationService.enqueueConsentNotification(patientWithIdentity, consentLink);
+
+            // Only now is the participant actually notified.
+            await patientsCollection.updateOne(
+              { _id: patient._id },
+              { $set: { consentNotifiedAt: new Date(), updatedAt: new Date() } }
+            );
+            consentNotifications.notified += 1;
+          } catch (patientError) {
+            consentNotifications.failed += 1;
+            logger.error(
+              `Falha ao notificar o participante ${patient.participantId} sobre o novo TCLE:`,
+              patientError.message
+            );
+          }
+        }
+
+        if (consentNotifications.failed > 0) {
+          // #810: a partial sweep used to be silent. Whoever published the
+          // term needs to know it did not reach everyone.
+          logger.error(
+            `Notificacao do novo TCLE parcial: ${consentNotifications.notified}/${consentNotifications.total} participantes notificados, ${consentNotifications.failed} falha(s).`
           );
         }
       } catch (notifyError) {
+        // Still needed for a failure of the sweep's own setup (resolving the
+        // collections, the find itself) -- not for a single patient.
         logger.error('Erro ao notificar pacientes do novo TCLE:', notifyError.message);
       }
       // --- End notification logic ---
       return {
         _id: result.insertedId,
-        ...document
+        ...document,
+        consentNotifications
       };
     } catch (error) {
       logger.error('Erro ao criar política de consentimento:', error.message);

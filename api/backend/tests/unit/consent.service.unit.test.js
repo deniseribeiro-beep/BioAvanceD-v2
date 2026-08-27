@@ -747,6 +747,147 @@ describe('ConsentService.createPolicy', () => {
     vi.restoreAllMocks();
   });
 
+
+  // #810: the try/catch used to wrap the whole `for`, so one patient that
+  // threw ended the entire sweep -- every patient after them got no
+  // invitation and, worse, no consentToken persisted, leaving nothing for a
+  // later resend to validate against. The publication still reported success.
+  describe('#810 per-patient isolation of the notification sweep', () => {
+    const THREE_PENDING = () => [
+      { _id: new ObjectId(), participantId: '10203041', status: 'PENDING_CONSENT' },
+      { _id: new ObjectId(), participantId: '10203042', status: 'PENDING_CONSENT' },
+      { _id: new ObjectId(), participantId: '10203043', status: 'PENDING_CONSENT' },
+    ];
+
+    const POLICY_PAYLOAD = {
+      title: 'Policy',
+      htmlContent: '<p>content</p>',
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validTo: '2026-12-31T23:59:59.000Z',
+      granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
+    };
+
+    function setup(pending) {
+      const templates = makeCollection({
+        find: vi.fn(() => makeCursor([])),
+        insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+      });
+      const patients = makeCollection({
+        find: vi.fn(() => makeCursor(pending)),
+        updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
+      });
+      const participantIdentities = makeCollection({ findOne: vi.fn(async () => null) });
+      const db = makeDb({ consent_templates: templates, patients, participantIdentities });
+
+      vi.spyOn(notificationService, 'buildConsentMetadata').mockImplementation(() => ({
+        token: 'tok-123',
+        createdAt: new Date(),
+        expiresAt: new Date(),
+      }));
+      vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://example.com/consent/tok-123');
+
+      return { db, patients, templates };
+    }
+
+    /** participantIds the sweep persisted a consentToken for. */
+    function tokenedParticipants(patients, pending) {
+      return patients.updateOne.mock.calls
+        .filter(([, update]) => update?.$set?.consentToken !== undefined)
+        .map(([filter]) => pending.find((p) => String(p._id) === String(filter._id))?.participantId);
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('keeps notifying the remaining patients after one of them throws', async () => {
+      const pending = THREE_PENDING();
+      const { db } = setup(pending);
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockImplementation(async (patient) => {
+        // CONSENT_RECIPIENT_REQUIRED is the realistic case: sendConsentEmail
+        // already throws it for a participant with no e-mail, which in a bulk
+        // import cohort is not exotic.
+        if (patient.participantId === '10203041') throw new Error('CONSENT_RECIPIENT_REQUIRED');
+      });
+
+      await consentService.createPolicy(db, POLICY_PAYLOAD);
+
+      const notified = notificationService.enqueueConsentNotification.mock.calls.map(
+        ([patient]) => patient.participantId
+      );
+      expect(notified).toEqual(['10203041', '10203042', '10203043']);
+    });
+
+    it('persists a consentToken for the patient whose delivery failed, so a resend can validate it', async () => {
+      const pending = THREE_PENDING();
+      const { db, patients } = setup(pending);
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockImplementation(async (patient) => {
+        if (patient.participantId === '10203041') throw new Error('CONSENT_RECIPIENT_REQUIRED');
+      });
+
+      await consentService.createPolicy(db, POLICY_PAYLOAD);
+
+      expect(tokenedParticipants(patients, pending)).toEqual(['10203041', '10203042', '10203043']);
+    });
+
+    it('does not mark a patient as notified when their delivery threw', async () => {
+      const pending = THREE_PENDING();
+      const { db, patients } = setup(pending);
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockImplementation(async (patient) => {
+        if (patient.participantId === '10203041') throw new Error('CONSENT_RECIPIENT_REQUIRED');
+      });
+
+      await consentService.createPolicy(db, POLICY_PAYLOAD);
+
+      const notifiedIds = patients.updateOne.mock.calls
+        .filter(([, update]) => update?.$set?.consentNotifiedAt !== undefined)
+        .map(([filter]) => pending.find((p) => String(p._id) === String(filter._id))?.participantId);
+      expect(notifiedIds).toEqual(['10203042', '10203043']);
+    });
+
+    it('survives an identity lookup that throws, which is the other reachable failure in the loop body', async () => {
+      const pending = THREE_PENDING();
+      const { db } = setup(pending);
+      const identities = await db.collection('participantIdentities');
+      identities.findOne = vi.fn(async ({ participantId }) => {
+        if (participantId === '10203041') throw new Error('decrypt failed');
+        return null;
+      });
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      await consentService.createPolicy(db, POLICY_PAYLOAD);
+
+      const notified = notificationService.enqueueConsentNotification.mock.calls.map(
+        ([patient]) => patient.participantId
+      );
+      expect(notified).toEqual(['10203042', '10203043']);
+    });
+
+    // The publication reported success with no signal that the sweep stopped
+    // a third of the way in. A count makes a partial sweep visible.
+    it('reports how many invitations were sent and how many failed', async () => {
+      const pending = THREE_PENDING();
+      const { db } = setup(pending);
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockImplementation(async (patient) => {
+        if (patient.participantId === '10203041') throw new Error('CONSENT_RECIPIENT_REQUIRED');
+      });
+
+      const result = await consentService.createPolicy(db, POLICY_PAYLOAD);
+
+      expect(result.consentNotifications).toEqual({ total: 3, notified: 2, failed: 1 });
+    });
+
+    it('reports a clean sweep when every patient succeeds', async () => {
+      const pending = THREE_PENDING();
+      const { db } = setup(pending);
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      const result = await consentService.createPolicy(db, POLICY_PAYLOAD);
+
+      expect(result.consentNotifications).toEqual({ total: 3, notified: 3, failed: 0 });
+    });
+  });
+
   it('rejects when validTo is earlier than validFrom', async () => {
     const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
     const db = makeDb({ consent_templates: templates });
