@@ -1,77 +1,84 @@
 # HANDOFF
 
 **⚠ INTERIM SNAPSHOT — this session is still running.** Written after
-iteration 3 of a self-picked 5-item queue. **3 of 5 resolved so far, 2
-remain.** This is NOT the definitive rotation for the sitting; if you are
-reading it cold, the sitting ended unexpectedly mid-queue.
+iteration 4 of a self-picked 5-item queue. **4 of 5 worked, 1 remains
+(#722).** This is NOT the definitive rotation; if you are reading it
+cold, the sitting ended unexpectedly before #722.
 
 ## The queue
 
 Dennis asked for the next 5 issues and left the pick to me, then said
 **"Docker is on"**. Theme: finish the consent-invitation path, make the
-LGPD import usable from the UI, and spend the (expensive) cold Docker
-sequence on the two items only a live stack can settle.
+LGPD import usable from the UI, and spend the cold Docker sequence on
+the item only a live stack can settle.
 
 | # | Issue | Route | State |
 |---|---|---|---|
 | 1 | **#805** consent link emails `/patients/undefined/consent` | fix-bugs | **half fixed** `2a374ce1` / merged `2f6bcbd3`; **OPEN**, frontend half is #809 |
 | 2 | **#796** `persistConsentDeliveryFailure` no-op | fix-bugs | **closed** `1886a3c8` / merged `10f3710f` |
 | 3 | **#808** LGPD import has no frontend caller | build-loop | **closed** `f5d8bdd1` / merged `c823fa45` |
-| 4 | **#794 item 3** correct-and-resubmit | build-loop | not started |
-| 5 | **#722** RF029 tests depend on the bootstrap chain | test-loop | not started |
+| 4 | **#794 item 3** correct-and-resubmit | build-loop | **split**; prerequisite `cfdac0bc` / merged `579775aa`; **OPEN**, extraction is #817 |
+| 5 | **#722** RF029 tests depend on the bootstrap chain | test-loop | **not started** — needs the cold Docker sequence |
 
 #802 was dropped from an earlier draft of the queue in favour of #796.
 Still open and unworked.
 
-## The theme: issue bodies are wrong about their *premises*, not just their details
+## The theme: bodies are wrong about their *premises*
 
-All three iterations turned on a false premise that pointed at the
+All four iterations turned on a false premise that pointed at the
 **wrong fix**, not merely a mis-scoped one:
 
 - **#805's "Suggested fix" would have shipped a broken link** —
-  `/patient/e-consent/${token}` `jwt.verify`s, and every caller passes a
+  `/patient/e-consent/${token}` `jwt.verify`s; every caller passes a
   random hex from a different token system. → pack **#469**.
 - **#796's "docs say nothing" was wrong** — RF015 AC#3 mandates exactly
   what the dead function pretended to do. The earlier check grepped the
-  *field names*; the requirement is Portuguese prose sharing no token
-  with the code. → pack **#470**.
+  *field names*; the requirement is Portuguese prose. → pack **#470**.
 - **#808's premises had both moved** — `importLGPDService` was no longer
-  dead (#794 item 2 uses it), and its "option 3: delete as cruft" was
-  actively wrong (it is the client for the *only* compliant importer).
+  dead, and its "delete as cruft" option was actively wrong.
+- **#794 item 3 was not one iteration** — see below.
 
-**Operating rule, now proven three times: a "docs are silent" or "this
-is dead" conclusion in this repo needs re-deriving from scratch, and the
-docs search must be concept-level and in Portuguese.** The docs are
-Portuguese, the code is English; a requirement and its implementation
-routinely share no token.
+**Operating rule, now four for four: a "docs are silent" or "this is
+dead" or "the fix is X" conclusion in this repo needs re-deriving from
+scratch, and the docs search must be concept-level and in Portuguese.**
 
-## What shipped
+## Iteration 4 — why #794 item 3 split
 
-**#805 (open).** `buildConsentLink` reads `participantId`, encodes the
-id segment, throws rather than emitting `undefined`. Six callers, not
-the four the body claimed; three link builders, not two. Settled by the
-**consuming contract** (`consent-tokens/{validate,accept}` resolve by
-`{ participantId }`), not by docs. Still open: the link lands on
-`App.tsx`'s `/patients/:id/consent`, which points at `EConsentPage` — an
-alias import of the participant JWT page — behind `ProtectedRoute`.
-**#809** has the two-token-system write-up; read it before touching
-consent.
+Correct-and-resubmit means re-running a corrected row through the path
+that rejected it. Anything else is a second validator, and **this repo
+produced exactly that failure this same sitting** (#805/#809: two
+consent-link builders, bulk paths on the broken one). On the import path
+that drift is worse because it is silent — a row the import would reject
+gets accepted on resubmit, the "correção silenciosa" AC#4 forbids.
 
-**#796 (closed).** Deleted the no-op, which was broken twice (the id
-chain early-returned *and* its `$or` query would have matched nothing).
-Failure recording moved to `sendEmail`'s compliance log per RF015 AC#3,
-covering every notification type. Closed a real gap it had hidden:
-`persistComplianceLog` ran only on success, so failures were recorded
-nowhere.
+Sharing the path means extracting the `for` loop at
+`import-lgpd.service.js:1078-1445` — **~370 lines** with validation, a
+participant lookup, duplicate checks, drug resolution, storage
+placement, `AllocateSampleUseCase` (occupancy grid, StorageAssignment,
+audit, Neo4j lineage) and `SampleGraphValidator`. Filed as **#817**.
 
-**#808 (closed).** `/import/lgpd` — type selection, template download,
-upload, result — plus a Sidebar entry (without it, #659's defect). The
-load-bearing piece: `stagingBatchId` has come back since #787, #794 item
-2 built the page that reads a batch, and **nothing connected them**. A
-partial import now renders a button straight to
-`/import/quarantine?batchId=<id>`. The UI states two real asymmetries
-rather than hiding them (patient imports don't quarantine, #814; no CSV
-patient template exists, #815).
+**The blocker that made a prerequisite necessary:**
+
+```js
+getNextAvailableStorageSlot(db, startBoxId, results.success)
+```
+
+The **running success count within the batch** is the storage slot
+index, and `startBoxId`/`autoIncrement`/`groupFields` came from the
+request. The batch document persisted **none** of it — so the placement
+intent ceased to exist when the request ended, and no resubmit could
+have reproduced it at any level of effort.
+
+**Landed:** `quarantineRejectedSampleRows` now records a normalized
+`importOptions` on the batch (`counts.success` is the matching cursor),
+and `importSamples` passes what it ran under. `sanitizeImportOptions`
+admits only plain scalars into `groupFields`.
+
+**Remaining for item 3:** #817 (extraction) → the resubmit endpoint,
+which needs **one design call** — what storage slot a resubmitted row
+takes, given its original batch position was never allocated (reuse the
+original index, next free slot now, or operator chooses) → the editing
+UI + a committed e2e spec.
 
 ## Filed this sitting
 
@@ -80,67 +87,71 @@ frontend — #805 depends on it), #810 (template publication aborts its
 whole notification sweep on the first patient that throws), #811 (RF015
 AC#3's remaining legs), #812 (`notification_compliance_logs` keeps
 participant emails forever and **no retention policy can be created for
-it** — `ALLOWED_ENTITY_TYPES` is `AuditEvent`/`Log` only, #667), **#813**
-(*the reachable importer has no quarantine* — `/import` posts to the
-async importer, which discards rejected rows; RNF011 AC#4 / RF029 AC#6),
-#814 (LGPD patient paths don't quarantine either; **do #807 first**, it
-would widen the plaintext problem), #815 (`downloadTemplate` can build a
-URL with no route behind it), #816 (frontend route authorization **fails
-open** — `canRoleAccessRoute` ends in `return true`).
+it** — #667), **#813** (*the reachable importer has no quarantine* —
+`/import` posts to the async importer, which discards rejected rows),
+#814 (LGPD patient paths don't quarantine either; **do #807 first**),
+#815 (`downloadTemplate` builds a URL with no route behind it), #816
+(frontend route authorization **fails open**), **#817** (the extraction),
+#818 (`groupFields` unvalidated from the request body; safe today only
+because every consumer remembers to `String()` it — the #802 shape).
 
 **Pack:** #468 (a mistyped filename in a targeted `vitest run` is
 silently ignored — **check the reported `Test Files` count against the
-number you named**; plus: don't pass `--reporter` in this repo, the two
-npm roots disagree and the frontend's 4.1.9 *crashes* on
-`--reporter=basic`), #469, #470, #471 (`git grep` over `grep -r`).
-Counter-case on #463: the routing gate blocking my first
-`AskUserQuestion` is *why* RF015 got found. Data point on #410.
+number you named**; also: don't pass `--reporter` here, the frontend's
+vitest 4.1.9 *crashes* on `--reporter=basic` while the backend's 4.1.10
+accepts it), #469, #470, #471 (`git grep` over `grep -r`). Comments on
+#463 (the routing gate is *why* RF015 got found — narrow its fix on what
+the question is about, not when it is asked), #414 (the per-slice
+overlay re-read costs ~11k chars/iteration; I deliberately skipped it
+for iteration 4 and said so), #410.
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, **in sync with origin**
-  (`c823fa45`). No open PR; `main` untouched and still 99 behind.
-- All three branches this sitting deleted **local and remote**, no
-  prompt any time.
+  (`579775aa` + this rotation). No open PR; `main` untouched, 99 behind.
+- All four branches this sitting deleted **local and remote**, no prompt
+  any time.
 - Untracked and deliberately untouched: `.claude/skills/` and
   `api/backend/storage/assays/`. **Never `git add -A`.**
 - Pre-existing branches unchanged: `test/787-lgpd-import-staging`
-  (merged; safe to delete after checking per-commit authorship,
-  precedent #332), `fix/599-*` (both merged), `test/377-docs-on-main`
-  and `test/human-showcase-video` (not merged), plus the two stale
-  remotes left alone deliberately.
+  (merged; delete only after checking per-commit authorship, precedent
+  #332), `fix/599-*` (both merged), `test/377-docs-on-main` and
+  `test/human-showcase-video` (not merged), plus the two stale remotes
+  left alone deliberately.
 - **#752** red is unchanged and pre-existing; not re-checked.
 
 ## Docker
 
-**Engine is UP (28.5.1) and authorised — but nothing has been started.**
+**Engine is UP (28.5.1) and authorised. Nothing has been started yet.**
 
 - **Services: none running, none stopped.** `docker ps -a` returns zero
   containers.
 - **Bootstrap: NONE.** The four named volumes
-  (`bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data`) are still
+  (`bioavanced-test_{mongodb,neo4j,influxdb,redis}-test-data`) are
   absent — `docker volume ls` shows no `*test*` volumes at all.
-- A gate still needs the **full cold sequence**: the 12-service recipe
-  with `--build`, then `admin-bootstrap-test`, then the entire
-  17-service reference-data chain. The chain is not optional, and
-  **#722 is specifically about what happens when it is skipped.**
-- **Deliberate sequencing:** the rebuild is held until after the backend
-  merges land, because `backend-app-test` is build-not-mount. It was
-  four merges stale at the start of this sitting and is now **seven**.
-  Rebuild once, late, then run items 4 and 5's gates against it.
-- **One deferred proof is now outstanding:** #808's page has unit tests
-  and a throwaway browser smoke check (per the overlay's pure-frontend
-  bar) but **no committed e2e spec**. That belongs with #794 item 3,
-  which exercises the same surface — see below.
+- **#722 is next and it is the Docker item.** It needs the **full cold
+  sequence**: the 12-service recipe with `--build`, then
+  `admin-bootstrap-test`, then the entire 17-service reference-data
+  chain — because #722 is *specifically about* those two RF029 tests
+  passing or failing depending on whether that chain ever ran.
+- `backend-app-test` is build-not-mount and now **eight merges stale**.
+  Rebuild before any e2e run or a stale image serves old code silently.
+
+**Two deferred proofs outstanding, both to be discharged at that gate:**
+
+1. **#808's page has no committed e2e spec** — unit tests plus a
+   throwaway browser check only, per the overlay's pure-frontend bar.
+2. The `importOptions` change (`579775aa`) touches the import path that
+   #817's extraction will refactor; a real sample import through Docker
+   would confirm nothing regressed.
 
 ## Recommended next steps
 
-**Continue the queue — item 4 (#794 item 3, correct-and-resubmit).** Its
-dependency is discharged: #792 retains the source file, and #808 now
-gives the operator a way in. Note it needs a backend capability that
-does not exist yet (transitioning a staging record out of `ERROR`), so
-per the overlay's **#466** rule it takes **both** proof bars — backend
-*and* frontend — not a choice between them. Its e2e spec should also
-cover #808's page, discharging the deferred proof above.
+**Finish the queue — #722**, behind the cold Docker sequence above. Its
+three options (seed a fixture pair, add the bootstrap chain to the
+documented recipe, or skip/document the dependency) are best chosen
+*after* running the chain once and seeing whether the two RF029 tests go
+green — which is the evidence nobody has gathered yet.
 
-Then **#722** behind the cold Docker sequence.
+After the queue: **#805's frontend half (#809)** is the highest-value
+open item, then **#807 before #814**, then **#817**.
