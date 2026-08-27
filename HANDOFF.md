@@ -1,7 +1,7 @@
 # HANDOFF
 
 **INTERIM — the session is still running.** Written 2026-08-27, after
-**queue item 1 of 5**. Dennis asked for the next five issues, left the
+**queue item 2 of 5**. Dennis asked for the next five issues, left the
 pick to me, and authorised Docker. This is a mid-run snapshot, not the
 definitive rotation; do not read it as "the session is done."
 
@@ -10,7 +10,7 @@ definitive rotation; do not read it as "the session is done."
 | # | Issue | Route | State |
 |---|---|---|---|
 | 1 | **#809** bulk consent-token page never built | build-loop | **CLOSED** `58c34236` / merged `76e893f9` — also cascaded **#805 CLOSED** |
-| 2 | **#810** publish sweep aborts on first throw | fix-bugs | not started |
+| 2 | **#810** publish sweep aborts on first throw | fix-bugs | **CLOSED** `b8ab77cb` / merged `df373af2` |
 | 3 | **#816** `canRoleAccessRoute` fails open | fix-bugs | not started |
 | 4 | **#815** `downloadTemplate` builds a dead URL | fix-bugs | not started |
 | 5 | **#813** async importer has no quarantine | build-loop | not started (largest; deliberately last) |
@@ -30,7 +30,26 @@ That would have shipped a broken link — that route `jwt.verify`s, and
 every caller passes random hex from the other token system. The
 query-string shape was right all along; only the page was missing.
 
-## Four issues filed while verifying #809's premises
+## Item 2: #810 — one patient's failure no longer silences the sweep
+
+The `try` now wraps the loop body. The token is persisted **before**
+delivery is attempted, so the failure mode is "invitation not sent"
+rather than "invitation sent, token missing" — a participant holding a
+link the database can't validate is unrecoverable. `createPolicy`
+returns `consentNotifications: {total, notified, failed}`.
+
+**But tracing who reaches that sweep produced #824, which is bigger than
+#810 was.** The sweep lives only in `createPolicy`
+(`POST /e-consent/consent-policies`), whose entire frontend client is
+**commented out** in `api.ts:794-799`. The operator UI's TCLE builder
+posts to `createTemplate` instead — and `createTemplate` has **no
+notification logic at all**. So publishing a term through the UI issues
+zero consent invitations and mints no `consentToken` for anyone. The
+fixed code is still live (the route is registered; `PUT
+/consent-policies/:id` delegates into it), just not UI-reachable — the
+#813/#808 shape one domain over.
+
+## Five issues filed this sitting
 
 The prior sitting's lesson (bodies are wrong about their *premises*)
 held again, and this time the false premise was in the **handoff**, not
@@ -59,6 +78,9 @@ the issue:
   to the shared `api` client without adding the route to
   `TOKEN_OPTIONAL_ROUTES` reproduces the auth wall, because the request
   interceptor cancels session-less requests.
+- **#824** — the operator UI's TCLE builder publishes terms through a
+  path that notifies nobody (above). Carries #810's remaining
+  operator-visibility half.
 - **#823** — `POST /consent-tokens/validate` is an unauthenticated
   **participant-enumeration oracle**: three distinguishable error
   messages disclose whether a `participantId` exists and whether it is
@@ -69,9 +91,12 @@ the issue:
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, **in sync with origin**
-  (`76e893f9`). No open PR; `main` untouched and frozen.
-- `test/809-bulk-consent-token-page` merged and deleted (local; it was
-  never pushed, so no remote to delete).
+  (`df373af2`). No open PR; `main` untouched and frozen.
+- `test/809-bulk-consent-token-page` and `fix/810-consent-sweep-per-patient`
+  both merged and deleted locally. Neither was pushed, so there are no
+  remote branches to clean up — a deliberate deviation from `fix-bugs`'
+  "push the fix branch then merge", since nothing needed the branch to
+  exist remotely.
 - Untracked and deliberately untouched: `.claude/skills/` and
   `api/backend/storage/assays/`. **Never `git add -A`.**
 
@@ -97,6 +122,9 @@ owes `clean-up`.
 
 ## Proof so far
 
+- `consent.service.unit.test.js` **116/116** (6 new for #810, red-first
+  — including the identity-lookup-throws case, which also aborted the
+  whole sweep before the fix).
 - `consent.controller.test.js` **81/81** (6 new, red-first).
 - `consentTokenView.test.ts` **15/15** (new).
 - `consent-token-page.spec.ts` **4/4** against the real stack, nothing
@@ -107,7 +135,7 @@ owes `clean-up`.
 
 ## Recommended next steps
 
-Continue the queue in order: **#810 → #816 → #815 → #813**. Nothing else
+Continue the queue in order: **#816 → #815 → #813**. Nothing else
 is queued by Dennis beyond the five.
 
 The `#684 / #800 / #801` object-ownership cluster remains the
