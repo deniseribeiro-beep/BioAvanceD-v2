@@ -87,22 +87,22 @@ export default function EConsentPage() {
     }
   }
 
-  if (loading) return <div>Carregando...</div>;
-  if (error) return <div style={{ color: 'red' }}>{error}</div>;
-  if (success) return <div>Consentimento atualizado com sucesso!</div>;
-  if (!template) return <div>Nenhum termo de consentimento ativo no momento.</div>;
+  if (loading) return <div data-testid="e-consent-loading">Carregando...</div>;
+  if (error) return <div data-testid="e-consent-error" style={{ color: 'red' }}>{error}</div>;
+  if (success) return <div data-testid="e-consent-success">Consentimento atualizado com sucesso!</div>;
+  if (!template) return <div data-testid="e-consent-no-template">Nenhum termo de consentimento ativo no momento.</div>;
 
   return (
     <div style={{ maxWidth: 500, margin: 'auto', padding: 24 }}>
       <h2>Consentimento Eletrônico</h2>
-      <p>Bem-vindo, {patientName}!</p>
+      <p data-testid="e-consent-patient">Bem-vindo, {patientName}!</p>
       <h4>Política de Privacidade e TCLE</h4>
       <p>Leia atentamente a política de privacidade e o Termo de Consentimento Livre e Esclarecido (TCLE) abaixo.</p>
       <div style={{ background: '#f7f7f7', padding: 12, borderRadius: 8, marginBottom: 16 }}>
         {/* Aqui pode-se renderizar o texto do TCLE/política */}
         <p>Seus dados serão tratados conforme a LGPD. Você pode aceitar ou revogar cada camada de consentimento abaixo a qualquer momento.</p>
       </div>
-      <form onSubmit={e => { e.preventDefault(); submitConsents(consents); }}>
+      <form data-testid="e-consent-permissions" onSubmit={e => { e.preventDefault(); submitConsents(consents); }}>
         {template.permissions.map(permission => (
           <div key={permission.key} style={{ marginBottom: 12 }}>
             <label>
@@ -115,10 +115,10 @@ export default function EConsentPage() {
             </label>
           </div>
         ))}
-        <button type="submit">Salvar Consentimento</button>
+        <button data-testid="e-consent-submit" type="submit">Salvar Consentimento</button>
       </form>
       <div style={{ marginTop: 24 }}>
-        <button style={{ color: 'red' }} onClick={() => {
+        <button data-testid="e-consent-revoke-all" style={{ color: 'red' }} onClick={() => {
           const revoked = buildRevokeAllAnswers(template);
           setConsents(revoked);
           submitConsents(revoked);
