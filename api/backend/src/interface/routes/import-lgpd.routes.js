@@ -66,6 +66,15 @@ router.get('/batches/:batchId',
   importLGPDController.getQuarantineBatch.bind(importLGPDController)
 );
 
+// Download de templates - Pacientes CSV (#815: the fourth combination, missing
+// until now -- the frontend client built this URL for a route that never
+// existed, and only escaped notice because nothing called it.)
+router.get('/pacientes/template/csv',
+  authenticate,
+  requirePermission('createPatient'),
+  importLGPDController.downloadPatientTemplateCSV.bind(importLGPDController)
+);
+
 // Download de templates - Pacientes Excel
 router.get('/pacientes/template/xlsx',
   authenticate,

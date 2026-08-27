@@ -15,18 +15,17 @@ export const MAX_IMPORT_FILE_BYTES = 100 * 1024 * 1024;
 const ACCEPTED_EXTENSIONS = ['.csv', '.xlsx', '.xls'];
 
 /**
- * The backend does not expose the same template formats for both types.
- * `import-lgpd.routes.js` defines `/pacientes/template/xlsx`,
- * `/amostras/template/csv` and `/amostras/template/xlsx` — there is no
- * `/pacientes/template/csv` route, and no `downloadPatientTemplateCSV`
- * controller method to hang one off.
+ * Both formats, for both types. This used to return `['xlsx']` for patients
+ * because `/pacientes/template/csv` was the one type x format combination
+ * `import-lgpd.routes.js` never registered, while
+ * `importLGPDService.downloadTemplate` built the URL anyway (#815, fixed).
  *
- * `importLGPDService.downloadTemplate` builds that URL regardless, so a UI
- * that offered "CSV" for patients would hand the operator a 404. Filed as
- * #815; until it is resolved this is the honest list.
+ * Kept as a function rather than collapsed into a constant: it is the single
+ * place the UI asks what the backend actually serves, so a future asymmetry
+ * has somewhere to live other than the render path.
  */
-export function availableTemplateFormats(type: ImportType): TemplateFormat[] {
-  return type === 'patients' ? ['xlsx'] : ['csv', 'xlsx'];
+export function availableTemplateFormats(_type: ImportType): TemplateFormat[] {
+  return ['csv', 'xlsx'];
 }
 
 export type FileCheck = { ok: true } | { ok: false; reason: string };

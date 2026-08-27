@@ -15,6 +15,68 @@ const {
   MIABIS_QUALITY,
 } = require('../config/constants/specimen.constants');
 
+// #815: the patient template's columns and its example row, shared by the
+// xlsx builder (downloadPatientTemplateExcel) and the CSV builder
+// (downloadPatientTemplateCSV). The importer accepts one column set; the two
+// downloads must not be able to disagree about what it is.
+const PATIENT_TEMPLATE_HEADERS = [
+  'patientName',
+  'email',
+  'phone',
+  'birthDate',
+  'sex',
+  'weight',
+  'heightCm',
+  'recordNumber',
+  'clinicalUnit',
+  'unitAcronym',
+  'diagnosticHypothesis',
+  'icdCode',
+  'hypertension',
+  'obesity',
+  'diabetesType1',
+  'diabetesType2',
+  'copd',
+  'ckd',
+  'smoking',
+  'alcoholUse',
+  'asthma',
+  'antibioticUse',
+  'insulinUse',
+  'antiviralUse',
+  'geneticVariant',
+  'notes'
+];
+
+const PATIENT_TEMPLATE_EXAMPLE_ROW = [
+  'João Silva Santos',        // patientName
+  'joao.silva@email.com',     // email
+  '5511999999999',            // phone
+  '15/03/1985',               // birthDate
+  'M',                         // sex
+  '75.5',                      // weight
+  '175',                       // heightCm
+  '2024001',                   // recordNumber
+  'Hospital Universitário São Francisco de Assis', // clinicalUnit
+  'HUSF',                      // unitAcronym
+    'Doença lisossômica',        // diagnosticHypothesis
+  'E75.21',                    // icdCode
+  'false',                     // hypertension (boolean)
+  'false',                     // obesity (boolean)
+  'false',                     // diabetesType1 (boolean)
+  'true',                      // diabetesType2 (boolean)
+  'false',                     // copd (boolean)
+  'false',                     // ckd (boolean)
+  'false',                     // smoking (boolean)
+  'false',                     // alcoholUse (boolean)
+  'false',                     // asthma (boolean)
+  'false',                     // antibioticUse (boolean)
+  'true',                      // insulinUse (boolean)
+  'false',                     // antiviralUse (boolean)
+  'GLA337T>C, p.Ala143Thr',    // geneticVariant
+  'Paciente em acompanhamento regular' // notes
+];
+
 // Configuração do multer para upload
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -773,66 +835,13 @@ class ImportLGPDController {
       instructionsSheet.getColumn(1).width = 80;
       
       // ========== ABA DE DADOS (TEMPLATE) ==========
-      // Headers limpos (sem asteriscos ou descrições - serão usados para importação)
-      const headers = [
-        'patientName',
-        'email',
-        'phone',
-        'birthDate',
-        'sex',
-        'weight',
-        'heightCm',
-        'recordNumber',
-        'clinicalUnit',
-        'unitAcronym',
-        'diagnosticHypothesis',
-        'icdCode',
-        'hypertension',
-        'obesity',
-        'diabetesType1',
-        'diabetesType2',
-        'copd',
-        'ckd',
-        'smoking',
-        'alcoholUse',
-        'asthma',
-        'antibioticUse',
-        'insulinUse',
-        'antiviralUse',
-        'geneticVariant',
-        'notes'
-      ];
-      
-      // Linha de exemplo (primeira linha de dados) - ordem deve corresponder exatamente aos headers
-      const exampleRow = [
-        'João Silva Santos',        // patientName
-        'joao.silva@email.com',     // email
-        '5511999999999',            // phone
-        '15/03/1985',               // birthDate
-        'M',                         // sex
-        '75.5',                      // weight
-        '175',                       // heightCm
-        '2024001',                   // recordNumber
-        'Hospital Universitário São Francisco de Assis', // clinicalUnit
-        'HUSF',                      // unitAcronym
-          'Doença lisossômica',        // diagnosticHypothesis
-        'E75.21',                    // icdCode
-        'false',                     // hypertension (boolean)
-        'false',                     // obesity (boolean)
-        'false',                     // diabetesType1 (boolean)
-        'true',                      // diabetesType2 (boolean)
-        'false',                     // copd (boolean)
-        'false',                     // ckd (boolean)
-        'false',                     // smoking (boolean)
-        'false',                     // alcoholUse (boolean)
-        'false',                     // asthma (boolean)
-        'false',                     // antibioticUse (boolean)
-        'true',                      // insulinUse (boolean)
-        'false',                     // antiviralUse (boolean)
-        'GLA337T>C, p.Ala143Thr',    // geneticVariant
-        'Paciente em acompanhamento regular' // notes
-      ];
-      
+      // #815: headers and the example row live at module scope
+      // (PATIENT_TEMPLATE_HEADERS / PATIENT_TEMPLATE_EXAMPLE_ROW) so the CSV
+      // builder below emits exactly the same columns. Two copies would drift,
+      // and an operator filling in the wrong one gets rejected rows.
+      const headers = PATIENT_TEMPLATE_HEADERS;
+      const exampleRow = PATIENT_TEMPLATE_EXAMPLE_ROW;
+
       // Cria planilha apenas com headers limpos e exemplo
       const dataSheet = workbook.addWorksheet('Pacientes');
       dataSheet.addRow(headers);
@@ -858,6 +867,36 @@ class ImportLGPDController {
 
     } catch (error) {
       logger.error('Erro ao gerar template Excel de pacientes:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao gerar template',
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * Gera template CSV para pacientes (#815).
+   *
+   * O par pacientes/amostras oferecia xlsx+csv para amostras mas apenas xlsx
+   * para pacientes, enquanto o cliente do frontend montava a URL das quatro
+   * combinacoes -- entao downloadTemplate('patients', 'csv') pedia uma rota
+   * que nunca existiu. Colunas e linha de exemplo vem das mesmas constantes
+   * usadas pelo template xlsx.
+   */
+  async downloadPatientTemplateCSV(req, res) {
+    try {
+      const { stringify } = require('csv-stringify/sync');
+
+      const csv = stringify([PATIENT_TEMPLATE_HEADERS, PATIENT_TEMPLATE_EXAMPLE_ROW]);
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="pacientes_template.csv"');
+      // BOM: sem ele o Excel abre o arquivo em ANSI e quebra os acentos.
+      res.send('﻿' + csv);
+
+    } catch (error) {
+      logger.error('Erro ao gerar template CSV de pacientes:', error.message);
       return res.status(500).json({
         success: false,
         error: 'Erro ao gerar template',
@@ -1209,5 +1248,12 @@ class ImportLGPDController {
   }
 }
 
-module.exports = new ImportLGPDController();
+const importLGPDController = new ImportLGPDController();
+
+// #815: exported so a test can assert the CSV and xlsx templates ship the
+// same columns, rather than restating the list a third time.
+importLGPDController.PATIENT_TEMPLATE_HEADERS = PATIENT_TEMPLATE_HEADERS;
+importLGPDController.PATIENT_TEMPLATE_EXAMPLE_ROW = PATIENT_TEMPLATE_EXAMPLE_ROW;
+
+module.exports = importLGPDController;
 

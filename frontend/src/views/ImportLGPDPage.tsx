@@ -18,8 +18,8 @@
  * Assimetrias reais que a tela mostra em vez de esconder:
  * - Só a importação de amostras coloca em quarentena. As duas de pacientes
  *   descartam as linhas rejeitadas (#814) — o resultado diz isso.
- * - Não existe template CSV de pacientes no backend (#815), então esse botão
- *   não é oferecido.
+ * - (Resolvido em #815: o template CSV de pacientes passou a existir, então
+ *   os dois tipos oferecem os dois formatos.)
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
