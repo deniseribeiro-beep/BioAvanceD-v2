@@ -60,36 +60,109 @@ export function hasRoleAccess(roleName: RoleName | undefined, requiredRole?: Rol
 /**
  * Verifica se uma role pode acessar uma rota específica
  */
+const ALL_ROLES: readonly RoleName[] = ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'];
+const ADMIN: readonly RoleName[] = ['Administrador'];
+const ADMIN_COORD: readonly RoleName[] = ['Administrador', 'Coordenador'];
+const STAFF: readonly RoleName[] = ['Administrador', 'Coordenador', 'Técnico'];
+
+/**
+ * #816: route authorization used to fail *open* — `canRoleAccessRoute` applied
+ * four restrictive blocks and then ended in a bare `return true`, so any route
+ * not explicitly named was reachable by every authenticated role, including
+ * `Usuário Externo`. A new route was gated only if someone also remembered its
+ * `requiredRole` prop on the `<Route>`; forget it and the grant was silent.
+ *
+ * This table inverts that: a path is allowed only if it matches an entry, so a
+ * missing entry is a visible 403 during development instead of an invisible
+ * grant. `rolePermissions.test.ts` asserts every `<Route>` in App.tsx is
+ * covered, so adding a route without an entry fails the suite rather than
+ * waiting for a user to report it.
+ *
+ * Order matters: the first matching prefix wins, so a more specific path must
+ * come before the broader one it sits under.
+ *
+ * These entries reproduce what the old function actually answered for every
+ * route that exists today — this fix closes the open default, it does not
+ * re-decide policy. Where a route's own `requiredRole` is narrower than the
+ * old answer, the narrower one is used (that cannot widen anyone's access,
+ * since ProtectedRoute requires both). Where the old answer was *stricter*
+ * than the route's declaration it is kept as-is, which leaves two known
+ * contradictions standing — `/reports` for `Usuário Externo` and
+ * `/admin/tcle/*` for `Coordenador`, both declared on the `<Route>` and both
+ * denied here. Resolving those means granting access, which is the owner's
+ * call, not a side effect of this fix: see #825.
+ */
+const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
+  // Self-service security pages — deliberately open to every role.
+  ['/user/security', ALL_ROLES],
+  ['/security/mfa-setup', ALL_ROLES],
+  ['/mfa-setup', ALL_ROLES],
+
+  // Administration.
+  ['/security', ADMIN],
+  ['/system-management', ADMIN],
+  ['/users', ADMIN],
+  ['/access', ADMIN],
+  ['/backup', ADMIN],
+  ['/settings/parameters', ADMIN],
+  ['/admin', ADMIN],
+
+  // Reporting and audit.
+  ['/reports', ADMIN_COORD],
+  ['/logs', ADMIN_COORD],
+
+  // Intake wizard.
+  ['/next/intake', STAFF],
+  ['/pacientes/novo-atendimento', STAFF],
+  // `/next/*` renders FoundationApp outside ProtectedRoute, so this gate is
+  // only consulted for it by the sidebar/header.
+  ['/next', ALL_ROLES],
+
+  // Participants.
+  ['/patients/import-fhir', STAFF],
+  ['/patients', ALL_ROLES],
+
+  // Imports — all three surfaces declare the same staff roles on their routes.
+  ['/import', STAFF],
+
+  // Facility management, plus the tab redirects that land on it.
+  ['/facility-management', STAFF],
+  ['/equipment', STAFF],
+  ['/locations', STAFF],
+  ['/temperature', STAFF],
+  ['/sensors', STAFF],
+  ['/policies', STAFF],
+  ['/quality-descriptions', STAFF],
+
+  // Specimens.
+  ['/samples/withdrawal-return', STAFF],
+  ['/samples', ALL_ROLES],
+  ['/results', ALL_ROLES],
+
+  ['/dashboard', ALL_ROLES],
+];
+
+/**
+ * True when `path` is `prefix` itself or sits beneath it. Compared on segment
+ * boundaries so `/reports-internal` does not ride in on `/reports`.
+ */
+function matchesPrefix(path: string, prefix: string): boolean {
+  return path === prefix || path.startsWith(`${prefix}/`);
+}
+
 export function canRoleAccessRoute(roleName: RoleName | undefined, route: string): boolean {
   if (!roleName) return false;
 
-  if (route === '/next/intake' || route === '/pacientes/novo-atendimento') {
-    return roleName === 'Administrador' || roleName === 'Coordenador' || roleName === 'Técnico';
-  }
+  // ProtectedRoute passes `location.pathname`, so strip any query/hash and the
+  // trailing slash before matching.
+  const path = String(route || '').split(/[?#]/)[0].replace(/\/+$/, '') || '/';
 
-  if (route === '/security' || (route.includes('/security') && !route.includes('/user/security') && !route.includes('/security/mfa-setup'))) {
-    return roleName === 'Administrador';
-  }
+  if (path === '/') return true;
 
-  const adminRoutes = ['/users', '/access', '/backup', '/system-management', '/admin'];
-  if (adminRoutes.some((restrictedRoute) => route === restrictedRoute || route.startsWith(`${restrictedRoute}/`))) {
-    return roleName === 'Administrador';
-  }
+  const entry = ROUTE_ACCESS.find(([prefix]) => matchesPrefix(path, prefix));
+  if (!entry) return false;
 
-  const coordinatorRoutes = ['/reports', '/logs'];
-  if (coordinatorRoutes.some((restrictedRoute) => route === restrictedRoute || route.startsWith(`${restrictedRoute}/`))) {
-    return roleName === 'Coordenador' || roleName === 'Administrador';
-  }
-
-  if (['/facility-management', '/quality-descriptions', '/import', '/samples/withdrawal-return', '/patients', '/samples', '/results', '/dashboard'].includes(route)) {
-    return true;
-  }
-
-  if (route === '/user/security' || route === '/security/mfa-setup') {
-    return true;
-  }
-
-  return true;
+  return entry[1].includes(roleName);
 }
 
 /**
