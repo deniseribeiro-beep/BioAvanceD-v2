@@ -255,31 +255,35 @@ describe('NotificationService - buildConsentLink', () => {
   // http://localhost:5173.
   it('throws when FRONTEND_URL is unset', () => {
     delete process.env.FRONTEND_URL;
-    expect(() => notificationService.buildConsentLink({ patientID: 'P1' }, 'tok en')).toThrow(
+    expect(() => notificationService.buildConsentLink({ participantId: 'P1' }, 'tok en')).toThrow(
       'FRONTEND_URL deve ser uma URL absoluta válida'
     );
   });
 
   it('honors FRONTEND_URL and strips a trailing slash', () => {
     process.env.FRONTEND_URL = 'https://app.example.com/';
-    const link = notificationService.buildConsentLink({ patientID: 'P2' }, 'abc');
+    const link = notificationService.buildConsentLink({ participantId: 'P2' }, 'abc');
     expect(link).toBe('https://app.example.com/patients/P2/consent?token=abc');
   });
 
-  it('prefers patientID, then patientId, then id', () => {
+  // #805: was 'prefers patientID, then patientId, then id'. That chain was
+  // the bug -- all three are prohibited legacy aliases (canonical-data-
+  // contract-v1.md) that no caller passes, so the assertion passed only
+  // because it invented shapes production never emits (#803). Inverted: the
+  // aliases must now be ignored, not preferred.
+  it('ignores the prohibited legacy aliases and requires participantId', () => {
     process.env.FRONTEND_URL = 'https://app.example.com';
     expect(
+      notificationService.buildConsentLink({ patientID: 'A', patientId: 'B', id: 'C', participantId: 'D' }, 'tok')
+    ).toContain('/patients/D/');
+    expect(() =>
       notificationService.buildConsentLink({ patientID: 'A', patientId: 'B', id: 'C' }, 'tok')
-    ).toContain('/patients/A/');
-    expect(
-      notificationService.buildConsentLink({ patientId: 'B', id: 'C' }, 'tok')
-    ).toContain('/patients/B/');
-    expect(notificationService.buildConsentLink({ id: 'C' }, 'tok')).toContain('/patients/C/');
+    ).toThrow(expect.objectContaining({ code: 'CONSENT_PARTICIPANT_ID_REQUIRED' }));
   });
 
   it('URL-encodes the token', () => {
     process.env.FRONTEND_URL = 'https://app.example.com';
-    const link = notificationService.buildConsentLink({ id: 'X' }, 'a/b c&d');
+    const link = notificationService.buildConsentLink({ participantId: 'X' }, 'a/b c&d');
     expect(link).toBe('https://app.example.com/patients/X/consent?token=a%2Fb%20c%26d');
   });
 });
@@ -469,5 +473,44 @@ describe('NotificationService - sendCriticalTempAlertFromInflux', () => {
     expect(collectRows).toHaveBeenCalledWith(expect.stringContaining('filter(fn: (r) => r.locationId == "loc-1")'));
     expect(alertSpy).toHaveBeenCalledWith('sample-1', -90, { locationId: 'loc-1', lookbackHours: 2 });
     expect(result).toEqual({ triggered: true });
+  });
+});
+
+// #805: buildConsentLink against the shapes its six production callers
+// actually pass. Every one of them hands it either a PatientModel.create()
+// result or a spread of a patients-collection document; both carry
+// `participantId` (models/Patient.js CANONICAL_FIELDS) and neither carries
+// patientID/patientId/id. The link's id segment is consumed by
+// POST /api/e-consent/consent-tokens/{validate,accept}, which look the
+// patient up by participantId -- so participantId is the only value that
+// can work here, per that endpoint's own contract.
+describe('NotificationService - buildConsentLink against real caller shapes (#805)', () => {
+  it('uses participantId, the field every production caller actually carries', () => {
+    process.env.FRONTEND_URL = 'https://app.example.com';
+    const patient = {
+      participantId: '00000042',
+      sex: 'F',
+      email: 'p@example.com',
+      status: 'PENDING_CONSENT',
+      consentToken: 'a'.repeat(64)
+    };
+    expect(notificationService.buildConsentLink(patient, 'a'.repeat(64)))
+      .toBe(`https://app.example.com/patients/00000042/consent?token=${'a'.repeat(64)}`);
+  });
+
+  it('throws rather than emailing a URL with an undefined id segment', () => {
+    process.env.FRONTEND_URL = 'https://app.example.com';
+    expect(() => notificationService.buildConsentLink({ sex: 'F' }, 'tok')).toThrow(
+      expect.objectContaining({ code: 'CONSENT_PARTICIPANT_ID_REQUIRED' })
+    );
+    expect(() => notificationService.buildConsentLink({ participantId: '   ' }, 'tok')).toThrow(
+      expect.objectContaining({ code: 'CONSENT_PARTICIPANT_ID_REQUIRED' })
+    );
+  });
+
+  it('URL-encodes the participantId segment as well as the token', () => {
+    process.env.FRONTEND_URL = 'https://app.example.com';
+    expect(notificationService.buildConsentLink({ participantId: 'a/b' }, 'c d'))
+      .toBe('https://app.example.com/patients/a%2Fb/consent?token=c%20d');
   });
 });

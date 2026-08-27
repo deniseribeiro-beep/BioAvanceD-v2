@@ -16,7 +16,7 @@ afterEach(() => {
 describe('consent frontend URL policy', () => {
   it.each(['localhost', '127.0.0.1', '[::1]'])('permite HTTP local em desenvolvimento: %s', (host) => {
     const service = createService({ nodeEnv: 'development', frontendUrl: `http://${host}:5173` });
-    expect(service.buildConsentLink({ patientID: '00000001' }, 'token')).toContain('/patients/00000001/consent');
+    expect(service.buildConsentLink({ participantId: '00000001' }, 'token')).toContain('/patients/00000001/consent');
   });
 
   it('bloqueia convite remoto em HTTP local antes do provedor', () => {
