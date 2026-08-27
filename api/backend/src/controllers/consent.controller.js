@@ -647,9 +647,40 @@ class ConsentController {
 
       const result = await patientService.validateConsentToken(db, String(patientId), String(token));
 
+      // #809: the page behind this token's link (/patients/:id/consent?token=)
+      // is unauthenticated -- it is emailed to a participant, not to a user of
+      // the system -- so this response is its only source for the term it asks
+      // them to accept. Every other route exposing a ConsentTemplate or an
+      // active policy sits behind `authenticate`.
+      let template = null;
+      try {
+        template = await consentService.getActiveTemplate(db);
+      } catch (templateError) {
+        // A template-lookup failure is not an invalid token: reporting it as
+        // one would tell the participant their link is bad and send them to
+        // request another, which would not help.
+        logger.error('Erro ao carregar termo ativo do link de consentimento:', templateError.message);
+        return res.status(503).json({
+          success: false,
+          error: 'Termo de consentimento indisponível',
+          message: templateError.message
+        });
+      }
+
       return res.status(200).json({
         success: true,
-        data: result
+        data: {
+          ...result,
+          template: template
+            ? {
+              id: String(template._id),
+              title: template.title,
+              content: template.content,
+              version: template.version || null,
+              permissions: Array.isArray(template.permissions) ? template.permissions : []
+            }
+            : null
+        }
       });
     } catch (error) {
       logger.error('Erro ao validar token de consentimento:', error.message);

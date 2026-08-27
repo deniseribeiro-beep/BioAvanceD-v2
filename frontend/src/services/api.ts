@@ -46,6 +46,15 @@ const TOKEN_OPTIONAL_ROUTES = [
   '/auth/password-reset/reset',
   '/auth/two-factor/qr-first-login',
   '/auth/two-factor/enable-first-login',
+  // #809: participant-facing consent-token endpoints. Whoever follows a bulk
+  // consent invitation has no account and no session -- the 64-char token in
+  // the emailed link is the credential. Without these entries the request
+  // interceptor below cancels the call and redirects to /login, which is the
+  // same auth wall #809 exists to remove, just relocated from ProtectedRoute
+  // into this client. Both routes are public on the backend too
+  // (routes/eConsent.js:246-247, no `authenticate`).
+  '/e-consent/consent-tokens/validate',
+  '/e-consent/consent-tokens/accept',
 ];
 
 let isRedirectingToLogin = false;
@@ -798,6 +807,32 @@ export const consentService = {
   }) => api.post<PatientConsent>('/e-consent/consents', data),
   revokeConsent: (consentId: string) => api.post(`/e-consent/consents/${consentId}/revoke`),
   getPatientConsent: (participantId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${participantId}/consent`)
+};
+
+// #809: the bulk consent-token pair, consumed by ConsentTokenPage. Unlike the
+// rest of consentService these are unauthenticated -- see
+// TOKEN_OPTIONAL_ROUTES above. They deliberately use the shared `api` client
+// rather than raw relative axios: nothing proxies /api on the frontend origin
+// in dev, test or prod, so a relative URL returns the SPA's index.html (#822).
+export type ConsentTokenTemplatePayload = {
+  id: string;
+  title: string;
+  content: string;
+  version: string | null;
+  permissions: Array<{ key: string; label: string; required?: boolean }>;
+};
+
+export const consentTokenService = {
+  validate: (participantId: string, token: string) =>
+    api.post<{ success: boolean; data: { valid: boolean; participantId: string; template: ConsentTokenTemplatePayload | null } }>(
+      '/e-consent/consent-tokens/validate',
+      { patientId: participantId, token }
+    ),
+  accept: (participantId: string, token: string) =>
+    api.post<{ success: boolean; message: string; data: { success: boolean; participantId: string } }>(
+      '/e-consent/consent-tokens/accept',
+      { patientId: participantId, token }
+    ),
 };
 
 // ========== IMPORT LGPD SERVICES ==========

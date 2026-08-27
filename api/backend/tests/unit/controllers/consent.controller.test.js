@@ -950,6 +950,18 @@ describe('ConsentController.getPatientConsent', () => {
 });
 
 describe('ConsentController.validateConsentToken', () => {
+  const ACTIVE_TEMPLATE = {
+    _id: 'tpl-1',
+    title: 'TCLE Biobanco v2',
+    content: 'Termo completo de consentimento livre e esclarecido.',
+    version: '2.0',
+    active: true,
+    permissions: [
+      { key: 'research', label: 'Uso em pesquisa', required: true },
+      { key: 'contact', label: 'Novo contato', required: false },
+    ],
+  };
+
   it('returns 503 when db is unavailable', async () => {
     const req = NO_DB_REQ();
     const res = createRes();
@@ -958,7 +970,9 @@ describe('ConsentController.validateConsentToken', () => {
   });
 
   it('returns 200 with validation result on success, using body values', async () => {
-    const validateSpy = vi.spyOn(patientService, 'validateConsentToken').mockResolvedValue({ valid: true });
+    const validateSpy = vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p1' });
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(ACTIVE_TEMPLATE);
     const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
     const res = createRes();
 
@@ -966,11 +980,80 @@ describe('ConsentController.validateConsentToken', () => {
 
     expect(validateSpy).toHaveBeenCalledWith(req.app.locals.db, 'p1', 'tok');
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: { valid: true } });
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({ valid: true, participantId: 'p1' }),
+      })
+    );
+  });
+
+  // #809: the page behind /patients/:id/consent?token= is unauthenticated, so
+  // this response is its only source for the term it asks the participant to
+  // accept -- GET /consent-policies/active and the ConsentTemplate CRUD routes
+  // all sit behind `authenticate`. Without the template here the page can
+  // render an accept button and no terms.
+  it('returns the active consent template alongside the validation result', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p1' });
+    const templateSpy = vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(ACTIVE_TEMPLATE);
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.validateConsentToken(req, res);
+
+    expect(templateSpy).toHaveBeenCalledWith(req.app.locals.db);
+    expect(res.status).toHaveBeenCalledWith(200);
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.data.template).toEqual({
+      id: 'tpl-1',
+      title: 'TCLE Biobanco v2',
+      content: 'Termo completo de consentimento livre e esclarecido.',
+      version: '2.0',
+      permissions: [
+        { key: 'research', label: 'Uso em pesquisa', required: true },
+        { key: 'contact', label: 'Novo contato', required: false },
+      ],
+    });
+  });
+
+  it('returns template: null when no consent template is active', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p1' });
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(null);
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.validateConsentToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.data.valid).toBe(true);
+    expect(payload.data.template).toBeNull();
+  });
+
+  // This endpoint is public. Whatever it returns is readable by anyone holding
+  // the link, so it must not widen the civil-identity surface (#807, RNF007):
+  // unlike system 1's /validate/:token, it resolves no ParticipantIdentity.
+  it('does not return civil identity fields', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p1' });
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(ACTIVE_TEMPLATE);
+    const identitySpy = vi.spyOn(participantIdentityService, 'decryptIdentity');
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.validateConsentToken(req, res);
+
+    expect(identitySpy).not.toHaveBeenCalled();
+    const serialized = JSON.stringify(res.json.mock.calls[0][0]);
+    expect(serialized).not.toMatch(/patientName|birthDate|identityDocument|cpf/i);
   });
 
   it('falls back to query values when body is empty', async () => {
-    const validateSpy = vi.spyOn(patientService, 'validateConsentToken').mockResolvedValue({ valid: true });
+    const validateSpy = vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p2' });
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(ACTIVE_TEMPLATE);
     const req = createReq({ body: {}, query: { patientID: 'p2', token: 'tok2' } });
     const res = createRes();
 
@@ -992,6 +1075,24 @@ describe('ConsentController.validateConsentToken', () => {
       error: 'Token inválido',
       message: 'expired',
     });
+  });
+
+  // A template-lookup failure must not be reported as an invalid token: the
+  // participant would be told their link is bad and asked to request a new
+  // one, which would not help.
+  it('returns 503, not 400, when the template lookup fails on a valid token', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p1' });
+    vi.spyOn(consentService, 'getActiveTemplate').mockRejectedValue(new Error('mongo down'));
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.validateConsentToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, error: 'Termo de consentimento indisponível' })
+    );
   });
 });
 
