@@ -208,16 +208,45 @@ class NotificationService {
     });
 
     const resend = this.getResendClient();
-    const response = await resend.emails.send({
-      from: this.emailFrom,
-      to: recipient.to,
-      subject,
-      html,
-      text
-    });
 
-    if (response.error) {
-      throw new Error(response.error.message || 'Falha ao enviar e-mail via Resend');
+    // RF015 AC#3 ("Registrar tentativas, falhas, entrega e confirmacao"):
+    // persistComplianceLog used to run only after a successful send, so every
+    // failure -- a provider error, a transport rejection -- left no record at
+    // all. The only code that tried to record consent-delivery failures,
+    // persistConsentDeliveryFailure, was a permanent no-op (#796) that also
+    // wrote non-canonical fields onto Patient; RF015 puts this recording on
+    // the notification, so it lives here and covers every notificationType,
+    // not just consent. persistComplianceLog swallows its own errors, so it
+    // cannot mask the failure being reported. See #811 for the legs still
+    // outstanding (attempts, escalation, and the pre-send validation throws
+    // above, which have no recipient resolved yet to record against).
+    let response;
+    try {
+      response = await resend.emails.send({
+        from: this.emailFrom,
+        to: recipient.to,
+        subject,
+        html,
+        text
+      });
+
+      if (response.error) {
+        throw new Error(response.error.message || 'Falha ao enviar e-mail via Resend');
+      }
+    } catch (error) {
+      await this.persistComplianceLog({
+        provider: 'resend',
+        notificationType: notificationType || 'generic',
+        subject,
+        to: recipient.to,
+        originalTo: recipient.originalTo,
+        redirectedByEnvironment: recipient.redirected,
+        metadata,
+        deliveryStatus: 'DELIVERY_FAILED',
+        failedAt: new Date(),
+        errorCode: error?.code || 'CONSENT_DELIVERY_FAILED'
+      });
+      throw error;
     }
 
     const messageId = response.data?.id || null;
@@ -365,26 +394,12 @@ class NotificationService {
 
       return { ...result, success: true };
     } catch (error) {
-      await this.persistConsentDeliveryFailure(patientData, error);
+      // #796: this used to call persistConsentDeliveryFailure, a permanent
+      // no-op that wrote three non-canonical fields onto Patient through a
+      // raw driver updateOne. Failure recording now happens in sendEmail,
+      // on the notification, per RF015 AC#3.
       throw error;
     }
-  }
-
-  async persistConsentDeliveryFailure(patientData, error) {
-    const patientId = patientData?.patientID || patientData?.patientId || patientData?.id;
-    if (!patientId) return;
-
-    const db = await connectDB();
-    await db.collection('patients').updateOne(
-      { $or: [{ patientID: String(patientId) }, { _id: patientId }] },
-      {
-        $set: {
-          consentDeliveryStatus: 'DELIVERY_FAILED',
-          consentDeliveryFailedAt: new Date(),
-          consentDeliveryErrorCode: error?.code || 'CONSENT_DELIVERY_FAILED'
-        }
-      }
-    );
   }
 
   async sendConsentSmsFallback(patientData, consentLink) {

@@ -263,6 +263,79 @@ describe('NotificationService', () => {
     });
   });
 
+
+  // #796 / #811 -- RF015 AC#3 ("Registrar tentativas, falhas, entrega e
+  // confirmacao"). persistComplianceLog used to run only on the success
+  // path, so a failed send left no record anywhere; the one function that
+  // tried to record consent-delivery failures
+  // (persistConsentDeliveryFailure) was a permanent no-op writing
+  // non-canonical fields onto Patient, and was deleted.
+  describe('sendEmail failure recording (#796 / RF015 AC#3)', () => {
+    beforeEach(() => {
+      notificationService.isDevelopment = false;
+      notificationService.emailFrom = 'notifications@example.com';
+    });
+
+    it('records a DELIVERY_FAILED compliance log when the provider returns an error', async () => {
+      const sendMock = vi.fn().mockResolvedValue({ error: { message: 'invalid domain' } });
+      vi.spyOn(notificationService, 'getResendClient').mockReturnValue({ emails: { send: sendMock } });
+      const complianceSpy = vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
+
+      await expect(
+        notificationService.sendEmail({
+          to: 'patient@example.com',
+          subject: 'Hello',
+          html: '<p>x</p>',
+          notificationType: 'RF_CONSENT_NOTIFICATION',
+          metadata: { participantId: '00000042' }
+        })
+      ).rejects.toThrow('invalid domain');
+
+      expect(complianceSpy).toHaveBeenCalledTimes(1);
+      expect(complianceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: 'RF_CONSENT_NOTIFICATION',
+          deliveryStatus: 'DELIVERY_FAILED',
+          errorCode: 'CONSENT_DELIVERY_FAILED',
+          to: 'patient@example.com',
+          metadata: { participantId: '00000042' },
+          failedAt: expect.any(Date)
+        })
+      );
+    });
+
+    it('records the failure when the transport itself rejects, and preserves the original error', async () => {
+      const sendMock = vi.fn().mockRejectedValue(Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }));
+      vi.spyOn(notificationService, 'getResendClient').mockReturnValue({ emails: { send: sendMock } });
+      const complianceSpy = vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
+
+      await expect(
+        notificationService.sendEmail({ to: 'p@example.com', subject: 'S', text: 'x' })
+      ).rejects.toThrow('socket hang up');
+
+      expect(complianceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ deliveryStatus: 'DELIVERY_FAILED', errorCode: 'ECONNRESET' })
+      );
+    });
+
+    it('still records exactly one compliance log on the success path, with no failure fields', async () => {
+      const sendMock = vi.fn().mockResolvedValue({ data: { id: 'msg-1' } });
+      vi.spyOn(notificationService, 'getResendClient').mockReturnValue({ emails: { send: sendMock } });
+      const complianceSpy = vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
+
+      await notificationService.sendEmail({ to: 'p@example.com', subject: 'S', text: 'x' });
+
+      expect(complianceSpy).toHaveBeenCalledTimes(1);
+      const payload = complianceSpy.mock.calls[0][0];
+      expect(payload.sentAt).toBeInstanceOf(Date);
+      expect(payload.deliveryStatus).toBeUndefined();
+    });
+
+    it('no longer exposes persistConsentDeliveryFailure', () => {
+      expect(notificationService.persistConsentDeliveryFailure).toBeUndefined();
+    });
+  });
+
   describe('getConsentQueueStats', () => {
     it('reports unavailable when no notification queue can be initialized', async () => {
       vi.spyOn(notificationService, 'getNotificationQueue').mockReturnValue(null);
@@ -323,19 +396,24 @@ describe('NotificationService', () => {
   describe('sendConsentEmail', () => {
     // sendConsentEmail no longer swallows a missing email into a soft
     // {success:false} result (intentionally removed in 5e571099, see issue
-    // #181) — it now throws, and persists a delivery-failure record via the
-    // catch block. notifyPatientConsent (the caller) is what turns this
-    // throw back into a {channel:'unknown', success:false} entry.
-    it('throws and records a delivery failure when the patient has no resolvable email', async () => {
+    // #181) — it throws, and notifyPatientConsent (the caller) is what turns
+    // that throw back into a {channel:'unknown', success:false} entry.
+    //
+    // #796: this test used to assert persistConsentDeliveryFailure was
+    // called, and its comment claimed the catch block "persists a
+    // delivery-failure record". It did not -- that function was a permanent
+    // no-op, and this test could not notice because it mocked it out (#803
+    // class). The function is gone; this failure happens before any send is
+    // attempted, so there is no recipient resolved to record against and it
+    // is deliberately not written to the compliance log -- see #811.
+    it('throws when the patient has no resolvable email', async () => {
       vi.spyOn(notificationService, 'validateFrontendUrl').mockReturnValue(new URL('https://app.example.com'));
-      const persistFailureSpy = vi
-        .spyOn(notificationService, 'persistConsentDeliveryFailure')
-        .mockResolvedValue(undefined);
+      const complianceSpy = vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
 
       await expect(
-        notificationService.sendConsentEmail({ patientID: 'P-1' }, 'http://link')
+        notificationService.sendConsentEmail({ participantId: '00000042' }, 'http://link')
       ).rejects.toThrow('E-mail do participante é obrigatório para convite remoto');
-      expect(persistFailureSpy).toHaveBeenCalledWith({ patientID: 'P-1' }, expect.any(Error));
+      expect(complianceSpy).not.toHaveBeenCalled();
     });
 
     it('sends the consent email through sendEmail and returns success', async () => {
@@ -937,20 +1015,6 @@ describe('NotificationService', () => {
     it('propagates the real initRedis failure when Redis is not configured for this test environment', () => {
       notificationService.notificationQueue = null;
       expect(() => notificationService.getNotificationQueue()).toThrow(/Redis/);
-    });
-  });
-
-  describe('persistConsentDeliveryFailure', () => {
-    it('returns without touching the database when no patient id can be resolved', async () => {
-      await expect(
-        notificationService.persistConsentDeliveryFailure({}, new Error('boom'))
-      ).resolves.toBeUndefined();
-    });
-
-    it('rejects when the database is unavailable (no MONGO_URI configured in tests)', async () => {
-      await expect(
-        notificationService.persistConsentDeliveryFailure({ patientID: 'P-1' }, { code: 'X' })
-      ).rejects.toThrow();
     });
   });
 
