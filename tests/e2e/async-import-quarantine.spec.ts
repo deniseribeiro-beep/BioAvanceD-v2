@@ -16,21 +16,35 @@ import { realLogin } from './helpers/realAuth';
 // Mongo directly, because the observable that matters is the persisted
 // quarantine, not the API's own response.
 //
-// *** CURRENTLY RED, AND DELIBERATELY SO -- BLOCKED ON #826. ***
+// *** CURRENTLY RED, AND DELIBERATELY SO -- NOW BLOCKED ON #828. ***
 //
 // The quarantine code this exercises is unit-proven (the '#813 quarantine of
 // rejected rows' block in batch-validation-engine.service.test.js, 24/24,
 // written red-first including the wiring test). What fails here is upstream
-// of it: the worker process has no Mongoose connection, so the very first
-// StagingImport write buffers and times out after 10s, the job fails, retries
-// forever, and never reaches the per-row loop at all. Confirmed 2026-08-27 by
-// the worker log ("Operation `stagingImports.updateOne()` buffering timed out")
-// and by the job document sitting at status 'queued' with processedRows 0.
+// of it, and there turned out to be two blockers, not one:
+//
+//   1. #826 -- the worker process had no Mongoose connection, so the first
+//      StagingImport read/write buffered and timed out after 10s. FIXED
+//      (8c707744): the worker now logs "[ISO20387][MONGODB] Conexão
+//      estabelecida" and processBatchImport's StagingImport.findOne resolves.
+//   2. #828 -- OPEN. The upload is handed from the API process to the worker
+//      as a filesystem *path*, but they are separate containers with no
+//      shared volume, so the worker's fs.existsSync(storagePath) fails and
+//      the job dies at batch-validation-engine.service.js:932 with "Arquivo
+//      bruto do staging não encontrado" -- then retries forever, exactly as
+//      before. Confirmed 2026-08-27 by `docker exec` on both containers: the
+//      CSV is in backend-app-test's /app/uploads/staging-imports, and that
+//      directory does not exist at all in worker-test.
 //
 // Do NOT weaken these assertions or skip the spec to get a green run -- the
-// failure is the proof of #826, the same way tcle-dinamico.spec.ts's RF010
-// AC#2 test is left red as the proof of its own gap. Once #826 lands, this
+// failure is the proof of #828, the same way tcle-dinamico.spec.ts's RF010
+// AC#2 test is left red as the proof of its own gap. Once #828 lands, this
 // should pass unchanged; if it does not, that is a real #813 regression.
+//
+// Note for whoever lands #828: the poll below declares a 60s timeout but the
+// Playwright test timeout is 30s, so it can never use its stated budget --
+// the failure reads "Test timeout of 30000ms exceeded". Worth raising the
+// test timeout rather than trusting the poll's number.
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
 const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
