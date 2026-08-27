@@ -1,109 +1,127 @@
 # HANDOFF
 
-**INTERIM — written 2026-08-27, session still running.** Dennis asked for
-the next group of issues and left the pick to me; Docker authorised. **2 of
-4 picked issues are shipped and closed; the session is continuing with
-#820.** This is a mid-run snapshot, not the definitive rotation.
+**Written 2026-08-27. Definitive rotation — the sitting is finished.**
+Dennis asked for the next group and left the pick to me, then answered
+"pick all issues" when I offered to stop at three. **6 closed, 9 filed,
+full e2e gate run.**
 
-## The pick, and why the handoff's own plan was wrong
+## Shipped
 
-I picked the **"the path the user actually reaches silently does nothing"**
-cluster: **#826, #822, #820, #824.**
-
-The previous handoff listed #820, #824 (and #821) as needing an owner call.
-**Two of the three are settled by the canonical docs**, checked this
-session per `resolve-issue`'s deferral rule:
-
-- **#820 → direction 2 (signature optional).** `dict-02_DICIONARIO.md`
-  P1X-0372 `signerDisplayName` is **0..1 Condicional**; RF010 AC#4's
-  "signatário" resolves to ELM-0107 `signerRole` (a *role code*), not a
-  captured signature. Three code layers already agree — the ajv `required`
-  list, `PatientConsentModel.validate` (type-checks only when truthy), and
-  `PatientConsentModel.create` (defaults all four to `null`).
-  `normalizeSignaturePayload` is the lone dissenter, and it dissents by
-  accident. Comment posted on #820.
-- **#824 → direction 2 (one entity).**
-  `dict-07_ALINHAMENTO_CODIGO.md:39` has a row for it verbatim:
-  `ConsentPolicy + ConsentTemplate` → canonical **`ConsentTemplate`**,
-  action "Unificar versões e permissões do termo", priority **Crítica**. So
-  the builder must not be pointed at `/consent-policies`; `createTemplate`
-  grows the sweep and `createPolicy` collapses into it. Comment posted on
-  #824.
-- **#821 genuinely does still need an owner call** (the convergence
-  question) and is additionally blocked on #820.
-
-**Operating rule this produced, extending last sitting's:** last sitting
-found issue *evidence* was unsound. This one: a **"needs an owner call"
-label or claim is itself a premise to re-check.** Both re-checks took one
-grep of `docs/docs-7-27-2026/extracted/` and moved an issue from blocked to
-actionable.
-
-## Shipped this sitting
-
-| # | Route | Outcome |
+| # | What it was | Merge |
 |---|---|---|
-| **#826** worker had no Mongoose connection | fix-bugs | **closed** `8c707744` / merged `120ced22` |
-| **#822** participant pages used relative `/api` | fix-bugs | **closed** `c57c1caf` + spec `f8a3a01d` / merged `f09c033c` |
+| **#826** | worker had no Mongoose connection; batch import never completed | `120ced22` |
+| **#822** | participant pages used relative `/api`; every request got the SPA shell | `f09c033c` |
+| **#820** | `normalizeSignaturePayload` emptied keys the schema `minLength:1`s | `706b3ef8` |
+| **#829** | `generate-link` had no try/catch → **unhandled rejection exits the API process** | `318a2882` |
+| **#835** | `createPolicy`'s sweep filtered on the id it had just inserted → notified nobody, ever | `6fb1d126` |
+| **#834** | `hpo.js` `GET /:id` — the one other unguarded async handler | `88cdd40b` |
 
-Both verified against the live stack, not only natively.
+Every one verified against the live stack, not only natively.
 
-## Filed this sitting (5 product + 1 pack)
+**The participant e-consent flow now works end to end** — #822 + #820
+together — proven by `participant-e-consent-page.spec.ts` (4 passing).
 
-- **#828** — **the second blocker behind #826.** The upload is handed from
-  API to worker as a filesystem *path*; they are separate containers with
-  no shared volume. Proven by `docker exec` on both. **This is what
-  `async-import-quarantine.spec.ts` is now red on**, not #826 — its in-file
-  annotation was repointed in `c6900b66`.
-- **#829** — `POST /api/e-consent/generate-link` has **no try/catch**, so
-  `sendConsentEmail`'s throw is an unhandled rejection and **Node exits**.
-  It throws every time here because `FRONTEND_URL` is set nowhere in
-  `.env.test.example` or `compose.test.yml`. The backend container went
-  `Up (healthy)` → `Exited (1)` mid-spec. **Highest severity found this
-  sitting** — an authenticated operator request DoSes the whole API.
+## The operating rule this sitting produced
+
+Last sitting: issue *evidence* was unsound. This sitting: **a "needs an
+owner call" claim is itself a premise to re-check, and so is an issue's
+description of what *works*.**
+
+- **#820 and #824 were both settled by one grep of
+  `docs/docs-7-27-2026/extracted/`** — dict-02 P1X-0372
+  (`signerDisplayName` 0..1) and dict-07:39 (`ConsentPolicy + ConsentTemplate`
+  → `ConsentTemplate`, "Crítica"). Both had been carried forward as
+  blocked on Denise.
+- **#824's premise was wrong** ("two paths, one notifies"): #835 proved
+  *neither* notified. Wiring the builder to `createPolicy`, as #824
+  recommended, would have wired the UI to a sweep that did nothing.
+- **#826's fix was necessary but not sufficient** — #828 was waiting
+  behind it.
+
+## Filed (9 product + 2 pack)
+
+Severity order:
+
+- **#828** — batch import: the upload is passed API→worker as a filesystem
+  *path*, but they are separate containers with no shared volume. **This is
+  what `async-import-quarantine.spec.ts` is red on**, not #826.
+- **#833** — **no email can be sent on the test stack at all**:
+  `sendEmail` is Resend-only with a dummy key, and the `smtp-test` Mailpit
+  container is reachable by no backend code path. Blocks every
+  email-dependent e2e; it is why #829 survived unnoticed.
+- **#836** — republishing a term now overwrites `consentToken` for the whole
+  pending cohort, silently killing outstanding invitation links. Newly
+  reachable *because of* #835.
+- **#832** — `POST /e-consent/update` is unauthenticated and, since #820,
+  writes a Consent instead of 422ing. Needs #823's rate limiting.
 - **#827** — `createPatientConsent` records no `consentVersion` and no
-  evidence fields at all (ELM-0091/0105/0106, P1X-0373, all 1..1 Core).
-  Independent of #820; #821 wrongly credits the canonical recorder with
-  these.
-- **#830** — should `StagingImport` be Mongoose at all? Carried out of
-  #826 so it doesn't die in a closed issue. Includes: `models/Sample.js`
-  registers a Mongoose model with **no query call site in `src/`**.
-- **#831** — decision record for #822 widening `TOKEN_OPTIONAL_ROUTES`;
-  notes `isTokenOptionalRoute` matches by `includes()`, not anchored.
-- **pack #505** — `fix-bugs` has no branch for "the pinned proof is still
-  red on a *newly found* second defect." Also commented a clean
-  within-session A/B on **pack #270** (full-suite guard not firing).
+  evidence fields (RF010 AC#3/AC#4). #821 wrongly credits it with these.
+- **#830** — should `StagingImport` be Mongoose at all? Carried out of #826.
+  Also: `models/Sample.js` registers a Mongoose model with no query call site.
+- **#831** — decision record for #822 widening `TOKEN_OPTIONAL_ROUTES`.
+- Pack **#505** (fix-bugs close discipline), **#506** (dennis-windows'
+  reactive trigger). Comments on pack **#270** (a clean within-session A/B
+  on the full-suite guard not firing) and product **#819**.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, **pushed, in sync with
+- On `feature/docker-e2e-backend-integration`, **clean and matching
   origin**. `main` untouched and frozen. No open PR.
-- Both fix branches merged and **deleted locally**; neither was pushed.
+- Last substantive commit: the `#834` merge. All six fix branches merged
+  and deleted locally; none was pushed.
 - Untracked and deliberately untouched: `.claude/skills/` and
   `api/backend/storage/assays/`. **Never `git add -A`.**
 
+## The gate WAS run this sitting
+
+`compose.test.yml` and `.env.test.example` changed (#829 needs
+`FRONTEND_URL`), so the infra-change rule applied. Full suite,
+`--workers=1`:
+
+**215 passed, 3 failed, 1 skipped.** All three failures accounted for:
+
+- 2 × `async-import-quarantine.spec.ts` — **deliberately red on #828**.
+  Do not weaken or skip them.
+- 1 × `tcle-dinamico.spec.ts:19` — **#819**, the lazy-route cold-compile
+  flake. Re-ran in isolation immediately: 4/4 green, the failing test in
+  724ms. Commented on #819 with a narrowing hypothesis.
+
+**`FRONTEND_URL` must be HTTPS and non-loopback** — `sendConsentEmail`
+calls `validateFrontendUrl({ remote: true })`, which refuses to email a
+plaintext or loopback link. `https://e2e.bioavanced.test` is the test
+value; specs following an emailed link strip it to the pathname.
+
 ## Docker
 
-**Stack: UP, 12 core services healthy. Bootstrap: DONE** —
-`admin-bootstrap-test` ran and exited 0 against these volumes this
-session, and `realLogin` succeeded repeatedly. The reference-data chain was
-**not** re-run and was not needed; the four named volumes carry the
-previous sitting's bootstrap.
+**Stack: DOWN. Volumes: PRESENT AND BOOTSTRAPPED** — `admin-bootstrap-test`
+ran and exited 0 against them this sitting, and `realLogin` succeeded
+repeatedly. The reference-data chain was not re-run and was not needed.
 
-`backend-app-test`, `worker-test` and `frontend-app-test` were all rebuilt
-this session and carry every change through `f09c033c`. **All three are
-build-not-mount** — rebuild before trusting them against any later change.
+`backend-app-test`, `worker-test`, `frontend-app-test` and
+`neo4j-projection-worker-test` were rebuilt/recreated this sitting and
+carried every change. **All are build-not-mount — rebuild before trusting
+them against any later change**, and recreate the *whole* stack after an
+`x-test-env` edit, not just one service (they all inherit it).
 
-**Left running deliberately** for the continuing session. If the session
-ends here, it still needs teardown (`clean-up`).
+## Recommended next
 
-## Deferred proofs outstanding
+**None queued — Dennis has not named the next group.** In the order I
+would argue for them:
 
-- `async-import-quarantine.spec.ts` — red on **#828**.
-- `participant-e-consent-page.spec.ts` — 1 passing, **3 `test.fixme` on
-  #829**. Do not "fix" them by hand-signing a JWT; running them as written
-  takes the backend down, which is how #829 was found.
+1. **#833** — unblocks every email-dependent e2e, including the one
+   `test.fixme` in `participant-e-consent-page.spec.ts`.
+2. **#828** — turns `async-import-quarantine.spec.ts` green and finally
+   lets #813's quarantine code run once.
+3. **#824** — now a real consolidation (dict-07: unify onto
+   `ConsentTemplate`), touching the service, the versioning fields and the
+   builder. **Its own sitting.** #835 made it worth doing; note
+   `createTemplate` sets `version`/`versionGroupId` but not
+   `previousPolicyId`/`revisionType`, and #835's sweep resolves the cohort
+   *through the lineage* — so wiring the builder without the lineage fields
+   reproduces #824's symptom by another route.
+4. **#836 then #832** — both fall out of what shipped here.
+5. **#821** — still genuinely owner-facing (the convergence question).
 
-## Next
-
-**#820**, then **#824** — both now unblocked by the doc findings above.
-Then #821 (still needs Denise on convergence) and #829 (severe, cheap).
+The `#684 / #800 / #801` object-ownership cluster remains the
+highest-severity item overall, still blocked on the RF010/RF021 actor
+model — unchanged.
