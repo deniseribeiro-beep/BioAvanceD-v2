@@ -7,14 +7,13 @@ import {
 } from './importLgpdFormatters';
 
 describe('availableTemplateFormats', () => {
-  // The backend does not expose the same template formats for both types:
-  // import-lgpd.routes.js defines /pacientes/template/xlsx,
-  // /amostras/template/csv and /amostras/template/xlsx -- there is no
-  // /pacientes/template/csv route and no downloadPatientTemplateCSV
-  // controller method. importLGPDService.downloadTemplate builds that URL
-  // anyway, so offering it in the UI would 404 (#815).
-  it('offers only xlsx for patients, because no CSV patient template route exists', () => {
-    expect(availableTemplateFormats('patients')).toEqual(['xlsx']);
+  // #815 (fixed): /pacientes/template/csv now exists, so the asymmetry this
+  // used to encode is gone. Both types offer both formats, and every one of
+  // the four URLs downloadTemplate can build has a route behind it --
+  // import-lgpd.controller.test.js's '#815 route registration' block asserts
+  // that from the backend side.
+  it('offers both formats for patients', () => {
+    expect(availableTemplateFormats('patients')).toEqual(['csv', 'xlsx']);
   });
 
   it('offers both formats for samples', () => {

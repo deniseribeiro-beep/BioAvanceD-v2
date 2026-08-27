@@ -668,6 +668,102 @@ describe('import-lgpd.controller', () => {
     });
   });
 
+
+  // #815: `importLGPDService.downloadTemplate('patients', 'csv')` built
+  // `/import-lgpd/pacientes/template/csv`, a route that had never existed --
+  // three of the four type x format combinations were routed, this one was
+  // not, and nothing called the method so nothing noticed.
+  describe('#815 downloadPatientTemplateCSV', () => {
+    it('sends a CSV with the patient template content type and filename', async () => {
+      const req = {};
+      const res = createRes();
+
+      await controller.downloadPatientTemplateCSV(req, res);
+
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'text/csv; charset=utf-8');
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        'attachment; filename="pacientes_template.csv"'
+      );
+      expect(res.send).toHaveBeenCalledTimes(1);
+      // BOM, so Excel opens the file as UTF-8 -- same as the samples CSV.
+      expect(res.send.mock.calls[0][0]).toMatch(/^\ufeff/);
+    });
+
+    // The point of sharing PATIENT_TEMPLATE_HEADERS between the two builders:
+    // an operator who downloads the CSV and one who downloads the xlsx must be
+    // filling in the same columns, or one of the two templates silently stops
+    // matching what the importer accepts.
+    it('emits exactly the same header row as the xlsx template', async () => {
+      const req = {};
+      const res = createRes();
+
+      await controller.downloadPatientTemplateCSV(req, res);
+
+      const csv = res.send.mock.calls[0][0].replace(/^\ufeff/, '');
+      const headerLine = csv.split(/\r?\n/)[0];
+      expect(headerLine.split(',')).toEqual(controller.PATIENT_TEMPLATE_HEADERS);
+    });
+
+    it('includes the same example row the xlsx template ships', async () => {
+      const req = {};
+      const res = createRes();
+
+      await controller.downloadPatientTemplateCSV(req, res);
+
+      const csv = res.send.mock.calls[0][0].replace(/^\ufeff/, '');
+      expect(csv.split(/\r?\n/).length).toBeGreaterThanOrEqual(2);
+      expect(csv).toContain('joao.silva@email.com');
+    });
+
+    it('returns 500 when CSV generation throws', async () => {
+      const req = {};
+      const res = createRes();
+      // Force a failure inside the handler without stubbing the handler itself.
+      res.setHeader = vi.fn(() => {
+        throw new Error('csv error');
+      });
+
+      await controller.downloadPatientTemplateCSV(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Erro ao gerar template',
+        message: 'csv error',
+      });
+    });
+  });
+
+  // The defect this issue is actually about is the *missing route*, not the
+  // missing handler: a handler nothing routes to is still a 404.
+  describe('#815 route registration', () => {
+    it('routes GET /pacientes/template/csv', () => {
+      const router = require('../../src/interface/routes/import-lgpd.routes');
+      const registered = router.stack
+        .filter((layer) => layer.route)
+        .map((layer) => layer.route.path);
+
+      expect(registered).toContain('/pacientes/template/csv');
+    });
+
+    it('routes all four type x format template combinations', () => {
+      const router = require('../../src/interface/routes/import-lgpd.routes');
+      const registered = router.stack
+        .filter((layer) => layer.route)
+        .map((layer) => layer.route.path);
+
+      for (const path of [
+        '/pacientes/template/csv',
+        '/pacientes/template/xlsx',
+        '/amostras/template/csv',
+        '/amostras/template/xlsx',
+      ]) {
+        expect(registered).toContain(path);
+      }
+    });
+  });
+
   describe('downloadSampleTemplateCSV', () => {
     it('sends a CSV with default values when no db is available', async () => {
       const req = { app: { locals: {} } };
