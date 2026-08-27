@@ -8,6 +8,7 @@
 # generic workflow skills
 work-issue
 resolve-issue
+github-issues
 issue-loop
 fix-bugs
 test-loop
