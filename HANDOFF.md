@@ -1,7 +1,7 @@
 # HANDOFF
 
 **INTERIM — the session is still running.** Written 2026-08-27, after
-**queue item 2 of 5**. Dennis asked for the next five issues, left the
+**queue item 3 of 5**. Dennis asked for the next five issues, left the
 pick to me, and authorised Docker. This is a mid-run snapshot, not the
 definitive rotation; do not read it as "the session is done."
 
@@ -11,7 +11,7 @@ definitive rotation; do not read it as "the session is done."
 |---|---|---|---|
 | 1 | **#809** bulk consent-token page never built | build-loop | **CLOSED** `58c34236` / merged `76e893f9` — also cascaded **#805 CLOSED** |
 | 2 | **#810** publish sweep aborts on first throw | fix-bugs | **CLOSED** `b8ab77cb` / merged `df373af2` |
-| 3 | **#816** `canRoleAccessRoute` fails open | fix-bugs | not started |
+| 3 | **#816** `canRoleAccessRoute` fails open | fix-bugs | **CLOSED** `1086502b` / merged `d17e7828` |
 | 4 | **#815** `downloadTemplate` builds a dead URL | fix-bugs | not started |
 | 5 | **#813** async importer has no quarantine | build-loop | not started (largest; deliberately last) |
 
@@ -49,7 +49,30 @@ fixed code is still live (the route is registered; `PUT
 /consent-policies/:id` delegates into it), just not UI-reachable — the
 #813/#808 shape one domain over.
 
-## Five issues filed this sitting
+## Item 3: #816 — frontend route authorization now fails closed
+
+`canRoleAccessRoute` ended in a bare `return true`. Replaced with
+`ROUTE_ACCESS`, an ordered per-role prefix allow-list; anything unmatched
+is denied, matched on segment boundaries. New
+`frontend/src/utils/rolePermissions.test.ts` includes the architecture
+guard the issue asked for: it parses every `<Route path=>` out of
+`App.tsx` and asserts each is reachable by at least one role (and pins
+its own regex hit count so a refactor can't make it vacuously green).
+
+**Nobody's effective access changed** — the table reproduces the old
+answers. Where a route's own `requiredRole` was narrower, the narrower
+one is used (can't widen: ProtectedRoute needs both). All 16 sidebar item
+paths were checked individually and still resolve identically.
+
+**#825** carries what this deliberately did NOT change: `canRoleAccessRoute`
+is *stricter* than the `<Route>` declaration in two places, so
+`Usuário Externo` cannot open `/reports` (the one thing that role's own
+description says it is for) and **no `Coordenador` can open the TCLE
+builder** (`/admin/tcle/*`, denied as collateral from the `/admin` prefix).
+Fixing those means *granting* access — an owner call, and not something to
+slip into a fail-closed commit.
+
+## Six issues filed this sitting
 
 The prior sitting's lesson (bodies are wrong about their *premises*)
 held again, and this time the false premise was in the **handoff**, not
@@ -78,6 +101,9 @@ the issue:
   to the shared `api` client without adding the route to
   `TOKEN_OPTIONAL_ROUTES` reproduces the auth wall, because the request
   interceptor cancels session-less requests.
+- **#825** — route authorization contradicts itself in two places
+  (above). Also flags `getAllowedRoutes`, a third per-role list with no
+  caller in the gate that disagrees with it on `/reports`.
 - **#824** — the operator UI's TCLE builder publishes terms through a
   path that notifies nobody (above). Carries #810's remaining
   operator-visibility half.
@@ -91,9 +117,10 @@ the issue:
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, **in sync with origin**
-  (`df373af2`). No open PR; `main` untouched and frozen.
-- `test/809-bulk-consent-token-page` and `fix/810-consent-sweep-per-patient`
-  both merged and deleted locally. Neither was pushed, so there are no
+  (`d17e7828`). No open PR; `main` untouched and frozen.
+- `test/809-bulk-consent-token-page`, `fix/810-consent-sweep-per-patient`
+  and `fix/816-route-authorization-fail-closed` all merged and deleted
+  locally. Neither was pushed, so there are no
   remote branches to clean up — a deliberate deviation from `fix-bugs`'
   "push the fix branch then merge", since nothing needed the branch to
   exist remotely.
@@ -130,12 +157,14 @@ owes `clean-up`.
 - `consent-token-page.spec.ts` **4/4** against the real stack, nothing
   logging in, asserting the persisted `PENDING_CONSENT` → `ACTIVE`
   transition.
-- Frontend unit suite **149/149**; `patient.service` +
+- `rolePermissions.test.ts` **10/10** (new for #816, red-first on the two
+  fail-open assertions).
+- Frontend unit suite **149/149** (before #816's file was added); `patient.service` +
   `NotificationService` **127/127**.
 
 ## Recommended next steps
 
-Continue the queue in order: **#816 → #815 → #813**. Nothing else
+Continue the queue in order: **#815 → #813**. Nothing else
 is queued by Dennis beyond the five.
 
 The `#684 / #800 / #801` object-ownership cluster remains the
