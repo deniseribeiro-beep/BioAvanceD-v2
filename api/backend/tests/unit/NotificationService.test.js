@@ -303,15 +303,20 @@ describe('NotificationService', () => {
       expect(diffDays).toBeCloseTo(7, 5);
     });
 
-    it('builds a consent link using patientID and the frontend URL, trimming trailing slash', () => {
+    it('builds a consent link using participantId and the frontend URL, trimming trailing slash', () => {
       process.env.FRONTEND_URL = 'https://app.example.com/';
-      const link = notificationService.buildConsentLink({ patientID: 'P-1' }, 'tok en');
+      const link = notificationService.buildConsentLink({ participantId: 'P-1' }, 'tok en');
       expect(link).toBe('https://app.example.com/patients/P-1/consent?token=tok%20en');
     });
 
-    it('falls back to patientId then id when patientID is absent', () => {
-      const link = notificationService.buildConsentLink({ id: 'P-9' }, 'tok');
-      expect(link).toContain('/patients/P-9/consent');
+    // #805: was 'falls back to patientId then id when patientID is absent'.
+    // That fallback chain never matched any caller's shape and produced
+    // /patients/undefined/consent in production; it now throws instead.
+    it('throws when participantId is absent instead of emitting an undefined id', () => {
+      process.env.FRONTEND_URL = 'https://app.example.com/';
+      expect(() => notificationService.buildConsentLink({ id: 'P-9' }, 'tok')).toThrow(
+        expect.objectContaining({ code: 'CONSENT_PARTICIPANT_ID_REQUIRED' })
+      );
     });
   });
 

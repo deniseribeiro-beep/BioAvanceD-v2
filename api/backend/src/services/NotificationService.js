@@ -316,9 +316,24 @@ class NotificationService {
 
   buildConsentLink(patientData, token) {
     const baseUrl = this.validateFrontendUrl().toString().replace(/\/$/, '');
-    const patientId = patientData.patientID || patientData.patientId || patientData.id;
+    // #805: this read `patientID || patientId || id`, none of which any of the
+    // six production callers carry -- they pass either a PatientModel.create()
+    // result or a spread of a patients-collection document, and Patient's
+    // canonical field list (models/Patient.js) has only `participantId`. Every
+    // consent invitation therefore emailed `/patients/undefined/consent`.
+    // participantId is not just the surviving alias: the endpoints that consume
+    // this link's id segment, POST /api/e-consent/consent-tokens/{validate,accept},
+    // resolve the patient by `{ participantId }` (patient.service.js), so it is
+    // the only value the link can carry and still work.
+    const participantId = String((patientData && patientData.participantId) || '').trim();
+    if (!participantId) {
+      throw consentTransportError(
+        'CONSENT_PARTICIPANT_ID_REQUIRED',
+        'participantId e obrigatorio para montar o link de consentimento'
+      );
+    }
     const encodedToken = encodeURIComponent(token);
-    return `${baseUrl}/patients/${patientId}/consent?token=${encodedToken}`;
+    return `${baseUrl}/patients/${encodeURIComponent(participantId)}/consent?token=${encodedToken}`;
   }
 
   async sendConsentEmail(patientData, consentLink) {
