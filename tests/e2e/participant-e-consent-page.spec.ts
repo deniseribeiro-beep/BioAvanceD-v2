@@ -23,13 +23,12 @@ import { realLogin } from './helpers/realAuth';
 // The token here is minted by the real endpoint, not hand-signed, so the spec
 // exercises the actual production path an operator triggers.
 //
-// SCOPE: this covers the *load* path. EConsentPage's submit is separately
-// blocked by #820 (createPatientConsent 422s every signature-less
-// manifestation, which is exactly what this page sends), so there is
-// deliberately no acceptance assertion here -- adding one would fail on a
-// different, already-tracked defect. The last test pins the 422 as the current
-// truth so that closing #820 makes this spec fail loudly and get updated,
-// rather than leaving the gap silently uncovered.
+// SCOPE: #820 (the submit-side 422 on every signature-less manifestation) is
+// now fixed, so the last test asserts the acceptance is recorded rather than
+// pinning the failure. Its proof here is still deferred on #829 like its two
+// siblings; the fix itself is proven natively (consent.service.unit 122/122,
+// 6 of them red-first) and by a direct signature-less POST against this stack
+// -- see #820's close comment.
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
 const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
@@ -220,12 +219,11 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
     await expect(page.getByTestId('e-consent-submit')).toHaveCount(0);
   });
 
-  // #820, pinned as current truth. The transport fix makes this request reach
-  // the backend, which is what exposes the 422 -- before it, the POST also
-  // returned index.html with a 200 and the page reported success-shaped
-  // silence. When #820 lands this test must be inverted to assert the
-  // acceptance is recorded; it is written to fail loudly at that point rather
-  // than leave the submit path uncovered.
+  // #820 is fixed (see its close comment). This asserts the acceptance is
+  // recorded; it previously pinned the 422 as current truth. #822's transport
+  // fix is what makes the request reach the backend at all -- before it, the
+  // POST also returned index.html with a 200 and the page reported
+  // success-shaped silence.
   // BLOCKED ON #829 -- not a weakened assertion, an unrunnable fixture.
   // This test mints its link through the real POST /api/e-consent/generate-link,
   // which currently *crashes the API process*: the handler has no try/catch, so
@@ -237,7 +235,7 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
   // Deliberately NOT worked around by hand-signing a JWT with CONSENT_SECRET:
   // going through the operator's real path is the point of the spec. Remove the
   // fixme when #829 lands.
-  test.fixme('submitting still fails: the backend 422s a signature-less manifestation (#820)', async ({
+  test.fixme('a signature-less acceptance is recorded as a Consent (#820, fixed)', async ({
     request,
   }) => {
     const { participantId, email } = await seedParticipant();
@@ -254,11 +252,20 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
       },
     });
 
-    expect(response.status()).toBe(422);
-    expect(await response.text()).toMatch(/signature/i);
+    // #820 (fixed): this asserted 422 + "no Consent recorded" as the pinned
+    // current truth. normalizeSignaturePayload now omits the signature keys
+    // rather than emptying them, so the schema's own "optional" declaration
+    // holds and the participant page's submit is accepted.
+    expect(response.status(), await response.text()).toBe(200);
 
-    // No Consent is recorded, which is the substance of #820.
     const consent = await db.collection('consents').findOne({ participantId });
-    expect(consent).toBeNull();
+    expect(consent).toBeTruthy();
+    expect(consent?.consentId).toBeTruthy();
+    expect(consent?.status).toBe('ACTIVE');
+    // Explicitly absent, not blank -- PatientConsentModel.create's null
+    // defaults, so the record says "no signature" rather than "empty signature".
+    expect(consent?.signatureImageBase64).toBeNull();
+    expect(consent?.signatureHash).toBeNull();
+    expect(consent?.responses).toMatchObject({ 'research-822': true });
   });
 });
