@@ -11,6 +11,7 @@ import {
   countReferenceDatasetReleases,
   countTerminologyConcepts,
   countReferenceDatasetReleasesByDatasetCode,
+  countActiveReferenceDatasetReleasesByDatasetCode,
   countTerminologyConceptsBySystemUri,
   closeFoundationDb,
 } from './helpers/queryFoundationData';
@@ -388,6 +389,40 @@ test.describe('Reference data importers (RF028) — real backend', () => {
 // Shared by every RF029 slice's describe block below (slice 1's own
 // generic proof plus each entity slice's) — the probe route itself is
 // entity-agnostic, so one helper covers all of them.
+// #722: the two tests below that assert `accepted` do so with
+// HP:0000001, the Foundation Data Pipeline bootstrap's own bundled root HPO
+// concept. That is a deliberate choice -- it is backed by a real, non-
+// fabricated ReferenceDatasetRelease, unlike a hand-seeded concept doc --
+// but it is only true on a stack where the reference-data bootstrap chain
+// has actually run. That chain is a separate, much more expensive set of
+// one-shot services (compose.test.yml's `reference-data-bootstrap-*-test`)
+// and is NOT part of the core bring-up recipe.
+//
+// Without it these tests failed as `expected 'accepted', received
+// 'quarantined'`, which reads as a regression in the ingestion gateway and
+// was briefly mistaken for one during #674's verification. The dependency
+// is real and worth keeping; what was missing is it being *stated*.
+//
+// Deliberately NOT solved by seeding a fixture release for HPO:
+// seedActiveTerminologyConcept supersedes whatever release is currently
+// active for its datasetCode, and #745 is the incident where doing exactly
+// that against a bootstrapped stack left HPO with zero active releases
+// permanently on a persistent volume -- breaking this very block. Asserting
+// the precondition is safe; manufacturing it is not.
+async function assertReferenceDataBootstrapped(datasetCode = 'HPO') {
+  const active = await countActiveReferenceDatasetReleasesByDatasetCode(datasetCode);
+  const hint = [
+    `RF029 ingestion probes need an active ${datasetCode} ReferenceDatasetRelease; this stack has ${active}.`,
+    'The reference-data bootstrap chain has not been run against these volumes.',
+    'This is an environment gap, not a regression in the ingestion gateway.',
+    'Bring the chain up with a single compose command naming every',
+    "reference-data-bootstrap-*-test service (grep compose.test.yml for",
+    "'^  reference-data-bootstrap' for the current list); each exits 0 in ~1-2 min.",
+    'See #722.',
+  ].join(' ');
+  expect(active, hint).toBeGreaterThan(0);
+}
+
 async function probeIngestionGateway(request: import('@playwright/test').APIRequestContext, body: Record<string, unknown>) {
   const response = await request.post(`${apiBaseURL}/api/_test-support/ingestion/probe`, {
     headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
@@ -422,6 +457,8 @@ test.describe('Ingestion gateway foundation (RF029 slice 1/6) — real backend',
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
 
+    await assertReferenceDataBootstrapped();
+
     const outcome = await probeIngestionGateway(request, {
       entityType: 'IngestionFoundationProbe',
       payload: { probe: 'accepted', participantId: participant.participantId },
@@ -436,6 +473,7 @@ test.describe('Ingestion gateway foundation (RF029 slice 1/6) — real backend',
       // bundled fixture root concept, same one the RF028 AC9 block above
       // waits for in Neo4j — guaranteed active with a real, non-fabricated
       // ReferenceDatasetRelease behind it, unlike a hand-seeded concept doc.
+      // Its precondition is asserted above (#722).
       referenceCodes: [{ systemUri: 'http://purl.obolibrary.org/obo/hp.owl', code: 'HP:0000001', label: 'probeCode' }],
     });
 
@@ -529,6 +567,8 @@ test.describe('Ingestion gateway — participants, consents, specimens, clinical
   });
 
   test('a specimen payload referencing a real participant, with a real active code, is accepted', async ({ request }) => {
+    await assertReferenceDataBootstrapped();
+
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
 
