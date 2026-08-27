@@ -1,7 +1,7 @@
 # HANDOFF
 
 **INTERIM — the session is still running.** Written 2026-08-27, after
-**queue item 3 of 5**. Dennis asked for the next five issues, left the
+**queue item 4 of 5**. Dennis asked for the next five issues, left the
 pick to me, and authorised Docker. This is a mid-run snapshot, not the
 definitive rotation; do not read it as "the session is done."
 
@@ -12,7 +12,7 @@ definitive rotation; do not read it as "the session is done."
 | 1 | **#809** bulk consent-token page never built | build-loop | **CLOSED** `58c34236` / merged `76e893f9` — also cascaded **#805 CLOSED** |
 | 2 | **#810** publish sweep aborts on first throw | fix-bugs | **CLOSED** `b8ab77cb` / merged `df373af2` |
 | 3 | **#816** `canRoleAccessRoute` fails open | fix-bugs | **CLOSED** `1086502b` / merged `d17e7828` |
-| 4 | **#815** `downloadTemplate` builds a dead URL | fix-bugs | not started |
+| 4 | **#815** `downloadTemplate` builds a dead URL | fix-bugs | **CLOSED** `e4e4d4fd` / merged `dd6cf43d` |
 | 5 | **#813** async importer has no quarantine | build-loop | not started (largest; deliberately last) |
 
 ## Item 1: #809 — the consent invitation path now works end to end
@@ -72,6 +72,29 @@ builder** (`/admin/tcle/*`, denied as collateral from the `/admin` prefix).
 Fixing those means *granting* access — an owner call, and not something to
 slip into a fail-closed commit.
 
+## Item 4: #815 — all four template URLs now have routes
+
+Added `downloadPatientTemplateCSV` + `/pacientes/template/csv`, the one
+type x format combination the router never registered while the client
+built the URL for all four. Columns and the example row moved to module
+scope (`PATIENT_TEMPLATE_HEADERS` / `PATIENT_TEMPLATE_EXAMPLE_ROW`) and
+are shared by both builders — a second copy would drift, and an operator
+filling in the drifted one would get rejected rows with nothing pointing
+at the template.
+
+The issue's option 2 (make the bad combination unrepresentable in the
+client's type) was deliberately **not** taken: a narrowed signature only
+encodes what someone believed the routes were, which is the assumption
+that was already wrong. The new `#815 route registration` test asserts
+from the backend that all four template paths are registered — which a
+client-side type cannot do. Reasoning and an offer to do it anyway are on
+the closed issue.
+
+Un-weakened all three pinned spots (`availableTemplateFormats`, its test,
+`ImportLGPDPage`'s header comment). Verified the page really renders from
+`availableTemplateFormats`, so the CSV button is genuinely reachable —
+the check #824 taught.
+
 ## Six issues filed this sitting
 
 The prior sitting's lesson (bodies are wrong about their *premises*)
@@ -117,10 +140,10 @@ the issue:
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, **in sync with origin**
-  (`d17e7828`). No open PR; `main` untouched and frozen.
-- `test/809-bulk-consent-token-page`, `fix/810-consent-sweep-per-patient`
-  and `fix/816-route-authorization-fail-closed` all merged and deleted
-  locally. Neither was pushed, so there are no
+  (`dd6cf43d`). No open PR; `main` untouched and frozen.
+- `test/809-bulk-consent-token-page`, `fix/810-consent-sweep-per-patient`,
+  `fix/816-route-authorization-fail-closed` and
+  `fix/815-patient-csv-template` all merged and deleted locally. Neither was pushed, so there are no
   remote branches to clean up — a deliberate deviation from `fix-bugs`'
   "push the fix branch then merge", since nothing needed the branch to
   exist remotely.
@@ -157,6 +180,8 @@ owes `clean-up`.
 - `consent-token-page.spec.ts` **4/4** against the real stack, nothing
   logging in, asserting the persisted `PENDING_CONSENT` → `ACTIVE`
   transition.
+- `import-lgpd.controller.test.js` **54/54** (6 new for #815, red-first);
+  91/91 across the three import-lgpd controller suites.
 - `rolePermissions.test.ts` **10/10** (new for #816, red-first on the two
   fail-open assertions).
 - Frontend unit suite **149/149** (before #816's file was added); `patient.service` +
@@ -164,7 +189,7 @@ owes `clean-up`.
 
 ## Recommended next steps
 
-Continue the queue in order: **#815 → #813**. Nothing else
+Continue the queue: **#813**, the last item. Nothing else
 is queued by Dennis beyond the five.
 
 The `#684 / #800 / #801` object-ownership cluster remains the
