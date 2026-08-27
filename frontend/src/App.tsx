@@ -13,6 +13,7 @@ const Dashboard = lazy(() => import('./views/Dashboard'));
 const PatientsPage = lazy(() => import('./views/PatientsPage'));
 const FhirImportPage = lazy(() => import('./views/FhirImportPage'));
 const ImportQuarantinePage = lazy(() => import('./views/ImportQuarantinePage'));
+const ImportLGPDPage = lazy(() => import('./views/ImportLGPDPage'));
 const ConsentPage = lazy(() => import('./pages/patient/EConsentPage'));
 const SamplesPage = lazy(() => import('./views/SamplesPage'));
 const SampleDetailsPage = lazy(() => import('./views/SampleDetailsPage'));
@@ -123,6 +124,21 @@ function App() {
                   <Route path="/reports/query/:type" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportQueryPage /></ProtectedRoute>} />
                   <Route path="/reports/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportViewPage /></ProtectedRoute>} />
                   <Route path="/quality-descriptions" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionPage /></ProtectedRoute>} />
+                  {/* #808: the LGPD import's own surface. `/import` posts to the
+                      *async* importer, which discards rejected rows (#813); this
+                      posts to the LGPD importer, the only one that quarantines
+                      them (RNF011 AC#4 / RF029 AC#6). Same roles as /import and
+                      /import/quarantine -- the backend gates the two import
+                      routes on createPatient/createSample respectively, which
+                      these three roles hold. */}
+                  <Route
+                    path="/import/lgpd"
+                    element={
+                      <ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}>
+                        <ImportLGPDPage />
+                      </ProtectedRoute>
+                    }
+                  />
                   {/* #794 item 2 (RNF011 AC#4): the quarantine review surface.
                       Same roles as /import — the backend gates both the list
                       and the batch read on createSample, which is the
