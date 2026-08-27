@@ -135,6 +135,94 @@ describe('eConsent.routes POST /generate-link', () => {
 
     sendConsentEmailSpy.mockRestore();
   });
+
+  // #829: the handler had no try/catch, so a throw from sendConsentEmail was
+  // an unhandled promise rejection and Node *exited the process*. Observed on
+  // the test stack: backend-app-test went Up (healthy) -> Exited (1) on a
+  // single request. Every existing test above mocks sendConsentEmail to
+  // resolve, which is why the throw path was never exercised.
+  //
+  // sendConsentEmail does network I/O (SMTP) and validates FRONTEND_URL, so
+  // both a transient mail failure and a config gap reach this branch.
+  it('returns an error response when sendConsentEmail throws, instead of rejecting unhandled', async () => {
+    const router = loadAuthenticatedRouter();
+    const notificationService = require('../../src/services/notification.service');
+    const failure = new Error('FRONTEND_URL deve ser uma URL absoluta válida');
+    failure.code = 'CONSENT_FRONTEND_URL_INVALID';
+    const sendConsentEmailSpy = vi
+      .spyOn(notificationService, 'sendConsentEmail')
+      .mockRejectedValue(failure);
+    const patient = { participantId: '12345678', email: 'a@b.com' };
+    const findOne = vi.fn().mockResolvedValue(patient);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const app = buildApp(router, db);
+
+    const res = await request(app)
+      .post('/e-consent/generate-link')
+      .send({ participantId: '12345678', email: 'a@b.com' });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/consentimento|link/i);
+    expect(res.body.message).toContain('FRONTEND_URL');
+
+    sendConsentEmailSpy.mockRestore();
+  });
+
+  it('propagates a statusCode the notification service sets, rather than flattening to 500', async () => {
+    const router = loadAuthenticatedRouter();
+    const notificationService = require('../../src/services/notification.service');
+    const failure = new Error('Convites remotos exigem FRONTEND_URL HTTPS');
+    failure.statusCode = 422;
+    const sendConsentEmailSpy = vi
+      .spyOn(notificationService, 'sendConsentEmail')
+      .mockRejectedValue(failure);
+    const patient = { participantId: '12345678', email: 'a@b.com' };
+    const findOne = vi.fn().mockResolvedValue(patient);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const app = buildApp(router, db);
+
+    const res = await request(app)
+      .post('/e-consent/generate-link')
+      .send({ participantId: '12345678', email: 'a@b.com' });
+
+    expect(res.status).toBe(422);
+
+    sendConsentEmailSpy.mockRestore();
+  });
+
+  // The route used to build the emailed link with its own
+  // `process.env.FRONTEND_URL || 'http://localhost:5173'` fallback, while
+  // sendConsentEmail -> validateFrontendUrl -> getFrontendUrl read the same
+  // variable with NO fallback and threw when empty. Two rules for one value in
+  // one request: the fallback made the endpoint look configured, and then the
+  // strict path crashed on the value the route had already substituted.
+  // Worse, had the strict path not thrown, the fallback would have emailed a
+  // real participant a link to *their own* localhost.
+  it('does not silently substitute a localhost link when FRONTEND_URL is unset', async () => {
+    const originalFrontendUrl = process.env.FRONTEND_URL;
+    delete process.env.FRONTEND_URL;
+
+    try {
+      const router = loadAuthenticatedRouter();
+      const patient = { participantId: '12345678', email: 'a@b.com' };
+      const findOne = vi.fn().mockResolvedValue(patient);
+      const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+      const app = buildApp(router, db);
+
+      const res = await request(app)
+        .post('/e-consent/generate-link')
+        .send({ participantId: '12345678', email: 'a@b.com' });
+
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(JSON.stringify(res.body)).not.toContain('localhost:5173');
+    } finally {
+      if (originalFrontendUrl === undefined) {
+        delete process.env.FRONTEND_URL;
+      } else {
+        process.env.FRONTEND_URL = originalFrontendUrl;
+      }
+    }
+  });
 });
 
 describe('eConsent.routes GET /validate/:token', () => {

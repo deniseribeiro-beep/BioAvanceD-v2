@@ -7,6 +7,7 @@ const { authenticate } = require('../infrastructure/middleware/auth');
 const { requireRole, requirePermission } = require('../infrastructure/middleware/rbac');
 const consentController = require('../controllers/consent.controller');
 const participantIdentityService = require('../services/participantIdentity.service');
+const logger = require('../utils/logger');
 const CONSENT_SECRET = String(process.env.CONSENT_SECRET || '').trim();
 const CONSENT_EXPIRATION = 60 * 60 * 2; // 2h
 
@@ -26,10 +27,31 @@ router.post('/generate-link', authenticate, requirePermission('createPatient'), 
     return res.status(403).json({ error: 'Email não corresponde ao paciente' });
   }
 
-  const token = jwt.sign({ participantId }, CONSENT_SECRET, { expiresIn: CONSENT_EXPIRATION });
-  const link = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/patient/e-consent/${token}`;
-  await notificationService.sendConsentEmail({ participantId, email }, link);
-  res.json({ success: true, link });
+  // #829: this block had no try/catch. sendConsentEmail throws on an invalid
+  // FRONTEND_URL and does SMTP I/O besides, so a config gap or a transient
+  // mail failure became an unhandled promise rejection -- which Node does not
+  // treat as a caught error: it exits the process. One authenticated request
+  // took the whole API down. The four sibling handlers in this file
+  // (/validate/:token, /update, and the FHIR import consent pair) all already
+  // had one; this was an omission, not a pattern.
+  try {
+    const token = jwt.sign({ participantId }, CONSENT_SECRET, { expiresIn: CONSENT_EXPIRATION });
+    // #829: the link is built from the service's own resolver rather than a
+    // second, more lenient reading of the same variable. The route used to
+    // default to 'http://localhost:5173' while getFrontendUrl() threw on an
+    // empty value -- two rules for one value in one request. The lenient one
+    // was the more dangerous of the two: had the strict path not thrown, it
+    // would have emailed a real participant a link to their own localhost.
+    const link = `${notificationService.getFrontendUrl()}/patient/e-consent/${token}`;
+    await notificationService.sendConsentEmail({ participantId, email }, link);
+    return res.json({ success: true, link });
+  } catch (error) {
+    logger.error('Erro ao gerar link de consentimento:', error);
+    return res.status(error.statusCode || 500).json({
+      error: 'Erro ao gerar link de consentimento',
+      message: error.message,
+    });
+  }
 });
 
 // Valida token e retorna dados do paciente, o template de consentimento
