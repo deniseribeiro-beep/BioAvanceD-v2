@@ -113,11 +113,19 @@ class ImportAsyncService {
     const normalized = this.normalizeHeader(original);
     const fieldMapping = {
       // patientId aliases
-      patientid: 'patientID',
+      // #773: both entries targeted the legacy name 'patientID'. Two
+      // independent sources settle the canonical spelling as
+      // 'participantId': contracts/canonical/v1/index.js declares
+      // participantId (required) and lists no patientID field, and
+      // sample.routes.js:378-384 already 422s a payload carrying patientID
+      // as NON_CANONICAL_FIELD, the same "Legacy Fields Prohibited" list.
+      // The keys on the left are user-facing CSV column names and stay as
+      // they are -- only the canonical target changes.
+      patientid: 'participantId',
       // #770: `idpaciente` was listed twice here. Both copies assigned the
       // same value, so the duplicate was inert -- but it is the same
       // rename-collision tell that started this family at #758, so it goes.
-      idpaciente: 'patientID',
+      idpaciente: 'participantId',
       // sampleType aliases
       sampletype: 'sampleType',
       tipoamostra: 'sampleType',
