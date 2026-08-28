@@ -430,7 +430,13 @@ describe('import-lgpd.controller gaps', () => {
 
       await controller.importPatients(req, res);
 
-      expect(logImportSpy).toHaveBeenCalledWith(req, 'Patient', 'partial', 2, 1, 1);
+      // #798: logImport gained a 7th `context` argument carrying the
+      // blank-row count. These mocked service returns have no `skipped`
+      // key, so it arrives undefined -- the call shape is what is pinned
+      // here; the counts are pinned in the per-loop service tests.
+      expect(logImportSpy).toHaveBeenCalledWith(
+        req, 'Patient', 'partial', 2, 1, 1, expect.objectContaining({ skipped: undefined })
+      );
     });
 
     it('catch block: logs an audit error via auditLogger.logError when req.user is present', async () => {
@@ -810,7 +816,10 @@ describe('import-lgpd.controller gaps', () => {
 
       await controller.importSamples(req, res);
 
-      expect(logImportSpy).toHaveBeenCalledWith(req, 'Sample', 'success', 2, 2, 0);
+      // #798: as above -- the 7th `context` argument is the blank-row count.
+      expect(logImportSpy).toHaveBeenCalledWith(
+        req, 'Sample', 'success', 2, 2, 0, expect.objectContaining({ skipped: undefined })
+      );
     });
 
     it('logs a "partial" audit event when req.user is present and some rows failed', async () => {
@@ -830,7 +839,10 @@ describe('import-lgpd.controller gaps', () => {
 
       await controller.importSamples(req, res);
 
-      expect(logImportSpy).toHaveBeenCalledWith(req, 'Sample', 'partial', 2, 1, 1);
+      // #798: as above -- the 7th `context` argument is the blank-row count.
+      expect(logImportSpy).toHaveBeenCalledWith(
+        req, 'Sample', 'partial', 2, 1, 1, expect.objectContaining({ skipped: undefined })
+      );
     });
   });
 });
