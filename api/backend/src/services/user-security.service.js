@@ -621,7 +621,15 @@ class UserSecurityService {
     try {
       const usersCollection = db.collection('users');
       const jwt = require('jsonwebtoken');
-      const env = require('../../config/env');
+      // #873: this was '../../config/env', which resolves to the
+      // compatibility re-export under api/backend/config/ rather than to the
+      // canonical module under src/config/. Every other importer in
+      // src/services/ uses '../config/env'; this one line was the outlier.
+      // It worked, because the re-export hands back the same object -- but
+      // #863's guard resolves require paths exactly, so going through the
+      // re-export took this file out of the guard's collection entirely and
+      // left its reads unchecked.
+      const env = require('../config/env');
       
       const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
       

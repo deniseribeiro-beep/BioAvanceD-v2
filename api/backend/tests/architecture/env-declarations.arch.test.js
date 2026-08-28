@@ -179,7 +179,18 @@ test('#777: the guard still collects both root entrypoints', () => {
   // what #777/#863 fixed.
   const collected = filesRequiringEnv().map(({ file }) => relative(file));
 
-  for (const name of ['app.js', 'server.js', 'src/config/collections.js', 'src/config/redis.js']) {
+  // #873 adds a fourth shape: user-security.service.js reached env through
+  // the api/backend/config/env.js re-export shim, which resolves to a
+  // different file than src/config/env.js, so the exact-resolution collector
+  // correctly excluded it and its reads went unchecked. The import is fixed;
+  // pinning it here is what stops the same one-token slip recurring silently.
+  for (const name of [
+    'app.js',
+    'server.js',
+    'src/config/collections.js',
+    'src/config/redis.js',
+    'src/services/user-security.service.js',
+  ]) {
     assert.ok(
       collected.includes(name),
       `${name} imports config/env but the guard did not collect it -- `
