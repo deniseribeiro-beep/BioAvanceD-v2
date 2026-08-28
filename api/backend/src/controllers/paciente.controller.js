@@ -796,16 +796,21 @@ class PacienteController {
       this.rejectCanonicalAliases(req.body || {});
 
       const { participantId } = req.body;
-      if (!participantId) {
+      // #887: a truthy check admits an object -- `{ $ne: null }` is truthy
+      // and would reach findOne below as a live operator, returning the
+      // first patient in natural order for editing. Coerced the way
+      // auth.service.js#login has always coerced its own lookup field.
+      if (!participantId || typeof participantId !== 'string' || !participantId.trim()) {
         return res.status(400).json({
           success: false,
           error: 'participantId é obrigatório'
         });
       }
+      const participantIdTerm = participantId.trim();
 
       const { getCollection } = require('../utils/collectionResolver');
       const patientsCollection = await getCollection(db, 'patients');
-      const patient = await patientsCollection.findOne({ participantId });
+      const patient = await patientsCollection.findOne({ participantId: participantIdTerm });
 
       if (!patient) {
         // Registra tentativa de busca para edição de paciente inexistente (sanitizado)

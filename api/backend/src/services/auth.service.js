@@ -535,11 +535,20 @@ class AuthService {
         throw new Error('Username e senha são obrigatórios');
       }
 
+      // #887: a truthy check admits an object. `{ $ne: null }` is truthy,
+      // so without this it reaches the $or below as a live operator and
+      // matches an arbitrary user. login() has coerced the same field with
+      // .trim() all along; these two siblings never did.
+      if (typeof username !== 'string') {
+        throw new Error('Username e senha são obrigatórios');
+      }
+      const usernameTerm = username.trim();
+
       const usersCollection = db.collection('users');
       const user = await usersCollection.findOne({
         $or: [
-          { email: username },
-          { username: username }
+          { email: usernameTerm },
+          { username: usernameTerm }
         ]
       });
 
@@ -619,6 +628,15 @@ class AuthService {
         throw new Error('Username e senha são obrigatórios');
       }
 
+      // #887: a truthy check admits an object. `{ $ne: null }` is truthy,
+      // so without this it reaches the $or below as a live operator and
+      // matches an arbitrary user. login() has coerced the same field with
+      // .trim() all along; these two siblings never did.
+      if (typeof username !== 'string') {
+        throw new Error('Username e senha são obrigatórios');
+      }
+      const usernameTerm = username.trim();
+
       if (!mfaCode) {
         throw new Error('Código MFA é obrigatório');
       }
@@ -628,8 +646,8 @@ class AuthService {
       
       const user = await usersCollection.findOne({
         $or: [
-          { email: username },
-          { username: username }
+          { email: usernameTerm },
+          { username: usernameTerm }
         ]
       });
 
@@ -833,11 +851,20 @@ class AuthService {
       const usersCollection = db.collection('users');
       const { ObjectId } = require('mongodb');
 
+      // #887: same coercion as login() and the MFA-first-login siblings.
+      // This path deliberately answers success whether or not a user is
+      // found, so an operator reaching the filter would be invisible from
+      // the response -- the reset mail destination would be the only tell.
+      if (typeof email !== 'string') {
+        throw new Error('Email é obrigatório');
+      }
+      const emailTerm = email.trim();
+
       // Busca usuário por email ou username
       const user = await usersCollection.findOne({
         $or: [
-          { email },
-          { username: email }
+          { email: emailTerm },
+          { username: emailTerm }
         ]
       });
 
