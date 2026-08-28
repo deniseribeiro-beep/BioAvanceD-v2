@@ -619,10 +619,19 @@ describe('backup.service', () => {
       expect(result.collections).toBe(1);
       expect(fakeDb.collection).toHaveBeenCalledWith('patients');
       expect(fakeCollection.deleteMany).toHaveBeenCalledWith({});
-      expect(fakeCollection.insertMany).toHaveBeenCalledWith(
-        [{ _id: 1, name: 'restored-patient' }],
-        { ordered: false }
-      );
+      // #858: the JSON fallback parses with BSON.EJSON.parse(raw, { relaxed: false })
+      // (backup.service.js:182), deliberately, because plain JSON.parse does not
+      // round-trip BSON -- ObjectId _ids came back as strings. Under relaxed:false a
+      // bare `1` deserialises to a BSON Int32, not a JS number, so the previous
+      // toHaveBeenCalledWith([{ _id: 1, ... }]) could not match. Assert the value
+      // rather than the wrapper, so this stays true whichever numeric type the
+      // driver hands back.
+      expect(fakeCollection.insertMany).toHaveBeenCalledTimes(1);
+      const [insertedDocs, insertOptions] = fakeCollection.insertMany.mock.calls[0];
+      expect(insertOptions).toEqual({ ordered: false });
+      expect(insertedDocs).toHaveLength(1);
+      expect(Number(insertedDocs[0]._id)).toBe(1);
+      expect(insertedDocs[0].name).toBe('restored-patient');
       expect(fakeClient.close).toHaveBeenCalled();
     });
 
