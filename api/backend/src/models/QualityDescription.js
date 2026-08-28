@@ -6,7 +6,10 @@ class QualityDescriptionModel {
   static validate(data) {
     const errors = [];
 
-    // qualityID é opcional - será gerado automaticamente se não fornecido
+    // qualityID é opcional - quando ausente, master-data.routes.js:53 o
+    // preenche com Date.now() no POST (montado em app.js via
+    // createMasterDataRouter). Não existe gerador sequencial: #776 removeu
+    // qualityIDGenerator, que nenhum caminho de src/ chamava.
     // Apenas valida se fornecido
     if (data.qualityID !== undefined && data.qualityID !== null) {
       if (typeof data.qualityID !== 'number') {

@@ -5,7 +5,10 @@ class SampleTypeModel {
   static validate(data) {
     const errors = [];
 
-    // sampleTypeID é opcional - será gerado automaticamente se não fornecido
+    // sampleTypeID é opcional - quando ausente, master-data.routes.js:53 o
+    // preenche com Date.now() no POST (montado em app.js via
+    // createMasterDataRouter). Não existe gerador sequencial: #776 removeu
+    // sampleTypeIDGenerator, que nenhum caminho de src/ chamava.
     if (data.sampleTypeID !== undefined && data.sampleTypeID !== null) {
       if (typeof data.sampleTypeID !== 'number') {
         errors.push('sampleTypeID deve ser um número');

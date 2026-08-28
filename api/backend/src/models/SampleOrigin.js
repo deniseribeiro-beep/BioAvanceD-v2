@@ -5,7 +5,10 @@ class SampleOriginModel {
   static validate(data) {
     const errors = [];
 
-    // originID é opcional - será gerado automaticamente se não fornecido
+    // originID é opcional - quando ausente, master-data.routes.js:53 o
+    // preenche com Date.now() no POST (montado em app.js via
+    // createMasterDataRouter). Não existe gerador sequencial: #776 removeu
+    // originIDGenerator, que nenhum caminho de src/ chamava.
     if (data.originID !== undefined && data.originID !== null) {
       if (typeof data.originID !== 'number') {
         errors.push('originID deve ser um número');

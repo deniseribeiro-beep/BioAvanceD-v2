@@ -1,9 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
 const { generateUniqueEquipmentID } = require('../../src/utils/equipmentIDGenerator');
-const { generateUniqueOriginID } = require('../../src/utils/originIDGenerator');
-const { generateUniqueProtocolID } = require('../../src/utils/protocolIDGenerator');
-const { generateUniqueQualityID } = require('../../src/utils/qualityIDGenerator');
-const { generateUniqueSampleTypeID } = require('../../src/utils/sampleTypeIDGenerator');
 const { generateUniqueSpecimenId } = require('../../src/utils/sampleIDGenerator');
 
 function makeDbMock(findOneResults) {
@@ -66,12 +62,12 @@ describe('generateUniqueEquipmentID', () => {
 // the filter and reproduces MongoDB's BSON sort order, in which every string
 // sorts above every number, so `sort: { equipmentID: -1 }` returns a
 // string-typed row ahead of any numeric one.
-// #756: generalized over the id field name. #736 added this as
-// makeEquipmentDbMock (hardcoded to `equipmentID`); the four sibling
-// generators need the identical fake keyed on originID/protocolID/
-// qualityID/sampleTypeID, so the field is now a parameter rather than
-// four near-copies. makeEquipmentDbMock stays below as a thin wrapper so
-// #736's own tests read unchanged.
+// #756: generalized over the id field name, to also cover four sibling
+// generators keyed on originID/protocolID/qualityID/sampleTypeID; #776
+// later deleted those siblings, leaving equipmentID as the only caller.
+// The field stays a parameter rather than reverting to a hardcoded one,
+// and makeEquipmentDbMock stays below as a thin wrapper so #736's own
+// tests read unchanged.
 //
 // Deliberately NOT makeDbMock (above): that one ignores its query filter
 // entirely and returns canned results in call order, which is precisely
@@ -170,126 +166,6 @@ describe('generateUniqueEquipmentID with string-typed debris (#736)', () => {
   });
 });
 
-// ── generateUniqueOriginID ─────────────────────────────────
-
-describe('generateUniqueOriginID', () => {
-  it('returns 1 when collection is empty', async () => {
-    const db = makeDbMock([null, null]);
-    const id = await generateUniqueOriginID(db);
-    expect(id).toBe(1);
-  });
-
-  it('returns lastID + 1 for populated collection', async () => {
-    const db = makeDbMock([{ originID: 3 }, null]);
-    const id = await generateUniqueOriginID(db);
-    expect(id).toBe(4);
-  });
-
-  it('increments again when next ID is taken', async () => {
-    const db = makeDbMock([{ originID: 2 }, { originID: 3 }, null]);
-    const id = await generateUniqueOriginID(db);
-    expect(id).toBe(4);
-  });
-
-  it('throws when two consecutive IDs are taken', async () => {
-    const db = makeDbMock([{ originID: 1 }, { originID: 2 }, { originID: 3 }]);
-    await expect(generateUniqueOriginID(db)).rejects.toThrow('único');
-  });
-});
-
-// ── generateUniqueProtocolID ───────────────────────────────
-
-describe('generateUniqueProtocolID', () => {
-  it('returns 1 when collection is empty', async () => {
-    const db = makeDbMock([null, null]);
-    const id = await generateUniqueProtocolID(db);
-    expect(id).toBe(1);
-  });
-
-  it('returns lastID + 1 for populated collection', async () => {
-    const db = makeDbMock([{ protocolID: 8 }, null]);
-    const id = await generateUniqueProtocolID(db);
-    expect(id).toBe(9);
-  });
-
-  it('increments again when next ID is taken', async () => {
-    const db = makeDbMock([{ protocolID: 8 }, { protocolID: 9 }, null]);
-    const id = await generateUniqueProtocolID(db);
-    expect(id).toBe(10);
-  });
-
-  it('throws when two consecutive IDs are taken', async () => {
-    const db = makeDbMock([{ protocolID: 1 }, { protocolID: 2 }, { protocolID: 3 }]);
-    await expect(generateUniqueProtocolID(db)).rejects.toThrow('único');
-  });
-
-  it('uses custom collection name', async () => {
-    let usedName;
-    const db = {
-      collection: (name) => {
-        usedName = name;
-        return { findOne: vi.fn().mockResolvedValue(null) };
-      },
-    };
-    await generateUniqueProtocolID(db, 'custom_protocols');
-    expect(usedName).toBe('custom_protocols');
-  });
-});
-
-// ── generateUniqueQualityID ────────────────────────────────
-
-describe('generateUniqueQualityID', () => {
-  it('returns 1 when collection is empty', async () => {
-    const db = makeDbMock([null, null]);
-    const id = await generateUniqueQualityID(db);
-    expect(id).toBe(1);
-  });
-
-  it('returns lastID + 1 for populated collection', async () => {
-    const db = makeDbMock([{ qualityID: 4 }, null]);
-    const id = await generateUniqueQualityID(db);
-    expect(id).toBe(5);
-  });
-
-  it('increments again when next ID is taken', async () => {
-    const db = makeDbMock([{ qualityID: 4 }, { qualityID: 5 }, null]);
-    const id = await generateUniqueQualityID(db);
-    expect(id).toBe(6);
-  });
-
-  it('throws when two consecutive IDs are taken', async () => {
-    const db = makeDbMock([{ qualityID: 1 }, { qualityID: 2 }, { qualityID: 3 }]);
-    await expect(generateUniqueQualityID(db)).rejects.toThrow('único');
-  });
-});
-
-// ── generateUniqueSampleTypeID ─────────────────────────────
-
-describe('generateUniqueSampleTypeID', () => {
-  it('returns 1 when collection is empty', async () => {
-    const db = makeDbMock([null, null]);
-    const id = await generateUniqueSampleTypeID(db);
-    expect(id).toBe(1);
-  });
-
-  it('returns lastID + 1 for populated collection', async () => {
-    const db = makeDbMock([{ sampleTypeID: 6 }, null]);
-    const id = await generateUniqueSampleTypeID(db);
-    expect(id).toBe(7);
-  });
-
-  it('increments again when next ID is taken', async () => {
-    const db = makeDbMock([{ sampleTypeID: 6 }, { sampleTypeID: 7 }, null]);
-    const id = await generateUniqueSampleTypeID(db);
-    expect(id).toBe(8);
-  });
-
-  it('throws when two consecutive IDs are taken', async () => {
-    const db = makeDbMock([{ sampleTypeID: 1 }, { sampleTypeID: 2 }, { sampleTypeID: 3 }]);
-    await expect(generateUniqueSampleTypeID(db)).rejects.toThrow('único');
-  });
-});
-
 // ── generateUniqueSpecimenId ─────────────────────────────────
 // Different shape: crypto.randomInt with collision-retry loop, not sequential.
 
@@ -334,54 +210,12 @@ describe('generateUniqueSpecimenId', () => {
   });
 });
 
-// #756: the four sibling generators carry #736's bug latently -- same
+// #756/#776: this file used to also cover four sibling generators
+// (originIDGenerator, protocolIDGenerator, qualityIDGenerator,
+// sampleTypeIDGenerator) that carried #736's bug latently -- same
 // findOne/sort/`+ 1` shape, no numeric filter. #736 fixed only
 // equipmentIDGenerator, because that was the one with a proven live
-// writer (the e2e fixture, since fixed in #757).
-//
-// Each field's only write outside its own generator is an unvalidated
-// pass-through in the model (SampleOrigin.js:27, ExtractionProtocol.js:27,
-// QualityDescription.js:29, SampleType.js:27), so a caller passing a
-// string writes a string -- and from that point the generator is
-// corrupted permanently for that collection, because the corrupted value
-// is itself a string and stays at the top of the descending BSON sort,
-// growing one character per create.
-describe('#756: sibling ID generators are immune to string-typed debris', () => {
-  const CASES = [
-    { name: 'originID', field: 'originID', run: generateUniqueOriginID },
-    { name: 'protocolID', field: 'protocolID', run: generateUniqueProtocolID },
-    { name: 'qualityID', field: 'qualityID', run: generateUniqueQualityID },
-    { name: 'sampleTypeID', field: 'sampleTypeID', run: generateUniqueSampleTypeID },
-  ];
-
-  for (const { name, field, run } of CASES) {
-    describe(name, () => {
-      const debris = `LEGACY-${name}-9`;
-
-      it('returns a numeric next id, not a concatenated string', async () => {
-        const { db } = makeIdDbMock(field, [{ [field]: 3 }, { [field]: debris }]);
-
-        const id = await run(db);
-
-        expect(id).toBe(4);
-        expect(typeof id).toBe('number');
-      });
-
-      it('restricts the last-id lookup to numeric values', async () => {
-        const { db, collection } = makeIdDbMock(field, [{ [field]: 3 }, { [field]: debris }]);
-
-        await run(db);
-
-        expect(collection.queries[0]).toEqual({ [field]: { $type: 'number' } });
-      });
-
-      it('starts at 1 when the collection holds nothing but string debris', async () => {
-        const { db } = makeIdDbMock(field, [{ [field]: debris }]);
-
-        const id = await run(db);
-
-        expect(id).toBe(1);
-      });
-    });
-  }
-});
+// writer (the e2e fixture, since fixed in #757); the other four were
+// never imported anywhere under src/, so #776 deleted them along with
+// their coverage here. equipmentIDGenerator remains this file's only
+// subject, still exercised above for the same string-debris class of bug.

@@ -5,7 +5,10 @@ class ExtractionProtocolModel {
   static validate(data) {
     const errors = [];
 
-    // protocolID é opcional - será gerado automaticamente se não fornecido
+    // protocolID é opcional - quando ausente, master-data.routes.js:53 o
+    // preenche com Date.now() no POST (montado em app.js via
+    // createMasterDataRouter). Não existe gerador sequencial: #776 removeu
+    // protocolIDGenerator, que nenhum caminho de src/ chamava.
     if (data.protocolID !== undefined && data.protocolID !== null) {
       if (typeof data.protocolID !== 'number') {
         errors.push('protocolID deve ser um número');
