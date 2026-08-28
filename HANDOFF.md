@@ -135,3 +135,48 @@ and re-running every slice's tests together after the merge. New this round:
   The slice that hit this cost 45 tool calls and ~170k tokens against 11/9
   and ~44k/~52k for the other two, on the smallest diff of the three.
 - Docker and delegation still do not overlap. No Docker ran.
+
+## New agent type deployed here: `fix-writer` — needs its first live run
+
+Deployed 2026-08-28 from pack `4dd6c41` (pack #523 slice 1), alongside a
+rename: `test-writer-bash-guard.cjs` is now `leaf-worker-bash-guard.cjs`,
+shared by both workers rather than copied per worker.
+
+`fix-writer` is `test-writer`'s fix-side sibling — one small, already
+diagnosed code fix in a named set of files. Same containment (sonnet-pinned,
+no Agent tool, guarded Bash). Two things it does that `test-writer` does not:
+it hands back **suggested** issue handling (a proposed comment, close text,
+or a new issue with claims graded) instead of stopping at "you may not touch
+the tracker", and it carries mechanical back-off tripwires — a file outside
+the brief, an unnamed test or fixture, a second failed repair, or a diagnosis
+that does not match the source.
+
+**It has never been run.** The authoring session was rooted in the pack repo,
+and agent types resolve from the *session's own* repo — `Agent(fix-writer)`
+there returned "Agent type 'fix-writer' not found", and so would
+`test-writer`, which has been deployed here for weeks. So the live test has
+to happen from a session rooted in this repo. That is the only reason it is
+outstanding; nothing about it is known to be broken.
+
+### The plan, for whoever picks this up
+
+1. **Containment first, before any real work.** Brief it to run exactly one
+   command — `docker ps` — and report what happened, nothing else. Harmless
+   if it executes, and the guard reserves `docker`, so **a refusal is the
+   pass**. If it executes, containment is not wired and nothing else in this
+   list should proceed.
+2. **Then one genuinely small issue**, per Dennis's "start small" constraint.
+   Pick a fix that is already diagnosed, touches files you can name up front,
+   and has a targeted native vitest command — the same shape the three
+   accepted slices above had. Do not hand it an architectural or
+   security-design issue; those are not what it is for.
+3. **Verify its work yourself.** A worker's "tests pass" is a claim. Re-run
+   its command, read its diff, and perform its suggested tracker handling
+   after reviewing it — the suggestion is a draft for you, not an
+   instruction.
+4. **Watch for a tripwire firing and report which one.** A worker that stops
+   early is the contract working, not a failure — that observation is the
+   most useful thing the first run can produce, and it belongs on pack #523.
+
+Docker and delegation still do not overlap, and this run needs no Docker at
+all — `docker ps` in step 1 is expected to be refused, not executed.
