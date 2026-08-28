@@ -84,7 +84,29 @@ const FILTER_SPEC = /\.(?:find|findOne)\(\s*\{[^{}]*\}/g;
 
 // Keys inside a filter or any other object literal. Quoted keys are how a
 // dotted path is usually written (`'encounterPeriod.start': 1`).
-const SPEC_KEY = /(?:^|,)\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_$][\w$.]*))\s*:/g;
+//
+// #851: also reads an ES6 shorthand property (`{ patientId }` ->
+// `patientId`). Before this, the shorthand form was invisible to this
+// guard's retired/unwritten-key checks entirely — confirmed by injecting
+// #847's actual pre-fix bug back into src/ written as
+// `.findOne({ patientId }, ...)` (shorthand, same retired key the longhand
+// form is already caught on) and observing the suite pass 6/6 green. That
+// gap mattered because it is the direction this codebase is migrating
+// toward, not away from: sample.routes.js's own post-#847 fix reads
+// `return { participantId, status: 'ACTIVE' };` — shorthand.
+//
+// A quoted key still requires its own colon (`{'a'}` isn't valid shorthand
+// syntax, so there's nothing to add there); only the bare-identifier
+// alternative gained the option. The lookahead `(?=[,}]|$)` is what keeps a
+// shorthand key from misreading a value as a key: it only has a chance to
+// fire immediately after the `(?:^|,)` anchor, so `status: ACTIVE_CONST`
+// never yields `ACTIVE_CONST` — that identifier is preceded by `: `, not a
+// comma or the start of the object, so the anchor never lands there. `$`
+// (not just `,`/`}`) is in the lookahead because the query-builder-return
+// checker's body slice (topLevelKeysOfReturnedObject) does not keep the
+// object's own closing brace, so a trailing shorthand key there ends at
+// end-of-string rather than at a `}` character.
+const SPEC_KEY = /(?:^|,)\s*(?:'([^']+)'\s*:|"([^"]+)"\s*:|([A-Za-z_$][\w$.]*)\s*(?::|(?=[,}]|$)))/g;
 const OBJECT_KEY = /(?:^|[{,\s])(?:'([^']+)'|"([^"]+)"|([A-Za-z_$][\w$]*))\s*:/g;
 const MEMBER_WRITE = /\b[A-Za-z_$][\w$]*\.([A-Za-z_$][\w$]*)\s*=[^=]/g;
 
@@ -427,14 +449,16 @@ test('#847: the guard also flags a filter object returned from a query-builder f
   assert.match(offendersBuilder[0], /retired key 'patientId'/);
 
   // ...and the actual fix (32a1538d) is not flagged: keying on
-  // `participantId` instead. `participantId` itself is written shorthand
-  // (`{ participantId, status: ... }`), which SPEC_KEY — reused as-is here,
-  // same as the call-site check above — does not read as a key at all,
-  // the same blind spot a call-site `.findOne({ participantId, ... })`
-  // would have. `status` is the only key this rule reads off this literal,
-  // and it is written above, so nothing is flagged.
+  // `participantId` instead, written shorthand (`return { participantId,
+  // status: ... };`, sample.routes.js's real post-#847 text verbatim).
+  // #851: SPEC_KEY now reads a shorthand property as a key too — so this
+  // only stays clean because `participantId` is (like `status` above)
+  // genuinely written elsewhere in this synthetic source, the same
+  // "legitimately written, elsewhere" shape Shape 2 above already uses for
+  // `patientId`/`biomarkerType`, not because the key goes unread.
   const fixedBuilder = [
     'const sample = { status: "REGISTERED" };',
+    'const consentRecord = { participantId: id };', // legitimately written, elsewhere (PatientConsent.js:63 et al.)
     'function buildActiveConsentQuery(patient) {',
     '  const participantId = String(patient?.participantId ?? "").trim();',
     '  if (!participantId) return null;',
@@ -451,6 +475,54 @@ test('#847: the guard also flags a filter object returned from a query-builder f
     offendersInSynthetic(fixedBuilder),
     [],
     'the sweep flags the fixed, participantId-keyed query-builder filter'
+  );
+});
+
+test('#851: SPEC_KEY also recognises an ES6 shorthand filter key', () => {
+  // #851: confirmed empirically before this fix — injecting #847's real
+  // retired-key bug back into src/ written as shorthand
+  // (`.findOne({ patientId }, ...)`) passed the whole suite 6/6 green,
+  // while the identical longhand (`.findOne({ patientId: id })`) was
+  // already caught. The verdict depended on syntax that is semantically
+  // identical, and it was weakest against the shorthand style this
+  // codebase is migrating toward (sample.routes.js:202's own post-#847
+  // text is shorthand). This is the call-site analogue of the
+  // query-builder-return proof in the #847 test above, which SPEC_KEY
+  // feeds too.
+
+  // Shape 1: a shorthand filter on a retired key IS flagged.
+  const shorthandRetired = [
+    'const consentRecord = { participantId: id };', // legitimately written, elsewhere
+    'const consent = await consents.findOne({ patientId });'
+  ].join('\n');
+
+  const offendersA = offendersInSynthetic(shorthandRetired);
+  assert.equal(offendersA.length, 1, 'the sweep no longer flags a shorthand filter on a retired key');
+  assert.match(offendersA[0], /retired key 'patientId'/);
+
+  // Shape 2: the real post-#847 shape — a shorthand filter on a legitimate
+  // key, alongside an explicit one — stays clean, and must stay clean.
+  const shorthandLegit = [
+    'const consentRecord = { participantId: id, status: "ACTIVE" };', // both legitimately written, elsewhere
+    'const consent = await consents.findOne({ participantId, status: "ACTIVE" });'
+  ].join('\n');
+
+  assert.deepEqual(
+    offendersInSynthetic(shorthandLegit),
+    [],
+    'the sweep flags a shorthand filter on a field the same source writes'
+  );
+
+  // The care this rule needs: an explicit `key: value` must never have its
+  // *value* misread as a second, shorthand key. The lookahead only has a
+  // chance to match right after `(?:^|,)`, and `ACTIVE_CONST` here is
+  // preceded by `: `, not a comma or the start of the object — so it can
+  // never be mistaken for a shorthand key sitting next to `status`.
+  const valueIsNotAKey = 'await consents.findOne({ status: ACTIVE_CONST });';
+  assert.deepEqual(
+    analyze(valueIsNotAKey).filterSites[0].keys,
+    ['status'],
+    'an explicit value is being misread as a shorthand key'
   );
 });
 
