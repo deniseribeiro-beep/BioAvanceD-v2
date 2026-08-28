@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const importAsyncService = require('../services/import-async.service');
 const logger = require('../utils/logger');
+const { parseGroupFields } = require('../utils/importGroupFields');
 
 // Configuração do multer para upload
 const storage = multer.diskStorage({
@@ -165,18 +166,16 @@ class ImportAsyncController {
       }
 
       if (req.body.groupFields) {
-        try {
-          parsedGroupFields = typeof req.body.groupFields === 'string'
-            ? JSON.parse(req.body.groupFields)
-            : req.body.groupFields;
-        } catch (groupFieldsError) {
+        const parsed = parseGroupFields(req.body.groupFields);
+        if (!parsed.ok) {
           importAsyncService.cleanupFile(file.path);
           return res.status(400).json({
             success: false,
             error: 'Formato inválido para groupFields. Use JSON válido.',
-            message: groupFieldsError.message
+            message: `groupFields ${parsed.reason}`
           });
         }
+        parsedGroupFields = parsed.value;
       }
 
       const userID = req.user?.userID || req.user?._id?.toString() || null;
