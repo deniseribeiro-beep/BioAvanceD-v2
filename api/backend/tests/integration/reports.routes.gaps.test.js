@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const express = require('express');
 const request = require('supertest');
 const { SYSTEM_REPORT_TEMPLATES } = require('../../src/services/report-template-seed.service');
+const { createCursorMock } = require('../factories/cursor.factory');
 
 const modulePaths = {
   auth: require.resolve('../../src/infrastructure/middleware/auth'),
@@ -53,17 +54,11 @@ function buildCollectionDb(collections = {}) {
       return {
         find(query = {}) {
           capturedQueries[name] = query;
-          const chain = {
-            toArray: async () => docs,
-            sort(spec) {
-              capturedSorts[name] = spec;
-              return chain;
-            },
-            limit() {
-              return chain;
-            },
-          };
-          return chain;
+          // #781: cursor.factory.js's mock captures the sort spec (and
+          // is chainable in any order), replacing this file's own inline
+          // stub -- same capturedSorts[name] shape the #769 assertions
+          // below already depend on.
+          return createCursorMock(docs, { capturedSorts, key: name });
         },
         async countDocuments(query = {}) {
           capturedQueries[`${name}.count`] = query;

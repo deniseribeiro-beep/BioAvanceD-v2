@@ -92,7 +92,7 @@ describe('import-async.service', () => {
 
   describe('canonicalizeHeader', () => {
     it('maps known aliases to canonical field names', () => {
-      expect(service.canonicalizeHeader('idPaciente')).toBe('patientID');
+      expect(service.canonicalizeHeader('idPaciente')).toBe('participantId');
       expect(service.canonicalizeHeader('Tipo Amostra')).toBe('sampleType');
       // #770: was 'registrationDate', a name sample.routes.js rejects at the
       // API boundary as NON_CANONICAL_FIELD and canonical-fields.arch.test.js
@@ -114,9 +114,21 @@ describe('import-async.service', () => {
     // assigned the same value, so removing one is behaviour-invariant; this
     // pins the surviving mapping so the dedupe cannot silently drop it.
     it('still maps idPaciente after the duplicate key was removed', () => {
-      expect(service.canonicalizeHeader('idPaciente')).toBe('patientID');
-      expect(service.canonicalizeHeader('ID Paciente')).toBe('patientID');
-      expect(service.canonicalizeHeader('patientId')).toBe('patientID');
+      expect(service.canonicalizeHeader('idPaciente')).toBe('participantId');
+      expect(service.canonicalizeHeader('ID Paciente')).toBe('participantId');
+      expect(service.canonicalizeHeader('patientId')).toBe('participantId');
+    });
+
+    // #773: fieldMapping's two patientID-targeting entries (patientid,
+    // idpaciente) were repointed to the canonical name. Two independent
+    // sources settle it: contracts/canonical/v1/index.js declares
+    // participantId as a required canonical field, and
+    // sample.routes.js:378-384 already 422s a payload carrying patientID as
+    // NON_CANONICAL_FIELD. Pinned explicitly here so a future revert to the
+    // legacy name is caught.
+    it('maps patientId aliases to the canonical participantId name (#773)', () => {
+      expect(service.canonicalizeHeader('patientId')).toBe('participantId');
+      expect(service.canonicalizeHeader('idPaciente')).toBe('participantId');
     });
 
     it('falls back to trimmed original string when no alias matches', () => {
@@ -185,7 +197,7 @@ describe('import-async.service', () => {
 
       expect(result.valid).toBe(true);
       expect(result.errors).toEqual([]);
-      expect(result.metadata.headers).toEqual(['patientID', 'sampleType']);
+      expect(result.metadata.headers).toEqual(['participantId', 'sampleType']);
     });
 
     it('swallows getHeadersFromFile errors via try/catch and still returns valid=true', async () => {
@@ -265,7 +277,7 @@ describe('import-async.service', () => {
 
       const headers = await service.getHeadersFromFile(file, 'patients');
 
-      expect(headers).toEqual(['patientID', 'sampleType']);
+      expect(headers).toEqual(['participantId', 'sampleType']);
     });
 
     it('resolves [] when the underlying csv-parser stream emits an error', async () => {
@@ -325,7 +337,7 @@ describe('import-async.service', () => {
 
       const headers = await service.getHeadersFromFile(file, 'samples');
 
-      expect(headers).toEqual(['patientID', 'sampleType', 'block']);
+      expect(headers).toEqual(['participantId', 'sampleType', 'block']);
     });
 
     it('returns [] for an xlsx file with no recognizable header row', async () => {

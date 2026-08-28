@@ -249,6 +249,48 @@ describe('ImportLGPDService.importPatientsSmart', () => {
     expect(result.total).toBe(1);
   });
 
+  // #798: a `skipped` count makes a truncated upload distinguishable from a
+  // clean file that happened to have trailing formatting artifacts. It must
+  // be purely additive -- total/success/errors have to come out identical to
+  // the same file without the blank rows.
+  it('reports a skipped count matching the number of blank rows, leaving total/success/errors identical to the same file without them (#798)', async () => {
+    const invalidRow = rowFromValid({ Email: 'not-an-email' });
+
+    vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid(), invalidRow]);
+    const baseline = await service.importPatientsSmart(db, { path: '/baseline.csv', originalname: 'baseline.csv' }, { mapping: MAPPING });
+
+    ({ db, patientsCollection } = makeDb());
+    vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
+      token: 'tok-1',
+      createdAt: new Date('2026-01-01'),
+      expiresAt: new Date('2026-02-01'),
+    });
+    vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://example.com/consent/tok-1');
+    vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+    vi.spyOn(patientService, 'checkDuplicatePatient').mockResolvedValue(null);
+
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      rowFromValid(),
+      invalidRow,
+      {},
+      { Nome: '   ', Email: '', cpf: null },
+      { Nome: null, Sexo: undefined },
+    ]);
+    const withBlanks = await service.importPatientsSmart(db, { path: '/x.csv', originalname: 'x.csv' }, { mapping: MAPPING });
+
+    expect(withBlanks.skipped).toBe(3);
+    expect(withBlanks.total).toBe(baseline.total);
+    expect(withBlanks.success).toBe(baseline.success);
+    expect(withBlanks.errors).toHaveLength(baseline.errors.length);
+  });
+
+  it('reports skipped: 0 when a file has no blank rows', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid()]);
+    const result = await service.importPatientsSmart(db, { path: '/x.csv', originalname: 'x.csv' }, { mapping: MAPPING });
+
+    expect(result.skipped).toBe(0);
+  });
+
   it('records a per-row error when cpf is present and invalid', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid({ cpf: '00000000000' })]);
     const result = await service.importPatientsSmart(
