@@ -15,7 +15,7 @@ const {
   createGetFreezerTreeController
 } = require('../controllers/storage-query.controller');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireRole } = require('../../infrastructure/middleware/rbac');
 const { ObjectId } = require('mongodb');
 const logger = require('../../utils/logger');
 
@@ -35,6 +35,27 @@ router.use((req, res, next) => {
   logger.debug(`[Storage] ${req.method} ${req.path}`);
   next();
 });
+
+// ==================== AUTORIZACAO ====================
+// #859: authenticate alone is not authorization. Every mutation below
+// carries MUTATION_ROLES so that a level-1 Usuario Externo cannot move,
+// allocate or release a sample -- RF002 AC#5 requires the backend to
+// enforce this independently of what the frontend hides.
+//
+// Why a role gate and not a requirePermission: the RBAC catalog defines
+// no storage-scoped permission code at all (21 codes, none about
+// storage, allocation or movement), so a requirePermission here would
+// have to borrow a wrong-domain code -- the mistake this file's one
+// pre-existing gate already makes with 'createPatient' on a freezer
+// route. Proper codes belong in the catalog and touch the canonical
+// dictionary; that is filed separately.
+//
+// Why 2 and not 3 as the floor: RF006 (custody and movement) names the
+// Tecnico as primary actor, RF017 (storage topology) names the
+// Coordenador. They disagree about whether the floor is 2 or 3, and this
+// constant deliberately does not settle that -- it encodes only the part
+// both agree on, that level 1 is excluded.
+const MUTATION_ROLES = [2, 3, 4];
 
 // ==================== ENDPOINTS ====================
 
@@ -121,7 +142,7 @@ router.get('/samples/search', createSearchSamplesController());
  *   "occupiedBySampleId": "507f..."
  * }
  */
-router.post('/allocate', createAllocateSampleController());
+router.post('/allocate', requireRole(...MUTATION_ROLES), createAllocateSampleController());
 
 /**
  * POST /api/storage/allocate/auto
@@ -166,7 +187,7 @@ router.post('/allocate', createAllocateSampleController());
  *   "message": "..."
  * }
  */
-router.post('/allocate/auto', createAutoAssignSampleController());
+router.post('/allocate/auto', requireRole(...MUTATION_ROLES), createAutoAssignSampleController());
 
 /**
  * POST /api/storage/move
@@ -181,7 +202,7 @@ router.post('/allocate/auto', createAutoAssignSampleController());
  *   "notes": "Movido durante inventário"
  * }
  */
-router.post('/move', createMoveSampleController());
+router.post('/move', requireRole(...MUTATION_ROLES), createMoveSampleController());
 
 /**
  * DELETE /api/storage/release/:sampleId
@@ -198,7 +219,7 @@ router.post('/move', createMoveSampleController());
  *   "message": "Amostra liberada de A1"
  * }
  */
-router.delete('/release/:sampleId', createReleaseSampleController());
+router.delete('/release/:sampleId', requireRole(...MUTATION_ROLES), createReleaseSampleController());
 
 /**
  * GET /api/storage/sample/:sampleId
