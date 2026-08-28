@@ -8,6 +8,23 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
 
   router.use(authenticate);
 
+  // #881: seeded rows carry a string business key on `id` (e.g. "PLASMA"),
+  // separate from the collection's own `idField` (e.g. "sampleTypeID").
+  // The `{ id: rawId }` branch is purely additive -- it does not touch the
+  // existing `_id` / numeric-idField / string-idField branches, so any
+  // caller relying on those keeps working exactly as before.
+  function buildIdQuery(rawId) {
+    const numericId = Number(rawId);
+    return {
+      $or: [
+        ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
+        ...(Number.isFinite(numericId) ? [{ [idField]: numericId }] : []),
+        { [idField]: rawId },
+        { id: rawId },
+      ],
+    };
+  }
+
   router.get('/', async (req, res) => {
     try {
       const db = req.app.locals.db;
@@ -24,14 +41,7 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
       const db = req.app.locals.db;
 
       const rawId = String(req.params.id);
-      const numericId = Number(rawId);
-      const query = {
-        $or: [
-          ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
-          ...(Number.isFinite(numericId) ? [{ [idField]: numericId }] : []),
-          { [idField]: rawId },
-        ],
-      };
+      const query = buildIdQuery(rawId);
 
       const item = await db.collection(collectionName).findOne(query);
       if (!item) {
@@ -80,14 +90,7 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
       const db = req.app.locals.db;
 
       const rawId = String(req.params.id);
-      const numericId = Number(rawId);
-      const query = {
-        $or: [
-          ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
-          ...(Number.isFinite(numericId) ? [{ [idField]: numericId }] : []),
-          { [idField]: rawId },
-        ],
-      };
+      const query = buildIdQuery(rawId);
       const update = { ...req.body, updatedAt: new Date() };
       delete update._id;
 
@@ -112,14 +115,7 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
       const db = req.app.locals.db;
 
       const rawId = String(req.params.id);
-      const numericId = Number(rawId);
-      const query = {
-        $or: [
-          ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
-          ...(Number.isFinite(numericId) ? [{ [idField]: numericId }] : []),
-          { [idField]: rawId },
-        ],
-      };
+      const query = buildIdQuery(rawId);
 
       const result = await db.collection(collectionName).deleteOne(query);
       if (result.deletedCount === 0) {

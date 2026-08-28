@@ -283,6 +283,132 @@ describe('GET /api/sample-types', () => {
   });
 });
 
+// ── #881: seeded rows carry a string business key on `id` (e.g. "PLASMA"),
+// separate from the collection's own idField ("sampleTypeID"). The $or
+// query must include an `{ id: rawId }` branch so those rows are reachable,
+// while the existing _id / numeric-idField / string-idField branches keep
+// working unchanged.
+describe('GET /api/sample-types/:id (canonical string business key)', () => {
+  const SEEDED_ITEM = { id: 'PLASMA', description: 'Plasma', code: 'MIABIS:ST:PLASMA' };
+
+  it('finds a seeded row by its canonical string key ("PLASMA")', async () => {
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(SEEDED_ITEM) });
+    app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .get('/api/sample-types/PLASMA')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(coll.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: expect.arrayContaining([{ id: 'PLASMA' }]),
+      })
+    );
+  });
+
+  it('regression: still finds a row by its Mongo _id and numeric/string idField', async () => {
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(SEEDED_ITEM) });
+    app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .get('/api/sample-types/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(200);
+    expect(coll.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: expect.arrayContaining([{ _id: new (require('mongodb').ObjectId)('507f1f77bcf86cd799439011') }]),
+      })
+    );
+
+    const res2 = await request(app)
+      .get('/api/sample-types/42')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res2.status).toBe(200);
+    expect(coll.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: expect.arrayContaining([{ sampleTypeID: 42 }, { sampleTypeID: '42' }]),
+      })
+    );
+  });
+});
+
+describe('PUT /api/sample-types/:id (canonical string business key)', () => {
+  it('updates a seeded row found by its canonical string key ("PLASMA")', async () => {
+    const coll = createCollectionMock({
+      findOneAndUpdate: vi.fn().mockResolvedValue({ id: 'PLASMA', description: 'Plasma Updated' }),
+    });
+    app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .put('/api/sample-types/PLASMA')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ description: 'Plasma Updated' });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(coll.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: expect.arrayContaining([{ id: 'PLASMA' }]),
+      }),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('regression: still updates a row found by its Mongo _id', async () => {
+    const coll = createCollectionMock({
+      findOneAndUpdate: vi.fn().mockResolvedValue({ id: 'PLASMA', description: 'Updated' }),
+    });
+    app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .put('/api/sample-types/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ description: 'Updated' });
+    expect(res.status).toBe(200);
+    expect(coll.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: expect.arrayContaining([{ _id: new (require('mongodb').ObjectId)('507f1f77bcf86cd799439011') }]),
+      }),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+});
+
+describe('DELETE /api/sample-types/:id (canonical string business key)', () => {
+  it('deletes a seeded row found by its canonical string key ("PLASMA")', async () => {
+    const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
+    app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .delete('/api/sample-types/PLASMA')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(coll.deleteOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: expect.arrayContaining([{ id: 'PLASMA' }]),
+      })
+    );
+  });
+
+  it('regression: still deletes a row found by its Mongo _id', async () => {
+    const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
+    app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .delete('/api/sample-types/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(200);
+    expect(coll.deleteOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: expect.arrayContaining([{ _id: new (require('mongodb').ObjectId)('507f1f77bcf86cd799439011') }]),
+      })
+    );
+  });
+});
+
 // ── /api/sample-origins ───────────────────────────────────
 describe('GET /api/sample-origins', () => {
   it('returns 401 without token', async () => {
