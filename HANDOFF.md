@@ -18,11 +18,17 @@ this table.
 | #843 miabisValidator sharing verdict | closed, `a27c9721` |
 | #847 buildActiveConsentQuery wrong key | closed, `32a1538d` |
 | #848 unguarded patient `$or` | closed, `ab1b20a1` |
-| #797 filter-blind mocks | **open** — guard slice landed `Refs`, `b969f851` |
-| #849 the guard's unreached scope | **open** — wants a direction call |
+| #797 filter-blind mocks | **open** — guard slices landed `Refs` |
+| #849 guard scope | **open** — option 2 done (`534a2e67`); two legs left |
+| #851 shorthand blind spot | closed, `28b66177` |
 | #850 the legacy `_id` leg | **open** — wants owner input or a DB query |
 
-Three of these were filed by this sitting from inside the work.
+Five of these were filed by this sitting from inside the work.
+
+**Also resolved, outside the hole:** #842 (`a125e524`) removed `frontend/.nycrc`
+and the two nyc devDependencies it kept alive. Reading it turned up **#852**
+— the 7-31 doc batch requires CI to fail on unapproved coverage regression,
+and CI has no coverage measurement at all.
 
 ## The mechanism claim worth carrying (ran it)
 
@@ -58,18 +64,22 @@ identity stub asserting two mock values against each other.
   #771 actually migrated nothing and was closed by one architecture test.
   The agent caught it. Pack #565.
 - **Prove a new guard catches the real defect, not just a synthetic one.**
-  `filter-keys.arch.test.js` was checked by reintroducing #843's actual
-  line; it goes red naming file, line and key.
+  `filter-keys.arch.test.js` was checked by reintroducing #843's and then
+  #847's actual lines; each goes red naming file, line and key.
+- **Open the non-greppable docs, or say you didn't.** A `git grep` hit on a
+  `.docx` is a match on compressed bytes — neither usable nor dismissable.
+  Opening `docs/docs-7-31-2026/3 - Plano_Integrado_*.docx` for #842 changed
+  that issue's outcome and produced #852. Pack #569.
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, **pushed**
-  (`b1176cab..b969f851`). Tree clean apart from this rotation. `main`
+  (through `a125e524`). Tree clean apart from this rotation. `main`
   untouched, no open PR.
 - Untracked and deliberately untouched: `.claude/skills/`,
   `api/backend/storage/assays/`. **Never `git add -A`.**
 - Native runs only, all green: the three touched unit files, and
-  `npm run test:architecture` at **78/78** (was 73).
+  `npm run test:architecture` at **80/80** (was 73).
 - **Docker: not run, not observed.** Bootstrap state unverified — run
   `docker ps -a`, not `docker ps`, before trusting anything about volumes.
 
