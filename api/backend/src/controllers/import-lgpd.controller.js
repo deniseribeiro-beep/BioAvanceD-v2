@@ -477,7 +477,20 @@ class ImportLGPDController {
 
       let mapping = {};
       if (req.body?.mapping) {
-        mapping = typeof req.body.mapping === 'string' ? JSON.parse(req.body.mapping) : req.body.mapping;
+        if (typeof req.body.mapping === 'string') {
+          try {
+            mapping = JSON.parse(req.body.mapping);
+          } catch (_) {
+            importLGPDService.cleanupFile(file.path);
+            return res.status(400).json({
+              success: false,
+              error: 'mapping inválido',
+              message: 'mapping deve ser um JSON válido'
+            });
+          }
+        } else {
+          mapping = req.body.mapping;
+        }
       }
 
       const fileBuffer = fs.readFileSync(file.path);

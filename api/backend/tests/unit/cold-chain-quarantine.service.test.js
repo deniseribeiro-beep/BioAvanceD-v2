@@ -2,39 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 const { ObjectId } = require('mongodb');
 
 const quarantineService = require('../../src/services/equipment-sensor-quarantine.service');
-
-function getByPath(source, path) {
-  return String(path).split('.').reduce((value, key) => (value == null ? undefined : value[key]), source);
-}
-
-function sameValue(left, right) {
-  return String(left) === String(right);
-}
-
-function matchesCondition(value, condition) {
-  if (condition && typeof condition === 'object' && !Array.isArray(condition) && !(condition instanceof ObjectId)) {
-    if (condition.$in) {
-      return condition.$in.some((candidate) => sameValue(value, candidate));
-    }
-    if (condition.$ne !== undefined) {
-      return !sameValue(value, condition.$ne);
-    }
-  }
-
-  return sameValue(value, condition);
-}
-
-function matchesFilter(doc, filter = {}) {
-  return Object.entries(filter).every(([key, condition]) => {
-    if (key === '$or') {
-      return condition.some((entry) => matchesFilter(doc, entry));
-    }
-    if (key === '$and') {
-      return condition.every((entry) => matchesFilter(doc, entry));
-    }
-    return matchesCondition(getByPath(doc, key), condition);
-  });
-}
+const { matchesFilter } = require('../factories/filter.factory');
 
 function makeCursor(items) {
   return {

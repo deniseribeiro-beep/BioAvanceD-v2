@@ -266,6 +266,36 @@ describe('import-lgpd.controller gaps', () => {
       expect(res.status).toHaveBeenCalledWith(400);
     });
 
+    // #837: mapping's JSON.parse was the last unguarded parse in this
+    // controller (its groupFields sibling already got a boundary guard for
+    // #818). A malformed mapping string threw out of the try block and
+    // landed in the outer catch, which answers 500 -- this pins the correct
+    // 400 with the same body shape as the groupFields guard, and that the
+    // upload is still cleaned up on this path.
+    it('returns 400 and cleans up the file when mapping JSON is malformed (#837)', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const db = createDb();
+      const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
+      const req = { app: { locals: { db } }, file, body: { mapping: '{not json' } };
+      const res = createRes();
+
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      const importSpy = vi.spyOn(importLGPDService, 'importPatientsSmart').mockResolvedValue({
+        total: 0, success: 0, errors: []
+      });
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await controller.importPatientsSmart(req, res);
+
+      expect(importSpy).not.toHaveBeenCalled();
+      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, error: 'mapping inválido' })
+      );
+    });
+
     it('logs a warning-status audit event and partial message when some rows fail', async () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();

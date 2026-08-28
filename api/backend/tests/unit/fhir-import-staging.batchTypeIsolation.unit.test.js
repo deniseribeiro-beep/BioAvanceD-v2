@@ -253,4 +253,48 @@ describe('fhir-import-staging.service -- batch-type isolation (#799)', () => {
       expect(result.record.normalized.participantId).toBe('PART-799');
     });
   });
+
+  // #838 (correcting #838's own scope): getBatch/getConsentStatus/sendConsents/
+  // validateBatch/validateImportConsentToken/attachExternalDocument are all
+  // pinned above via the *ordering* property -- they resolve through
+  // findFhirBatch (or its own explicit discriminator) and so 404 on an LGPD
+  // batch today. That ordering guard does not prove the discriminator is
+  // actually on the filter handed to the driver; it only proves the batch
+  // that ends up read/written is the right one *given the current call order*.
+  // commitBatch's own `import_batches.findOne({ _id: batchId })` (no `type`)
+  // and refreshBatchCounts' `import_batches.updateOne({ _id: batchId }, ...)`
+  // (no `type`) are two sites where that ordering is the *only* thing
+  // standing between a caller and the other path's document -- reorder
+  // commitBatch's internals (or call refreshBatchCounts directly, since it is
+  // not exported today but could become so) and the guard silently
+  // disappears. These tests assert directly on the filter object handed to
+  // the mock collection on a *successful* FHIR commit, so they fail the
+  // moment either site's discriminator is missing, independent of ordering.
+  describe('the direct discriminator on commitBatch/refreshBatchCounts filters (#838)', () => {
+    it("commitBatch's own import_batches.findOne carries { type: 'FHIR_BUNDLE' } on every call, not just _id", async () => {
+      const { batchId } = await seedFhirBatch(db);
+
+      const result = await fhirImportStagingService.commitBatch(db, batchId);
+
+      expect(result.committed).toBe(1);
+      const findOneCalls = db.collections.import_batches.findOne.mock.calls;
+      expect(findOneCalls.length).toBeGreaterThan(0);
+      findOneCalls.forEach(([filter]) => {
+        expect(filter).toMatchObject({ type: 'FHIR_BUNDLE' });
+      });
+    });
+
+    it("refreshBatchCounts' import_batches.updateOne carries { type: 'FHIR_BUNDLE' } on every call, not just _id", async () => {
+      const { batchId } = await seedFhirBatch(db);
+
+      const result = await fhirImportStagingService.commitBatch(db, batchId);
+
+      expect(result.committed).toBe(1);
+      const updateOneCalls = db.collections.import_batches.updateOne.mock.calls;
+      expect(updateOneCalls.length).toBeGreaterThan(0);
+      updateOneCalls.forEach(([filter]) => {
+        expect(filter).toMatchObject({ type: 'FHIR_BUNDLE' });
+      });
+    });
+  });
 });

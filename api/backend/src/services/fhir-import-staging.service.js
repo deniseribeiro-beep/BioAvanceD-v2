@@ -583,7 +583,7 @@ async function refreshBatchCounts(db, batchId) {
           : 'VALIDATED';
 
   await collection(db, 'import_batches').updateOne(
-    { _id: batchId },
+    { _id: batchId, type: FHIR_BATCH_TYPE },
     { $set: { status, counts, updatedAt: new Date() } }
   );
 
@@ -940,7 +940,15 @@ async function commitBatch(db, batchIdRaw) {
   const patients = collection(db, 'patients');
   const samples = collection(db, 'samples');
   const staging = collection(db, 'import_staging_records');
-  const batchInfo = await collection(db, 'import_batches').findOne({ _id: batchId });
+  // #838: route through findFhirBatch rather than a bare `{ _id: batchId }`
+  // findOne, so this file's `type: FHIR_BATCH_TYPE` discriminator (#799) does
+  // not depend on validateBatch's ordering above having already enforced it.
+  // findFhirBatch throws a 404 on a miss rather than tolerating null; that
+  // branch is unreachable here today (validateBatch already resolved batchId
+  // through the same discriminated lookup), so this is a latent behaviour
+  // change only, chosen to keep a single source for the discriminator
+  // instead of duplicating a local not-found guard for no live caller.
+  const batchInfo = await findFhirBatch(db, batchId);
 
   let committed = 0;
   for (const record of records) {
