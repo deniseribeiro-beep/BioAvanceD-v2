@@ -17,12 +17,10 @@
     "typecheck:e2e": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "@istanbuljs/nyc-config-babel": "^3.0.0",
     "@playwright/test": "^1.58.2",
     "@types/node": "^22.20.1",
     "baseline-browser-mapping": "^2.9.16",
     "cross-env": "^10.1.0",
-    "nyc": "^18.0.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
