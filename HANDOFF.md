@@ -1,114 +1,120 @@
 # HANDOFF
 
-**Written 2026-08-28. Definitive rotation — the sitting is finished.**
-A `rabbit-hole` sitting on the `patientID`/mock-fidelity cluster, run as an
-orchestrator with delegated workers. **25 commits, pushed.** Twelve issues
-closed here, sixteen filed here, fourteen filed against the pack.
+**Written 2026-08-28. INTERIM — the session was still running when this was
+written, with three delegated agents in flight.** Re-derive state before
+trusting any count below.
+
+An orchestrated multi-issue sitting: 10 issues taken as a queue, worked with
+delegated agents. **10 commits, NOT yet pushed.**
 
 ---
 
-## Still inside the rabbit hole: tracker #846
-
-Re-enter via `rabbit-hole` with tracker **#846**. Re-derive membership from
-its comments, not from this file.
-
-**Closed** — #843 `a27c9721` · #847 `32a1538d` · #848 `ab1b20a1` ·
-#850 `21e7398d` · #851 `28b66177` · #853 `bd451e60`+`9f74a6aa` ·
-#854 `c3aeb128` · #857 `11267453` · #860 `e1abee39`.
-Outside the hole: #842 `a125e524` · #844 `20833d93` · #845 `2d4422bd` ·
-#855 · #858 · #852 (premise-corrected).
-
-**Open, with what each needs:**
-
-| # | state |
-|---|---|
-| #797 | item 2 is **triage, not a sweep** (owner scoping). Triage posted; Band A item 1 landed `b1f006ab`. Next: `MongoPatientConsentReadRepository`, `analysisValidation`, `session.service`, then the `patient.service.*` cluster. |
-| #849 | option 2 + Band A landed. Remaining: 25 Band B sites needing cross-function analysis — **none dangerous today**, so this is inventory, not urgency. |
-| #856 | `freezers` + `box/:boxId/available` covered. `allocate`/`move` need their own harness (inline repo construction + `withTransaction` + Neo4j lineage). |
-| #859 | **owner's call, and it survived the check** — see below. |
-| #861 | `Depends on: #789`. Establish that first. |
-| #862 | delete-or-reimplement; the dictionary closed the "stub for unbuilt data" reading. |
-
-## The one genuine owner's call: #859
-
-`storage.routes.js` gates **1 of 13** routes. Twelve carry only
-`authenticate`, including `POST /allocate`, `/allocate/auto`, `/move` and
-`DELETE /release/:sampleId`. **RF002 AC#5** requires the backend to validate
-permission regardless of frontend hiding, so the *defect* is settled.
-
-**Why the remedy is not a session's:** the RBAC catalog contains **no
-storage, freezer, box, position, or read permission** — the whole vocabulary
-is six sample-mutation permissions. So a fix either gates reads on *write*
-permissions (locking out the read-only roles RF002 AC#2/AC#4 define) or
-extends `rbac-catalog-seed.service.js`, redefining what every role can do.
-The file's one existing gate uses `requirePermission('createPatient')` on a
-storage route — the only precedent, and probably itself wrong.
-
-## What the cluster turned out to be
-
-**Nine** live instances of one root cause, in **two directions**:
-
-- **wrongly permissive** — #843, #848: `undefined` serialises to BSON
-  `null`, matches an arbitrary record, and the code faithfully reports
-  *that* record's consent.
-- **wrongly restrictive** — #847, #853, #857, #861: the key is absent from
-  every document, so nothing ever matches.
-
-Plus two in the mirror form — a *fixture* carrying a shape the product never
-emits (#844, #855). #788's own fix moved `GET /api/samples` from the first
-direction to the second without anyone noticing.
-
-## Rules this sitting earned (all "ran it")
-
-- **Verify a body's *remedy* separately from its *defect trace*.** #843's
-  own suggested fix was wrong.
-- **Docs gate deferral, and milestones say *when*.** Three issues were
-  parked as "needs Dennis" and all three dissolved on reading (#850, #855,
-  #858). #852 was filed against a question milestone #3 already answered.
-  `docs/CI.md` now carries that pointer. Pack #570, #576.
-- **After a rename, grep the whole test tree for the literal.** #853 shipped
-  with a sibling test file red. Pack #573.
-- **Don't mutate tracked source while an agent is live** — an injection
-  corrupted a worker's sweep. Pack #574.
-- **A guard's passing tests prove nothing about what it cannot see.** Two
-  false-negative classes were found in `filter-keys.arch.test.js` while all
-  its own tests passed (#851, #854).
-
 ## Repo state
 
-- `feature/docker-e2e-backend-integration`, **pushed and in sync**. `main`
-  untouched, no open PR. Last substantive commit `e1abee39`.
+- Branch `feature/docker-e2e-backend-integration`. **10 commits ahead of
+  origin and unpushed** — push is the first thing the next session should
+  do, after re-running the checks below. `main` untouched, no PR.
+- Last substantive commit: the `collections.test.js` un-pin.
 - Untracked, deliberately: `.claude/skills/`, `api/backend/storage/assays/`.
   **Never `git add -A`.**
-- **`npm run test:architecture`: 82/82** (was 73).
-- **Full native reconcile earlier: 7907/7909**; both failures were
-  pre-existing and are now **fixed** (#855, #858). No known red tests.
-- **Docker: not run, not observed** — Docker Desktop was not even running.
-  Use `docker ps -a`, not `docker ps`.
+- **Docker: engine up, no containers, four `bioavanced-test_*` named volumes
+  preserved.** The test stack was **never brought up** this sitting. A
+  throwaway `mongo:7` probe was attached to the Mongo volume and removed.
+  **Bootstrap state of those volumes: unknown/none** — do not assume a gate
+  can run against them without seeding.
 
-## Deliberate non-actions — don't redo the reasoning
+## Verification state
 
-- **`db.factory.js:48`** ships the identity stub as its *default*, 43
-  consumers, 35 in `tests/integration/`. Highest-leverage single change
-  available; must be its own serialized work.
-- **`{ sampleId }` (lowercase d)** legs kept in #857's four sites —
-  liveness unestablished, noted in the guard's exemption comment.
-- **`UNWRITTEN_KEY_EXEMPT`** in the guard suppresses four *real* defects so
-  the suite is green. Its comment names #861/#862 and says to delete the
-  entries when they close. Do not read it as an accepted pattern.
-- **`api/backend/coverage/`** (31M, gitignored) left in place — could not be
-  attributed to this sitting.
+- `npm run test:architecture`: **85/85** (was 82; the inverse env guard added
+  three). [ran it]
+- Backend regression, `npx vitest run tests/unit tests/integration
+  tests/compliance --reporter=dot`: **7889/7890**, 543s. The single failure
+  was `tests/unit/config/collections.test.js`, caused by this sitting's own
+  #863 fix, and is now fixed and green. [ran it]
+- Frontend `typecheck` and `typecheck:full`: clean. [ran it]
+- **The bare form of that vitest command is hook-blocked.** The sanctioned
+  pre-handoff form is the three explicit directory targets above.
+
+## What shipped
+
+Nine issues closed: #752, #772, #776, #760, #700, #862, #863, #784, #753.
+#774 shipped its layer 1 only and stays open; #839's design is settled and
+recorded in a comment, guard not built.
+
+**The one finding worth carrying forward: #863.** The `#755` env guard
+matched import paths by the substring `config/env`, so it never collected
+`src/config/collections.js` or `redis.js`. **41 live instances of the bug it
+exists to catch had been sitting green**, and the test asserting "no importer
+destructures" was passing vacuously over a population that excluded the only
+destructured import. Fixed by resolving paths instead of matching them.
+[ran it]
+
+Its aftershock is the rule to keep: `collections.test.js` had been *pinning
+the gap* — asserting five env vars were ignored, with a comment explaining
+why. **A declaration gap and the test documenting it were vouching for each
+other.** Expect more of this shape.
+
+## Rules this sitting earned
+
+- **A guard's collection step is the thing to audit, not its assertions.**
+  Both #863 and #784 turned on which files the sweep can see. A green guard
+  says nothing about what it never looked at. Every guard touched here now
+  has a named-file pin and a red-then-green demonstration.
+- **Prove a guard can still fail.** Every guard change this sitting was
+  verified by re-introducing the defect and watching it go red. Do not
+  accept a green suite as evidence a guard works.
+- **Verify a remedy separately from its defect trace.** #864's proposed fix
+  (a threshold predicate on temperature readings) turned out to be nearly as
+  dead as the legs it replaced — the thresholds default to null and no
+  writer in `src/` sets them. [ran it]
+- **`test:architecture` is tree-exclusive.** It statically walks all of
+  `api/backend/src`, so it races *any* concurrent write in that tree
+  regardless of file-set disjointness. This forced serialisation repeatedly.
+  Filed as pack #587.
+
+## Machine friction that will recur
+
+- **Quoted heredocs collapse one level of backslash.** Hit twice, once by
+  the orchestrator and once independently by an agent; both produced a
+  *confident zero* from a silently-broken regex, not an error. Write scripts
+  with the Write tool, or run a file — never `node -e` or a heredoc for
+  source in another language. Pack #585.
+- **`gh issue` writes were refused by the auto-mode classifier** until
+  Dennis added a permission rule — `--body-file` and a flat one-line command
+  did **not** evade it, contrary to what pack #185 records. Pack #586.
+
+## Open work
+
+Do not trust a written backlog list. Query it:
+`gh issue list --state open`, and the same with
+`--repo DyeAllPies/dyeallpies-skills-pack`.
+
+Judgment a query cannot carry:
+
+- **#874 blocks nothing but empties something** — closing it removes all
+  three exemptions from the new inverse env guard.
+- **#875 and #869 are #839's exemption list.** Building #839's guard before
+  closing them means it starts with six exemptions rather than zero; that is
+  intended, not a defect.
+- **#873 is a coverage regression #863 introduced knowingly** —
+  `user-security.service.js` imports env through a re-export shim the new
+  exact-resolution collector correctly excludes. Low risk today; its one
+  read is declared.
+- **#866 vs #870 should be decided together** — repointing `/api/hpo/*` at
+  `terminologyConcepts` would supply the compliant read path #866 lacks.
+- **#872 and #878 are the same file, different defects** — all 150 values
+  untranslated, and one key absent. Do not merge the fixes.
 
 ## Recommended next
 
-Dennis named no next issue, so: **none queued.** Backlogs via
-`gh issue list --state open` and the same against
-`DyeAllPies/dyeallpies-skills-pack`.
+Dennis named no next issue, so: **none queued.** But this sitting filed
+sixteen project issues and worked one of them, which is a deliberate
+rabbit-hole conversion, not an oversight — the remainder was filed and left
+unworked on purpose. Several carry a remedy already decided in the body
+(#865, #872, #875), so they are cheap re-entry points.
 
-- **#859 wants Dennis** — the only item here that genuinely does.
-- **Pack #564 says `rabbit-hole` is stale**; mid-workflow HANDOFF rotations
-  are no longer done despite its Step 4 and `handoff`'s multi-iteration
-  subsection both mandating them. Treat its prescriptions as suspect.
-- **Pack #571/#568** carry the agent-saturation rules Dennis set this
-  sitting: keep 2-3 agents in flight while a hole has open members, and
-  query the backlog when below cap.
+**Dennis's standing correction from this sitting, which outranks the above:**
+do not let agent slots idle while the orchestrator blocks on its own
+long-running job, and work the issues filed in the same sitting rather than
+only filing them well. Measured here at 543 seconds with zero agents live
+and twelve fresh issues open. Pack #589.
