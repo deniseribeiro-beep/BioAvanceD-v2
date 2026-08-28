@@ -334,6 +334,56 @@ describe('ImportLGPDService.importPatients', () => {
     expect(result.success).toBe(1);
   });
 
+  // #798: blank rows must be visible in the result, not just silently
+  // excluded from `total` — otherwise a truncated upload (missing trailing
+  // rows) is indistinguishable from a clean file that legitimately had
+  // formatting artifacts. `skipped` is additive: it must not change what
+  // total/success/errors already mean.
+  it('reports a skipped count matching the number of blank rows, leaving total/success/errors identical to the same file without them (#798)', async () => {
+    const rowWithBadEmail = { ...VALID_ROW, email: 'not-an-email' };
+
+    // Baseline: the same two real rows (one success, one error), no blanks.
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW, rowWithBadEmail]);
+    const baseline = await service.importPatients(db, { path: '/baseline.csv', originalname: 'baseline.csv' });
+
+    // Reset the db/mocks so the second run starts from the same state as the
+    // first (fresh insertOne call count, no leftover duplicate-check state).
+    ({ db, patientsCollection } = makeDb());
+    vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
+      token: 'tok-1',
+      createdAt: new Date('2026-01-01'),
+      expiresAt: new Date('2026-02-01'),
+    });
+    vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://example.com/consent/tok-1');
+    vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+    vi.spyOn(patientService, 'checkDuplicatePatient').mockResolvedValue(null);
+
+    // Same file, plus three blank/whitespace-only trailing rows a spreadsheet
+    // export commonly appends.
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      VALID_ROW,
+      rowWithBadEmail,
+      {},
+      { patientName: '', email: '   ' },
+      { patientName: null, sex: undefined },
+    ]);
+    const withBlanks = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(withBlanks.skipped).toBe(3);
+    // The invariant that matters most: presence of blank rows is additive,
+    // not a reshaping of the existing counts.
+    expect(withBlanks.total).toBe(baseline.total);
+    expect(withBlanks.success).toBe(baseline.success);
+    expect(withBlanks.errors).toHaveLength(baseline.errors.length);
+  });
+
+  it('reports skipped: 0 when a file has no blank rows', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.skipped).toBe(0);
+  });
+
   it('warns but still imports when a patientID column is present in the file (it is ignored)', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, patientID: '99999999' }]);
     const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });

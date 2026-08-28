@@ -324,6 +324,46 @@ describe('ImportLGPDService.importSamples', () => {
     expect(result.total).toBe(1);
   });
 
+  // #798: a `skipped` count makes a truncated upload distinguishable from a
+  // clean file that happened to have trailing formatting artifacts. It must
+  // be purely additive -- total/success/errors have to come out identical to
+  // the same file without the blank rows.
+  it('reports a skipped count matching the number of blank rows, leaving total/success/errors identical to the same file without them (#798)', async () => {
+    const badRow = { ...VALID_ROW, treatmentStatus: 'TREATED', atcCode: 'NOT-A-CODE' };
+
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW, badRow]);
+    const baseline = await service.importSamples(db, { path: '/baseline.csv', originalname: 'baseline.csv' });
+
+    ({ db, samplesCollection } = makeDb());
+    vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant').mockResolvedValue(MATCHED_PATIENT);
+    vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+      governance_status: 1,
+      final_grade: 'A',
+      category: 'A',
+      score: 90,
+    });
+
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      VALID_ROW,
+      badRow,
+      {},
+      { sampleType: '', sampleOrigin: '   ', participantId: '\t' },
+    ]);
+    const withBlanks = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(withBlanks.skipped).toBe(2);
+    expect(withBlanks.total).toBe(baseline.total);
+    expect(withBlanks.success).toBe(baseline.success);
+    expect(withBlanks.errors).toHaveLength(baseline.errors.length);
+  });
+
+  it('reports skipped: 0 when a file has no blank rows', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.skipped).toBe(0);
+  });
+
   // #787 staged rejected rows into quarantine. A blank row is exactly the junk
   // that should not land there dressed as a real data problem -- the guard
   // runs before the row can be rejected, so an otherwise-clean file still

@@ -369,12 +369,13 @@ class ImportLGPDController {
         const auditLogger = require('../utils/auditLogger');
         auditLogger.init(db);
         await auditLogger.logImport(
-          req, 
-          'Patient', 
+          req,
+          'Patient',
           results.errors.length === 0 ? 'success' : 'partial',
-          results.total, 
-          results.success, 
-          results.errors.length
+          results.total,
+          results.success,
+          results.errors.length,
+          { skipped: results.skipped }
         );
       }
 
@@ -553,7 +554,8 @@ class ImportLGPDController {
           results.errors.length === 0 ? 'success' : 'partial',
           results.total,
           results.success,
-          results.errors.length
+          results.errors.length,
+          { skipped: results.skipped }
         );
       }
 
@@ -681,12 +683,13 @@ class ImportLGPDController {
         const auditLogger = require('../utils/auditLogger');
         auditLogger.init(db);
         await auditLogger.logImport(
-          req, 
-          'Sample', 
+          req,
+          'Sample',
           results.errors.length === 0 ? 'success' : 'partial',
-          results.total, 
-          results.success, 
-          results.errors.length
+          results.total,
+          results.success,
+          results.errors.length,
+          { skipped: results.skipped }
         );
       }
 

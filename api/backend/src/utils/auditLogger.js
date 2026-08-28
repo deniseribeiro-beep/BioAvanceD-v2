@@ -383,6 +383,13 @@ class AuditLogger {
       total,
       success,
       errors,
+      // #798: blank rows are skipped by isEmptyRow and deliberately stay out
+      // of `total`, so without this the audit record cannot distinguish a
+      // clean 9-row file from a 12-row file whose last three rows were blank
+      // -- which is the one case where an operator most needs to notice.
+      // This payload hand-picks known keys off `context`, so a caller passing
+      // `skipped` has no effect until it is read here by name.
+      skipped: context.skipped || 0,
       jobID: context.jobID || null,
       dataType: context.dataType || entity.toLowerCase(),
       fhirResourcesCreated: context.fhirResourcesCreated || 0,

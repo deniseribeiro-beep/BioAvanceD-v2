@@ -415,6 +415,7 @@ class ImportLGPDService {
       total: 0,
       success: 0,
       errors: [],
+      skipped: 0, // #798: linhas em branco ignoradas (isEmptyRow), fora de total
       generatedIDs: [] // Não será exposto na resposta final
     };
 
@@ -467,6 +468,10 @@ class ImportLGPDService {
           // Ignora linhas vazias (#790: as duas verificacoes daqui viraram
           // isEmptyRow, agora compartilhada pelos tres loops)
           if (this.isEmptyRow(row)) {
+            // #798: conta a linha ignorada separadamente de total/success/errors,
+            // para que o operador saiba que o arquivo tinha mais linhas do que as
+            // que contaram, sem alterar o significado de nenhum campo existente.
+            results.skipped++;
             continue;
           }
 
@@ -695,6 +700,7 @@ class ImportLGPDService {
         total: results.total,
         success: results.success,
         errors: results.errors,
+        skipped: results.skipped,
         // NÃO retorna IDs gerados (LGPD)
       };
 
@@ -1076,6 +1082,7 @@ class ImportLGPDService {
       total: 0,
       success: 0,
       errors: [],
+      skipped: 0, // #798: linhas em branco ignoradas (isEmptyRow), fora de total
       importedSampleIds: []
     };
 
@@ -1129,6 +1136,8 @@ class ImportLGPDService {
         // em quarentena como se fosse um problema real de dados. Fica antes
         // do results.total++ para casar com importPatients.
         if (this.isEmptyRow(row)) {
+          // #798: conta a linha ignorada separadamente de total/success/errors.
+          results.skipped++;
           continue;
         }
 
@@ -1503,6 +1512,7 @@ class ImportLGPDService {
         total: results.total,
         success: results.success,
         errors: results.errors,
+        skipped: results.skipped,
         importedSampleIds: results.importedSampleIds,
         stagingBatchId
       };
@@ -2006,7 +2016,8 @@ class ImportLGPDService {
     const results = {
       total: 0,
       success: 0,
-      errors: []
+      errors: [],
+      skipped: 0 // #798: linhas em branco ignoradas (isEmptyRow), fora de total
     };
 
     const rows = await this.readFile(file.path, file.originalname, 'patients');
@@ -2019,6 +2030,8 @@ class ImportLGPDService {
 
       // #790: mesmo guard dos outros dois loops, antes de contar a linha.
       if (this.isEmptyRow(rawRow)) {
+        // #798: conta a linha ignorada separadamente de total/success/errors.
+        results.skipped += 1;
         continue;
       }
 

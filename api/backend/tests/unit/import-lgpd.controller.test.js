@@ -392,7 +392,14 @@ describe('import-lgpd.controller', () => {
       await controller.importPatients(req, res);
 
       expect(initSpy).toHaveBeenCalledWith(db);
-      expect(logImportSpy).toHaveBeenCalledWith(req, 'Patient', 'success', 1, 1, 0);
+      // #798: logImport now carries a 7th `context` argument holding the
+      // blank-row count. The mocked service returns no `skipped`, so the
+      // value is undefined here -- what this assertion pins is the call
+      // shape, not the count; the count itself is pinned in the three
+      // per-loop service tests and in audit-logger.unit.test.js.
+      expect(logImportSpy).toHaveBeenCalledWith(
+        req, 'Patient', 'success', 1, 1, 0, expect.objectContaining({ skipped: undefined })
+      );
     });
 
     it('does not log audit when req.user is absent', async () => {
@@ -607,7 +614,10 @@ describe('import-lgpd.controller', () => {
       expect(body.data.success).toBe(4);
 
       expect(auditLogger.log).toHaveBeenCalledTimes(2);
-      expect(auditLogger.logImport).toHaveBeenCalledWith(req, 'Patient', 'success', 4, 4, 0);
+      // #798: as above -- the 7th `context` argument is the blank-row count.
+      expect(auditLogger.logImport).toHaveBeenCalledWith(
+        req, 'Patient', 'success', 4, 4, 0, expect.objectContaining({ skipped: undefined })
+      );
     });
 
     it('returns 503 when no db', async () => {
