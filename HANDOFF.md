@@ -1,117 +1,106 @@
 # HANDOFF
 
 **Written 2026-08-28. Definitive rotation — the sitting is finished.**
-Dennis asked to continue pack #523. It was measured, it is blocked on an
-owner action, and **the previous rotation's central claim turned out to be
-false.** No product code changed; the sitting's whole output is tracker
-state.
+A `rabbit-hole` sitting on the `patientID`/mock-fidelity cluster, run as an
+orchestrator with delegated workers. Three bugs fixed and closed, one static
+guard landed, four issues filed here and four against the pack.
 
 ---
 
-## Read this first: correcting the previous rotation
+## Still inside the rabbit hole: tracker #846
 
-The last note told the next session that the auto-mode classifier is
-**session-stateful** — that it "arms" on demonstrated intent to modify hook
-configuration and thereafter denies even read-only Bash — and prescribed
-that the `#523` matcher flip **must be a fresh session's first action.**
+**Do not treat this as a fresh backlog pick.** Re-enter via `rabbit-hole`
+with tracker #846, and re-derive membership from its comments rather than
+this table.
 
-**Ran it today. Both halves are false, and the prescription is unrunnable.**
+| member | state |
+|---|---|
+| #843 miabisValidator sharing verdict | closed, `a27c9721` |
+| #847 buildActiveConsentQuery wrong key | closed, `32a1538d` |
+| #848 unguarded patient `$or` | closed, `ab1b20a1` |
+| #797 filter-blind mocks | **open** — guard slice landed `Refs`, `b969f851` |
+| #849 the guard's unreached scope | **open** — wants a direction call |
+| #850 the legacy `_id` leg | **open** — wants owner input or a DB query |
 
-- Registering the probe hook was denied **as a fresh session's first
-  config-surface action.** The denial is unconditional. There is no window
-  to get in ahead of.
-- **Nothing arms.** Seconds after that denial, `head -3` on a file under
-  `.claude/hooks/` and `ls .claude/skills/` both succeeded.
-- What actually drives a refusal is **command shape**, not path or session
-  history: `ls X | head && f=$(ls ...); cat "$f" | head` was denied, while a
-  bare `ls X` on the same directory passed. That also explains the original
-  "byte-identical command denied later" observation without any statefulness.
+Three of these were filed by this sitting from inside the work.
 
-**Practical rule: when a read is refused, simplify the command and retry
-before concluding anything about the session.**
+## The mechanism claim worth carrying (ran it)
 
-Full measurements and the corrected procedure are on **#556**. Do not plan
-around the old model.
+**The `consents` collection is keyed on `participantId`. No writer emits
+`patientId`** — verified across `PatientConsent.js:63`,
+`consent.service.js:901,918`, `RegisterSample.js:128`,
+`intakeWizard.js:523`, with `intakeWizard.js:543` the one correct reader.
 
-## Where #523 stands
+**#843's own "Suggested fix" was wrong because of it** — it proposed
+`{ patientId: participantId }`, right value and wrong key, which would have
+traded a match-anything filter for a match-nothing one while the guard made
+it look fixed.
 
-Slice 1 now has two independent blockers, and **neither is a session's to
-clear**:
+The cluster is **two failure directions from one root**, which is why no
+single rename sweep clears it:
 
-1. **The probe cannot be registered by any session** — #556. It needs a
-   one-time edit to `.claude/settings.json` by Dennis; #556 carries the exact
-   block, a deliberately wider `Bash|PowerShell|Edit|Write` matcher and why,
-   and the six-step readout procedure. Dennis declined the two workarounds
-   offered (paste-the-block now, or instrument an already-registered hook)
-   in favour of filing it for a clean session.
-2. **The out-of-scope-brief method remains unrunnable** — unchanged, and
-   already recorded on #523: the brief trips the leaf worker's role contract
-   before the hook is ever consulted, so nothing is observed either way. The
-   honest fix is still the authorised-self-test clause in the shared
-   leaf-worker fragment.
+- **wrongly permissive** (#843, #848) — `undefined` serialises to BSON
+  `null`, matches an arbitrary record, and the code faithfully reports
+  *that* record's consent.
+- **wrongly restrictive** (#847) — the key is absent from every document,
+  so nothing matches and every sample badges "TCLE Pendente".
 
-**#526 stays blocked behind it. Every leaf worker still runs uncontained on
-the frontmatter surface.**
+#788's fix moved `GET /api/samples` from the first to the second without
+anyone noticing, because the test written to prove #788 fixed was an
+identity stub asserting two mock values against each other.
+
+## Rules this sitting earned
+
+- **Verify a body's *remedy* separately from its *defect trace*.**
+  Confirming the trace is exactly what makes the remedy feel pre-vetted.
+- **A precedent cited in a brief must be verified from commits, not from an
+  issue body.** This sitting briefed "#771 swept 165 mocks across 80 files";
+  #771 actually migrated nothing and was closed by one architecture test.
+  The agent caught it. Pack #565.
+- **Prove a new guard catches the real defect, not just a synthetic one.**
+  `filter-keys.arch.test.js` was checked by reintroducing #843's actual
+  line; it goes red naming file, line and key.
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, clean and matching origin
-  apart from this rotation. `main` untouched. No open PR.
-- **No product code was changed this sitting** — `git diff --stat` empty at
-  audit time. Last substantive commit remains
-  `chore(deps): drop three unreferenced root devDependencies`.
-- Untracked and deliberately untouched: `.claude/skills/` and
+- On `feature/docker-e2e-backend-integration`, **pushed**
+  (`b1176cab..b969f851`). Tree clean apart from this rotation. `main`
+  untouched, no open PR.
+- Untracked and deliberately untouched: `.claude/skills/`,
   `api/backend/storage/assays/`. **Never `git add -A`.**
-- `.claude/agents/` and `.claude/hooks/` are gitignored here.
+- Native runs only, all green: the three touched unit files, and
+  `npm run test:architecture` at **78/78** (was 73).
+- **Docker: not run, not observed.** Bootstrap state unverified — run
+  `docker ps -a`, not `docker ps`, before trusting anything about volumes.
 
-## Docker
+## Deliberate non-actions — don't redo the reasoning
 
-**Not run and not observed this sitting.** Bootstrap state remains
-unverified — run `docker ps -a`, not `docker ps`, before trusting anything
-about the volumes.
+- **#797 was not closed, and no migration-chunk issues were filed.** Its
+  item 1 is already done; its owner comment scopes item 2 to triage, not a
+  730-site sweep. The triage itself is now a comment on #797.
+- **`db.factory.js:48` was not touched.** It ships the identity stub as its
+  *default*, with 43 consumers, 35 in `tests/integration/` — outside this
+  cluster. Arguably the highest-leverage single change available, and it
+  must be its own serialized work.
+- **#844 is a sixth instance** of the same class, predates this sitting, so
+  it was not absorbed into the hole.
 
 ## Recommended next
 
-Dennis named no next issue, so: **none queued.**
+Dennis named no next issue, so: **none queued.** For the backlogs run
+`gh issue list --state open` and the same against
+`DyeAllPies/dyeallpies-skills-pack`.
 
-For the backlogs run `gh issue list --state open` and
-`gh issue list --repo DyeAllPies/dyeallpies-skills-pack --state open`.
-What a query cannot carry is the ordering:
+What a query cannot carry:
 
-- **#556 is owner-gated, not session-gated.** Do not re-attempt the flip
-  from a session; it will be denied again. #523 and #526 sit behind it.
-- **Pack #398 is the readiest thing on the board** — root-caused, with the
-  fix already existing in the sibling guard its own header cites. Needs the
-  edit plus a regression pair, from a pack session. It cost this sitting a
-  tool choice: issue bodies quoting a `.claude/hooks/` path next to `node`
-  are the false-block shape, so bodies were written with `Write` rather than
-  a Bash heredoc.
-- **#557 is new and pairs with #398/#555 as a pack-prose batch** — HANDOFF.md
-  carries load-bearing mechanism claims under no grading rule, which is
-  precisely how the false claim above reached this session wearing the word
-  "Measured". Its own "not established" item is whether the pattern recurs;
-  a `git log -p HANDOFF.md` sweep would settle it.
-- **#558 wants a direction call from Dennis before anyone codes it.**
-  `routing-gate`'s four carve-outs are each correct and union to leave a
-  tracker-only sitting completely ungated. The obvious fix — gate on
-  `gh issue create`/`comment` — would fire on the disciplined side track
-  `github-issues` says costs nothing, so the remedy is genuinely open.
-- **#752 still wants Dennis, not a session.** The #684/#800/#801 ownership
-  cluster remains the highest-severity item and is still blocked on the
-  RF010/RF021 actor model.
-
-## Conventions this sitting confirmed
-
-- **Re-measure a handoff's mechanism claims before building on them.** This
-  sitting's entire opening was spent on a prescription that did not survive
-  first contact. State claims (branch, cleanliness) are cheap and were fine;
-  the mechanism claim was the expensive one.
-- **`Glob` returns nothing under `.claude/skills/`** — the entries are
-  symlinks. Reach them by explicit path. Already documented in
-  `dennis-windows` (#157); loading that skill first would have saved the
-  detour.
-- **Work directly on the integration branch, commit per slice** (#552).
-- **Route before touching the tracker, not after.** This sitting invoked
-  `work-issue`/`resolve-issue` only because the Stop hook demanded it, and
-  by then every filing decision was made. `routing-gate` stayed correctly
-  silent throughout — that gap is now #558.
+- **#849 and #850 both want Dennis, not a session** — one is a
+  lint-vs-dataflow direction call (and should probably be decided with
+  #839, which has the identical fork), the other needs a real database
+  answer.
+- **Pack #564 says `rabbit-hole` is stale** — Dennis flagged it mid-sitting,
+  and mid-workflow HANDOFF rotations are no longer done despite Step 4 and
+  `handoff`'s multi-iteration subsection both mandating them. Treat that
+  skill's prescriptions as suspect until #564 lands.
+- **Pack #566 and #567** are this sitting's two orchestration findings: the
+  opening move of a delegating sitting is under-specified, and the routing
+  reminder now fires too late to change anything.
