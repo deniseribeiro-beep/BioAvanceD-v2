@@ -188,13 +188,23 @@ function validateCreateSamplePayload(req, res, next) {
   return next();
 }
 
+// #847: this used to build its filter from `patient?.patientID` (dead --
+// Patient.js's CANONICAL_FIELDS never declares it) and `patient?._id?.toString()`
+// (an ObjectId string, never what `consents` documents store their
+// participant under -- every writer emits `participantId`, e.g.
+// PatientConsent.js:63, consent.service.js:901/918, RegisterSample.js:128,
+// intakeWizard.js:523). The query therefore selected on a key absent from
+// every consent document and findOne returned null every time, badging
+// every sample not-consented regardless of a signed TCLE. Returning null
+// here when the patient has no participantId of its own -- rather than
+// falling back to some other identifier -- keeps an absent id from ever
+// degrading into a match-anything filter, which was #788's failure mode.
 function buildActiveConsentQuery(patient) {
-  const patientIds = [patient?.patientID, patient?._id?.toString()]
-    .filter((value) => value !== undefined && value !== null && value !== '')
-    .map(String);
+  const participantId = String(patient?.participantId ?? '').trim();
+  if (!participantId) return null;
 
   return {
-    patientId: { $in: [...new Set(patientIds)] },
+    participantId,
     status: 'ACTIVE'
   };
 }
@@ -531,7 +541,11 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
 
       if (patient) {
         // Verificar se há consentimento ativo
-        const consent = await patientConsentsCollection.findOne(buildActiveConsentQuery(patient));
+        // #847: a null query means the patient has no participantId of its
+        // own -- treated as "no active consent" without issuing a findOne,
+        // rather than falling back to a filter that could match anything.
+        const consentQuery = buildActiveConsentQuery(patient);
+        const consent = consentQuery ? await patientConsentsCollection.findOne(consentQuery) : null;
 
         if (consent) {
           consentValid = true;

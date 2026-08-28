@@ -1322,7 +1322,9 @@ describe('sample.routes', () => {
       });
       const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
 
-      const patient = { _id: { toString: () => 'patient-1' } };
+      // #847: the patient must carry its own participantId for
+      // buildActiveConsentQuery to issue a consent lookup at all.
+      const patient = { _id: { toString: () => 'patient-1' }, participantId: '53117577' };
       const patientsCollection = { findOne: vi.fn().mockResolvedValue(patient) };
       const consentsCollection = {
         findOne: vi.fn().mockResolvedValue({ status: 'ACTIVE' }),
@@ -1348,7 +1350,9 @@ describe('sample.routes', () => {
       });
       const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
 
-      const patient = { _id: { toString: () => 'patient-1' } };
+      // #847: the patient must carry its own participantId for
+      // buildActiveConsentQuery to issue a consent lookup at all.
+      const patient = { _id: { toString: () => 'patient-1' }, participantId: '53117577' };
       const patientsCollection = { findOne: vi.fn().mockResolvedValue(patient) };
       const consentsCollection = {
         findOne: vi.fn().mockResolvedValue(null),
@@ -1417,8 +1421,12 @@ describe('sample.routes', () => {
         { _id: 'patient-unrelated', participantId: '64404470' },
         { _id: 'patient-real', participantId: '53117577' },
       ]);
+      // #847: every writer of the `consents` collection emits `participantId`
+      // (PatientConsent.js:63, consent.service.js:901/918, RegisterSample.js:128,
+      // intakeWizard.js:523) -- never `patientId`. Seeded with the real field
+      // name, not the dead one buildActiveConsentQuery used to query on.
       const consentsCollection = createMatchingCollection([
-        { patientId: 'patient-real', status: 'ACTIVE' },
+        { participantId: '53117577', status: 'ACTIVE' },
       ]);
       const db = {
         collection: (name) => (name === 'patients' ? patientsCollection : consentsCollection),
@@ -1438,6 +1446,12 @@ describe('sample.routes', () => {
       );
       // The identifier actually queried must be the sample's own.
       expect(JSON.stringify(patientsCollection.findOne.mock.calls[0][0])).toContain('53117577');
+      // #847: the consent lookup itself must filter on the patient's
+      // participantId, not a dead `patientId` key nor the patient's _id.
+      expect(consentsCollection.findOne.mock.calls[0][0]).toEqual({
+        participantId: '53117577',
+        status: 'ACTIVE',
+      });
     });
 
     it('fails closed when a sample carries no participant identifier, instead of matching an arbitrary patient (#788)', async () => {
@@ -1469,6 +1483,45 @@ describe('sample.routes', () => {
           consentValid: false,
           canUse: false,
           consentReasonCode: 'PATIENT_NOT_FOUND',
+        })
+      );
+    });
+
+    // #847: buildActiveConsentQuery(patient) built its filter from
+    // `patient.patientID` (a field no writer of Patient.js sets) and
+    // `patient._id.toString()` (an ObjectId string, never what `consents`
+    // documents store their participant under). The fix queries on the
+    // patient's own `participantId` instead, and must refuse to query at
+    // all when that is absent -- an absent id must never degrade into a
+    // match-anything filter, which was #788's original failure mode.
+    it('does not query consents when a matched patient record carries no participantId of its own (#847)', async () => {
+      const listSamples = vi.fn().mockResolvedValue({
+        samples: [{ _id: 'sample-3', participantId: '53117577' }],
+        total: 1,
+      });
+      const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
+
+      // The patient IS found (by the sample's own participantId, per the
+      // #788 guard), but the patient record itself has no participantId
+      // field -- only an ObjectId-shaped _id, which the old code fell back
+      // to and which must not be queried against `consents` at all.
+      const patient = { _id: { toString: () => 'patient-no-participant-id' } };
+      const patientsCollection = { findOne: vi.fn().mockResolvedValue(patient) };
+      const consentsCollection = { findOne: vi.fn(), countDocuments: vi.fn() };
+      const db = {
+        collection: (name) => (name === 'patients' ? patientsCollection : consentsCollection),
+      };
+      const app = buildApp(router, db);
+
+      const res = await request(app).get('/api/samples');
+
+      expect(res.status).toBe(200);
+      expect(consentsCollection.findOne).not.toHaveBeenCalled();
+      expect(res.body.data[0]).toEqual(
+        expect.objectContaining({
+          consentValid: false,
+          canUse: false,
+          consentReasonCode: 'NO_ACTIVE_CONSENT',
         })
       );
     });
