@@ -32,8 +32,7 @@ const MongoStorageRepository = require('../infrastructure/persistence/mongo/Mong
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
 const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
 
-const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
-const BLOCKED_EQUIPMENT_STATUSES = ['maintenance', 'inactive', 'needs calibration', 'error', 'retired'];
+const { CRITICAL_SENSOR_STATUSES, BLOCKED_EQUIPMENT_STATUSES } = require('../models/equipmentStatus');
 
 function buildIdVariants(...ids) {
   const variants = [];

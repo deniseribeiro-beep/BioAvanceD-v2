@@ -24,11 +24,11 @@ const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoA
 const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
 const { ObjectId } = require('mongodb');
 
+const { CRITICAL_SENSOR_STATUSES, BLOCKED_EQUIPMENT_STATUSES } = require('../models/equipmentStatus');
+
 const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadastro de amostra';
-const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
-// #470: mirrors intakeWizard.js's BLOCKED_EQUIPMENT_STATUSES — the
+// #470: imports the shared equipment-readiness constants (#774) — the
 // equipment-readiness half of RF004's gate, missing here until now.
-const BLOCKED_EQUIPMENT_STATUSES = ['maintenance', 'inactive', 'needs calibration', 'error', 'retired'];
 
 /**
  * Every caller (sample.routes.js) passes an already-cast ObjectId as

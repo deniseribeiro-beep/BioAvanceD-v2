@@ -329,8 +329,7 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
   return outcome;
 }
 
-const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
-const BLOCKED_EQUIPMENT_STATUSES = ['maintenance', 'inactive', 'needs calibration', 'error', 'retired'];
+const { CRITICAL_SENSOR_STATUSES, BLOCKED_EQUIPMENT_STATUSES } = require('../models/equipmentStatus');
 const BLOCKED_BOX_STATUSES = ['FULL', 'RETIRED', 'INACTIVE'];
 
 function normalizeString(value) {
