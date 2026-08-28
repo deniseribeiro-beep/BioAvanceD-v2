@@ -5,6 +5,93 @@ Short sitting, no product work. Dennis asked which skills-pack issue had
 work that could only be done here, then authorized executing it. Answer:
 **pack #523's live agent run** — and it **failed**, which is the finding.
 
+---
+
+## ADDED 2026-08-28 by a pack-rooted sitting: what changed under you, and what still needs running here
+
+Everything below this heading was written from the skills-pack repo and
+deployed here (`assets-manifest.txt` → pack `48a2c49`). The section above
+is unchanged and still accurate; read it first.
+
+### Operational change you will notice immediately: no more per-issue branches
+
+**Work directly on `feature/docker-e2e-backend-integration` and commit per
+slice.** No branch per issue, no merge-back, no delete (pack #552, Dennis's
+call). **The unit of review is the commit.**
+
+- `edit-branch-guard.cjs` now protects **`main` only**. Editing on the
+  integration branch is the intended workflow, not the #125/#395 near-miss.
+- **`main` is still frozen and still absolutely protected** — that was
+  always the guard's real job and it is untouched.
+- Still branch when something genuinely warrants it (risky, long-lived,
+  abandonable whole). `branch-guard.cjs`'s names and lineage checks are
+  unchanged.
+- `resolve-issue`'s "create the per-issue branch" and
+  "fold-into-the-integration-branch" steps are **skipped** here now; its
+  overlay says so.
+
+### Delegation is capped at 3 agents in flight
+
+Pack #550. `agent-delegation-guard.cjs` blocks the 4th concurrent `Agent`
+call. Three workers plus you is four tracks progressing; **you are the
+coordination track, not a fourth worker** — take small tasks, not ones big
+enough to leave returns queueing.
+
+**This is a cap on your attention, not a containment control.** Containment
+is still broken (the section above); the cap does not touch that.
+
+### Edit the fragment, not the two agent files
+
+`fix-writer.md` and `test-writer.md` are now **composed at deploy time**
+from `projects/bioavanced-v2/assets/agents/_shared/` in the pack (pack
+#530). They had already drifted three ways — including `test-writer` having
+no tripwire section at all, which it now has.
+
+Editing `.claude/agents/*.md` here still works and is not junctioned, but
+**the next deploy overwrites it**. Change the pack fragment.
+
+### Pack issues that can only be run from here
+
+**#523 — the probe order has changed.** A pack sitting read the Claude Code
+binary (2.1.217) and found: the matcher alternation you suspected is the
+*documented* form, and **every string tying "agent frontmatter" to a config
+layer is about MCP servers, not hooks** — the built-in subagent scaffold
+emits no `hooks:` key at all. Suggestive, not decisive, but it demotes the
+matcher hypothesis below "frontmatter hooks are not wired for hooks."
+
+So run these in this order:
+
+1. **Dump a hook's entire stdin from inside a live worker.** The binary
+   carries `agentType` (440), `subagent_type` (83), `agent_id` (77),
+   `parent_tool_use_id` (72) — the identity exists internally. Whether any
+   of it reaches a hook's stdin is the real blocker on the `settings.json`
+   route, which your own probe already proved reaches subagents. **This is
+   now the highest-value single measurement in the programme.**
+2. **Then** flip `matcher: "Bash|PowerShell"` → `"Bash"` and re-probe. Note
+   your own recorded blocker: the auto-mode classifier refused that edit via
+   both Bash and `Edit` (pack #530). A pack sitting confirmed the denial is
+   **not** keyed on the `.claude/` path or on agent-definition-ness — two
+   such writes succeeded from the pack repo — so it is specific to this repo
+   or that session. Retry it; it may simply go through.
+
+A refusal is still the pass.
+
+**#526 — still blocked on #523**, and its body is stale in one way worth
+knowing: it says "`resolve-issue`'s six cases"; there are now **eight** and
+they live in **`github-issues`**. Its orchestrator loop is now written into
+`agent-delegation` (research → plan → take the researcher down → refill the
+slot with the executing worker; scoped verification that first checks no
+in-flight agent owns those files; Docker last and never delegated).
+
+### One new rule that will bite here
+
+**Before running any scoped test, check which files the in-flight agents
+own** — their briefs name them. A suite run across a file another agent is
+mid-edit reports on neither the old state nor the new one, and looks like a
+result. Wait for that agent rather than narrowing the test until it passes.
+
+---
+
 ## The result: delegated leaf workers are not contained
 
 The previous handoff's four-step plan was followed and stopped at step 1,
