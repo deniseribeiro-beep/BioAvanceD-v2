@@ -38,6 +38,7 @@ describe('equipment.routes quarantine flow', () => {
     const foundEquipment = {
       _id: '507f1f77bcf86cd799439011',
       equipmentID: 101,
+      equipmentDescription: 'Freezer de teste',
       status: 'Active'
     };
 
@@ -86,22 +87,29 @@ describe('equipment.routes quarantine flow', () => {
     const response = await request(app)
       .put('/equipment/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${token}`)
-      .send({ status: 'active' });
+      .send({ status: 'Active' });
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
     expect(response.body.quarantine).toEqual({ triggered: false });
 
-    expect(isQuarantineTriggerStatusMock).toHaveBeenCalledWith('active');
+    expect(isQuarantineTriggerStatusMock).toHaveBeenCalledWith('Active');
     expect(quarantineByEquipmentStatusMock).not.toHaveBeenCalled();
     expect(startSession).not.toHaveBeenCalled();
     expect(updateOne).toHaveBeenCalledTimes(1);
   });
 
-  it('Gatilho: status offline dispara transacao e quarentena', async () => {
+  // #868: 'offline' is a quarantine-trigger value but not one
+  // EquipmentModel.validate accepts, so this test now exercises the fix
+  // with 'Maintenance' -- valid per the model *and* a real trigger member
+  // of QUARANTINE_TRIGGER_STATUSES (case-insensitively) -- to keep
+  // covering the transaction/quarantine path without relying on a status
+  // the PUT handler would now reject with 422 before ever reaching it.
+  it('Gatilho: status Maintenance dispara transacao e quarentena', async () => {
     const foundEquipment = {
       _id: '507f1f77bcf86cd799439011',
       equipmentID: 202,
+      equipmentDescription: 'Freezer de teste',
       status: 'Active'
     };
 
@@ -152,7 +160,7 @@ describe('equipment.routes quarantine flow', () => {
       matched: 2,
       quarantined: 2,
       movements: 2,
-      reason: 'status:offline'
+      reason: 'status:maintenance'
     });
 
     const app = buildAppWithDb(db);
@@ -162,7 +170,7 @@ describe('equipment.routes quarantine flow', () => {
       .put('/equipment/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${token}`)
       .set('user-agent', 'vitest-agent')
-      .send({ status: 'offline' });
+      .send({ status: 'Maintenance' });
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
@@ -172,22 +180,22 @@ describe('equipment.routes quarantine flow', () => {
     expect(withTransaction).toHaveBeenCalledTimes(1);
     expect(endSession).toHaveBeenCalledTimes(1);
 
-    expect(isQuarantineTriggerStatusMock).toHaveBeenCalledWith('offline');
+    expect(isQuarantineTriggerStatusMock).toHaveBeenCalledWith('Maintenance');
     expect(quarantineByEquipmentStatusMock).toHaveBeenCalledTimes(1);
     expect(quarantineByEquipmentStatusMock).toHaveBeenCalledWith(
       db,
       expect.objectContaining({
         _id: foundEquipment._id,
         equipmentID: foundEquipment.equipmentID,
-        status: 'offline'
+        status: 'Maintenance'
       }),
-      'offline',
+      'Maintenance',
       expect.objectContaining({ session })
     );
 
     expect(updateOne).toHaveBeenCalledWith(
       { _id: expect.anything() },
-      { $set: expect.objectContaining({ status: 'offline' }) },
+      { $set: expect.objectContaining({ status: 'Maintenance' }) },
       { session }
     );
   });

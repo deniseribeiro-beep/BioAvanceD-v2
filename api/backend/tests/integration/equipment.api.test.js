@@ -51,6 +51,15 @@ function givenSession() {
 // #635: organizationId matches buildRbacCollections' default scopeId for a
 // non-Administrador assignment ('test-org-default') so this fixture stays
 // visible to the org-scoped callers most tests in this file use.
+// #868: this fixture is deliberately NOT a valid document. Its
+// equipmentID is a string and it has no equipmentDescription, so
+// EquipmentModel.validate() rejects it outright -- which is exactly the
+// shape #757 records escaping into the database through a raw insertOne.
+//
+// PUT validates only the errors a request introduces, not the state it
+// inherits, so every test below that patches an unrelated field on this
+// document is also a regression guard: it proves a legacy record is still
+// updatable rather than permanently frozen by the new check.
 const FAKE_EQ = { _id: '507f1f77bcf86cd799439011', equipmentID: 'EQ-001', name: 'Freezer A', type: 'Storage', status: 'Active', organizationId: 'test-org-default' };
 
 beforeEach(() => { givenSession(); });
@@ -238,6 +247,61 @@ describe('PUT /api/equipment/:id', () => {
       .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ status: 'Maintenance' });
     expect([200, 400]).toContain(res.status);
+  });
+
+  // #868: PUT is a partial update -- validating the merged (existing +
+  // patch) document, not the raw body, must still let a legitimate partial
+  // update through even though the body alone doesn't look like a full
+  // Equipment document.
+  it('returns 200 for a valid partial update (only equipmentDescription changed)', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      updateOne,
+    });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ equipmentDescription: 'Updated description' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(updateOne).toHaveBeenCalledWith(
+      { _id: expect.anything() },
+      { $set: expect.objectContaining({ equipmentDescription: 'Updated description' }) }
+    );
+  });
+
+  // #868: the core bug -- an unvalidated status write on PUT that also
+  // auto-quarantines. A status EquipmentModel.validate rejects (here,
+  // 'offline', which only the quarantine vocabulary recognises) must now
+  // 422 before any write, and must never reach the quarantine service.
+  it('returns 422 for an invalid status and never invokes the quarantine service', async () => {
+    const isQuarantineTriggerStatus = vi.fn().mockReturnValue(true);
+    const quarantineByEquipmentStatus = vi.fn();
+    app.locals.quarantineService = { isQuarantineTriggerStatus, quarantineByEquipmentStatus };
+
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      updateOne,
+    });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ status: 'offline' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.success).toBe(false);
+    expect(res.body.message).toMatch(/status deve ser um de/);
+    expect(updateOne).not.toHaveBeenCalled();
+    expect(quarantineByEquipmentStatus).not.toHaveBeenCalled();
+
+    delete app.locals.quarantineService;
   });
 });
 
@@ -460,7 +524,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
 
   it('falls back to numeric equipmentID lookup when id is not a valid ObjectId but is numeric', async () => {
     const coll = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue({ _id: 'abc', equipmentID: 123, status: 'Active' }),
+      findOne: vi.fn().mockResolvedValue({ _id: 'abc', equipmentID: 123, equipmentDescription: 'desc', status: 'Active' }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     });
     app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });

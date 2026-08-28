@@ -340,6 +340,38 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
       });
     }
 
+    // #868: PUT was writing whatever it was handed. EquipmentModel.validate
+    // is a whole-document validator, so it cannot be applied to the patch
+    // directly -- a patch changing only `status` carries no
+    // equipmentDescription and would fail on its absence.
+    //
+    // Validating the MERGED document is the obvious next move and is also
+    // wrong: the validator requires a numeric equipmentID and a
+    // description unconditionally, and documents predating those rules
+    // exist -- #757 records a raw insertOne putting a string equipmentID
+    // past both schemas. Merge-validation would make every such document
+    // permanently un-updatable, including by the very patch that would
+    // repair it.
+    //
+    // So reject only what this request actually introduces: validate
+    // before and after, and fail on errors the patch added. A caller is
+    // never punished for a pre-existing defect it did not cause, and an
+    // invalid status still cannot reach quarantineByEquipmentStatus below.
+    const priorErrors = new Set(EquipmentModel.validate(foundEquipment).errors);
+    const introducedErrors = EquipmentModel
+      .validate({ ...foundEquipment, ...updateData })
+      .errors
+      .filter((error) => !priorErrors.has(error));
+
+    if (introducedErrors.length > 0) {
+      logger.warn(`Validação falhou ao atualizar equipamento ${req.params.id}: ${introducedErrors.join(', ')}`);
+      return res.status(422).json({
+        success: false,
+        error: 'Dados inválidos',
+        message: introducedErrors.join(', ')
+      });
+    }
+
     const finalStatus = updateData.status !== undefined ? updateData.status : foundEquipment.status;
     const shouldTriggerQuarantine = quarantineService.isQuarantineTriggerStatus(finalStatus);
     const mongoClient = db?.client;
