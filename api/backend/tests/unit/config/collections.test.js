@@ -113,15 +113,23 @@ describe('config/collections', () => {
       consentTemplates: 'custom_coll_consent_templates',
       sampleMovements: 'custom_coll_sample_movements',
       biomarkerObservations: 'custom_coll_biomarker_observations',
-      // src/config/env.js never reads these COLL_* vars into its
-      // exports, so collections.js's `env.X ||` fallback for them always
-      // takes the hardcoded default regardless of process.env.
-      cids: 'cids',
-      clinicalUnits: 'clinical_units',
+      // These five used to expect the hardcoded default here, with a
+      // comment explaining that env.js "never reads these COLL_* vars".
+      // That was true, and it was the bug: #863 found env.js declared 6 of
+      // the 47 COLL_* keys collections.js reads, so 41 were undefined
+      // forever and the `env.X ||` fallback always won. The declaration
+      // gap and this assertion were vouching for each other -- exactly the
+      // mutually-reinforcing pattern #778/#784 describe -- while this
+      // test's own name promised the opposite of what it asserted.
+      // Now that env.js declares all 47, every key in ENV_KEYS is honoured.
+      cids: 'custom_coll_cids',
+      clinicalUnits: 'custom_coll_clinical_units',
+      // organizations stays defaulted: COLL_ORGANIZATIONS is genuinely not
+      // in ENV_KEYS, so customEnv never sets it.
       organizations: 'organizations',
-      diseaseDictionary: 'disease_dictionary',
-      medicationDictionary: 'medication_dictionary',
-      referenceSeedRuns: 'referenceSeedRuns',
+      diseaseDictionary: 'custom_coll_disease_dictionary',
+      medicationDictionary: 'custom_coll_medication_dictionary',
+      referenceSeedRuns: 'custom_coll_reference_seed_runs',
       foundationDataRuns: 'foundationDataRuns',
       participantIdentities: 'participantIdentities',
       rcsAssessments: 'rcsAssessments',
