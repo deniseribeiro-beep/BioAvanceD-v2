@@ -26,9 +26,14 @@ this table.
 Five of these were filed by this sitting from inside the work.
 
 **Also resolved, outside the hole:** #842 (`a125e524`) removed `frontend/.nycrc`
-and the two nyc devDependencies it kept alive. Reading it turned up **#852**
-— the 7-31 doc batch requires CI to fail on unapproved coverage regression,
-and CI has no coverage measurement at all.
+and the two nyc devDependencies it kept alive.
+
+**#852 was filed and closed premise-corrected in the same sitting** — a
+doc-mandated CI coverage gate looked unimplemented, but milestone #3
+already sequences CI *after* Playwright ("do not start wiring CI until #2
+closes", Dennis 2026-07-27). **We are in the pre-CI stage.** `docs/CI.md`
+(`c4b21775`) now carries that pointer so the next reader of the same
+passage does not repeat it.
 
 ## The mechanism claim worth carrying (ran it)
 
@@ -69,7 +74,11 @@ identity stub asserting two mock values against each other.
 - **Open the non-greppable docs, or say you didn't.** A `git grep` hit on a
   `.docx` is a match on compressed bytes — neither usable nor dismissable.
   Opening `docs/docs-7-31-2026/3 - Plano_Integrado_*.docx` for #842 changed
-  that issue's outcome and produced #852. Pack #569.
+  that issue's outcome.
+- **Then keep going down the ladder — check the milestones.** Docs say what
+  must eventually be true; **milestones say when.** Stopping at the first
+  rung that answers is what produced #852, an issue about work already
+  scheduled. `gh api repos/.../milestones` settles it in one call. Pack #569.
 
 ## Repo state
 
