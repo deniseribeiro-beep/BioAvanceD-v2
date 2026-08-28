@@ -56,7 +56,7 @@ report and a fix.
 
 ## Filed
 
-All on `DyeAllPies/dyeallpies-skills-pack`, no new issues opened:
+All on `DyeAllPies/dyeallpies-skills-pack`:
 
 - **#523** — the full run: probe results, layer discrimination, guard
   payload table, the matcher hypothesis, the stale overlay, suggested next.
@@ -66,6 +66,24 @@ All on `DyeAllPies/dyeallpies-skills-pack`, no new issues opened:
   but it pushes edits onto the one surface the (inert) guard polices.
 - **#526** — cross-reference: its blocker is cleared but its containment
   premise is void; **#523 still lands first.**
+
+- **#214 reopened** — the routing checkpoint fires at Stop, too late. 4th
+  recurrence, which its own close comment named as the escalation trigger.
+  `routing-gate.cjs` *is* the deferred PreToolUse fix: it fired at the right
+  moment this session, is **advisory**, and lost to a wrong judgment.
+- **#530 reopened** — auto mode’s prefer-Bash reminder reached both workers
+  (n=4), and its orchestrator half is what **blocks #523’s one-character
+  diagnostic experiment** via the permission classifier.
+- **#544 filed** — `wrap-up`’s "file it now, don’t offer" rule was read and
+  skipped in this session. The offer masked an unrun duplicate search, and
+  all three findings already had homes. n=2 with #454 (pointer comment added
+  there; it stays closed).
+- **#545 filed** — the sibling defect: all three dup-search hits came back
+  CLOSED and the reflex was to comment on them anyway. `github-issues` has
+  eight close cases and no disposition rule for a CLOSED search hit.
+
+**Do not park actionable work on a closed issue** (Dennis, this sitting) —
+reopen it instead. That is why #214 and #530 are open again.
 
 **Also recorded on #523, not fixed (Rule 0):**
 `agent-delegation/local-env/bioavanced-v2.md` is stale — names `test-writer`
