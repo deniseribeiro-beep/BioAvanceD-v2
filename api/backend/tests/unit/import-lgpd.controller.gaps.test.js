@@ -214,7 +214,13 @@ describe('import-lgpd.controller gaps', () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
-    it('returns 500 when groupFields JSON is malformed (uncaught parse error hits outer catch)', async () => {
+    // #818: this used to assert 500. importPatientsSmart's groupFields
+    // JSON.parse was the one unguarded parse of the three in this controller,
+    // so a malformed payload threw out of the handler and landed in the outer
+    // catch -- which is what this test was pinning. parseGroupFields now
+    // rejects it at the boundary like its two sibling call sites, so 400 is
+    // the correct answer.
+    it('returns 400 when groupFields JSON is malformed (#818)', async () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
@@ -228,7 +234,36 @@ describe('import-lgpd.controller gaps', () => {
       await controller.importPatientsSmart(req, res);
 
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
-      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, error: 'groupFields inválido' })
+      );
+    });
+
+    // #818's actual subject: the boundary must reject an operator-shaped
+    // payload outright, rather than admitting it and relying on every
+    // downstream consumer remembering to String() it. Asserted through the
+    // handler, not just against parseGroupFields, because the property that
+    // matters is that no operator object reaches the service at all.
+    it('rejects an operator-shaped groupFields at the boundary rather than passing it to the service (#818)', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const db = createDb();
+      const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
+      const req = { app: { locals: { db } }, file, body: { groupFields: '{"$ne": null}' } };
+      const res = createRes();
+
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      const importSpy = vi.spyOn(importLGPDService, 'importPatientsSmart').mockResolvedValue({
+        total: 0, success: 0, errors: []
+      });
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await controller.importPatientsSmart(req, res);
+
+      expect(importSpy).not.toHaveBeenCalled();
+      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
+      expect(res.status).toHaveBeenCalledWith(400);
     });
 
     it('logs a warning-status audit event and partial message when some rows fail', async () => {

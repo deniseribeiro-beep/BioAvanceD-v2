@@ -8,6 +8,7 @@ const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
+const { parseGroupFields } = require('../utils/importGroupFields');
 const {
   SPECIMEN_TYPES,
   SAMPLE_ORIGINS,
@@ -349,21 +350,16 @@ class ImportLGPDController {
         });
       }
 
-      let groupFields = {};
-      if (req.body?.groupFields) {
-        try {
-          groupFields = typeof req.body.groupFields === 'string'
-            ? JSON.parse(req.body.groupFields)
-            : req.body.groupFields;
-        } catch (error) {
-          importLGPDService.cleanupFile(file.path);
-          return res.status(400).json({
-            success: false,
-            error: 'groupFields inválido',
-            message: 'groupFields deve ser um JSON válido'
-          });
-        }
+      const parsedGroupFields = parseGroupFields(req.body?.groupFields);
+      if (!parsedGroupFields.ok) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(400).json({
+          success: false,
+          error: 'groupFields inválido',
+          message: 'groupFields deve ser um JSON válido'
+        });
       }
+      const groupFields = parsedGroupFields.value;
 
       // Processa importação
       const results = await importLGPDService.importPatients(db, file, { groupFields });
@@ -467,10 +463,16 @@ class ImportLGPDController {
         });
       }
 
-      let groupFields = {};
-      if (req.body?.groupFields) {
-        groupFields = typeof req.body.groupFields === 'string' ? JSON.parse(req.body.groupFields) : req.body.groupFields;
+      const parsedGroupFields = parseGroupFields(req.body?.groupFields);
+      if (!parsedGroupFields.ok) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(400).json({
+          success: false,
+          error: 'groupFields inválido',
+          message: 'groupFields deve ser um JSON válido'
+        });
       }
+      const groupFields = parsedGroupFields.value;
 
       let mapping = {};
       if (req.body?.mapping) {
@@ -646,22 +648,17 @@ class ImportLGPDController {
       const startBoxId = req.body.boxId || null;
       const autoIncrement = req.body.autoIncrement === 'true' || req.body.autoIncrement === true || req.body.autoIncrement === '1';
 
-      let groupFields = {};
-      if (req.body?.groupFields) {
-        try {
-          groupFields = typeof req.body.groupFields === 'string'
-            ? JSON.parse(req.body.groupFields)
-            : req.body.groupFields;
-        } catch (error) {
-          importLGPDService.cleanupFile(file.path);
-          return res.status(400).json({
-            success: false,
-            error: 'groupFields inválido',
-            message: 'groupFields deve ser um JSON válido'
-          });
-        }
+      const parsedGroupFields = parseGroupFields(req.body?.groupFields);
+      if (!parsedGroupFields.ok) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(400).json({
+          success: false,
+          error: 'groupFields inválido',
+          message: 'groupFields deve ser um JSON válido'
+        });
       }
-      
+      const groupFields = parsedGroupFields.value;
+
       logger.debug('Parâmetros de importação:', { startBoxId, autoIncrement });
 
       // Processa importação
