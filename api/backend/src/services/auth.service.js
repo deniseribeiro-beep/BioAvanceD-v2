@@ -329,7 +329,9 @@ class AuthService {
       // política usar duração' -- não há política de duração aqui, então o
       // bloqueio não expira sozinho.
       if (user.mfaLocked) {
-        throw new Error('MFA bloqueado devido a muitas tentativas falhas');
+        const error = new Error('MFA bloqueado devido a muitas tentativas falhas');
+        error.code = 'MFA_LOCKED';
+        throw error;
       }
 
       // Verifica se é admin

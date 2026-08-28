@@ -139,6 +139,14 @@ class AuthController {
           logger.error('Erro ao registrar auditoria de login:', logError.message);
         });
       });
+      if (error.code === 'MFA_LOCKED') {
+        return res.status(401).json({
+          success: false,
+          code: 'MFA_LOCKED',
+          error: (req.t && req.t('auth.mfaLocked')) || 'MFA bloqueado devido a muitas tentativas falhas',
+          message: error.message
+        });
+      }
       return res.status(401).json({
         success: false,
         error: (req.t && req.t('auth.loginError')) || 'Erro ao fazer login. Verifique suas credenciais.',

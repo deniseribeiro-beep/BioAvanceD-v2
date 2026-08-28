@@ -252,6 +252,30 @@ describe('AuthController.login', () => {
     vi.useRealTimers();
   });
 
+  it('returns 401 with an MFA_LOCKED code when authService.login throws a locked-account error', async () => {
+    vi.useFakeTimers();
+    const logLoginSpy = vi.spyOn(auditLogger, 'logLogin').mockResolvedValue();
+    const lockedError = new Error('MFA bloqueado devido a muitas tentativas falhas');
+    lockedError.code = 'MFA_LOCKED';
+    vi.spyOn(authService, 'login').mockRejectedValue(lockedError);
+    const req = createReq({ body: { username: 'alice', password: 'wrong' } });
+    const res = createRes();
+
+    await authController.login(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      code: 'MFA_LOCKED',
+      error: 'MFA bloqueado devido a muitas tentativas falhas',
+      message: 'MFA bloqueado devido a muitas tentativas falhas',
+    });
+    expect(logLoginSpy).not.toHaveBeenCalled();
+    await vi.runAllTimersAsync();
+    expect(logLoginSpy).toHaveBeenCalledWith(req, false, lockedError);
+    vi.useRealTimers();
+  });
+
   it('logs the error stack (not just the message) when the thrown error has a stack', async () => {
     vi.useFakeTimers();
     vi.spyOn(auditLogger, 'logLogin').mockResolvedValue();

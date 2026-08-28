@@ -98,6 +98,10 @@ export default function LoginPage() {
         setRequiresTwoFactor(true);
         setAttemptsRemaining(err.attemptsRemaining);
         setError(err.message || t('auth.mfaRequired'));
+      } else if (err.response?.data?.code === 'MFA_LOCKED') {
+        setError(t('auth.mfaLockedContactAdmin'));
+        setRequiresTwoFactor(false);
+        setTwoFactorCode('');
       } else {
         const errorMessage = err.response?.data?.error || 
                            err.response?.data?.message || 
