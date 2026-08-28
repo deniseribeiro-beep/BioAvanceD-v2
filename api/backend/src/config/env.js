@@ -76,6 +76,11 @@ module.exports = {
   AUDIT_RFC3161_TSA_URL: process.env.AUDIT_RFC3161_TSA_URL,
   AUDIT_RFC3161_TSA_AUTH_TOKEN: process.env.AUDIT_RFC3161_TSA_AUTH_TOKEN,
   AUDIT_EXTERNAL_WITNESS_URL: process.env.AUDIT_EXTERNAL_WITNESS_URL,
+  // #874: reserved for unbuilt work. AUDIT_EXTERNAL_WITNESS_URL above is
+  // genuinely read (the witness call is wired), but nothing yet verifies a
+  // response against this public key -- that signature-verification half
+  // was never built, so this key is currently inert. Do not assume a
+  // signature check exists on the strength of this declaration alone.
   AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: process.env.AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY,
   // ENCRYPTION_KEY_LEGACY removido
   // ENCRYPTION_KEY_LEGACY_ID removido
@@ -84,7 +89,6 @@ module.exports = {
   // URLs
   ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
   FRONTEND_URL: process.env.FRONTEND_URL,
-  API_URL: process.env.API_URL,
   ALLOW_CLOUD_INTEGRATIONS: process.env.ALLOW_CLOUD_INTEGRATIONS === 'true' || process.env.ALLOW_CLOUD_INTEGRATIONS === '1',
   ALLOW_EXTERNAL_TERMINOLOGY_SYNC: process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC === 'true' || process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC === '1',
   ALLOW_EXTERNAL_HPO_LOOKUP: process.env.ALLOW_EXTERNAL_HPO_LOOKUP === 'true' || process.env.ALLOW_EXTERNAL_HPO_LOOKUP === '1',
@@ -179,7 +183,4 @@ module.exports = {
   NEO4J_RETRY_INTERVAL_MS: process.env.NEO4J_RETRY_INTERVAL_MS,
   NEO4J_RETRY_BATCH_SIZE: process.env.NEO4J_RETRY_BATCH_SIZE,
   NEO4J_RETRY_MAX_ATTEMPTS: process.env.NEO4J_RETRY_MAX_ATTEMPTS,
-
-  // Data read strategy
-  FHIR_READ_MODE: process.env.FHIR_READ_MODE || 'fhir-first',
 };

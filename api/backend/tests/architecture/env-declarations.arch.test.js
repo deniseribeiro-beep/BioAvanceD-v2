@@ -317,13 +317,12 @@ function processEnvSweep() {
 // decided. Delete the entry when the issue closes; do not add one
 // without filing first.
 //
-// All three carried by #874, verified with `git grep -n -I` the day this
-// guard was added:
+// #874 closed FHIR_READ_MODE (deleted -- nothing read it, and the
+// 'fhir-first' strategy it named existed nowhere else in code) and API_URL
+// (deleted, together with its .env.docker.example line -- nothing consumed
+// it either). One entry remains, carried by #874 as deliberately unbuilt
+// work rather than a defect to delete:
 //
-// - FHIR_READ_MODE: one occurrence repo-wide -- its own declaration. The
-//   'fhir-first' strategy it names exists nowhere else in code.
-// - API_URL: two occurrences -- its declaration and .env.docker.example.
-//   Nothing consumes it.
 // - AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: its declaration,
 //   .env.docker.example, and compose.test.yml (set to empty). No JS reads
 //   it. Its sibling AUDIT_EXTERNAL_WITNESS_URL IS read (by
@@ -331,8 +330,6 @@ function processEnvSweep() {
 //   scripts/audit-e2e-real.js), so the witness call is wired and the
 //   signature check on it is the part left undone.
 const READ_EXEMPT = new Set([
-  'FHIR_READ_MODE',
-  'API_URL',
   'AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY',
 ]);
 
@@ -389,5 +386,5 @@ test('#784: the read-exemption set has not grown', () => {
   // add to casually. A change to this number should come with a filed
   // issue reference in the comment above, same convention as
   // UNWRITTEN_KEY_EXEMPT in filter-keys.arch.test.js.
-  assert.equal(READ_EXEMPT.size, 3);
+  assert.equal(READ_EXEMPT.size, 1);
 });
