@@ -824,8 +824,24 @@ async function validateImportConsentToken(db, tokenRaw) {
   const token = String(tokenRaw || '').trim();
   const payload = parseConsentToken(token);
   const { batchId, recordId, participantId } = ensureImportConsentPayload(payload);
-  const batch = await collection(db, 'import_batches').findOne({ _id: toObjectId(batchId) });
-  const record = await collection(db, 'import_staging_records').findOne({ _id: toObjectId(recordId), batchId: toObjectId(batchId) });
+  const batchObjectId = toObjectId(batchId);
+
+  // #802: route the batch lookup through findFhirBatch so the `type:
+  // FHIR_BUNDLE` discriminator (#799) lives in exactly one place in this
+  // file. findFhirBatch throws (rather than returning null) on a miss --
+  // including a batchId that resolves to the *other* import path's
+  // `LGPD_SAMPLE_CSV` document -- so its 404 is folded into the combined
+  // not-found guard below instead of propagating findFhirBatch's own
+  // message, keeping this function's single external failure message.
+  let batch = null;
+  try {
+    batch = await findFhirBatch(db, batchObjectId);
+  } catch (error) {
+    if (error.statusCode !== 404) throw error;
+    batch = null;
+  }
+
+  const record = await collection(db, 'import_staging_records').findOne({ _id: toObjectId(recordId), batchId: batchObjectId });
 
   if (!batch || !record || String(record.normalized?.participantId || '') !== participantId) {
     const error = new Error('Registro FHIR de importação não encontrado.');

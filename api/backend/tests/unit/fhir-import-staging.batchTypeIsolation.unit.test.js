@@ -187,4 +187,70 @@ describe('fhir-import-staging.service -- batch-type isolation (#799)', () => {
       expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
     });
   });
+
+  // #802: validateImportConsentToken (called by acceptImportConsentToken, the
+  // e-consent signing endpoint) used to look up `import_batches` on a bare
+  // `{ _id }` filter -- no `type: FHIR_BUNDLE` discriminator -- so a forged or
+  // stale token naming an LGPD quarantine batch's _id could resolve `batch` to
+  // that other path's document instead of 404ing. These tests pin the fix,
+  // which routes the lookup through findFhirBatch (the same discriminated
+  // helper getBatch/getConsentStatus/commitBatch/sendConsents/validateBatch
+  // already use).
+  describe('validateImportConsentToken', () => {
+    function signConsentToken({ batchId, recordId, participantId }) {
+      const jwt = require('jsonwebtoken');
+      return jwt.sign(
+        {
+          scope: 'fhir-import-consent',
+          batchId: String(batchId),
+          recordId: String(recordId),
+          participantId: String(participantId || ''),
+        },
+        process.env.CONSENT_SECRET,
+        { expiresIn: '2h' }
+      );
+    }
+
+    const originalConsentSecret = process.env.CONSENT_SECRET;
+
+    beforeEach(() => {
+      process.env.CONSENT_SECRET = originalConsentSecret || 'test-consent-secret';
+    });
+
+    it('404s a token naming an LGPD quarantine batch instead of returning its batch', async () => {
+      const { batchId, recordId } = await seedLgpdQuarantineBatch(db);
+      // The LGPD record's own normalized.participantId (null in the seed) is
+      // irrelevant here -- proving the point requires a token whose
+      // participantId *would* satisfy the combined guard's equality check if
+      // the batch lookup itself did not discriminate on type, so a
+      // pre-fix reader that skipped straight to the participantId
+      // comparison could not accidentally pass this test for the wrong
+      // reason.
+      const token = signConsentToken({ batchId, recordId, participantId: '' });
+
+      const promise = fhirImportStagingService.validateImportConsentToken(db, token);
+
+      await expect(promise).rejects.toMatchObject({
+        statusCode: 404,
+        message: 'Registro FHIR de importação não encontrado.',
+      });
+      // Pin what a caller does with the settled promise: acceptImportConsentToken
+      // destructures `{ batch }` straight from this call's return value, so if
+      // the rejection above did not actually happen the LGPD document would be
+      // exactly what a bug here would hand back.
+      await promise.catch(() => {});
+    });
+
+    it('still resolves a genuine FHIR_BUNDLE batch with a matching staging record and participantId', async () => {
+      const { batchId, recordId } = await seedFhirBatch(db);
+      const token = signConsentToken({ batchId, recordId, participantId: 'PART-799' });
+
+      const result = await fhirImportStagingService.validateImportConsentToken(db, token);
+
+      expect(result.batch.type).toBe('FHIR_BUNDLE');
+      expect(String(result.batch._id)).toBe(String(batchId));
+      expect(String(result.record._id)).toBe(String(recordId));
+      expect(result.record.normalized.participantId).toBe('PART-799');
+    });
+  });
 });
