@@ -147,6 +147,16 @@ export async function seedStorageBoxLocation(): Promise<SeededStorageBox> {
   const equipmentResult = await db.collection('equipment').insertOne({
     equipmentID: containerID,
     status: 'Active',
+    // #774: this is a raw insertOne, so it bypasses Equipment.validate()
+    // entirely -- which is exactly how this document spent a long time
+    // carrying `status: 'operational'`, a value the model would have
+    // refused and the RF004 gate passed only because it did not recognise
+    // it. The status is fixed; `equipmentDescription` was the last field
+    // the same validation run flagged. Running this document through
+    // Equipment.validate() now returns isValid: true, so the fixture
+    // finally describes something the product could actually have
+    // persisted.
+    equipmentDescription: `RF004 e2e freezer equipment ${suffix}`,
     createdAt: new Date(),
   });
   await db.collection('sensors').insertOne({
