@@ -5,6 +5,8 @@ import request from 'supertest';
 
 const require = createRequire(import.meta.url);
 
+const { createMatchingCollection } = require('../factories/filter.factory');
+
 const authPath = require.resolve('../../src/infrastructure/middleware/auth');
 const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac');
 const consentEnforcementPath = require.resolve('../../src/infrastructure/middleware/consent.enforcement');
@@ -1402,23 +1404,6 @@ describe('sample.routes', () => {
     // fixed value regardless of the filter it is handed, so the broken query
     // was structurally invisible to them. These two use a stub that actually
     // matches, against patient documents shaped like the real ones.
-    function matchesFilter(doc, filter) {
-      return Object.entries(filter).every(([key, value]) => {
-        if (key === '$or') return value.some((sub) => matchesFilter(doc, sub));
-        if (value && typeof value === 'object' && Array.isArray(value.$in)) {
-          return value.$in.some((candidate) => String(candidate) === String(doc[key]));
-        }
-        return doc[key] === value;
-      });
-    }
-
-    function matchingCollection(docs) {
-      return {
-        findOne: vi.fn(async (filter = {}) => docs.find((doc) => matchesFilter(doc, filter)) || null),
-        countDocuments: vi.fn(async () => docs.length),
-      };
-    }
-
     it('resolves the consent badge from the sample own participant, not an arbitrary patient (#788)', async () => {
       const listSamples = vi.fn().mockResolvedValue({
         samples: [{ _id: 'sample-1', participantId: '53117577' }],
@@ -1428,11 +1413,11 @@ describe('sample.routes', () => {
 
       // Deliberately ordered so an unfiltered/degenerate query finds the WRONG
       // patient first -- which is what the live database does.
-      const patientsCollection = matchingCollection([
+      const patientsCollection = createMatchingCollection([
         { _id: 'patient-unrelated', participantId: '64404470' },
         { _id: 'patient-real', participantId: '53117577' },
       ]);
-      const consentsCollection = matchingCollection([
+      const consentsCollection = createMatchingCollection([
         { patientId: 'patient-real', status: 'ACTIVE' },
       ]);
       const db = {
@@ -1465,10 +1450,10 @@ describe('sample.routes', () => {
       // This patient HAS an active consent. A degenerate `{ field: null }`
       // filter matches it, which would badge an unidentified specimen as
       // usable -- asserting a consent that does not exist for it.
-      const patientsCollection = matchingCollection([
+      const patientsCollection = createMatchingCollection([
         { _id: 'patient-unrelated', participantId: '64404470' },
       ]);
-      const consentsCollection = matchingCollection([
+      const consentsCollection = createMatchingCollection([
         { patientId: 'patient-unrelated', status: 'ACTIVE' },
       ]);
       const db = {
