@@ -24,6 +24,19 @@ async function createPhenotypeObservation(db, data) {
     throw new Error(codeCheck.violations.map((v) => v.message).join(', '));
   }
 
+  // RF005 AC#5 ("preservar código, sistema, versão e descrição da
+  // terminologia"): the active-release check above already resolved the
+  // matched TerminologyConcept's own `version` -- it used to be computed
+  // and discarded (#866). Stamp it onto hpoCoding when the caller didn't
+  // supply one already; never overwrite an explicitly-given version, and
+  // leave the field absent (not null) if the validator couldn't resolve one.
+  if (!observation.hpoCoding.version) {
+    const resolvedVersion = codeCheck.results[0]?.concept?.version;
+    if (resolvedVersion) {
+      observation.hpoCoding.version = resolvedVersion;
+    }
+  }
+
   const collection = await getCollection(db, 'phenotypeObservations');
   await collection.insertOne(observation);
   return observation;

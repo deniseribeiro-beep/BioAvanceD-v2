@@ -38,6 +38,23 @@ async function createCondition(db, data) {
     throw new Error(codeCheck.violations.map((v) => v.message).join(', '));
   }
 
+  // RF005 AC#5 ("preservar código, sistema, versão e descrição da
+  // terminologia"): the active-release check above already resolved each
+  // matched TerminologyConcept's own `version` -- it used to be computed
+  // and discarded (#866). Stamp it onto each conditionCoding entry when the
+  // caller didn't supply one already; never overwrite an explicitly-given
+  // version, and leave the field absent (not null) if the validator
+  // couldn't resolve one for that entry. codeCheck.results is built in the
+  // same order as condition.conditionCoding above, so index-aligning is safe.
+  condition.conditionCoding.forEach((coding, index) => {
+    if (!coding.version) {
+      const resolvedVersion = codeCheck.results[index]?.concept?.version;
+      if (resolvedVersion) {
+        coding.version = resolvedVersion;
+      }
+    }
+  });
+
   const collection = await getCollection(db, 'conditions');
   await collection.insertOne(condition);
   return condition;

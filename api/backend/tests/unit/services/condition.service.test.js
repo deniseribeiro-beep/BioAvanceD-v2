@@ -74,6 +74,64 @@ describe('condition.service', () => {
       ).rejects.toThrow(/não pertence a uma release de referência ativa/);
       expect(db.collections.conditions?.docs || []).toHaveLength(0);
     });
+
+    it('#866 (RF005 AC#5): stamps the resolved TerminologyConcept version onto conditionCoding when the caller omitted it', async () => {
+      const db = createFakeDb(activeConceptAndRelease());
+
+      await createCondition(db, {
+        participantId: 'PART-1',
+        conditionCoding: [{ systemUri: SYSTEM_URI, code: CODE }],
+      });
+
+      expect(db.collections.conditions.docs[0].conditionCoding[0].version).toBe('2026-01');
+    });
+
+    it('#866: never overwrites a version the caller explicitly supplied', async () => {
+      // checkActiveCode resolves an explicit version via an exact
+      // systemUri+code+version match, so the seeded concept's version must
+      // equal the caller-supplied one for the code check to pass at all --
+      // this still proves the caller's own value reaches the stored
+      // document untouched, via the `if (!coding.version)` guard, rather
+      // than being unconditionally re-assigned from the validator result.
+      const db = createFakeDb(
+        activeConceptAndRelease({
+          terminologyConcepts: [
+            {
+              systemUri: SYSTEM_URI,
+              code: CODE,
+              version: 'caller-supplied-version',
+              conceptStatus: 'active',
+              referenceDatasetReleaseId: 'release-1',
+            },
+          ],
+        })
+      );
+
+      await createCondition(db, {
+        participantId: 'PART-1',
+        conditionCoding: [{ systemUri: SYSTEM_URI, code: CODE, version: 'caller-supplied-version' }],
+      });
+
+      expect(db.collections.conditions.docs[0].conditionCoding[0].version).toBe('caller-supplied-version');
+    });
+
+    it('#866: leaves version absent (not null/invented) when the validator resolves the code without a version', async () => {
+      const db = createFakeDb(
+        activeConceptAndRelease({
+          terminologyConcepts: [
+            { systemUri: SYSTEM_URI, code: CODE, conceptStatus: 'active', referenceDatasetReleaseId: 'release-1' },
+          ],
+        })
+      );
+
+      await createCondition(db, {
+        participantId: 'PART-1',
+        conditionCoding: [{ systemUri: SYSTEM_URI, code: CODE }],
+      });
+
+      expect(db.collections.conditions.docs).toHaveLength(1);
+      expect('version' in db.collections.conditions.docs[0].conditionCoding[0]).toBe(false);
+    });
   });
 
   describe('getConditionsForParticipant', () => {

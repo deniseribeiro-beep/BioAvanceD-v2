@@ -63,6 +63,70 @@ describe('phenotype-observation.service', () => {
         createPhenotypeObservation(db, { participantId: 'PART-1', hpoCoding: { systemUri: SYSTEM_URI, code: CODE }, effectiveDateTime: '2026-01-01' })
       ).rejects.toThrow(/presenceStatus é obrigatório/);
     });
+
+    it('#866 (RF005 AC#5): stamps the resolved TerminologyConcept version onto hpoCoding when the caller omitted it', async () => {
+      const db = createFakeDb(activeConceptAndRelease());
+
+      await createPhenotypeObservation(db, {
+        participantId: 'PART-1',
+        hpoCoding: { systemUri: SYSTEM_URI, code: CODE },
+        presenceStatus: 'present',
+        effectiveDateTime: '2026-01-01',
+      });
+
+      expect(db.collections.phenotypeObservations.docs[0].hpoCoding.version).toBe('2026-01-01');
+    });
+
+    it('#866: never overwrites a version the caller explicitly supplied', async () => {
+      // checkActiveCode resolves an explicit version via an exact
+      // systemUri+code+version match, so the seeded concept's version must
+      // equal the caller-supplied one for the code check to pass at all --
+      // this still proves the caller's own value reaches the stored
+      // document untouched, via the `if (!coding.version)` guard, rather
+      // than being unconditionally re-assigned from the validator result.
+      const db = createFakeDb(
+        activeConceptAndRelease({
+          terminologyConcepts: [
+            {
+              systemUri: SYSTEM_URI,
+              code: CODE,
+              version: 'caller-supplied-version',
+              conceptStatus: 'active',
+              referenceDatasetReleaseId: 'release-1',
+            },
+          ],
+        })
+      );
+
+      await createPhenotypeObservation(db, {
+        participantId: 'PART-1',
+        hpoCoding: { systemUri: SYSTEM_URI, code: CODE, version: 'caller-supplied-version' },
+        presenceStatus: 'present',
+        effectiveDateTime: '2026-01-01',
+      });
+
+      expect(db.collections.phenotypeObservations.docs[0].hpoCoding.version).toBe('caller-supplied-version');
+    });
+
+    it('#866: leaves version absent (not null/invented) when the validator resolves the code without a version', async () => {
+      const db = createFakeDb(
+        activeConceptAndRelease({
+          terminologyConcepts: [
+            { systemUri: SYSTEM_URI, code: CODE, conceptStatus: 'active', referenceDatasetReleaseId: 'release-1' },
+          ],
+        })
+      );
+
+      await createPhenotypeObservation(db, {
+        participantId: 'PART-1',
+        hpoCoding: { systemUri: SYSTEM_URI, code: CODE },
+        presenceStatus: 'present',
+        effectiveDateTime: '2026-01-01',
+      });
+
+      expect(db.collections.phenotypeObservations.docs).toHaveLength(1);
+      expect('version' in db.collections.phenotypeObservations.docs[0].hpoCoding).toBe(false);
+    });
   });
 
   describe('getPhenotypeObservationsForParticipant', () => {
