@@ -772,14 +772,18 @@ function sweepSource() {
 // remedy is decided. Delete the entry when the issue closes; do not add
 // one without filing first.
 //
-// #861: NOT a dead leg. `query.importJobID` is conjunctive, so passing
-//   ?importJobID= zeroes the whole result set of GET /api/results,
-//   silently. Kept here rather than deleted because deleting it would
-//   convert "returns nothing" into "silently ignores the parameter",
-//   which is #789's defect.
-const UNWRITTEN_KEY_EXEMPT = new Set([
-  'interface/routes/result.routes.js:77:importJobID'
-]);
+// #861 CLOSED, entry removed: ResultWorker now threads its jobID down to
+//   processResultRow and writes `importJobID` onto the inserted document,
+//   so the key has a real writer and the sweep passes on its own. The
+//   remedy chosen was option 1 (write the field) rather than deleting the
+//   filter branch, because ResultsPage.tsx builds ?importJobID= from a
+//   live "Ver" button -- deleting it would have turned "returns nothing"
+//   into #789's silent-ignore for a caller that actually exists.
+//
+// The set is empty on purpose. An empty set here means every filter key
+// in src/ is backed by a writer, which is the state this guard wants; it
+// is not a sign the exemption mechanism is unused.
+const UNWRITTEN_KEY_EXEMPT = new Set([]);
 
 function offendersIn({ filterSites, writtenFields }) {
   const offenders = [];
