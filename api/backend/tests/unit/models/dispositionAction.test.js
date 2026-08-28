@@ -75,5 +75,15 @@ describe('DispositionActionModel (RF026 AC#3/#4/#5, dict-02 ELM-0411..0415)', ()
       result.affectedRecordIds.push('log-2');
       expect(affectedRecordIds).toEqual(['log-1']);
     });
+
+    it('preserves a caller-supplied dispositionActionId instead of discarding it', () => {
+      const result = DispositionActionModel.create({ ...baseDisposition, dispositionActionId: 'disposition-fixed-1' });
+      expect(result.dispositionActionId).toBe('disposition-fixed-1');
+    });
+
+    it('generates a uuid dispositionActionId when none is supplied', () => {
+      const result = DispositionActionModel.create({ ...baseDisposition });
+      expect(result.dispositionActionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    });
   });
 });

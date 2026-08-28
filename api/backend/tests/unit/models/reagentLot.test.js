@@ -68,5 +68,15 @@ describe('ReagentLotModel (RF025 AC#2, dict-02 ELM-0298..0304)', () => {
       expect(result.expirationDate).toBeInstanceOf(Date);
       expect(result.expirationDate.toISOString()).toContain('2027-06-30');
     });
+
+    it('preserves a caller-supplied reagentId instead of discarding it', () => {
+      const result = ReagentLotModel.create({ ...baseReagentLot, reagentId: 'reagent-fixed-1' });
+      expect(result.reagentId).toBe('reagent-fixed-1');
+    });
+
+    it('generates a uuid reagentId when none is supplied', () => {
+      const result = ReagentLotModel.create({ ...baseReagentLot });
+      expect(result.reagentId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    });
   });
 });

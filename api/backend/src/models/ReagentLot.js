@@ -40,7 +40,7 @@ class ReagentLotModel {
 
   static create(data = {}) {
     return {
-      reagentId: randomUUID(),
+      reagentId: data.reagentId || randomUUID(),
       reagentName: data.reagentName,
       manufacturer: data.manufacturer || null,
       catalogNumber: data.catalogNumber || null,

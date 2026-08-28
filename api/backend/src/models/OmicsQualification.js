@@ -46,7 +46,7 @@ class OmicsQualificationModel {
 
   static create(data = {}) {
     return {
-      omicsQualificationId: randomUUID(),
+      omicsQualificationId: data.omicsQualificationId || randomUUID(),
       targetAssay: data.targetAssay,
       qcRuleSetVersion: data.qcRuleSetVersion,
       qcMetrics: data.qcMetrics.map((metric) => ({ ...metric })),

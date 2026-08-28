@@ -57,7 +57,7 @@ class NonconformanceModel {
 
   static create(data = {}) {
     return {
-      nonconformanceId: randomUUID(),
+      nonconformanceId: data.nonconformanceId || randomUUID(),
       nonconformanceType: data.nonconformanceType,
       detectedAt: new Date(data.detectedAt),
       detectedBy: data.detectedBy,

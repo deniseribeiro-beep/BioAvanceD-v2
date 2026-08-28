@@ -97,7 +97,7 @@ class WorkflowRunModel {
 
   static create(data = {}) {
     return {
-      workflowRunId: randomUUID(),
+      workflowRunId: data.workflowRunId || randomUUID(),
       workflowId: data.workflowId,
       workflowVersion: data.workflowVersion,
       createdBy: data.createdBy,

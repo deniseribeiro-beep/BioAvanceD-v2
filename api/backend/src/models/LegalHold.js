@@ -39,7 +39,7 @@ class LegalHoldModel {
 
   static create(data = {}) {
     return {
-      legalHoldId: randomUUID(),
+      legalHoldId: data.legalHoldId || randomUUID(),
       targetEntityType: data.targetEntityType,
       targetEntityIds: [...data.targetEntityIds],
       reason: data.reason,

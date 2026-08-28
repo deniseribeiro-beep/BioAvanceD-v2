@@ -53,5 +53,15 @@ describe('LegalHoldModel (RF026 AC#2/#6)', () => {
       result.targetEntityIds.push('specimen-2');
       expect(targetEntityIds).toEqual(['specimen-1']);
     });
+
+    it('preserves a caller-supplied legalHoldId instead of discarding it', () => {
+      const result = LegalHoldModel.create({ ...baseHold, legalHoldId: 'legal-hold-fixed-1' });
+      expect(result.legalHoldId).toBe('legal-hold-fixed-1');
+    });
+
+    it('generates a uuid legalHoldId when none is supplied', () => {
+      const result = LegalHoldModel.create({ ...baseHold });
+      expect(result.legalHoldId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    });
   });
 });

@@ -58,7 +58,7 @@ class OrganizationModel {
     const officialName = String(data.officialName || '').trim().replace(/\s+/g, ' ');
 
     return {
-      organizationId: randomUUID(),
+      organizationId: data.organizationId || randomUUID(),
       officialName,
       normalizedName: OrganizationModel.normalizeName(officialName),
       acronym: data.acronym ? String(data.acronym).trim() : null,

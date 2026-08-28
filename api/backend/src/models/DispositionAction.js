@@ -56,7 +56,7 @@ class DispositionActionModel {
   }
 
   static create(data = {}) {
-    const dispositionActionId = randomUUID();
+    const dispositionActionId = data.dispositionActionId || randomUUID();
     return {
       dispositionActionId,
       retentionPolicyId: data.retentionPolicyId,

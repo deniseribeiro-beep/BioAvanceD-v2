@@ -70,7 +70,7 @@ class OmicsRunModel {
 
   static create(data = {}) {
     return {
-      omicsRunId: randomUUID(),
+      omicsRunId: data.omicsRunId || randomUUID(),
       modality: data.modality,
       referenceAssembly: data.referenceAssembly || null,
       mixsChecklist: data.mixsChecklist || null,

@@ -50,7 +50,7 @@ class DatasetModel {
 
   static create(data = {}) {
     return {
-      datasetId: randomUUID(),
+      datasetId: data.datasetId || randomUUID(),
       datasetTitle: data.datasetTitle,
       datasetVersion: data.datasetVersion,
       creators: [...data.creators],

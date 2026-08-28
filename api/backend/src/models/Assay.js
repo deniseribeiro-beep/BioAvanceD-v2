@@ -100,7 +100,7 @@ class AssayModel {
 
   static create(data = {}) {
     return {
-      assayId: randomUUID(),
+      assayId: data.assayId || randomUUID(),
       studyId: data.studyId,
       specimenIds: [...data.specimenIds],
       assayType: data.assayType,
