@@ -131,4 +131,33 @@ describe('summarizeImportResult', () => {
     expect(summarizeImportResult(undefined).outcome).toBe('unknown');
     expect(summarizeImportResult({}).outcome).toBe('unknown');
   });
+
+  // #798 item 3: blank rows the backend guards out with isEmptyRow are
+  // counted separately from total/success/errors (#786 keeps that sum
+  // exact), so the UI needs its own figure to tell "9 of 9, clean" apart
+  // from "9 of 9, but 3 rows never made it into the count at all".
+  describe('skipped', () => {
+    it('reports a non-zero skipped count from the response', () => {
+      const summary = summarizeImportResult({
+        data: { total: 9, success: 9, errors: 0, errorsDetails: [], skipped: 3, stagingBatchId: null },
+      });
+      expect(summary.skipped).toBe(3);
+      // Not folded into total -- #786's total === success + errors holds.
+      expect(summary.total).toBe(9);
+    });
+
+    it('reports zero when the response says zero', () => {
+      const summary = summarizeImportResult({
+        data: { total: 9, success: 9, errors: 0, errorsDetails: [], skipped: 0, stagingBatchId: null },
+      });
+      expect(summary.skipped).toBe(0);
+    });
+
+    it('defaults to zero for an older backend response with no skipped field', () => {
+      const summary = summarizeImportResult({
+        data: { total: 9, success: 9, errors: 0, errorsDetails: [], stagingBatchId: null },
+      });
+      expect(summary.skipped).toBe(0);
+    });
+  });
 });

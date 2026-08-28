@@ -64,6 +64,13 @@ export type ImportSummary = {
   total: number;
   imported: number;
   rejected: number;
+  /**
+   * Blank rows the backend guarded out (`isEmptyRow`) before counting
+   * anything toward `total`/`success`/`errors` -- deliberately outside the
+   * `total === success + errors` invariant (#786), so it is surfaced as its
+   * own figure rather than folded in (#798 item 3).
+   */
+  skipped: number;
   /** Deep link into #794 item 2's review surface, or null when no batch exists. */
   quarantineHref: string | null;
   rows: RejectedRow[];
@@ -75,6 +82,7 @@ const EMPTY: ImportSummary = {
   total: 0,
   imported: 0,
   rejected: 0,
+  skipped: 0,
   quarantineHref: null,
   rows: [],
   message: null,
@@ -102,6 +110,7 @@ export function summarizeImportResult(payload: any): ImportSummary {
   const total = Number(data.total) || 0;
   const imported = Number(data.success) || 0;
   const rejected = Number(data.errors) || 0;
+  const skipped = Number(data.skipped) || 0;
   const batchId = data.stagingBatchId ? String(data.stagingBatchId) : null;
 
   const rows: RejectedRow[] = (Array.isArray(data.errorsDetails) ? data.errorsDetails : []).map(
@@ -126,6 +135,7 @@ export function summarizeImportResult(payload: any): ImportSummary {
     total,
     imported,
     rejected,
+    skipped,
     quarantineHref: batchId ? `/import/quarantine?batchId=${encodeURIComponent(batchId)}` : null,
     rows,
     message: payload?.message ? String(payload.message) : null,

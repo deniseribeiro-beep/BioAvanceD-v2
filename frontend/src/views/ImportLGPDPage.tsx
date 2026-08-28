@@ -241,6 +241,16 @@ export default function ImportLGPDPage() {
             </strong>
           </div>
 
+          {summary.skipped > 0 && (
+            <p
+              data-testid="import-lgpd-skipped"
+              style={{ margin: '0 0 12px', fontSize: 13, color: '#6b7280' }}
+            >
+              {summary.skipped} linha{summary.skipped === 1 ? '' : 's'} em branco ignorada
+              {summary.skipped === 1 ? '' : 's'}
+            </p>
+          )}
+
           {summary.outcome === 'partial' && summary.quarantineHref && (
             <div style={{ marginBottom: 12 }}>
               <Button
