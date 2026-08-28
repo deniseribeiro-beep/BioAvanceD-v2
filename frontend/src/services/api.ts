@@ -731,49 +731,9 @@ export const importService = {
     });
   },
   
-  // Novos métodos assíncronos
-  validateFile: (file: File, dataType: string) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('dataType', dataType);
-    return api.post('/import/validate', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-  },
-  
-  createImportJob: (
-    file: File, 
-    dataType: string, 
-    options?: { startBoxId?: string; autoIncrement?: boolean; groupFields?: Record<string, any> }
-  ) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('dataType', dataType);
-    if (options?.startBoxId !== undefined) {
-      formData.append('startBoxId', options.startBoxId);
-    }
-    if (options?.autoIncrement !== undefined) {
-      formData.append('autoIncrement', options.autoIncrement.toString());
-    }
-    if (options?.groupFields) {
-      formData.append('groupFields', JSON.stringify(options.groupFields));
-    }
-    return api.post('/import/import', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-  },
-  
-  getJobStatus: (jobID: string) => api.get(`/import/job/${jobID}`),
-  
-  listJobs: (params?: { status?: string; dataType?: string; limit?: number; skip?: number }) => 
+  listJobs: (params?: { status?: string; dataType?: string; limit?: number; skip?: number }) =>
     api.get('/import/jobs', { params }),
-  
-  cancelJob: (jobID: string) => api.post(`/import/job/${jobID}/cancel`),
-  
+
   getImportReport: (jobID: string) => api.get(`/import/job/${jobID}/report`),
 };
 
