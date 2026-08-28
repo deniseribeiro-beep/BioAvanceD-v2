@@ -365,7 +365,7 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
 
     if (introducedErrors.length > 0) {
       logger.warn(`Validação falhou ao atualizar equipamento ${req.params.id}: ${introducedErrors.join(', ')}`);
-      return res.status(422).json({
+      return res.status(400).json({
         success: false,
         error: 'Dados inválidos',
         message: introducedErrors.join(', ')

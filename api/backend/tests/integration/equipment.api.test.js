@@ -277,8 +277,10 @@ describe('PUT /api/equipment/:id', () => {
   // #868: the core bug -- an unvalidated status write on PUT that also
   // auto-quarantines. A status EquipmentModel.validate rejects (here,
   // 'offline', which only the quarantine vocabulary recognises) must now
-  // 422 before any write, and must never reach the quarantine service.
-  it('returns 422 for an invalid status and never invokes the quarantine service', async () => {
+  // 400 before any write, and must never reach the quarantine service --
+  // 400 rather than 422 to match this file's own POST and the 22 other
+  // validate-then-reject sites in src/ (#884 carries the repo-wide question).
+  it('returns 400 for an invalid status and never invokes the quarantine service', async () => {
     const isQuarantineTriggerStatus = vi.fn().mockReturnValue(true);
     const quarantineByEquipmentStatus = vi.fn();
     app.locals.quarantineService = { isQuarantineTriggerStatus, quarantineByEquipmentStatus };
@@ -295,7 +297,7 @@ describe('PUT /api/equipment/:id', () => {
       .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ status: 'offline' });
 
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(400);
     expect(res.body.success).toBe(false);
     expect(res.body.message).toMatch(/status deve ser um de/);
     expect(updateOne).not.toHaveBeenCalled();
