@@ -10,7 +10,7 @@ const { validateMiabisCompliance } = require('../../src/services/miabisValidator
 
 function makeCompleteSample(overrides = {}) {
   return {
-    patientID: 'patient-1',
+    participantId: 'patient-1',
     sampleType: 'blood',
     anatomicalSite: 'arm',
     storageTemperature: -20,
@@ -89,7 +89,7 @@ describe('validateMiabisCompliance', () => {
     const result = await validateMiabisCompliance('id-3', makeFakeDb());
 
     expect(findOne).toHaveBeenCalledWith(
-      { patientId: 'patient-1' },
+      { participantId: 'patient-1' },
       { sort: { signedAt: -1, createdAt: -1 } }
     );
     expect(result).toEqual({
@@ -129,6 +129,24 @@ describe('validateMiabisCompliance', () => {
     expect(result.consentStatus).toBe('unknown');
     expect(result.canBeShared).toBe(false);
     expect(result.isCompliant).toBe(false);
+  });
+
+  it('does not query consents and yields canBeShared false when sample has no participantId', async () => {
+    const sample = makeCompleteSample({ participantId: undefined });
+    vi.spyOn(Sample, 'findById').mockReturnValue({
+      lean: vi.fn().mockResolvedValue(sample),
+    });
+    const getCollectionSpy = vi.spyOn(collectionResolver, 'getCollection');
+
+    const result = await validateMiabisCompliance('id-9', makeFakeDb());
+
+    expect(getCollectionSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      isCompliant: false,
+      missingFields: [],
+      consentStatus: 'no_consent',
+      canBeShared: false,
+    });
   });
 
   it('uses consentStatus no_consent (distinct from sample_not_found) when no consent record exists', async () => {

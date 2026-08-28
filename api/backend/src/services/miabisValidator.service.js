@@ -30,14 +30,16 @@ async function validateMiabisCompliance(sampleId, db) {
   let consentStatus = 'no_consent';
   let canBeShared = false;
   try {
-    const consentsCollection = await collectionResolver.getCollection(db, 'consents');
-    const consent = await consentsCollection.findOne(
-      { patientId: sample.patientID },
-      { sort: { signedAt: -1, createdAt: -1 } }
-    );
-    if (consent) {
-      consentStatus = String(consent.status || 'unknown').toLowerCase();
-      canBeShared = consentStatus === 'active';
+    if (sample.participantId) {
+      const consentsCollection = await collectionResolver.getCollection(db, 'consents');
+      const consent = await consentsCollection.findOne(
+        { participantId: sample.participantId },
+        { sort: { signedAt: -1, createdAt: -1 } }
+      );
+      if (consent) {
+        consentStatus = String(consent.status || 'unknown').toLowerCase();
+        canBeShared = consentStatus === 'active';
+      }
     }
   } catch (err) {
     logger.error(`[MIABIS] Falha ao consultar consentimento para amostra ${sampleId}: ${err.message}`);
