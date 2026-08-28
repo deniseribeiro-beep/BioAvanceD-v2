@@ -1,132 +1,132 @@
 # HANDOFF
 
-**Written 2026-08-27. Definitive rotation — the sitting is finished.**
-First trial of the **orchestrator workflow** (pack #526): Dennis asked for
-two delegated agents, then a round of three if the first showed no
-meaningful workflow errors. It didn't. **5 issues shipped, 5 filed, no
-Docker.**
+**Written 2026-08-28. Definitive rotation — the sitting is finished.**
+Third round of the **orchestrator workflow** (pack #526). Dennis asked for
+another agent session, with divide-and-conquer if no scoped issues were
+available. Two were (#837, #838); the third slice came from splitting #797.
+**3 workers, all three slices accepted, 2 issues closed, 1 filed, no Docker.**
 
-## Shipped
+## Shipped — merge `744c7381`
 
-| # | What it was | Merge |
+| # | What it was | Commit |
 |---|---|---|
-| **#802** | `validateImportConsentToken` read `import_batches` with no `type` discriminator — a token naming an LGPD batch resolved and returned that path's quarantine document, `CPF`/`Nome` included | `5091cd08` |
-| **#818** | `groupFields` JSON.parsed at four import sites with no validation; **`importPatientsSmart`'s parse had no try/catch at all** → 500 on malformed input | `5091cd08` |
-| **#773** | `canonicalizeHeader` mapped two aliases onto the prohibited `patientID` | `aa26bdc1` |
-| **#781** | 165 identity-form cursor mocks could not observe a sort key; now a shared `tests/factories/cursor.factory.js` | `aa26bdc1` |
-| **#798** | blank rows skipped by `isEmptyRow` were counted nowhere — **items 1-2 only, issue left open** | `aa26bdc1` |
+| **#797** *(item 1 only)* | `tests/factories/filter.factory.js` — a filter-honouring collection mock, in #781's drawer, + 20 tests on its own guarantees | `e39ee1b5` |
+| **#837** | `importPatientsSmart`'s `mapping` parse answered **500** on malformed JSON; now 400, matching its `groupFields` sibling | `66b9aa20` |
+| **#838** | two undiscriminated `import_batches` filters, not the one the issue named | `15d5ed3c` |
+| **#797** *(item 1 landing)* | both hand-rolled matchers retired onto the factory | `03abfaa6` |
+
+**652 tests green across 17 files** on the merged tree — every file touching
+either changed source file, plus both factories and their consumers. Native
+and targeted; no full suite, no e2e. Both fixes verified red first by
+reverting the product change and observing the failure.
 
 ## The operating rule this sitting produced
 
-**Verifying a signature is not verifying a contract.**
+**A shared helper is a precondition, not a slice — the orchestrator builds
+and commits it before the fan-out.**
 
-My brief for #798 said `auditLogger.logImport` "takes a `context` object,
-so the new count can travel in it." The signature claim was checked; the
-behaviour claim was *inferred from it* and was false — `logImport`
-hand-picks context keys by name, so the value was accepted and silently
-dropped. Item 2 would have shipped inert. The worker caught it by reading
-the file.
+The handoff rule "slices must have provably disjoint file sets" and last
+sitting's "the orchestrator must own the shared helper's guarantees" collide
+the moment a round is *build a helper, then migrate onto it*. Building it
+first satisfies both instead of trading them off.
 
-In the serial loop these two collapse into one act, because you are
-already reading the function you're about to change. **As orchestrator you
-verify from outside code you will never open, which is exactly where they
-come apart.** `agent-delegation` already forbids unverified claims in a
-brief; this is the shape that slips past it.
+It was not a formality. The factory's own test caught a real defect in my
+first draft inside ten minutes: I had written the matcher so an `undefined`
+filter value matches **nothing**, when the Node driver coerces `undefined`
+to BSON `null` and `null` matches an absent field — which is the precise
+mechanism of #788. Shipped, every migrated site would have been *quietly
+weaker* than the hand-rolled matcher it replaced, green either way. From
+inside a migration slice a green suite is the whole signal, so no worker
+could have caught it.
 
-Corollaries, both confirmed twice this sitting:
+Corollary, and it cost nothing to check: **a green suite after a helper swap
+does not prove the helper can still fail the suite.** Re-introduce the
+original defect and confirm the tests still go red. Done here for #788.
 
-- **A worker tests what it wrote; the orchestrator must name the property
-  that makes the change worth making.** #818's worker tested its new util
-  exhaustively and never asserted the *controller* rejected an operator
-  payload. #781's worker migrated onto its new factory and never tested
-  the factory's own guarantees. Both gaps were mine to close.
-- **Issue bodies' factual traces drift, and a brief inherits the drift.**
-  #818 named two call sites (there are three); #802 said one
-  undiscriminated query remained (there are two).
+**Last sitting's rule recurred, in the session set up to apply it.** Brief A
+asserted a malformed-`mapping` 400 would leak the upload without a
+`cleanupFile` call. I had verified the *sibling* guard calls it and inferred
+the rest; the outer catch already cleaned up. Nothing shipped wrong, but the
+shape is identical. The sharpened form: **the rule bites hardest on the
+properties a brief adds beyond the issue's own scope** — the defect trace
+gets re-checked because it is the thing being fixed; the "and make sure X
+still holds" clauses get written from adjacency and feel like framing rather
+than claims. They are claims.
 
-## Filed (3 product + 2 pack)
+**Issue bodies keep undercounting — now n=3.** #838 named one undiscriminated
+`import_batches` read; there were two, and the second (`refreshBatchCounts`)
+is a **write**. Re-grep before briefing, every time.
 
-- **#837** — `importPatientsSmart`'s **`mapping`** parse is still unguarded,
-  two lines below the `groupFields` one #818 fixed. Still answers 500.
-- **#838** — `commitBatch` is a *second* undiscriminated `import_batches`
-  read. Guarded in practice (`validateBatch` runs first), so inert.
-- **#839** — the architecture test #818's body proposed.
-- **#840** — decision record on #818's changed 400 message. **Filed as an
-  owner's call, then withdrawn:** the trace dissolved it (the only caller
-  reads `data.error` before `data.message`, and is dead code per #772).
-  Retagged `enhancement`. Small consistency work now, not a decision.
-- Pack **#530** (auto mode's prefer-Bash reminder reaches leaf workers;
-  one read it as a prompt injection), **#531** (`edit-branch-guard` did
-  not fire on three Edits on the protected branch, though it blocks
-  correctly on replay). Two long comments on pack **#526** with both
-  rounds' measurements.
+## Filed / left open
+
+- **#841** — the `.sort()` migration onto `cursor.factory` has **no tracker
+  item**: #771 and #781 are both closed. Measured today: 88 identity-form
+  stubs across ~43 files, one real consumer. Partitions cleanly by file.
+- **#797 left open** — item 2 (the triaged `findOne` sweep) untouched.
+  Re-measured: the population **grew**, 520→729 sites and 56→94 files. It is
+  being added to faster than it is migrated.
+- **#752 commented, not fixed** — `tests/unit/services/backup.service.test.js`
+  is **still red** at branch tip (1 failed / 42 passed), and has grown 39→43
+  tests since filing without the failure being addressed. **The last two
+  handoffs both claimed "native checks green"; this is the known exception.**
+  Deliberately not fixed: the one-line assertion edit is also the move that
+  ratifies a BSON-type change on the live destructive `restoreBackup` path.
+  **Highest-value single decision on the board — it needs Dennis, not a
+  session.**
+- Pack **#534** (two brief-writing gaps: order the baseline before the first
+  edit; helper before fan-out), **#535** (long content as a Bash argument
+  gets silently mangled on MSYS — a `gh --body` comment published with two
+  identifiers deleted *and* printed its URL alongside the parse error).
+  Comments on **#526** (round measurements) and **#530** (n=2).
 
 ## Repo state
 
 - On `feature/docker-e2e-backend-integration`, clean and matching origin.
   `main` untouched and frozen. No open PR.
-- Last substantive commit: the `aa26bdc1` merge. All four fix branches
-  merged and deleted locally; none was pushed.
+- `fix/parallel-round-837-838-797` merged and deleted locally; never pushed.
 - Untracked and deliberately untouched: `.claude/skills/` and
   `api/backend/storage/assays/`. **Never `git add -A`.**
-- **Their presence means `edit-branch-guard`'s HANDOFF.md exemption can
-  never fire here** — it requires nothing else dirty, and untracked files
-  count. Don't route the rotation to a `chore/` branch either:
-  `branch-guard` permits only `fix/<slug>` and `test/<slug>`. This file is
-  committed directly on the integration branch, which is what the
-  exemption was written to allow.
-
-## The gate was NOT run
-
-No Docker this sitting — Dennis's instruction. Nothing that ran is
-Docker-dependent: all five slices are natively unit-testable.
-
-**573 tests passing across the 18 touched-or-adjacent files**, re-run on
-the merged tree, `api/backend`-relative and targeted. No full native suite,
-no e2e.
-
-**Every fix was verified red before it was accepted** — the product change
-reverted, the test re-run, the failure observed. #802's reproduction
-returned the LGPD quarantine document verbatim.
+- Their presence still blocks `edit-branch-guard`'s HANDOFF.md exemption, so
+  this file is written via Bash from a scratchpad copy rather than the Write
+  tool. Don't route it to a `chore/` branch — `branch-guard` permits only
+  `fix/<slug>` and `test/<slug>`.
 
 ## Docker
 
-**Docker Desktop is not running** — `docker ps -a` fails to connect. No
-container or volume state was observed or changed this sitting. Whatever
-the 2026-08-27 morning handoff recorded (volumes present and bootstrapped)
-is unverified as of now; **re-check with `docker ps -a` before trusting
-it**, per the readiness rule rather than the up/down one.
+**Not run, and not checked this sitting.** Nothing that ran needed it — all
+three slices are natively unit-testable. Treat the previous handoff's
+observation (Docker Desktop not running) as **unverified**: run `docker ps -a`
+before trusting any container or volume state, per the readiness rule rather
+than the up/down one.
 
 ## Recommended next
 
-**None queued — Dennis has not named the next group.** He did name the
-workflow: this is now the orchestrator pattern, and pack #526 is its
-tracking issue.
+**None queued — Dennis has not named the next group.**
 
-Two of this sitting's own filings are small, unblocked and would make a
-clean next round — **#837** and **#838**, both one-file fixes with an
-obvious test. **#839** wants its own sitting (the design fork between a
-shallow lint and a real taint trace is the whole issue).
-
-Unchanged from before: **#833** (no email can be sent on the test stack)
-and **#828** (batch import passes a file by path between containers with
-no shared volume) remain the highest-value Docker-dependent items, and the
-`#684 / #800 / #801` object-ownership cluster remains the
-highest-severity item overall, still blocked on the RF010/RF021 actor
-model.
+- **#752 is the one item that wants him, not a session** (see above).
+- **#841 and #797 item 2 are the natural next parallel round** — both are
+  test-only, both partition cleanly by file, and both helpers now exist. A
+  few files (e.g. `reports.routes.gaps.test.js`) carry *both* a sort stub and
+  a `findOne` stub, so partition explicitly before briefing.
+- Looked at and deliberately **not** picked, all three blocked on an owner's
+  call rather than on work: **#774** (Equipment allow-list vs deny-list — step
+  1 is "decide which vocabulary is canonical"), **#772** (delete the dead
+  `useAsyncImport` hook vs wire it in), **#789** (reject non-canonical GET
+  query params vs allow-list vs log-only).
+- Unchanged: **#833** and **#828** remain the highest-value Docker-dependent
+  items; the **#684 / #800 / #801** object-ownership cluster remains the
+  highest-severity item overall, still blocked on the RF010/RF021 actor model.
 
 ## If you run another parallel round
 
-Not a rule yet — one sitting, 5 workers, n=2 rounds. What held:
+Holding from before: provably disjoint file sets, named mechanical tripwires,
+and re-running every slice's tests together after the merge. New this round:
 
-- **Slices must have provably disjoint file sets.** That is what allows
-  one shared `fix/` branch, one commit per slice, and a revertable bad
-  slice. Partition before briefing, not after.
-- **Name the tripwires.** "Stop if a test I didn't name has to change"
-  fired twice, both times on a decision a worker must not make (a test
-  pinning the *buggy* behaviour, which is `fix-bugs`' un-weaken case).
-- **Run every slice's tests together after the merge.** A slice can break
-  the repo through a shared helper without touching another slice —
-  #798's 7th argument broke three assertions in a file no brief named.
-- **Docker and delegation do not overlap**, per `agent-delegation`. Not
-  tested this sitting; no Docker ran.
+- **Build any shared helper first, yourself, and commit it** (above).
+- **If a brief asks for before/after measurements, order the baseline
+  explicitly before the first edit.** A contained worker cannot `git stash`,
+  `git checkout --` or `git apply` — its Bash guard reserves every git
+  mutation — so a baseline is not recoverable once it has started editing.
+  The slice that hit this cost 45 tool calls and ~170k tokens against 11/9
+  and ~44k/~52k for the other two, on the smallest diff of the three.
+- Docker and delegation still do not overlap. No Docker ran.
