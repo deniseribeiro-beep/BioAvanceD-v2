@@ -5,7 +5,7 @@ still in flight.** Re-derive counts before trusting them.
 
 An orchestrated multi-issue sitting: a 10-issue queue worked with delegated
 agents, which then absorbed its own filings after two mid-session
-corrections from Dennis. **20 commits, pushed. 18 issues closed, 21 filed.**
+corrections from Dennis. **23 commits, pushed. 18 issues closed, 23 filed.** Regression verified clean at 7928/7928.
 
 ---
 
@@ -24,10 +24,14 @@ corrections from Dennis. **20 commits, pushed. 18 issues closed, 21 filed.**
 ## Verification state
 
 - `npm run test:architecture`: **85/85**, run with no writers live. [ran it]
-- Backend regression: the sanctioned form is
-  `npx vitest run tests/unit tests/integration tests/compliance --reporter=dot`.
-  **The bare `vitest run` form is hook-blocked**, and so is a bare directory
-  target — name files or use the three explicit directories.
+- Backend regression: **7928/7928 passing, 441 files, zero failures** [ran it]
+  — `npx vitest run tests/unit tests/integration tests/compliance
+  --reporter=dot`, 542s. **The bare `vitest run` form is hook-blocked**, and
+  so is a bare directory target — name files or use the three explicit
+  directories.
+  - **That run earned its keep.** The one before it came back `19 failed`,
+    all of them this sitting's own #867 regression, already committed and
+    pushed. Do not skip it.
 - Frontend `typecheck` and `typecheck:full`: clean. [ran it]
 - **e2e specs were NOT run.** #867 changed
   `tests/e2e/helpers/seedParticipant.ts` (`operational` → `Active`); six
@@ -55,6 +59,19 @@ guarded.
 
 ## Rules this sitting earned
 
+- **Verify from the changed module's CONSUMERS, not from the brief's file
+  list.** This sitting shipped and pushed a 19-test regression because a
+  worker's brief named four test files and one of the three consumer
+  services' tests was not among them. The worker ran what it was given and
+  was green; so was my re-run of the same four. Pack #591.
+  - The tell was free and I misread it: **a behaviour change that moves no
+    existing assertion means either the behaviour is untested or you ran the
+    wrong tests.** I drew the first conclusion and missed the second.
+- **Absent is not the same as unrecognised.** #867 replaced a deny-list with
+  `!isEquipmentReady(status)`, which also rejected equipment carrying no
+  status — a pre-existing data gap the caller cannot fix from the intake
+  path. `isEquipmentBlocked` now holds the two apart, and its test asserts it
+  is *not* the negation of `isEquipmentReady`.
 - **A guard's collection step is what to audit, not its assertions.** #863,
   #784 and #873 all turned on which files the sweep can see.
 - **Prove a guard can fail.** Every guard changed here was verified by
