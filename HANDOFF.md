@@ -93,11 +93,16 @@ is a **write**. Re-grep before briefing, every time.
 
 ## Docker
 
-**Not run, and not checked this sitting.** Nothing that ran needed it — all
-three slices are natively unit-testable. Treat the previous handoff's
-observation (Docker Desktop not running) as **unverified**: run `docker ps -a`
-before trusting any container or volume state, per the readiness rule rather
-than the up/down one.
+**Not run. Docker Desktop is DOWN** — checked at session end during cleanup:
+`docker ps` fails to connect (`open //./pipe/dockerDesktopLinuxEngine: The
+system cannot find the file specified`). Same state the 2026-08-27 handoff
+recorded, now re-confirmed rather than inherited.
+
+Nothing that ran this sitting needed it — all three slices are natively
+unit-testable. **No container or volume state was observed or changed**, so
+whatever a pre-2026-08-27 handoff claimed about bootstrapped volumes remains
+unverified: start Docker Desktop and run `docker ps -a` before trusting it,
+per the readiness rule rather than the up/down one.
 
 ## Recommended next
 
