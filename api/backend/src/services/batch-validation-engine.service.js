@@ -395,7 +395,11 @@ class BatchValidationEngine {
       patientData.patientID || rawRow.patientID || rawRow.patientId || rawRow.patient_id
     );
     if (patientID) {
-      criteria.push({ patientID });
+      // #853: `patients` never persists a `patientID` key (Patient.js's
+      // CANONICAL_FIELDS declares `participantId`); an 8-digit patientID
+      // column is exactly that canonical participantId, so the filter must
+      // be keyed on `participantId` or this criterion never matches.
+      criteria.push({ participantId: patientID });
     }
 
     const cpf = this.normalizeCpf(patientData.cpf || rawRow.cpf || rawRow.representativeCpf);

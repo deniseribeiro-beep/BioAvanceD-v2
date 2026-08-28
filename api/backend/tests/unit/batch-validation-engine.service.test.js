@@ -10,6 +10,36 @@ const biomarkerObservationService = require('../../src/services/biomarker-observ
 const StagingImport = require('../../src/models/StagingImport');
 
 function createDb(patientsByFilter = {}) {
+  // #853: `patients` never writes a `patientID` key (that's the
+  // participantId's CSV-facing alias) -- the collection's real linkage key
+  // is `participantId`. A stub that answered on `filter.patientID` matched
+  // the buggy production filter instead of the real one, which is exactly
+  // what hid this. The `patients` collection object is memoized (rather
+  // than rebuilt per `db.collection('patients')` call) so a test can grab a
+  // stable reference to `findOne` and assert on the exact filter shape the
+  // product code handed it.
+  const patientsCollection = {
+    findOne: vi.fn(async (filter) => {
+      if (filter.participantId && patientsByFilter.patientID === filter.participantId) {
+        return patientsByFilter.patient;
+      }
+
+      if (filter.cpf && patientsByFilter.cpf === filter.cpf) {
+        return patientsByFilter.patient;
+      }
+
+      if (filter.recordNumber && patientsByFilter.recordNumber === filter.recordNumber) {
+        return patientsByFilter.patient;
+      }
+
+      if (filter._id && patientsByFilter._id === String(filter._id)) {
+        return patientsByFilter.patient;
+      }
+
+      return null;
+    }),
+  };
+
   return {
     collection(name) {
       if (name !== 'patients') {
@@ -18,27 +48,7 @@ function createDb(patientsByFilter = {}) {
         };
       }
 
-      return {
-        findOne: vi.fn(async (filter) => {
-          if (filter.patientID && patientsByFilter.patientID === filter.patientID) {
-            return patientsByFilter.patient;
-          }
-
-          if (filter.cpf && patientsByFilter.cpf === filter.cpf) {
-            return patientsByFilter.patient;
-          }
-
-          if (filter.recordNumber && patientsByFilter.recordNumber === filter.recordNumber) {
-            return patientsByFilter.patient;
-          }
-
-          if (filter._id && patientsByFilter._id === String(filter._id)) {
-            return patientsByFilter.patient;
-          }
-
-          return null;
-        }),
-      };
+      return patientsCollection;
     },
   };
 }
@@ -140,6 +150,14 @@ describe('batch-validation-engine.service', () => {
       },
       2
     );
+
+    // #853: the patients collection stores the linkage key as `participantId`
+    // (never `patientID` -- see Patient.js's CANONICAL_FIELDS), and an 8-digit
+    // patientID column is that canonical participantId. The first criterion
+    // findLinkedPatient tries must therefore be filtered on `participantId`,
+    // not `patientID`, or an existing patient is never found and this row
+    // falls through to the not-found branch instead of linking.
+    expect(db.collection('patients').findOne).toHaveBeenCalledWith({ participantId: '12345678' });
 
     expect(createPatientSpy).not.toHaveBeenCalled();
     expect(createSampleSpy).toHaveBeenCalledTimes(1);
