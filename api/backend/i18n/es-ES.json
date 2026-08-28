@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "title": "Asistente Inteligente"
+  },
   "auth": {
     "attemptsRemaining": "Intentos restantes",
     "confirmPassword": "Confirmar contraseña",

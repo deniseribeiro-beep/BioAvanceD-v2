@@ -219,4 +219,58 @@ describe('i18n', () => {
       i18n.loadTranslations();
     });
   });
+
+  // #878: es-ES.json was missing `assistant.title`, which pt-BR and en-US
+  // both carried. #872, on the same file, was every one of its 150 values
+  // being verbatim Portuguese. This suite passed 26/26 through both.
+  //
+  // It could, because nothing here compared the locale files to each other
+  // -- every test drove translate() against whatever happened to be loaded.
+  // These two do the comparison. The first is exact; the second is a
+  // heuristic and says so.
+  describe('locale parity (#872, #878)', () => {
+    const LOCALES = ['pt-BR', 'en-US', 'es-ES'];
+
+    const flatten = (obj, prefix = '') =>
+      Object.entries(obj).flatMap(([key, value]) =>
+        value && typeof value === 'object'
+          ? flatten(value, `${prefix}${key}.`)
+          : [[`${prefix}${key}`, value]]
+      );
+
+    const load = (locale) =>
+      new Map(flatten(require(`../../i18n/${locale}.json`)));
+
+    it('every locale declares exactly the same keys', () => {
+      const [reference, ...others] = LOCALES;
+      const referenceKeys = [...load(reference).keys()].sort();
+
+      for (const locale of others) {
+        expect(
+          [...load(locale).keys()].sort(),
+          `${locale}.json's key set differs from ${reference}.json's`
+        ).toEqual(referenceKeys);
+      }
+    });
+
+    it('es-ES is not a verbatim copy of pt-BR', () => {
+      // Deliberately a threshold, not zero: some words are spelled
+      // identically in both languages (Cancelar, Confirmar, Editar,
+      // Administrador, Tecnico...), so a strict "no value may match" rule
+      // would be wrong. What this catches is the failure that actually
+      // happened -- a whole file copied across and never translated, which
+      // showed up as 150 of 150 identical.
+      const ptBR = load('pt-BR');
+      const esES = load('es-ES');
+
+      const identical = [...esES].filter(([key, value]) => ptBR.get(key) === value);
+      const ratio = identical.length / esES.size;
+
+      expect(
+        ratio,
+        `${identical.length}/${esES.size} es-ES values are byte-identical to pt-BR. `
+          + 'A handful is expected; a majority means the file was copied, not translated.'
+      ).toBeLessThan(0.25);
+    });
+  });
 });
