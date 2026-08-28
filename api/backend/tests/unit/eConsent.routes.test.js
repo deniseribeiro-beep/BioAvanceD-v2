@@ -627,3 +627,77 @@ describe('eConsent.routes POST /update', () => {
     expect(res.body).toEqual({ success: true });
   });
 });
+
+// #684: POST /consents/:id/revoke carried `authenticate` and nothing else,
+// while six neighbouring consent-policy routes in the same file gate on
+// requireRole(3, 4). So any authenticated user of any role -- including
+// accessType 1, Usuario Externo -- could revoke ANY patient's consent by
+// guessing a Mongo _id, and a revoked consent has real downstream effect:
+// authConsent.js blocks operations on that participant's data once
+// status === 'REVOKED'.
+//
+// The issue offered an ownership check as the alternative gate. It is not
+// implementable on this route: `authenticate` sets req.user from the staff
+// JWT, whose identity is a `userID` into `users`. There is no participantId
+// on it, and the two identity spaces are disjoint. The participant's own
+// self-service path is the separate CONSENT_SECRET-token flow
+// (/generate-link -> /validate/:token -> /update), which does not go
+// through `authenticate` at all -- so gating this route on staff roles does
+// not lock a participant out of revoking their own consent.
+describe('eConsent.routes POST /consents/:id/revoke (#684)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearRouteCache();
+  });
+
+  function loadRouterAsRole(hierarchyLevel) {
+    clearRouteCache();
+    const authModule = require(authPath);
+    authModule.authenticate = (req, res, next) => {
+      req.user = { userID: 'user-1', id: 'user-1' };
+      next();
+    };
+    const assignmentService = require('../../src/services/rbac-assignment.service');
+    vi.spyOn(assignmentService, 'resolveUserHierarchyLevel').mockResolvedValue(hierarchyLevel);
+    return require(routePath);
+  }
+
+  it('refuses a Usuario Externo (level 1) instead of revoking', async () => {
+    const revokeSpy = vi
+      .spyOn(consentService, 'revokeConsent')
+      .mockResolvedValue({ _id: 'consent-1', status: 'REVOKED' });
+
+    const app = buildApp(loadRouterAsRole(1), { collection: () => ({}) });
+
+    const res = await request(app).post('/e-consent/consents/consent-1/revoke').send({});
+
+    expect(res.status).toBe(403);
+    expect(revokeSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a Tecnico (level 2) instead of revoking', async () => {
+    const revokeSpy = vi
+      .spyOn(consentService, 'revokeConsent')
+      .mockResolvedValue({ _id: 'consent-1', status: 'REVOKED' });
+
+    const app = buildApp(loadRouterAsRole(2), { collection: () => ({}) });
+
+    const res = await request(app).post('/e-consent/consents/consent-1/revoke').send({});
+
+    expect(res.status).toBe(403);
+    expect(revokeSpy).not.toHaveBeenCalled();
+  });
+
+  it('lets a Coordenador (level 3) through to the handler', async () => {
+    const revokeSpy = vi
+      .spyOn(consentService, 'revokeConsent')
+      .mockResolvedValue({ _id: 'consent-1', status: 'REVOKED' });
+
+    const app = buildApp(loadRouterAsRole(3), { collection: () => ({}) });
+
+    const res = await request(app).post('/e-consent/consents/consent-1/revoke').send({});
+
+    expect(res.status).not.toBe(403);
+    expect(revokeSpy).toHaveBeenCalledWith(expect.anything(), 'consent-1');
+  });
+});
