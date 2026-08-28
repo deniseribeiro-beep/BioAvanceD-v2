@@ -123,17 +123,25 @@ What the *ordering* constraints are, which a query cannot carry:
    as a real write. The fix already exists in the sibling guard its own
    header cites as precedent. **This one is ready to apply from a pack
    session** — it needs no measurement, just the edit and a regression pair.
-3. **#843 is the highest-severity item filed this sitting** —
+   The "do other guards share this?" question is **settled: no.** Every
+   other command-reading hook strips heredocs, three of them via
+   `bash-write-targets.cjs`; the two that appeared not to never see a shell
+   command at all. Audit and method correction are on #398.
+3. **Pack #555** — a brief that pre-argues against an anticipated objection
+   reads as *less* legitimate to the worker. Found because it cost this
+   sitting the #523 probe. Reusable `agent-delegation` rule, independent of
+   containment, and a small prose edit from a pack session.
+4. **#843 is the highest-severity item filed this sitting** —
    `miabisValidator` computes a MIABIS `canBeShared` sharing verdict from an
    arbitrary consent record. Fourth instance of #788's class. Its test pins
    the broken shape, so the mock and the product line must change together.
-4. **#844** — `POST /api/users/register-sample` never links a sample to its
+5. **#844** — `POST /api/users/register-sample` never links a sample to its
    patient. Both legs (the read and the `updateOne` filter) must be renamed
    in one edit; renaming only the read makes it worse.
-5. **#845 first if touching #803** — four `*-integration.test.js` files
+6. **#845 first if touching #803** — four `*-integration.test.js` files
    exercise zero product code and must be *excluded* from #803's sweep, not
    renamed under it. #803 now carries a full map and a five-batch plan.
-6. **#842** wants a direction call from the owner (delete the orphaned nyc
+7. **#842** wants a direction call from the owner (delete the orphaned nyc
    coverage config, or finish wiring it).
 
 Unchanged and still true from the previous rotation:
