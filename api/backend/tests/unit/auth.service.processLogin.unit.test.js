@@ -7,6 +7,18 @@ const QRCode = require('qrcode');
 const authService = require('../../src/services/auth.service');
 const notificationDispatchService = require('../../src/services/notificationDispatch.service');
 const logger = require('../../src/utils/logger');
+// #797: findOne/updateOne mocks that actually honour the filter they are
+// handed, instead of the identity stub (`findOne: vi.fn().mockResolvedValue(doc)`)
+// that returns the same document regardless of the query. Used below only
+// where a test's function under test actually issues a findOne against the
+// `users` collection with a filter worth distinguishing (setupMFAFirstLogin,
+// enableMFAFirstLogin, requestPasswordReset -- all $or: [{email},{username}]
+// lookups). The `AuthService.processLogin` describe block deliberately does
+// NOT use this: processLogin(db, user, ...) takes `user` as a parameter and
+// never calls usersCollection.findOne itself -- that lookup lives in
+// AuthService.login(), which this file does not test -- so tightening findOne
+// there would assert on a call that never happens.
+const { createMatchingCollection, createFilterCaptureStore } = require('../factories/filter.factory');
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -419,15 +431,26 @@ describe('AuthService.setupMFAFirstLogin', () => {
   });
 
   it('throws when user not found', async () => {
-    const db = makeDb();
+    // #797: proves the $or lookup queried email/username with the given
+    // term even on the miss path -- an identity stub returning null can't
+    // distinguish "queried the right fields and missed" from "queried the
+    // wrong field entirely" (the #788-shaped bug this factory exists for).
+    const filterStore = createFilterCaptureStore();
+    const usersMock = createMatchingCollection([], { ...filterStore, key: 'users' });
+    const db = makeDb(usersMock);
     await expect(
       authService.setupMFAFirstLogin(db, { username: 'x', password: 'y' })
     ).rejects.toThrow('Credenciais inválidas');
+    expect(filterStore.capturedFilters.users).toEqual({
+      $or: [{ email: 'x' }, { username: 'x' }]
+    });
   });
 
   it('throws when password does not match', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
-    const db = makeDb({ findOne: vi.fn().mockResolvedValue(BASE_USER) });
+    // Matched via the username arm of the $or (email differs) -- a real
+    // match, not a stub returning the doc regardless of the filter.
+    const db = makeDb(createMatchingCollection([{ ...BASE_USER }]));
     await expect(
       authService.setupMFAFirstLogin(db, { username: 'user1', password: 'wrong' })
     ).rejects.toThrow('Credenciais inválidas');
@@ -435,9 +458,9 @@ describe('AuthService.setupMFAFirstLogin', () => {
 
   it('throws when MFA already configured and not first login', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
-    const db = makeDb({
-      findOne: vi.fn().mockResolvedValue({ ...BASE_USER, mfaEnabled: true, mfaSecret: 'SECRET' }),
-    });
+    const db = makeDb(
+      createMatchingCollection([{ ...BASE_USER, mfaEnabled: true, mfaSecret: 'SECRET' }])
+    );
     await expect(
       authService.setupMFAFirstLogin(db, { username: 'user1', password: 'pw' })
     ).rejects.toThrow('já configurado');
@@ -446,16 +469,27 @@ describe('AuthService.setupMFAFirstLogin', () => {
   it('generates a QR code and secret on success', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     vi.spyOn(QRCode, 'toDataURL').mockResolvedValue('data:image/png;base64,xyz');
-    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, lastLogin: null }) });
+    // #797: happy-path proof that the doc was found via the intended
+    // email/username fields, not merely returned regardless of the filter.
+    // Asserted via the findOne mock's own call history rather than the
+    // shared capturedFilters slot: this test's success path also calls
+    // updateOne (to persist mfaSecret) on the same collection, and
+    // capturedFilters records only the most recent filter per collection --
+    // that write would otherwise clobber the findOne filter we care about.
+    const usersMock = createMatchingCollection([{ ...BASE_USER, lastLogin: null }]);
+    const db = makeDb(usersMock);
     const result = await authService.setupMFAFirstLogin(db, { username: 'user1', password: 'pw' });
     expect(result.secret).toBeTruthy();
     expect(result.qrCode).toBe('data:image/png;base64,xyz');
+    expect(usersMock.findOne).toHaveBeenCalledWith({
+      $or: [{ email: 'user1' }, { username: 'user1' }]
+    });
   });
 
   it('throws when QRCode generation fails', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     vi.spyOn(QRCode, 'toDataURL').mockRejectedValue(new Error('qr fail'));
-    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, lastLogin: null }) });
+    const db = makeDb(createMatchingCollection([{ ...BASE_USER, lastLogin: null }]));
     await expect(
       authService.setupMFAFirstLogin(db, { username: 'user1', password: 'pw' })
     ).rejects.toThrow('Erro ao gerar QR Code');
@@ -476,15 +510,22 @@ describe('AuthService.enableMFAFirstLogin', () => {
   });
 
   it('throws when user not found', async () => {
-    const db = makeDb();
+    // #797: proves the $or lookup queried email/username with the given
+    // term even on the miss path.
+    const filterStore = createFilterCaptureStore();
+    const usersMock = createMatchingCollection([], { ...filterStore, key: 'users' });
+    const db = makeDb(usersMock);
     await expect(
       authService.enableMFAFirstLogin(db, { username: 'u', password: 'p' }, '123456', {})
     ).rejects.toThrow('Credenciais inválidas');
+    expect(filterStore.capturedFilters.users).toEqual({
+      $or: [{ email: 'u' }, { username: 'u' }]
+    });
   });
 
   it('throws when password mismatch', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
-    const db = makeDb({ findOne: vi.fn().mockResolvedValue(BASE_USER) });
+    const db = makeDb(createMatchingCollection([{ ...BASE_USER }]));
     await expect(
       authService.enableMFAFirstLogin(db, { username: 'user1', password: 'wrong' }, '123456', {})
     ).rejects.toThrow('Credenciais inválidas');
@@ -492,7 +533,7 @@ describe('AuthService.enableMFAFirstLogin', () => {
 
   it('throws when mfaSecret not configured', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
-    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, mfaSecret: null }) });
+    const db = makeDb(createMatchingCollection([{ ...BASE_USER, mfaSecret: null }]));
     await expect(
       authService.enableMFAFirstLogin(db, { username: 'user1', password: 'pw' }, '123456', {})
     ).rejects.toThrow('MFA não configurado');
@@ -501,7 +542,7 @@ describe('AuthService.enableMFAFirstLogin', () => {
   it('throws on invalid MFA code', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(false);
-    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, mfaSecret: 'SECRET' }) });
+    const db = makeDb(createMatchingCollection([{ ...BASE_USER, mfaSecret: 'SECRET' }]));
     await expect(
       authService.enableMFAFirstLogin(db, { username: 'user1', password: 'pw' }, '000000', {})
     ).rejects.toThrow('Código MFA inválido');
@@ -510,10 +551,19 @@ describe('AuthService.enableMFAFirstLogin', () => {
   it('activates MFA and issues session tokens on success', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
-    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, mfaSecret: 'SECRET' }) });
+    // #797: happy-path proof that the doc was found via the intended
+    // email/username fields. Asserted via the findOne mock's call history,
+    // not the shared capturedFilters slot -- this success path also calls
+    // updateOne (to persist mfaEnabled) on the same collection, which would
+    // otherwise clobber the recorded findOne filter.
+    const usersMock = createMatchingCollection([{ ...BASE_USER, mfaSecret: 'SECRET' }]);
+    const db = makeDb(usersMock);
     const result = await authService.enableMFAFirstLogin(db, { username: 'user1', password: 'pw' }, '123456', {});
     expect(result.success).toBe(true);
     expect(result.token).toBeTruthy();
+    expect(usersMock.findOne).toHaveBeenCalledWith({
+      $or: [{ email: 'user1' }, { username: 'user1' }]
+    });
     expect(result.user.mfaEnabled).toBe(true);
   });
 
@@ -522,7 +572,7 @@ describe('AuthService.enableMFAFirstLogin', () => {
   it('resolves the response body accessType from the live RBAC assignment, not stale user.accessType', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
-    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, accessType: 2, mfaSecret: 'SECRET' }) });
+    const db = makeDb(createMatchingCollection([{ ...BASE_USER, accessType: 2, mfaSecret: 'SECRET' }]));
     db.collection.mockImplementation((name) => {
       if (name === 'roles') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ roleId: 'role-x', roleCode: 'gestor', roleStatus: 'active', hierarchyLevel: 3 }]) }) };
       if (name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ userAccountId: 'user-1', roleId: 'role-x', assignmentStatus: 'active', validUntil: null }]) }) };
@@ -595,27 +645,44 @@ describe('AuthService.enableMFA', () => {
 
 describe('AuthService.requestPasswordReset', () => {
   it('returns generic success when user not found (no enumeration)', async () => {
-    const db = makeDb();
+    // #797: proves the $or lookup queried email/username with the given
+    // email even on the miss path.
+    const filterStore = createFilterCaptureStore();
+    const usersMock = createMatchingCollection([], { ...filterStore, key: 'users' });
+    const db = makeDb(usersMock);
     const result = await authService.requestPasswordReset(db, 'nobody@test.com', {});
     expect(result.success).toBe(true);
     expect(result.resetLink).toBeUndefined();
+    expect(filterStore.capturedFilters.users).toEqual({
+      $or: [{ email: 'nobody@test.com' }, { username: 'nobody@test.com' }]
+    });
   });
 
   it('returns generic success for inactive user without generating a token', async () => {
-    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, status: 'inactive' }) });
+    const db = makeDb(createMatchingCollection([{ ...BASE_USER, status: 'inactive' }]));
     const result = await authService.requestPasswordReset(db, 'user@test.com', {});
     expect(result.success).toBe(true);
   });
 
   it('generates a reset token and persists it for an active user', async () => {
-    const collectionApi = { findOne: vi.fn().mockResolvedValue(BASE_USER), updateOne: vi.fn().mockResolvedValue({}), find: vi.fn(), insertOne: vi.fn() };
-    const db = makeDb(collectionApi);
+    // #797: happy-path proof that the doc was found via the intended
+    // email/username fields, not merely returned regardless of the filter.
+    // Asserted via the findOne mock's call history, not the shared
+    // capturedFilters slot: this success path also writes the reset token
+    // (updateOne) and then runs auditLogger.log, whose LGPD anonymization
+    // step (getUserAnonId) issues its own findOne on this same collection --
+    // either of which would clobber the recorded findOne filter.
+    const usersMock = createMatchingCollection([{ ...BASE_USER }]);
+    const db = makeDb(usersMock);
     const result = await authService.requestPasswordReset(db, 'user@test.com', {});
     expect(result.success).toBe(true);
-    expect(collectionApi.updateOne).toHaveBeenCalledWith(
+    expect(usersMock.updateOne).toHaveBeenCalledWith(
       { _id: BASE_USER._id },
       expect.objectContaining({ $set: expect.objectContaining({ passwordResetToken: expect.any(String) }) })
     );
+    expect(usersMock.findOne).toHaveBeenCalledWith({
+      $or: [{ email: 'user@test.com' }, { username: 'user@test.com' }]
+    });
   });
 });
 
