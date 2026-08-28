@@ -879,6 +879,21 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(403);
     });
+
+    // #857: the $or omitted the canonical `specimenId` leg entirely, so a
+    // sample findable only by the field SampleModel.create actually writes
+    // 404'd instead of resolving.
+    it('finds a sample by its canonical specimenId when no other identifier leg matches (issue #857)', async () => {
+      const { router } = loadRoute();
+      const collection = createMatchingCollection([
+        { _id: 'internal-1', specimenId: 'SPEC-99', sampleType: 'Sangue' },
+      ]);
+      const app = buildApp(router, { collection: () => collection });
+
+      const res = await request(app).get('/api/samples/SPEC-99/label');
+
+      expect(res.status).toBe(200);
+    });
   });
 
   describe('GET /search/by-term', () => {
@@ -1782,6 +1797,26 @@ describe('sample.routes', () => {
         expect.objectContaining({ specimenId: 's1', success: false, status: 403 })
       );
     });
+
+    // #857: the $or omitted the canonical `specimenId` leg entirely, so a
+    // sample findable only by the field SampleModel.create actually writes
+    // 404'd instead of resolving.
+    it('finds a specimen by its canonical specimenId when no other identifier leg matches (issue #857)', async () => {
+      const getBarcodeIndustrialAssets = vi.fn(async (barcode) => ({
+        canonicalValue: barcode, code128: {}, dataMatrix: {}, qr: {},
+      }));
+      const { router } = loadRoute({ sampleServiceOverrides: { getBarcodeIndustrialAssets } });
+      const { db } = statefulDb({ samples: [{ _id: 's1', specimenId: 'SPEC-99', barcode: 'BC-1' }] });
+      const app = buildApp(router, db);
+
+      const res = await request(app).post('/api/samples/labels/batch').send({ specimenIds: ['SPEC-99'] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.generated).toBe(1);
+      expect(res.body.data.results[0]).toEqual(
+        expect.objectContaining({ specimenId: 'SPEC-99', success: true })
+      );
+    });
   });
 
   describe('GET /:id', () => {
@@ -2467,6 +2502,21 @@ describe('sample.routes', () => {
       const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
 
       expect(res.status).toBe(500);
+    });
+
+    // #857: the $or omitted the canonical `specimenId` leg entirely, so a
+    // sample findable only by the field SampleModel.create actually writes
+    // 404'd instead of resolving.
+    it('finds a sample by its canonical specimenId when no other identifier leg matches (issue #857)', async () => {
+      const { router } = loadRoute();
+      const collection = createMatchingCollection([
+        { _id: 'internal-1', specimenId: 'SPEC-99', barcode: 'BC-99' },
+      ]);
+      const app = buildApp(router, { collection: () => collection });
+
+      const res = await request(app).get('/api/samples/SPEC-99/label/print-job');
+
+      expect(res.status).toBe(200);
     });
   });
 });

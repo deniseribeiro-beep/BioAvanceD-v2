@@ -109,6 +109,23 @@ describe('analysisValidationService.validateSampleExists', () => {
     expect(findOne).toHaveBeenCalledTimes(2);
   });
 
+  // #857: the collision check's $or omitted the canonical `specimenId` leg
+  // entirely, so a same-string collision on specimenId (the field
+  // SampleModel.create actually writes) went undetected.
+  it('includes a specimenId leg in the collision-check $or filter (issue #857)', async () => {
+    const oid = new ObjectId();
+    const idMatch = { _id: oid, sampleID: 'S-BY-ID' };
+    const findOne = vi.fn()
+      .mockResolvedValueOnce(idMatch) // _id hit
+      .mockResolvedValueOnce(null); // collision check: no other sample matches
+    const db = createDb({ samples: { findOne } });
+
+    await analysisValidationService.validateSampleExists(db, oid.toString());
+
+    const collisionFilter = findOne.mock.calls[1][0];
+    expect(collisionFilter.$or).toContainEqual({ specimenId: oid.toString() });
+  });
+
   it('returns a not-found failure (distinct message) when no strategy matches', async () => {
     const db = createDb({
       samples: { findOne: vi.fn().mockResolvedValue(null) }

@@ -28,7 +28,7 @@ class AnalysisValidationService {
           // fechado em vez de anexar o upload à amostra errada (issue #34).
           const collision = await samplesCollection.findOne({
             _id: { $ne: sample._id },
-            $or: [{ sampleID: sampleIdentifier }, { barcode: sampleIdentifier }]
+            $or: [{ specimenId: sampleIdentifier }, { sampleID: sampleIdentifier }, { barcode: sampleIdentifier }]
           });
           if (collision) {
             return {

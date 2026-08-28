@@ -619,6 +619,7 @@ router.get('/:id/label', authenticate, requireOrganizationScope, async (req, res
     const sample = await samplesCollection.findOne({
       $or: [
         ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
+        { specimenId: rawId },
         ...(Number.isFinite(numericId) ? [{ sampleID: numericId }] : []),
         { sampleID: rawId },
         { sampleId: rawId },
@@ -695,6 +696,7 @@ router.get('/:id/label/print-job', authenticate, requireOrganizationScope, async
     const sample = await samplesCollection.findOne({
       $or: [
         ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
+        { specimenId: rawId },
         ...(Number.isFinite(numericId) ? [{ sampleID: numericId }] : []),
         { sampleID: rawId },
         { sampleId: rawId },
@@ -787,6 +789,7 @@ router.post('/labels/batch', authenticate, requireOrganizationScope, async (req,
         const sample = await samplesCollection.findOne({
           $or: [
             ...(ObjectId.isValid(id) ? [{ _id: new ObjectId(id) }] : []),
+            { specimenId: id },
             ...(Number.isFinite(numericId) ? [{ sampleID: numericId }] : []),
             { sampleID: id },
             { sampleId: id },
