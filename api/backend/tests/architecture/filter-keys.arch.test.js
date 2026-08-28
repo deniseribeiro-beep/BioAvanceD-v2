@@ -78,9 +78,27 @@ function relative(file) {
 // `.findOne()` call: `.find({ a: 1 })`, `.findOne({ a: 1 }, { projection })`.
 // Nested braces are deliberately not matched, for the same reason #771's
 // SORT_SPEC excludes them — a flat key/value map is what this guard can
-// check, and `$or`/`$and`/range sub-documents are not one. That is a known
+// check, and a `$gte`/`$lte` range sub-document is not one. That is a known
 // under-collection risk, which is exactly why there is a floor test below.
+// #854: a `$or`/`$and`/`$nor` array is the one nested shape this file does
+// still follow — see FILTER_CALL_START below, a second, narrower pass over
+// exactly that shape, added rather than folded in here because widening
+// this regex itself to accept arbitrary nested braces would also swallow
+// every other nested shape (range sub-documents, `$in`, `$regex`...) this
+// comment just said stays out of scope.
 const FILTER_SPEC = /\.(?:find|findOne)\(\s*\{[^{}]*\}/g;
+
+// #854: the start of a call-site filter literal that FILTER_SPEC's `[^{}]*`
+// cannot match at all, because it nests further braces — a filter combined
+// with `$or`/`$and`/`$nor`, `{ $or: [{ patientId: x }, { _id: y }] }`
+// among them, is #788's exact shape wrapped in the operator this codebase
+// actually uses to write a multi-criteria filter. matchingBrace (below)
+// finds the true, arbitrarily-deep extent from here; the body is only
+// treated as a new filter site if a genuine top-level `$and`/`$or`/`$nor`
+// key turns out to be present in it (checked in analyze()) — anything else
+// nested stays out of scope, same as FILTER_SPEC's own comment above.
+const FILTER_CALL_START = /\.(?:find|findOne)\(\s*\{/g;
+const OPERATOR_KEYS = new Set(['$and', '$or', '$nor']);
 
 // Keys inside a filter or any other object literal. Quoted keys are how a
 // dotted path is usually written (`'encounterPeriod.start': 1`).
@@ -170,11 +188,30 @@ const RETIRED_FILTER_KEYS = [
 // of migrating *away* from the retired key, not a fresh write that
 // invented it — so it is exempted from the retired-key check by site
 // rather than by loosening RETIRED_FILTER_KEYS itself.
+//
+// #857 added four more sites to the same pattern, and they earned the
+// exemption rather than being granted it: before that fix these $or filters
+// resolved an identifier through _id, sampleID, sampleId and barcode with
+// NO specimenId leg at all, so they could not find a sample by the field
+// SampleModel.create actually writes. That is a genuine bug, and this guard
+// is what surfaced it — the $or recursion added for #854 was what made the
+// sites visible in the first place. They are exempt now because they carry
+// the canonical tier, not because the retired legs are harmless.
+//
+// Still unestablished, tracked on #857: whether `{ sampleId: <id> }`
+// (lowercase d) was ever a written field. #628's comment names only
+// sampleID as the legacy form. If it was never written, that leg is dead
+// and should be dropped, which would shrink these four exemptions.
 const RETIRED_KEY_EXEMPT = new Set([
   'interface/routes/result.routes.js:137',
   'interface/routes/result.routes.js:384',
   'interface/routes/result.routes.js:522',
-  'services/result-specimenid-backfill.service.js:56'
+  'services/result-specimenid-backfill.service.js:56',
+  // #857: _id -> specimenId -> legacy sampleID/sampleId/barcode.
+  'interface/routes/sample.routes.js:619',
+  'interface/routes/sample.routes.js:696',
+  'interface/routes/sample.routes.js:789',
+  'services/analysisValidation.service.js:29'
 ]);
 
 function keysIn(text, pattern) {
@@ -186,21 +223,88 @@ function keysIn(text, pattern) {
   return keys;
 }
 
-// Index of the `}` matching the `{` immediately before `content[openIndex]`
-// (i.e. openIndex is the position right after that opening brace), found by
-// depth counting. Same known risk as this file's other regexes: a `{`/`}`
-// inside a string or a regex literal would misdirect the count. None of the
-// query-builder functions this rule targets has one as of this writing.
-function matchingBrace(content, openIndex) {
+// Index of the closer matching the opener immediately before
+// `content[openIndex]` (i.e. openIndex is the position right after that
+// opener), found by depth counting. Same known risk as this file's other
+// regexes: an opener/closer inside a string or a regex literal would
+// misdirect the count. None of the sites this file matches has one as of
+// this writing.
+function matchingClose(content, openIndex, openChar, closeChar) {
   let depth = 1;
   for (let i = openIndex; i < content.length; i++) {
-    if (content[i] === '{') depth++;
-    else if (content[i] === '}') {
+    if (content[i] === openChar) depth++;
+    else if (content[i] === closeChar) {
       depth -= 1;
       if (depth === 0) return i;
     }
   }
   return -1;
+}
+
+// `matchingBrace` is `matchingClose` scoped to `{`/`}` — kept as its own
+// name because every pre-#854 call site (queryBuilderReturnSites) already
+// reads that way. #854's operatorArrayKeys (below) is the first caller that
+// also needs `[`/`]` (an operator's array value), hence matchingClose
+// underneath rather than a second, parallel depth-counting copy.
+function matchingBrace(content, openIndex) {
+  return matchingClose(content, openIndex, '{', '}');
+}
+
+// #854: `$and`/`$or`/`$nor` combine several filter objects into one array
+// value — `{ $or: [{ patientId: x }, { _id: y }] }` is #788's exact shape,
+// just wrapped in the operator this codebase actually uses to write a
+// multi-criteria filter (five of the six functions the QUERY_BUILDER leg
+// below matches return exactly this shape, per #854's own blast-radius
+// count). offendersIn already skips the operator key itself (`$or` is not a
+// field), but nothing previously descended into the array to read the keys
+// nested inside it, so they were never extracted at all. This is that
+// descent: each element of the array is checked as a filter object in its
+// own right, via the same keyPattern the caller already reads other keys
+// with (SPEC_KEY in both of this file's callers), so a nested operator
+// inside an operator recurses through this same function.
+//
+// Only a top-level `{` within the array is treated as an element start —
+// `searchFrom`/`i` are both advanced past whatever span was just consumed
+// (the whole array, an element's whole brace span) before continuing the
+// scan, so a nested operator inside an element is read exactly once, via
+// the recursive call on that element's own body, never a second time by
+// the outer scan re-matching text already handled one level down.
+const OPERATOR_ARRAY = /\$(?:and|or|nor)\s*:\s*\[/g;
+
+function operatorArrayKeys(body, keyPattern) {
+  const keys = [];
+  let searchFrom = 0;
+
+  for (;;) {
+    OPERATOR_ARRAY.lastIndex = searchFrom;
+    const opMatch = OPERATOR_ARRAY.exec(body);
+    if (!opMatch) break;
+
+    const openBracket = opMatch.index + opMatch[0].length - 1; // the '[' itself
+    const closeBracket = matchingClose(body, openBracket + 1, '[', ']');
+    if (closeBracket === -1) {
+      searchFrom = openBracket + 1;
+      continue;
+    }
+
+    const arrayBody = body.slice(openBracket + 1, closeBracket);
+    let i = 0;
+    while (i < arrayBody.length) {
+      const braceIndex = arrayBody.indexOf('{', i);
+      if (braceIndex === -1) break;
+      const elClose = matchingBrace(arrayBody, braceIndex + 1);
+      if (elClose === -1) break;
+
+      const elementBody = arrayBody.slice(braceIndex + 1, elClose);
+      keys.push(...keysIn(elementBody, keyPattern));
+      keys.push(...operatorArrayKeys(elementBody, keyPattern));
+      i = elClose + 1;
+    }
+
+    searchFrom = closeBracket + 1; // past the whole array
+  }
+
+  return keys;
 }
 
 // Unlike FILTER_SPEC's call-site literal, a query-builder's `return`ed
@@ -209,8 +313,16 @@ function matchingBrace(content, openIndex) {
 // a flat, single-level regex the way FILTER_SPEC does. It still only reads
 // *top-level* keys: repeatedly deleting the innermost `{...}`/`[...]` group
 // leaves just the outer skeleton, so a nested value's own keys (`$in`
-// above) are never read as filter keys, the same way FILTER_SPEC never
-// looks inside a call-site `$or`/`$and`.
+// above) are never read as filter keys.
+//
+// #854: that deletion loop discards an operator array wholesale, before the
+// loop ever gets a chance to look inside via its own `{...}` alternative —
+// `[{ patientId: x }, { _id: y }]` has no *nested* `[`/`]`, so the loop's
+// `\[[^[\]]*\]` alternative consumes the whole array, elements and all, in
+// one step, on the very first pass. A retired/unwritten key nested in a
+// `$and`/`$or`/`$nor` array — #788's actual shape — was silently discarded
+// rather than read. Recover those from the pristine (pre-strip) body, via
+// the same operatorArrayKeys descent the call-site checker uses.
 function topLevelKeysOfReturnedObject(body) {
   let skeleton = body;
   let previous;
@@ -218,7 +330,7 @@ function topLevelKeysOfReturnedObject(body) {
     previous = skeleton;
     skeleton = skeleton.replace(/\{[^{}]*\}|\[[^[\]]*\]/, '');
   } while (skeleton !== previous);
-  return keysIn(skeleton, SPEC_KEY);
+  return [...keysIn(skeleton, SPEC_KEY), ...operatorArrayKeys(body, SPEC_KEY)];
 }
 
 // Finds every `return { ... };` written directly inside a QUERY_BUILDER
@@ -253,6 +365,39 @@ function queryBuilderReturnSites(content) {
   return sites;
 }
 
+// #854: the second, narrower pass FILTER_SPEC's own comment refers to —
+// finds every `.find(`/`.findOne(` call site FILTER_SPEC's flat-only regex
+// cannot match at all because it nests a genuine top-level `$and`/`$or`/
+// `$nor` array, and reports it in the same shape a FILTER_SPEC match is
+// reported in. A site with *some* nested brace but no operator key at the
+// top (a `$gte`/`$lte` range sub-document, say) is deliberately left alone
+// here — that stays the "known under-collection risk" FILTER_SPEC's own
+// comment already names, not a new hole this issue is closing.
+function operatorFilterCallSites(content) {
+  const sites = [];
+
+  for (const match of content.matchAll(FILTER_CALL_START)) {
+    const openIndex = match.index + match[0].length; // just past the '{'
+    const closeIndex = matchingBrace(content, openIndex);
+    if (closeIndex === -1) continue;
+
+    const body = content.slice(openIndex, closeIndex);
+    if (!body.includes('{')) continue; // flat — FILTER_SPEC above already covers it
+
+    const topKeys = keysIn(body, SPEC_KEY);
+    if (!topKeys.some((key) => OPERATOR_KEYS.has(key))) continue; // not this issue's shape
+
+    sites.push({
+      start: match.index,
+      end: closeIndex + 1,
+      keys: [...topKeys, ...operatorArrayKeys(body, SPEC_KEY)],
+      raw: content.slice(match.index, closeIndex + 1).replace(/\s+/g, ' ')
+    });
+  }
+
+  return sites;
+}
+
 // Returns { filterSites, writtenFields } from one pass over a source text.
 // The filter specs are blanked out before the write sweep runs, so a
 // filter's own keys never end up vouching for themselves.
@@ -272,6 +417,20 @@ function analyze(content) {
       raw: match[0].replace(/\s+/g, ' ')
     });
     stripped = stripped.replace(match[0], ' '.repeat(match[0].length));
+  }
+
+  // #854: the call-site analogue of the #847 query-builder loop below — a
+  // filter combined via $and/$or/$nor is invisible to FILTER_SPEC (it
+  // requires zero nested braces), so this is a second pass scoped to
+  // exactly that shape. Same "blank it so it can't vouch for its own keys"
+  // rule as the other two loops here.
+  for (const site of operatorFilterCallSites(content)) {
+    filterSites.push({
+      line: content.slice(0, site.start).split('\n').length,
+      keys: site.keys,
+      raw: site.raw
+    });
+    stripped = stripped.slice(0, site.start) + ' '.repeat(site.end - site.start) + stripped.slice(site.end);
   }
 
   // #847: the query-builder analogue of the loop above — same "blank it so
@@ -524,6 +683,90 @@ test('#851: SPEC_KEY also recognises an ES6 shorthand filter key', () => {
     ['status'],
     'an explicit value is being misread as a shorthand key'
   );
+});
+
+test('#854: a key nested inside a $or/$and array is checked, not just the operator itself', () => {
+  // #854: the exact shape #788's whole bug class is named after, just
+  // wrapped in the operator this codebase actually uses to combine
+  // multi-criteria filters — confirmed empirically before this fix by
+  // injecting this literal shape into src/services/miabisValidator.service.js
+  // at a real .findOne call site: 7/7 green, not flagged, while the same
+  // key unnested at the same line already was.
+
+  // Shape 1 (call site): a retired key nested inside $or IS flagged.
+  const orNestedRetired = [
+    'const doc = { patientId: id, _id: id, biomarkerType: "x" };', // legitimately written, elsewhere
+    'const record = await consentsCollection.findOne({ $or: [{ patientId: sample.patientID }, { _id: sample.patientID }] });'
+  ].join('\n');
+
+  const offendersA = offendersInSynthetic(orNestedRetired);
+  assert.equal(offendersA.length, 1, 'the sweep no longer flags a retired key nested inside a call-site $or array');
+  assert.match(offendersA[0], /retired key 'patientId'/);
+
+  // ...and a legitimate key nested the same way is NOT flagged.
+  const orNestedLegit = [
+    'const doc = { participantId: id, _id: id, biomarkerType: "x" };', // legitimately written, elsewhere
+    'const record = await consentsCollection.findOne({ $or: [{ participantId: sample.participantId }, { _id: sample.patientID }] });'
+  ].join('\n');
+
+  assert.deepEqual(
+    offendersInSynthetic(orNestedLegit),
+    [],
+    'the sweep flags a legitimate key nested inside a call-site $or array'
+  );
+
+  // Shape 2 (query-builder return): the identical hole in
+  // topLevelKeysOfReturnedObject — its skeleton-stripping loop deletes an
+  // operator array wholesale (no *nested* `[`/`]` inside it, so its own
+  // `\[[^[\]]*\]` alternative consumes the whole thing, elements included,
+  // in one step) before ever reading what was inside it.
+  const returnedOrNestedRetired = [
+    'const doc = { patientId: id, _id: id };', // legitimately written, elsewhere
+    'function buildIdQuery(rawId) {',
+    '  return {',
+    '    $or: [',
+    '      { _id: rawId },',
+    '      { patientId: rawId }',
+    '    ]',
+    '  };',
+    '}',
+    'const record = await x.findOne(buildIdQuery(rawId));'
+  ].join('\n');
+
+  const offendersC = offendersInSynthetic(returnedOrNestedRetired);
+  assert.equal(offendersC.length, 1, 'the sweep no longer flags a retired key nested inside a query-builder-returned $or array');
+  assert.match(offendersC[0], /retired key 'patientId'/);
+
+  // ...and the same shape keyed legitimately stays clean.
+  const returnedOrNestedLegit = [
+    'const doc = { organizationId: id, _id: id };', // legitimately written, elsewhere
+    'function buildIdQuery(rawId) {',
+    '  return {',
+    '    $or: [',
+    '      { _id: rawId },',
+    '      { organizationId: rawId }',
+    '    ]',
+    '  };',
+    '}',
+    'const record = await x.findOne(buildIdQuery(rawId));'
+  ].join('\n');
+
+  assert.deepEqual(
+    offendersInSynthetic(returnedOrNestedLegit),
+    [],
+    'the sweep flags a legitimate key nested inside a query-builder-returned $or array'
+  );
+
+  // A nested operator inside another operator recurses through the same
+  // path rather than stopping one level down.
+  const nestedOperators = [
+    'const doc = { patientId: id, _id: id, status: "x" };', // legitimately written, elsewhere
+    'const record = await x.findOne({ $and: [{ status: "x" }, { $or: [{ patientId: sample.patientID }, { _id: sample.patientID }] }] });'
+  ].join('\n');
+
+  const offendersD = offendersInSynthetic(nestedOperators);
+  assert.equal(offendersD.length, 1, 'the sweep does not recurse into an operator nested inside another operator');
+  assert.match(offendersD[0], /retired key 'patientId'/);
 });
 
 test('#788: a filter spec does not vouch for its own keys', () => {
