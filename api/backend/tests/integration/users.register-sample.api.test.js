@@ -33,7 +33,10 @@ function createAuthToken() {
 describe('POST /api/users/register-sample - paridade de contrato com /api/samples', () => {
   let previousLineageMode;
 
+  let patientsCollectionMock;
+
   function givenAppDbCollections() {
+    patientsCollectionMock = createCollectionMock();
     app.locals.db = createDbMock({
       samples: createCollectionMock({
         deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
@@ -50,6 +53,7 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
       logs: createCollectionMock({
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'log-qa' }),
       }),
+      patients: patientsCollectionMock,
       ...buildRbacCollections([{ userAccountId: 'qa-user-3', accessType: 2 }]),
     });
   }
@@ -62,7 +66,7 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
   function givenSampleServiceResult() {
     vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: '507f1f77bcf86cd799439013',
-      patientID: '12345678',
+      participantId: '12345678',
       sampleType: 'Sangue',
       barcode: 'BR-TEST-0003',
     });
@@ -118,6 +122,7 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
     expect(response.body.data.topology.synced).toBe(false);
     expect(response.body.data.topology.fallbackQueued).toBe(true);
     expect(typeof response.body.data.sampleID).toBe('string');
+    expect(patientsCollectionMock.updateOne).not.toHaveBeenCalled();
   });
 
   it('deve bloquear em STRICT_MODE_BLOCKED na rota alternativa (403)', async () => {

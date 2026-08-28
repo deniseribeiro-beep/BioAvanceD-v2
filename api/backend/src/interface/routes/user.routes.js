@@ -609,26 +609,10 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
     }
 
     const sampleService = require('../../services/sample.service');
-    const patientsCollection = await getCollection(db, 'patients');
 
     const sampleRepository = {
       create: async (sampleData) => {
         const savedSample = await sampleService.createSample(db, { ...sampleData });
-
-        const patientID = String(savedSample.patientID || '').trim();
-        if (patientID) {
-          const patientUpdateResult = await patientsCollection.updateOne(
-            { patientID },
-            {
-              $push: { sampleList: savedSample },
-              $set: { updatedAt: new Date() }
-            }
-          );
-
-          if (patientUpdateResult.matchedCount === 0) {
-            throw new Error('Paciente não encontrado para vincular a amostra');
-          }
-        }
 
         return savedSample;
       },

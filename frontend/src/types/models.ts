@@ -98,7 +98,6 @@ export interface Patient {
   consentTokenExpiresAt?: Date | string | null;
   consentNotifiedAt?: Date | string | null;
   consentAcceptedAt?: Date | string | null;
-  sampleList?: Sample[] | string[];
   linkedProject?: string;
   createdAt?: Date | string;
   updatedAt?: Date | string;
