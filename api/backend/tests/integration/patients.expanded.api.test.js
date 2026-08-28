@@ -567,7 +567,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
 
     it('Given: paciente com consentimento pendente | When: requisita reenvio | Then: retorna 200 e enfileira notificação', async () => {
       // #626: clinicalUnitId must match the coordinator's scoped organization.
-      const patient = { patientID: '12345678', status: 'PENDING_CONSENT', _id: 'obj-1', clinicalUnitId: 'test-org-default' };
+      const patient = { participantId: '12345678', status: 'PENDING_CONSENT', _id: 'obj-1', clinicalUnitId: 'test-org-default' };
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValue(patient),
         updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
