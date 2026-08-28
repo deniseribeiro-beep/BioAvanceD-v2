@@ -326,11 +326,11 @@ opened for the placed specimen (same #461/#462 convention: `equipmentId`
 is the FREEZER `StorageContainer`'s `_id`, not its `containerID`).
 
 Frontend impact: nil for live behavior — grepped `frontend/src`, no
-view component ever calls `useAsyncImport`/`useImportJob` (the hooks
-that plumb `startLocationID` through), so the type/wire-field rename
-(`useAsyncImport.ts`'s `AsyncImportOptions`, `api.ts`'s
-`createImportJob`) has no live caller to break. Updated anyway for type
-consistency with the backend contract.
+view component ever called `useAsyncImport`/`useImportJob` (the hooks
+that plumbed `startLocationID` through), so the type/wire-field rename
+had no live caller to break. Those two hooks have since been deleted
+as dead code; `api.ts`'s `createImportJob` had no consistency
+requirement to preserve after their removal.
 
 Proven with the same native-only bar as #462/#463/#464: an in-memory
 `storageBoxes`/`storageContainers`/`storageAssignments` fixture with
