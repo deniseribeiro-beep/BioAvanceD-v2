@@ -94,6 +94,19 @@ const MEMBER_WRITE = /\b[A-Za-z_$][\w$]*\.([A-Za-z_$][\w$]*)\s*=[^=]/g;
 // #771's `{ [sortField]: order }` sites.
 const UNFOLLOWABLE_FILTER = /\.(?:find|findOne)\(\s*\{\s*\[/g;
 
+// #847: FILTER_SPEC only sees a filter object literal written directly at
+// the `.find(`/`.findOne(` call site — it misses one built inside a helper
+// and `return`ed, which is exactly the shape #847 shipped as
+// (buildActiveConsentQuery, sample.routes.js). This matches a query-builder
+// function declaration by name only: `build<Something>Query`. Deliberately
+// narrow — function declarations only (no arrow/const-assigned form, and no
+// class-method shorthand, e.g. batch-validation-engine.service.js's
+// `buildPatientLinkageQuery(...) {}`, were found returning a filter object
+// literal in src/ as of this writing; widening to cover a shape that isn't
+// there yet would be exactly the speculative broadening this file's header
+// already declined to do for `query`/`filter` variables).
+const QUERY_BUILDER = /function\s+(build[A-Za-z0-9_$]*Query)\s*\([^)]*\)\s*\{/g;
+
 // Copied, not imported, from canonical-fields.arch.test.js's
 // ASPIRATIONAL_FORBIDDEN (that file exports nothing, and is not this
 // file's to edit). Those are names the FHIR-canonical migration retired —
@@ -151,6 +164,73 @@ function keysIn(text, pattern) {
   return keys;
 }
 
+// Index of the `}` matching the `{` immediately before `content[openIndex]`
+// (i.e. openIndex is the position right after that opening brace), found by
+// depth counting. Same known risk as this file's other regexes: a `{`/`}`
+// inside a string or a regex literal would misdirect the count. None of the
+// query-builder functions this rule targets has one as of this writing.
+function matchingBrace(content, openIndex) {
+  let depth = 1;
+  for (let i = openIndex; i < content.length; i++) {
+    if (content[i] === '{') depth++;
+    else if (content[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+// Unlike FILTER_SPEC's call-site literal, a query-builder's `return`ed
+// filter routinely nests a value — `{ patientId: { $in: [...] },
+// status: 'ACTIVE' }` is #847's actual pre-fix shape — so this cannot stay
+// a flat, single-level regex the way FILTER_SPEC does. It still only reads
+// *top-level* keys: repeatedly deleting the innermost `{...}`/`[...]` group
+// leaves just the outer skeleton, so a nested value's own keys (`$in`
+// above) are never read as filter keys, the same way FILTER_SPEC never
+// looks inside a call-site `$or`/`$and`.
+function topLevelKeysOfReturnedObject(body) {
+  let skeleton = body;
+  let previous;
+  do {
+    previous = skeleton;
+    skeleton = skeleton.replace(/\{[^{}]*\}|\[[^[\]]*\]/, '');
+  } while (skeleton !== previous);
+  return keysIn(skeleton, SPEC_KEY);
+}
+
+// Finds every `return { ... };` written directly inside a QUERY_BUILDER
+// function's own body (not a nested inner function's — matchingBrace scopes
+// the search to this function's braces only), and reports it in the same
+// shape a FILTER_SPEC call-site match is reported in.
+function queryBuilderReturnSites(content) {
+  const sites = [];
+
+  for (const fnMatch of content.matchAll(QUERY_BUILDER)) {
+    const bodyStart = fnMatch.index + fnMatch[0].length;
+    const bodyEnd = matchingBrace(content, bodyStart);
+    if (bodyEnd === -1) continue;
+    const fnBody = content.slice(bodyStart, bodyEnd);
+
+    for (const retMatch of fnBody.matchAll(/return\s*\{/g)) {
+      const openIndex = retMatch.index + retMatch[0].length;
+      const closeIndex = matchingBrace(fnBody, openIndex);
+      if (closeIndex === -1) continue;
+
+      const start = bodyStart + retMatch.index;
+      const end = bodyStart + closeIndex + 1;
+      sites.push({
+        start,
+        end,
+        keys: topLevelKeysOfReturnedObject(fnBody.slice(openIndex, closeIndex)),
+        raw: content.slice(start, end).replace(/\s+/g, ' ')
+      });
+    }
+  }
+
+  return sites;
+}
+
 // Returns { filterSites, writtenFields } from one pass over a source text.
 // The filter specs are blanked out before the write sweep runs, so a
 // filter's own keys never end up vouching for themselves.
@@ -170,6 +250,18 @@ function analyze(content) {
       raw: match[0].replace(/\s+/g, ' ')
     });
     stripped = stripped.replace(match[0], ' '.repeat(match[0].length));
+  }
+
+  // #847: the query-builder analogue of the loop above — same "blank it so
+  // it can't vouch for its own keys" rule, applied to a `return`ed filter
+  // instead of a call-site one.
+  for (const site of queryBuilderReturnSites(content)) {
+    filterSites.push({
+      line: content.slice(0, site.start).split('\n').length,
+      keys: site.keys,
+      raw: site.raw
+    });
+    stripped = stripped.slice(0, site.start) + ' '.repeat(site.end - site.start) + stripped.slice(site.end);
   }
 
   const writtenFields = new Set([
@@ -307,6 +399,59 @@ test('#788: the guard actually flags a #788-shaped filter', () => {
   const offendersB = offendersInSynthetic(retiredKeyBug);
   assert.equal(offendersB.length, 1, 'the sweep no longer flags a retired identity key used as a filter');
   assert.match(offendersB[0], /retired key 'patientId'/);
+});
+
+test('#847: the guard also flags a filter object returned from a query-builder function', () => {
+  // #847's actual pre-fix shape (sample.routes.js, before 32a1538d): a
+  // query-builder function whose filter is `return`ed rather than written
+  // at the `.find`/`.findOne` call site, keyed on the same retired
+  // `patientId` #788 already forbids — FILTER_SPEC alone cannot see it,
+  // because it never looks past the call site.
+  const buggyBuilder = [
+    'const sample = { status: "REGISTERED" };', // status legitimately written, elsewhere
+    'function buildActiveConsentQuery(patient) {',
+    '  const patientIds = [patient?.patientID, patient?._id?.toString()]',
+    '    .filter((value) => value !== undefined && value !== null && value !== "")',
+    '    .map(String);',
+    '',
+    '  return {',
+    '    patientId: { $in: [...new Set(patientIds)] },',
+    '    status: "ACTIVE"',
+    '  };',
+    '}',
+    'const consent = await patientConsentsCollection.findOne(buildActiveConsentQuery(patient));'
+  ].join('\n');
+
+  const offendersBuilder = offendersInSynthetic(buggyBuilder);
+  assert.equal(offendersBuilder.length, 1, 'the sweep no longer flags a query-builder function returning a retired filter key');
+  assert.match(offendersBuilder[0], /retired key 'patientId'/);
+
+  // ...and the actual fix (32a1538d) is not flagged: keying on
+  // `participantId` instead. `participantId` itself is written shorthand
+  // (`{ participantId, status: ... }`), which SPEC_KEY — reused as-is here,
+  // same as the call-site check above — does not read as a key at all,
+  // the same blind spot a call-site `.findOne({ participantId, ... })`
+  // would have. `status` is the only key this rule reads off this literal,
+  // and it is written above, so nothing is flagged.
+  const fixedBuilder = [
+    'const sample = { status: "REGISTERED" };',
+    'function buildActiveConsentQuery(patient) {',
+    '  const participantId = String(patient?.participantId ?? "").trim();',
+    '  if (!participantId) return null;',
+    '',
+    '  return {',
+    '    participantId,',
+    "    status: 'ACTIVE'",
+    '  };',
+    '}',
+    'const consent = await patientConsentsCollection.findOne(buildActiveConsentQuery(patient));'
+  ].join('\n');
+
+  assert.deepEqual(
+    offendersInSynthetic(fixedBuilder),
+    [],
+    'the sweep flags the fixed, participantId-keyed query-builder filter'
+  );
 });
 
 test('#788: a filter spec does not vouch for its own keys', () => {
