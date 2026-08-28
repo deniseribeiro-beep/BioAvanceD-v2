@@ -313,13 +313,16 @@ describe('BatchValidationEngine.classifySampleRow', () => {
 });
 
 describe('BatchValidationEngine.buildPatientLinkageQuery', () => {
-  it('builds criteria in patientID, cpf, recordNumber, _id order', () => {
+  // #853: the input key stays `patientID` -- that is the operator-facing CSV
+  // column -- but the emitted filter is keyed on `participantId`, the field
+  // the patients collection actually writes.
+  it('builds criteria in participantId, cpf, recordNumber, _id order', () => {
     const criteria = engine.buildPatientLinkageQuery(
       {},
       { patientID: '12345678', cpf: '12345678901', recordNumber: '42', _id: '507f1f77bcf86cd799439011' }
     );
 
-    expect(criteria[0]).toEqual({ patientID: '12345678' });
+    expect(criteria[0]).toEqual({ participantId: '12345678' });
     expect(criteria[1]).toEqual({ cpf: '12345678901' });
     expect(criteria[2]).toEqual({ recordNumber: '42' });
     expect(criteria[3]).toEqual({ recordNumber: 42 });
@@ -328,7 +331,7 @@ describe('BatchValidationEngine.buildPatientLinkageQuery', () => {
 
   it('falls back to rawRow fields when patientData lacks them', () => {
     const criteria = engine.buildPatientLinkageQuery({ patientID: '12345678' }, {});
-    expect(criteria).toEqual([{ patientID: '12345678' }]);
+    expect(criteria).toEqual([{ participantId: '12345678' }]);
   });
 
   it('returns empty array when nothing resolves', () => {
