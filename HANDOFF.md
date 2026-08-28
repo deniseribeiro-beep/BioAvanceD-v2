@@ -91,6 +91,11 @@ What a query cannot carry is the ordering:
   precisely how the false claim above reached this session wearing the word
   "Measured". Its own "not established" item is whether the pattern recurs;
   a `git log -p HANDOFF.md` sweep would settle it.
+- **#558 wants a direction call from Dennis before anyone codes it.**
+  `routing-gate`'s four carve-outs are each correct and union to leave a
+  tracker-only sitting completely ungated. The obvious fix — gate on
+  `gh issue create`/`comment` — would fire on the disciplined side track
+  `github-issues` says costs nothing, so the remedy is genuinely open.
 - **#752 still wants Dennis, not a session.** The #684/#800/#801 ownership
   cluster remains the highest-severity item and is still blocked on the
   RF010/RF021 actor model.
@@ -106,3 +111,7 @@ What a query cannot carry is the ordering:
   `dennis-windows` (#157); loading that skill first would have saved the
   detour.
 - **Work directly on the integration branch, commit per slice** (#552).
+- **Route before touching the tracker, not after.** This sitting invoked
+  `work-issue`/`resolve-issue` only because the Stop hook demanded it, and
+  by then every filing decision was made. `routing-gate` stayed correctly
+  silent throughout — that gap is now #558.
