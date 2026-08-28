@@ -5,6 +5,7 @@ import {
   BLOCKED_EQUIPMENT_STATUSES,
   CRITICAL_SENSOR_STATUSES,
   isEquipmentReady,
+  isEquipmentBlocked,
 } from '../../../src/models/equipmentStatus.js';
 
 // #867 inverted the equipment-readiness gate from a deny-list to an
@@ -47,11 +48,52 @@ describe('equipmentStatus', () => {
       expect(isEquipmentReady('retired')).toBe(false);
     });
 
-    it('rejects an absent status instead of treating it as ready', () => {
+    it('does not call an absent status ready', () => {
+      // Honest on its own terms -- but read `isEquipmentBlocked` below before
+      // using this at a gate. Absent and unrecognised are different cases and
+      // the read sites must not conflate them.
       expect(isEquipmentReady(undefined)).toBe(false);
       expect(isEquipmentReady(null)).toBe(false);
       expect(isEquipmentReady('')).toBe(false);
       expect(isEquipmentReady('   ')).toBe(false);
+    });
+  });
+
+  // The distinction this pair exists to hold. Gating on
+  // `!isEquipmentReady(status)` looks equivalent to `isEquipmentBlocked` and
+  // is not: it also rejects equipment carrying no status at all, which is a
+  // pre-existing data gap the caller cannot fix from the intake path.
+  // Shipped that way briefly and it broke 19 sample-creation tests, every one
+  // of them ordinary intake against status-less equipment.
+  describe('isEquipmentBlocked (#867)', () => {
+    it('blocks a status that is present and not ready', () => {
+      expect(isEquipmentBlocked('operational')).toBe(true);
+      expect(isEquipmentBlocked('Maintenance')).toBe(true);
+      expect(isEquipmentBlocked('retired')).toBe(true);
+      expect(isEquipmentBlocked('wibble')).toBe(true);
+    });
+
+    it('does not block a ready status', () => {
+      expect(isEquipmentBlocked('Calibrado')).toBe(false);
+      expect(isEquipmentBlocked('Active')).toBe(false);
+      expect(isEquipmentBlocked('  aCtIvE ')).toBe(false);
+    });
+
+    it('does not block equipment carrying no status at all', () => {
+      // The pre-#867 deny-list treated absent as unspecified and allowed it.
+      // #867 was about a present-but-unrecognised value passing the gate, not
+      // about status-less records, so that behaviour is deliberately kept.
+      expect(isEquipmentBlocked(undefined)).toBe(false);
+      expect(isEquipmentBlocked(null)).toBe(false);
+      expect(isEquipmentBlocked('')).toBe(false);
+      expect(isEquipmentBlocked('   ')).toBe(false);
+    });
+
+    it('is not simply the negation of isEquipmentReady', () => {
+      // If this ever becomes true, the absent case has been collapsed back
+      // into the unrecognised one and intake breaks for legacy equipment.
+      expect(isEquipmentReady('')).toBe(false);
+      expect(isEquipmentBlocked('')).toBe(false);
     });
 
     it('is case- and whitespace-insensitive, matching the read sites', () => {

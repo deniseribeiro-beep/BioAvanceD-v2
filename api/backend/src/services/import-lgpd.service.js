@@ -32,7 +32,7 @@ const MongoStorageRepository = require('../infrastructure/persistence/mongo/Mong
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
 const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
 
-const { CRITICAL_SENSOR_STATUSES, isEquipmentReady } = require('../models/equipmentStatus');
+const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
 
 function buildIdVariants(...ids) {
   const variants = [];
@@ -767,7 +767,7 @@ class ImportLGPDService {
     if (!equipment) return false;
 
     const equipmentStatus = String(equipment.status || equipment.maintenanceStatus || equipment.operationalStatus || '').trim().toLowerCase();
-    if (!isEquipmentReady(equipmentStatus)) return false;
+    if (isEquipmentBlocked(equipmentStatus)) return false;
 
     const sensorsCollection = db.collection('sensors');
     const sensors = await sensorsCollection.find({

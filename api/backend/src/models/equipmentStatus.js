@@ -56,9 +56,38 @@ function isEquipmentReady(status) {
   return READY_EQUIPMENT_STATUSES.includes(normalized);
 }
 
+/**
+ * What the read sites actually need, and the reason it is not simply
+ * `!isEquipmentReady(status)`.
+ *
+ * An **absent** status is not the same as an unrecognised one. #867 was about
+ * a status that is present and unrecognised — 'operational' — passing a
+ * deny-list. It was never about equipment carrying no status at all, and
+ * those documents exist: `Equipment.create` defaults the field to 'Active',
+ * so a record without one came from a raw insert that bypassed the model.
+ *
+ * Gating on `!isEquipmentReady(status)` blocks both, which fails closed on
+ * data the caller did not create and cannot fix from the intake path —
+ * measured at 19 broken sample-creation tests, all of them ordinary intake
+ * against equipment with no status field. That is the same mistake #868
+ * avoided on the equipment PUT: do not reject a request for a pre-existing
+ * gap it did not introduce.
+ *
+ * So: block a status that is present and not ready. Treat an absent one as
+ * unspecified, which is what the pre-#867 deny-list did.
+ */
+function isEquipmentBlocked(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return !isEquipmentReady(normalized);
+}
+
 module.exports = {
   EQUIPMENT_STATUS,
   BLOCKED_EQUIPMENT_STATUSES,
   CRITICAL_SENSOR_STATUSES,
   isEquipmentReady,
+  isEquipmentBlocked,
 };
