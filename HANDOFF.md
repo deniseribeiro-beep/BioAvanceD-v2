@@ -2,124 +2,100 @@
 
 **Written 2026-08-28. Definitive rotation — the sitting is finished.**
 A `rabbit-hole` sitting on the `patientID`/mock-fidelity cluster, run as an
-orchestrator with delegated workers. Three bugs fixed and closed, one static
-guard landed, four issues filed here and four against the pack.
+orchestrator with delegated workers. **19 commits, pushed.** Nine issues
+closed here, nine filed here, nine filed against the pack.
 
 ---
 
 ## Still inside the rabbit hole: tracker #846
 
-**Do not treat this as a fresh backlog pick.** Re-enter via `rabbit-hole`
-with tracker #846, and re-derive membership from its comments rather than
-this table.
+Re-enter via `rabbit-hole` with tracker **#846**; re-derive membership from
+its comments, not from this table.
 
 | member | state |
 |---|---|
-| #843 miabisValidator sharing verdict | closed, `a27c9721` |
-| #847 buildActiveConsentQuery wrong key | closed, `32a1538d` |
-| #848 unguarded patient `$or` | closed, `ab1b20a1` |
-| #797 filter-blind mocks | **open** — guard slices landed `Refs` |
-| #849 guard scope | **open** — option 2 done (`534a2e67`); two legs left |
-| #851 shorthand blind spot | closed, `28b66177` |
-| #850 the legacy `_id` leg | **open** — wants owner input or a DB query |
+| #843 miabisValidator sharing verdict | closed `a27c9721` |
+| #847 buildActiveConsentQuery wrong key | closed `32a1538d` |
+| #848 unguarded patient `$or` | closed `ab1b20a1` |
+| #850 dead `_id` leg | closed `21e7398d` |
+| #851 shorthand blind spot | closed `28b66177` |
+| #853 batch-import linkage key | closed `bd451e60` + `9f74a6aa` |
+| #854 `$or` blind spot in the guard | closed `c3aeb128` |
+| #857 missing canonical `specimenId` tier | closed `11267453` |
+| **#797** filter-blind mocks | **open** — triage posted; item 2 is triage, *not* a sweep |
+| **#849** guard's unreached scope | **open** — option 2 done; direction decided, see its triage comment |
 
-Five of these were filed by this sitting from inside the work.
+Also closed outside the hole: **#842** (`a125e524`), **#844** (`20833d93`),
+**#845** (`2d4422bd`), **#852** (premise-corrected, not planned).
 
-**Also resolved, outside the hole:** #842 (`a125e524`) removed `frontend/.nycrc`
-and the two nyc devDependencies it kept alive.
+## The cluster, as it actually turned out
 
-**#852 was filed and closed premise-corrected in the same sitting** — a
-doc-mandated CI coverage gate looked unimplemented, but milestone #3
-already sequences CI *after* Playwright ("do not start wiring CI until #2
-closes", Dennis 2026-07-27). **We are in the pre-CI stage.** `docs/CI.md`
-(`c4b21775`) now carries that pointer so the next reader of the same
-passage does not repeat it.
-
-## The mechanism claim worth carrying (ran it)
-
-**The `consents` collection is keyed on `participantId`. No writer emits
-`patientId`** — verified across `PatientConsent.js:63`,
-`consent.service.js:901,918`, `RegisterSample.js:128`,
-`intakeWizard.js:523`, with `intakeWizard.js:543` the one correct reader.
-
-**#843's own "Suggested fix" was wrong because of it** — it proposed
-`{ patientId: participantId }`, right value and wrong key, which would have
-traded a match-anything filter for a match-nothing one while the guard made
-it look fixed.
-
-The cluster is **two failure directions from one root**, which is why no
-single rename sweep clears it:
+`sample.patientID` produced **eight** live read-site bugs, in **two
+directions** — which is why no single rename sweep would have cleared it:
 
 - **wrongly permissive** (#843, #848) — `undefined` serialises to BSON
   `null`, matches an arbitrary record, and the code faithfully reports
   *that* record's consent.
-- **wrongly restrictive** (#847) — the key is absent from every document,
-  so nothing matches and every sample badges "TCLE Pendente".
+- **wrongly restrictive** (#847, #853, #857) — the key is absent from every
+  document, so nothing ever matches.
 
-#788's fix moved `GET /api/samples` from the first to the second without
-anyone noticing, because the test written to prove #788 fixed was an
+#788's fix moved `GET /api/samples` from the first direction to the second
+without anyone noticing, because the test written to prove #788 fixed was an
 identity stub asserting two mock values against each other.
 
-## Rules this sitting earned
+## Rules this sitting earned (all "ran it")
 
-- **Verify a body's *remedy* separately from its *defect trace*.**
-  Confirming the trace is exactly what makes the remedy feel pre-vetted.
-- **A precedent cited in a brief must be verified from commits, not from an
-  issue body.** This sitting briefed "#771 swept 165 mocks across 80 files";
-  #771 actually migrated nothing and was closed by one architecture test.
-  The agent caught it. Pack #565.
-- **Prove a new guard catches the real defect, not just a synthetic one.**
-  `filter-keys.arch.test.js` was checked by reintroducing #843's and then
-  #847's actual lines; each goes red naming file, line and key.
+- **Verify a body's *remedy* separately from its *defect trace*.** #843's
+  own suggested fix was wrong; confirming the trace is what made it feel
+  pre-vetted.
+- **Check the milestones before filing a doc-derived gap.** Docs say what
+  must eventually be true; **milestones say when.** #852 was filed and
+  closed the same sitting for want of one `gh api .../milestones` call.
+  `docs/CI.md` now carries that pointer.
 - **Open the non-greppable docs, or say you didn't.** A `git grep` hit on a
-  `.docx` is a match on compressed bytes — neither usable nor dismissable.
-  Opening `docs/docs-7-31-2026/3 - Plano_Integrado_*.docx` for #842 changed
-  that issue's outcome.
-- **Then keep going down the ladder — check the milestones.** Docs say what
-  must eventually be true; **milestones say when.** Stopping at the first
-  rung that answers is what produced #852, an issue about work already
-  scheduled. `gh api repos/.../milestones` settles it in one call. Pack #569.
+  `.docx` is a compressed-bytes match. Opening one inverted #844's fix.
+- **After a rename, grep the whole test tree for the literal — not just the
+  file you changed.** #853 shipped with a sibling test file red. Pack #573.
+- **Prove a new guard catches the *real* defect.** Two false-negative
+  classes were found in a guard whose own tests passed throughout (#851,
+  #854).
 
 ## Repo state
 
-- On `feature/docker-e2e-backend-integration`, **pushed**
-  (through `a125e524`). Tree clean apart from this rotation. `main`
-  untouched, no open PR.
-- Untracked and deliberately untouched: `.claude/skills/`,
-  `api/backend/storage/assays/`. **Never `git add -A`.**
-- Native runs only, all green: the three touched unit files, and
-  `npm run test:architecture` at **80/80** (was 73).
-- **Docker: not run, not observed.** Bootstrap state unverified — run
-  `docker ps -a`, not `docker ps`, before trusting anything about volumes.
+- On `feature/docker-e2e-backend-integration`, **pushed and in sync**.
+  `main` untouched, no open PR.
+- Untracked, deliberately: `.claude/skills/`, `api/backend/storage/assays/`.
+  **Never `git add -A`.**
+- **Full native reconcile run: 7907/7909 passing** (438 files). The two
+  failures are **pre-existing and filed** — #855 (consent resend 400) and
+  #858 (backup.service restore fallback). Confirmed pre-existing by
+  reverting `src/` to this sitting's base and reproducing. **That is the
+  current baseline; neither is a regression from today.**
+- `npm run test:architecture`: **81/81** (was 73).
+- **Docker: not run, not observed.** Run `docker ps -a`, not `docker ps`.
 
 ## Deliberate non-actions — don't redo the reasoning
 
-- **#797 was not closed, and no migration-chunk issues were filed.** Its
-  item 1 is already done; its owner comment scopes item 2 to triage, not a
-  730-site sweep. The triage itself is now a comment on #797.
-- **`db.factory.js:48` was not touched.** It ships the identity stub as its
-  *default*, with 43 consumers, 35 in `tests/integration/` — outside this
-  cluster. Arguably the highest-leverage single change available, and it
-  must be its own serialized work.
-- **#844 is a sixth instance** of the same class, predates this sitting, so
-  it was not absorbed into the hole.
+- **#797 not closed, and no migration-chunk issues filed.** Its item 1 is
+  done; its owner comment scopes item 2 to triage, not a 730-site sweep.
+- **`db.factory.js:48` untouched** — ships the identity stub as its
+  *default*, 43 consumers, 35 in `tests/integration/`. Highest-leverage
+  single change available, and it must be its own serialized work.
+- **`{ sampleId }` (lowercase d) legs kept** in #857's four sites. Whether
+  that field was ever written is unestablished; noted in the guard's
+  exemption comment.
 
 ## Recommended next
 
-Dennis named no next issue, so: **none queued.** For the backlogs run
+Dennis named no next issue, so: **none queued.** Backlogs via
 `gh issue list --state open` and the same against
 `DyeAllPies/dyeallpies-skills-pack`.
 
-What a query cannot carry:
-
-- **#849 and #850 both want Dennis, not a session** — one is a
-  lint-vs-dataflow direction call (and should probably be decided with
-  #839, which has the identical fork), the other needs a real database
-  answer.
-- **Pack #564 says `rabbit-hole` is stale** — Dennis flagged it mid-sitting,
-  and mid-workflow HANDOFF rotations are no longer done despite Step 4 and
-  `handoff`'s multi-iteration subsection both mandating them. Treat that
-  skill's prescriptions as suspect until #564 lands.
-- **Pack #566 and #567** are this sitting's two orchestration findings: the
-  opening move of a delegating sitting is under-specified, and the routing
-  reminder now fires too late to change anything.
+- **#855 and #858 are the two red tests** — both want a stale-test-vs-real-bug
+  direction call before anyone edits.
+- **#856** — nothing drives `storage.routes.js` over HTTP.
+- **#849's remaining legs** want deciding with **#839** (identical
+  lint-vs-taint fork).
+- **Pack #564 says `rabbit-hole` is stale** — Dennis flagged it mid-sitting.
+  Mid-workflow HANDOFF rotations are no longer done, despite its Step 4 and
+  `handoff`'s multi-iteration subsection both mandating them.
