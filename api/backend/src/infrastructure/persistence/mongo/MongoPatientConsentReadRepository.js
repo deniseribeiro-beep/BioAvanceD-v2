@@ -23,12 +23,15 @@ class MongoPatientConsentReadRepository {
       let consentValid = false;
       let consentMessage = '';
 
-      const patient = await patientsCollection.findOne({
-        $or: [
-          { participantId: sample.participantId },
-          { _id: sample.participantId }
-        ]
-      });
+      const participantId = String(sample?.participantId ?? '').trim();
+      const patient = participantId
+        ? await patientsCollection.findOne({
+          $or: [
+            { participantId },
+            { _id: participantId }
+          ]
+        })
+        : null;
 
       if (patient) {
         const consent = await patientConsentsCollection.findOne({

@@ -91,6 +91,12 @@ describe('MongoPatientConsentReadRepository', () => {
       barcode: 'BC1',
       participantId: 'P1'
     });
+    expect(db.__patientsCollection.findOne).toHaveBeenCalledWith({
+      $or: [
+        { participantId: 'P1' },
+        { _id: 'P1' }
+      ]
+    });
     expect(db.__consentsCollection.findOne).toHaveBeenCalledWith({
       participantId: { $in: ['P1', 'patient-id-1'] },
       status: 'ACTIVE'
@@ -150,6 +156,26 @@ describe('MongoPatientConsentReadRepository', () => {
     expect(result).toEqual([]);
     // No consent lookup should be attempted for a patient that was never found.
     expect(db.__consentsCollection.findOne).not.toHaveBeenCalled();
+  });
+
+  it('issues no patient lookup at all when participantId is absent, and treats the sample as not found', async () => {
+    const db = createDb({
+      patients: { findOne: vi.fn().mockResolvedValue({ _id: 'someone-else', participantId: 'other' }) }
+    });
+    const repo = new MongoPatientConsentReadRepository(db);
+
+    const result = await repo.enrichSamplesWithConsent([
+      makeSample({ _id: 'blank-sample', participantId: undefined })
+    ]);
+
+    // No query may be issued for a blank/absent participantId: an unguarded
+    // $or on { participantId: undefined } / { _id: undefined } serialises to
+    // BSON null and would match any patient with a null/absent participantId.
+    expect(db.__patientsCollection.findOne).not.toHaveBeenCalled();
+    // Same fail-closed path as "patient not found": no consent lookup, and
+    // the sample is filtered out of the result entirely.
+    expect(db.__consentsCollection.findOne).not.toHaveBeenCalled();
+    expect(result).toEqual([]);
   });
 
   it('looks up the patient via $or matching either participantId or _id', async () => {
