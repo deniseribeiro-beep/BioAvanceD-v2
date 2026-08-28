@@ -68,6 +68,112 @@ function walk(dir, out = []) {
 // ENV_MODULE is exact: it can't under-collect on a future '../env' or
 // '../../config/env', and can't over-collect on some unrelated './env'
 // module elsewhere that happens to share the name.
+// #882: every sweep below runs on comment-stripped source. The read
+// extractors are regexes over raw text, so prose matched them: a comment in
+// user-security.service.js that merely mentioned a path ending `env.js` was
+// reported as `reads env.js`, a key that does not exist and a read that never
+// happened. That inverts this guard's one stated property -- under-collection
+// is invisible, over-collection is loud and therefore always real -- and it
+// penalises exactly the comment a reader most wants (one explaining *why* a
+// file reads a key).
+//
+// Comments are blanked rather than deleted so byte offsets and line structure
+// survive; nothing here depends on that today, but a future index-based
+// report would.
+//
+// The scanner has to know about strings and regex literals, not just comment
+// openers, because `'http://x'` and `/^https?:\/\//` both contain `//`.
+// Treating either as a comment would blank real code, and this guard's
+// dangerous failure direction is silently seeing *less*. `REGEX_ALLOWED_AFTER`
+// is the standard "can a `/` start a regex here" heuristic: at the start of
+// input, after an operator or opening bracket, or after a keyword that must be
+// followed by an expression. A `/` in any other position is division.
+const REGEX_ALLOWED_AFTER =
+  /(?:^|[(,=:[!&|?{};+\-*%~^<>]|\b(?:return|typeof|case|in|of|new|delete|void|do|else|yield|await))\s*$/;
+
+function stripComments(source) {
+  let out = '';
+  let i = 0;
+  const n = source.length;
+
+  while (i < n) {
+    const c = source[i];
+    const d = source[i + 1];
+
+    if (c === '/' && d === '/') {
+      while (i < n && source[i] !== '\n') {
+        out += ' ';
+        i += 1;
+      }
+      continue;
+    }
+
+    if (c === '/' && d === '*') {
+      out += '  ';
+      i += 2;
+      while (i < n && !(source[i] === '*' && source[i + 1] === '/')) {
+        out += source[i] === '\n' ? '\n' : ' ';
+        i += 1;
+      }
+      if (i < n) {
+        out += '  ';
+        i += 2;
+      }
+      continue;
+    }
+
+    if (c === '"' || c === "'" || c === '`') {
+      out += c;
+      i += 1;
+      while (i < n && source[i] !== c) {
+        if (source[i] === '\\') {
+          out += source[i];
+          i += 1;
+          if (i < n) {
+            out += source[i];
+            i += 1;
+          }
+          continue;
+        }
+        out += source[i];
+        i += 1;
+      }
+      if (i < n) {
+        out += source[i];
+        i += 1;
+      }
+      continue;
+    }
+
+    if (c === '/' && REGEX_ALLOWED_AFTER.test(out.slice(-16))) {
+      out += c;
+      i += 1;
+      let inClass = false;
+      while (i < n && source[i] !== '\n') {
+        const ch = source[i];
+        out += ch;
+        i += 1;
+        if (ch === '\\') {
+          if (i < n) {
+            out += source[i];
+            i += 1;
+          }
+          continue;
+        }
+        if (ch === '[') inClass = true;
+        else if (ch === ']') inClass = false;
+        else if (ch === '/' && !inClass) break;
+      }
+      continue;
+    }
+
+    out += c;
+    i += 1;
+  }
+
+  return out;
+}
+
 const REQUIRE_CALL = /require\(\s*['"]([^'"]+)['"]\s*\)/g;
 
 function resolvesToEnvModule(file, spec) {
@@ -87,7 +193,7 @@ function requiresEnvModule(file, content) {
 function filesRequiringEnv() {
   return [...walk(BACKEND_SRC), ...ROOT_ENTRYPOINTS]
     .filter((file) => file !== ENV_MODULE)
-    .map((file) => ({ file, content: fs.readFileSync(file, 'utf8') }))
+    .map((file) => ({ file, content: stripComments(fs.readFileSync(file, 'utf8')) }))
     .filter(({ file, content }) => requiresEnvModule(file, content));
 }
 
@@ -307,7 +413,13 @@ function processEnvSweep() {
   const scanned = [];
   for (const file of walk(BACKEND_ROOT)) {
     if (file === ENV_MODULE) continue;
-    const content = fs.readFileSync(file, 'utf8');
+    // #882: comment-stripped here too, and in this direction the stakes are
+    // the opposite way round -- a key whose only `process.env.NAME` mention
+    // lives in prose would otherwise vouch for itself and keep #784 green
+    // over a key nothing reads. Measured when this landed: stripping removes
+    // exactly one name from the sweep (`NAME`, out of this file's own
+    // explanatory comments) and no declared key loses its only reader.
+    const content = stripComments(fs.readFileSync(file, 'utf8'));
     let found = false;
     for (const match of content.matchAll(PROCESS_ENV_DOT)) {
       names.add(match[1]);
@@ -388,6 +500,57 @@ test('#784: the process.env read sweep still collects known readers', () => {
     scanned.length >= 20,
     'Expected the process.env sweep to find at least 20 reading files, found '
       + `${scanned.length} -- coverage may have silently narrowed.`
+  );
+});
+
+// ---------------------------------------------------------------------
+// #882: the stripper the two sweeps above depend on. Both directions are
+// pinned here, because they fail differently: under-stripping makes the
+// guard loud about things that are not reads (the reported symptom), while
+// over-stripping blanks real code and makes it silently see less (the
+// dangerous one this guard family keeps re-learning -- #777, #863, #873).
+// ---------------------------------------------------------------------
+
+test('#882: comment text is not collected as an env read', () => {
+  const source = [
+    "const env = require('../config/env');",
+    '// this reads env.INSIDE_LINE_COMMENT, or so a regex would think',
+    '/* env.INSIDE_BLOCK_COMMENT',
+    '   spanning env.SECOND_LINE too */',
+    'const port = env.REAL_READ;',
+  ].join('\n');
+
+  assert.deepEqual(
+    [...staticReads(stripComments(source), 'env')].sort(),
+    ['REAL_READ'],
+    'A comment naming a key is documentation, not a read -- collecting it '
+      + 'makes this guard fail on prose, which trains readers to treat its '
+      + 'failures as possibly spurious.'
+  );
+});
+
+test('#882: stripping preserves code that only looks like a comment', () => {
+  const source = [
+    "const env = require('../config/env');",
+    "const url = 'http://example.test/' + env.FROM_STRING_LINE;",
+    'const tpl = `https://x/${env.FROM_TEMPLATE_LINE}`;',
+    'const re = /^https?:\\/\\//;',
+    'const after = env.AFTER_REGEX;',
+    'const ratio = env.NUMERATOR / env.DENOMINATOR;',
+  ].join('\n');
+
+  assert.deepEqual(
+    [...staticReads(stripComments(source), 'env')].sort(),
+    ['AFTER_REGEX', 'DENOMINATOR', 'FROM_STRING_LINE', 'FROM_TEMPLATE_LINE', 'NUMERATOR'],
+    'A `//` inside a string or a regex literal is not a comment opener. '
+      + 'Blanking from one silently removes real reads from every sweep in '
+      + 'this file, which is the invisible failure direction.'
+  );
+
+  assert.ok(
+    stripComments(source).includes("require('../config/env')"),
+    'Stripping must leave require() specifiers intact -- the collector runs '
+      + 'on stripped source, so eating one silently narrows coverage.'
   );
 });
 
