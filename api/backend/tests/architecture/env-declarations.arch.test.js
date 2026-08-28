@@ -239,3 +239,155 @@ test('#755: no dynamic env[...] read escapes the static guard', () => {
       + 'explicit exemption here:\n  ' + dynamic.join('\n  ')
   );
 });
+
+// ---------------------------------------------------------------------
+// #784: the mirror of the guard above. That guard catches an undeclared
+// key being *read*; this one catches a declared key that is never read
+// anywhere -- an operator sets it, sees config/env.js accept it, and the
+// value goes nowhere. A key counts as "read" here through any of: an
+// `env.NAME` property read via a followable binding (reusing the
+// collector above), a name pulled directly out of a destructured
+// `const { NAME } = require(...)` binding, or a direct `process.env.NAME`
+// / `process.env['NAME']` read anywhere else in the backend.
+// ---------------------------------------------------------------------
+
+// Names read off a followable config/env binding: `env.NAME` through a
+// simple binding, or `NAME` pulled directly out of a destructured one.
+// This reuses the same collector the forward guard above uses, walked
+// once more here to build the *read* side of the key set rather than to
+// check it against DECLARED_KEYS.
+function envModuleReadKeys() {
+  const names = new Set();
+  for (const { file, content } of filesRequiringEnv()) {
+    const binding = envBinding(file, content);
+    if (!binding) continue;
+    if (binding.type === 'simple') {
+      for (const name of staticReads(content, binding.name)) names.add(name);
+    } else {
+      for (const name of binding.names) names.add(name);
+    }
+  }
+  return names;
+}
+
+const PROCESS_ENV_DOT = /process\.env\.([A-Za-z_][\w$]*)/g;
+const PROCESS_ENV_BRACKET = /process\.env\[\s*['"]([^'"]+)['"]\s*\]/g;
+
+// A direct `process.env.NAME` / `process.env['NAME']` read, anywhere
+// under api/backend -- this walk already covers scripts/ and
+// src/scripts/, since both sit under BACKEND_ROOT the same as src/ does
+// -- except config/env.js itself.
+//
+// Excluding env.js here is load-bearing, not incidental: every declared
+// key matches `process.env.NAME` inside its own declaration line, so
+// scanning env.js would make DECLARED_KEYS a subset of readKeys by
+// construction and this guard would pass unconditionally forever, having
+// proven nothing. That is this test's version of a confident zero.
+//
+// Only .js files are walked (see `walk()` above), so a compose file, a
+// Dockerfile, or a `.env*` example is never a source of a "read" here.
+// Those are advertisement, not consumption: a key named in
+// .env.docker.example but never touched by application code is exactly
+// the defect this guard exists to catch, and letting the example file
+// vouch for its own key would make the guard certify that deception
+// instead of catching it.
+function processEnvSweep() {
+  const names = new Set();
+  const scanned = [];
+  for (const file of walk(BACKEND_ROOT)) {
+    if (file === ENV_MODULE) continue;
+    const content = fs.readFileSync(file, 'utf8');
+    let found = false;
+    for (const match of content.matchAll(PROCESS_ENV_DOT)) {
+      names.add(match[1]);
+      found = true;
+    }
+    for (const match of content.matchAll(PROCESS_ENV_BRACKET)) {
+      names.add(match[1]);
+      found = true;
+    }
+    if (found) scanned.push(relative(file));
+  }
+  return { names, scanned };
+}
+
+// Keys that are genuinely read nowhere and are therefore real defects --
+// NOT accepted patterns. Each entry names the open issue that carries it,
+// and exists only so this guard can stay green while the remedy is
+// decided. Delete the entry when the issue closes; do not add one
+// without filing first.
+//
+// All three carried by #874, verified with `git grep -n -I` the day this
+// guard was added:
+//
+// - FHIR_READ_MODE: one occurrence repo-wide -- its own declaration. The
+//   'fhir-first' strategy it names exists nowhere else in code.
+// - API_URL: two occurrences -- its declaration and .env.docker.example.
+//   Nothing consumes it.
+// - AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: its declaration,
+//   .env.docker.example, and compose.test.yml (set to empty). No JS reads
+//   it. Its sibling AUDIT_EXTERNAL_WITNESS_URL IS read (by
+//   src/services/audit-witness.service.js and
+//   scripts/audit-e2e-real.js), so the witness call is wired and the
+//   signature check on it is the part left undone.
+const READ_EXEMPT = new Set([
+  'FHIR_READ_MODE',
+  'API_URL',
+  'AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY',
+]);
+
+test('#784: every declared key in config/env.js is read somewhere', () => {
+  const readKeys = new Set([...envModuleReadKeys(), ...processEnvSweep().names]);
+
+  const offenders = [...DECLARED_KEYS].filter(
+    (key) => !readKeys.has(key) && !READ_EXEMPT.has(key)
+  );
+
+  assert.deepEqual(
+    offenders,
+    [],
+    'These keys are declared in config/env.js but read nowhere -- an '
+      + 'operator sets them, sees env.js accept them, and the value goes '
+      + 'nowhere. Either wire up a reader, remove the declaration, or add a '
+      + 'filed exemption to READ_EXEMPT above:\n  ' + offenders.join('\n  ')
+  );
+});
+
+test('#784: the process.env read sweep still collects known readers', () => {
+  // The mirror image of #777's pin. #777's forward guard fails loud when
+  // it under-collects: keys look undeclared and the suite goes red. This
+  // inverse guard's read sweep fails the opposite way when it
+  // over-collects: an over-broad process.env matcher makes every key look
+  // read and the suite stays green forever, silently proving nothing. So
+  // this pin does not just assert the sweep is non-empty -- it names two
+  // real readers verified by hand this session and asserts a floor on the
+  // total file count, so a sweep that quietly narrows (down to zero, or
+  // to a trivial handful) is caught either way.
+  const { scanned } = processEnvSweep();
+
+  for (const name of [
+    'src/services/mqtt-telemetry.service.js',
+    'src/infrastructure/queue/TopologicalQuarantine.js',
+  ]) {
+    assert.ok(
+      scanned.includes(name),
+      `${name} reads process.env directly but the sweep did not collect it -- `
+        + `coverage has silently narrowed. Collected ${scanned.length} files.`
+    );
+  }
+
+  assert.ok(
+    scanned.length >= 20,
+    'Expected the process.env sweep to find at least 20 reading files, found '
+      + `${scanned.length} -- coverage may have silently narrowed.`
+  );
+});
+
+test('#784: the read-exemption set has not grown', () => {
+  // Growing this set is a review event, not a fix: each entry is a real
+  // defect carried by #874 until it is closed, not an accepted pattern to
+  // add to casually. A change to this number should come with a filed
+  // issue reference in the comment above, same convention as
+  // UNWRITTEN_KEY_EXEMPT in filter-keys.arch.test.js.
+  assert.equal(READ_EXEMPT.size, 3);
+});
