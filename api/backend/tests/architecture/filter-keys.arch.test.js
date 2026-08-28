@@ -398,6 +398,259 @@ function operatorFilterCallSites(content) {
   return sites;
 }
 
+// #849: Band A of the bare-identifier gap this file's own header names but
+// scopes out — `.find(query)`/`.findOne(filter)` where the argument is a
+// pre-built variable rather than a literal. A read-only survey (issue
+// #849) found ~67 such call sites in src/ and split them: ~41 are
+// statically resolvable within the *same function body* the call sits in,
+// in four shapes; the rest need cross-function tracing (a helper mutates
+// the object by computed key, a helper's return is passed straight in, or
+// a spread of a caller-supplied object) and stay out of scope, same as
+// this file's header already declines for the class as a whole. This is
+// the resolver for the 41 — deliberately narrow: it never leaves the
+// innermost enclosing function, and a variable whose origin isn't one of
+// the four shapes is silently Band B, not guessed at and not allowlisted.
+//
+// The four shapes, and why they collapse to two primitives:
+//   1. a plain object literal assigned to the variable (`const q = {...}`);
+//   2. that literal (often `{}`) later grown via `q.key = value` member
+//      writes;
+//   3. a ternary between two object literals, or a `let` + later bare
+//      reassignment — mechanically the same "variable = {...}" surface as
+//      shape 1, just found via a second branch (ternary) or a second,
+//      later match (reassignment) of the identical search;
+//   4. an array accumulator `.push()`-ed into, then wrapped as
+//      `{ $and: accumulator }` (or `$or`/`$nor`) — reports.routes.js's
+//      handleSamplesByPatient (`patientQueryParts`) is this shape in the
+//      wild, itself inside a ternary (shape 3), confirming shapes compose
+//      rather than needing separate code paths.
+// Primitive one: find every real `variable = ...` assignment (shapes 1/3)
+// via literalAssignmentsOf. Primitive two: find every `variable.key = ...`
+// member write (shape 2) via memberWritesOf. Shape 4 is primitive one
+// applied recursively — an operator key whose value is a bare identifier
+// (not an inline array, which operatorArrayKeys already reads) is resolved
+// one level further, into that identifier's own `.push({...})` sites, via
+// pushedObjectsOf.
+
+// A JS identifier can contain `$` (valid, if unusual — jQuery-style names),
+// which is a regex metacharacter. Every helper below builds a `RegExp` from
+// a variable name pulled out of source text, so it must be escaped first or
+// a `$`-containing name would silently corrupt the pattern it's spliced
+// into.
+function escapeForRegex(name) {
+  return name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Matches at the point `.find`/`.findOne` is called with a bare identifier
+// argument — `.find(query)`, `.findOne(filter)` — rather than an object
+// literal at the call site (FILTER_SPEC) or nested in one (FILTER_CALL_START).
+const FILTER_CALL_IDENTIFIER = /\.(?:find|findOne)\(\s*([A-Za-z_$][\w$]*)\s*[,)]/g;
+
+// The opening brace of a function-like construct: a `function` declaration
+// or expression (named or anonymous, sync or async), an arrow function, or
+// a method/class-method shorthand (`name(...) {}`, `get name() {}`) —
+// excluding the control-flow keywords (`if`/`for`/`while`/`switch`/`catch`/
+// `with`) that share the exact same `keyword (...) {` surface but are not a
+// function boundary. Known risk shared with this file's other brace-depth
+// regexes: a string/template literal/regex-literal containing one of these
+// shapes would misdirect it; none of the sites this file matches has one as
+// of this writing.
+const FUNCTION_OPEN = new RegExp(
+  [
+    String.raw`(?:async\s+)?function\b\s*(?:[A-Za-z_$][\w$]*\s*)?\([^)]*\)\s*\{`,
+    String.raw`(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{`,
+    String.raw`(?:async\s+)?(?:get\s+|set\s+|static\s+)?(?!if\b|for\b|while\b|switch\b|catch\b|with\b|function\b)\b[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{`
+  ].join('|'),
+  'g'
+);
+
+// Every function-like body in `content`, as `{ bodyStart, bodyEnd }` — the
+// indices just inside its braces. Spans nest and overlap freely; picking
+// the *innermost* one that contains a given index (enclosingFunctionBody,
+// below) is what turns this into a scope lookup.
+function functionSpans(content) {
+  const spans = [];
+  for (const match of content.matchAll(FUNCTION_OPEN)) {
+    const bodyStart = match.index + match[0].length;
+    const bodyEnd = matchingBrace(content, bodyStart);
+    if (bodyEnd === -1) continue;
+    spans.push({ bodyStart, bodyEnd });
+  }
+  return spans;
+}
+
+// The innermost function span containing `index` — deliberately spans-only,
+// not a real scope tree: an ordinary block (`if`/`for`/`while`/`try`) is not
+// a function boundary and is walked straight through, which is exactly what
+// lets shape 3's ternary/reassignment branches and shape 2's member writes
+// reach across one, the same as real JS scoping would.
+function enclosingFunctionBody(spans, index) {
+  let best = null;
+  for (const span of spans) {
+    if (span.bodyStart <= index && index <= span.bodyEnd) {
+      if (!best || span.bodyEnd - span.bodyStart < best.bodyEnd - best.bodyStart) best = span;
+    }
+  }
+  return best;
+}
+
+// Shapes 1 and 3: every real assignment `name = {...}` in `text` — a plain
+// object literal (shape 1), or a ternary between two object literals or a
+// bare reassignment (shape 3; a `const`/`let` prefix before `name` is not
+// part of the match, so an initial declaration and a later reassignment are
+// found the same way). `(?<![.=!<>])` keeps a member write (`obj.name =`)
+// from being misread as a declaration of `name`, and keeps `==`/`===`/`<=`/
+// `>=`/`!=` from being misread as an assignment. Returns one entry per
+// object literal found (two for a matched ternary), each spanning the
+// literal itself — including its braces, so blanking it removes it from the
+// written-field sweep entirely, the same "can't vouch for its own keys"
+// rule this file's other extractors already follow.
+function literalAssignmentsOf(name, text) {
+  const assignments = [];
+  const pattern = new RegExp(`(?<![.=!<>])\\b${escapeForRegex(name)}\\s*=(?!=)\\s*`, 'g');
+
+  for (const match of text.matchAll(pattern)) {
+    const i = match.index + match[0].length;
+    if (text[i] !== '{') {
+      // Shape 3's ternary: `cond ? { ... } : { ... }`. A ternary between
+      // anything other than two object literals isn't this shape and is
+      // left alone (Band B) — same as any other RHS that isn't `{`.
+      // Known risk: a condition itself containing `?` (e.g. optional
+      // chaining, `patient?.id ? {...} : {...}`) stops the `[^;{}?]*` scan
+      // early and this fails to match at all — under-collection, not a
+      // false read.
+      const ternary = /^[^;{}?]*\?\s*\{/.exec(text.slice(i));
+      if (!ternary) continue;
+
+      const firstOpen = i + ternary[0].length - 1; // the '{' itself
+      const firstClose = matchingBrace(text, firstOpen + 1);
+      if (firstClose === -1) continue;
+      assignments.push({ start: firstOpen, end: firstClose + 1, body: text.slice(firstOpen + 1, firstClose) });
+
+      const afterFirst = /^\s*:\s*\{/.exec(text.slice(firstClose + 1));
+      if (!afterFirst) continue;
+      const secondOpen = firstClose + 1 + afterFirst[0].length - 1;
+      const secondClose = matchingBrace(text, secondOpen + 1);
+      if (secondClose === -1) continue;
+      assignments.push({ start: secondOpen, end: secondClose + 1, body: text.slice(secondOpen + 1, secondClose) });
+      continue;
+    }
+
+    const close = matchingBrace(text, i + 1);
+    if (close === -1) continue;
+    assignments.push({ start: i, end: close + 1, body: text.slice(i + 1, close) });
+  }
+
+  return assignments;
+}
+
+// Shape 2: `name.key = value` member writes onto the filter variable
+// itself (typically after `const name = {}`). Scoped to `name` rather than
+// MEMBER_WRITE's blanket sweep, because MEMBER_WRITE exists to build the
+// generic *written-field* vocabulary (any `x.field = ...`, anywhere) —
+// here the question is narrower: which keys land on *this* filter variable
+// specifically. Only the key name is read; the value is not inspected, so
+// an operator member write (`query.$or = [...]`) reports the key `$or`
+// (filtered out downstream — an operator, not a field) without descending
+// into the array value, an accepted under-collection rather than a fifth
+// shape this issue didn't authorise.
+function memberWritesOf(name, text) {
+  const writes = [];
+  const pattern = new RegExp(`\\b${escapeForRegex(name)}\\.([A-Za-z_$][\\w$]*)\\s*=[^=]`, 'g');
+  for (const match of text.matchAll(pattern)) {
+    writes.push({ start: match.index, end: match.index + match[0].length, key: match[1] });
+  }
+  return writes;
+}
+
+// Shape 4's second half: every `accumulator.push({...})` call in `text` —
+// see resolveBareIdentifier for how the accumulator name itself is found.
+function pushedObjectsOf(name, text) {
+  const pushes = [];
+  const pattern = new RegExp(`\\b${escapeForRegex(name)}\\.push\\(\\s*\\{`, 'g');
+  for (const match of text.matchAll(pattern)) {
+    const open = match.index + match[0].length - 1; // the '{' itself
+    const close = matchingBrace(text, open + 1);
+    if (close === -1) continue;
+    pushes.push({ start: match.index, end: close + 1, body: text.slice(open + 1, close) });
+  }
+  return pushes;
+}
+
+// Resolves one bare-identifier `.find`/`.findOne` argument (`name`) using
+// `bodyText` — its innermost enclosing function's text, from the start of
+// that function up to the call site ("look backwards ... within the same
+// function body", #849). Returns `{ keys, blankSpans }`, or `null` if
+// `name` has no assignment and no member write anywhere in `bodyText` —
+// the caller treats `null` as Band B and skips the call site silently, per
+// #849's own scope: no cross-function tracing, no guessing.
+function resolveBareIdentifier(name, bodyText) {
+  const literals = literalAssignmentsOf(name, bodyText);
+  const writes = memberWritesOf(name, bodyText);
+  if (literals.length === 0 && writes.length === 0) return null; // Band B
+
+  const keys = [];
+  const blankSpans = [];
+
+  for (const literal of literals) {
+    blankSpans.push([literal.start, literal.end]);
+    keys.push(...keysIn(literal.body, SPEC_KEY));
+    keys.push(...operatorArrayKeys(literal.body, SPEC_KEY));
+
+    // Shape 4: an operator key whose value is a bare identifier (not an
+    // inline array — operatorArrayKeys just above already covers that
+    // case) is the array-accumulator idiom. Resolve it one level further.
+    for (const opMatch of literal.body.matchAll(/\$(?:and|or|nor)\s*:\s*([A-Za-z_$][\w$]*)\s*(?:,|$)/g)) {
+      for (const pushed of pushedObjectsOf(opMatch[1], bodyText)) {
+        blankSpans.push([pushed.start, pushed.end]);
+        keys.push(...keysIn(pushed.body, SPEC_KEY));
+        keys.push(...operatorArrayKeys(pushed.body, SPEC_KEY));
+      }
+    }
+  }
+
+  for (const write of writes) {
+    blankSpans.push([write.start, write.end]);
+    keys.push(write.key);
+  }
+
+  return { keys, blankSpans };
+}
+
+// #849: the call-site pass for Band A of the bare-identifier gap — see the
+// block comment above escapeForRegex. Unlike this file's other three site
+// producers, this one can legitimately find nothing to report for a given
+// call: that is not an error, it is exactly the Band B boundary #849 draws
+// (no cross-function tracing), so such a call is simply left out of the
+// returned list rather than added with zero keys.
+function bareIdentifierFilterSites(content) {
+  const spans = functionSpans(content);
+  const sites = [];
+
+  for (const match of content.matchAll(FILTER_CALL_IDENTIFIER)) {
+    const callStart = match.index;
+    const enclosing = enclosingFunctionBody(spans, callStart);
+    if (!enclosing) continue; // no enclosing function to search within — Band B
+
+    const bodyText = content.slice(enclosing.bodyStart, callStart);
+    const resolved = resolveBareIdentifier(match[1], bodyText);
+    if (!resolved) continue; // not one of the four shapes — Band B, skip silently
+
+    const blankSpans = resolved.blankSpans.map(([s, e]) => [enclosing.bodyStart + s, enclosing.bodyStart + e]);
+    const sourceSnippets = blankSpans.map(([s, e]) => content.slice(s, e).replace(/\s+/g, ' ')).join('; ');
+
+    sites.push({
+      start: callStart,
+      end: callStart + match[0].length,
+      keys: resolved.keys,
+      raw: `${content.slice(callStart, callStart + match[0].length).replace(/\s+/g, ' ')} <- ${sourceSnippets}`,
+      blankSpans
+    });
+  }
+
+  return sites;
+}
+
 // Returns { filterSites, writtenFields } from one pass over a source text.
 // The filter specs are blanked out before the write sweep runs, so a
 // filter's own keys never end up vouching for themselves.
@@ -443,6 +696,24 @@ function analyze(content) {
       raw: site.raw
     });
     stripped = stripped.slice(0, site.start) + ' '.repeat(site.end - site.start) + stripped.slice(site.end);
+  }
+
+  // #849: Band A of the bare-identifier gap — `.find(query)`/
+  // `.findOne(filter)` where the variable's origin is statically
+  // resolvable within its own function body (see the block comment above
+  // escapeForRegex). The span blanked here is not the call site itself (a
+  // bare identifier carries no keys of its own) but the *source*
+  // assignment(s)/member write(s) the keys were read from — the same
+  // "can't vouch for its own keys" rule, aimed at the actual literal.
+  for (const site of bareIdentifierFilterSites(content)) {
+    filterSites.push({
+      line: content.slice(0, site.start).split('\n').length,
+      keys: site.keys,
+      raw: site.raw
+    });
+    for (const [s, e] of site.blankSpans) {
+      stripped = stripped.slice(0, s) + ' '.repeat(e - s) + stripped.slice(e);
+    }
   }
 
   const writtenFields = new Set([
@@ -495,6 +766,28 @@ function sweepSource() {
   return { filterSites, writtenFields };
 }
 
+// Keys that are genuinely written nowhere in src/ and are therefore real
+// defects -- NOT accepted patterns. Each entry names the open issue that
+// carries it, and exists only so this guard can stay green while the
+// remedy is decided. Delete the entry when the issue closes; do not add
+// one without filing first.
+//
+// #862: dead $or legs. Their sibling legs are genuinely written, so these
+//   contribute nothing and remove nothing -- the searches are simply
+//   narrower than they read. Whether icdReference is a typo or a stub for
+//   unbuilt data is the open question.
+// #861: NOT a dead leg. `query.importJobID` is conjunctive, so passing
+//   ?importJobID= zeroes the whole result set of GET /api/results,
+//   silently. Kept here rather than deleted because deleting it would
+//   convert "returns nothing" into "silently ignores the parameter",
+//   which is #789's defect.
+const UNWRITTEN_KEY_EXEMPT = new Set([
+  'interface/routes/reports.routes.js:437:icdReference.ORPHA',
+  'interface/routes/reports.routes.js:523:icdReference.ORPHA',
+  'interface/routes/reports.routes.js:619:alertType',
+  'interface/routes/result.routes.js:77:importJobID'
+]);
+
 function offendersIn({ filterSites, writtenFields }) {
   const offenders = [];
   const retired = new Set(RETIRED_FILTER_KEYS);
@@ -514,6 +807,7 @@ function offendersIn({ filterSites, writtenFields }) {
       // sub-document's own shape is beyond a static sweep.
       const root = key.split('.')[0];
       if (!writtenFields.has(key) && !writtenFields.has(root)) {
+        if (UNWRITTEN_KEY_EXEMPT.has(`${site.file}:${site.line}:${key}`)) continue;
         offenders.push(`${site.file}:${site.line} filters on '${key}' — ${site.raw}`);
       }
     }
@@ -767,6 +1061,188 @@ test('#854: a key nested inside a $or/$and array is checked, not just the operat
   const offendersD = offendersInSynthetic(nestedOperators);
   assert.equal(offendersD.length, 1, 'the sweep does not recurse into an operator nested inside another operator');
   assert.match(offendersD[0], /retired key 'patientId'/);
+});
+
+test('#849: a .find()/.findOne() filter passed as a pre-built variable is resolved, Band A only', () => {
+  // #849: the shape this file's own header names but scopes out — a filter
+  // built into a `query`/`filter` variable before being handed to `.find`/
+  // `.findOne`, rather than written as (or nested in) an object literal at
+  // the call site. A read-only survey found ~41 such sites resolvable
+  // within a single function body, in four shapes; each is proven both
+  // ways below (a retired key through that shape IS flagged, a legitimate
+  // key through the same shape is NOT), plus one proof that a site outside
+  // all four shapes is left alone rather than guessed at.
+
+  // Shape 1: `const query = { ... };` — a plain object literal.
+  const shape1Retired = [
+    'const doc = { patientId: id, biomarkerType: "x" };', // legitimately written, elsewhere
+    'async function lookupConsent(id) {',
+    '  const query = { patientId: id };',
+    '  return consentsCollection.findOne(query);',
+    '}'
+  ].join('\n');
+
+  const offendersShape1 = offendersInSynthetic(shape1Retired);
+  assert.equal(offendersShape1.length, 1, 'the sweep no longer flags a retired key reaching the filter via a plain object-literal variable (shape 1)');
+  assert.match(offendersShape1[0], /retired key 'patientId'/);
+
+  const shape1Legit = [
+    'const doc = { participantId: id, biomarkerType: "x" };', // legitimately written, elsewhere
+    'async function lookupConsent(id) {',
+    '  const query = { participantId: id };',
+    '  return consentsCollection.findOne(query);',
+    '}'
+  ].join('\n');
+
+  assert.deepEqual(
+    offendersInSynthetic(shape1Legit),
+    [],
+    'the sweep flags a legitimate key reaching the filter via a plain object-literal variable (shape 1)'
+  );
+
+  // Shape 2: `const filter = {};` followed by `filter.key = value;` member
+  // writes.
+  const shape2Retired = [
+    'const doc = { organizationId: id };', // legitimately written, elsewhere
+    'async function lookupSensor(id) {',
+    '  const filter = {};',
+    '  filter.patientId = id;',
+    '  return sensorsCollection.findOne(filter);',
+    '}'
+  ].join('\n');
+
+  const offendersShape2 = offendersInSynthetic(shape2Retired);
+  assert.equal(offendersShape2.length, 1, 'the sweep no longer flags a retired key reaching the filter via a member write onto an empty object literal (shape 2)');
+  assert.match(offendersShape2[0], /retired key 'patientId'/);
+
+  const shape2Legit = [
+    'const doc = { organizationId: id };', // legitimately written, elsewhere
+    'async function lookupSensor(id) {',
+    '  const filter = {};',
+    '  filter.organizationId = id;',
+    '  return sensorsCollection.findOne(filter);',
+    '}'
+  ].join('\n');
+
+  assert.deepEqual(
+    offendersInSynthetic(shape2Legit),
+    [],
+    'the sweep flags a legitimate key reaching the filter via a member write onto an empty object literal (shape 2)'
+  );
+
+  // Shape 3, form a: a ternary between two object literals.
+  const shape3TernaryRetired = [
+    'const doc = { patientId: id, status: "x" };', // legitimately written, elsewhere
+    'async function lookupByScope(scoped, id) {',
+    '  const query = scoped ? { patientId: id } : {};',
+    '  return collection.findOne(query);',
+    '}'
+  ].join('\n');
+
+  const offendersShape3a = offendersInSynthetic(shape3TernaryRetired);
+  assert.equal(offendersShape3a.length, 1, 'the sweep no longer flags a retired key reaching the filter via a ternary between two object literals (shape 3)');
+  assert.match(offendersShape3a[0], /retired key 'patientId'/);
+
+  const shape3TernaryLegit = [
+    'const doc = { participantId: id, status: "x" };', // legitimately written, elsewhere
+    'async function lookupByScope(scoped, id) {',
+    '  const query = scoped ? { participantId: id } : {};',
+    '  return collection.findOne(query);',
+    '}'
+  ].join('\n');
+
+  assert.deepEqual(
+    offendersInSynthetic(shape3TernaryLegit),
+    [],
+    'the sweep flags a legitimate key reaching the filter via a ternary between two object literals (shape 3)'
+  );
+
+  // Shape 3, form b: `let query = {};` then a later bare reassignment —
+  // mechanically the same "variable = {...}" search as shape 1, just
+  // matched a second time, which is exactly what this proves.
+  const shape3ReassignRetired = [
+    'const doc = { patientId: id, status: "x" };', // legitimately written, elsewhere
+    'async function lookupReassigned(id) {',
+    '  let query = {};',
+    '  query = { patientId: id };',
+    '  return collection.findOne(query);',
+    '}'
+  ].join('\n');
+
+  const offendersShape3b = offendersInSynthetic(shape3ReassignRetired);
+  assert.equal(offendersShape3b.length, 1, 'the sweep no longer flags a retired key reaching the filter via a let + later reassignment (shape 3)');
+  assert.match(offendersShape3b[0], /retired key 'patientId'/);
+
+  const shape3ReassignLegit = [
+    'const doc = { participantId: id, status: "x" };', // legitimately written, elsewhere
+    'async function lookupReassigned(id) {',
+    '  let query = {};',
+    '  query = { participantId: id };',
+    '  return collection.findOne(query);',
+    '}'
+  ].join('\n');
+
+  assert.deepEqual(
+    offendersInSynthetic(shape3ReassignLegit),
+    [],
+    'the sweep flags a legitimate key reaching the filter via a let + later reassignment (shape 3)'
+  );
+
+  // Shape 4: an array accumulator `.push()`-ed into, then wrapped as
+  // `{ $and: accumulator }`. reports.routes.js's handleSamplesByPatient
+  // (`patientQueryParts`) is this exact shape in the wild, itself inside a
+  // ternary (shape 3) — shapes compose rather than needing separate code
+  // paths, which this also exercises indirectly via literalAssignmentsOf.
+  const shape4Retired = [
+    'const doc = { patientId: id, status: "x" };', // legitimately written, elsewhere
+    'async function buildAndFind(id) {',
+    '  const parts = [];',
+    '  parts.push({ patientId: id });',
+    '  parts.push({ status: "ACTIVE" });',
+    '  const query = { $and: parts };',
+    '  return collection.findOne(query);',
+    '}'
+  ].join('\n');
+
+  const offendersShape4 = offendersInSynthetic(shape4Retired);
+  assert.equal(offendersShape4.length, 1, 'the sweep no longer flags a retired key reaching the filter via a push()-ed array accumulator wrapped in $and (shape 4)');
+  assert.match(offendersShape4[0], /retired key 'patientId'/);
+
+  const shape4Legit = [
+    'const doc = { participantId: id, status: "x" };', // legitimately written, elsewhere
+    'async function buildAndFind(id) {',
+    '  const parts = [];',
+    '  parts.push({ participantId: id });',
+    '  parts.push({ status: "ACTIVE" });',
+    '  const query = { $and: parts };',
+    '  return collection.findOne(query);',
+    '}'
+  ].join('\n');
+
+  assert.deepEqual(
+    offendersInSynthetic(shape4Legit),
+    [],
+    'the sweep flags a legitimate key reaching the filter via a push()-ed array accumulator wrapped in $and (shape 4)'
+  );
+
+  // Band B, confirmed rather than assumed: a variable whose origin is a
+  // helper's return value — cross-function, none of the four shapes — must
+  // stay invisible to the whole guard, retired key and all. `fetchFilterFor`
+  // is deliberately not named `build...Query`, so #847's QUERY_BUILDER
+  // mechanism doesn't also catch it; this isolates #849's own resolver.
+  const bandBSkipped = [
+    'function fetchFilterFor(id) { return { patientId: id }; }', // retired key inside a helper — cross-function, Band B
+    'async function lookupViaHelper(id) {',
+    '  const query = fetchFilterFor(id);',
+    '  return collection.findOne(query);',
+    '}'
+  ].join('\n');
+
+  assert.deepEqual(
+    offendersInSynthetic(bandBSkipped),
+    [],
+    'a cross-function origin (Band B) is being resolved (or guessed at) rather than silently skipped'
+  );
 });
 
 test('#788: a filter spec does not vouch for its own keys', () => {
