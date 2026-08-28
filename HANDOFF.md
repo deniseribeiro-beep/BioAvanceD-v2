@@ -82,6 +82,12 @@ All on `DyeAllPies/dyeallpies-skills-pack`:
   CLOSED and the reflex was to comment on them anyway. `github-issues` has
   eight close cases and no disposition rule for a CLOSED search hit.
 
+- **#546 filed** — Dennis: remove the blocking-only bar’s residue and
+  `wrap-up`’s inflow framing. **The bar was already retired** (#527,
+  `1daad9a`, same day) but its text survives in five places, and that text
+  is what made this session withhold three findings. Carries the removal
+  list file-by-file, #521’s stranded "a sitting works the issues it files"
+  principle, and the ordering: **#523 → the removals → #526’s agent half.**
 **Do not park actionable work on a closed issue** (Dennis, this sitting) —
 reopen it instead. That is why #214 and #530 are open again.
 
