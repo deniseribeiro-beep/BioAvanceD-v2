@@ -1,7 +1,8 @@
 # HANDOFF
 
-**Written 2026-08-28. INTERIM — a regression run and one research agent were
-still in flight.** Re-derive counts before trusting them.
+**Written 2026-08-28. INTERIM — the session was still open when this was
+written, so more may have landed after it.** Everything below is verified as
+of writing; re-derive counts rather than trusting them.
 
 An orchestrated multi-issue sitting: a 10-issue queue worked with delegated
 agents, which then absorbed its own filings after two mid-session
