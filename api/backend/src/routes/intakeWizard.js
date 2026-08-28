@@ -329,7 +329,7 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
   return outcome;
 }
 
-const { CRITICAL_SENSOR_STATUSES, BLOCKED_EQUIPMENT_STATUSES } = require('../models/equipmentStatus');
+const { CRITICAL_SENSOR_STATUSES, isEquipmentReady } = require('../models/equipmentStatus');
 const BLOCKED_BOX_STATUSES = ['FULL', 'RETIRED', 'INACTIVE'];
 
 function normalizeString(value) {
@@ -625,7 +625,7 @@ async function isEquipmentReadyForContainer(db, freezer) {
 
   if (!equipment) return false;
   const status = normalizeString(equipment.status || equipment.maintenanceStatus || equipment.operationalStatus).toLowerCase();
-  return !status || !BLOCKED_EQUIPMENT_STATUSES.includes(status);
+  return isEquipmentReady(status);
 }
 
 /**

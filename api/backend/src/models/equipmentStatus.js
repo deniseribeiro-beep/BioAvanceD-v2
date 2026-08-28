@@ -38,8 +38,27 @@ const BLOCKED_EQUIPMENT_STATUSES = [
 
 const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
 
+// The subset of EQUIPMENT_STATUS that means "ready", lowercased to match
+// how read sites normalize incoming status values.
+const READY_EQUIPMENT_STATUSES = ['Calibrado', 'Active'].map((status) => status.toLowerCase());
+
+/**
+ * #867: the three readiness read sites used to ask "is this status in the
+ * blocked list?" — a deny-list, so any status EquipmentModel.validate does
+ * not recognise (e.g. 'operational') was treated as ready by default and
+ * then rejected by the model. This predicate is the fix: an allow-list, so
+ * a status is ready only if it is explicitly one of the ready members of
+ * EQUIPMENT_STATUS. Anything else — recognised-but-not-ready, or entirely
+ * unrecognised — is not ready.
+ */
+function isEquipmentReady(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  return READY_EQUIPMENT_STATUSES.includes(normalized);
+}
+
 module.exports = {
   EQUIPMENT_STATUS,
   BLOCKED_EQUIPMENT_STATUSES,
   CRITICAL_SENSOR_STATUSES,
+  isEquipmentReady,
 };

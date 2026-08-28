@@ -24,7 +24,7 @@ const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoA
 const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
 const { ObjectId } = require('mongodb');
 
-const { CRITICAL_SENSOR_STATUSES, BLOCKED_EQUIPMENT_STATUSES } = require('../models/equipmentStatus');
+const { CRITICAL_SENSOR_STATUSES, isEquipmentReady } = require('../models/equipmentStatus');
 
 const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadastro de amostra';
 // #470: imports the shared equipment-readiness constants (#774) — the
@@ -252,7 +252,7 @@ class SampleService {
       // #470: equipment.status must also be checked — existence alone isn't
       // readiness (mirrors intakeWizard.js's isEquipmentReadyForContainer).
       const equipmentStatus = String(equipment.status || equipment.maintenanceStatus || equipment.operationalStatus || '').trim().toLowerCase();
-      if (equipmentStatus && BLOCKED_EQUIPMENT_STATUSES.includes(equipmentStatus)) {
+      if (!isEquipmentReady(equipmentStatus)) {
         throw createSampleValidationError(`Equipamento vinculado à localização física não está operacional. Status atual: ${equipmentStatus}.`);
       }
 

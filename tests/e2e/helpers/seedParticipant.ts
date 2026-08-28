@@ -146,7 +146,7 @@ export async function seedStorageBoxLocation(): Promise<SeededStorageBox> {
 
   const equipmentResult = await db.collection('equipment').insertOne({
     equipmentID: containerID,
-    status: 'operational',
+    status: 'Active',
     createdAt: new Date(),
   });
   await db.collection('sensors').insertOne({
