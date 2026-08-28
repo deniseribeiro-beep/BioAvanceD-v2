@@ -33,13 +33,13 @@ class ResultWorker {
 
       if (ext === '.zip') {
         // Processa arquivo ZIP
-        await this.processZip(db, filePath, results, fhirResources);
+        await this.processZip(db, jobID, filePath, results, fhirResources);
       } else if (ext === '.raw') {
         // Processa arquivo RAW
         await this.processRaw(db, filePath, results, fhirResources);
       } else if (ext === '.csv') {
         // Processa arquivo CSV
-        await this.processCSV(db, filePath, results, fhirResources);
+        await this.processCSV(db, jobID, filePath, results, fhirResources);
       } else {
         throw new Error(`Formato de arquivo não suportado: ${ext}`);
       }
@@ -64,7 +64,7 @@ class ResultWorker {
   /**
    * Processa arquivo ZIP
    */
-  async processZip(db, filePath, results, fhirResources) {
+  async processZip(db, jobID, filePath, results, fhirResources) {
     return new Promise((resolve, reject) => {
       // validateEntrySizes: false — some zip writers (e.g. streamed
       // archives using data descriptors) report an uncompressedSize of 0
@@ -140,7 +140,7 @@ class ResultWorker {
                 }
                 entryHandled = true;
                 try {
-                  await this.processFile(db, tempPath, results, fhirResources);
+                  await this.processFile(db, jobID, tempPath, results, fhirResources);
                 } catch (error) {
                   results.errors.push({
                     error: `Erro ao processar ${entry.fileName}: ${error.message}`,
@@ -184,7 +184,7 @@ class ResultWorker {
   /**
    * Processa arquivo CSV
    */
-  async processCSV(db, filePath, results, fhirResources) {
+  async processCSV(db, jobID, filePath, results, fhirResources) {
     return new Promise((resolve, reject) => {
       const rows = [];
       fs.createReadStream(filePath)
@@ -195,7 +195,7 @@ class ResultWorker {
         .on('end', async () => {
           try {
             for (const row of rows) {
-              await this.processResultRow(db, row, results, fhirResources);
+              await this.processResultRow(db, jobID, row, results, fhirResources);
             }
             resolve();
           } catch (error) {
@@ -211,10 +211,10 @@ class ResultWorker {
   /**
    * Processa arquivo genérico
    */
-  async processFile(db, filePath, results, fhirResources) {
+  async processFile(db, jobID, filePath, results, fhirResources) {
     const ext = path.extname(filePath).toLowerCase();
     if (ext === '.csv') {
-      await this.processCSV(db, filePath, results, fhirResources);
+      await this.processCSV(db, jobID, filePath, results, fhirResources);
     } else if (ext === '.raw') {
       await this.processRaw(db, filePath, results, fhirResources);
     } else {
@@ -226,7 +226,7 @@ class ResultWorker {
   /**
    * Processa linha de resultado do CSV
    */
-  async processResultRow(db, row, results, fhirResources) {
+  async processResultRow(db, jobID, row, results, fhirResources) {
     results.total++;
 
     try {
@@ -266,6 +266,12 @@ class ResultWorker {
         createdAt: new Date(),
         updatedAt: new Date(),
       };
+
+      // #861: absent/undefined jobID (e.g. a result created outside an
+      // import job) must not write a junk importJobID field.
+      if (jobID) {
+        resultData.importJobID = jobID;
+      }
 
       const resultsCollection = db.collection('results');
       const result = await resultsCollection.insertOne(resultData);

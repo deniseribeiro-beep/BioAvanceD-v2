@@ -71,6 +71,44 @@ describe('ResultWorker.process — CSV path (processResultRow)', () => {
     expect(fhirService.resultToFHIR).toHaveBeenCalled();
   });
 
+  it('#861: persists importJobID on the inserted result when process() receives a job id', async () => {
+    vi.spyOn(fhirService, 'resultToFHIR').mockReturnValue({
+      observation: { id: 'obs-1b' },
+      diagnosticReport: { id: 'dr-1b' },
+    });
+
+    const sample = { _id: 'samp-1b', specimenId: 'SMP-001B' };
+    const db = makeDb({ sample });
+    const csvFile = writeCsv(['specimenId,testName,resultValue', 'SMP-001B,Glicose,95']);
+
+    await resultWorker.process(db, 'job-import-1', csvFile);
+    fs.unlinkSync(csvFile);
+
+    const resultsCollection = db.collection('results');
+    expect(resultsCollection.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ importJobID: 'job-import-1' })
+    );
+  });
+
+  it('#861: omits importJobID entirely when process() receives no job id', async () => {
+    vi.spyOn(fhirService, 'resultToFHIR').mockReturnValue({
+      observation: { id: 'obs-1c' },
+      diagnosticReport: { id: 'dr-1c' },
+    });
+
+    const sample = { _id: 'samp-1c', specimenId: 'SMP-001C' };
+    const db = makeDb({ sample });
+    const csvFile = writeCsv(['specimenId,testName,resultValue', 'SMP-001C,Glicose,95']);
+
+    await resultWorker.process(db, undefined, csvFile);
+    fs.unlinkSync(csvFile);
+
+    const resultsCollection = db.collection('results');
+    expect(resultsCollection.insertOne).toHaveBeenCalledTimes(1);
+    const insertedData = resultsCollection.insertOne.mock.calls[0][0];
+    expect(insertedData).not.toHaveProperty('importJobID');
+  });
+
   it('records a row error when required identifier fields are missing', async () => {
     const db = makeDb({ sample: null });
     const csvFile = writeCsv(['testName,resultValue', 'Glicose,95']);
@@ -535,7 +573,7 @@ describe('ResultWorker.process — ZIP path, yauzl-level failures (mocked)', () 
     vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {
       throw new Error('cleanup unlink failed');
     });
-    vi.spyOn(resultWorker, 'processFile').mockImplementation(async (db, filePath, results) => {
+    vi.spyOn(resultWorker, 'processFile').mockImplementation(async (db, jobID, filePath, results) => {
       results.total += 1;
       results.success += 1;
     });
