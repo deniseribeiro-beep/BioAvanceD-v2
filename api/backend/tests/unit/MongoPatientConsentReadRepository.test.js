@@ -91,12 +91,7 @@ describe('MongoPatientConsentReadRepository', () => {
       barcode: 'BC1',
       participantId: 'P1'
     });
-    expect(db.__patientsCollection.findOne).toHaveBeenCalledWith({
-      $or: [
-        { participantId: 'P1' },
-        { _id: 'P1' }
-      ]
-    });
+    expect(db.__patientsCollection.findOne).toHaveBeenCalledWith({ participantId: 'P1' });
     expect(db.__consentsCollection.findOne).toHaveBeenCalledWith({
       participantId: { $in: ['P1', 'patient-id-1'] },
       status: 'ACTIVE'
@@ -178,7 +173,11 @@ describe('MongoPatientConsentReadRepository', () => {
     expect(result).toEqual([]);
   });
 
-  it('looks up the patient via $or matching either participantId or _id', async () => {
+  // #850: this asserted the old two-leg $or. The `_id` leg was dead by
+  // construction -- PatientModel.create's allow-list omits `_id`, so every
+  // patient `_id` is an ObjectId and a string participantId cannot match it.
+  // The filter is now single-key, and this pins that exact shape.
+  it('looks up the patient by participantId alone, with no dead _id leg', async () => {
     const db = createDb({
       patients: { findOne: vi.fn().mockResolvedValue(null) }
     });
@@ -186,12 +185,10 @@ describe('MongoPatientConsentReadRepository', () => {
 
     await repo.enrichSamplesWithConsent([makeSample({ participantId: 'some-value' })]);
 
-    expect(db.__patientsCollection.findOne).toHaveBeenCalledWith({
-      $or: [
-        { participantId: 'some-value' },
-        { _id: 'some-value' }
-      ]
-    });
+    expect(db.__patientsCollection.findOne).toHaveBeenCalledWith({ participantId: 'some-value' });
+    expect(db.__patientsCollection.findOne).not.toHaveBeenCalledWith(
+      expect.objectContaining({ $or: expect.anything() })
+    );
   });
 
   it('filters the returned array down to only canAllocate=true entries (mixed accept/reject)', async () => {
@@ -201,7 +198,7 @@ describe('MongoPatientConsentReadRepository', () => {
     const db = createDb({
       patients: {
         findOne: vi.fn((query) => {
-          const target = query.$or[0].participantId;
+          const target = query.participantId;
           if (target === 'accept-me') {
             return Promise.resolve({ _id: acceptedPatientId, participantId: 'accept-me' });
           }
@@ -242,7 +239,7 @@ describe('MongoPatientConsentReadRepository', () => {
     const db = createDb({
       patients: {
         findOne: vi.fn((query) => {
-          const target = query.$or[0].participantId;
+          const target = query.participantId;
           if (target === 'A') return Promise.resolve({ _id: patientA, participantId: 'A' });
           if (target === 'B') return Promise.resolve({ _id: patientB, participantId: 'B' });
           if (target === 'C') return Promise.resolve({ _id: patientC, participantId: 'C' });

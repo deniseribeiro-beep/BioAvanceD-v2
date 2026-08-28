@@ -23,14 +23,17 @@ class MongoPatientConsentReadRepository {
       let consentValid = false;
       let consentMessage = '';
 
+      // #850: the `{ _id: participantId }` leg this $or used to carry was
+      // provably dead, not merely suspicious. Every patient insert path
+      // (patient.service, import.service, import-lgpd x2) goes through
+      // PatientModel.create, whose canonical field allow-list omits `_id`
+      // and throws 422 on any non-canonical field -- so every patient `_id`
+      // is a driver-generated ObjectId, and a string participantId can never
+      // equal one (Mongo does not coerce string to ObjectId in a filter).
+      // sample.routes.js:527 dropped the same leg for #788; this matches it.
       const participantId = String(sample?.participantId ?? '').trim();
       const patient = participantId
-        ? await patientsCollection.findOne({
-          $or: [
-            { participantId },
-            { _id: participantId }
-          ]
-        })
+        ? await patientsCollection.findOne({ participantId })
         : null;
 
       if (patient) {
