@@ -60,24 +60,69 @@ function walk(dir, out = []) {
   return out;
 }
 
-const REQUIRES_ENV = /require\(\s*['"][^'"]*config\/env['"]\s*\)/;
+// #863: the previous filter required the literal substring "config/env" in
+// the require() specifier, so a sibling import from inside src/config/
+// itself -- `require('./env')`, used by both collections.js and redis.js --
+// was invisible to this guard. Resolving each require() specifier against
+// the requiring file's own directory and comparing the resolved path to
+// ENV_MODULE is exact: it can't under-collect on a future '../env' or
+// '../../config/env', and can't over-collect on some unrelated './env'
+// module elsewhere that happens to share the name.
+const REQUIRE_CALL = /require\(\s*['"]([^'"]+)['"]\s*\)/g;
 
-// Captures the local binding: `const env = require('.../config/env')`.
-const ENV_BINDING = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*['"][^'"]*config\/env['"]\s*\)/;
+function resolvesToEnvModule(file, spec) {
+  if (!spec.startsWith('.')) return false;
+  let resolved = path.resolve(path.dirname(file), spec);
+  if (path.extname(resolved) === '') resolved += '.js';
+  return resolved === ENV_MODULE;
+}
 
-// A destructured import would read `const { FOO } = require('.../config/env')`,
-// which this guard cannot follow — asserted against separately below.
-const ENV_DESTRUCTURED = /(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*['"][^'"]*config\/env['"]\s*\)/;
+function requiresEnvModule(file, content) {
+  for (const match of content.matchAll(REQUIRE_CALL)) {
+    if (resolvesToEnvModule(file, match[1])) return true;
+  }
+  return false;
+}
 
 function filesRequiringEnv() {
   return [...walk(BACKEND_SRC), ...ROOT_ENTRYPOINTS]
     .filter((file) => file !== ENV_MODULE)
     .map((file) => ({ file, content: fs.readFileSync(file, 'utf8') }))
-    .filter(({ content }) => REQUIRES_ENV.test(content));
+    .filter(({ file, content }) => requiresEnvModule(file, content));
 }
 
 function relative(file) {
   return path.relative(path.resolve(__dirname, '../..'), file).replace(/\\/g, '/');
+}
+
+// Finds how a file binds config/env: either `const env = require(...)` (a
+// "simple" binding whose reads look like `env.NAME`), or a destructured
+// `const { NAME, ... } = require(...)` (#863: redis.js's shape, which pulls
+// six REDIS_* names directly into scope). Both are followable; anything
+// else -- a bare `require('./env')` with no assignment, a `require(...).X`
+// chain, etc. -- is not, and is reported by the "binding this guard can
+// follow" test below. Both regexes capture the require specifier too, so
+// the match is only accepted once it resolves to ENV_MODULE.
+const SIMPLE_BINDING = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g;
+const DESTRUCTURED_BINDING = /(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g;
+
+function envBinding(file, content) {
+  for (const match of content.matchAll(SIMPLE_BINDING)) {
+    if (resolvesToEnvModule(file, match[2])) {
+      return { type: 'simple', name: match[1] };
+    }
+  }
+  for (const match of content.matchAll(DESTRUCTURED_BINDING)) {
+    if (resolvesToEnvModule(file, match[2])) {
+      const names = match[1]
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .map((entry) => entry.split(':')[0].split('=')[0].trim());
+      return { type: 'destructured', names };
+    }
+  }
+  return null;
 }
 
 // Static `<binding>.NAME` reads. The negative lookbehind on `.` is what keeps
@@ -97,13 +142,20 @@ test('#755: every env.<NAME> read is declared in config/env.js', () => {
   const offenders = [];
 
   for (const { file, content } of filesRequiringEnv()) {
-    const bindingMatch = content.match(ENV_BINDING);
-    if (!bindingMatch) continue; // covered by the destructuring test below
-    const binding = bindingMatch[1];
+    const binding = envBinding(file, content);
+    if (!binding) continue; // covered by the "binding this guard can follow" test below
 
-    for (const name of staticReads(content, binding)) {
-      if (!DECLARED_KEYS.has(name)) {
-        offenders.push(`${relative(file)} reads ${binding}.${name}`);
+    if (binding.type === 'simple') {
+      for (const name of staticReads(content, binding.name)) {
+        if (!DECLARED_KEYS.has(name)) {
+          offenders.push(`${relative(file)} reads ${binding.name}.${name}`);
+        }
+      }
+    } else {
+      for (const name of binding.names) {
+        if (!DECLARED_KEYS.has(name)) {
+          offenders.push(`${relative(file)} destructures ${name} from config/env`);
+        }
       }
     }
   }
@@ -120,28 +172,31 @@ test('#755: every env.<NAME> read is declared in config/env.js', () => {
 test('#777: the guard still collects both root entrypoints', () => {
   // This guard's failure mode is under-collecting files, which is invisible
   // by construction -- a narrowed scope makes every other test here pass
-  // more easily. Pin the two root importers by name so a future refactor
-  // that moves or renames them fails loudly instead of silently shrinking
-  // coverage back to what #777 fixed.
+  // more easily. Pin the two root importers, plus the two #863 sibling
+  // importers inside src/config/ itself (the ones the literal-path filter
+  // could not see), by name so a future refactor that moves or renames any
+  // of them fails loudly instead of silently shrinking coverage back to
+  // what #777/#863 fixed.
   const collected = filesRequiringEnv().map(({ file }) => relative(file));
 
-  for (const name of ['app.js', 'server.js']) {
+  for (const name of ['app.js', 'server.js', 'src/config/collections.js', 'src/config/redis.js']) {
     assert.ok(
       collected.includes(name),
       `${name} imports config/env but the guard did not collect it -- `
-        + `coverage has silently narrowed (see #777). Collected `
+        + `coverage has silently narrowed (see #777/#863). Collected `
         + `${collected.length} files.`
     );
   }
 });
 
 test('#755: config/env is imported under a binding this guard can follow', () => {
-  // A destructured import (`const { FOO } = require('config/env')`) would take
-  // its reads out of the `env.NAME` shape the guard above matches, silently
-  // exempting that file. All 26 current importers use `const env = ...`; this
-  // fails if a future one does not, rather than quietly losing coverage.
+  // A simple binding (`const env = require(...)`) or a destructured one
+  // (`const { FOO } = require(...)`, #863) both keep every read of that
+  // import checkable. Anything else -- no assignment, a property chain off
+  // the require() call, a dynamic require -- takes its reads out of a shape
+  // this guard can follow, silently exempting that file.
   const unfollowable = filesRequiringEnv()
-    .filter(({ content }) => ENV_DESTRUCTURED.test(content) || !ENV_BINDING.test(content))
+    .filter(({ file, content }) => !envBinding(file, content))
     .map(({ file }) => relative(file));
 
   assert.deepEqual(
@@ -149,7 +204,8 @@ test('#755: config/env is imported under a binding this guard can follow', () =>
     [],
     'These files import config/env in a shape the undeclared-key guard cannot '
       + 'follow, so their reads are unchecked. Import it as '
-      + '`const env = require(...)`, or extend the guard:\n  '
+      + '`const env = require(...)` or `const { NAME } = require(...)`, or '
+      + 'extend the guard:\n  '
       + unfollowable.join('\n  ')
   );
 });
@@ -167,12 +223,11 @@ test('#755: no dynamic env[...] read escapes the static guard', () => {
   const dynamic = [];
 
   for (const { file, content } of filesRequiringEnv()) {
-    const bindingMatch = content.match(ENV_BINDING);
-    if (!bindingMatch) continue;
-    const binding = bindingMatch[1];
-    const pattern = new RegExp(`(?<!\\.)\\b${binding}\\s*\\[`, 'g');
+    const binding = envBinding(file, content);
+    if (!binding || binding.type !== 'simple') continue;
+    const pattern = new RegExp(`(?<!\\.)\\b${binding.name}\\s*\\[`, 'g');
     if (pattern.test(content)) {
-      dynamic.push(`${relative(file)} reads ${binding}[...]`);
+      dynamic.push(`${relative(file)} reads ${binding.name}[...]`);
     }
   }
 
