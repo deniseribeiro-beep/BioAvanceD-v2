@@ -9,6 +9,7 @@ const logger = require('../utils/logger');
 const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
 const { parseGroupFields } = require('../utils/importGroupFields');
+const { parseImportMapping } = require('../utils/importMapping');
 const {
   SPECIMEN_TYPES,
   SAMPLE_ORIGINS,
@@ -475,23 +476,25 @@ class ImportLGPDController {
       }
       const groupFields = parsedGroupFields.value;
 
-      let mapping = {};
-      if (req.body?.mapping) {
-        if (typeof req.body.mapping === 'string') {
-          try {
-            mapping = JSON.parse(req.body.mapping);
-          } catch (_) {
-            importLGPDService.cleanupFile(file.path);
-            return res.status(400).json({
-              success: false,
-              error: 'mapping inválido',
-              message: 'mapping deve ser um JSON válido'
-            });
-          }
-        } else {
-          mapping = req.body.mapping;
-        }
+      // #869: `mapping`'s values become document keys in
+      // ImportLGPDService#buildMappedPatientRow, so it gets the same
+      // boundary treatment #818 gave its groupFields sibling twelve lines
+      // up -- reject the whole payload here rather than relying on
+      // parsePatientRow's fixed return literal to drop stray keys further
+      // down. #837's 400-on-malformed behaviour is preserved: the reason
+      // codes differ, the response does not.
+      const parsedMapping = parseImportMapping(req.body?.mapping);
+      if (!parsedMapping.ok) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(400).json({
+          success: false,
+          error: 'mapping inválido',
+          message: parsedMapping.reason === 'malformed'
+            ? 'mapping deve ser um JSON válido'
+            : 'mapping deve ser um objeto de colunas para campos conhecidos'
+        });
       }
+      const mapping = parsedMapping.value;
 
       const fileBuffer = fs.readFileSync(file.path);
       const fileHashSHA256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');

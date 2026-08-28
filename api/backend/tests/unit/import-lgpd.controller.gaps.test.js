@@ -296,6 +296,67 @@ describe('import-lgpd.controller gaps', () => {
       );
     });
 
+    // #869: #837 fixed how a *malformed* mapping answers; it gave mapping no
+    // schema. The values of this object become document keys downstream
+    // (`mapped[targetField] = rawRow[sourceColumn]` in
+    // buildMappedPatientRow), which is the hazard #818 fixed for the
+    // groupFields sibling twelve lines above. Today only parsePatientRow's
+    // fixed return literal keeps an operator-shaped target from reaching a
+    // driver call -- an allowlist nothing states or tests. Reject at the
+    // boundary instead, the way groupFields does.
+    it('rejects an operator-shaped mapping target at the boundary (#869)', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const db = createDb();
+      const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
+      const req = {
+        app: { locals: { db } },
+        file,
+        body: { mapping: '{"Coluna":"$where"}' }
+      };
+      const res = createRes();
+
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      const importSpy = vi.spyOn(importLGPDService, 'importPatientsSmart').mockResolvedValue({
+        total: 0, success: 0, errors: []
+      });
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await controller.importPatientsSmart(req, res);
+
+      expect(importSpy).not.toHaveBeenCalled();
+      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, error: 'mapping inválido' })
+      );
+    });
+
+    it('rejects an operator-shaped mapping source column at the boundary (#869)', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const db = createDb();
+      const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
+      const req = {
+        app: { locals: { db } },
+        file,
+        body: { mapping: { $ne: 'patientName' } }
+      };
+      const res = createRes();
+
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      const importSpy = vi.spyOn(importLGPDService, 'importPatientsSmart').mockResolvedValue({
+        total: 0, success: 0, errors: []
+      });
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await controller.importPatientsSmart(req, res);
+
+      expect(importSpy).not.toHaveBeenCalled();
+      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
     it('logs a warning-status audit event and partial message when some rows fail', async () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
