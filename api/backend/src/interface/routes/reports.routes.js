@@ -403,7 +403,6 @@ async function handleSamplesByPatient(db, filters) {
       $or: [
         { orphaCode: cleanedOrpha },
         { orphaCode: toRegex(cleanedOrpha) },
-        { 'icdReference.ORPHA': toRegex(cleanedOrpha) },
         { diagnosticHypothesis: toRegex(cleanedOrpha) },
       ],
     });
@@ -499,7 +498,6 @@ async function handlePatient(db, filters) {
       $or: [
         { orphaCode: cleanedOrpha },
         { orphaCode: toRegex(cleanedOrpha) },
-        { 'icdReference.ORPHA': toRegex(cleanedOrpha) },
         { diagnosticHypothesis: toRegex(cleanedOrpha) },
       ],
     });
@@ -603,7 +601,6 @@ async function handleTemperature(db, filters, handlerOptions = {}) {
       $or: [
         { readingStatus: { $regex: 'critical|alert', $options: 'i' } },
         { severity: { $regex: 'critical|alert', $options: 'i' } },
-        { alertType: { $regex: 'critical', $options: 'i' } },
         { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
       ],
     });

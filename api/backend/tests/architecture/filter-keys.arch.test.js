@@ -772,19 +772,12 @@ function sweepSource() {
 // remedy is decided. Delete the entry when the issue closes; do not add
 // one without filing first.
 //
-// #862: dead $or legs. Their sibling legs are genuinely written, so these
-//   contribute nothing and remove nothing -- the searches are simply
-//   narrower than they read. Whether icdReference is a typo or a stub for
-//   unbuilt data is the open question.
 // #861: NOT a dead leg. `query.importJobID` is conjunctive, so passing
 //   ?importJobID= zeroes the whole result set of GET /api/results,
 //   silently. Kept here rather than deleted because deleting it would
 //   convert "returns nothing" into "silently ignores the parameter",
 //   which is #789's defect.
 const UNWRITTEN_KEY_EXEMPT = new Set([
-  'interface/routes/reports.routes.js:437:icdReference.ORPHA',
-  'interface/routes/reports.routes.js:523:icdReference.ORPHA',
-  'interface/routes/reports.routes.js:619:alertType',
   'interface/routes/result.routes.js:77:importJobID'
 ]);
 
