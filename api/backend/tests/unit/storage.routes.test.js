@@ -198,6 +198,432 @@ describe('storage.routes', () => {
       expect(res.body.message).toContain('não encontrada');
     });
   });
+
+  describe('GET /samples/search', () => {
+    it('sends the real $and/$or/$in/$exists filter to the samples collection (issue #856)', async () => {
+      const { router } = loadRoute();
+      const { capturedFilters } = createFilterCaptureStore();
+      // The mock's matcher does not evaluate `$regex` (see filter.factory's
+      // own doc comment), so a document seeded here can never actually
+      // surface in the response body no matter how well it matches the
+      // search term -- the repository always builds `new RegExp(term, 'i')`
+      // conditions for barcode/participantId/specimenId, and the matcher
+      // compares document values against the *stringified* RegExp instead
+      // of testing them. That is exactly why the filter itself, not the
+      // returned array, is the assertion that can actually catch a
+      // regression here.
+      const samples = createMatchingCollection(
+        [
+          { _id: 's-decoy', barcode: 'BR-2025-002', participantId: 'PARTICIPANT-2', specimenId: 'SPEC-2', specimenStatus: 'available', storageLocation: { boxId: 'box1' } },
+          { _id: 's1', barcode: 'BR-2025-001', participantId: 'PARTICIPANT-1', specimenId: 'SPEC-1', specimenStatus: 'available' },
+        ],
+        { capturedFilters, key: 'samples' }
+      );
+      const patients = createMatchingCollection([]);
+      const consents = createMatchingCollection([]);
+      const app = buildApp(router, {
+        collection: (name) => {
+          if (name === 'samples') return samples;
+          if (name === 'patients') return patients;
+          if (name === 'patientConsents') return consents;
+          return null;
+        },
+      });
+
+      const res = await request(app).get('/api/storage/samples/search?q=BR2025');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(capturedFilters.samples).toEqual({
+        $and: [
+          {
+            $or: [
+              { barcode: expect.any(RegExp) },
+              { participantId: expect.any(RegExp) },
+              { specimenId: expect.any(RegExp) },
+            ],
+          },
+          { specimenStatus: { $in: ['available', 'reserved'] } },
+          {
+            $or: [
+              { 'storageLocation.boxId': { $exists: false } },
+              { 'storageLocation.boxId': null },
+            ],
+          },
+        ],
+      });
+    });
+
+    it('returns 200 with an empty array and never touches the samples collection for a sub-2-character query', async () => {
+      const { router } = loadRoute();
+      const samples = createMatchingCollection([
+        { _id: 's1', barcode: 'BR-2025-001', specimenStatus: 'available' },
+      ]);
+      const app = buildApp(router, {
+        collection: (name) => (name === 'samples' ? samples : null),
+      });
+
+      const res = await request(app).get('/api/storage/samples/search');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data).toEqual([]);
+      expect(samples.find).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unauthenticated request with 401 before touching the database', async () => {
+      const { router } = loadRoute({ authImpl: unauthenticated });
+      const samples = createMatchingCollection([
+        { _id: 's1', barcode: 'BR-2025-001', specimenStatus: 'available' },
+      ]);
+      const app = buildApp(router, { collection: () => samples });
+
+      const res = await request(app).get('/api/storage/samples/search?q=BR2025');
+
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
+      expect(samples.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /sample/:sampleId', () => {
+    it('resolves barcode, box and path/fullHierarchy for a sample looked up by id', async () => {
+      const { router } = loadRoute();
+      const samples = createMatchingCollection([
+        // Same shape, different _id -- proves the lookup is keyed by _id
+        // rather than "whichever document was seeded first".
+        { _id: 'sample-decoy', barcode: 'BR-DECOY', storageLocation: { boxId: 'box1', boxName: 'Box A1-01', position: 'A1' } },
+        { _id: 'sample1', barcode: 'BR-2025-001', storageLocation: { boxId: 'box1', boxName: 'Box A1-01', position: 'A1' } },
+      ]);
+      const storagePaths = createMatchingCollection([
+        { boxId: 'box1', path: 'Freezer 1/Shelf 1/Rack A/Box A1-01', freezerId: 'freezer1', shelfId: 'shelf1', rackId: 'rack1' },
+      ]);
+      const app = buildApp(router, {
+        collection: (name) => (name === 'samples' ? samples : name === 'storagePaths' ? storagePaths : null),
+      });
+
+      const res = await request(app).get('/api/storage/sample/sample1');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.specimenId).toBe('sample1');
+      expect(res.body.data.barcode).toBe('BR-2025-001');
+      expect(res.body.data.box).toEqual({ boxId: 'box1', boxName: 'Box A1-01', position: 'A1' });
+      expect(res.body.data.path).toBe('Freezer 1/Shelf 1/Rack A/Box A1-01');
+      expect(res.body.data.fullHierarchy).toEqual({
+        freezerId: 'freezer1',
+        shelfId: 'shelf1',
+        rackId: 'rack1',
+        boxId: 'box1',
+      });
+    });
+
+    it('returns 404 SAMPLE_NOT_FOUND when no sample matches the given sampleId', async () => {
+      const { router } = loadRoute();
+      const samples = createMatchingCollection([
+        { _id: 'sample1', storageLocation: { boxId: 'box1', position: 'A1' } },
+      ]);
+      const app = buildApp(router, { collection: (name) => (name === 'samples' ? samples : null) });
+
+      const res = await request(app).get('/api/storage/sample/does-not-exist');
+
+      expect(res.status).toBe(404);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe('SAMPLE_NOT_FOUND');
+    });
+
+    it('rejects an unauthenticated request with 401 before touching the database', async () => {
+      const { router } = loadRoute({ authImpl: unauthenticated });
+      const samples = createMatchingCollection([
+        { _id: 'sample1', storageLocation: { boxId: 'box1', position: 'A1' } },
+      ]);
+      const app = buildApp(router, { collection: () => samples });
+
+      const res = await request(app).get('/api/storage/sample/sample1');
+
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
+      expect(samples.findOne).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /validate/:boxId/:position', () => {
+    it('reports an unoccupied position as available with box occupancy data', async () => {
+      const { router } = loadRoute();
+      const storageBoxes = createMatchingCollection([
+        { _id: 'box1', status: 'ACTIVE', name: 'Box A1-01', dimension: { rows: 2, cols: 2 }, occupancyGrid: {}, currentOccupancy: 0 },
+      ]);
+      const storagePaths = createMatchingCollection([]);
+      const app = buildApp(router, {
+        collection: (name) => (name === 'storageBoxes' ? storageBoxes : name === 'storagePaths' ? storagePaths : null),
+      });
+
+      const res = await request(app).get('/api/storage/validate/box1/A1');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.available).toBe(true);
+      expect(res.body.boxData).toEqual({
+        boxId: 'box1',
+        boxName: 'Box A1-01',
+        dimension: { rows: 2, cols: 2 },
+        currentOccupancy: 0,
+        capacity: 4,
+        availablePositions: 4,
+      });
+    });
+
+    // Survey claim under test: this answers 409, not 400, when the position
+    // is already occupied -- ValidateStoragePositionUseCase's controller
+    // maps every `!available` outcome (collision, bad format, out of
+    // bounds, box not found) to 409, not just the collision case.
+    it('answers 409 (not 400) with STORAGE_COLLISION when the position is already occupied', async () => {
+      const { router } = loadRoute();
+      const storageBoxes = createMatchingCollection([
+        { _id: 'box1', status: 'ACTIVE', name: 'Box A1-01', dimension: { rows: 2, cols: 2 }, occupancyGrid: { A1: 'sample-occupant' }, currentOccupancy: 1 },
+      ]);
+      const storagePaths = createMatchingCollection([]);
+      const app = buildApp(router, {
+        collection: (name) => (name === 'storageBoxes' ? storageBoxes : name === 'storagePaths' ? storagePaths : null),
+      });
+
+      const res = await request(app).get('/api/storage/validate/box1/A1');
+
+      expect(res.status).toBe(409);
+      expect(res.body.success).toBe(false);
+      expect(res.body.available).toBe(false);
+      expect(res.body.error).toBe('STORAGE_COLLISION');
+      expect(res.body.occupiedBySampleId).toBe('sample-occupant');
+    });
+
+    it('rejects an unauthenticated request with 401 before touching the database', async () => {
+      const { router } = loadRoute({ authImpl: unauthenticated });
+      const storageBoxes = createMatchingCollection([
+        { _id: 'box1', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, occupancyGrid: {} },
+      ]);
+      const app = buildApp(router, { collection: () => storageBoxes });
+
+      const res = await request(app).get('/api/storage/validate/box1/A1');
+
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
+      expect(storageBoxes.findOne).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /freezer/:freezerId/stats', () => {
+    it('returns rack occupancy stats, filtered on _id + containerType (issue #856)', async () => {
+      const { router } = loadRoute();
+      const { capturedFilters } = createFilterCaptureStore();
+      const storageContainers = createMatchingCollection(
+        [
+          // Same _id, wrong containerType -- must not be the container this
+          // resolves to. docs.find() picks the first match in array order,
+          // so if containerType were dropped from the filter this decoy
+          // (seeded first) would answer instead and leak its name below.
+          { _id: 'freezer1', containerType: 'RACK', name: 'Wrong Type Container' },
+          { _id: 'freezer1', containerType: 'FREEZER', name: 'Freezer 1', temperature: -80 },
+        ],
+        { capturedFilters, key: 'freezerStats' }
+      );
+      const storageBoxes = { aggregate: vi.fn().mockReturnValue({ toArray: async () => [] }) };
+      const app = buildApp(router, {
+        collection: (name) => (name === 'storageContainers' ? storageContainers : name === 'storageBoxes' ? storageBoxes : null),
+      });
+
+      const res = await request(app).get('/api/storage/freezer/freezer1/stats');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.freezerName).toBe('Freezer 1');
+      expect(res.body.data.rackStats).toEqual([]);
+      expect(res.body.data.aggregate).toEqual({
+        totalCapacity: 0,
+        totalOccupied: 0,
+        totalAvailable: 0,
+        occupancyPercent: 0,
+      });
+      expect(capturedFilters.freezerStats).toEqual({ _id: 'freezer1', containerType: 'FREEZER' });
+    });
+
+    // Survey claim under test: 404 when the id matches a container that
+    // exists but is not a FREEZER.
+    it('returns 404 FREEZER_NOT_FOUND when the id matches a non-FREEZER container', async () => {
+      const { router } = loadRoute();
+      const storageContainers = createMatchingCollection([
+        { _id: 'rack-only', containerType: 'RACK', name: 'Just a rack' },
+      ]);
+      const storageBoxes = { aggregate: vi.fn() };
+      const app = buildApp(router, {
+        collection: (name) => (name === 'storageContainers' ? storageContainers : name === 'storageBoxes' ? storageBoxes : null),
+      });
+
+      const res = await request(app).get('/api/storage/freezer/rack-only/stats');
+
+      expect(res.status).toBe(404);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe('FREEZER_NOT_FOUND');
+      expect(storageBoxes.aggregate).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unauthenticated request with 401 before touching the database', async () => {
+      const { router } = loadRoute({ authImpl: unauthenticated });
+      const storageContainers = createMatchingCollection([
+        { _id: 'freezer1', containerType: 'FREEZER', name: 'Freezer 1' },
+      ]);
+      const app = buildApp(router, { collection: () => storageContainers });
+
+      const res = await request(app).get('/api/storage/freezer/freezer1/stats');
+
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
+      expect(storageContainers.findOne).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /box/:boxId/integrity', () => {
+    it('reports valid:true with no errors when occupancyGrid matches sample records and the count', async () => {
+      const { router } = loadRoute();
+      const storageBoxes = createMatchingCollection([
+        { _id: 'box1', dimension: { rows: 2, cols: 2 }, currentOccupancy: 1, occupancyGrid: { A1: 'sample1' } },
+      ]);
+      const samples = createMatchingCollection([
+        { _id: 'sample1', storageLocation: { boxId: 'box1', position: 'A1' } },
+      ]);
+      const app = buildApp(router, {
+        collection: (name) => (name === 'storageBoxes' ? storageBoxes : name === 'samples' ? samples : null),
+      });
+
+      const res = await request(app).get('/api/storage/box/box1/integrity');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.valid).toBe(true);
+      expect(res.body.data.errors).toBeUndefined();
+      expect(res.body.data.stats).toEqual({
+        boxId: 'box1',
+        dimension: { rows: 2, cols: 2 },
+        capacity: 4,
+        currentOccupancy: 1,
+        actualOccupancy: 1,
+      });
+    });
+
+    // Survey claim under test: valid-but-inconsistent answers 400 (not 404
+    // or 409), success:false, with an errors array -- an orphaned position
+    // reference plus a currentOccupancy/actualOccupancy mismatch.
+    it('answers 400 with success:false and an errors array for an orphaned/miscounted box', async () => {
+      const { router } = loadRoute();
+      const storageBoxes = createMatchingCollection([
+        { _id: 'box2', dimension: { rows: 2, cols: 2 }, currentOccupancy: 2, occupancyGrid: { A1: 'sample-missing' } },
+      ]);
+      const samples = createMatchingCollection([]);
+      const app = buildApp(router, {
+        collection: (name) => (name === 'storageBoxes' ? storageBoxes : name === 'samples' ? samples : null),
+      });
+
+      const res = await request(app).get('/api/storage/box/box2/integrity');
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.data.valid).toBe(false);
+      expect(res.body.data.errors).toHaveLength(2);
+      expect(res.body.data.errors[0]).toContain('Orfão');
+      expect(res.body.data.errors[1]).toContain('Contagem incorreta');
+    });
+
+    it('rejects an unauthenticated request with 401 before touching the database', async () => {
+      const { router } = loadRoute({ authImpl: unauthenticated });
+      const storageBoxes = createMatchingCollection([
+        { _id: 'box1', dimension: { rows: 1, cols: 1 }, occupancyGrid: {} },
+      ]);
+      const app = buildApp(router, { collection: () => storageBoxes });
+
+      const res = await request(app).get('/api/storage/box/box1/integrity');
+
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
+      expect(storageBoxes.findOne).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /freezer/:freezerId/tree', () => {
+    it('resolves the freezer and its shelves from storageContainers via two distinct filters (issue #856)', async () => {
+      const { router } = loadRoute();
+      const { capturedFilters } = createFilterCaptureStore();
+      const storageContainers = createMatchingCollection(
+        [
+          // Same _id as the freezer, wrong containerType -- must not be
+          // picked as the freezer.
+          { _id: 'freezer1', containerType: 'RACK', name: 'Wrong Type Container' },
+          { _id: 'freezer1', containerType: 'FREEZER', name: 'Freezer 1', temperature: -80, temperatureUnit: 'CELSIUS', status: 'OPERATIONAL' },
+          // Right containerType (SHELF), wrong parent -- must not appear
+          // among freezer1's shelves.
+          { _id: 'shelf-wrong-parent', parent_id: 'other-freezer', containerType: 'SHELF', name: 'Shelf Elsewhere' },
+          // Right parent, wrong containerType (RACK) -- must not appear
+          // among freezer1's shelves either.
+          { _id: 'rack-under-freezer', parent_id: 'freezer1', containerType: 'RACK', name: 'Rack Directly Under Freezer' },
+        ],
+        { capturedFilters, key: 'storageContainers' }
+      );
+      const storageBoxes = {};
+      const app = buildApp(router, {
+        collection: (name) => (name === 'storageContainers' ? storageContainers : name === 'storageBoxes' ? storageBoxes : null),
+      });
+
+      const res = await request(app).get('/api/storage/freezer/freezer1/tree');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.freezerName).toBe('Freezer 1');
+      expect(res.body.data.shelves).toEqual([]);
+      expect(res.body.data.aggregateStats).toEqual({
+        totalShelves: 0,
+        totalRacks: 0,
+        totalBoxes: 0,
+        totalCapacity: 0,
+        totalOccupied: 0,
+        totalAvailable: 0,
+        occupancyPercent: 0,
+      });
+
+      // capturedFilters keeps only the LAST filter recorded per key on this
+      // collection, and this route issues two distinct storageContainers
+      // filters (freezer findOne, then shelves find) -- .mock.calls is what
+      // reaches both.
+      expect(storageContainers.findOne.mock.calls[0][0]).toEqual({ _id: 'freezer1', containerType: 'FREEZER' });
+      expect(storageContainers.find.mock.calls[0][0]).toEqual({ parent_id: 'freezer1', containerType: 'SHELF' });
+    });
+
+    it('returns 404 FREEZER_NOT_FOUND when the id matches a non-FREEZER container', async () => {
+      const { router } = loadRoute();
+      const storageContainers = createMatchingCollection([
+        { _id: 'rack-only', containerType: 'RACK', name: 'Just a rack' },
+      ]);
+      const app = buildApp(router, { collection: (name) => (name === 'storageContainers' ? storageContainers : null) });
+
+      const res = await request(app).get('/api/storage/freezer/rack-only/tree');
+
+      expect(res.status).toBe(404);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe('FREEZER_NOT_FOUND');
+    });
+
+    it('rejects an unauthenticated request with 401 before touching the database', async () => {
+      const { router } = loadRoute({ authImpl: unauthenticated });
+      const storageContainers = createMatchingCollection([
+        { _id: 'freezer1', containerType: 'FREEZER', name: 'Freezer 1' },
+      ]);
+      const app = buildApp(router, { collection: () => storageContainers });
+
+      const res = await request(app).get('/api/storage/freezer/freezer1/tree');
+
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
+      expect(storageContainers.findOne).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // #859: storage.routes.js applied `router.use(authenticate)` and then
