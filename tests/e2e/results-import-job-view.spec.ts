@@ -29,6 +29,16 @@ import { realLogin, seedRealAuth } from './helpers/realAuth';
 // `if (jobID)` guard above is a safeguard added alongside that fix, not
 // the defect itself.) It pins the
 // reader and the button, not the writer. Do not overstate what it covers.
+// *** THE UI HALF IS CURRENTLY RED IN A FULL-SUITE RUN -- SEE #889. ***
+// Assertions 1-3 (API-level) pass everywhere and prove the filter narrows.
+// The final table-row count fails ONLY in a full-suite run, never in
+// isolation: the URL gains importJobID (the assertion above it passes), the
+// results collection holds exactly this spec's 3 documents, useResults
+// correctly depends on [importJobID] -- and the table still renders all 3
+// for the full 5s timeout. Root cause not established; do NOT weaken the
+// count assertion to make this green, because the exact count is the only
+// thing proving the view narrows rather than merely rendering everything.
+
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
 const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
