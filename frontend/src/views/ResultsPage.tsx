@@ -48,21 +48,35 @@ export default function ResultsPage() {
   const loadImportJobs = async () => {
     try {
       const response = await importService.listJobs({ limit: 20 });
-      // Backend retorna { success: true, data: [] }
-      // Axios já extrai o body, então response.data é { success: true, data: [] }
+      // #895: GET /api/import/jobs returns { success, data: { jobs, total, limit,
+      // skip } } -- see import-async.controller.js. Axios unwraps the HTTP body,
+      // so the array lives at response.data.data.jobs.
+      //
+      // The three fallbacks below are kept for older/other response shapes, but
+      // the canonical one MUST come first: response.data.data is a non-array
+      // object here, so the old `Array.isArray(response.data.data)` branch fell
+      // through to `jobs = []` on every single call. The page therefore rendered
+      // "no imports yet" unconditionally and the per-job "Ver" button -- the only
+      // entry point to the importJobID flow (#861, #889) -- could never appear.
       let jobs: ImportJob[] = [];
       if (response.data) {
-        if (Array.isArray(response.data)) {
-          // Se response.data já é um array (caso direto)
+        if (response.data.data?.jobs && Array.isArray(response.data.data.jobs)) {
+          // Canonical: { success, data: { jobs: [] } }
+          jobs = response.data.data.jobs;
+        } else if (Array.isArray(response.data)) {
           jobs = response.data;
         } else if (response.data.data && Array.isArray(response.data.data)) {
-          // Se response.data é { success: true, data: [] }
           jobs = response.data.data;
         } else if (response.data.jobs && Array.isArray(response.data.jobs)) {
-          // Se response.data é { jobs: [] }
           jobs = response.data.jobs;
         } else {
-          // Se não for array, assume que é um objeto vazio ou estrutura diferente
+          // #895: never fail silently again. An unrecognised shape is a bug, and
+          // an empty list is indistinguishable from "no imports yet" to a user.
+          console.error(
+            '[ResultsPage] Unrecognised /api/import/jobs response shape; ' +
+            'import history will render empty. Received keys:',
+            Object.keys(response.data ?? {})
+          );
           jobs = [];
         }
       }

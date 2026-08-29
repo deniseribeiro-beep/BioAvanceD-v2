@@ -166,7 +166,13 @@ test.describe('Results page import-job filter (#889 Part A)', () => {
 
     const jobItem = page.locator('.job-item', { hasText: fileName });
     await expect(jobItem).toBeVisible();
-    await jobItem.getByRole('button', { name: /ver/i }).click();
+    // Selected structurally, NOT by accessible name. The label is translated --
+    // pt-BR 'Ver', en-US 'View', es-ES 'Ver' (i18n key results.view) -- and the
+    // test browser renders en-US, so a /ver/i matcher silently finds nothing
+    // against "View". Within a completed job item the view action is the only
+    // variant="primary" Button (the sibling "Relatório" is secondary), so
+    // .btn-primary identifies it in any locale.
+    await jobItem.locator('button.btn-primary').click();
 
     await expect(page).toHaveURL(new RegExp(`importJobID=${jobID}`));
 
