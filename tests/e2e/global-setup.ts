@@ -88,7 +88,16 @@ const CONCURRENCY = 4;
 // mirrored here is silently left cold -- and the symptom is #819's, which by
 // then reads as 'already fixed' and gets misattributed. This does not verify
 // the paths (it cannot; the params are placeholders), only that nobody added a
-// lazy chunk without considering the warm list. Best-effort: if App.tsx is not
+// lazy chunk without considering the warm list.
+//
+// The equality is a TRIPWIRE, not a semantic invariant, and it is worth knowing
+// why before trusting it. There are 40 lazy chunks, not 39: App.tsx declares 39
+// and foundation/FoundationApp.tsx nests one more (IntakeWizardPage). The counts
+// line up anyway because three App.tsx chunks each serve two route paths
+// (SampleDetailsPage, MFASetupPage, TcleBuilderPage), freeing the slots that
+// '/next/warmup' and '/next/intake' occupy. So a future change could keep the
+// counts equal while leaving a chunk cold. It still fires on the common case --
+// somebody adds a route and does not touch this list. Best-effort: if App.tsx is not
 // readable -- e.g. inside playwright-runner, where the frontend source may not
 // be present -- the check is skipped rather than failing the run.
 function warnIfWarmListDrifted(): void {
