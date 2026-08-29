@@ -9,6 +9,7 @@ import { useEquipment } from '../hooks/useEquipment';
 import { useAnalysisTypes } from '../hooks/useAnalysisTypes';
 import { useAuth } from '../contexts/AuthContext';
 import { resultService, equipmentService } from '../services/api';
+import { extractResponseItems } from '../api/response.adapters';
 import { Sample, Equipment } from '../types/models';
 import { ANALYSIS_METHODS } from '../constants/labOptions';
 
@@ -61,7 +62,15 @@ export default function AnalysisUploadModal({
     try {
       setLoadingAnalyticalEquipment(true);
       const response = await equipmentService.getAnalytical();
-      setAnalyticalEquipment(Array.isArray(response.data) ? response.data : []);
+      // #898: the backend wraps this list in a { success, data } envelope,
+      // not a bare array — unwrap it the same way the rest of the app does
+      // (see response.adapters.ts) instead of assuming the array shape.
+      const payload: any = response?.data;
+      const isRecognisedShape = Array.isArray(payload) || Array.isArray(payload?.data);
+      if (!isRecognisedShape) {
+        console.error('Formato de resposta inesperado para equipamentos analíticos:', payload);
+      }
+      setAnalyticalEquipment(extractResponseItems<Equipment>(response));
     } catch (err: any) {
       console.error('Erro ao carregar equipamentos analíticos:', err);
       setAnalyticalEquipment([]);
