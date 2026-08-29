@@ -97,14 +97,6 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-
-    // #819: the first spec to hit a lazy-loaded route on a cold Vite dev
-    // server can fail on the on-demand compile. Warm this route once so a
-    // compile stall cannot masquerade as a missing element inside a test.
-    const page = await browser.newPage();
-    await page.goto('/patient/e-consent/warmup', { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(1_000);
-    await page.close();
   });
 
   test.afterAll(async () => {

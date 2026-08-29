@@ -66,15 +66,6 @@ test.describe('RF010 bulk consent-token page (/patients/:id/consent?token=) -- r
       updatedAt: new Date(),
     });
     templateId = inserted.insertedId.toString();
-
-    // #819: the first spec to hit a lazy-loaded route on a cold Vite dev
-    // server can fail on the on-demand compile, and this route is lazy. Warm
-    // it once here so a compile stall cannot masquerade as a missing element
-    // inside a test.
-    const page = await browser.newPage();
-    await page.goto('/patients/00000000/consent?token=warmup', { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(1_000);
-    await page.close();
   });
 
   test.afterAll(async () => {

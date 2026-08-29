@@ -1,4 +1,5 @@
 const express = require('express');
+const { randomUUID } = require('crypto');
 const { ObjectId } = require('mongodb');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requireRole } = require('../../infrastructure/middleware/rbac');
@@ -60,7 +61,24 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
 
       const payload = {
         ...req.body,
-        [idField]: req.body?.[idField] ?? Date.now(),
+        // #896/#876: randomUUID(), not Date.now(). Settled by the canonical
+        // dictionary rather than by inference -- dict-02 ELM-0298 types
+        // ReagentLot.reagentId as `uuid`, and near every other entity's
+        // identifier in that table is `uuid` too. An epoch millisecond is not
+        // the specified shape.
+        //
+        // The bare Date.now() also emitted a NUMBER, which every consumer
+        // rejects: Assay.js:86 answers `reagentLotIds deve conter apenas
+        // strings nao vazias`, i.e. two e2e gate failures. Several of these
+        // models (ReagentLot.js:43 among them) already default to
+        // randomUUID() on their own -- this fallback was pre-empting the
+        // model's correct, dict-02-aligned default with a wrong-typed value.
+        //
+        // Backward compatible: buildIdQuery above $or's over BOTH a numeric
+        // and a string idField, so rows already written with an epoch number
+        // keep resolving. Nothing sorts or compares these numerically (the
+        // list route sorts on createdAt/_id).
+        [idField]: req.body?.[idField] ?? randomUUID(),
       };
       const validation = model.validate(payload);
       if (!validation.isValid) {
