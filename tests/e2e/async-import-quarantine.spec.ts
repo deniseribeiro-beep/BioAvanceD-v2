@@ -16,30 +16,32 @@ import { realLogin } from './helpers/realAuth';
 // Mongo directly, because the observable that matters is the persisted
 // quarantine, not the API's own response.
 //
-// *** CURRENTLY RED, AND DELIBERATELY SO -- NOW BLOCKED ON #828. ***
+// *** GREEN as of 2026-08-29. Was deliberately red on two upstream blockers. ***
 //
-// The quarantine code this exercises is unit-proven (the '#813 quarantine of
-// rejected rows' block in batch-validation-engine.service.test.js, 24/24,
-// written red-first including the wiring test). What fails here is upstream
-// of it, and there turned out to be two blockers, not one:
+// The quarantine code this exercises was always unit-proven (the '#813
+// quarantine of rejected rows' block in batch-validation-engine.service.test.js,
+// 24/24, written red-first including the wiring test). What failed was upstream
+// of it, twice over:
 //
 //   1. #826 -- the worker process had no Mongoose connection, so the first
 //      StagingImport read/write buffered and timed out after 10s. FIXED
-//      (8c707744): the worker now logs "[ISO20387][MONGODB] Conexão
-//      estabelecida" and processBatchImport's StagingImport.findOne resolves.
-//   2. #828 -- OPEN. The upload is handed from the API process to the worker
-//      as a filesystem *path*, but they are separate containers with no
-//      shared volume, so the worker's fs.existsSync(storagePath) fails and
-//      the job dies at batch-validation-engine.service.js:932 with "Arquivo
-//      bruto do staging não encontrado" -- then retries forever, exactly as
-//      before. Confirmed 2026-08-27 by `docker exec` on both containers: the
-//      CSV is in backend-app-test's /app/uploads/staging-imports, and that
-//      directory does not exist at all in worker-test.
+//      (8c707744).
+//   2. #828 -- the upload was handed from the API process to the worker as a
+//      filesystem *path*, but they are separate containers and neither declared
+//      any volumes, so the worker's fs.existsSync(storagePath) failed and the
+//      job died at batch-validation-engine.service.js:932 with "Arquivo bruto
+//      do staging nao encontrado". FIXED (9ce27678): compose.test.yml now
+//      mounts one named volume at /app/uploads on both backend-app-test and
+//      worker-test.
 //
-// Do NOT weaken these assertions or skip the spec to get a green run -- the
-// failure is the proof of #828, the same way tcle-dinamico.spec.ts's RF010
-// AC#2 test is left red as the proof of its own gap. Once #828 lands, this
-// should pass unchanged; if it does not, that is a real #813 regression.
+// Both halves of this spec passed in the 2026-08-29 full gate (219 passed / 1
+// skipped / 0 failed, --workers=1, fresh volumes, full 17-service bootstrap).
+//
+// Do NOT weaken these assertions. They are now the regression proof for #828's
+// volume as well as for #813's quarantine -- if the volume is ever removed (and
+// it should be, once the bytes are stored via the storageType discriminator
+// rather than a shared filesystem), this is what will catch a path-based
+// handoff silently returning.
 //
 // Note for whoever lands #828: the poll below declares a 60s timeout but the
 // Playwright test timeout is 30s, so it can never use its stated budget --

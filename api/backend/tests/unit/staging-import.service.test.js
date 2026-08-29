@@ -221,9 +221,14 @@ describe('staging-import.service', () => {
         {
           jobId: 'job-99',
           removeOnComplete: true,
-          removeOnFail: false,
         }
       );
+
+      // #900: removeOnFail must NOT be passed, so config/queue.js's 7-day
+      // retention applies instead of bullmq's keep-forever. Asserted
+      // explicitly because the object equality above would still pass if a
+      // future edit reintroduced it as `undefined`.
+      expect(addSpy.mock.calls[0][2]).not.toHaveProperty('removeOnFail');
 
       expect(updateOneSpy).toHaveBeenCalledTimes(1);
       const [filterArg, updateArg] = updateOneSpy.mock.calls[0];

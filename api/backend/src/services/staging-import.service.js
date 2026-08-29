@@ -83,7 +83,17 @@ class StagingImportService {
       {
         jobId: stagingImport.jobId,
         removeOnComplete: true,
-        removeOnFail: false,
+        // #900: removeOnFail was `false`, which bullmq reads as keep-forever
+        // ({count: -1}) and which overrode config/queue.js's 7-day retention.
+        // Nothing consumed it: no bull-board/arena is installed and nothing in
+        // src/ reads failed jobs -- the only failed-job reference is a
+        // getJobCounts health probe. The sibling NotificationService queue
+        // chose bounded retention for itself, the option carried no comment or
+        // issue number in a file that annotates every deliberate option
+        // choice, and the durable failure record now lives on
+        // StagingImport.importErrors (which only started working in 058bbd39).
+        // Omitting the key restores the queue default: failures are retained
+        // 7 days, which still covers manual redis-cli inspection.
       }
     );
 
