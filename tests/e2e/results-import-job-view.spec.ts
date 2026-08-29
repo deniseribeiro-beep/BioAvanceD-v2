@@ -6,7 +6,7 @@ import { realLogin, seedRealAuth } from './helpers/realAuth';
 // #889 Part A -- Results page import-job filter.
 //
 // ResultsPage.tsx renders a "Ver" button per completed import job
-// (~line 179) that sets `importJobID` on the query string; useResults()
+// (~lines 189-198) that sets `importJobID` on the query string; useResults()
 // reads that param and calls GET /api/results?importJobID=<id>, which
 // result.routes.js's GET / handler (~lines 73-74) narrows on only when the
 // query param is present. This spec pins that reader + the button's wiring
@@ -176,6 +176,14 @@ test.describe('Results page import-job filter (#889 Part A)', () => {
 
     const jobItem = page.locator('.job-item', { hasText: fileName });
     await expect(jobItem).toBeVisible();
+
+    // Pre-state: before narrowing, the unfiltered table renders all three
+    // seeded rows (the two tagged + the control). This makes the count
+    // assertion below an explicit 3 -> 2 narrowing proof, not just a bare
+    // count with no baseline.
+    const unfilteredTableRows = page.locator('.results-table-card table tbody tr');
+    await expect(unfilteredTableRows).toHaveCount(3);
+
     // Selected structurally, NOT by accessible name. The label is translated --
     // pt-BR 'Ver', en-US 'View', es-ES 'Ver' (i18n key results.view) -- and the
     // test browser renders en-US, so a /ver/i matcher silently finds nothing

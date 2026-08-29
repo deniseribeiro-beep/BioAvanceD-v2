@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Result } from '../types/models';
 import { resultService } from '../services/api';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
@@ -8,6 +8,7 @@ export function useResults(importJobID?: string) {
   const [results, setResults] = useState<Result[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestSeq = useRef(0);
 
   useEffect(() => {
     loadResults();
@@ -23,21 +24,24 @@ export function useResults(importJobID?: string) {
   }, []);
 
   const loadResults = async () => {
+    const seq = ++requestSeq.current;
     try {
       setLoading(true);
       const response = await resultService.getAll(importJobID);
+      if (seq !== requestSeq.current) return;
       const responseData: any = response.data;
       // API agora retorna { data: [...], pagination: {...} }
-      const resultsData = Array.isArray(responseData) 
-        ? responseData 
+      const resultsData = Array.isArray(responseData)
+        ? responseData
         : (responseData?.data || []);
       setResults(resultsData);
       setError(null);
     } catch (err: any) {
+      if (seq !== requestSeq.current) return;
       setError(err.message || 'Erro ao carregar resultados');
       setResults([]); // Garante array vazio em caso de erro
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
   };
 
