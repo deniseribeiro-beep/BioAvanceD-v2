@@ -206,7 +206,7 @@ const UPDATE_SPREAD_EXEMPT = new Map([
   // #875 -- real defects. Both spread the body into $set with no schema.
   // master-data's PUT is the sharper one: the SAME factory's POST at :65
   // calls model.validate(payload) and the PUT dropped it.
-  ['interface/routes/master-data.routes.js:99:update', '#875'],
+  ['interface/routes/master-data.routes.js:117:update', '#875'],
   // result.routes.js denylists exactly three legacy alias keys (#628) and
   // spreads the rest. A denylist destructure is textually identical to an
   // allowlist one; only where `...rest` goes tells them apart.
