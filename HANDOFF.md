@@ -1,115 +1,110 @@
 # HANDOFF
 
-**Written 2026-08-29. INTERIM — written mid-sitting while two workers were
-live and the Docker gate had not yet run.** Everything below is verified as
-of writing; re-derive counts rather than trusting them.
+**Written 2026-08-29, end of sitting.** Everything below is verified as of
+writing; re-derive counts rather than trusting them.
 
-A delegating sitting on the e2e/Docker-gate cluster, opened by three
-concurrent recon agents. **Recon overturned the premise of three of the four
-issues picked.** 1 commit so far, not pushed. 3 issues filed, 3 commented.
+A delegating sitting on the e2e/Docker-gate cluster. Five recon/worker
+agents. **The Docker gate ran, and it earned its keep by falsifying two
+things that had passed every static check.** 7 commits pushed, 1 issue
+closed, 7 product issues + 4 pack issues filed.
 
 ---
 
 ## Repo state
 
-- Branch `feature/docker-e2e-backend-integration`. **One unpushed commit:
-  `a0a091b0`** (the #819 warm-up). `main` untouched, no PR.
-- Untracked, deliberately: `.claude/skills/` and `api/backend/storage/assays/`
-  — unchanged from session start [ran it].
+- Branch `feature/docker-e2e-backend-integration`, pushed, in sync, tree
+  clean. `main` untouched, no PR.
+- Untracked, deliberately: `.claude/skills/`, `api/backend/storage/assays/`.
 - **Never `git add -A`.**
-- **Nothing was lost in the WSL/Docker cleanup** [ran it] — all three
-  `node_modules` trees, `.env.docker` (uncommitted and unrecoverable if it
-  had gone), `.env.test.example`, all four compose files, and the Playwright
-  browser cache are intact. `docker_data.vhdx` is down to 1.29GB.
-- **Docker is at absolute zero** [ran it]: 0 images, 0 containers, 0 volumes,
-  0 build cache. The four `bioavanced-test_*` named volumes are gone. **The
-  gate is a full cold rebuild of ~30 services.**
+- **Docker stack is UP** (12 core + 18 bootstrap services, all healthy /
+  Exited 0). Volumes were empty at start and are now seeded. `clean-up`
+  has NOT been run.
+- Nothing was lost in the WSL/Docker cleanup [ran it].
 
 ## Verification state
 
-- `npm run test:architecture`: **93/93** [ran it], unchanged.
-- `npx tsc --noEmit -p tsconfig.json`: clean [ran it].
-- `PLAYWRIGHT_SKIP_WEBSERVER=1 npx playwright test --list`: exit 0,
-  **219 tests in 20 files** [ran it].
-- **The Docker gate has NOT run.** Nothing behavioural has been verified this
-  sitting. `a0a091b0` is statically verified only.
-- Backend regression not re-run — no `api/backend/src` change has landed yet.
+- **Full e2e gate: 214 passed / 5 failed / 1 skipped, 220 tests, 3.1m**
+  [ran it]. Cold-built stack, empty volumes, full 17-service bootstrap
+  chain (all Exited 0), `--workers=1`.
+  - The 5 failures are **2 deliberately-red (#828)** plus **the 3 in
+    #896**. Nothing else is red.
+  - An earlier run was 212/7; the two fixes below closed the difference.
+- `npm run test:architecture`: 93/93 [ran it].
+- `storage.routes.test.js`: 51/51 [ran it]; 376/376 across all 9 unit
+  route test files.
+- `tsc --noEmit -p tsconfig.json` clean; `frontend typecheck` clean.
 
-## The cold-volume state is an ADVANTAGE, not a problem
+## The gate falsified two things that looked fine
 
-`docker-workflow`'s bioavanced overlay records that a from-scratch run (fresh
-volumes, full bootstrap chain) went 199/200, hitting **zero** of the three
-"known" failures that a stale-volume stack reproduces. Those were fixture
-accumulation. So a failure on this gate is a real regression until shown
-otherwise — do not reach for the historical known-failure list.
+Both passed `tsc` and `playwright test --list`. Neither was detectable
+without a live stack. **This is the argument for the gate, in one place:**
 
-## Four premises that did not survive contact with the tree
+1. **`a0a091b0`'s warm-up was inert.** It waited on `networkidle`, which
+   never fires under Vite -- the dev server holds an open HMR websocket.
+   30 of 39 routes burned the full timeout. Fixed in `41fde0fa`
+   (domcontentloaded + a bounded 3s dwell that is *expected* to time out).
+   Re-run: **0 warm-up timeouts**, `tcle-dinamico` 4/4 including `:19`.
+2. **#895 -- `ResultsPage`'s import history was empty for every user,
+   always.** It unwrapped three response shapes and the real one
+   (`response.data.data.jobs`) was not among them, so `jobs = []` on every
+   call and the per-job "Ver" button could never render. That is the flow
+   #861 fixed the writer for and #889 was filed to cover; every layer was
+   individually green. Fixed in `308c2a32`.
 
-This is now **five in two sittings**, and one of them was this sitting's own.
+## Rules this sitting earned
 
-- **#856 — already built.** `tests/unit/storage.routes.test.js` exists
-  (`ad344ed6`) and cites the issue five times. The router has **13** routes,
-  not the 4 the body names; the body also omits `DELETE /release/:sampleId`,
-  the fourth mutation. Anyone scoping from that list under-builds by
-  two-thirds. Commented.
-- **#889 — its own `[not established]` settled: no.** Part B is blocked on
-  **#828**: neither `backend-app-test` nor `worker-test` declares a
-  `volumes:` key [ran it], so the worker cannot see the uploaded file and the
-  job never reaches `completed`. Commented.
-- **#819 — not "cold stack", "cold route".** The issue's own 2026-08-27
-  comment records a failure 215 tests into a run. That kills every
-  bring-up-time remedy. Also: the healthcheck probes `/` and Vite serves the
-  static shell for every unknown path, so "healthy" means "port open".
-  Commented.
-- **#890 — mine, and I corrected it.** I filed it claiming `.raw`/generic
-  imports set no `importJobID`. True but irrelevant: `processRawFile` and
-  `processGenericFile` are **stubs** that write no document at all [ran it].
-  The proposed remedy (thread `jobID` through) is a no-op. Retitled to the
-  real open question — whether such a job reports itself `completed`.
-
-## Rule this sitting earned
-
-**Grade the inference, not just the observation.** #890 went wrong because
-the call-site signatures were verified firsthand and correct — `processRaw`
-genuinely is called without `jobID` — and the *consequence* was inferred from
-them without reading the callee bodies. A verified premise plus an unverified
-inference reads exactly like a verified conclusion. The `[not established]`
-marker placed on the right question is the only thing that caught it.
+- **Grade the inference, not just the observation.** #890 went wrong
+  because the call-site facts were verified and correct, and the
+  *consequence* was inferred without reading the callee bodies.
+- **When a premise falls, re-derive the symptom independently.** #890's
+  first correction dismissed a real defect because the stated cause was
+  wrong. A wrong explanation of a real problem is not no problem.
+- **Verify a matcher by which LINES CHANGED, not by exit code.** A `perl`
+  substitution silently did not match, and the resulting green run read
+  exactly like a falsifiability proof. It proved nothing.
+- **Never assert a filing before making it.** `2c0a77bb`'s message says
+  "filed separately" for something later found not to be a defect. The
+  commit is pushed and now carries a false statement.
 
 ## Open work
 
-Query it: `gh issue list --state open`, and the same with
+Query it: `gh issue list --state open`, same with
 `--repo DyeAllPies/dyeallpies-skills-pack`.
 
 Judgment a query cannot carry:
 
-- **#891 (new)** — `frontend-app-test` runs a Vite dev server with **no bind
-  mount** [ran it], so it pays #819's on-demand compile cost for HMR it
-  structurally cannot deliver. Landing it makes #819's warm-up dead weight.
-  Two verified hazards keep it separate: `VITE_API_BASE_URL` is a *runtime*
-  compose env var that must become a build arg, and
-  `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` is dev-server-specific.
-- **#888 is Dennis's or Denise's call, not a diagnosis.** Adding storage
-  permission codes touches the canonical dictionary, and RF006 (Técnico) vs
-  RF017 (Coordenador) disagree on the tier for the same four routes.
-- **pack #607 (new)** — `agent-delegation-guard` false-positived on three
-  briefs that *forbade* tracker writes; the prohibition text is what matched.
-  Cannot be fixed from here: `skill-maintenance` Rule 0 forbids editing pack
-  files from a consuming project.
-- **#859 closes at the gate.** Both close-criterion specs exist and every
-  auth call in them goes through `realLogin` as admin [ran it], so they
-  should clear the new role gate.
+- **#896 is root-caused for 2 of its 3 items, and folds into #876.**
+  `POST /api/reagent-lots` returns `reagentId` as a **number**
+  (`1787986833457`, the `Date.now()` fallback) while `Assay.js:86`
+  validates foreign keys as strings. The cheap fix is `String(Date.now())`,
+  which unblocks both RF025 failures without pre-empting #876's
+  uuid-vs-epoch question. **Check first whether anything sorts or compares
+  these numerically.** Item 1 (RF027 404) is still un-isolated.
+- **#892 item 2 was verified and deliberately NOT changed** -- the dead
+  `400` branch is defensive-in-depth; the problem was legibility and the
+  record now solves it. Item 1 stays parked behind #884.
+- **pack #608 -- Dennis corrected the premise in session:** `test-loop`'s
+  "never edit product source for any reason" is **stale scope**, from when
+  the loop only wrote unit tests. It manufactured a false blocker this
+  sitting. Retitled; needs a pack-repo session.
+- **#893 is a production landmine with no consumer today** --
+  `compose.prod.yml` sets `read_only: true` with only `tmpfs /tmp` while
+  every upload dir is created under `/app/uploads`, so uploads fail EROFS
+  on the first request. Cheap now, an outage later.
+- **#828's fix is compose-only** (`uploads-test-data:/app/uploads` on
+  `backend-app-test` + `worker-test`) and unblocks #889 Part B. But nothing
+  prunes those dirs, and a named volume survives `down` without `-v`.
 
 ## Recommended next
 
-Dennis named no next issue, so: **none queued.** What this sitting has left
-open, in order:
+**Dennis named this explicitly:** after the e2e slices, go back to the
+**coverage GitHub milestone**, and **review `COVERAGE_NOTES.md`** -- its
+buckets are dated 2026-07-22/24, five weeks stale. That staleness already
+showed: `storage.routes.js` appears in no bucket, so #856's two slices
+moved nothing in it.
 
-1. **The Docker gate.** Cold rebuild, ~30 services. It is the only thing that
-   can verify `a0a091b0`, and it closes #859.
-2. **#856 slice 2** — the four mutations plus `PATCH .../room`. Note the trap:
-   `requirePermission`'s test seam has the factory-freeze bug `ad344ed6` fixed
-   for `requireRole`, and must be converted to per-request dispatch first.
-3. **#890's remaining question** — does a `.raw` import land `completed` or
-   `failed` when `results.errors` is non-empty but nothing threw? That decides
-   whether the issue survives at all.
+Before that, the cheap wins:
+1. **`String(Date.now())` for #876/#896** -- two gate failures for a
+   one-line change, once the numeric-comparison check is done.
+2. **Delete the two redundant in-spec warm-ups** (#894) now that the gate
+   proves `global-setup.ts` works.
