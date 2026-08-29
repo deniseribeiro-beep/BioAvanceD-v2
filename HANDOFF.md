@@ -1,76 +1,82 @@
 # HANDOFF
 
-**Written 2026-08-29, end of sitting.** Verified as of writing; re-derive
-counts rather than trusting them.
+**Written 2026-08-29, after the e2e/uploads cluster sitting.** Verified as of
+writing; re-derive counts rather than trusting them.
 
-The e2e/Docker-gate cluster, worked with five agents and closed out with a
-full Docker gate. **15 commits pushed. 4 issues closed, 6 product + 6 pack
-issues filed.** Dennis intervened three times and every intervention
-changed an outcome — see "What Dennis had to correct".
+Worked two groups with six agents: the **uploads shared-storage cluster**
+(#828/#893) and the **results-view cluster** (#889/#895). Both closed out with
+a full Docker gate and a full backend regression. **9 commits pushed. 5 issues
+closed, 4 product + 4 pack issues filed.**
 
 ---
 
 ## Repo state
 
-- Branch `feature/docker-e2e-backend-integration`, pushed, in sync, tree
-  clean. `main` untouched, no PR.
+- Branch `feature/docker-e2e-backend-integration`, pushed, in sync, tree clean.
+  `main` untouched, no PR.
 - Untracked, deliberately: `.claude/skills/`, `api/backend/storage/assays/`.
 - **Never `git add -A`.**
-- **Docker is fully torn down** (`down -v`, Dennis's call — next session is
-  the pack repo). Volumes dropped; **images kept** (~4GB) so the next gate
-  skips the cold build but WILL need the bootstrap chain re-run.
+- Last substantive commit: `397cafef`.
+
+## Docker state — READ THIS BEFORE THE NEXT GATE
+
+- **Stack is DOWN. Volumes were dropped (`down -v`), including the new
+  `uploads-test-data`.** Build cache pruned 1.066GB to 0B.
+- **Images kept** (24 `bioavanced-test-*`), so the next gate skips the cold
+  build but **WILL need the full bootstrap chain re-run** — `admin-bootstrap-test`
+  plus the 16 reference-data services. Without it ~20 specs fail environmentally.
+- `docker-workflow`'s bioavanced overlay has the exact recipe. Two things it is
+  right about and easy to skip: append `--build` if the sitting touched
+  `api/backend/src` or `frontend/src`, and verify each one-shot with
+  `docker ps -a` for `Exited (0)` rather than trusting the compose exit code.
 
 ## Verification state — all [ran it]
 
-- **Full backend regression: 8000 passed, 443 files, 0 failures** (565s),
-  `npx vitest run tests/unit tests/integration tests/compliance`. Up from
-  7956/442. Run deliberately: the sitting changed a route factory serving
-  14 entities, and a prior sitting shipped a 19-test regression from a
-  change of that shape.
-- `npm run test:architecture`: **93/93**.
-- `tsc --noEmit -p tsconfig.json` and frontend `typecheck`: clean.
-- **Final e2e gate: 216 passed / 3 failed / 1 skipped**, 220 tests, 3.1m,
-  `--workers=1`, full 17-service bootstrap chain.
-  - 2 failures are the deliberately-red #828 pair.
-  - **1 is `results-import-job-view.spec.ts`, left red-first on purpose** —
-    see below.
+- **Full e2e gate: 219 passed / 1 skipped / 0 failed** (220 tests, 2.3m,
+  `--workers=1`, fresh volumes, all 18 bootstrap containers `Exited (0)`).
+  Up from 216 passed / 3 failed. **Zero failures — the first fully green gate.**
+- **Full backend regression: 8011 passed, 443 files, 0 failures** (579s), from
+  **`api/backend`** (see the command note below). Up from 8000.
+- `npm run test:architecture` 93/93 — also from `api/backend`.
+- Frontend `typecheck` and `typecheck:e2e` clean.
 
-## The gate falsified four things that passed every static check
+**Command gotcha that cost this sitting two round-trips and a wrong brief:**
+the backend suites and `test:architecture` run **from `api/backend`, not the
+repo root**. A root-level vitest run dies on `CONSENT_SECRET` (the config
+resolves `setupFiles` relative to cwd), which reads as an env problem rather
+than a cwd one; and `test:architecture` is only defined in
+`api/backend/package.json`. Filed as pack #620. Previous handoffs, including
+the one this replaced, wrote these commands with no directory.
 
-This is the argument for the gate, in one place. All four were `tsc`-clean
-and `playwright test --list`-clean:
+## What the gate proved
 
-1. **`a0a091b0`'s warm-up was inert** — `networkidle` never fires under
-   Vite's HMR websocket; 30 of 39 routes timed out. Fixed `41fde0fa`.
-2. **#895** — `ResultsPage`'s import history rendered empty for **every
-   user, always**: it unwrapped three response shapes and the real one
-   (`response.data.data.jobs`) was not among them. Fixed `308c2a32`.
-3. **#896** — three failures, ONE cause: `master-data.routes.js` emitted
-   epoch-number identifiers where dict-02 specifies `uuid`. Fixed
-   `fef5936e`. **The RF027 one presented as a 404, the RF025 pair as
-   validation rejections** — one defect wearing two status codes, which is
-   why triage grouped them as unrelated.
-4. **My own arch break** — an explanatory comment shifted a line-pinned
-   `#875` exemption. Consumer tests were 49/49 green; the arch suite was
-   91/93. Fixed `7cb1b7d0`.
+All three previously-red tests went green, none by weakening:
 
-## What Dennis had to correct — all three changed an outcome
+1. **#828** — the two `async-import-quarantine` tests, deliberately red since
+   2026-08-27. One shared `/app/uploads` volume between `backend-app-test` and
+   `worker-test` (`9ce27678`) closed it end to end.
+2. **#889** — the results-table count assertion. Root cause was a **product**
+   defect, not the spec: `useResults` had no abort, no cleanup and no sequence
+   token, so the mount-time unfiltered fetch overwrote the post-click filtered
+   one under load. Guarded in `4d3135e6`. The `toHaveCount(2)` assertion is
+   untouched and the spec now *additionally* pins the pre-click count of 3.
 
-- **`test-loop`'s "never edit product source for any reason" is stale
-  scope**, from when the loop only wrote unit tests. It manufactured a
-  false blocker I reported to him as real (#892 item 2). Pack **#608**.
-- **Design questions need an exhaustive ladder before escalating** — docs
-  chronologically, then Denise's papers, then commit history, then the
-  philosophy the docs express. I had proposed `String(Date.now())` on
-  internal consistency alone; dict-02 ELM-0298 says **`uuid`**, and #876
-  had cited that answer in its own body for eight days. Pack **#611**.
-- **A sitting must absorb the issues it files.** I answered the absorption
-  checkpoint **ten times** and used its four categories as classification
-  rather than doing the work — twice citing deferral conditions that had
-  already expired. Pack **#612**.
+## Two things found by accident that matter more than the issues worked
 
-**Five of eight product issues moved only after he pushed back, with no new
-information available in between.**
+- **The previous sitting shipped a regression** (#899, fixed). `fef5936e`
+  changed the master-data id fallback from `Date.now()` (a number) to a uuid
+  string for all 14 factory mounts; four of those models hard-require a number,
+  so id-less POSTs to `/api/sample-types`, `/sample-origins`,
+  `/extraction-protocols` and `/quality-descriptions` began returning 422.
+  **The 8000-test run missed it** because the only test covering that path
+  targets `/api/measurement-units` — the one model with no type check — and
+  asserted `expect([200,201,422])`, green either way.
+- **Batch-import row errors had never reached an operator** (#900, fixed). The
+  per-row `$push` targeted `errors`, absent from the strict `StagingImport`
+  schema, so Mongoose dropped the whole operator and
+  `import-batch.controller.js` returned `[]` for every batch. Same class as
+  #43, which was fixed in the sibling service and pinned there; the engine
+  never got that test. It has one now.
 
 ## Open work
 
@@ -79,35 +85,37 @@ Query it: `gh issue list --state open`, same with
 
 Judgment a query cannot carry:
 
-- **#889's UI assertion is red-first and one investigation from done.**
-  Established: the URL gains `importJobID`, the DB holds only the spec's 3
-  docs (0 leftovers), `useResults` correctly depends on `[importJobID]`,
-  and all API-level assertions pass. Not established: why the table renders
-  all 3 rows for a full 5s under full-suite load but not in isolation.
-  **Do not weaken the count assertion** — it is the only thing proving the
-  view narrows.
-- **#876 looks closeable** — dict-02 answers it. One enumeration remains:
-  whether any of the 14 mounted entities specifies something other than
-  `uuid`.
-- **#891 I chose not to do.** Not blocked, not deferred — a sizeable infra
-  change (production bundle for `frontend-app-test`) with two verified
-  hazards and its own verification cycle.
-- **#893 is a production landmine with no consumer today** —
-  `compose.prod.yml` is `read_only: true` with only `tmpfs /tmp` while
-  uploads are created under `/app/uploads`, so they fail EROFS on the first
-  request.
-- **#890's remedy is now constrained, not open** — RF029 AC#6 ("sem
-  correção silenciosa") and RNF015 AC#7 (fatal import failures must be
-  distinguishable) rule out the status quo.
+- **#902 is genuinely Denise's call and the ladder is already walked.** Four
+  MIABIS master-data entities have three competing identifier shapes live at
+  once; dict-02 is silent on all four (grepped, with the two near-miss matches
+  checked individually and ruled out) and the milestones do not sequence it.
+  #899's fix is deliberately direction-neutral so any answer lands without a
+  second regression.
+- **#893 stays open with a real physical blocker**, and one of its unknowns is
+  now settled: `[ran it]` a named volume **is** writable under
+  `read_only: true`. What remains is a `Dockerfile.prod` ownership trap
+  (`USER app` + an empty untracked `uploads/` seeds the volume root-owned, so
+  it fails `EACCES` not `EROFS`) plus two write roots outside `/app/uploads`.
+  Nothing this repo runs exercises `compose.prod.yml`, so it cannot be verified
+  here.
+- **#898 and #901 I chose to stop on, not deferred.** #898's live bug is fixed;
+  its remaining half is retyping 20 `api.get<T[]>` generics that lie about the
+  response envelope. #901 is that class one layer over — no hook under
+  `frontend/src/hooks/` uses an `AbortController` or sequence token, and
+  `useEquipment` has the identical shape to the bug #889 fixed.
+- **`E2E_TRACEABILITY_PLAN.md` has a new "Carried coverage items" section.**
+  #889 Part B lives there — a spec pinning the `importJobID` *writer*, which
+  Part A deliberately does not. It is unwritten, no longer blocked.
+- **The `uploads-test-data` volume is scaffolding.** It makes the
+  shared-filesystem assumption true rather than removing it, in the stack that
+  gates every e2e run. Storing the bytes via the `rawData.storageType`
+  discriminator — one writer, one value, zero readers in `src/` — is what
+  retires it, and that change deletes the mount. The quarantine spec is now the
+  regression proof for both.
 
 ## Recommended next
 
-**Dennis named it: the skills-pack repo**, to work the six issues this
-sitting filed there. Of those, **#608 and #612 first** — #608 because a
-stale rule produced a false blocker, #612 because it let five issues sit
-behind well-argued classifications.
-
-After that, his stated order: **the coverage GitHub milestone**, and
-**`COVERAGE_NOTES.md` needs a reconcile** — dated 2026-07-22/24, five weeks
-stale. It already showed: `storage.routes.js` is in no bucket, so #856's
-two slices (11 → 51 tests) moved nothing in it.
+**None queued** — no next task was named. `COVERAGE_NOTES.md` still wants the
+reconcile the previous handoff flagged (dated 2026-07-22/24), and the coverage
+milestone (#228) is still the one open item there. Both `[not established]`
+this sitting; I did not look at either.
