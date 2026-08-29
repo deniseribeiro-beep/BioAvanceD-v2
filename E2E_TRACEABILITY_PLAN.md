@@ -374,6 +374,25 @@ commit as the spec that changes it, same discipline as
 the underlying gap got fixed, update both this file and close the
 linked issue in the same PR.
 
+### Carried coverage items (not yet specs, not lost)
+
+Items that came out of a closed issue and would otherwise only exist in that
+issue's comments, where no backlog scan reaches them.
+
+- **#889 Part B — a spec that pins the `importJobID` *writer*, not just the
+  reader.** #889 Part A shipped and is green (`results-import-job-view.spec.ts`,
+  full gate 2026-08-29), but its fixture writes `importJobID` itself, so it
+  pins the reader and the "Ver" button only. **It would not have caught #861**,
+  which was a missing writer — the spec header says so deliberately. The real
+  version runs a results import through the async importer, waits for the job
+  to reach `completed`, and asserts the rows come back tagged with the job's
+  own id.
+
+  It was blocked on #828 (no shared upload volume between the API and worker
+  containers). **That blocker is gone** — #828 landed in `9ce27678` and its own
+  e2e proof is green — so this is now merely unwritten, not blocked. It needs
+  the worker container live, which the test stack now provides.
+
 ## Docs/skills that need a second look because of the new docs
 
 Found while cross-checking the new dictionary against what
