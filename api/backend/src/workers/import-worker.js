@@ -96,8 +96,8 @@ async function initWorker() {
             // report "still retrying" if a caller ever threw
             // UnrecoverableError or called job.discard(), neither of which
             // happens on this path today.
-            const attemptNumber = (job.attemptsMade || 0) + 1;
-            const attemptsAllowed = Math.max(1, Number(job.opts.attempts) || 1);
+            const attemptNumber = (job?.attemptsMade || 0) + 1;
+            const attemptsAllowed = Math.max(1, Number(job?.opts?.attempts) || 1);
 
             await batchValidationEngine.recordAttemptFailure(stagingImportId, {
               attemptNumber,
@@ -253,13 +253,36 @@ async function initWorker() {
 
           return result;
         } catch (error) {
-          logger.error(`❌ Erro ao processar job ${jobID}:`, error);
+          // #900: same attempt-awareness as the batch path above. bullmq runs
+          // this catch once per ATTEMPT, so an unguarded 'failed' write plus
+          // notifyJobFailed meant one failing job flipped the record to failed
+          // at t=0 and sent the user up to three "import failed" notifications
+          // for a run that could still succeed.
+          const attemptNumber = (job?.attemptsMade || 0) + 1;
+          const attemptsAllowed = Math.max(1, Number(job?.opts?.attempts) || 1);
+          const isFinalAttempt = attemptNumber >= attemptsAllowed;
 
-          // Atualiza status para failed
-          await updateJobStatus(db, jobID, 'failed', 0, {
-            errors: [{ error: error.message, stack: error.stack }],
-            completedAt: new Date(),
-          });
+          logger.error(
+            `❌ Erro ao processar job ${jobID} (tentativa ${attemptNumber}/${attemptsAllowed}):`,
+            error
+          );
+
+          // Only the last attempt is terminal. Earlier ones stay 'processing'
+          // and record the attempt, so the failure is visible without claiming
+          // the job is over.
+          await updateJobStatus(
+            db,
+            jobID,
+            isFinalAttempt ? 'failed' : 'processing',
+            0,
+            {
+              errors: [{
+                error: `Tentativa ${attemptNumber}/${attemptsAllowed}: ${error.message}`,
+                stack: error.stack,
+              }],
+              ...(isFinalAttempt ? { completedAt: new Date() } : {}),
+            }
+          );
 
           // Registra no AuditLog
           const auditLogger = require('../utils/auditLogger');
@@ -281,15 +304,20 @@ async function initWorker() {
             { action: 'IMPORT', jobID, dataType: dataTypeNormalized, fileName }
           );
 
-          // Envia notificação de falha
-          await getNotificationService().notifyJobFailed(userID, {
-            jobID,
-            status: 'failed',
-            dataType: dataTypeNormalized,
-            fileName: fileName,
-            error: error.message,
-            completedAt: new Date(),
-          });
+          // #900: only notify once, on the terminal attempt. The audit entry
+          // above is deliberately left per-attempt -- each failure really did
+          // happen and an audit trail should say so -- but a user-facing
+          // "import failed" push for an attempt that will be retried is wrong.
+          if (isFinalAttempt) {
+            await getNotificationService().notifyJobFailed(userID, {
+              jobID,
+              status: 'failed',
+              dataType: dataTypeNormalized,
+              fileName: fileName,
+              error: error.message,
+              completedAt: new Date(),
+            });
+          }
 
           throw error;
         }

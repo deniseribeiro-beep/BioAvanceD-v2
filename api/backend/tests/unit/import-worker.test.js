@@ -604,6 +604,80 @@ describe('workers/import-worker', () => {
         expect.objectContaining({ jobID: 'j8', status: 'failed', error: 'worker exploded' })
       );
     });
+
+    // #900: the assertion above passes on a job literal with no `opts`, which
+    // resolves to attempt 1 of 1 -- terminal. That makes it blind to the
+    // attempt-awareness itself, so this pins the non-terminal case explicitly.
+    // bullmq runs this catch once per ATTEMPT, so without the guard one failing
+    // job flipped the record to 'failed' at t=0 and pushed the user up to three
+    // "import failed" notifications for a run that could still succeed.
+    it('on a NON-final attempt: does not mark failed and does not notify, but still re-throws', async () => {
+      const processor = await getProcessor();
+      const boom = new Error('transient blip');
+      fakePatientWorker.process.mockRejectedValue(boom);
+
+      const updateOneMock = vi.fn().mockResolvedValue({ acknowledged: true });
+      fakeDb.collection.mockReturnValue({ updateOne: updateOneMock });
+
+      const job = {
+        id: 'j8b',
+        name: 'import',
+        attemptsMade: 0,
+        opts: { attempts: 3 },
+        data: {
+          jobID: 'j8b',
+          userID: 'u8b',
+          dataType: 'patients',
+          filePath: '/tmp/p.csv',
+          fileName: 'p.csv',
+          options: {},
+        },
+      };
+
+      // The re-throw must survive -- it is what drives bullmq's retry.
+      await expect(processor(job)).rejects.toThrow('transient blip');
+
+      expect(updateOneMock).toHaveBeenCalledTimes(2);
+      const failWrite = updateOneMock.mock.calls[1][1].$set;
+      expect(failWrite.status).toBe('processing');
+      expect(failWrite.completedAt).toBeUndefined();
+      expect(failWrite.errors[0].error).toContain('Tentativa 1/3');
+
+      expect(fakeNotificationService.notifyJobFailed).not.toHaveBeenCalled();
+      // The audit entry is deliberately per-attempt: the failure really happened.
+      expect(fakeAuditLogger.logError).toHaveBeenCalled();
+    });
+
+    it('on the FINAL attempt: marks failed and notifies once', async () => {
+      const processor = await getProcessor();
+      const boom = new Error('last straw');
+      fakePatientWorker.process.mockRejectedValue(boom);
+
+      const updateOneMock = vi.fn().mockResolvedValue({ acknowledged: true });
+      fakeDb.collection.mockReturnValue({ updateOne: updateOneMock });
+
+      const job = {
+        id: 'j8c',
+        name: 'import',
+        attemptsMade: 2,
+        opts: { attempts: 3 },
+        data: {
+          jobID: 'j8c',
+          userID: 'u8c',
+          dataType: 'patients',
+          filePath: '/tmp/p.csv',
+          fileName: 'p.csv',
+          options: {},
+        },
+      };
+
+      await expect(processor(job)).rejects.toThrow('last straw');
+
+      const failWrite = updateOneMock.mock.calls[1][1].$set;
+      expect(failWrite.status).toBe('failed');
+      expect(failWrite.errors[0].error).toContain('Tentativa 3/3');
+      expect(fakeNotificationService.notifyJobFailed).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('import-queue processor: batch-import path', () => {
