@@ -16,9 +16,15 @@ closed, 7 product issues + 4 pack issues filed.
   clean. `main` untouched, no PR.
 - Untracked, deliberately: `.claude/skills/`, `api/backend/storage/assays/`.
 - **Never `git add -A`.**
-- **Docker stack is UP** (12 core + 18 bootstrap services, all healthy /
-  Exited 0). Volumes were empty at start and are now seeded. `clean-up`
-  has NOT been run.
+- **Docker stack is DOWN** -- torn down at session end with `docker
+  compose down` (no `-v`), Dennis's call. **The 11 named volumes are kept
+  and carry the full seed** (admin bootstrap + all 17 reference-data
+  services), so the next gate skips the bootstrap chain: bring the stack
+  up and run, no reseed needed. Verify with `docker ps -a` before trusting
+  that -- a plain `docker ps` cannot see the one-shot bootstrap containers
+  that prove a stack is usable rather than merely up.
+- 30 images (4.05GB) kept deliberately, for the same reason. Build cache
+  pruned with `-af` (1.23GB, vs the 18.19MB `docker system df` reported).
 - Nothing was lost in the WSL/Docker cleanup [ran it].
 
 ## Verification state
