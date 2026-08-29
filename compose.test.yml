@@ -241,6 +241,19 @@ services:
       AUDIT_EXTERNAL_WITNESS_URL: http://witness-test:8096
       AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: ""
     command: ["npm", "start"]
+    # #828: the API writes the uploaded staging file to /app/uploads and the
+    # worker reads it back by absolute path (staging-import.service.js ->
+    # rawData.storagePath, resolved in batch-validation-engine.service.js).
+    # They are separate containers, so without a shared mount the worker
+    # throws "Arquivo bruto do staging nao encontrado" and the batch import
+    # never completes. compose.dev.yml does not have this problem because it
+    # bind-mounts ./api/backend:/app into both services.
+    #
+    # This is scaffolding for the shared-filesystem assumption, not an
+    # endorsement of it -- #893 records why storing the bytes (GridFS) is the
+    # real fix, and that change deletes this mount.
+    volumes:
+      - uploads-test-data:/app/uploads
     depends_on:
       mongodb-test:
         condition: service_healthy
@@ -565,6 +578,9 @@ services:
     environment:
       <<: *test-env
     command: ["npm", "run", "worker"]
+    # #828: same volume as backend-app-test -- this is the reading half.
+    volumes:
+      - uploads-test-data:/app/uploads
     depends_on:
       backend-app-test:
         condition: service_healthy
@@ -687,4 +703,6 @@ volumes:
   neo4j-test-data:
   redis-test-data:
   influxdb-test-data:
+  # #828: shared /app/uploads for backend-app-test and worker-test.
+  uploads-test-data:
 
