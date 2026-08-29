@@ -191,6 +191,7 @@ function installFakes() {
       partialRows: 0,
     }),
     updateProgress: vi.fn().mockResolvedValue(undefined),
+    recordAttemptFailure: vi.fn().mockResolvedValue(undefined),
   };
   require.cache[batchValidationEnginePath] = {
     id: batchValidationEnginePath,
@@ -652,7 +653,14 @@ describe('workers/import-worker', () => {
       });
     });
 
-    it('on batch-import failure: marks batch progress as "failed" and re-throws (#46)', async () => {
+    // #900: bullmq's Worker runs the processor's catch once per attempt, not
+    // once per job -- moveToFailed() runs on every attempt and decides
+    // retry-vs-fail inside itself, after the processor has already rejected.
+    // Marking the StagingImport document 'failed' on attempt 1 of an
+    // `attempts: 3` job was wrong: the document read FAILED through a run
+    // that could still finish `completed`. These cases pin the replacement:
+    // recordAttemptFailure() decides final-vs-not from attemptsMade/opts.attempts.
+    it('on batch-import failure, attempt 1 of 3 (not final): still retries, processor rejects with the original error', async () => {
       const processor = await getProcessor();
       const boom = new Error('batch exploded');
       fakeBatchValidationEngine.processBatchImport.mockRejectedValue(boom);
@@ -660,16 +668,94 @@ describe('workers/import-worker', () => {
       const updateOneMock = vi.fn().mockResolvedValue({ acknowledged: true });
       fakeDb.collection.mockReturnValue({ updateOne: updateOneMock });
 
-      const job = { id: 'b3', name: 'batch-import', data: { stagingImportId: 'stg-3' } };
+      const job = {
+        id: 'b3',
+        name: 'batch-import',
+        data: { stagingImportId: 'stg-3' },
+        attemptsMade: 0,
+        opts: { attempts: 3 },
+      };
 
       await expect(processor(job)).rejects.toThrow('batch exploded');
 
-      expect(fakeBatchValidationEngine.updateProgress).toHaveBeenCalledWith('stg-3', {
-        status: 'failed',
+      expect(fakeBatchValidationEngine.recordAttemptFailure).toHaveBeenCalledWith('stg-3', {
+        attemptNumber: 1,
+        attemptsAllowed: 3,
+        message: 'batch exploded',
       });
+      expect(fakeBatchValidationEngine.updateProgress).not.toHaveBeenCalledWith('stg-3', { status: 'failed' });
       expect(updateOneMock).not.toHaveBeenCalled();
       expect(fakeAuditLogger.logError).not.toHaveBeenCalled();
       expect(fakeNotificationService.notifyJobFailed).not.toHaveBeenCalled();
+    });
+
+    it('on batch-import failure, attempt 2 of 3 (middle, not final): still retries', async () => {
+      const processor = await getProcessor();
+      const boom = new Error('batch exploded again');
+      fakeBatchValidationEngine.processBatchImport.mockRejectedValue(boom);
+
+      const job = {
+        id: 'b3b',
+        name: 'batch-import',
+        data: { stagingImportId: 'stg-3b' },
+        attemptsMade: 1,
+        opts: { attempts: 3 },
+      };
+
+      await expect(processor(job)).rejects.toThrow('batch exploded again');
+
+      expect(fakeBatchValidationEngine.recordAttemptFailure).toHaveBeenCalledWith('stg-3b', {
+        attemptNumber: 2,
+        attemptsAllowed: 3,
+        message: 'batch exploded again',
+      });
+    });
+
+    it('on batch-import failure, attempt 3 of 3 (final): marks failed, recorded message carries the thrown error text, and re-throws', async () => {
+      const processor = await getProcessor();
+      const boom = new Error('batch exploded for good');
+      fakeBatchValidationEngine.processBatchImport.mockRejectedValue(boom);
+
+      const job = {
+        id: 'b3c',
+        name: 'batch-import',
+        data: { stagingImportId: 'stg-3c' },
+        attemptsMade: 2,
+        opts: { attempts: 3 },
+      };
+
+      await expect(processor(job)).rejects.toThrow('batch exploded for good');
+
+      expect(fakeBatchValidationEngine.recordAttemptFailure).toHaveBeenCalledWith('stg-3c', {
+        attemptNumber: 3,
+        attemptsAllowed: 3,
+        message: 'batch exploded for good',
+      });
+    });
+
+    it.each([
+      ['opts: {}', {}],
+      ['opts: { attempts: 0 }', { attempts: 0 }],
+    ])('on batch-import failure with %s on a first attempt: treated as final (Math.max guard)', async (_label, opts) => {
+      const processor = await getProcessor();
+      const boom = new Error('batch exploded, no retries configured');
+      fakeBatchValidationEngine.processBatchImport.mockRejectedValue(boom);
+
+      const job = {
+        id: 'b3d',
+        name: 'batch-import',
+        data: { stagingImportId: 'stg-3d' },
+        attemptsMade: 0,
+        opts,
+      };
+
+      await expect(processor(job)).rejects.toThrow('batch exploded, no retries configured');
+
+      expect(fakeBatchValidationEngine.recordAttemptFailure).toHaveBeenCalledWith('stg-3d', {
+        attemptNumber: 1,
+        attemptsAllowed: 1,
+        message: 'batch exploded, no retries configured',
+      });
     });
   });
 

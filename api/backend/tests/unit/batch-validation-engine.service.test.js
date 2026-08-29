@@ -416,6 +416,29 @@ describe('batch-validation-engine.service processBatchImport', () => {
     expect(finalUpdateCall).toBeTruthy();
   });
 
+  // #900: every other test in this file spies over StagingImport.updateOne,
+  // so a rename of the persisted field to a name the schema does not declare
+  // would stay green here forever -- the schema never runs. This one goes
+  // through the real model instead (mirrors
+  // tests/unit/staging-import.service.test.js:179-192, which pins the same
+  // failure mode for the sibling service): errors/errorEntry must land on
+  // `importErrors`, the field the StagingImport schema (strict: true)
+  // actually declares, or Mongoose silently strips the whole $push.
+  it('writes to a field that actually exists on the StagingImport schema (#900)', () => {
+    const entry = { row: 4, classification: 'INVALID', errors: ['sampleType é obrigatório'] };
+    const doc = new StagingImport({
+      jobId: 'schema-check-batch-validation',
+      fileName: 'data.csv',
+      status: 'processing',
+      totalRows: 1,
+      processedRows: 1,
+      importErrors: [entry],
+      rawData: { storagePath: '/tmp/data.csv' },
+    });
+
+    expect(doc.toObject().importErrors).toHaveLength(1);
+    expect(doc.toObject().importErrors[0]).toMatchObject(entry);
+  });
 
   // The wiring, not the writer: a quarantine helper nothing calls is exactly
   // the failure this issue is about one level up. Proves processBatchImport
@@ -573,7 +596,7 @@ describe('batch-validation-engine.service processBatchImport', () => {
 // #813 (RNF011 AC#4 / RF029 AC#6): the importer an operator actually reaches
 // -- /import -> POST /api/import/batch -> this engine -- classified rows
 // VALID/PARTIAL/INVALID and pushed `{row: <line number>, errors}` onto
-// StagingImport.errors. The field is named `row` but holds an integer, so the
+// StagingImport.importErrors. The field is named `row` but holds an integer, so the
 // rejected row's *data* was never persisted anywhere: an operator could read
 // what was wrong with a row but never see, correct or resubmit the row itself.
 // That is "closer to a well-organised log than to staging" (#794).

@@ -85,11 +85,27 @@ async function initWorker() {
 
             return batchResult;
           } catch (error) {
-            await batchValidationEngine.updateProgress(stagingImportId, {
-              status: 'failed',
+            // #900: bullmq's Worker calls the processor's catch once per
+            // attempt, not once per job (worker.js's moveToFailed() runs every
+            // attempt; the retry-vs-fail decision happens inside it, after
+            // this catch already ran). attemptsMade is only incremented after
+            // the throw, so it plus 1 is the attempt that just failed;
+            // Math.max(1, ...) is load-bearing because bullmq defaults
+            // opts.attempts to 0 and treats 0 and 1 identically as "one
+            // attempt only". This predicate is arithmetic-only -- it would
+            // report "still retrying" if a caller ever threw
+            // UnrecoverableError or called job.discard(), neither of which
+            // happens on this path today.
+            const attemptNumber = (job.attemptsMade || 0) + 1;
+            const attemptsAllowed = Math.max(1, Number(job.opts.attempts) || 1);
+
+            await batchValidationEngine.recordAttemptFailure(stagingImportId, {
+              attemptNumber,
+              attemptsAllowed,
+              message: error.message,
             });
 
-            logger.error(`❌ Erro ao processar batch-import ${stagingImportId}:`, error);
+            logger.error(`❌ Erro ao processar batch-import ${stagingImportId} (tentativa ${attemptNumber}/${attemptsAllowed}):`, error);
             throw error;
           }
         }

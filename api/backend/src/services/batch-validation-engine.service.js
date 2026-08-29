@@ -835,12 +835,51 @@ class BatchValidationEngine {
   }
 
   /**
+   * Records a single failed processing attempt (#900). bullmq's Worker runs
+   * the processor's catch once per attempt, not once per job -- moveToFailed()
+   * is called on every attempt and the retry-vs-fail decision happens inside
+   * it, after the processor has already rejected. updateProgress() is
+   * $set-only and would clobber importErrors already accumulated by earlier
+   * rows/attempts, so this is a separate method rather than a new argument to
+   * that one.
+   *
+   * Only marks the document `failed` when this was the last allowed attempt;
+   * otherwise the status is left as `processing`, since bullmq may still
+   * retry and the run may yet complete. The schema enum only allows
+   * ['staged','queued','processing','completed','failed'], so there is no
+   * "retrying" status to set instead.
+   *
+   * The pushed entry's shape mirrors what staging-import.service.js already
+   * pushes onto importErrors on its own failure path, so the two writers
+   * stay consistent.
+   */
+  async recordAttemptFailure(jobId, { attemptNumber, attemptsAllowed, message } = {}) {
+    const isFinalAttempt = attemptNumber >= attemptsAllowed;
+
+    await StagingImport.updateOne(
+      { jobId },
+      {
+        $set: {
+          status: isFinalAttempt ? 'failed' : 'processing',
+          updatedAt: new Date(),
+        },
+        $push: {
+          importErrors: {
+            message: `Tentativa ${attemptNumber}/${attemptsAllowed} falhou: ${message || 'erro desconhecido'}`,
+            occurredAt: new Date(),
+          },
+        },
+      }
+    );
+  }
+
+  /**
    * Coloca as linhas rejeitadas em quarentena (#813, RNF011 AC#4 / RF029 AC#6).
    *
    * Este e o importador que o operador realmente alcanca (/import ->
    * POST /api/import/batch). Ate aqui ele classificava as linhas
    * VALID/PARTIAL/INVALID e empilhava `{row: <numero da linha>, errors}` em
-   * StagingImport.errors -- o campo se chama `row` mas guarda um inteiro,
+   * StagingImport.importErrors -- o campo se chama `row` mas guarda um inteiro,
    * entao o *dado* da linha rejeitada nunca era persistido. Dava para ler o
    * que estava errado, nunca para corrigir e reenviar.
    *
@@ -940,7 +979,7 @@ class BatchValidationEngine {
       status: 'processing',
       processedRows: 0,
       totalRows: 0,
-      errors: [],
+      importErrors: [],
     });
 
     const rows = await this.readRowsFromFile(storagePath, fileName);
@@ -1025,7 +1064,7 @@ class BatchValidationEngine {
           });
           await StagingImport.updateOne(
             { jobId: stagingImportId },
-            { $push: { errors: errorEntry } }
+            { $push: { importErrors: errorEntry } }
           );
         }
 
