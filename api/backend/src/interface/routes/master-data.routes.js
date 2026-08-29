@@ -4,7 +4,7 @@ const { ObjectId } = require('mongodb');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requireRole } = require('../../infrastructure/middleware/rbac');
 
-function createMasterDataRouter({ collectionName, idField, model, validateReferences }) {
+function createMasterDataRouter({ collectionName, idField, model, validateReferences, generateId = randomUUID }) {
   const router = express.Router();
 
   router.use(authenticate);
@@ -78,7 +78,7 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
         // and a string idField, so rows already written with an epoch number
         // keep resolving. Nothing sorts or compares these numerically (the
         // list route sorts on createdAt/_id).
-        [idField]: req.body?.[idField] ?? randomUUID(),
+        [idField]: req.body?.[idField] ?? generateId(),
       };
       const validation = model.validate(payload);
       if (!validation.isValid) {

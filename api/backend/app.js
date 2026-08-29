@@ -249,25 +249,47 @@ app.use("/api/measurement-units", createMasterDataRouter({
   idField: "unitID",
   model: require("./src/models/MeasurementUnit")
 }));
+// #899: QualityDescription.js hard-requires a NUMBER for qualityID, and the
+// data dictionary does not cover this entity (unlike the uuid-typed entities
+// left on the factory default below). Which of the competing identifier
+// shapes this should ultimately use is an open question tracked in #899 --
+// Date.now() only restores the pre-fef5936e behavior, it does not answer it.
 app.use("/api/quality-descriptions", createMasterDataRouter({
   collectionName: "qualityDescriptions",
   idField: "qualityID",
-  model: require("./src/models/QualityDescription")
+  model: require("./src/models/QualityDescription"),
+  generateId: () => Date.now()
 }));
+// #899: SampleType.js hard-requires a NUMBER for sampleTypeID, and the data
+// dictionary does not cover this entity. Which of the competing identifier
+// shapes this should ultimately use is an open question tracked in #899 --
+// Date.now() only restores the pre-fef5936e behavior, it does not answer it.
 app.use("/api/sample-types", createMasterDataRouter({
   collectionName: "sampleTypes",
   idField: "sampleTypeID",
-  model: require("./src/models/SampleType")
+  model: require("./src/models/SampleType"),
+  generateId: () => Date.now()
 }));
+// #899: SampleOrigin.js hard-requires a NUMBER for originID, and the data
+// dictionary does not cover this entity. Which of the competing identifier
+// shapes this should ultimately use is an open question tracked in #899 --
+// Date.now() only restores the pre-fef5936e behavior, it does not answer it.
 app.use("/api/sample-origins", createMasterDataRouter({
   collectionName: "sampleOrigins",
   idField: "originID",
-  model: require("./src/models/SampleOrigin")
+  model: require("./src/models/SampleOrigin"),
+  generateId: () => Date.now()
 }));
+// #899: ExtractionProtocol.js hard-requires a NUMBER for protocolID, and the
+// data dictionary does not cover this entity. Which of the competing
+// identifier shapes this should ultimately use is an open question tracked
+// in #899 -- Date.now() only restores the pre-fef5936e behavior, it does not
+// answer it.
 app.use("/api/extraction-protocols", createMasterDataRouter({
   collectionName: "extractionProtocols",
   idField: "protocolID",
-  model: require("./src/models/ExtractionProtocol")
+  model: require("./src/models/ExtractionProtocol"),
+  generateId: () => Date.now()
 }));
 app.use("/api/studies", createMasterDataRouter({
   collectionName: "studies",

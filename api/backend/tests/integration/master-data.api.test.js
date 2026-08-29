@@ -581,3 +581,43 @@ describe('unexpected-error (500) branches', () => {
     expect(res.status).toBe(500);
   });
 });
+
+// ── #899: the factory's generated identifier must satisfy the entity's own model ──
+// The suite above covers the factory "via /api/measurement-units", and
+// MeasurementUnit is the ONE mounted model with no type check on its idField --
+// it only checks presence. So every branch of the factory was exercised against
+// the one entity that cannot observe what type the generated id has.
+//
+// Four of the fourteen mounts hard-require a NUMBER (SampleType.js:13,
+// SampleOrigin.js:13, ExtractionProtocol.js:13, QualityDescription.js:15).
+// master-data.routes.js:81 injects the generated id into the payload BEFORE
+// model.validate runs, so the generated type is the model's problem.
+describe('POST master-data: generated identifier satisfies the entity model (#899)', () => {
+  const NUMBER_TYPED_MOUNTS = [
+    { route: '/api/sample-types', collection: 'sampleTypes', idField: 'sampleTypeID' },
+    { route: '/api/sample-origins', collection: 'sampleOrigins', idField: 'originID' },
+    { route: '/api/extraction-protocols', collection: 'extractionProtocols', idField: 'protocolID' },
+    { route: '/api/quality-descriptions', collection: 'qualityDescriptions', idField: 'qualityID' },
+  ];
+
+  for (const { route, collection, idField } of NUMBER_TYPED_MOUNTS) {
+    it(`${route} accepts a POST that omits ${idField}`, async () => {
+      const coll = createCollectionMock({
+        insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }),
+      });
+      app.locals.db = createDbMock({ [collection]: coll, ...rbacCollectionsAdmin });
+
+      const res = await request(app)
+        .post(route)
+        .set('Authorization', `Bearer ${makeToken(4)}`)
+        .send({ description: 'Reproduction payload' });
+
+      // Exact, not a tolerant set: the whole defect is that this answers 422
+      // "<idField> deve ser um número" because the factory generates a uuid
+      // string. A [200,201,422] assertion cannot see it -- that is precisely
+      // why the existing 'creates item for admin' test stayed green.
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+    });
+  }
+});
