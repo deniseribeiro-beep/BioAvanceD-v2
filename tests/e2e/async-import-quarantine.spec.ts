@@ -63,6 +63,16 @@ let db: Db;
 const createdBatchIds: ObjectId[] = [];
 
 test.describe('RF029 AC#6 / RNF011 AC#4 -- the async importer quarantines rejected rows', () => {
+  // #828: the poll below budgets 60s, but Playwright's default test timeout is
+  // 30s, so the poll could never spend its stated budget and the failure always
+  // read "Test timeout of 30000ms exceeded" rather than a poll timeout. The
+  // batch path is API -> BullMQ -> worker -> Mongo, so 60s is the realistic
+  // figure; this makes the declared budget the effective one.
+  //
+  // NOT a weakening: no assertion changes, and a genuinely broken import still
+  // fails -- it just now fails with the poll's own diagnostic instead of an
+  // unrelated harness timeout.
+  test.setTimeout(90_000);
   test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set -- run via npm run test:e2e:docker');
 
   test.beforeAll(async () => {
