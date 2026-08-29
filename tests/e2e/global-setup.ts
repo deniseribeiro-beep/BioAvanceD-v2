@@ -1,5 +1,7 @@
 import { chromium } from '@playwright/test';
 import type { FullConfig } from '@playwright/test';
+import { readFileSync } from 'fs';
+import { resolve as resolvePath } from 'path';
 import { mockLogin } from './helpers/mockAuth';
 
 // #819: Playwright global setup -- warms every lazy-loaded route once.
@@ -82,9 +84,38 @@ const ROUTES_TO_WARM: readonly string[] = [
 // runs once before the suite, not per-test, so there is no need to tune it.
 const CONCURRENCY = 4;
 
+// #894: ROUTES_TO_WARM is hand-maintained, so a route added to App.tsx and not
+// mirrored here is silently left cold -- and the symptom is #819's, which by
+// then reads as 'already fixed' and gets misattributed. This does not verify
+// the paths (it cannot; the params are placeholders), only that nobody added a
+// lazy chunk without considering the warm list. Best-effort: if App.tsx is not
+// readable -- e.g. inside playwright-runner, where the frontend source may not
+// be present -- the check is skipped rather than failing the run.
+function warnIfWarmListDrifted(): void {
+  try {
+    const appTsx = readFileSync(
+      resolvePath(__dirname, '..', '..', 'frontend', 'src', 'App.tsx'),
+      'utf-8'
+    );
+    const LAZY_MARKER = 'lazy(() => import(';
+    const lazyCount = appTsx.split(LAZY_MARKER).length - 1;
+    if (lazyCount !== ROUTES_TO_WARM.length) {
+      console.warn(
+        `[global-setup #894] warm-list drift: frontend/src/App.tsx declares ${lazyCount} `
+        + `lazy chunks but ROUTES_TO_WARM has ${ROUTES_TO_WARM.length} entries. `
+        + 'A route added to App.tsx without an entry here stays cold and flakes per #819.'
+      );
+    }
+  } catch {
+    // App.tsx not reachable from here; skip silently.
+  }
+}
+
 export default async function globalSetup(_config: FullConfig): Promise<void> {
   // Single-spec iteration (running one file directly) has no need to pay the
   // warm-up cost every time.
+  warnIfWarmListDrifted();
+
   if (process.env.E2E_SKIP_WARMUP === '1') {
     return;
   }
