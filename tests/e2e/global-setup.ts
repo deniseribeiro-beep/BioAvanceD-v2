@@ -110,11 +110,25 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
             let route = queue.shift();
             while (route !== undefined) {
               try {
-                // 'networkidle', not 'domcontentloaded': React.lazy fires its import()
-                // only after the app boots and renders, which is strictly after
-                // DOMContentLoaded -- returning there would navigate away mid-chunk-fetch
-                // and warm nothing. Bounded at 15s so a polling page cannot stall it.
-                await page.goto(`${baseURL}${route}`, { waitUntil: 'networkidle', timeout: 15_000 });
+                // Two-step, and both steps are load-bearing.
+                //
+                // 'domcontentloaded' alone is too early: React.lazy fires its
+                // import() only after the app boots and renders, which is strictly
+                // after DOMContentLoaded, so returning there navigates away
+                // mid-chunk-fetch and warms nothing.
+                //
+                // 'networkidle' as the goto condition is worse -- it never fires at
+                // all. The Vite dev server holds an open HMR websocket, so the
+                // network is never idle and every route burns its full timeout.
+                // Measured 2026-08-29 on the first real gate run: 30 of 39 routes
+                // timed out at 15s and the warm-up was inert.
+                //
+                // So: return at domcontentloaded, then give the chunk a bounded
+                // window to be requested and transformed. The wait is expected to
+                // time out (HMR again) -- that is fine, the point is the dwell, and
+                // the catch keeps it from ever throwing.
+                await page.goto(`${baseURL}${route}`, { waitUntil: 'domcontentloaded', timeout: 15_000 });
+                await page.waitForLoadState('networkidle', { timeout: 3_000 }).catch(() => {});
               } catch (navigationError) {
                 // A single route failing to load must not fail the run.
                 console.warn(`[global-setup #819] warm-up navigation failed for ${route}:`, navigationError);
