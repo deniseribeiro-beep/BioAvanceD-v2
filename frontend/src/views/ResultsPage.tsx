@@ -10,9 +10,26 @@ import { useResults } from '../hooks/useResults';
 import { useEquipment } from '../hooks/useEquipment';
 import { useLanguage } from '../contexts/LanguageContext';
 import { resultService, importService } from '../services/api';
+import { extractResponseEntity } from '../api/response.adapters';
 import AnalysisUploadModal from '../components/AnalysisUploadModal';
 import AnalysisUpload from '../components/AnalysisUpload.jsx';
 import './ResultsPage.css';
+
+// #905: the jobs-list endpoint returns the worker's flat counts
+// (totalRecords/successCount/errorCount) verbatim -- there is no nested
+// `metrics` object on listed jobs, so the strip that read job.metrics
+// never rendered for any job. Derive the display shape from the flat
+// fields instead. Exported for the co-located unit test.
+export function deriveJobMetrics(job: ImportJob): { totalRecords: number; successfulRecords: number; failedRecords: number } | null {
+  if (typeof job.totalRecords !== 'number') {
+    return null;
+  }
+  return {
+    totalRecords: job.totalRecords,
+    successfulRecords: typeof job.successCount === 'number' ? job.successCount : 0,
+    failedRecords: typeof job.errorCount === 'number' ? job.errorCount : 0,
+  };
+}
 
 export default function ResultsPage() {
   const { t, language } = useLanguage();
@@ -93,7 +110,10 @@ export default function ResultsPage() {
   const handleViewReport = async (job: ImportJob) => {
     try {
       const response = await importService.getImportReport(job.jobID);
-      setSelectedJob(response.data);
+      // #905: the controller wraps the report in { success, data } -- setting
+      // response.data directly made selectedJob the envelope, so every
+      // modal field (fileName, status, metrics) read undefined.
+      setSelectedJob(extractResponseEntity<ImportJob>(response, job));
       setShowReportModal(true);
     } catch (err: any) {
       setImportError(t('results.reportLoadError', 'Erro ao carregar relatório'));
@@ -219,15 +239,20 @@ export default function ResultsPage() {
                       )}
                     </div>
                   </div>
-                  {job.metrics && (
-                    <div className="job-metrics">
-                      <span>{t('results.metrics.total', 'Total')}: {job.metrics.totalRecords}</span>
-                      <span className="metric-success">{t('results.metrics.success', 'Sucesso')}: {job.metrics.successfulRecords}</span>
-                      {job.metrics.failedRecords > 0 && (
-                        <span className="metric-failure">{t('results.metrics.failures', 'Falhas')}: {job.metrics.failedRecords}</span>
-                      )}
-                    </div>
-                  )}
+                  {(() => {
+                    // #905: derived from the flat fields the API actually
+                    // returns; job.metrics never existed on listed jobs.
+                    const jobMetrics = deriveJobMetrics(job);
+                    return jobMetrics && (
+                      <div className="job-metrics">
+                        <span>{t('results.metrics.total', 'Total')}: {jobMetrics.totalRecords}</span>
+                        <span className="metric-success">{t('results.metrics.success', 'Sucesso')}: {jobMetrics.successfulRecords}</span>
+                        {jobMetrics.failedRecords > 0 && (
+                          <span className="metric-failure">{t('results.metrics.failures', 'Falhas')}: {jobMetrics.failedRecords}</span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               ))}
             </div>

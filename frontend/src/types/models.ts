@@ -863,6 +863,14 @@ export interface ImportJob {
   validationErrors?: ImportValidationError[];
   processingErrors?: string[];
   metrics?: ImportMetrics;
+  // #905: the worker persists flat counts and the jobs-list endpoint
+  // returns them verbatim; `metrics` above only exists on the report
+  // shape (mapped server-side in getJobReport).
+  totalRecords?: number;
+  successCount?: number;
+  errorCount?: number;
+  unprocessedFormats?: number;
+  errors?: Array<{ row?: number; error: string; code?: string; fileName?: string; filePath?: string }>;
   createdAt?: Date | string;
   startedAt?: Date | string;
   completedAt?: Date | string;

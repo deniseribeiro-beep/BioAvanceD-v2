@@ -576,7 +576,20 @@ class ImportAsyncService {
         totalRecords: job.totalRecords,
         successCount: job.successCount,
         errorCount: job.errorCount,
-        errors: job.importErrors,
+        // #905: the worker writes `errors`; nothing ever wrote
+        // `importErrors`, so this mapping returned undefined for every job
+        // since the field existed. importErrors kept as a fallback belt in
+        // case any historical document carries the old name.
+        errors: job.errors ?? job.importErrors,
+        // #905: ResultsPage's report modal reads a nested metrics object
+        // (frontend ImportMetrics shape); the worker writes flat counts.
+        // Map them here so the modal's strip actually renders.
+        metrics: {
+          totalRecords: job.totalRecords,
+          successfulRecords: job.successCount,
+          failedRecords: job.errorCount,
+          duplicatesFound: job.duplicatesFound ?? 0,
+        },
         progress: job.progress,
         createdAt: job.createdAt,
         startedAt: job.startedAt,

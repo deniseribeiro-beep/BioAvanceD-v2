@@ -632,7 +632,10 @@ describe('import-async.service', () => {
         totalRecords: 10,
         successCount: 9,
         errorCount: 1,
-        importErrors: ['line 3 invalid'],
+        // #905: the worker writes `errors` -- the old fixture seeded
+        // `importErrors`, a field no writer ever set, pinning the broken
+        // mapping as if correct (the #803 mock-fidelity class).
+        errors: [{ row: 3, error: 'line 3 invalid' }],
         progress: 100,
         createdAt: new Date('2026-01-01'),
         startedAt: new Date('2026-01-01'),
@@ -651,13 +654,32 @@ describe('import-async.service', () => {
         totalRecords: 10,
         successCount: 9,
         errorCount: 1,
-        errors: ['line 3 invalid'],
+        errors: [{ row: 3, error: 'line 3 invalid' }],
+        // #905: the frontend report modal reads a nested metrics object;
+        // the report maps the worker's flat counts into it.
+        metrics: {
+          totalRecords: 10,
+          successfulRecords: 9,
+          failedRecords: 1,
+          duplicatesFound: 0,
+        },
         progress: 100,
         createdAt: job.createdAt,
         startedAt: job.startedAt,
         completedAt: job.completedAt,
         fhirResources: ['Patient/1'],
       });
+    });
+
+    it('falls back to a legacy importErrors field when errors is absent (#905 belt)', async () => {
+      vi.spyOn(service, 'getJobStatus').mockResolvedValue({
+        jobID: 'j2',
+        status: 'completed',
+        importErrors: ['legacy'],
+      });
+
+      const report = await service.getJobReport({}, 'j2');
+      expect(report.errors).toEqual(['legacy']);
     });
 
     it('defaults fhirResources to [] when absent and propagates getJobStatus errors', async () => {
