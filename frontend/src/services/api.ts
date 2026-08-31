@@ -39,6 +39,23 @@ export interface ApiRequestConfig extends AxiosRequestConfig {
   suppressAuthRedirect?: boolean;
 }
 
+// #898: the shared envelope shape most JSON routes on this backend actually
+// answer with -- verified directly against policy.routes.js (GET/POST/PUT),
+// access.routes.js, result.routes.js, user.routes.js's /register, and
+// master-data.routes.js (the router factory behind measurement-units,
+// quality-descriptions, sample-types, sample-origins, extraction-protocols
+// and collections). `data` is optional because several PUT handlers
+// (policy.routes.js:220-223, access.routes.js:158-161,
+// result.routes.js:504-507 and :591-... for link-sample) return only
+// `{ success, message }` with no `data` key at all -- writing the raw
+// envelope into state instead of reloading was exactly the #898 bug class.
+// A single `ApiEnvelope<never>` reads as "success/message only" for those.
+export type ApiEnvelope<T> = {
+  success: boolean;
+  message?: string;
+  data?: T;
+};
+
 const NO_TOKEN_PROTECTED_REQUEST = 'NO_TOKEN_PROTECTED_REQUEST';
 const TOKEN_OPTIONAL_ROUTES = [
   '/auth/login',
@@ -268,8 +285,12 @@ api.interceptors.response.use(
 
 // ========== PATIENT SERVICES ==========
 export const patientService = {
+  // paciente.controller.js's listar() nests the page inside `data`
+  // (`data: { patients, total, limit, skip }`), in both its "cadastro" and
+  // "operacional" branches (paciente.controller.js:220-228, :255-258) --
+  // `data` is never Patient[] directly.
   getAll: (params?: { limit?: number; skip?: number; patientName?: string; clinicalUnit?: string }) =>
-    api.get<Patient[]>('/patients', { params }),
+    api.get<ApiEnvelope<{ patients: Patient[]; total: number; limit: number; skip: number }>>('/patients', { params }),
   getById: (id: number | string) => api.get<Patient>(`/patients/${id}`),
   create: (data: Partial<Patient>) => api.post<Patient>('/patients', data),
   update: (id: number | string, data: Partial<Patient>) => api.put<Patient>(`/patients/${id}`, data),
@@ -294,11 +315,11 @@ export const phoneCodeService = {
 
 // ========== SAMPLE SERVICES ==========
 export const sampleService = {
-  getAll: () => api.get<Sample[]>('/samples'),
+  getAll: () => api.get<ApiEnvelope<Sample[]>>('/samples'),
   getById: (id: number) => api.get<Sample>(`/samples/${id}`),
   getComplianceGraph: (id: number | string) => api.get(`/samples/${id}/compliance-graph`),
   getByBarcode: (barcode: string) => api.get<{ sample: Sample; patient: { participantId: number; patientName: string; recordNumber: number } | null }>(`/samples/by-barcode/${encodeURIComponent(barcode)}`),
-  getResults: (id: number) => api.get<Result[]>(`/samples/${id}/results`), // Implementa Sample.getResults()
+  getResults: (id: number) => api.get<ApiEnvelope<Result[]>>(`/samples/${id}/results`), // Implementa Sample.getResults()
   getMovements: (id: string) => api.get<{ success: boolean; data: any[] }>(`/samples/${id}/movements`), // Histórico de movimentações
   create: (data: Partial<Sample>) => api.post<Sample>('/samples', data),
   update: (id: number | string, data: Partial<Sample>) => api.put<Sample>(`/samples/${id}`, data),
@@ -347,7 +368,7 @@ export const dataImportService = {
 // ========== RESULT SERVICES ==========
 export const resultService = {
   getAll: (importJobID?: string) => {
-    return api.get<Result[]>('/results', {
+    return api.get<ApiEnvelope<Result[]>>('/results', {
       params: importJobID ? { importJobID } : undefined
     });
   },
@@ -356,10 +377,12 @@ export const resultService = {
     api.post('/results/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     }),
-  create: (data: Partial<Result>) => api.post<Result>('/results', data),
+  create: (data: Partial<Result>) => api.post<ApiEnvelope<Result>>('/results', data), // result.routes.js:426-430
+  // result.routes.js:504-507 and :591-... (link-sample) both answer
+  // { success, message } with no `data` key.
   linkSample: (id: number, specimenId: string) =>
-    api.put<Result>(`/results/${id}/link-sample`, { specimenId }), // Implementa Result.linkSample()
-  update: (id: number, data: Partial<Result>) => api.put<Result>(`/results/${id}`, data),
+    api.put<ApiEnvelope<never>>(`/results/${id}/link-sample`, { specimenId }), // Implementa Result.linkSample()
+  update: (id: number, data: Partial<Result>) => api.put<ApiEnvelope<never>>(`/results/${id}`, data),
   delete: (id: number) => api.delete(`/results/${id}`),
   download: async (id: number | string) => {
     try {
@@ -471,9 +494,9 @@ export const analysisFileService = {
 
 // ========== EQUIPMENT SERVICES ==========
 export const equipmentService = {
-  getAll: () => api.get<Equipment[]>('/equipment'),
+  getAll: () => api.get<ApiEnvelope<Equipment[]>>('/equipment'),
   getById: (id: number) => api.get<Equipment>(`/equipment/${id}`),
-  getAnalytical: () => api.get<Equipment[]>('/equipment/analytical'),
+  getAnalytical: () => api.get<ApiEnvelope<Equipment[]>>('/equipment/analytical'),
   create: (data: Partial<Equipment>) => api.post<Equipment>('/equipment', data),
   update: (id: number | string, data: Partial<Equipment>) => api.put<Equipment>(`/equipment/${id}`, data),
   delete: (id: number | string) => api.delete(`/equipment/${id}`),
@@ -481,7 +504,10 @@ export const equipmentService = {
 
 // ========== TEMPERATURE SERVICES ==========
 export const temperatureService = {
-  getAll: () => api.get<Temperature[]>('/temperature'),
+  // temperature.service.js's getTemperatureHistory nests the page inside
+  // `data` (`data: { temperatures, total, limit, skip }`, temperature.
+  // service.js:226) -- `data` is never Temperature[] directly.
+  getAll: () => api.get<ApiEnvelope<{ temperatures: Temperature[]; total: number; limit: number; skip: number }>>('/temperature'),
   getById: (id: string) => api.get<Temperature>(`/temperature/${id}`),
   viewControl: (sensorID?: string, policyID?: string) => 
     api.get<any>('/temperature/control', { 
@@ -492,7 +518,7 @@ export const temperatureService = {
 
 // ========== SENSOR SERVICES ==========
 export const sensorService = {
-  getAll: () => api.get<Sensor[]>('/sensors'),
+  getAll: () => api.get<ApiEnvelope<Sensor[]>>('/sensors'),
   getById: (id: string) => api.get<Sensor>(`/sensors/${id}`),
   collectReading: (id: string) => 
     api.post<Temperature>(`/sensors/${id}/collect-reading`), // Implementa Sensor.collectReading()
@@ -503,29 +529,32 @@ export const sensorService = {
 
 // ========== POLICY SERVICES ==========
 export const policyService = {
-  getAll: () => api.get<Policy[]>('/policies'),
+  getAll: () => api.get<ApiEnvelope<Policy[]>>('/policies'),
   getById: (id: number) => api.get<Policy>(`/policies/${id}`),
-  getActiveLimit: (id: number, isMax: boolean = true) => 
+  getActiveLimit: (id: number, isMax: boolean = true) =>
     api.get<{ limit: number; type: string; unit: string }>(`/policies/${id}/active-limit`, {
       params: { type: isMax ? 'max' : 'min' }
     }), // Implementa Policy.getActiveLimit()
-  create: (data: Partial<Policy>) => api.post<Policy>('/policies', data),
-  update: (id: number, data: Partial<Policy>) => api.put<Policy>(`/policies/${id}`, data),
+  create: (data: Partial<Policy>) => api.post<ApiEnvelope<Policy>>('/policies', data), // policy.routes.js:163-167
+  update: (id: number, data: Partial<Policy>) => api.put<ApiEnvelope<never>>(`/policies/${id}`, data), // policy.routes.js:220-223, no data key
   delete: (id: number) => api.delete(`/policies/${id}`),
 };
 
 // ========== USER SERVICES ==========
 export const userService = {
-  getAll: () => api.get<User[]>('/users'),
+  getAll: () => api.get<ApiEnvelope<User[]>>('/users'),
   getById: (id: number) => api.get<User>(`/users/${id}`),
-  register: (data: Partial<User>) => api.post<User>('/users/register', data), // Implementa User.registerUser()
+  register: (data: Partial<User>) => api.post<ApiEnvelope<User>>('/users/register', data), // user.routes.js:105-109
   validateStatus: (id: number) => api.get<{ status: string }>(`/users/${id}/validate-status`), // Implementa User.validateUserStatus()
   registerPatient: (data: Partial<Patient>) => api.post<Patient>('/users/register-patient', data), // Implementa User.registerPatient()
   registerSample: (data: Partial<Sample>) => api.post<Sample>('/users/register-sample', data), // Implementa User.registerSample()
   recordWithdrawal: (data: Partial<Withdrawal>) => api.post<Withdrawal>('/users/record-withdrawal', data), // Implementa User.recordSampleWithdrawal()
   generateReport: (reportType: string) => api.post<Reports>('/users/generate-report', { reportType }), // Implementa User.generateReports()
   registerSensor: (data: Partial<Sensor>) => api.post<Sensor>('/users/register-sensor', data), // Implementa User.registerSensor()
-  getLogs: (filters?: any) => api.get<Log[]>('/users/logs', { params: filters }), // Implementa User.getLogs()
+  // log.service.js's getLogs (also used by logService.getLogs below) nests
+  // the page inside `data` (`data: { logs, total, page, totalPages }`,
+  // log.service.js:352-359) -- `data` is never Log[] directly.
+  getLogs: (filters?: any) => api.get<ApiEnvelope<{ logs: Log[]; total: number; page: number; totalPages: number }>>('/users/logs', { params: filters }), // Implementa User.getLogs()
   update: (id: number | string, data: Partial<User>) => api.put<User>(`/users/${id}`, data),
   delete: (id: number | string) => api.delete(`/users/${id}`),
   resetMFA: (id: number | string) => api.post(`/users/${id}/reset-mfa`),
@@ -535,7 +564,7 @@ export const userService = {
 
 // ========== ORGANIZATION SERVICES ==========
 export const organizationService = {
-  getAll: () => api.get<Organization[]>('/organizations'),
+  getAll: () => api.get<ApiEnvelope<Organization[]>>('/organizations'),
   create: (data: Partial<Organization>) => api.post<Organization>('/organizations', data),
   update: (id: string, data: Partial<Organization>) => api.put<Organization>(`/organizations/${id}`, data),
   delete: (id: string) => api.delete(`/organizations/${id}`),
@@ -553,7 +582,7 @@ export const reportTemplateService = {
 
 // ========== COLLECTION SERVICES (RF020, MIABIS Collection) ==========
 export const collectionsService = {
-  getAll: () => api.get<Collection[]>('/collections'),
+  getAll: () => api.get<ApiEnvelope<Collection[]>>('/collections'),
   getById: (id: string) => api.get<Collection>(`/collections/${id}`),
   create: (data: Partial<Collection>) => api.post<Collection>('/collections', data),
   update: (id: string, data: Partial<Collection>) => api.put<Collection>(`/collections/${id}`, data),
@@ -562,15 +591,19 @@ export const collectionsService = {
 
 // ========== ACCESS SERVICES ==========
 export const accessService = {
-  getAll: () => api.get<Access[]>('/access'),
+  getAll: () => api.get<ApiEnvelope<Access[]>>('/access'),
   getById: (id: number) => api.get<Access>(`/access/${id}`),
-  create: (data: Partial<Access>) => api.post<Access>('/access', data),
-  update: (id: number, data: Partial<Access>) => api.put<Access>(`/access/${id}`, data),
+  create: (data: Partial<Access>) => api.post<ApiEnvelope<Access>>('/access', data), // access.routes.js:100-104
+  update: (id: number, data: Partial<Access>) => api.put<ApiEnvelope<never>>(`/access/${id}`, data), // access.routes.js:158-161, no data key
   delete: (id: number) => api.delete(`/access/${id}`),
 };
 
 // ========== REPORTS SERVICES ==========
 export const reportsService = {
+  // #898: the one exception among the api.get<X[]> sites -- reports.
+  // routes.js's GET / answers `res.status(200).json(reports.map(...))`
+  // (reports.routes.js:906, `#637` region), a bare array with no
+  // { success, data } envelope. Left as Reports[], not ApiEnvelope<Reports[]>.
   getAll: () => api.get<Reports[]>('/reports'),
   getById: (id: number) => api.get<Reports>(`/reports/${id}`),
   generate: (reportType: string) => api.post<Reports>('/reports/generate', { reportType }), // Implementa User.generateReports()
@@ -596,16 +629,19 @@ export const reportsService = {
 
 // ========== MEASUREMENT UNIT SERVICES ==========
 export const measurementUnitService = {
-  getAll: () => api.get<SampleWithMeasurementUnit[]>('/measurement-units'),
+  // master-data.routes.js (the router factory this mount uses) always
+  // answers { success, data } -- including PUT, unlike policy/access/result's
+  // updates (master-data.routes.js:77, :95, :140, :173).
+  getAll: () => api.get<ApiEnvelope<SampleWithMeasurementUnit[]>>('/measurement-units'),
   getById: (id: number) => api.get<SampleWithMeasurementUnit>(`/measurement-units/${id}`),
-  create: (data: Partial<SampleWithMeasurementUnit>) => api.post<SampleWithMeasurementUnit>('/measurement-units', data),
-  update: (id: number, data: Partial<SampleWithMeasurementUnit>) => api.put<SampleWithMeasurementUnit>(`/measurement-units/${id}`, data),
+  create: (data: Partial<SampleWithMeasurementUnit>) => api.post<ApiEnvelope<SampleWithMeasurementUnit>>('/measurement-units', data),
+  update: (id: number, data: Partial<SampleWithMeasurementUnit>) => api.put<ApiEnvelope<SampleWithMeasurementUnit>>(`/measurement-units/${id}`, data),
   delete: (id: number) => api.delete(`/measurement-units/${id}`),
 };
 
 // ========== QUALITY DESCRIPTION SERVICES ==========
 export const qualityDescriptionService = {
-  getAll: () => api.get<SampleWithQualityDescription[]>('/quality-descriptions'),
+  getAll: () => api.get<ApiEnvelope<SampleWithQualityDescription[]>>('/quality-descriptions'),
   getById: (id: number) => api.get<SampleWithQualityDescription>(`/quality-descriptions/${id}`),
   create: (data: Partial<SampleWithQualityDescription>) => api.post<SampleWithQualityDescription>('/quality-descriptions', data),
   update: (id: number, data: Partial<SampleWithQualityDescription>) => api.put<SampleWithQualityDescription>(`/quality-descriptions/${id}`, data),
@@ -614,27 +650,27 @@ export const qualityDescriptionService = {
 
 // ========== SAMPLE TYPE SERVICES ==========
 export const sampleTypeService = {
-  getAll: () => api.get<any[]>('/sample-types'),
+  getAll: () => api.get<ApiEnvelope<any[]>>('/sample-types'),
   getById: (id: number) => api.get<any>(`/sample-types/${id}`),
   create: (data: Partial<any>) => api.post<any>('/sample-types', data),
 };
 
 // ========== ANALYSIS TYPE SERVICES ==========
 export const analysisTypeService = {
-  getAll: () => api.get<any[]>('/analysis-types'),
+  getAll: () => api.get<ApiEnvelope<any[]>>('/analysis-types'),
   create: (data: { name: string; code?: string }) => api.post<any>('/analysis-types', data),
 };
 
 // ========== SAMPLE ORIGIN SERVICES ==========
 export const sampleOriginService = {
-  getAll: () => api.get<any[]>('/sample-origins'),
+  getAll: () => api.get<ApiEnvelope<any[]>>('/sample-origins'),
   getById: (id: number) => api.get<any>(`/sample-origins/${id}`),
   create: (data: Partial<any>) => api.post<any>('/sample-origins', data),
 };
 
 // ========== EXTRACTION PROTOCOL SERVICES ==========
 export const extractionProtocolService = {
-  getAll: () => api.get<any[]>('/extraction-protocols'),
+  getAll: () => api.get<ApiEnvelope<any[]>>('/extraction-protocols'),
   getById: (id: number) => api.get<any>(`/extraction-protocols/${id}`),
   create: (data: Partial<any>) => api.post<any>('/extraction-protocols', data),
 };

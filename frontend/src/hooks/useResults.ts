@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Result } from '../types/models';
 import { resultService } from '../services/api';
-import { extractResponseEntity } from '../api/response.adapters';
+import { extractResponseEntity, extractResponseItems } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 import { useRequestSequence } from './useRequestSequence';
@@ -32,11 +32,8 @@ export function useResults(importJobID?: string) {
       setLoading(true);
       const response = await resultService.getAll(importJobID);
       if (!requestSeq.isCurrent(seq)) return;
-      const responseData: any = response.data;
       // API agora retorna { data: [...], pagination: {...} }
-      const resultsData = Array.isArray(responseData)
-        ? responseData
-        : (responseData?.data || []);
+      const resultsData = extractResponseItems<Result>(response);
       setResults(resultsData);
       setError(null);
     } catch (err: any) {
