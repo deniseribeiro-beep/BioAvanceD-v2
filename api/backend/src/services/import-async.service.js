@@ -576,10 +576,13 @@ class ImportAsyncService {
         totalRecords: job.totalRecords,
         successCount: job.successCount,
         errorCount: job.errorCount,
-        // #905: the worker writes `errors`; nothing ever wrote
-        // `importErrors`, so this mapping returned undefined for every job
-        // since the field existed. importErrors kept as a fallback belt in
-        // case any historical document carries the old name.
+        // #905: the worker writes `errors`. The old mapping read
+        // `importErrors`, which ImportJob.toJSON() stamped as an
+        // always-empty [] on every created document (nothing ever
+        // populated it) -- so the report carried no error detail, ever.
+        // ImportJob no longer emits the field; the ?? belt only matters
+        // for a job the worker never reached (errors absent entirely),
+        // where older documents still carry the stamped [].
         errors: job.errors ?? job.importErrors,
         // #905: ResultsPage's report modal reads a nested metrics object
         // (frontend ImportMetrics shape); the worker writes flat counts.

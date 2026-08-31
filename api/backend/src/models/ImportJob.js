@@ -16,7 +16,9 @@ class ImportJob {
     this.totalRecords = data.totalRecords || 0;
     this.successCount = data.successCount || 0;
     this.errorCount = data.errorCount || 0;
-    this.importErrors = data.importErrors || [];
+    // #905: importErrors removed -- the worker writes `errors`, and this
+    // constructor was the last writer, stamping an always-empty
+    // importErrors: [] onto every new job document via toJSON().
     this.metadata = data.metadata || {};
     this.createdAt = data.createdAt || new Date();
     this.updatedAt = data.updatedAt || new Date();
@@ -60,7 +62,6 @@ class ImportJob {
       totalRecords: this.totalRecords,
       successCount: this.successCount,
       errorCount: this.errorCount,
-      importErrors: this.importErrors,
       metadata: this.metadata,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
