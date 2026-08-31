@@ -24,18 +24,23 @@ import { consentLinkPath, mintConsentToken } from './helpers/consentJwt';
 // The page tests mint the token directly rather than via the operator
 // endpoint -- see helpers/consentJwt.ts for why that is forced, not preferred.
 //
-// Writing this spec turned up three issues. Two are fixed and load-bearing for
-// it; the third is why one test is fixme'd:
+// Writing this spec turned up three issues, all now fixed:
 //   - #829 (fixed) -- generate-link had no try/catch, so sendConsentEmail's
 //     throw exited the API process. Attempting these tests took the backend
 //     down for the whole suite rather than failing.
 //   - #820 (fixed) -- createPatientConsent 422'd every signature-less
 //     manifestation, which is exactly what this page sends. The acceptance
 //     test asserts the Consent is recorded; it previously pinned the 422.
-//   - #833 (open) -- no email can be sent on this stack at all, so the real
-//     POST /e-consent/generate-link cannot return 200 here. The four tests
-//     about the *page* mint the JWT directly (helpers/consentJwt.ts); the one
-//     test about the *operator endpoint* is fixme'd on #833.
+//   - #833 (fixed) -- no email could be sent on this stack: sendEmail was
+//     Resend-only against a deliberately-dummy RESEND_API_KEY, with the
+//     smtp-test (Mailpit) container beside it reachable by no backend code
+//     path. sendEmail now selects a real SMTP transport when SMTP_HOST is
+//     set, which the test stack's compose.test.yml does, routing to Mailpit.
+//     The four tests about the *page* still mint the JWT directly
+//     (helpers/consentJwt.ts) rather than going through generate-link -- that
+//     is a deliberate choice unrelated to #833, see that helper. The one test
+//     about the *operator endpoint* below is un-fixme'd; proof that it
+//     actually passes runs at the Docker e2e gate, not from this repo copy.
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
 const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
@@ -65,11 +70,12 @@ async function seedParticipant(): Promise<{ participantId: string; email: string
   return { participantId, email };
 }
 
-// NOTE: the link is minted locally rather than via POST /e-consent/generate-link.
-// That endpoint emails the invitation, and no email can be sent on this stack
-// at all (#833) -- so it cannot return 200 here for reasons unrelated to the
-// page under test. The one test that does exercise it is test.fixme'd on #833.
-// See helpers/consentJwt.ts for the full reasoning.
+// NOTE: the link is minted locally rather than via POST /e-consent/generate-link
+// for the four page tests below. That endpoint emails the invitation; #833
+// (fixed) means it can now actually send on this stack, but the page tests
+// still mint the JWT directly -- unrelated to #833, see helpers/consentJwt.ts
+// for that reasoning. The one test that does exercise generate-link is below,
+// un-fixme'd now that #833 gives it a real transport to send through.
 
 test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- real backend', () => {
   test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set -- run via npm run test:e2e:docker');
@@ -227,18 +233,20 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
     expect(consent?.responses).toMatchObject({ 'research-822': true });
   });
 
-  // BLOCKED ON #833 -- an environment gap, not a weakened assertion.
-  //
-  // This is the only test here that goes through the operator's real path.
-  // It cannot pass on this stack: sendConsentEmail is Resend-only against a
+  // #833 (fixed) -- un-fixme'd. This is the only test here that goes through
+  // the operator's real path, including the real send. It used to be unable
+  // to pass on this stack: sendConsentEmail was Resend-only against a
   // deliberately-dummy RESEND_API_KEY, and the smtp-test (Mailpit) container
-  // beside it is reachable by no backend code path -- so the send fails with
-  // "API key is invalid" and the route correctly reports it.
+  // beside it was reachable by no backend code path, so the send failed with
+  // "API key is invalid". sendEmail now selects a real SMTP transport when
+  // SMTP_HOST is set (compose.test.yml sets it to the Mailpit container), so
+  // the send -- and this test -- can actually succeed here.
   //
-  // Kept rather than deleted because it is the marker for #833, and because
-  // it is what would catch a regression of #829: before that fix, this same
-  // request exited the API process instead of returning a status.
-  test.fixme('an operator can generate and email a consent link (#833)', async ({ request }) => {
+  // It is also what catches a regression of #829: before that fix, this same
+  // request exited the API process instead of returning a status. Proof that
+  // this passes for real runs at the Docker e2e gate; it was not run from
+  // this worktree (see #833's close comment).
+  test('an operator can generate and email a consent link (#833)', async ({ request }) => {
     const { participantId, email } = await seedParticipant();
 
     const response = await request.post(`${apiBaseURL}/api/e-consent/generate-link`, {

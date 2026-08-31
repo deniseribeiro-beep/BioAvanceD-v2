@@ -276,6 +276,10 @@ describe('NotificationService', () => {
       notificationService.emailFrom = 'notifications@example.com';
     });
 
+    // #903: persistComplianceLog now also writes an ATTEMPTED row before the
+    // transport is touched (RF015 AC#3, "Registrar tentativas"), so the
+    // failure path is two calls, not one -- the count assertion below is a
+    // deliberate strengthening, not a loosening, of what this test pins.
     it('records a DELIVERY_FAILED compliance log when the provider returns an error', async () => {
       const sendMock = vi.fn().mockResolvedValue({ error: { message: 'invalid domain' } });
       vi.spyOn(notificationService, 'getResendClient').mockReturnValue({ emails: { send: sendMock } });
@@ -291,8 +295,12 @@ describe('NotificationService', () => {
         })
       ).rejects.toThrow('invalid domain');
 
-      expect(complianceSpy).toHaveBeenCalledTimes(1);
-      expect(complianceSpy).toHaveBeenCalledWith(
+      expect(complianceSpy).toHaveBeenCalledTimes(2);
+      expect(complianceSpy.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ deliveryStatus: 'ATTEMPTED', attemptedAt: expect.any(Date) })
+      );
+      const lastCall = complianceSpy.mock.calls[complianceSpy.mock.calls.length - 1][0];
+      expect(lastCall).toEqual(
         expect.objectContaining({
           notificationType: 'RF_CONSENT_NOTIFICATION',
           deliveryStatus: 'DELIVERY_FAILED',
@@ -318,21 +326,179 @@ describe('NotificationService', () => {
       );
     });
 
-    it('still records exactly one compliance log on the success path, with no failure fields', async () => {
+    // #903: same as above -- the success path is now ATTEMPTED followed by
+    // the sentAt row, so it is two calls, not one; strengthened accordingly.
+    it('records exactly two compliance logs on the success path: ATTEMPTED then the sentAt row', async () => {
       const sendMock = vi.fn().mockResolvedValue({ data: { id: 'msg-1' } });
       vi.spyOn(notificationService, 'getResendClient').mockReturnValue({ emails: { send: sendMock } });
       const complianceSpy = vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
 
       await notificationService.sendEmail({ to: 'p@example.com', subject: 'S', text: 'x' });
 
-      expect(complianceSpy).toHaveBeenCalledTimes(1);
-      const payload = complianceSpy.mock.calls[0][0];
+      expect(complianceSpy).toHaveBeenCalledTimes(2);
+      expect(complianceSpy.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ deliveryStatus: 'ATTEMPTED', attemptedAt: expect.any(Date) })
+      );
+      const payload = complianceSpy.mock.calls[complianceSpy.mock.calls.length - 1][0];
       expect(payload.sentAt).toBeInstanceOf(Date);
       expect(payload.deliveryStatus).toBeUndefined();
     });
 
     it('no longer exposes persistConsentDeliveryFailure', () => {
       expect(notificationService.persistConsentDeliveryFailure).toBeUndefined();
+    });
+
+    // #903: writes the ATTEMPTED row before the transport call on both
+    // paths, so a crash mid-send still leaves a "we tried" record.
+    it('writes the ATTEMPTED compliance row before invoking the transport', async () => {
+      const order = [];
+      const sendMock = vi.fn().mockImplementation(async () => {
+        order.push('send');
+        return { data: { id: 'msg-order' } };
+      });
+      vi.spyOn(notificationService, 'getResendClient').mockReturnValue({ emails: { send: sendMock } });
+      vi.spyOn(notificationService, 'persistComplianceLog').mockImplementation(async (payload) => {
+        if (payload.deliveryStatus === 'ATTEMPTED') order.push('attempted');
+      });
+
+      await notificationService.sendEmail({ to: 'p@example.com', subject: 'S', text: 'x' });
+
+      expect(order).toEqual(['attempted', 'send']);
+    });
+
+    it('writes the ATTEMPTED compliance row before invoking the transport, even when the send later fails', async () => {
+      const order = [];
+      const sendMock = vi.fn().mockImplementation(async () => {
+        order.push('send');
+        return { error: { message: 'invalid domain' } };
+      });
+      vi.spyOn(notificationService, 'getResendClient').mockReturnValue({ emails: { send: sendMock } });
+      vi.spyOn(notificationService, 'persistComplianceLog').mockImplementation(async (payload) => {
+        if (payload.deliveryStatus === 'ATTEMPTED') order.push('attempted');
+      });
+
+      await expect(
+        notificationService.sendEmail({ to: 'p@example.com', subject: 'S', text: 'x' })
+      ).rejects.toThrow('invalid domain');
+
+      expect(order).toEqual(['attempted', 'send']);
+    });
+
+    // #903: the two pre-send validation throws had no recipient resolved yet
+    // to record against, so they used to leave no compliance row at all.
+    it('records a VALIDATION_FAILED compliance log before throwing when subject is missing, without changing the thrown message', async () => {
+      const complianceSpy = vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
+
+      await expect(
+        notificationService.sendEmail({ to: 'a@x.com', html: '<p>x</p>' })
+      ).rejects.toThrow('subject e html/text são obrigatórios para envio de e-mail');
+
+      expect(complianceSpy).toHaveBeenCalledTimes(1);
+      expect(complianceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          originalTo: 'a@x.com',
+          deliveryStatus: 'DELIVERY_FAILED',
+          errorCode: 'VALIDATION_FAILED',
+          failedAt: expect.any(Date)
+        })
+      );
+    });
+
+    it('records a VALIDATION_FAILED compliance log before throwing when resolveRecipient rejects (e.g. empty recipient)', async () => {
+      const complianceSpy = vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
+
+      await expect(
+        notificationService.sendEmail({ to: '   ', subject: 'Hello', text: 'body' })
+      ).rejects.toThrow('Destinatário é obrigatório');
+
+      expect(complianceSpy).toHaveBeenCalledTimes(1);
+      expect(complianceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliveryStatus: 'DELIVERY_FAILED',
+          errorCode: 'VALIDATION_FAILED',
+          failedAt: expect.any(Date)
+        })
+      );
+    });
+  });
+
+  // #833: a real SMTP transport, selected by environment (option 1). This
+  // repo's Vitest setup does not let vi.mock() reliably intercept require()
+  // (NotificationService.js is loaded via a native createRequire, outside
+  // Vitest's module graph -- see e.g. tests/unit/database-mongo.test.js's
+  // note on the same pattern), so SMTP is stubbed the same way getResendClient
+  // already is above: by spying on the lazy getter, not by mocking the
+  // 'nodemailer' package itself.
+  describe('sendEmail SMTP transport selection (#833)', () => {
+    beforeEach(() => {
+      notificationService.isDevelopment = false;
+      notificationService.emailFrom = 'notifications@example.com';
+    });
+
+    it('selects Resend (unchanged) when SMTP_HOST is unset', async () => {
+      delete process.env.SMTP_HOST;
+      const sendMock = vi.fn().mockResolvedValue({ data: { id: 'msg-resend' } });
+      vi.spyOn(notificationService, 'getResendClient').mockReturnValue({ emails: { send: sendMock } });
+      vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
+
+      const result = await notificationService.sendEmail({ to: 'p@example.com', subject: 'S', text: 'x' });
+
+      expect(sendMock).toHaveBeenCalled();
+      expect(result.provider).toBe('resend');
+    });
+
+    it('selects SMTP and sends via nodemailer when SMTP_HOST is set', async () => {
+      process.env.SMTP_HOST = 'smtp-test';
+      process.env.SMTP_PORT = '1025';
+      const sendMailMock = vi.fn().mockResolvedValue({ messageId: 'smtp-msg-1' });
+      vi.spyOn(notificationService, 'getSmtpTransport').mockReturnValue({ sendMail: sendMailMock });
+      const complianceSpy = vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
+
+      const result = await notificationService.sendEmail({
+        to: 'patient@example.com',
+        subject: 'Hello',
+        html: '<p>body</p>',
+        notificationType: 'TEST'
+      });
+
+      expect(sendMailMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          from: 'notifications@example.com',
+          to: 'patient@example.com',
+          subject: 'Hello',
+          html: '<p>body</p>'
+        })
+      );
+      expect(result.success).toBe(true);
+      expect(result.provider).toBe('smtp');
+      expect(result.messageId).toBe('smtp-msg-1');
+
+      const lastCall = complianceSpy.mock.calls[complianceSpy.mock.calls.length - 1][0];
+      expect(lastCall).toEqual(
+        expect.objectContaining({ provider: 'smtp', sentAt: expect.any(Date), messageId: 'smtp-msg-1' })
+      );
+    });
+
+    it('records a DELIVERY_FAILED row with provider smtp and rethrows when the SMTP transport rejects', async () => {
+      process.env.SMTP_HOST = 'smtp-test';
+      process.env.SMTP_PORT = '1025';
+      const sendMailMock = vi.fn().mockRejectedValue(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
+      vi.spyOn(notificationService, 'getSmtpTransport').mockReturnValue({ sendMail: sendMailMock });
+      const complianceSpy = vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
+
+      await expect(
+        notificationService.sendEmail({ to: 'patient@example.com', subject: 'Hello', text: 'body' })
+      ).rejects.toThrow('connect ECONNREFUSED');
+
+      const lastCall = complianceSpy.mock.calls[complianceSpy.mock.calls.length - 1][0];
+      expect(lastCall).toEqual(
+        expect.objectContaining({
+          provider: 'smtp',
+          deliveryStatus: 'DELIVERY_FAILED',
+          errorCode: 'ECONNREFUSED',
+          failedAt: expect.any(Date)
+        })
+      );
     });
   });
 

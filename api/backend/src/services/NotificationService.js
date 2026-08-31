@@ -27,6 +27,7 @@ function isLoopbackHostname(hostname) {
 class NotificationService {
   constructor() {
     this.resendClient = null;
+    this.smtpTransport = null;
     this.emailFrom = String(process.env.EMAIL_FROM || '').trim();
     this.adminEmail = process.env.ADMIN_EMAIL || '';
     this.isDevelopment = String(process.env.NODE_ENV || 'development').toLowerCase() === 'development';
@@ -124,6 +125,25 @@ class NotificationService {
     return this.resendClient;
   }
 
+  // #833: real SMTP transport, selected by environment (option 1). Lazy and
+  // cached like getResendClient above. host/port come from the test stack's
+  // Mailpit container (compose.test.yml) in test; any real SMTP relay
+  // elsewhere. No auth/TLS config here because Mailpit needs neither --
+  // extending this for an authenticated relay is a separate change.
+  getSmtpTransport() {
+    if (this.smtpTransport) {
+      return this.smtpTransport;
+    }
+
+    const nodemailer = require('nodemailer');
+    this.smtpTransport = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT || 1025),
+      secure: false
+    });
+    return this.smtpTransport;
+  }
+
   resolveRecipient(originalTo) {
     const safeTo = String(originalTo || '').trim();
     if (!safeTo) {
@@ -189,15 +209,52 @@ class NotificationService {
   }
 
   async sendEmail({ to, subject, html, text, notificationType, metadata = {} }) {
+    // #903 (RF015 AC#3, "Registrar tentativas, falhas..."): these two throws
+    // used to leave no record at all -- there is no recipient resolved yet
+    // to attach one to, but the raw `to` argument is still worth keeping so
+    // a validation failure isn't invisible in the compliance log.
     if (!subject || (!html && !text)) {
+      await this.persistComplianceLog({
+        notificationType: notificationType || 'generic',
+        subject,
+        originalTo: String(to || '').trim(),
+        metadata,
+        deliveryStatus: 'DELIVERY_FAILED',
+        errorCode: 'VALIDATION_FAILED',
+        failedAt: new Date()
+      });
       throw new Error('subject e html/text são obrigatórios para envio de e-mail');
     }
 
     if (!this.emailFrom) {
+      await this.persistComplianceLog({
+        notificationType: notificationType || 'generic',
+        subject,
+        originalTo: String(to || '').trim(),
+        metadata,
+        deliveryStatus: 'DELIVERY_FAILED',
+        errorCode: 'VALIDATION_FAILED',
+        failedAt: new Date()
+      });
       throw new Error('EMAIL_FROM é obrigatório para envio de e-mails');
     }
 
-    const recipient = this.resolveRecipient(to);
+    let recipient;
+    try {
+      recipient = this.resolveRecipient(to);
+    } catch (error) {
+      await this.persistComplianceLog({
+        notificationType: notificationType || 'generic',
+        subject,
+        originalTo: String(to || '').trim(),
+        metadata,
+        deliveryStatus: 'DELIVERY_FAILED',
+        errorCode: 'VALIDATION_FAILED',
+        failedAt: new Date()
+      });
+      throw error;
+    }
+
     this.logDevelopmentPreview({
       subject,
       text,
@@ -207,7 +264,11 @@ class NotificationService {
       notificationType: notificationType || 'generic'
     });
 
-    const resend = this.getResendClient();
+    // #833: real SMTP transport, selected by environment (option 1) --
+    // decided at send time, not in the constructor, so tests (and ops) can
+    // flip SMTP_HOST per-case/per-deploy without restarting the process.
+    // Resend stays the default when SMTP_HOST is unset, exactly as before.
+    const provider = String(process.env.SMTP_HOST || '').trim() ? 'smtp' : 'resend';
 
     // RF015 AC#3 ("Registrar tentativas, falhas, entrega e confirmacao"):
     // persistComplianceLog used to run only after a successful send, so every
@@ -217,26 +278,57 @@ class NotificationService {
     // wrote non-canonical fields onto Patient; RF015 puts this recording on
     // the notification, so it lives here and covers every notificationType,
     // not just consent. persistComplianceLog swallows its own errors, so it
-    // cannot mask the failure being reported. See #903 for the legs still
-    // outstanding (attempts, escalation, confirmation, and the pre-send
-    // validation throws above, which have no recipient resolved yet to
-    // record against); #811 covered the failure leg and is closed.
-    let response;
-    try {
-      response = await resend.emails.send({
-        from: this.emailFrom,
-        to: recipient.to,
-        subject,
-        html,
-        text
-      });
+    // cannot mask the failure being reported. #811 covered the failure leg
+    // and is closed; #903 covers the attempt record below plus the pre-send
+    // validation throws above (escalation/confirmation remain outstanding).
 
-      if (response.error) {
-        throw new Error(response.error.message || 'Falha ao enviar e-mail via Resend');
+    // #903: record the attempt itself, before the transport is touched, so a
+    // crash or hang mid-send still leaves a "we tried" row rather than
+    // nothing. Insert-only, same as every other compliance write here;
+    // volume/retention of these rows is #812's tracked concern.
+    await this.persistComplianceLog({
+      provider,
+      notificationType: notificationType || 'generic',
+      subject,
+      to: recipient.to,
+      originalTo: recipient.originalTo,
+      redirectedByEnvironment: recipient.redirected,
+      metadata,
+      deliveryStatus: 'ATTEMPTED',
+      attemptedAt: new Date()
+    });
+
+    let messageId = null;
+    try {
+      if (provider === 'smtp') {
+        const transporter = this.getSmtpTransport();
+        const info = await transporter.sendMail({
+          from: this.emailFrom,
+          to: recipient.to,
+          subject,
+          html,
+          text
+        });
+        messageId = info?.messageId || null;
+      } else {
+        const resend = this.getResendClient();
+        const response = await resend.emails.send({
+          from: this.emailFrom,
+          to: recipient.to,
+          subject,
+          html,
+          text
+        });
+
+        if (response.error) {
+          throw new Error(response.error.message || 'Falha ao enviar e-mail via Resend');
+        }
+
+        messageId = response.data?.id || null;
       }
     } catch (error) {
       await this.persistComplianceLog({
-        provider: 'resend',
+        provider,
         notificationType: notificationType || 'generic',
         subject,
         to: recipient.to,
@@ -250,11 +342,9 @@ class NotificationService {
       throw error;
     }
 
-    const messageId = response.data?.id || null;
-
     await this.persistComplianceLog({
       messageId,
-      provider: 'resend',
+      provider,
       notificationType: notificationType || 'generic',
       subject,
       to: recipient.to,
@@ -267,7 +357,7 @@ class NotificationService {
     return {
       success: true,
       channel: 'email',
-      provider: 'resend',
+      provider,
       mocked: false,
       notificationType: notificationType || 'generic',
       messageId,

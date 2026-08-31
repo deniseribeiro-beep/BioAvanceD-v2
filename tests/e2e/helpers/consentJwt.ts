@@ -4,14 +4,17 @@ import crypto from 'node:crypto';
 // e-consent page, so a spec can reach that page without going through
 // POST /api/e-consent/generate-link.
 //
-// Why not use the real endpoint: it sends an invitation email, and **no email
-// can be sent on the test stack at all** -- NotificationService.sendEmail is
-// Resend-only against a deliberately-dummy RESEND_API_KEY, and the smtp-test
-// (Mailpit) container running beside it is reachable by no backend code path
-// (#833). So `generate-link` cannot return 200 there for structural reasons,
-// not because of anything a spec does. participant-e-consent-page.spec.ts
-// keeps one test.fixme on the real endpoint as the marker for #833; everything
-// about the *page* is exercised through this helper instead.
+// Why not use the real endpoint: it sends an invitation email, and going
+// through generate-link for every page test would tie four page-focused
+// specs to the email transport being up, which is a separate concern from
+// what these tests are proving. #833 (fixed) means NotificationService.sendEmail
+// can now actually send on this stack -- it selects a real SMTP transport
+// against the smtp-test (Mailpit) container when SMTP_HOST is set, rather
+// than being Resend-only against a deliberately-dummy RESEND_API_KEY -- and
+// participant-e-consent-page.spec.ts has one un-fixme'd test that exercises
+// the real endpoint end to end. Everything about the *page* is still
+// exercised through this helper instead, to keep those tests independent of
+// the email transport.
 //
 // Written with node:crypto rather than `jsonwebtoken` on purpose: that package
 // is not a repo-root dependency, and this repo has twice had to clean up root
