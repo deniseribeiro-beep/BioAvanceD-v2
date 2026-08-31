@@ -158,6 +158,28 @@ describe('PUT /api/access/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
+
+  // #875: PUT /:id used to $set req.body verbatim -- an unfiltered or
+  // under-filtered body could inject arbitrary keys or overwrite identity
+  // fields. Only AccessModel.create()'s own fields (minus accessID, which
+  // is business identity) may reach $set.
+  it('#875: filters $set to the AccessModel allowlist, dropping injected/identity keys', async () => {
+    const coll = createCollectionMock({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
+    app.locals.db = createDbMock({ access: coll, ...rbacCollections });
+
+    const res = await request(app)
+      .put('/api/access/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ expiresAt: '2030-01-01T00:00:00.000Z', injected: 'x', accessID: 999 });
+
+    expect(res.status).toBe(200);
+    const setArg = coll.updateOne.mock.calls[0][1].$set;
+    expect(setArg).toHaveProperty('expiresAt');
+    expect(setArg).toHaveProperty('updatedAt');
+    expect(setArg).not.toHaveProperty('injected');
+    expect(setArg).not.toHaveProperty('accessID');
+    expect(Object.keys(setArg).sort()).toEqual(['expiresAt', 'updatedAt']);
+  });
 });
 
 describe('DELETE /api/access/:id', () => {

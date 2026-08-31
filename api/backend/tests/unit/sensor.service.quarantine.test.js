@@ -113,4 +113,49 @@ describe('sensor.service quarantine flow', () => {
       { session }
     );
   });
+
+  // #875: updateSensor's allowlist must not break the quarantine trigger for
+  // callers still sending the legacy `status` alias -- it should normalize
+  // onto maintenanceStatus (the real Sensor.create() field) before $set,
+  // not persist `status` itself (not a model field).
+  it('#875: normalizes the status alias onto maintenanceStatus before $set, still triggering quarantine', async () => {
+    const existingSensor = {
+      sensorId: 'S-300',
+      maintenanceStatus: 'operational'
+    };
+
+    const findOne = vi.fn(async () => existingSensor);
+    const updateOne = vi.fn(async () => ({ matchedCount: 1 }));
+    const sensorsCollection = { findOne, updateOne };
+
+    const withTransaction = vi.fn(async (cb) => cb());
+    const endSession = vi.fn(async () => undefined);
+    const session = { withTransaction, endSession };
+    const startSession = vi.fn(() => session);
+
+    const db = {
+      collection: vi.fn(() => sensorsCollection),
+      client: { startSession }
+    };
+
+    isQuarantineTriggerStatusMock.mockReturnValue(true);
+    quarantineBySensorStatusMock.mockResolvedValue({
+      triggered: true,
+      matched: 1,
+      quarantined: 1,
+      movements: 1,
+      reason: 'status:offline'
+    });
+
+    const result = await sensorService.updateSensor(db, 'S-300', {
+      status: 'offline'
+    });
+
+    expect(result.quarantine.triggered).toBe(true);
+    expect(isQuarantineTriggerStatusMock).toHaveBeenCalledWith('offline');
+
+    const setArg = updateOne.mock.calls[0][1].$set;
+    expect(setArg.maintenanceStatus).toBe('offline');
+    expect(setArg).not.toHaveProperty('status');
+  });
 });

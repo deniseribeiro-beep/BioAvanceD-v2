@@ -360,6 +360,29 @@ describe('sensor.service (non-quarantine paths)', () => {
       );
       expect(result).toEqual({ success: true, quarantine: { triggered: false } });
     });
+
+    // #875: updateSensor used to $set the caller's updateData verbatim --
+    // an unfiltered or under-filtered body could inject arbitrary keys or
+    // overwrite identity fields. Only Sensor.create()'s own fields (minus
+    // sensorId/sensorID, which are identity and part of the lookup query)
+    // may reach $set.
+    it('#875: filters $set to the SensorModel allowlist, dropping injected/identity keys', async () => {
+      const { db, collection } = makeDb();
+      const existing = { sensorId: 'S-1', maintenanceStatus: 'operational' };
+      collection.findOne.mockResolvedValue(existing);
+      collection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+      await sensorService.updateSensor(db, 'S-1', {
+        sensorModel: 'new-model',
+        injected: 'x',
+        sensorId: 'ignored'
+      });
+
+      const setArg = collection.updateOne.mock.calls[0][1].$set;
+      expect(setArg).toEqual(expect.objectContaining({ sensorModel: 'new-model', updatedAt: expect.any(Date) }));
+      expect(setArg).not.toHaveProperty('injected');
+      expect(setArg).not.toHaveProperty('sensorId');
+    });
   });
 
   describe('collectReading', () => {

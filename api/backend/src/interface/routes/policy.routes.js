@@ -187,11 +187,27 @@ router.put('/:id', authenticate, requirePermission('viewTemperature'), async (re
 
     const { ObjectId } = require('mongodb');
     const policiesCollection = db.collection('policies');
-    req.body.updatedAt = new Date();
+
+    // #875: $set used to be built straight from req.body, letting a caller
+    // inject arbitrary keys or overwrite fields like policyId/policyID.
+    // Allowlist to PolicyModel.create()'s own fields; policyId/policyID is
+    // business identity and is excluded, updatedAt is server-set here
+    // (never caller-supplied).
+    const ALLOWED_POLICY_UPDATE_FIELDS = [
+      'minThreshold', 'maxThreshold', 'targetTemperature', 'hysteresis',
+      'alertDelayMin', 'temperatureUnit', 'validFrom', 'validTo'
+    ];
+    const updateFields = {};
+    for (const field of ALLOWED_POLICY_UPDATE_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+        updateFields[field] = req.body[field];
+      }
+    }
+    updateFields.updatedAt = new Date();
 
     const result = await policiesCollection.updateOne(
       { _id: new ObjectId(req.params.id) },
-      { $set: req.body }
+      { $set: updateFields }
     );
 
     if (result.matchedCount === 0) {

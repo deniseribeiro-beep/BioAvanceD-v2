@@ -296,6 +296,29 @@ describe('policy.routes', () => {
 
       expect(res.status).toBe(400);
     });
+
+    // #875: PUT /:id used to $set req.body verbatim -- an unfiltered or
+    // under-filtered body could inject arbitrary keys or overwrite identity
+    // fields. Only PolicyModel.create()'s own fields (minus policyId/policyID,
+    // which are business identity) may reach $set.
+    it('#875: filters $set to the PolicyModel allowlist, dropping injected/identity keys', async () => {
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const db = { collection: vi.fn().mockReturnValue({ updateOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const res = await request(app)
+        .put('/api/policies/507f1f77bcf86cd799439011')
+        .send({ minThreshold: 1, injected: 'x', policyId: 999 });
+
+      expect(res.status).toBe(200);
+      const setArg = updateOne.mock.calls[0][1].$set;
+      expect(setArg).toHaveProperty('minThreshold', 1);
+      expect(setArg).toHaveProperty('updatedAt');
+      expect(setArg).not.toHaveProperty('injected');
+      expect(setArg).not.toHaveProperty('policyId');
+      expect(Object.keys(setArg).sort()).toEqual(['minThreshold', 'updatedAt']);
+    });
   });
 
   describe('DELETE /:id', () => {

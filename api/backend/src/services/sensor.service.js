@@ -183,7 +183,43 @@ class SensorService {
 
       const sensorsCollection = db.collection('sensors');
       const query = { $or: [{ sensorId }, { sensorID: sensorId }, { _id: sensorId }] };
-      const normalizedUpdateData = { ...(updateData || {}) };
+
+      // #875: normalizedUpdateData used to be an unfiltered spread of the
+      // caller's updateData, reaching $set as-is on both the transaction
+      // and non-transaction paths. First normalize known caller aliases
+      // onto their canonical Sensor.create() field name -- maintenanceStatus
+      // is the real model field; status/sensorStatus are legacy aliases the
+      // quarantine trigger below still needs to recognize, so fold them in
+      // only when maintenanceStatus itself is absent (same ?? precedence
+      // this code already relied on). Then allowlist to Sensor.create()'s
+      // own fields so unrecognized keys never reach $set. sensorId/sensorID
+      // are identity and already part of the lookup query above -- excluded.
+      const aliasedUpdateData = { ...(updateData || {}) };
+      if (aliasedUpdateData.maintenanceStatus === undefined) {
+        if (aliasedUpdateData.status !== undefined) {
+          aliasedUpdateData.maintenanceStatus = aliasedUpdateData.status;
+        } else if (aliasedUpdateData.sensorStatus !== undefined) {
+          aliasedUpdateData.maintenanceStatus = aliasedUpdateData.sensorStatus;
+        }
+      }
+      if (aliasedUpdateData.locationId === undefined && aliasedUpdateData.locationID !== undefined) {
+        aliasedUpdateData.locationId = aliasedUpdateData.locationID;
+      }
+      if (aliasedUpdateData.policyId === undefined && aliasedUpdateData.policyID !== undefined) {
+        aliasedUpdateData.policyId = aliasedUpdateData.policyID;
+      }
+
+      const ALLOWED_SENSOR_UPDATE_FIELDS = [
+        'sensorType', 'sensorModel', 'maintenanceStatus', 'lastCalibration',
+        'nextCalibration', 'calibrationCertificate', 'locationId', 'policyId',
+        'macAddress', 'organizationId'
+      ];
+      const normalizedUpdateData = {};
+      for (const field of ALLOWED_SENSOR_UPDATE_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(aliasedUpdateData, field)) {
+          normalizedUpdateData[field] = aliasedUpdateData[field];
+        }
+      }
 
       const existingSensor = await sensorsCollection.findOne(query);
       if (!existingSensor) {
@@ -194,8 +230,6 @@ class SensorService {
 
       const mergedStatus =
         normalizedUpdateData.maintenanceStatus ??
-        normalizedUpdateData.status ??
-        normalizedUpdateData.sensorStatus ??
         existingSensor.maintenanceStatus ??
         existingSensor.status ??
         existingSensor.sensorStatus;
