@@ -217,9 +217,10 @@ class NotificationService {
     // wrote non-canonical fields onto Patient; RF015 puts this recording on
     // the notification, so it lives here and covers every notificationType,
     // not just consent. persistComplianceLog swallows its own errors, so it
-    // cannot mask the failure being reported. See #811 for the legs still
-    // outstanding (attempts, escalation, and the pre-send validation throws
-    // above, which have no recipient resolved yet to record against).
+    // cannot mask the failure being reported. See #903 for the legs still
+    // outstanding (attempts, escalation, confirmation, and the pre-send
+    // validation throws above, which have no recipient resolved yet to
+    // record against); #811 covered the failure leg and is closed.
     let response;
     try {
       response = await resend.emails.send({
