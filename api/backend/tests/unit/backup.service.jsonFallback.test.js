@@ -3,7 +3,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
-const { ObjectId, Decimal128, Long, Binary } = require('mongodb');
+const { ObjectId, Decimal128, Long, Binary, BSON } = require('mongodb');
 const backupService = require('../../src/services/backup.service');
 
 // #738 (RF013 AC#3): the Docker images ship no mongodump/mongorestore, so
@@ -83,7 +83,89 @@ describe('#738: JSON-fallback backup round trip preserves BSON types', () => {
     // Untagged, so still a plain string -- the old lossiness preserved,
     // not newly introduced. Nothing throws, which is the point.
     expect(docs[0]._id).toBe('507f1f77bcf86cd799439011');
+    // Canonical mode (relaxed: false) wraps a bare JSON number in Int32,
+    // same as every other number in this file -- constraining the type
+    // here, not just the value, is what would catch a numeric-type
+    // regression (e.g. it silently becoming a native number).
+    expect(docs[0].n).toBeInstanceOf(BSON.Int32);
     expect(Number(docs[0].n)).toBe(42);
+  });
+
+  // #865: a legacy plain-JSON backup can contain a field whose NAME happens
+  // to begin with `$` -- e.g. carried over from a source system, or a user
+  // field named `$oid`/`$date`/`$numberInt`. EJSON.parse(raw, { relaxed:
+  // false }) reinterprets these as canonical type wrappers instead of
+  // passing them through, and restoreFromJsonBackup has already wiped
+  // earlier collections (deleteMany({}) before insertMany) by the time a
+  // later collection's parseBackupDocs runs -- so a newly-introduced throw
+  // here would leave those earlier collections dropped and empty.
+  describe('#865: legacy fields whose names collide with EJSON type wrappers', () => {
+    it('passes through a legacy-looking $oid field instead of throwing (malformed as an ObjectId)', () => {
+      const raw = JSON.stringify([{ a: { $oid: 'zzz' } }]);
+
+      const docs = backupService.parseBackupDocs(raw);
+
+      expect(docs).toHaveLength(1);
+      expect(docs[0].a).toEqual({ $oid: 'zzz' });
+    });
+
+    it('passes through a legacy-looking $date field instead of silently losing it', () => {
+      const raw = JSON.stringify([{ a: { $date: 'nope' } }]);
+
+      const docs = backupService.parseBackupDocs(raw);
+
+      expect(docs).toHaveLength(1);
+      expect(docs[0].a).toEqual({ $date: 'nope' });
+    });
+
+    it('passes through a legacy-looking $numberInt field and keeps its sibling key', () => {
+      const raw = JSON.stringify([{ a: { $numberInt: '1', b: 2 } }]);
+
+      const docs = backupService.parseBackupDocs(raw);
+
+      expect(docs).toHaveLength(1);
+      expect(docs[0].a).toEqual({ $numberInt: '1', b: 2 });
+    });
+
+    it('still converts a genuine canonical $oid wrapper to an ObjectId', () => {
+      const raw = JSON.stringify([{ a: { $oid: '507f1f77bcf86cd799439011' } }]);
+
+      const docs = backupService.parseBackupDocs(raw);
+
+      expect(docs[0].a).toBeInstanceOf(ObjectId);
+      expect(docs[0].a.toHexString()).toBe('507f1f77bcf86cd799439011');
+    });
+
+    it('still converts a genuine canonical $date wrapper to a Date', () => {
+      const raw = backupService.serializeBackupDocs([{ when: new Date('2026-01-02T03:04:05.678Z') }]);
+
+      const docs = backupService.parseBackupDocs(raw);
+
+      expect(docs[0].when).toBeInstanceOf(Date);
+      expect(docs[0].when.toISOString()).toBe('2026-01-02T03:04:05.678Z');
+    });
+
+    it('handles a file mixing a legacy $-named field and a genuine wrapper', () => {
+      const raw = JSON.stringify([
+        { legacy: { $oid: 'zzz' }, wrapped: { $oid: '507f1f77bcf86cd799439011' } },
+      ]);
+
+      const docs = backupService.parseBackupDocs(raw);
+
+      expect(docs[0].legacy).toEqual({ $oid: 'zzz' });
+      expect(docs[0].wrapped).toBeInstanceOf(ObjectId);
+      expect(docs[0].wrapped.toHexString()).toBe('507f1f77bcf86cd799439011');
+    });
+
+    it('keeps current EJSON behaviour for a DBRef, which legitimately keeps sibling keys', () => {
+      const raw = JSON.stringify([{ $ref: 'c', $id: 1, b: 2 }]);
+
+      const expected = BSON.EJSON.parse(raw, { relaxed: false });
+      const docs = backupService.parseBackupDocs(raw);
+
+      expect(docs).toEqual(expected);
+      expect(docs[0]).toBeInstanceOf(BSON.DBRef);
+    });
   });
 
   // Canonical mode wraps plain numbers in Int32/Double rather than

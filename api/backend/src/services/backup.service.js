@@ -178,8 +178,244 @@ function serializeBackupDocs(docs) {
 // wrappers comes back exactly as JSON.parse would return it. That is what
 // keeps backups written before this change restorable: as lossily as they
 // always were, but without erroring.
+//
+// #865: that guarantee broke for a legacy plain-JSON backup that happens to
+// contain a field whose NAME begins with `$` (carried over from a source
+// system, or a user field literally named `$oid`/`$date`/`$numberInt`).
+// deserializeValue (bson@6.10.4) reinterprets such a field as a canonical
+// EJSON type wrapper instead of passing it through: `{"$oid":"zzz"}` throws
+// a BSONError, `{"$date":"nope"}` silently becomes an Invalid Date, and
+// `{"$numberInt":"1","b":2}` silently drops the sibling `b`. Every wrapper
+// but DBRef drops its non-wrapper siblings the same way, and roughly half
+// of the 18 recognised $-names throw outright on a malformed value (two of
+// those throws are TypeErrors, not BSONErrors) while the rest corrupt
+// silently. restoreFromJsonBackup calls this per collection *after*
+// wiping that collection with deleteMany({}), with no transaction, so a
+// newly-introduced throw here would leave already-processed collections
+// dropped and empty -- this function must not gain a new way to throw on
+// that destructive path.
+//
+// The fix classifies every $-keyed object in the raw parsed tree before
+// trusting EJSON with it:
+//  - a wrapper other than DBRef must have *no* sibling keys beyond its own
+//    (plus $scope for $code) -- the sibling rule alone catches most legacy
+//    collisions, independent of the value's type;
+//  - DBRef ($ref/$id[/$db]) is the one wrapper that legitimately keeps
+//    siblings (they become its `fields`), so it gets its own rule;
+//  - what remains must additionally have a plausible value shape for its
+//    type (24-hex string for $oid, a parseable date for $date, a
+//    decimal-string for the $number* family, and so on) -- this is what
+//    catches the *silent* corruptions, since those don't throw for
+//    `isWellFormedWrapper` to catch via the EJSON.parse try/catch below.
+// Only sub-objects that pass both checks are ever handed to EJSON.parse;
+// everything else is kept as the plain-JSON value untouched. If nothing in
+// the whole document classifies as legacy, today's single-shot
+// `EJSON.parse(raw, { relaxed: false })` result is returned unchanged --
+// bit-for-bit current behaviour for every backup the current serializer
+// wrote, with no new failure mode introduced for any of them.
+//
+// Known undecidables, deliberately left as plain JSON rather than grown
+// into more machinery: a genuine legacy field literally named `$date`
+// holding a syntactically valid ISO string (indistinguishable from a real
+// wrapper); a sibling-free `$minKey`/`$maxKey`/`{"$undefined":true}` legacy
+// field (same collision, no siblings to use as a tell).
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+const HEX24_RE = /^[0-9a-fA-F]{24}$/;
+const DECIMAL_INT_RE = /^[+-]?\d+$/;
+const NUMERIC_STRING_RE = /^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/;
+const NUMBER_SPECIAL_RE = /^[+-]?(Infinity|NaN)$/i;
+const UUID_RE = /^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$/;
+const REGEX_OPTIONS_RE = /^[imxlsu]*$/;
+const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})?$/;
+const DBREF_KEYS = new Set(['$ref', '$id', '$db']);
+const BSON_INT32_MIN = -2147483648;
+const BSON_INT32_MAX = 2147483647;
+const BSON_INT64_MIN = -9223372036854775808n;
+const BSON_INT64_MAX = 9223372036854775807n;
+
+function isNumberIntShape(value) {
+  if (typeof value !== 'string' || !DECIMAL_INT_RE.test(value)) return false;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= BSON_INT32_MIN && n <= BSON_INT32_MAX;
+}
+
+function isNumberLongShape(value) {
+  if (typeof value !== 'string' || !DECIMAL_INT_RE.test(value) || value.length > 20) return false;
+  try {
+    const n = BigInt(value);
+    return n >= BSON_INT64_MIN && n <= BSON_INT64_MAX;
+  } catch (_) {
+    return false;
+  }
+}
+
+function isNumericStringShape(value) {
+  return typeof value === 'string' && (NUMERIC_STRING_RE.test(value) || NUMBER_SPECIAL_RE.test(value));
+}
+
+function isDateWrapperShape(value) {
+  if (typeof value === 'string') return !Number.isNaN(Date.parse(value));
+  if (isPlainObject(value) && Object.keys(value).length === 1) return isNumberLongShape(value.$numberLong);
+  return false;
+}
+
+// One entry per recognised $-name other than the DBRef triple, which has
+// its own rule below. `required` are the $-keys that must all be present;
+// `optionalDollar` are $-keys allowed alongside them (only $code/$scope
+// uses this); `check` validates the value shape once the key set matches.
+const WRAPPER_SPECS = [
+  { required: ['$oid'], check: (n) => typeof n.$oid === 'string' && HEX24_RE.test(n.$oid) },
+  {
+    required: ['$binary'],
+    check: (n) => isPlainObject(n.$binary)
+      && typeof n.$binary.base64 === 'string' && BASE64_RE.test(n.$binary.base64)
+      && typeof n.$binary.subType === 'string' && /^[0-9a-fA-F]{1,2}$/.test(n.$binary.subType),
+  },
+  { required: ['$uuid'], check: (n) => typeof n.$uuid === 'string' && UUID_RE.test(n.$uuid) },
+  { required: ['$symbol'], check: (n) => typeof n.$symbol === 'string' },
+  { required: ['$numberInt'], check: (n) => isNumberIntShape(n.$numberInt) },
+  { required: ['$numberDecimal'], check: (n) => isNumericStringShape(n.$numberDecimal) },
+  { required: ['$numberDouble'], check: (n) => isNumericStringShape(n.$numberDouble) },
+  { required: ['$numberLong'], check: (n) => isNumberLongShape(n.$numberLong) },
+  { required: ['$minKey'], check: (n) => n.$minKey === 1 },
+  { required: ['$maxKey'], check: (n) => n.$maxKey === 1 },
+  {
+    required: ['$regex'],
+    optionalDollar: ['$options'],
+    check: (n) => typeof n.$regex === 'string'
+      && (n.$options === undefined || (typeof n.$options === 'string' && REGEX_OPTIONS_RE.test(n.$options))),
+  },
+  {
+    required: ['$regularExpression'],
+    check: (n) => isPlainObject(n.$regularExpression)
+      && typeof n.$regularExpression.pattern === 'string'
+      && typeof n.$regularExpression.options === 'string'
+      && REGEX_OPTIONS_RE.test(n.$regularExpression.options),
+  },
+  {
+    required: ['$timestamp'],
+    check: (n) => isPlainObject(n.$timestamp)
+      && typeof n.$timestamp.t === 'number' && typeof n.$timestamp.i === 'number',
+  },
+  { required: ['$undefined'], check: (n) => n.$undefined === true },
+  { required: ['$date'], check: (n) => isDateWrapperShape(n.$date) },
+  {
+    required: ['$code'],
+    optionalDollar: ['$scope'],
+    check: (n) => typeof n.$code === 'string' && (n.$scope === undefined || isPlainObject(n.$scope)),
+  },
+  {
+    required: ['$dbPointer'],
+    check: (n) => isPlainObject(n.$dbPointer) && typeof n.$dbPointer.$ref === 'string'
+      && Object.prototype.hasOwnProperty.call(n.$dbPointer, '$id'),
+  },
+];
+
+// Does this object, taken on its own (ignoring what's nested inside its
+// value), look like a genuine canonical EJSON wrapper rather than a legacy
+// field that happens to collide with one? Nested wrapper values (e.g. the
+// $numberLong inside a canonical $date, or the $id inside a $dbPointer)
+// are left to the real BSON.EJSON.parse call this function is only ever
+// used to gate -- EJSON.parse's own bottom-up parsing resolves those with
+// full fidelity, so this classifier does not need to re-implement it.
+function isWellFormedWrapper(node, keys, dollarKeys) {
+  if (dollarKeys.length > 0 && dollarKeys.every((k) => DBREF_KEYS.has(k))
+    && typeof node.$ref === 'string'
+    && Object.prototype.hasOwnProperty.call(node, '$id')) {
+    return true;
+  }
+
+  const spec = WRAPPER_SPECS.find((candidate) => {
+    if (!candidate.required.every((k) => dollarKeys.includes(k))) return false;
+    const extraDollar = dollarKeys.filter((k) => !candidate.required.includes(k));
+    return extraDollar.every((k) => (candidate.optionalDollar || []).includes(k));
+  });
+  if (!spec) return false;
+
+  const allowedKeys = new Set([...spec.required, ...(spec.optionalDollar || [])]);
+  if (!keys.every((k) => allowedKeys.has(k))) return false;
+
+  return spec.check(node);
+}
+
+// True if `node` (or anything nested inside it) contains a $-keyed object
+// that does not classify as a well-formed wrapper -- i.e. this document
+// needs the careful per-node rebuild rather than the single-shot
+// EJSON.parse that reproduces today's behaviour exactly.
+function hasLegacyDollarObject(node) {
+  if (Array.isArray(node)) return node.some(hasLegacyDollarObject);
+  if (!isPlainObject(node)) return false;
+
+  const keys = Object.keys(node);
+  const dollarKeys = keys.filter((k) => k.startsWith('$'));
+  if (dollarKeys.length > 0) {
+    // A well-formed wrapper delegates everything nested inside it to real
+    // EJSON.parse (see isWellFormedWrapper's comment), so it is not
+    // itself legacy and its interior is not walked separately here.
+    return !isWellFormedWrapper(node, keys, dollarKeys);
+  }
+
+  return keys.some((k) => hasLegacyDollarObject(node[k]));
+}
+
+// Rebuilds the tree bottom-up: a node proven well-formed is hand off to
+// real EJSON.parse (on its own untouched JSON text, so nested wrappers
+// inside it still convert with full fidelity); everything else is walked
+// and kept as plain JSON. The per-node try/catch means a wrong "looks
+// well-formed" classification degrades that one sub-object to legacy
+// (plain JSON) instead of aborting the whole document -- deliberately not
+// filtered to BSONError, since two of deserializeValue's throws are
+// TypeErrors.
+function convertLegacyAwareTree(node) {
+  if (Array.isArray(node)) return node.map(convertLegacyAwareTree);
+  if (!isPlainObject(node)) return node;
+
+  const keys = Object.keys(node);
+  const dollarKeys = keys.filter((k) => k.startsWith('$'));
+  if (dollarKeys.length > 0 && isWellFormedWrapper(node, keys, dollarKeys)) {
+    try {
+      return BSON.EJSON.parse(JSON.stringify(node), { relaxed: false });
+    } catch (_) {
+      // Fall through: treat as legacy for this node rather than letting a
+      // wrong classification abort the destructive restore path.
+    }
+  }
+
+  const result = {};
+  for (const k of keys) {
+    result[k] = convertLegacyAwareTree(node[k]);
+  }
+  return result;
+}
+
 function parseBackupDocs(raw) {
-  return BSON.EJSON.parse(raw, { relaxed: false });
+  let plain;
+  try {
+    plain = JSON.parse(raw);
+  } catch (_) {
+    // Not parseable as plain JSON either -- defer to today's behaviour
+    // (and error) rather than inventing a new failure mode for input that
+    // was already unrestorable.
+    return BSON.EJSON.parse(raw, { relaxed: false });
+  }
+
+  if (!hasLegacyDollarObject(plain)) {
+    // Nothing in this document collides with a canonical wrapper name --
+    // bit-for-bit today's behaviour, no new failure mode.
+    return BSON.EJSON.parse(raw, { relaxed: false });
+  }
+
+  try {
+    return convertLegacyAwareTree(plain);
+  } catch (_) {
+    // Never let a malformed legacy backup abort the destructive restore
+    // path -- fall back to the plain-JSON parse, exactly as lossy as
+    // every JSON fallback restore was before #738, but never throwing.
+    return plain;
+  }
 }
 
 async function restoreFromJsonBackup(backupPath, mongoUri, targetDbName) {
