@@ -205,7 +205,11 @@ const RETIRED_FILTER_KEYS = [
 const RETIRED_KEY_EXEMPT = new Set([
   'interface/routes/result.routes.js:137',
   'interface/routes/result.routes.js:384',
-  'interface/routes/result.routes.js:522',
+  // :522 -> :543 when #875's allowlist rework added ~21 lines above the
+  // link-sample legacy-resolution tier (the entry itself is #628's
+  // deliberate _id -> specimenId -> legacy sampleID fallback; #804 owns
+  // sampleID's eventual retirement).
+  'interface/routes/result.routes.js:543',
   'services/result-specimenid-backfill.service.js:56',
   // #857: _id -> specimenId -> legacy sampleID/sampleId/barcode.
   'interface/routes/sample.routes.js:619',

@@ -203,14 +203,12 @@ function updateDocumentSites() {
 //
 // Delete an entry when its issue closes; do not add one without filing.
 const UPDATE_SPREAD_EXEMPT = new Map([
-  // #875 -- real defects. Both spread the body into $set with no schema.
-  // master-data's PUT is the sharper one: the SAME factory's POST at :65
-  // calls model.validate(payload) and the PUT dropped it.
-  ['interface/routes/master-data.routes.js:117:update', '#875'],
-  // result.routes.js denylists exactly three legacy alias keys (#628) and
-  // spreads the rest. A denylist destructure is textually identical to an
-  // allowlist one; only where `...rest` goes tells them apart.
-  ['interface/routes/result.routes.js:457:updateFields', '#875'],
+  // The two #875 entries that stood here (master-data.routes.js:117:update,
+  // result.routes.js:457:updateFields) were removed when #875 CLOSED those
+  // defects: both PUTs now build $set from model-derived allowlists, so
+  // the spread shapes this sweep detects no longer exist at those sites --
+  // the sweep not finding them is the fix landing, not the detector
+  // regressing (this is the sanctioned reason to remove an entry).
 
   // Equipment PUT -- NOT a defect, and the reason is worth stating so a
   // later reader does not "fix" it. It validates the MERGED document and
@@ -273,6 +271,8 @@ test('#839: the sweep still sees the sites it is supposed to judge', () => {
 test('#839: the exemption set has not grown', () => {
   // Same convention as filter-keys.arch.test.js's UNWRITTEN_KEY_EXEMPT and
   // env-declarations' READ_EXEMPT: growing this is a review event, not a
-  // fix. Two entries are #875's open defects; two are the #868 pattern.
-  assert.equal(UPDATE_SPREAD_EXEMPT.size, 4);
+  // fix. #875's two open-defect entries were removed when that issue
+  // closed both sites with model-derived allowlists (4 -> 2); the two
+  // that remain are the deliberate #868 merge-validate pattern.
+  assert.equal(UPDATE_SPREAD_EXEMPT.size, 2);
 });
