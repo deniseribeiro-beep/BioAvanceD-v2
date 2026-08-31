@@ -11,7 +11,7 @@ class ImportJob {
     this.filePath = data.filePath || null;
     this.fileName = data.fileName || null;
     this.fileSize = data.fileSize || null;
-    this.status = data.status || 'pending'; // 'pending', 'processing', 'completed', 'failed', 'cancelled'
+    this.status = data.status || 'pending'; // 'pending', 'processing', 'completed', 'completed_no_data' (#890: terminal, wrote nothing -- every processed entry hit an unimplemented/unsupported format stub), 'failed', 'cancelled'
     this.progress = data.progress || 0; // 0-100
     this.totalRecords = data.totalRecords || 0;
     this.successCount = data.successCount || 0;

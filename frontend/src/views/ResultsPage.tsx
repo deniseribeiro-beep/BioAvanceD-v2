@@ -105,6 +105,12 @@ export default function ResultsPage() {
     switch (status) {
       case 'completed':
         return <CheckCircle className="status-icon completed" />;
+      // #890: a run that finished normally but wrote nothing (every
+      // processed entry hit an unimplemented/unsupported format stub) is
+      // not a plain success -- flag it visually like failed/pending states
+      // rather than the green completed checkmark.
+      case 'completed_no_data':
+        return <AlertCircle className="status-icon completed_no_data" />;
       case 'failed':
         return <XCircle className="status-icon failed" />;
       case 'processing':
@@ -120,6 +126,7 @@ export default function ResultsPage() {
       pending: t('results.status.pending', 'Pendente'),
       processing: t('results.status.processing', 'Processando'),
       completed: t('results.status.completed', 'Concluído'),
+      completed_no_data: t('results.status.completed_no_data', 'Concluído sem dados'),
       failed: t('results.status.failed', 'Falhou'),
       cancelled: t('results.status.cancelled', 'Cancelado')
     };
@@ -197,7 +204,12 @@ export default function ResultsPage() {
                           <ExternalLink size={16} /> {t('results.view', 'Ver')}
                         </Button>
                       )}
-                      {(job.status === 'completed' || job.status === 'failed') && (
+                      {/* #890: completed_no_data is a terminal status whose
+                          only user-facing route to the underlying error text
+                          is the report -- there is nothing to "Ver" (no
+                          results were written), but the report must remain
+                          reachable. */}
+                      {(job.status === 'completed' || job.status === 'completed_no_data' || job.status === 'failed') && (
                         <Button
                           variant="secondary"
                           onClick={() => handleViewReport(job)}

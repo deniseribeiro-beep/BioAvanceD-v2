@@ -200,4 +200,64 @@ test.describe('Results page import-job filter (#889 Part A)', () => {
     await expect(page.getByText(specimenIdB, { exact: false })).toBeVisible();
     await expect(page.getByText(specimenIdControl, { exact: false })).not.toBeVisible();
   });
+
+  // #890: a result-import run that finishes normally but writes nothing
+  // because every processed entry hit an unimplemented/unsupported format
+  // stub (.raw / generic-file) is reported as 'completed_no_data', not a
+  // plain 'completed' at 100% having written zero records. This seeds that
+  // status directly (mirroring the fixture pattern above -- a real .raw
+  // upload cannot reach the worker on this test stack, see the SCOPE CAVEAT
+  // at the top of this file) and pins the badge/label, the "Relatório"
+  // button staying reachable (it is the only route to the error text), and
+  // the "Ver" button staying absent (there is nothing written to view).
+  test('completed_no_data renders its badge/label, keeps "Relatório" reachable, and hides "Ver" (#890)', async ({
+    page,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    await seedRealAuth(page, admin);
+
+    const suffix = Date.now();
+    const jobID = `e2e-890-${randomUUID()}`;
+    const fileName = `e2e-890-results-${suffix}.raw`;
+
+    const importJobDoc = {
+      jobID,
+      userID: admin.user._id,
+      userName: admin.user.name,
+      dataType: 'results',
+      fileName,
+      filePath: `/tmp/${fileName}`,
+      fileSize: 64,
+      fileFormat: 'RAW',
+      status: 'completed_no_data',
+      totalRecords: 1,
+      successCount: 0,
+      errorCount: 1,
+      unprocessedFormats: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const jobInsert = await db.collection('importJobs').insertOne(importJobDoc);
+    createdImportJobIds.push(jobInsert.insertedId);
+
+    await page.goto('/results');
+
+    const jobItem = page.locator('.job-item', { hasText: fileName });
+    await expect(jobItem).toBeVisible();
+
+    // Badge/label: the status-badge carries the completed_no_data class and
+    // renders the translated label (en-US: "Completed, no data written").
+    const statusBadge = jobItem.locator('.status-badge.completed_no_data');
+    await expect(statusBadge).toBeVisible();
+    await expect(statusBadge).toHaveText(/./);
+
+    // "Relatório"/"Report" stays present -- the only user-facing route to
+    // the underlying error text for a run that wrote nothing.
+    await expect(jobItem.locator('button.btn-secondary')).toBeVisible();
+
+    // "Ver"/"View" (variant="primary") must be absent -- nothing was
+    // written, so there is nothing to view.
+    await expect(jobItem.locator('button.btn-primary')).toHaveCount(0);
+  });
 });

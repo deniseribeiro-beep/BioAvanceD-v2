@@ -186,12 +186,23 @@ async function initWorker() {
               throw new Error(`Tipo de dados não suportado: ${dataType}`);
           }
 
+          // #890: a run that finished normally but wrote nothing because
+          // every processed entry hit an unimplemented/unsupported format
+          // stub (.raw / generic-file) must not be reported as a plain
+          // 'completed' -- that reads as a successful import at 100% having
+          // written zero records. A CSV whose rows failed for cause (RF029
+          // staging/quarantine) stays 'completed'; only the
+          // unprocessedFormats signal routes here, per RNF015 AC#7.
+          const producedNothing = result.success === 0 && (result.unprocessedFormats || 0) > 0;
+          const completionStatus = producedNothing ? 'completed_no_data' : 'completed';
+
           // Atualiza status para completed
-          await updateJobStatus(db, jobID, 'completed', 100, {
+          await updateJobStatus(db, jobID, completionStatus, 100, {
             totalRecords: result.total,
             successCount: result.success,
             errorCount: result.errors.length,
             errors: result.errors,
+            unprocessedFormats: result.unprocessedFormats || 0,
             fhirResources: result.fhirResources || [],
             completedAt: new Date(),
           });
@@ -222,6 +233,9 @@ async function initWorker() {
                   : (dataTypeNormalized || 'Import');
 
           auditLogger.init(db);
+          // #890: deliberately left as the literal 'completed' here (not
+          // completionStatus) -- bounding blast radius on unaudited
+          // consumers of this AuditLog action string.
           await auditLogger.logImport(
             null, // req não disponível no worker
             entityName,
@@ -241,7 +255,7 @@ async function initWorker() {
           // Envia notificação assíncrona
           await getNotificationService().notifyJobCompleted(userID, {
             jobID,
-            status: 'completed',
+            status: completionStatus,
             dataType: dataTypeNormalized,
             fileName: fileName,
             successCount: result.success,

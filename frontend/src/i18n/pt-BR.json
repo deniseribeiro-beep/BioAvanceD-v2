@@ -1036,6 +1036,7 @@
     "status": {
       "cancelled": "Cancelado",
       "completed": "Concluído",
+      "completed_no_data": "Concluído sem dados",
       "failed": "Falhou",
       "pending": "Pendente",
       "processing": "Processando"

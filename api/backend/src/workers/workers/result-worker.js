@@ -20,6 +20,7 @@ class ResultWorker {
       total: 0,
       success: 0,
       errors: [],
+      unprocessedFormats: 0,
     };
 
     try {
@@ -50,6 +51,7 @@ class ResultWorker {
         total: results.total,
         success: results.success,
         errors: results.errors,
+        unprocessedFormats: results.unprocessedFormats,
         processingTime,
         fhirResourcesCreated,
         fhirResourcesUpdated,
@@ -325,9 +327,11 @@ class ResultWorker {
     // Implementação básica - pode ser expandida conforme necessário
     results.total++;
     results.errors.push({
+      code: 'FORMAT_NOT_IMPLEMENTED',
       error: 'Processamento de arquivo RAW ainda não totalmente implementado',
       fileName,
     });
+    results.unprocessedFormats += 1;
   }
 
   /**
@@ -337,9 +341,11 @@ class ResultWorker {
     // Implementação básica - pode ser expandida conforme necessário
     results.total++;
     results.errors.push({
+      code: 'FORMAT_UNSUPPORTED',
       error: 'Formato de arquivo não suportado',
       filePath,
     });
+    results.unprocessedFormats += 1;
   }
 }
 

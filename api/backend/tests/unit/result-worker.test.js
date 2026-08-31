@@ -190,6 +190,12 @@ describe('ResultWorker.process — RAW path', () => {
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].error).toMatch(/RAW ainda não totalmente implementado/);
     expect(result.errors[0].fileName).toBe(path.basename(rawFile));
+    // #890: the .raw stub carries a machine-readable code and increments
+    // unprocessedFormats, so import-worker.js can tell "wrote nothing
+    // because the format is unimplemented" apart from "wrote nothing
+    // because every row failed for cause".
+    expect(result.errors[0].code).toBe('FORMAT_NOT_IMPLEMENTED');
+    expect(result.unprocessedFormats).toBe(1);
   });
 });
 
@@ -221,6 +227,33 @@ describe('ResultWorker.process — ZIP path', () => {
     expect(result.total).toBe(1);
     expect(result.success).toBe(0);
     expect(result.errors[0].error).toMatch(/Formato de arquivo não suportado/);
+    // #890: the generic-file stub carries a machine-readable code and
+    // increments unprocessedFormats, mirroring the .raw stub's discriminator.
+    expect(result.errors[0].code).toBe('FORMAT_UNSUPPORTED');
+    expect(result.unprocessedFormats).toBe(1);
+  });
+});
+
+describe('ResultWorker.process — CSV path, unprocessedFormats anti-regression (#890)', () => {
+  it('leaves unprocessedFormats at 0 when every CSV row fails for cause (not an unimplemented format)', async () => {
+    const db = makeDb({ sample: null });
+    const csvFile = writeCsv([
+      'specimenId,testName,resultValue',
+      'SMP-901,Glicose,95',
+      'SMP-902,Colesterol,180',
+    ]);
+
+    const result = await resultWorker.process(db, 'job-890-csv', csvFile);
+    fs.unlinkSync(csvFile);
+
+    expect(result.total).toBe(2);
+    expect(result.success).toBe(0);
+    expect(result.errors).toHaveLength(2);
+    // The discriminator: a CSV with all-rows-rejected is a different failure
+    // class from a .raw/generic-file unimplemented-format stub (RNF015 AC#7).
+    // Rows failed for cause (RF029 AC#6 -> staging/quarantine), not because
+    // the format itself is unsupported, so unprocessedFormats must stay 0.
+    expect(result.unprocessedFormats).toBe(0);
   });
 });
 

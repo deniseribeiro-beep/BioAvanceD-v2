@@ -840,6 +840,10 @@ export enum ImportJobStatus {
   PENDING = 'pending',
   PROCESSING = 'processing',
   COMPLETED = 'completed',
+  // #890: terminal status for a result-import run that finished normally
+  // but wrote nothing because every processed entry hit an
+  // unimplemented/unsupported format stub (.raw / generic-file).
+  COMPLETED_NO_DATA = 'completed_no_data',
   FAILED = 'failed',
   CANCELLED = 'cancelled'
 }

@@ -566,6 +566,100 @@ describe('workers/import-worker', () => {
       );
     });
 
+    // #890: a result-import run that finishes normally but writes nothing
+    // because every processed entry hit an unimplemented/unsupported format
+    // stub must be reported as 'completed_no_data', not a plain 'completed'
+    // at 100% having written zero records.
+    it('on success with success:0 and unprocessedFormats>0 (results dataType): marks completed_no_data', async () => {
+      const processor = await getProcessor();
+      fakeResultWorker.process.mockResolvedValue({
+        total: 1,
+        success: 0,
+        errors: [{ code: 'FORMAT_NOT_IMPLEMENTED', error: 'x' }],
+        unprocessedFormats: 1,
+        processingTime: 0,
+        fhirResourcesCreated: 0,
+        fhirResourcesUpdated: 0,
+        fhirResources: [],
+      });
+
+      const updateOneMock = vi.fn().mockResolvedValue({ acknowledged: true });
+      fakeDb.collection.mockReturnValue({ updateOne: updateOneMock });
+
+      const job = {
+        id: 'j7b',
+        name: 'import',
+        data: {
+          jobID: 'j7b',
+          userID: 'u7b',
+          dataType: 'results',
+          filePath: '/tmp/r.raw',
+          fileName: 'r.raw',
+          options: {},
+        },
+      };
+
+      await processor(job);
+
+      expect(updateOneMock).toHaveBeenCalledTimes(2);
+      const completeWrite = updateOneMock.mock.calls[1][1].$set;
+      expect(completeWrite.status).toBe('completed_no_data');
+      expect(completeWrite.progress).toBe(100);
+      expect(completeWrite.unprocessedFormats).toBe(1);
+
+      expect(fakeNotificationService.notifyJobCompleted).toHaveBeenCalledWith(
+        'u7b',
+        expect.objectContaining({ jobID: 'j7b', status: 'completed_no_data' })
+      );
+      // The AuditLog action stays the literal 'completed' -- bounding blast
+      // radius on unaudited consumers (#890).
+      expect(fakeAuditLogger.logImport).toHaveBeenCalledWith(
+        null,
+        'Result',
+        'completed',
+        1,
+        0,
+        1,
+        expect.objectContaining({ jobID: 'j7b' })
+      );
+    });
+
+    it('on success with success:0 but unprocessedFormats:0 (row errors with cause, not unimplemented format): stays completed', async () => {
+      const processor = await getProcessor();
+      fakeResultWorker.process.mockResolvedValue({
+        total: 1,
+        success: 0,
+        errors: [{ row: 1, error: 'x' }],
+        unprocessedFormats: 0,
+        processingTime: 0,
+        fhirResourcesCreated: 0,
+        fhirResourcesUpdated: 0,
+        fhirResources: [],
+      });
+
+      const updateOneMock = vi.fn().mockResolvedValue({ acknowledged: true });
+      fakeDb.collection.mockReturnValue({ updateOne: updateOneMock });
+
+      const job = {
+        id: 'j7c',
+        name: 'import',
+        data: {
+          jobID: 'j7c',
+          userID: 'u7c',
+          dataType: 'results',
+          filePath: '/tmp/r.csv',
+          fileName: 'r.csv',
+          options: {},
+        },
+      };
+
+      await processor(job);
+
+      const completeWrite = updateOneMock.mock.calls[1][1].$set;
+      expect(completeWrite.status).toBe('completed');
+      expect(completeWrite.unprocessedFormats).toBe(0);
+    });
+
     it('on failure: updates job status to failed, logs error, notifies failure, and re-throws', async () => {
       const processor = await getProcessor();
       const boom = new Error('worker exploded');

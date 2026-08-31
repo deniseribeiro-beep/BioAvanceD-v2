@@ -472,6 +472,27 @@ describe('import-async.service', () => {
       expect(result.status).toBe('active');
       expect(result.progress).toBe(42);
     });
+
+    // #890: BullMQ has no notion of the custom terminal status
+    // 'completed_no_data' -- it only ever reports its own generic
+    // 'completed'. Within Redis's 24h job retention window, an unguarded
+    // sync would clobber the DB's 'completed_no_data' back to 'completed'
+    // on every getJobStatus() call, silently erasing the #890 signal.
+    it('does not overwrite a stored completed_no_data status when the queue reports completed', async () => {
+      const queueJob = {
+        getState: vi.fn().mockResolvedValue('completed'),
+        progress: 100,
+      };
+      const freshService = freshServiceWithQueue({ getJob: vi.fn().mockResolvedValue(queueJob) });
+      const db = createDb();
+      const dbJob = { jobID: 'j-890', status: 'completed_no_data', progress: 100 };
+      db.__collection.findOne.mockResolvedValue(dbJob);
+
+      const result = await freshService.getJobStatus(db, 'j-890');
+
+      expect(db.__collection.updateOne).not.toHaveBeenCalled();
+      expect(result.status).toBe('completed_no_data');
+    });
   });
 
   describe('listJobs', () => {

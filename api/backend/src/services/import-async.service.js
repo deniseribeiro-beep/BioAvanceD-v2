@@ -368,8 +368,16 @@ class ImportAsyncService {
         const state = await queueJob.getState();
         const progress = queueJob.progress || 0;
 
+        // #890: BullMQ only knows its own generic 'completed' state -- it has
+        // no notion of our custom terminal status 'completed_no_data'. Redis
+        // retains the job for up to 24h after the worker wrote the DB's
+        // terminal status, so without this guard every getJobStatus() call
+        // in that window would clobber 'completed_no_data' back to
+        // 'completed', silently erasing the #890 fix's user-facing signal.
+        const dbStatusIsCustomTerminal = job.status === 'completed_no_data';
+
         // Atualiza status no banco se necessário
-        if (state !== job.status) {
+        if (state !== job.status && !(state === 'completed' && dbStatusIsCustomTerminal)) {
           await jobsCollection.updateOne(
             { jobID },
             {
