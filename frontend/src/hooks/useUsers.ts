@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { User } from '../types/models';
 import { userService } from '../services/api';
+import { extractResponseEntity } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useUsers() {
@@ -64,8 +65,9 @@ export function useUsers() {
   const registerUser = async (data: Partial<User>) => {
     try {
       const response = await userService.register(data);
-      setUsers([...users, response.data]);
-      return response.data;
+      const newUser = extractResponseEntity<User>(response, data as any);
+      setUsers([...users, newUser]);
+      return newUser;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao registrar usuário');
     }

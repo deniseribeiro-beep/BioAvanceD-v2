@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { SampleWithMeasurementUnit } from '../types/models';
 import { measurementUnitService } from '../services/api';
+import { extractResponseEntity } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useMeasurementUnits() {
@@ -44,8 +45,9 @@ export function useMeasurementUnits() {
   const createUnit = async (data: Partial<SampleWithMeasurementUnit>) => {
     try {
       const response = await measurementUnitService.create(data);
-      setUnits([...units, response.data]);
-      return response.data;
+      const newUnit = extractResponseEntity<SampleWithMeasurementUnit>(response, data as any);
+      setUnits([...units, newUnit]);
+      return newUnit;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao criar unidade');
     }
@@ -54,8 +56,9 @@ export function useMeasurementUnits() {
   const updateUnit = async (id: number, data: Partial<SampleWithMeasurementUnit>) => {
     try {
       const response = await measurementUnitService.update(id, data);
-      setUnits(units.map((u) => (u.unitID === id ? response.data : u)));
-      return response.data;
+      const updatedUnit = extractResponseEntity<SampleWithMeasurementUnit>(response, data as any);
+      setUnits(units.map((u) => (u.unitID === id ? updatedUnit : u)));
+      return updatedUnit;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao atualizar unidade');
     }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Policy } from '../types/models';
 import { policyService } from '../services/api';
+import { extractResponseEntity } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 
@@ -52,9 +53,10 @@ export function usePolicies() {
   const createPolicy = async (data: Partial<Policy>) => {
     try {
       const response = await policyService.create(data);
-      setPolicies([...policies, response.data]);
+      const newPolicy = extractResponseEntity<Policy>(response, data as any);
+      setPolicies([...policies, newPolicy]);
       notifyDashboardDataChanged();
-      return response.data;
+      return newPolicy;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao criar política');
     }
@@ -63,7 +65,9 @@ export function usePolicies() {
   const updatePolicy = async (id: number, data: Partial<Policy>) => {
     try {
       const response = await policyService.update(id, data);
-      setPolicies(policies.map((p) => (p.policyID === id ? response.data : p)));
+      // PUT /policies/:id returns { success, message } with no data key --
+      // reload the list instead of writing the bare envelope into state.
+      await loadPolicies();
       notifyDashboardDataChanged();
       return response.data;
     } catch (err: any) {

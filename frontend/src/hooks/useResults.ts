@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Result } from '../types/models';
 import { resultService } from '../services/api';
+import { extractResponseEntity } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 
@@ -48,7 +49,10 @@ export function useResults(importJobID?: string) {
   const linkSample = async (resultID: number, specimenId: string) => {
     try {
       const response = await resultService.linkSample(resultID, specimenId);
-      setResults(results.map((r) => (r.resultID === resultID ? response.data : r)));
+      // PUT /results/:id/link-sample returns { success, message } with no
+      // data key -- reload the list instead of writing the bare envelope
+      // into state.
+      await loadResults();
       return response.data;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao vincular amostra');
@@ -58,9 +62,10 @@ export function useResults(importJobID?: string) {
   const createResult = async (data: Partial<Result>) => {
     try {
       const response = await resultService.create(data);
-      setResults([...results, response.data]);
+      const newResult = extractResponseEntity<Result>(response, data as any);
+      setResults([...results, newResult]);
       notifyDashboardDataChanged();
-      return response.data;
+      return newResult;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao criar resultado');
     }
@@ -69,7 +74,9 @@ export function useResults(importJobID?: string) {
   const updateResult = async (id: number, data: Partial<Result>) => {
     try {
       const response = await resultService.update(id, data);
-      setResults(results.map((r) => (r.resultID === id ? response.data : r)));
+      // PUT /results/:id returns { success, message } with no data key --
+      // reload the list instead of writing the bare envelope into state.
+      await loadResults();
       notifyDashboardDataChanged();
       return response.data;
     } catch (err: any) {

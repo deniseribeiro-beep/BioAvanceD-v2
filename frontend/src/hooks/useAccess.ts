@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Access } from '../types/models';
 import { accessService } from '../services/api';
+import { extractResponseEntity } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useAccess() {
@@ -42,7 +43,7 @@ export function useAccess() {
       const { reportID, ...accessData } = data;
       const response = await accessService.create(accessData);
       await loadAccesses(); // Recarrega a lista para garantir sincronização
-      return response.data;
+      return extractResponseEntity<Access>(response, accessData as any);
     } catch (err: any) {
       const errorMessage = err.response?.data?.error || err.message || 'Erro ao criar acesso';
       throw new Error(errorMessage);
@@ -52,7 +53,9 @@ export function useAccess() {
   const updateAccess = async (id: number, data: Partial<Access>) => {
     try {
       const response = await accessService.update(id, data);
-      setAccesses(accesses.map((a) => (a.reportID === id ? response.data : a)));
+      // PUT /access/:id returns { success, message } with no data key --
+      // reload the list instead of writing the bare envelope into state.
+      await loadAccesses();
       return response.data;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao atualizar acesso');
