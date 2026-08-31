@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { apiClient, notifyApiToast } from '../api/client';
 import { extractResponseItems } from '../api/response.adapters';
+import { useRequestSequence } from './useRequestSequence';
 
 export type SemanticCoding = {
   system: string;
@@ -67,6 +68,11 @@ export function useSemanticCascade() {
     phenotypes: [],
     biomarkers: [],
   });
+  // #901: discards a stale response when loadCascadeByDisease is called
+  // again (new disease, or a retry) before the in-flight request resolves.
+  // searchDiseases returns its results rather than writing shared state, so
+  // it is left out of this guard.
+  const requestSeq = useRequestSequence();
 
   const searchDiseases = useCallback(async (query: string): Promise<SemanticCoding[]> => {
     const nextQuery = String(query || '').trim();
@@ -96,6 +102,7 @@ export function useSemanticCascade() {
   }, []);
 
   const loadCascadeByDisease = useCallback(async (diseaseCoding: SemanticCoding | null, options: LoadCascadeOptions = {}): Promise<SemanticCascadeState> => {
+    const seq = requestSeq.next();
     setLastDisease(diseaseCoding || null);
     if (!diseaseCoding?.code) {
       const cleared = { disease: null, phenotypes: [], biomarkers: [] };
@@ -127,11 +134,15 @@ export function useSemanticCascade() {
         biomarkers: normalizedBiomarkers,
       };
 
-      setState(nextState);
+      if (requestSeq.isCurrent(seq)) {
+        setState(nextState);
+      }
       return nextState;
     } catch {
       const errorMessage = 'Falha ao carregar sugestoes semanticas. Voce pode tentar novamente.';
-      setSuggestError(errorMessage);
+      if (requestSeq.isCurrent(seq)) {
+        setSuggestError(errorMessage);
+      }
       if (!options.suppressErrorToast) {
         notifyApiToast({
           message: errorMessage,
@@ -144,10 +155,12 @@ export function useSemanticCascade() {
         phenotypes: [],
         biomarkers: [],
       };
-      setState(fallback);
+      if (requestSeq.isCurrent(seq)) {
+        setState(fallback);
+      }
       return fallback;
     } finally {
-      setLoadingSuggest(false);
+      if (requestSeq.isCurrent(seq)) setLoadingSuggest(false);
     }
   }, []);
 

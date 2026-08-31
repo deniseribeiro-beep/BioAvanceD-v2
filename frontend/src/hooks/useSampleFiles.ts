@@ -1,13 +1,18 @@
 import { useState } from 'react';
 import { SampleFile } from '../types/models';
 import { sampleService } from '../services/api';
+import { useRequestSequence } from './useRequestSequence';
 
 export function useSampleFiles(sampleID: string | null) {
   const [files, setFiles] = useState<SampleFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when sampleID changes before the
+  // in-flight request for the previous sampleID resolves.
+  const requestSeq = useRequestSequence();
 
   const loadFiles = async () => {
+    const seq = requestSeq.next();
     if (!sampleID) {
       setFiles([]);
       return;
@@ -17,19 +22,21 @@ export function useSampleFiles(sampleID: string | null) {
       setLoading(true);
       setError(null);
       const response = await sampleService.listFiles(sampleID);
+      if (!requestSeq.isCurrent(seq)) return;
       // Backend retorna { success: true, data: [...] }
       const responseData = response.data as any;
-      const filesData = Array.isArray(responseData) 
-        ? responseData 
-        : (Array.isArray(responseData?.data) 
-          ? responseData.data 
+      const filesData = Array.isArray(responseData)
+        ? responseData
+        : (Array.isArray(responseData?.data)
+          ? responseData.data
           : []);
       setFiles(filesData);
     } catch (err: any) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(err.response?.data?.error || err.message || 'Erro ao carregar arquivos');
       setFiles([]);
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 

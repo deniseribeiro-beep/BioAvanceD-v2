@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { sampleChainApi } from '@/services/sampleChainApi';
 import { normalizeMovementList, parseComplianceError, SampleMovementItem } from './sampleMovements.shared';
+import { useRequestSequence } from '../useRequestSequence';
 
 export type { SampleMovementItem } from './sampleMovements.shared';
 
@@ -10,10 +11,14 @@ export function useSampleMovements(sampleId?: string) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  // #901: discards a stale response when resolvedSampleId changes before
+  // the in-flight request for the previous id resolves.
+  const requestSeq = useRequestSequence();
 
   const resolvedSampleId = useMemo(() => (sampleId ? String(sampleId) : ''), [sampleId]);
 
   const loadMovements = async () => {
+    const seq = requestSeq.next();
     if (!resolvedSampleId) {
       setItems([]);
       setError('ID da amostra não informado');
@@ -27,14 +32,16 @@ export function useSampleMovements(sampleId?: string) {
 
     try {
       const response = await sampleChainApi.getMovements(resolvedSampleId);
+      if (!requestSeq.isCurrent(seq)) return;
       setItems(normalizeMovementList(response?.data));
     } catch (e: unknown) {
+      if (!requestSeq.isCurrent(seq)) return;
       const parsed = parseComplianceError(e);
       setItems([]);
       setError(parsed.message);
       setErrorCode(parsed.code);
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 
