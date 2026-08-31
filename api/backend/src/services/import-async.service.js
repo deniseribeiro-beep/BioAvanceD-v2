@@ -449,16 +449,15 @@ class ImportAsyncService {
    */
   async cancelJob(db, jobID) {
     try {
-      const queue = getQueue();
-      const queueJob = await queue.getJob(jobID);
-
-      if (queueJob) {
-        await queueJob.remove();
-      }
-
+      // #907: only a job that has not reached a terminal state can be
+      // cancelled -- the unguarded version rewrote completed/failed/
+      // completed_no_data jobs to 'cancelled', falsifying the record, and
+      // removed their Redis entry inside the retention window. The DB
+      // write goes first and gates the queue removal on having matched.
+      const TERMINAL_STATUSES = ['completed', 'failed', 'completed_no_data', 'cancelled'];
       const jobsCollection = db.collection('importJobs');
-      await jobsCollection.updateOne(
-        { jobID },
+      const result = await jobsCollection.updateOne(
+        { jobID, status: { $nin: TERMINAL_STATUSES } },
         {
           $set: {
             status: 'cancelled',
@@ -466,6 +465,16 @@ class ImportAsyncService {
           },
         }
       );
+
+      if (result.matchedCount === 0) {
+        return { success: false, message: 'Job já finalizado ou inexistente; não pode ser cancelado' };
+      }
+
+      const queue = getQueue();
+      const queueJob = await queue.getJob(jobID);
+      if (queueJob) {
+        await queueJob.remove();
+      }
 
       return { success: true, message: 'Job cancelado com sucesso' };
     } catch (error) {

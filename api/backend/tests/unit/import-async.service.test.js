@@ -529,32 +529,51 @@ describe('import-async.service', () => {
       return freshService;
     }
 
-    it('removes the job from the queue when present and always sets DB status to cancelled', async () => {
+    // #907: these two used to pin "always sets DB status to cancelled" --
+    // the unguarded behavior that falsified finished imports. They now pin
+    // the terminal-status guard instead.
+    it('cancels a non-terminal job: guarded DB write first, then queue removal', async () => {
       const removeMock = vi.fn().mockResolvedValue();
       const freshService = freshServiceWithQueue({ getJob: vi.fn().mockResolvedValue({ remove: removeMock }) });
       const db = createDb();
+      db.__collection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
       const result = await freshService.cancelJob(db, 'j1');
 
       expect(removeMock).toHaveBeenCalledTimes(1);
       expect(db.__collection.updateOne).toHaveBeenCalledWith(
-        { jobID: 'j1' },
+        { jobID: 'j1', status: { $nin: ['completed', 'failed', 'completed_no_data', 'cancelled'] } },
         expect.objectContaining({ $set: expect.objectContaining({ status: 'cancelled' }) })
       );
       expect(result).toEqual({ success: true, message: 'Job cancelado com sucesso' });
     });
 
-    it('still sets DB status to cancelled when the job is absent from the queue', async () => {
-      const freshService = freshServiceWithQueue({ getJob: vi.fn().mockResolvedValue(null) });
+    it('still cancels when the job is absent from the queue', async () => {
+      const getJobMock = vi.fn().mockResolvedValue(null);
+      const freshService = freshServiceWithQueue({ getJob: getJobMock });
       const db = createDb();
+      db.__collection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
       const result = await freshService.cancelJob(db, 'j2');
 
-      expect(db.__collection.updateOne).toHaveBeenCalledWith(
-        { jobID: 'j2' },
-        expect.objectContaining({ $set: expect.objectContaining({ status: 'cancelled' }) })
-      );
+      expect(getJobMock).toHaveBeenCalledWith('j2');
       expect(result.success).toBe(true);
+    });
+
+    it('#907: refuses to cancel a terminal job -- no status overwrite, no queue removal', async () => {
+      const removeMock = vi.fn().mockResolvedValue();
+      const getJobMock = vi.fn().mockResolvedValue({ remove: removeMock });
+      const freshService = freshServiceWithQueue({ getJob: getJobMock });
+      const db = createDb();
+      // The guarded filter matches nothing for a completed/failed/
+      // completed_no_data/cancelled job.
+      db.__collection.updateOne.mockResolvedValue({ matchedCount: 0 });
+
+      const result = await freshService.cancelJob(db, 'j3');
+
+      expect(result.success).toBe(false);
+      expect(getJobMock).not.toHaveBeenCalled();
+      expect(removeMock).not.toHaveBeenCalled();
     });
   });
 
