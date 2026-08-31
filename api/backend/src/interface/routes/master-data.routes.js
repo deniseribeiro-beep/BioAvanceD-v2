@@ -26,6 +26,49 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
     };
   }
 
+  // #875: PUT used to build `update = {...req.body, updatedAt}; delete
+  // update._id;` then `$set: update` with no filter -- every key the
+  // client sent rode straight into $set. The allowlist below is derived
+  // mechanically from this entity's own model.create({}) shape (the same
+  // property Patient.js's CANONICAL_FIELDS precedent documents) instead of
+  // 14 hand-written lists, so a new model field is picked up automatically.
+  // Computed once per router construction, not per request.
+  //
+  // Excluded: createdAt/updatedAt (the PUT handler below owns updatedAt)
+  // and idField/_id (immutable business identity). The `id` field (the
+  // #881/#899 seeded MIABIS business key) is not a key of any model's
+  // create() return at all, so it is excluded from every entity's
+  // allowlist without needing a separate filter -- deliberate
+  // immutable-identity treatment, not an oversight.
+  //
+  // Three of the fourteen mounted models throw on an empty
+  // `model.create({})` probe because their create() spreads/maps a
+  // required array field with no fallback when it's absent
+  // (Assay.js:105 specimenIds, Dataset.js:56 creators,
+  // OmicsQualification.js:52 qcMetrics). For those three the allowlist
+  // falls back to a hand-enumerated list, derived by reading that model's
+  // own create() return keys, keyed by collectionName.
+  const HAND_ENUMERATED_UPDATE_FIELDS = {
+    assays: [
+      'studyId', 'specimenIds', 'assayType', 'omicsDomain', 'protocolId',
+      'operatorId', 'laboratoryId', 'assayDateTime', 'assayBatchId',
+      'controls', 'reagentLotIds', 'equipmentIds', 'intendedUse',
+    ],
+    datasets: [
+      'datasetTitle', 'datasetVersion', 'creators', 'doi', 'license',
+      'distributionFiles', 'roCrateManifest',
+    ],
+    omicsQualifications: [
+      'targetAssay', 'qcRuleSetVersion', 'qcMetrics', 'qualificationDecision',
+      'limitations',
+    ],
+  };
+
+  const allowedUpdateFields = HAND_ENUMERATED_UPDATE_FIELDS[collectionName]
+    || Object.keys(model.create({})).filter(
+      (key) => key !== 'createdAt' && key !== 'updatedAt' && key !== idField && key !== '_id'
+    );
+
   router.get('/', async (req, res) => {
     try {
       const db = req.app.locals.db;
@@ -109,8 +152,13 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
 
       const rawId = String(req.params.id);
       const query = buildIdQuery(rawId);
-      const update = { ...req.body, updatedAt: new Date() };
-      delete update._id;
+      const body = req.body || {};
+      const update = { updatedAt: new Date() };
+      for (const key of allowedUpdateFields) {
+        if (Object.prototype.hasOwnProperty.call(body, key)) {
+          update[key] = body[key];
+        }
+      }
 
       const result = await db.collection(collectionName).findOneAndUpdate(
         query,

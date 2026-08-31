@@ -153,7 +153,7 @@ describe('POST /api/measurement-units', () => {
 
 describe('PUT /api/measurement-units/:id', () => {
   it('returns 401 without token', async () => {
-    const res = await request(app).put('/api/measurement-units/1').send({ name: 'Updated' });
+    const res = await request(app).put('/api/measurement-units/1').send({ description: 'Updated' });
     expect(res.status).toBe(401);
   });
 
@@ -162,7 +162,7 @@ describe('PUT /api/measurement-units/:id', () => {
     const res = await request(app)
       .put('/api/measurement-units/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ name: 'Updated' });
+      .send({ description: 'Updated' });
     expect(res.status).toBe(403);
   });
 
@@ -173,30 +173,30 @@ describe('PUT /api/measurement-units/:id', () => {
     const res = await request(app)
       .put('/api/measurement-units/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ name: 'Updated' });
+      .send({ description: 'Updated' });
     expect(res.status).toBe(404);
   });
 
   it('updates item for admin', async () => {
-    const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, name: 'Updated' }) });
+    const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'Updated' }) });
     app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .put('/api/measurement-units/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ name: 'Updated' });
+      .send({ description: 'Updated' });
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
 
   it('updates item by numeric (non-ObjectId) id, matching on idField', async () => {
-    const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, name: 'Updated' }) });
+    const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'Updated' }) });
     app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .put('/api/measurement-units/42')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ name: 'Updated' });
+      .send({ description: 'Updated' });
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(coll.findOneAndUpdate).toHaveBeenCalledWith(
@@ -206,6 +206,31 @@ describe('PUT /api/measurement-units/:id', () => {
       expect.anything(),
       expect.anything()
     );
+  });
+
+  // #875: the PUT handler used to do `update = {...req.body, updatedAt};
+  // delete update._id;` then `$set: update` -- every key the client sent
+  // rode straight into $set, including `injected` (not a MeasurementUnit
+  // field at all), `id` (the #881/#899 seeded MIABIS business key) and
+  // `unitID` (this mount's own idField, immutable business identity). The
+  // fix derives an allowlist from the model's own create() shape, so only
+  // `description` (a real MeasurementUnit field) should survive into $set,
+  // alongside the handler-owned `updatedAt`.
+  it('#875 regression: PUT ignores non-model keys and the id/idField spoof attempt', async () => {
+    const coll = createCollectionMock({
+      findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'x' }),
+    });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .put('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ description: 'x', injected: 'y', id: 'SPOOF', unitID: 999 });
+    expect(res.status).toBe(200);
+
+    const [, update] = coll.findOneAndUpdate.mock.calls[0];
+    expect(Object.keys(update.$set).sort()).toEqual(['description', 'updatedAt']);
+    expect(update.$set.description).toBe('x');
   });
 });
 
@@ -504,7 +529,7 @@ describe('db-not-available (503) branches', () => {
     const res = await request(app)
       .put('/api/measurement-units/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ name: 'Updated' });
+      .send({ description: 'Updated' });
     expect(res.status).toBe(503);
   });
 
@@ -565,7 +590,7 @@ describe('unexpected-error (500) branches', () => {
     const res = await request(app)
       .put('/api/measurement-units/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ name: 'Updated' });
+      .send({ description: 'Updated' });
     expect(res.status).toBe(500);
   });
 
