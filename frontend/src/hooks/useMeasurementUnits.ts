@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
 import { SampleWithMeasurementUnit } from '../types/models';
 import { measurementUnitService } from '../services/api';
-import { extractResponseEntity } from '../api/response.adapters';
+import { extractResponseEntity, extractResponseItems } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 export function useMeasurementUnits() {
   const [units, setUnits] = useState<SampleWithMeasurementUnit[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when loadUnits is called again before
+  // a previous in-flight call resolves.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadUnits();
@@ -22,23 +26,21 @@ export function useMeasurementUnits() {
   }, []);
 
   const loadUnits = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       const response = await measurementUnitService.getAll();
-      const responseData: any = response.data;
+      if (!requestSeq.isCurrent(seq)) return;
       // Backend retorna { success: true, data: [...] }
-      const unitsData = Array.isArray(responseData) 
-        ? responseData 
-        : (Array.isArray(responseData?.data) 
-          ? responseData.data 
-          : []);
+      const unitsData = extractResponseItems<SampleWithMeasurementUnit>(response);
       setUnits(unitsData);
       setError(null);
     } catch (err: any) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(err.message || 'Erro ao carregar unidades');
       setUnits([]); // Garante array vazio em caso de erro
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 

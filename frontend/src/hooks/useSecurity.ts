@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { securityService } from '../services/api';
+import { useRequestSequence } from './useRequestSequence';
 
 interface ApiLikeError {
   message?: string;
@@ -117,40 +118,56 @@ export function useSecurity() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // #901: one sequence per state pair -- loadConfig/updateConfig write
+  // `config`, loadPermissions/updatePermissions write `permissions`. Each
+  // pair's own catch also guards its `error` write with its own sequence,
+  // since `error` is shared: a stale config error shouldn't clobber a
+  // fresher permissions error (or vice versa) that landed in between.
+  // `saving` is shared by both update* calls but is a plain in-flight flag,
+  // not stale data, so its finally-clear stays unconditional.
+  const configSeq = useRequestSequence();
+  const permissionsSeq = useRequestSequence();
 
   const loadConfig = async () => {
+    const seq = configSeq.next();
     try {
       setLoading(true);
       setError(null);
       const response = await securityService.getConfig();
+      if (!configSeq.isCurrent(seq)) return;
       setConfig(extractResponseData<SecurityConfig>(response));
     } catch (err: unknown) {
+      if (!configSeq.isCurrent(seq)) return;
       setError(extractErrorMessage(err, 'Erro ao carregar configurações'));
     } finally {
-      setLoading(false);
+      if (configSeq.isCurrent(seq)) setLoading(false);
     }
   };
 
   const loadPermissions = async () => {
+    const seq = permissionsSeq.next();
     try {
       setError(null);
       const response = await securityService.getPermissions();
+      if (!permissionsSeq.isCurrent(seq)) return;
       setPermissions(extractResponseData<ProfilePermissions>(response));
     } catch (err: unknown) {
+      if (!permissionsSeq.isCurrent(seq)) return;
       setError(extractErrorMessage(err, 'Erro ao carregar permissões'));
     }
   };
 
   const updateConfig = async (updates: Partial<SecurityConfig>) => {
+    const seq = configSeq.next();
     try {
       setSaving(true);
       setError(null);
       const response = await securityService.updateConfig(updates);
-      setConfig(extractResponseData<SecurityConfig>(response));
+      if (configSeq.isCurrent(seq)) setConfig(extractResponseData<SecurityConfig>(response));
       return response.data;
     } catch (err: unknown) {
       const errorMessage = extractErrorMessage(err, 'Erro ao salvar configurações');
-      setError(errorMessage);
+      if (configSeq.isCurrent(seq)) setError(errorMessage);
       throw new Error(errorMessage);
     } finally {
       setSaving(false);
@@ -158,15 +175,16 @@ export function useSecurity() {
   };
 
   const updatePermissions = async (updates: ProfilePermissions) => {
+    const seq = permissionsSeq.next();
     try {
       setSaving(true);
       setError(null);
       const response = await securityService.updatePermissions(updates);
-      setPermissions(extractResponseData<ProfilePermissions>(response));
+      if (permissionsSeq.isCurrent(seq)) setPermissions(extractResponseData<ProfilePermissions>(response));
       return response.data;
     } catch (err: unknown) {
       const errorMessage = extractErrorMessage(err, 'Erro ao salvar permissões');
-      setError(errorMessage);
+      if (permissionsSeq.isCurrent(seq)) setError(errorMessage);
       throw new Error(errorMessage);
     } finally {
       setSaving(false);

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { backupPolicyService } from '../services/api';
+import { useRequestSequence } from './useRequestSequence';
 
 interface ApiLikeError {
   message?: string;
@@ -60,14 +61,23 @@ export function useBackupPolicy() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // #901: loadPolicy and updatePolicy both write `policy`, so they share one
+  // sequence to discard a stale write from either side. `loading`/`saving`
+  // are each owned by a single caller (load vs. save), so their own
+  // finally-clears stay unconditional -- gating them on this shared
+  // sequence would let one call's advance suppress the other's flag clear.
+  const requestSeq = useRequestSequence();
 
   const loadPolicy = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       setError(null);
       const response = await backupPolicyService.getPolicy();
+      if (!requestSeq.isCurrent(seq)) return;
       setPolicy(extractResponseData<BackupPolicy>(response));
     } catch (err: unknown) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(extractErrorMessage(err, 'Erro ao carregar política de backup'));
     } finally {
       setLoading(false);
@@ -75,16 +85,17 @@ export function useBackupPolicy() {
   };
 
   const updatePolicy = async (updates: Partial<BackupPolicy>) => {
+    const seq = requestSeq.next();
     try {
       setSaving(true);
       setError(null);
       const response = await backupPolicyService.updatePolicy(updates);
       const updated = extractResponseData<BackupPolicy>(response);
-      setPolicy(updated);
+      if (requestSeq.isCurrent(seq)) setPolicy(updated);
       return updated;
     } catch (err: unknown) {
       const errorMessage = extractErrorMessage(err, 'Erro ao salvar política de backup');
-      setError(errorMessage);
+      if (requestSeq.isCurrent(seq)) setError(errorMessage);
       throw new Error(errorMessage);
     } finally {
       setSaving(false);

@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { userSecurityService } from '../services/api';
+import { useRequestSequence } from './useRequestSequence';
 
 interface ApiLikeError {
   name?: string;
@@ -103,8 +104,12 @@ export function useUserSecurity() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when refreshData is called again
+  // (e.g. by a mutation) before the in-flight Promise.all resolves.
+  const requestSeq = useRequestSequence();
 
   const refreshData = useCallback(async () => {
+    const seq = requestSeq.next();
     setLoading(true);
     setError(null);
     try {
@@ -114,6 +119,8 @@ export function useUserSecurity() {
         userSecurityService.getPasswordStatus(),
         userSecurityService.getSessions()
       ]);
+
+      if (!requestSeq.isCurrent(seq)) return;
 
       setSecurityStatus(extractResponseData<SecurityStatus | null>(statusRes, null));
       setMfaStatus(extractResponseData<MFAStatus | null>(mfaRes, null));
@@ -132,12 +139,13 @@ export function useUserSecurity() {
         }))
       );
     } catch (err: unknown) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(extractErrorMessage(err, 'Erro ao carregar dados de segurança'));
       console.error('Erro ao carregar dados de segurança:', err);
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
-  }, []);
+  }, [requestSeq]);
 
   const updatePassword = useCallback(async (currentPassword: string, newPassword: string) => {
     try {

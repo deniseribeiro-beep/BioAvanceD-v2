@@ -4,11 +4,15 @@ import { equipmentService } from '../services/api';
 import { extractResponseEntity, extractResponseItems, normalizeMasterDataItem } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 export function useEquipment() {
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when loadEquipment is called again
+  // before a previous in-flight call resolves.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadEquipment();
@@ -23,17 +27,20 @@ export function useEquipment() {
   }, []);
 
   const loadEquipment = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       const response = await equipmentService.getAll();
+      if (!requestSeq.isCurrent(seq)) return;
       const equipmentData = extractResponseItems<Equipment>(response).map((item) => normalizeMasterDataItem<Equipment>(item, ['equipmentID']));
       setEquipment(equipmentData);
       setError(null);
     } catch (err: any) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(err.message || 'Erro ao carregar equipamentos');
       setEquipment([]); // Garante array vazio em caso de erro
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 

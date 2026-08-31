@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
 import { Access } from '../types/models';
 import { accessService } from '../services/api';
-import { extractResponseEntity } from '../api/response.adapters';
+import { extractResponseEntity, extractResponseItems } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 export function useAccess() {
   const [accesses, setAccesses] = useState<Access[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when loadAccesses is called again
+  // before a previous in-flight call resolves.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadAccesses();
@@ -22,18 +26,19 @@ export function useAccess() {
   }, []);
 
    const loadAccesses = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       const response = await accessService.getAll();
-      const responseData: any = response.data;
+      if (!requestSeq.isCurrent(seq)) return;
       // Backend retorna { success: true, data: [...] }
-      const data = responseData?.data || responseData || [];
-      setAccesses(Array.isArray(data) ? data : []);
+      setAccesses(extractResponseItems<Access>(response));
       setError(null);
     } catch (err: any) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(err.message || 'Erro ao carregar acessos');
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 

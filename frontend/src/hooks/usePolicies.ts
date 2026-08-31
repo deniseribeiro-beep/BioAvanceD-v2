@@ -1,14 +1,18 @@
 import { useState, useEffect } from 'react';
 import { Policy } from '../types/models';
 import { policyService } from '../services/api';
-import { extractResponseEntity } from '../api/response.adapters';
+import { extractResponseEntity, extractResponseItems } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 export function usePolicies() {
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when loadPolicies is called again
+  // before a previous in-flight call resolves.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadPolicies();
@@ -23,21 +27,21 @@ export function usePolicies() {
   }, []);
 
   const loadPolicies = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       const response = await policyService.getAll();
-      const responseData: any = response.data;
+      if (!requestSeq.isCurrent(seq)) return;
       // Garante que seja um array
-      const policiesData = Array.isArray(responseData) 
-        ? responseData 
-        : (responseData?.data || []);
+      const policiesData = extractResponseItems<Policy>(response);
       setPolicies(policiesData);
       setError(null);
     } catch (err: any) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(err.message || 'Erro ao carregar políticas');
       setPolicies([]); // Garante array vazio em caso de erro
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 

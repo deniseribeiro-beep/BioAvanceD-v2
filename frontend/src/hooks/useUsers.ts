@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
 import { User } from '../types/models';
 import { userService } from '../services/api';
-import { extractResponseEntity } from '../api/response.adapters';
+import { extractResponseEntity, extractResponseItems } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 export function useUsers() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when loadUsers is called again before
+  // a previous in-flight call resolves.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadUsers();
@@ -22,43 +26,31 @@ export function useUsers() {
   }, []);
 
   const loadUsers = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       setError(null);
       const response = await userService.getAll();
-      const responseData: any = response.data;
-      
-      // Garante que users seja sempre um array
-      let usersData: User[] = [];
-      
-      if (Array.isArray(responseData)) {
-        // Se response.data é um array direto
-        usersData = responseData;
-      } else if (responseData && responseData.data && Array.isArray(responseData.data)) {
-        // Se response.data tem uma propriedade data que é um array
-        usersData = responseData.data;
-      } else if (responseData && typeof responseData === 'object') {
-        // Se for um objeto único, converte em array
-        usersData = [responseData];
-      }
-      
+      if (!requestSeq.isCurrent(seq)) return;
+
       // Mapeia _id para id se necessário
-      usersData = usersData.map((user: any) => {
+      const usersData = extractResponseItems<User>(response).map((user: any) => {
         if (user._id && !user.id) {
           // Se tem _id mas não tem id, usa _id como id
           return { ...user, id: user._id };
         }
         return user;
       });
-      
+
       setUsers(usersData);
     } catch (err: any) {
+      if (!requestSeq.isCurrent(seq)) return;
       console.error('Erro ao carregar usuários:', err);
       const errorMessage = err.response?.data?.error || err.message || 'Erro ao carregar usuários';
       setError(errorMessage);
       setUsers([]); // Garante que a lista seja limpa em caso de erro
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 

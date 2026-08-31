@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Temperature } from '../types/models';
 import { temperatureService } from '../services/api';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 interface ApiLikeError {
   message?: string;
@@ -44,6 +45,11 @@ export function useTemperature() {
   const [temperatures, setTemperatures] = useState<Temperature[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when loadTemperatures is called again
+  // before a previous in-flight call resolves. The loader is currently
+  // gated behind TEMPERATURE_READING_DISABLED, but the guard is cheap and
+  // keeps the hook consistent should the flag ever flip back.
+  const requestSeq = useRequestSequence();
 
   // TEMPORARIAMENTE DESATIVADO: Não há sensores cadastrados ainda
   const TEMPERATURE_READING_DISABLED = true;
@@ -67,6 +73,7 @@ export function useTemperature() {
   }, []);
 
   const loadTemperatures = async () => {
+    const seq = requestSeq.next();
     if (TEMPERATURE_READING_DISABLED) {
       setTemperatures([]);
       setError(null);
@@ -77,15 +84,17 @@ export function useTemperature() {
     try {
       setLoading(true);
       const response = await temperatureService.getAll();
+      if (!requestSeq.isCurrent(seq)) return;
       const temperaturesData = extractTemperatures(response.data);
-      
+
       setTemperatures(temperaturesData);
       setError(null);
     } catch (err: unknown) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(extractErrorMessage(err, 'Erro ao carregar temperaturas'));
       setTemperatures([]); // Garante array vazio em caso de erro
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 

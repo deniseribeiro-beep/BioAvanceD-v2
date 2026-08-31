@@ -1,12 +1,17 @@
 import { useState, useEffect } from 'react';
 import { Organization } from '../types/models';
 import { organizationService } from '../services/api';
+import { extractResponseItems } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 export function useOrganizations() {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when loadOrganizations is called again
+  // before a previous in-flight call resolves.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadOrganizations();
@@ -21,20 +26,20 @@ export function useOrganizations() {
   }, []);
 
   const loadOrganizations = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       const response = await organizationService.getAll();
-      const responseData: any = response.data;
-      const organizationsData = Array.isArray(responseData)
-        ? responseData
-        : (responseData?.data || []);
+      if (!requestSeq.isCurrent(seq)) return;
+      const organizationsData = extractResponseItems<Organization>(response);
       setOrganizations(organizationsData);
       setError(null);
     } catch (err: any) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(err.message || 'Erro ao carregar organizações');
       setOrganizations([]);
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 

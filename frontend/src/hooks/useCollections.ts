@@ -1,12 +1,17 @@
 import { useState, useEffect } from 'react';
 import { Collection } from '../types/models';
 import { collectionsService } from '../services/api';
+import { extractResponseItems } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 export function useCollections() {
   const [collections, setCollections] = useState<Collection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when loadCollections is called again
+  // before a previous in-flight call resolves.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadCollections();
@@ -21,20 +26,20 @@ export function useCollections() {
   }, []);
 
   const loadCollections = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       const response = await collectionsService.getAll();
-      const responseData: any = response.data;
-      const collectionsData = Array.isArray(responseData)
-        ? responseData
-        : (responseData?.data || []);
+      if (!requestSeq.isCurrent(seq)) return;
+      const collectionsData = extractResponseItems<Collection>(response);
       setCollections(collectionsData);
       setError(null);
     } catch (err: any) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(err.message || 'Erro ao carregar coleções');
       setCollections([]);
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 

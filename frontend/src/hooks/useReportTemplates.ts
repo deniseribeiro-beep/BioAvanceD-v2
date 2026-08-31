@@ -1,12 +1,17 @@
 import { useState, useEffect } from 'react';
 import { ReportTemplate } from '../types/models';
 import { reportTemplateService } from '../services/api';
+import { extractResponseItems } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 export function useReportTemplates() {
   const [reportTemplates, setReportTemplates] = useState<ReportTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when loadReportTemplates is called
+  // again before a previous in-flight call resolves.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadReportTemplates();
@@ -21,18 +26,20 @@ export function useReportTemplates() {
   }, []);
 
   const loadReportTemplates = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       const response = await reportTemplateService.getAll();
-      const responseData: any = response.data;
-      const templatesData = Array.isArray(responseData) ? responseData : (responseData?.data || []);
+      if (!requestSeq.isCurrent(seq)) return;
+      const templatesData = extractResponseItems<ReportTemplate>(response);
       setReportTemplates(templatesData);
       setError(null);
     } catch (err: any) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(err.response?.data?.details?.join('; ') || err.response?.data?.error || err.message || 'Erro ao carregar modelos de relatório');
       setReportTemplates([]);
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 
