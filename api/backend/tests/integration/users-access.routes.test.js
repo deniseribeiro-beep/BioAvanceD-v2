@@ -663,6 +663,58 @@ describe('Users and Access routes', () => {
     expect(assignmentDocs[0].scopeId).toBeNull();
   });
 
+  // #875: PUT /:id used to $set req.body directly, so any key on the
+  // request body reached the driver untouched. This regression pins the
+  // allowlist that closes the route's last mechanical #875 site -- an
+  // injected key, a business-key spoof (userID) and an attempt to clear
+  // the MFA lockout counter (mfaLocked) must all be dropped from $set,
+  // while a legitimate field (name) still goes through.
+  it('PUT /api/users/:id descarta chaves nao permitidas (injected/userID/mfaLocked) do $set', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-8',
+      name: 'Alvo Original',
+      email: 'alvo-injecao@bioavanced.com.br',
+      username: 'alvoinjecao',
+      status: 'active',
+      accessType: 2,
+      roleName: 'Técnico',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce({ ...targetUser, name: 'Alvo Renomeado' });
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-8', accessType: 2 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-8' },
+      body: { name: 'Alvo Renomeado', injected: 'x', mfaLocked: false, userID: 999 },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect(setPayload.name).toBe('Alvo Renomeado');
+    expect(setPayload).not.toHaveProperty('injected');
+    expect(setPayload).not.toHaveProperty('mfaLocked');
+    expect(setPayload).not.toHaveProperty('userID');
+    expect(Object.keys(setPayload).sort()).toEqual(['name', 'updatedAt']);
+  });
+
   it('GET /api/access deve listar acessos', async () => {
     const handler = getHandler(accessRoutes, 'get', '/');
     accessCollection.find.mockReturnValue({

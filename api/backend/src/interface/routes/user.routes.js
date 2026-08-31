@@ -364,9 +364,40 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     delete req.body.accessType;
     delete req.body.roleName;
 
+    // #875: $set used to be built straight from req.body, letting a caller
+    // inject arbitrary keys (e.g. userID, or anything else) that reach the
+    // driver untouched. Allowlist to UserModel.create()'s own fields, plus
+    // the route-managed fields the preprocessing above legitimately writes
+    // (password/mfaEnabled/mfaSecret/mfaActivationDate/roleValidFrom/
+    // roleValidUntil/organizationId — already covered by create()'s field
+    // set) and updatedAt (server-set above, never caller-supplied).
+    // Excluded: _id/id (identity, already deleted above), userID (business
+    // key equivalent — not a User document field; resolved from _id),
+    // createdAt (immutable), lastLogin (already deleted above — not
+    // user-editable), and accessType/roleName/mfaFailedAttempts/mfaLocked,
+    // which the preprocessing above already deletes from req.body — the
+    // mfaFailedAttempts/mfaLocked exclusion is load-bearing (a caller must
+    // never be able to clear their own MFA lockout/attempt counter via this
+    // route).
+    const ALLOWED_USER_UPDATE_FIELDS = [
+      'name', 'email', 'phone', 'organizationId', 'organizationIds', 'username',
+      'password', 'status',
+      'mfaEnabled', 'mfaSecret', 'mfaActivationDate',
+      'anonId',
+      'passwordHistory', 'lastPasswordChange', 'forceReset', 'failedLoginAttempts',
+      'roleValidFrom', 'roleValidUntil',
+      'updatedAt'
+    ];
+    const updateFields = {};
+    for (const field of ALLOWED_USER_UPDATE_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+        updateFields[field] = req.body[field];
+      }
+    }
+
     const result = await usersCollection.updateOne(
       userFilter,
-      { $set: req.body }
+      { $set: updateFields }
     );
 
     if (result.matchedCount === 0) {
