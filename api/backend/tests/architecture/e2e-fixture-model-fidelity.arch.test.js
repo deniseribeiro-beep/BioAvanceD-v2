@@ -45,6 +45,17 @@ const StudyModel = require('../../src/models/Study');
 const ProtocolModel = require('../../src/models/Protocol');
 const TerminologyConceptModel = require('../../src/models/TerminologyConcept');
 const ReferenceDatasetReleaseModel = require('../../src/models/ReferenceDatasetRelease');
+const SensorModel = require('../../src/models/Sensor');
+
+// #906: three seedParticipant.ts raw inserts are deliberately NOT under
+// this guard -- seedRawSpecimen (samples), seedAssay (assays) and
+// seedActiveConsent (patientConsents) are reference stubs whose only
+// consumer resolves the id via findOne (assertReferencesExist /
+// consent.validator's {participantId, status} query). Their partiality is
+// documented at each fixture. The sensors fixture, by contrast, IS
+// guarded below: the RF004 gates read its fields
+// (sample.service.js#isOperationalSensor and intakeWizard.js's twin), the
+// exact mechanism that made the equipment fixture worth guarding.
 
 const FIXTURE = path.resolve(
   __dirname,
@@ -385,5 +396,45 @@ test('#886: the e2e referenceDatasetReleases fixture (seedActiveTerminologyConce
       + 'ReferenceDatasetRelease.validate(). The raw insertOne bypasses '
       + 'validation, so this fails nowhere else:\n  '
       + result.errors.join('\n  ')
+  );
+});
+
+test('#906: the e2e sensor fixture writes a document Sensor.validate accepts', () => {
+  const source = fs.readFileSync(FIXTURE, 'utf8');
+  const literal = extractInsertLiteral(source, 'sensors');
+
+  const suffix = 1756412345678;
+  const containerID = suffix;
+  const document = buildFixtureDocument(literal, { suffix, containerID });
+
+  const result = SensorModel.validate(document);
+  assert.deepEqual(
+    result.errors,
+    [],
+    'seedStorageBoxLocation()\'s sensors document fails Sensor.validate(). '
+      + 'The RF004 gates (sample.service.js#isOperationalSensor and '
+      + 'intakeWizard.js\'s twin) read this document\'s status fields, so an '
+      + 'invalid shape here is admitted only by their permissive check -- '
+      + 'the #774 mechanism one collection over:\n  '
+      + result.errors.join('\n  ')
+  );
+});
+
+test('#906: the sensor fixture still pins locationId to containerID', () => {
+  const source = fs.readFileSync(FIXTURE, 'utf8');
+  const literal = extractInsertLiteral(source, 'sensors');
+
+  const suffix = 1756412345678;
+  const containerID = suffix;
+  const document = buildFixtureDocument(literal, { suffix, containerID });
+
+  assert.equal(
+    document.locationId,
+    containerID,
+    'seedStorageBoxLocation()\'s sensor no longer ties locationId to '
+      + 'containerID. The RF004 operational-sensor gates join on exactly that '
+      + 'equality (sensorLocationQuery over the freezer\'s containerID '
+      + 'variants), so a fixture that drops it keeps passing while no longer '
+      + 'exercising the join it exists to exercise.'
   );
 });

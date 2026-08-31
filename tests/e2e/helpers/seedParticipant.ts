@@ -169,9 +169,19 @@ export async function seedStorageBoxLocation(): Promise<SeededStorageBox> {
     equipmentDescription: `RF004 e2e freezer equipment ${suffix}`,
     createdAt: new Date(),
   });
+  // #906: model-valid on purpose. The RF004 gates read this document's
+  // fields (sample.service.js#isOperationalSensor and intakeWizard.js's
+  // twin read status||maintenanceStatus), and the old shape
+  // ({ status: 'ok' }, no sensorId/sensorType) was a value the Sensor
+  // model refuses admitted only because the gate's check is permissive --
+  // the exact #774/#886 mechanism one collection over. locationId must
+  // stay === containerID (the gates join on the freezer's containerID).
+  // e2e-fixture-model-fidelity.arch.test.js pins both.
   await db.collection('sensors').insertOne({
+    sensorId: `e2e-sensor-${suffix}`,
+    sensorType: 'temperature',
+    maintenanceStatus: 'operational',
     locationId: containerID,
-    status: 'ok',
     createdAt: new Date(),
   });
 
@@ -339,6 +349,12 @@ export async function seedProtocol(protocolId: string, options: { approvalStatus
  */
 export async function seedRawSpecimen(specimenId: string): Promise<void> {
   const db = await getDb();
+  // #906: deliberately NOT Sample.validate()-clean, and excluded from
+  // e2e-fixture-model-fidelity.arch.test.js by design. This is a
+  // reference stub -- assertReferencesExist resolves the id via findOne
+  // and reads nothing else -- and enriching it to model validity would
+  // put a fully-shaped specimen into every list/count-sensitive spec's
+  // dataset for zero product-path payoff.
   await db.collection('samples').insertOne({
     specimenId,
     createdAt: new Date(),
@@ -354,6 +370,8 @@ export async function seedRawSpecimen(specimenId: string): Promise<void> {
  */
 export async function seedAssay(assayId: string): Promise<void> {
   const db = await getDb();
+  // #906: deliberately not Assay.validate()-clean -- reference stub,
+  // same rationale and guard exclusion as seedRawSpecimen above.
   await db.collection('assays').insertOne({
     assayId,
     createdAt: new Date(),
@@ -377,6 +395,11 @@ export async function seedActiveConsent(
   const db = await getDb();
   // Canonical name is `patientConsents` — see collections.js's
   // CANONICAL_COLLECTIONS['consents'], consulted by consent.validator.js.
+  // #906: deliberately not PatientConsent.validate()-clean (no
+  // consentTemplateId) and excluded from the fidelity guard by design --
+  // the consent validator queries {participantId, status} only, and
+  // inventing a template id here would be false evidence data (#821/#827
+  // own the real recorder's evidence fields).
   await db.collection('patientConsents').insertOne({
     participantId: String(participantId),
     status: 'ACTIVE',
