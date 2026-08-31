@@ -156,6 +156,16 @@ export async function seedStorageBoxLocation(): Promise<SeededStorageBox> {
     // Equipment.validate() now returns isValid: true, so the fixture
     // finally describes something the product could actually have
     // persisted.
+    // #886 item 2, resolved 2026-08-31: the raw insert STAYS, deliberately.
+    // Equipment.create() does honour a caller-supplied numeric equipmentID
+    // (Equipment.js:69-71 after #880's family of fixes), so constructing
+    // through the model is possible -- but it would make this Playwright
+    // helper import api/backend/src model internals across npm roots,
+    // while the invariant the model would add is already enforced loudly
+    // from the backend side: e2e-fixture-model-fidelity.arch.test.js
+    // (f8443983) extracts THIS literal, runs it through
+    // Equipment.validate(), and pins equipmentID === containerID for the
+    // RF004 join. Change this document and that guard answers.
     equipmentDescription: `RF004 e2e freezer equipment ${suffix}`,
     createdAt: new Date(),
   });
