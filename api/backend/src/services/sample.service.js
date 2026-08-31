@@ -683,7 +683,44 @@ class SampleService {
       // specimenStatus is the sole source of truth, so any caller still
       // sending the legacy fields on the wire is silently ignored rather
       // than persisted.
-      const { lifecycleStatus, availabilityStatus, quarantineStatus, currentStatus, status, ...restUpdateData } = updateData;
+      //
+      // #875: spreading the rest of updateData into $set (previously here)
+      // is a denylist of only those 5 fields -- every other body key,
+      // recognized or not, sailed through untouched. Use an allowlist
+      // instead, derived from SampleModel.create()'s field set
+      // (src/models/Sample.js:184-246), excluding identity (specimenId,
+      // participantId), the 5 status fields above (already handled/
+      // recomputed), and _id/createdAt/updatedAt (this service owns
+      // updatedAt below). Add a field to Sample.create() and this list
+      // together.
+      // 'notes' is not in Sample.js's field list but is pinned writable by
+      // #540's test; whether it belongs in the model is #875's dict-02
+      // flag, not this change's call.
+      const ALLOWED_UPDATE_FIELDS = [
+        'sampleType', 'sampleOrigin', 'extractionProtocol', 'barcode',
+        'barcodeSymbologies', 'barcodeIndustrial', 'registeredAt',
+        'withdrawnAt', 'receivedAt', 'quantity', 'unit', 'quality',
+        'modelVersion', 'matrixType', 'governanceStatus',
+        'governanceFailureReasons', 'governanceRuleCodes',
+        'biologicalPenalty', 'rcsScore', 'scoreBasedGrade', 'finalGrade',
+        'gradeRoute', 'axisPenalties', 'calculationTrace', 'rcsEvaluation',
+        'externalQualityAssessment', 'locationID', 'linkedProject',
+        'collectionSite', 'sprec', 'merkleRoot', 'sealedRcsAssessmentId',
+        'sealedSpecimenPreanalyticsId', 'consentTemplateId', 'clinicalData',
+        'pharmacologyData', 'consentStatus', 'quarantineReason',
+        'importBatchId', 'importedAt', 'importedBy', 'currentQuantity',
+        'initialQuantity', 'totalWithdrawn', 'totalReturned',
+        'accessionNumber', 'orderNumber', 'processingStatus',
+        'protocolApplied', 'specimenCollection', 'studyId', 'protocolId',
+        'collectionId', 'linkedFiles', 'qrCode', 'storageLocation',
+        'notes'
+      ];
+      const restUpdateData = {};
+      for (const key of ALLOWED_UPDATE_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(updateData, key)) {
+          restUpdateData[key] = updateData[key];
+        }
+      }
 
       const payload = {
         ...restUpdateData,

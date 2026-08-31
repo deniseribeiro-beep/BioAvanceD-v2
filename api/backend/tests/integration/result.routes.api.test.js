@@ -789,6 +789,27 @@ describe('PUT /api/results/:id', () => {
     );
   });
 
+  // #875: the previous implementation only denylisted specimenId/sampleID/
+  // sampleId and spread every other body key into $set -- an unrecognized
+  // key like `injected` sailed through untouched. The allowlist must drop
+  // it too, not just the identity/linkage fields covered by #628 above.
+  it('drops unrecognized keys from the body before $set (#875)', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const resultsColl = createCollectionMock({ updateOne });
+    app.locals.db = createDbMock({ results: resultsColl });
+
+    const res = await request(app)
+      .put(`/api/results/${RESULT_OID}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ description: 'new', injected: 'x', specimenId: 'inj' });
+
+    expect(res.status).toBe(200);
+    expect(updateOne).toHaveBeenCalledWith(
+      { _id: expect.any(ObjectId) },
+      { $set: { description: 'new', updatedAt: expect.any(Date) } }
+    );
+  });
+
   it('returns 503 when db is unavailable', async () => {
     app.locals.db = null;
     const res = await request(app)

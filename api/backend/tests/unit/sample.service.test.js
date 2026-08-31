@@ -1147,6 +1147,35 @@ describe('sample.service', () => {
       expect(updateArg.$set.notes).toBe('edited via SampleDetailsPage');
     });
 
+    // #875: updateSample spread every non-status key from the body into
+    // $set -- an unrecognized key like `hacked`, or an identity field like
+    // participantId, sailed through untouched. The allowlist must drop
+    // both, while still persisting recognized fields like quantity.
+    it('drops unrecognized keys and participantId from the persisted payload (#875)', async () => {
+      const db = makeDb();
+      const existing = {
+        _id: 'sample-1',
+        quantity: 10,
+        initialQuantity: 10,
+        currentQuantity: 10,
+        specimenStatus: 'available'
+      };
+      db.collections.samples.findOne
+        .mockResolvedValueOnce(existing)
+        .mockResolvedValueOnce(existing);
+
+      await sampleService.updateSample(db, 'sample-1', {
+        quantity: 5,
+        hacked: 'x',
+        participantId: 'switch'
+      });
+
+      const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
+      expect(updateArg.$set.quantity).toBe(5);
+      expect(updateArg.$set.hacked).toBeUndefined();
+      expect(updateArg.$set.participantId).toBeUndefined();
+    });
+
     it('returns null when updateOne matches nothing', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', quantity: 10 });

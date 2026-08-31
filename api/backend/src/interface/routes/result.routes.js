@@ -444,12 +444,33 @@ router.put('/:id', authenticate, requirePermission('editResult'), async (req, re
 
     const { ObjectId } = require('mongodb');
     const resultsCollection = db.collection('results');
-    // #628: specimenId is a reference resolved from a real Sample lookup
-    // (see POST /upload, POST /, PUT /:id/link-sample) -- a generic $set
-    // must not let a caller overwrite it with an arbitrary unvalidated
-    // value. Use PUT /:id/link-sample to change which sample a result is
-    // linked to.
-    const { specimenId: _ignoredSpecimenId, sampleID: _ignoredSampleID, sampleId: _ignoredSampleId, ...updateFields } = req.body;
+    // #875: a denylist here (previously just specimenId/sampleID/sampleId,
+    // #628) passes every other body key straight into $set, including keys
+    // that don't belong to the Result document at all. Use an allowlist
+    // instead, derived from ResultModel.create()'s field set
+    // (src/models/Result.js:53-70) -- add a field there and here together.
+    // specimenId/sampleID/sampleId stay excluded: that linkage is owned by
+    // PUT /:id/link-sample, not this generic update. resultID and _id are
+    // immutable identity and are excluded too.
+    const ALLOWED_UPDATE_FIELDS = [
+      'fileType',
+      'resultFilePath',
+      'filePath',
+      'description',
+      'analysisType',
+      'method',
+      'responsibleResearcher',
+      'equipmentID',
+      'equipmentName',
+      'fileSize',
+      'uploadedAt'
+    ];
+    const updateFields = {};
+    for (const key of ALLOWED_UPDATE_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(req.body, key)) {
+        updateFields[key] = req.body[key];
+      }
+    }
     updateFields.updatedAt = new Date();
 
     const result = await resultsCollection.updateOne(
