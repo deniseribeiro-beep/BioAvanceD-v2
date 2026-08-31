@@ -468,11 +468,22 @@ describe('Reports API integration', () => {
       );
     });
 
-    it('temperatura: calcula estatísticas e filtra apenas alertas críticos quando solicitado', async () => {
+    // #864: readingStatus's whole vocabulary is valid|invalid|suspicious
+    // (Temperature.js) and no writer of the temperature collection ever
+    // sets `severity` -- so a doc whose only "critical" signal is
+    // readingStatus (verified never true in production) must NOT count
+    // toward statistics.alerts. What does count: a threshold breach
+    // (minThreshold/maxThreshold both non-null and temperatureValue outside
+    // them) and a faulty/maintenance sensorStatus. A null-threshold doc,
+    // the honest majority state today since no bulk writer persists
+    // thresholds (they live on Policy), must not count either.
+    it('temperatura: calcula estatísticas e conta alertas críticos via limiar de threshold e sensorStatus, não readingStatus (#864)', async () => {
       const { db, capturedQueries } = buildCollectionDb({
         temperature: [
-          { temperatureValue: '2.5', readingStatus: 'normal' },
-          { temperatureValue: '10', readingStatus: 'critical' },
+          { temperatureValue: 2.5, readingStatus: 'normal', sensorStatus: 'normal', minThreshold: null, maxThreshold: null },
+          { temperatureValue: 10, readingStatus: 'critical', sensorStatus: 'normal', minThreshold: null, maxThreshold: null },
+          { temperatureValue: 15, readingStatus: 'valid', sensorStatus: 'normal', minThreshold: 2, maxThreshold: 8 },
+          { temperatureValue: 5, readingStatus: 'valid', sensorStatus: 'faulty', minThreshold: null, maxThreshold: null },
         ],
       });
 
@@ -482,8 +493,18 @@ describe('Reports API integration', () => {
         .send({ filters: { criticalAlertsOnly: 'true', startDate: '2026-01-01', endDate: '2026-01-31' } });
 
       expect(response.status).toBe(200);
-      expect(response.body.data.statistics).toEqual({ average: 6.25, min: 2.5, max: 10, alerts: 1 });
-      expect(capturedQueries.temperature.$and[0].$or).toBeDefined();
+      // Only the threshold-breach doc and the faulty-sensor doc count; the
+      // readingStatus:'critical' doc (dead leg, removed) does not.
+      expect(response.body.data.statistics).toEqual({ average: (2.5 + 10 + 15 + 5) / 4, min: 2.5, max: 15, alerts: 2 });
+
+      // The impossible readingStatus/severity regex legs are gone; the $or
+      // now carries only the sensorStatus leg and the two non-null-guarded
+      // threshold-breach $and legs.
+      expect(capturedQueries.temperature.$and[1].$or).toEqual([
+        { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
+        { $and: [{ minThreshold: { $ne: null } }, { $expr: { $lt: ['$temperatureValue', '$minThreshold'] } }] },
+        { $and: [{ maxThreshold: { $ne: null } }, { $expr: { $gt: ['$temperatureValue', '$maxThreshold'] } }] },
+      ]);
     });
 
     // #620: withdrawalhistory reads from sample_movements (type: 'withdraw'

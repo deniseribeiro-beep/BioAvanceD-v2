@@ -596,12 +596,25 @@ async function handleTemperature(db, filters, handlerOptions = {}) {
     queryParts.push({ $or: [{ timestamp: dateRange }, { dateTime: dateRange }] });
   }
 
+  // #864: readingStatus's whole vocabulary is valid|invalid|suspicious
+  // (Temperature.js; import.service.js, iot-streaming.service.js and
+  // mqtt-telemetry.service.js all write only those three) and no writer of
+  // the temperature collection ever sets `severity` -- so the old
+  // readingStatus/severity 'critical|alert' regex legs could never match
+  // anything and are dropped rather than repaired. sensorStatus
+  // faulty|maintenance is kept (a broken/offline sensor is a real critical
+  // condition, and today the only populated signal). The threshold-breach
+  // leg below is correct but mostly unpopulated today -- minThreshold/
+  // maxThreshold default to null and none of the three bulk writers
+  // supplies them (thresholds normally come from a Policy at alert time) --
+  // so it is explicitly non-null-guarded rather than silently matching the
+  // null-threshold majority.
   if (isTruthyFilter(filters.criticalAlertsOnly)) {
     queryParts.push({
       $or: [
-        { readingStatus: { $regex: 'critical|alert', $options: 'i' } },
-        { severity: { $regex: 'critical|alert', $options: 'i' } },
         { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
+        { $and: [{ minThreshold: { $ne: null } }, { $expr: { $lt: ['$temperatureValue', '$minThreshold'] } }] },
+        { $and: [{ maxThreshold: { $ne: null } }, { $expr: { $gt: ['$temperatureValue', '$maxThreshold'] } }] },
       ],
     });
   }
@@ -625,10 +638,20 @@ async function handleTemperature(db, filters, handlerOptions = {}) {
         average: values.reduce((sum, value) => sum + value, 0) / values.length,
         min: Math.min(...values),
         max: Math.max(...values),
-        alerts: temperatures.filter((entry) =>
-          String(entry.readingStatus || '').toLowerCase().includes('alert') ||
-          String(entry.readingStatus || '').toLowerCase().includes('critical')
-        ).length,
+        // #864: mirrors the criticalAlertsOnly query predicate above in JS
+        // instead of the dead readingStatus 'alert'/'critical' substring
+        // check -- a breach requires a non-null threshold on the relevant
+        // side, so a null-threshold entry (today's honest majority) never
+        // counts.
+        alerts: temperatures.filter((entry) => {
+          const value = Number(entry.temperatureValue);
+          const hasMin = entry.minThreshold !== null && entry.minThreshold !== undefined;
+          const hasMax = entry.maxThreshold !== null && entry.maxThreshold !== undefined;
+          const breachesMin = hasMin && Number.isFinite(value) && value < Number(entry.minThreshold);
+          const breachesMax = hasMax && Number.isFinite(value) && value > Number(entry.maxThreshold);
+          const sensorFlag = /faulty|maintenance/i.test(String(entry.sensorStatus || ''));
+          return breachesMin || breachesMax || sensorFlag;
+        }).length,
       }
     : undefined;
 

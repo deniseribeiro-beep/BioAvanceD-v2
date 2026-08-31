@@ -422,6 +422,105 @@ describe('reports.routes.js gaps', () => {
     expect(capturedQueries.temperature).toEqual({});
   });
 
+  // #864: handleTemperature's criticalAlertsOnly branch used to build a
+  // 3-leg $or where two legs (readingStatus/severity matching
+  // 'critical|alert') could never match anything -- readingStatus's whole
+  // vocabulary is valid|invalid|suspicious (Temperature.js, import.service.js,
+  // iot-streaming.service.js, mqtt-telemetry.service.js all agree) and no
+  // writer of the temperature collection ever sets `severity`. The fix drops
+  // those two legs, keeps the sensorStatus faulty|maintenance leg, and adds a
+  // non-null-guarded threshold-breach leg. This file's buildCollectionDb mock
+  // doesn't apply the query to filter documents (see cursor.factory.js), so
+  // "IS matched"/"NOT matched" here is pinned on the query object handleTemperature
+  // actually builds, and on statistics.alerts -- computed in plain JS over
+  // whatever documents come back, so it exercises the real predicate logic
+  // even though the mock can't evaluate $expr.
+  describe('criticalAlertsOnly: predicado de threshold/sensorStatus (#864)', () => {
+    it('constrói o $or sem os legs impossíveis de readingStatus/severity, com sensorStatus e limiares com guarda not-null', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ temperature: [] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/temperature/preview')
+        .send({ filters: { criticalAlertsOnly: 'true' } });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.temperature.$and).toEqual([
+        {
+          $or: [
+            { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
+            { $and: [{ minThreshold: { $ne: null } }, { $expr: { $lt: ['$temperatureValue', '$minThreshold'] } }] },
+            { $and: [{ maxThreshold: { $ne: null } }, { $expr: { $gt: ['$temperatureValue', '$maxThreshold'] } }] },
+          ],
+        },
+      ]);
+    });
+
+    it('statistics.alerts conta leitura com limiar excedido (minThreshold/maxThreshold definidos e valor fora da faixa)', async () => {
+      const { db } = buildCollectionDb({
+        temperature: [
+          { temperatureValue: 12, minThreshold: 2, maxThreshold: 8 },
+        ],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/temperature/preview')
+        .send({ filters: { criticalAlertsOnly: 'true' } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.statistics.alerts).toBe(1);
+    });
+
+    it('statistics.alerts NÃO conta leitura com limiares nulos, qualquer que seja o valor', async () => {
+      const { db } = buildCollectionDb({
+        temperature: [
+          { temperatureValue: 999, minThreshold: null, maxThreshold: null },
+        ],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/temperature/preview')
+        .send({ filters: { criticalAlertsOnly: 'true' } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.statistics.alerts).toBe(0);
+    });
+
+    it('statistics.alerts conta leitura com sensorStatus faulty', async () => {
+      const { db } = buildCollectionDb({
+        temperature: [
+          { temperatureValue: 5, sensorStatus: 'faulty', minThreshold: null, maxThreshold: null },
+        ],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/temperature/preview')
+        .send({ filters: { criticalAlertsOnly: 'true' } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.statistics.alerts).toBe(1);
+    });
+
+    it('statistics.alerts NÃO conta readingStatus "critical" sozinho (leg morto removido)', async () => {
+      const { db } = buildCollectionDb({
+        temperature: [
+          { temperatureValue: 5, readingStatus: 'invalid', sensorStatus: 'normal', minThreshold: null, maxThreshold: null },
+        ],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/temperature/preview')
+        .send({ filters: { criticalAlertsOnly: 'true' } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.statistics.alerts).toBe(0);
+    });
+  });
+
   describe('normalizeReport: fallbacks de reportID/generatedAt ausentes', () => {
     it('lista relatório sem reportID (default 0) e sem generatedAt (usa createdAt)', async () => {
       const { db } = buildCollectionDb({
