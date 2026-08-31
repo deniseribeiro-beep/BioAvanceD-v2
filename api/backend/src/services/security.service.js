@@ -137,16 +137,34 @@ class SecurityService {
       // Valida configurações
       this.validateConfig(newConfig);
       
-      // Mescla com configuração atual (mantém valores não fornecidos)
-      const mergedConfig = {
-        ...currentConfig,
-        ...newConfig,
-        metadata: {
-          ...currentConfig.metadata,
-          lastUpdated: new Date(),
-          lastUpdatedBy: req.user?.userID || 'SYSTEM',
-          version: (currentConfig.metadata?.version || 1) + 1
+      // Mescla com configuração atual, grupo a grupo (um nível de profundidade),
+      // para não apagar flags do grupo que o chamador não enviou (#904)
+      const knownGroups = [
+        'authentication',
+        'passwordRules',
+        'session',
+        'loginAttempts',
+        'logging',
+        'privacy',
+        'enhancedSecurity',
+        'lgpd'
+      ];
+
+      const mergedConfig = {};
+      for (const group of knownGroups) {
+        if (currentConfig[group] || newConfig[group]) {
+          mergedConfig[group] = {
+            ...currentConfig[group],
+            ...(newConfig[group] || {})
+          };
         }
+      }
+
+      mergedConfig.metadata = {
+        ...currentConfig.metadata,
+        lastUpdated: new Date(),
+        lastUpdatedBy: req.user?.userID || 'SYSTEM',
+        version: (currentConfig.metadata?.version || 1) + 1
       };
 
       // Atualiza no banco

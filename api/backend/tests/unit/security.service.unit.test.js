@@ -260,6 +260,54 @@ describe('SecurityService.updateConfig', () => {
     expect(updateOne).not.toHaveBeenCalled();
     expect(errSpy).toHaveBeenCalled();
   });
+
+  it('deep-merges a partial group update, preserving sibling flags in that group (#904)', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ updateOne })) };
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue({});
+
+    const currentConfig = {
+      session: {
+        timeoutMinutes: 30,
+        maxSessionDuration: 12,
+        allowMultipleSessions: false,
+        autoRenewal: true,
+        logExpiration: true
+      },
+      metadata: { version: 1 }
+    };
+    const newConfig = { session: { timeoutMinutes: 45 } };
+
+    const result = await securityService.updateConfig(db, newConfig, currentConfig, {});
+
+    expect(result.session.timeoutMinutes).toBe(45);
+    expect(result.session.allowMultipleSessions).toBe(false);
+    expect(result.session.autoRenewal).toBe(true);
+    expect(result.session.logExpiration).toBe(true);
+    expect(result.session.maxSessionDuration).toBe(12);
+
+    const setArg = updateOne.mock.calls[0][1].$set;
+    expect(setArg.session.allowMultipleSessions).toBe(false);
+    expect(setArg.session.autoRenewal).toBe(true);
+    expect(setArg.session.logExpiration).toBe(true);
+  });
+
+  it('ignores caller-supplied metadata and keeps server-owned metadata handling', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ updateOne })) };
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue({});
+
+    const currentConfig = { metadata: { version: 3, lastUpdatedBy: 'admin1' } };
+    const newConfig = { metadata: { version: 999, lastUpdatedBy: 'attacker', extra: 'x' } };
+
+    const result = await securityService.updateConfig(db, newConfig, currentConfig, { user: { userID: 'admin2' } });
+
+    expect(result.metadata.version).toBe(4);
+    expect(result.metadata.lastUpdatedBy).toBe('admin2');
+    expect(result.metadata.extra).toBeUndefined();
+  });
 });
 
 describe('SecurityService.exportLogs', () => {
