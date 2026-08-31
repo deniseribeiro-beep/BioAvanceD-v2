@@ -164,7 +164,12 @@ export function useUserSecurity() {
       if (!codes || codes.length === 0) {
         throw new Error('Nenhum código foi gerado');
       }
-      
+
+      // #901: invalidate any in-flight refreshData before writing -- a
+      // slower, older refresh landing after this write would replace the
+      // clear-text codes below with the server's redacted mfaStatus.
+      requestSeq.next();
+
       // Atualiza o estado local com os códigos retornados
       // O getMFAStatus não retorna códigos em texto claro (por segurança),
       // então precisamos manter os códigos gerados no estado
@@ -183,7 +188,7 @@ export function useUserSecurity() {
     } catch (err: unknown) {
       throw new Error(extractErrorMessage(err, 'Erro ao gerar códigos de recuperação'));
     }
-  }, []);
+  }, [requestSeq]);
 
   const revokeSession = useCallback(async (sessionId: string) => {
     try {
