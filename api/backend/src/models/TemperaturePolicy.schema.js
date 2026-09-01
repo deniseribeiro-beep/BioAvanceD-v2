@@ -34,10 +34,13 @@ const TemperaturePolicySchema = new mongoose.Schema(
       end: { type: Date, default: null },
     },
     // dict-02 P1X-0110 (Duration, 0..1 Essencial): "how long out of range
-    // before it counts as an excursion" -- not yet consumed by
-    // TelemetryMonitor's excursion detection (that still uses a single
-    // global TELEMETRY_CRITICAL_DURATION_HOURS threshold), so this stays
-    // optional/unread until #688 wires it in per-policy.
+    // before it counts as an excursion", in MINUTES (dict-02 types this
+    // Duration/UCUM but names no concrete unit; minutes is this repo's
+    // inferred convention -- see #688). #688: TelemetryMonitor now consumes
+    // this per-sensor via the sensor's bound temperaturePolicy, falling
+    // back to the global TELEMETRY_CRITICAL_DURATION_HOURS threshold
+    // whenever this stays at its `null` default (or any other non-positive
+    // value), which is why this field remains optional here.
     minimumDuration: { type: Number, default: null },
   },
   {

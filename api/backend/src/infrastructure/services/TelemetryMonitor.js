@@ -10,6 +10,12 @@ const {
 const EnvironmentalExcursionModel = require('../../models/EnvironmentalExcursion');
 const { quarantineByColdChainIncident } = require('../../services/equipment-sensor-quarantine.service');
 
+// #688: TemperaturePolicy.schema.js's minimumDuration is in MINUTES (see
+// that file's field comment), while criticalDurationHours below is in
+// HOURS -- this constant makes every conversion between the two an
+// explicit, named multiplication/division instead of a bare * 60 / 60.
+const MINUTES_PER_HOUR = 60;
+
 /**
  * Monitor de Telemetria (InfluxDB -> Neo4j)
  *
@@ -107,13 +113,19 @@ class TelemetryMonitor {
 
   // AC#6 "acionar alerta": a sensor is critical when its temperature has
   // stayed continuously above criticalTemp through to the most recent
-  // reading for longer than criticalDurationHours. The Flux filter below
+  // reading for longer than its excursion threshold. The Flux filter below
   // only returns above-threshold points, so a dip back into range simply
   // stops appearing as rows — we detect that by walking each sensor's
   // points newest-first and stopping at the first gap larger than
   // expectedReadingIntervalMinutes (same missing-reading tolerance
   // findSensorsWithMissingReadings uses), which marks where the current
   // above-threshold streak actually began.
+  //
+  // #688: the excursion threshold itself is per-sensor now -- each sensor's
+  // bound TemperaturePolicy.minimumDuration (minutes) governs when present
+  // and positive; criticalDurationHours (converted to minutes) is the
+  // fallback, which keeps every policy still carrying the seeded
+  // `minimumDuration: null` default behaving exactly as before.
   async findCriticalFreezers() {
     await connectInfluxDB();
     const queryApi = getInfluxQueryApi();
@@ -137,8 +149,11 @@ class TelemetryMonitor {
     }
 
     const gapThresholdMs = this.expectedReadingIntervalMinutes * 60 * 1000;
-    const durationThresholdMs = this.criticalDurationHours * 60 * 60 * 1000;
     const now = Date.now();
+
+    const durationMinutesBySensor = await this.resolveCriticalDurationMinutesBySensor(
+      [...pointsBySensor.keys()]
+    );
 
     const criticalFreezers = [];
     for (const [sensorId, points] of pointsBySensor) {
@@ -154,6 +169,7 @@ class TelemetryMonitor {
       }
 
       const breachedSince = points[streakStartIndex].time;
+      const durationThresholdMs = durationMinutesBySensor.get(sensorId) * 60 * 1000;
       if (now - breachedSince.getTime() < durationThresholdMs) {
         continue;
       }
@@ -174,6 +190,61 @@ class TelemetryMonitor {
     }
 
     return criticalFreezers;
+  }
+
+  // #688: batched per-sensor excursion-duration lookup, in MINUTES. One
+  // sensorMetadata query + one temperaturePolicies query for the whole
+  // sensorIds batch (not one pair per sensor), matching this file's other
+  // batched-lookup methods (resolveRootSamples/findSensorsWithMissingReadings).
+  // A sensor falls back to the global criticalDurationHours (converted to
+  // minutes) whenever it has no bound policy, the policy doesn't resolve,
+  // or the policy's minimumDuration isn't a usable (positive number) value
+  // -- this is what keeps the seeded `minimumDuration: null` default
+  // behaving exactly as it did before #688.
+  //
+  // Guarded on `this.db` so it degrades to "every sensor gets the global
+  // default" instead of throwing when findCriticalFreezers() is exercised
+  // without a Mongo db wired up (production always has one by the time
+  // this runs -- runCycle() already returns early otherwise).
+  async resolveCriticalDurationMinutesBySensor(sensorIds) {
+    const defaultMinutes = this.criticalDurationHours * MINUTES_PER_HOUR;
+    const durationMinutesBySensor = new Map();
+
+    if (!this.db || sensorIds.length === 0) {
+      for (const sensorId of sensorIds) {
+        durationMinutesBySensor.set(sensorId, defaultMinutes);
+      }
+      return durationMinutesBySensor;
+    }
+
+    const sensors = await this.db.collection('sensorMetadata')
+      .find({ sensorId: { $in: sensorIds } })
+      .toArray();
+
+    const policyIdBySensorId = new Map();
+    for (const sensor of sensors) {
+      if (sensor.temperaturePolicy) {
+        policyIdBySensorId.set(sensor.sensorId, sensor.temperaturePolicy);
+      }
+    }
+
+    const policyIds = [...policyIdBySensorId.values()];
+    const policies = policyIds.length
+      ? await this.db.collection('temperaturePolicies').find({ _id: { $in: policyIds } }).toArray()
+      : [];
+    const policyById = new Map(policies.map((policy) => [String(policy._id), policy]));
+
+    for (const sensorId of sensorIds) {
+      const policyId = policyIdBySensorId.get(sensorId);
+      const policy = policyId ? policyById.get(String(policyId)) : null;
+      const minimumDuration = policy?.minimumDuration;
+      durationMinutesBySensor.set(
+        sensorId,
+        typeof minimumDuration === 'number' && minimumDuration > 0 ? minimumDuration : defaultMinutes
+      );
+    }
+
+    return durationMinutesBySensor;
   }
 
   // #308: freezerKey is the sensor's sensorId (see findCriticalFreezers).

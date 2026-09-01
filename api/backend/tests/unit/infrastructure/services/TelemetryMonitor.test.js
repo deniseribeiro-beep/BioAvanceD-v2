@@ -406,6 +406,175 @@ describe('TelemetryMonitor', () => {
 
       expect(result).toEqual([]);
     });
+
+    // #688: per-sensor TemperaturePolicy.minimumDuration (minutes) as the
+    // excursion threshold, falling back to the global criticalDurationHours
+    // (converted to minutes) when the policy is absent/unresolved/unusable.
+    describe('per-sensor minimumDuration threshold (#688)', () => {
+      function buildPolicyDb({ sensors = [], policies = [] } = {}) {
+        const sensorMetadata = { find: vi.fn(() => ({ toArray: async () => sensors })) };
+        const temperaturePolicies = { find: vi.fn(() => ({ toArray: async () => policies })) };
+        return {
+          collection: vi.fn((name) => {
+            if (name === 'sensorMetadata') return sensorMetadata;
+            if (name === 'temperaturePolicies') return temperaturePolicies;
+            throw new Error(`unexpected collection: ${name}`);
+          }),
+          sensorMetadata,
+          temperaturePolicies
+        };
+      }
+
+      it('uses the bound policy\'s minimumDuration (minutes) as the threshold, flagging a streak the 2h global default would not', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-01-01T02:00:00Z'));
+
+        const db = buildPolicyDb({
+          sensors: [{ sensorId: 'sensor-P', temperaturePolicy: 'policy-1' }],
+          policies: [{ _id: 'policy-1', minimumDuration: 30 }]
+        });
+        const monitor = new TelemetryMonitor({
+          db,
+          criticalTemp: -80,
+          criticalDurationHours: 2,
+          expectedReadingIntervalMinutes: 15
+        });
+        monitor.resolveRootSamples = vi.fn().mockResolvedValue([]);
+
+        // Streak spans 01:00Z -> 02:00Z (60 min): over the policy's
+        // 30-minute threshold, but under the global 2h (120 min) default.
+        getInfluxQueryApiSpy.mockReturnValue({
+          collectRows: vi.fn().mockResolvedValue([
+            rowAt('sensor-P', '2026-01-01T01:00:00Z', -70),
+            rowAt('sensor-P', '2026-01-01T01:05:00Z', -65)
+          ])
+        });
+
+        const result = await monitor.findCriticalFreezers();
+
+        expect(db.sensorMetadata.find).toHaveBeenCalledWith({ sensorId: { $in: ['sensor-P'] } });
+        expect(db.temperaturePolicies.find).toHaveBeenCalledWith({ _id: { $in: ['policy-1'] } });
+        expect(result).toHaveLength(1);
+        expect(result[0].freezerKey).toBe('sensor-P');
+      });
+
+      it('falls back to the global default when the bound policy has minimumDuration: null (backward compatibility)', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-01-01T02:00:00Z'));
+
+        const db = buildPolicyDb({
+          sensors: [{ sensorId: 'sensor-N', temperaturePolicy: 'policy-2' }],
+          policies: [{ _id: 'policy-2', minimumDuration: null }]
+        });
+        const monitor = new TelemetryMonitor({
+          db,
+          criticalTemp: -80,
+          criticalDurationHours: 2,
+          expectedReadingIntervalMinutes: 15
+        });
+
+        // Same 60-minute streak as above: under the 120-minute global
+        // default, so a null minimumDuration must behave exactly as if no
+        // policy value existed at all -- not flagged.
+        getInfluxQueryApiSpy.mockReturnValue({
+          collectRows: vi.fn().mockResolvedValue([
+            rowAt('sensor-N', '2026-01-01T01:00:00Z', -70),
+            rowAt('sensor-N', '2026-01-01T01:05:00Z', -65)
+          ])
+        });
+
+        const result = await monitor.findCriticalFreezers();
+
+        expect(result).toEqual([]);
+      });
+
+      it('falls back to the global default when the sensor has no bound policy at all', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-01-01T05:00:00Z'));
+
+        const db = buildPolicyDb({ sensors: [], policies: [] });
+        const monitor = new TelemetryMonitor({
+          db,
+          criticalTemp: -80,
+          criticalDurationHours: 2,
+          expectedReadingIntervalMinutes: 15
+        });
+        monitor.resolveRootSamples = vi.fn().mockResolvedValue([]);
+
+        // Streak spans 150 minutes, over the 120-minute global default.
+        getInfluxQueryApiSpy.mockReturnValue({
+          collectRows: vi.fn().mockResolvedValue([
+            rowAt('sensor-U', '2026-01-01T02:30:00Z', -70),
+            rowAt('sensor-U', '2026-01-01T02:35:00Z', -65)
+          ])
+        });
+
+        const result = await monitor.findCriticalFreezers();
+
+        expect(result).toHaveLength(1);
+        expect(result[0].freezerKey).toBe('sensor-U');
+      });
+
+      it('converts a 90-minute policy threshold correctly: flags a streak past 90 minutes that the 2h global default would not', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-01-01T02:00:00Z'));
+
+        const db = buildPolicyDb({
+          sensors: [{ sensorId: 'sensor-B1', temperaturePolicy: 'policy-90' }],
+          policies: [{ _id: 'policy-90', minimumDuration: 90 }]
+        });
+        const monitor = new TelemetryMonitor({
+          db,
+          criticalTemp: -80,
+          criticalDurationHours: 2,
+          expectedReadingIntervalMinutes: 15
+        });
+        monitor.resolveRootSamples = vi.fn().mockResolvedValue([]);
+
+        // Streak spans 95 minutes: past the 90-minute policy threshold,
+        // still short of the 120-minute (2h) global default.
+        getInfluxQueryApiSpy.mockReturnValue({
+          collectRows: vi.fn().mockResolvedValue([
+            rowAt('sensor-B1', '2026-01-01T00:25:00Z', -70),
+            rowAt('sensor-B1', '2026-01-01T00:30:00Z', -65)
+          ])
+        });
+
+        const result = await monitor.findCriticalFreezers();
+
+        expect(result).toHaveLength(1);
+        expect(result[0].freezerKey).toBe('sensor-B1');
+      });
+
+      it('converts a 90-minute policy threshold correctly: does not flag a streak short of 90 minutes, even past a 1h mark', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-01-01T02:00:00Z'));
+
+        const db = buildPolicyDb({
+          sensors: [{ sensorId: 'sensor-B2', temperaturePolicy: 'policy-90' }],
+          policies: [{ _id: 'policy-90', minimumDuration: 90 }]
+        });
+        const monitor = new TelemetryMonitor({
+          db,
+          criticalTemp: -80,
+          criticalDurationHours: 2,
+          expectedReadingIntervalMinutes: 15
+        });
+
+        // Streak spans 75 minutes: past the 1h mark, but short of the
+        // 90-minute policy threshold.
+        getInfluxQueryApiSpy.mockReturnValue({
+          collectRows: vi.fn().mockResolvedValue([
+            rowAt('sensor-B2', '2026-01-01T00:45:00Z', -70),
+            rowAt('sensor-B2', '2026-01-01T00:50:00Z', -65)
+          ])
+        });
+
+        const result = await monitor.findCriticalFreezers();
+
+        expect(result).toEqual([]);
+      });
+    });
   });
 
   describe('resolveRootSamples()', () => {
