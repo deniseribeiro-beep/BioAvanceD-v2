@@ -158,6 +158,36 @@ describe('incident.controller.getAlertRecipients', () => {
 
     expect(result).toEqual([]);
   });
+
+  it('#651: resolves recipients via mongoose.Types.ObjectId without hitting the foreign-bson error on the mongoose-backed find', async () => {
+    const { createForeignBsonGuardCollectionMock } = require('../factories/db.factory');
+    const loggerModule = require('../../src/utils/logger');
+    const errorSpy = vi.spyOn(loggerModule, 'error').mockImplementation(() => undefined);
+
+    // Guarded find rejects any foreign `require('mongodb').ObjectId` instance
+    // in the filter (mirroring mongoose's bson 7 codec), the way the real
+    // mongoose-backed `users` collection would. If getAlertRecipients still
+    // built ObjectId from the top-level `mongodb` package, this throws,
+    // getAlertRecipients' catch swallows it, and this would fail silently
+    // with an empty-array result instead of surfacing the real error.
+    const guardedUsers = createForeignBsonGuardCollectionMock({
+      find: vi.fn().mockReturnValue(buildFindChain([{ email: 'guarded@x.com' }])),
+    });
+    userCollection.find = guardedUsers.find;
+
+    const result = await incidentController.getAlertRecipients();
+
+    // Fail loudly with the real production error string, not with a silent
+    // "0 recipients" side effect -- that silence is exactly what let #651
+    // survive undetected.
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      '[INCIDENT] Erro ao buscar destinatários de alertas:',
+      'Unsupported BSON version, bson types must be from bson 7.x.x'
+    );
+    expect(result).toEqual(['guarded@x.com']);
+
+    errorSpy.mockRestore();
+  });
 });
 
 describe('incident.controller.createOrUpdateIncident', () => {

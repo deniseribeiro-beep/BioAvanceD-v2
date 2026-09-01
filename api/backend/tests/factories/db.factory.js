@@ -84,7 +84,54 @@ function createDbMock(collections = {}) {
   };
 }
 
+const FOREIGN_BSON_ERROR_MESSAGE = 'Unsupported BSON version, bson types must be from bson 7.x.x';
+
+function assertNoForeignObjectId(value) {
+  const { ObjectId: NativeObjectId } = require('mongodb');
+  const seen = new Set();
+  const walk = (val) => {
+    if (val === null || typeof val !== 'object') return;
+    if (val instanceof NativeObjectId) {
+      throw new Error(FOREIGN_BSON_ERROR_MESSAGE);
+    }
+    if (seen.has(val)) return;
+    seen.add(val);
+    const entries = Array.isArray(val) ? val : Object.values(val);
+    entries.forEach(walk);
+  };
+  walk(value);
+}
+
+// #651: mongoose bundles its own bson, major-version-diverged from the
+// top-level `mongodb` package's bson. A live ObjectId *instance* built from
+// `require('mongodb')` and handed to a query run through the mongoose
+// connection throws "Unsupported BSON version, bson types must be from bson
+// 7.x.x" -- bytes already stored in Mongo round-trip fine through either
+// connection, only a foreign in-memory instance crossing codecs fails. This
+// helper reproduces that failure mode on a collection mock's find/findOne so
+// a regression at a mongoose-backed call site (someone reintroducing
+// `require('mongodb').ObjectId`) fails loudly instead of silently returning
+// zero matches. Additive only -- does not change createCollectionMock's
+// default find/findOne behaviour for existing callers.
+function createForeignBsonGuardCollectionMock(overrides = {}) {
+  const v = globalThis.vi;
+  if (!v) {
+    throw new Error('Vitest global "vi" is not available in db factory context');
+  }
+
+  const mock = createCollectionMock(overrides);
+  ['find', 'findOne'].forEach((method) => {
+    const inner = mock[method];
+    mock[method] = v.fn().mockImplementation((filter, ...rest) => {
+      assertNoForeignObjectId(filter);
+      return inner(filter, ...rest);
+    });
+  });
+  return mock;
+}
+
 module.exports = {
   createCollectionMock,
   createDbMock,
+  createForeignBsonGuardCollectionMock,
 };

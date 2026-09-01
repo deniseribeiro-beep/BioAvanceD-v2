@@ -28,7 +28,11 @@ async function getAlertRecipients() {
     // #426: resolve via UserRoleAssignment -> Role, não accessType direto.
     const userAccountIds = await findUserAccountIdsByRoleCodes(db, NOTIFIABLE_ROLE_CODES);
     if (!userAccountIds.length) return [];
-    const { ObjectId } = require('mongodb');
+    // #651: same fix as the other four ObjectId sites in this file -- db
+    // here is the mongoose connection, and mongoose bundles its own bson
+    // (major-version-diverged from the top-level `mongodb` package's
+    // bson), so ObjectId must come from mongoose.Types, not `require('mongodb')`.
+    const { ObjectId } = mongoose.Types;
     const objectIds = userAccountIds.filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id));
     const recipients = await UserCollection
       .find({ _id: { $in: objectIds }, status: 'active' })

@@ -489,6 +489,48 @@ describe('iot.controller', () => {
     });
   }, 15000);
 
+  it('#651: resolve destinatários via mongoose.Types.ObjectId sem lançar o erro de BSON estrangeiro no UserCollection.find (db mongoose-backed)', async () => {
+    const { createForeignBsonGuardCollectionMock } = require('../factories/db.factory');
+    const loggerModule = require('../../src/utils/logger');
+    const errorSpy = vi.spyOn(loggerModule, 'error').mockImplementation(() => undefined);
+
+    // Guarded find rejects any foreign `require('mongodb').ObjectId` instance
+    // in the filter (mirroring mongoose's bson 7 codec), the way the real
+    // mongoose-backed `users` collection would. If the controller still
+    // builds ObjectId from the top-level `mongodb` package, this throws and
+    // gets caught/logged instead of resolving recipients.
+    const guardedUsers = createForeignBsonGuardCollectionMock({
+      find: vi.fn().mockReturnValue({
+        project: vi.fn().mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([{ email: 'guarded@x.com' }]),
+        }),
+      }),
+    });
+    usersCollection.find = guardedUsers.find;
+
+    const req = { body: { sensorId: 'sensor-1', temperature: 12.5 } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    await vi.waitFor(() => {
+      const foreignBsonCall = errorSpy.mock.calls.find(
+        ([, message]) => message === 'Unsupported BSON version, bson types must be from bson 7.x.x'
+      );
+      // Fail loudly with the real production error string, not with a
+      // silent "0 recipients" side effect -- that silence is exactly what
+      // let #651 survive undetected.
+      expect(foreignBsonCall).toBeUndefined();
+      expect(sendIncidentAlertEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ _id: 'incident-1' }),
+        ['guarded@x.com'],
+        0
+      );
+    });
+
+    errorSpy.mockRestore();
+  }, 15000);
+
   it('não notifica destinatários quando não há usuários ativos com e-mail', async () => {
     usersCollection.find.mockReturnValue({
       project: vi.fn().mockReturnValue({
