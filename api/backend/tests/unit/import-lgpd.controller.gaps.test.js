@@ -207,10 +207,14 @@ describe('import-lgpd.controller gaps', () => {
 
       await controller.importPatientsSmart(req, res);
 
-      expect(importSpy).toHaveBeenCalledWith(db, file, {
+      // #814: objectContaining, not a strict match. This test is about
+      // groupFields/mapping PARSING; asserting the whole options object made
+      // it break when the controller started forwarding an `actor` (which is
+      // correct and is covered by its own test).
+      expect(importSpy).toHaveBeenCalledWith(db, file, expect.objectContaining({
         mapping: { patientName: 'nome' },
         groupFields: { clinicalUnit: 'HUSF' }
-      });
+      }));
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
@@ -500,7 +504,11 @@ describe('import-lgpd.controller gaps', () => {
 
       await controller.importPatients(req, res);
 
-      expect(importSpy).toHaveBeenCalledWith(db, file, { groupFields: { clinicalUnit: 'HUSF' } });
+      // #814: objectContaining, not a strict match. This test is about
+      // groupFields/mapping PARSING; asserting the whole options object made
+      // it break when the controller started forwarding an `actor` (which is
+      // correct and is covered by its own test).
+      expect(importSpy).toHaveBeenCalledWith(db, file, expect.objectContaining({ groupFields: { clinicalUnit: 'HUSF' } }));
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
@@ -643,10 +651,14 @@ describe('import-lgpd.controller gaps', () => {
 
       await controller.importPatientsSmart(req, res);
 
-      expect(importSpy).toHaveBeenCalledWith(db, file, {
+      // #814: objectContaining, not a strict match. This test is about
+      // groupFields/mapping PARSING; asserting the whole options object made
+      // it break when the controller started forwarding an `actor` (which is
+      // correct and is covered by its own test).
+      expect(importSpy).toHaveBeenCalledWith(db, file, expect.objectContaining({
         mapping: { patientName: 'nome' },
         groupFields: { clinicalUnit: 'HUSF' }
-      });
+      }));
       expect(res.status).toHaveBeenCalledWith(200);
     });
 

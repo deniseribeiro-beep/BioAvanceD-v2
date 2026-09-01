@@ -49,12 +49,23 @@ function makeDb({ templateFound = true } = {}) {
   const participantIdentitiesCollection = {
     insertOne: vi.fn().mockResolvedValue({ insertedId: 'identity-id-1' }),
   };
+  // #814 (RNF011 AC#4): rejected rows are quarantined via the same
+  // import_batches/import_staging_records pair #787 already uses for
+  // importSamples, reached through the shared quarantineRejectedSampleRows.
+  const importBatchesCollection = {
+    insertOne: vi.fn().mockResolvedValue({ insertedId: 'batch-1' }),
+  };
+  const importStagingRecordsCollection = {
+    insertMany: vi.fn().mockResolvedValue({ insertedCount: 1 }),
+  };
 
   const collections = {
     patients: patientsCollection,
     consent_templates: consentTemplatesCollection,
     pacientes: pacientesCollection,
     participantIdentities: participantIdentitiesCollection,
+    import_batches: importBatchesCollection,
+    import_staging_records: importStagingRecordsCollection,
   };
 
   const db = {
@@ -68,7 +79,15 @@ function makeDb({ templateFound = true } = {}) {
     }),
   };
 
-  return { db, patientsCollection, consentTemplatesCollection, pacientesCollection, participantIdentitiesCollection };
+  return {
+    db,
+    patientsCollection,
+    consentTemplatesCollection,
+    pacientesCollection,
+    participantIdentitiesCollection,
+    importBatchesCollection,
+    importStagingRecordsCollection,
+  };
 }
 
 describe('ImportLGPDService.importPatients', () => {
@@ -76,9 +95,11 @@ describe('ImportLGPDService.importPatients', () => {
   let patientsCollection;
   let consentTemplatesCollection;
   let participantIdentitiesCollection;
+  let importBatchesCollection;
+  let importStagingRecordsCollection;
 
   beforeEach(() => {
-    ({ db, patientsCollection, consentTemplatesCollection, participantIdentitiesCollection } = makeDb());
+    ({ db, patientsCollection, consentTemplatesCollection, participantIdentitiesCollection, importBatchesCollection, importStagingRecordsCollection } = makeDb());
 
     vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
       token: 'tok-1',
@@ -390,5 +411,75 @@ describe('ImportLGPDService.importPatients', () => {
 
     expect(result.success).toBe(1);
     expect(patientsCollection.insertOne.mock.calls[0][0].patientID).not.toBe('99999999');
+  });
+
+  // #814 (RNF011 AC#4 / RF029 AC#5-6): rejected participant rows are
+  // quarantined the same way #787 already quarantines rejected sample rows,
+  // via the shared quarantineRejectedSampleRows, with a distinct batch
+  // `type` ('LGPD_PATIENT_CSV') so a patient batch never collides with a
+  // sample batch in the shared import_batches collection.
+  describe('#814: rejected rows are quarantined, not discarded', () => {
+    it('stages a rejected row into import_staging_records under a batch, and returns stagingBatchId', async () => {
+      vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, email: 'not-an-email' }]);
+
+      const result = await service.importPatients(db, { path: '/x.csv', originalname: 'lote.csv' });
+
+      expect(result.success).toBe(0);
+      expect(result.errors).toHaveLength(1);
+
+      expect(importBatchesCollection.insertOne).toHaveBeenCalledTimes(1);
+      expect(importBatchesCollection.insertOne.mock.calls[0][0]).toMatchObject({
+        type: 'LGPD_PATIENT_CSV',
+        source: 'LGPD',
+        status: 'QUARANTINED',
+        fileName: 'lote.csv',
+        counts: { total: 1, success: 0, errors: 1 },
+      });
+
+      expect(importStagingRecordsCollection.insertMany).toHaveBeenCalledTimes(1);
+      const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
+      expect(staged).toHaveLength(1);
+      expect(staged[0]).toMatchObject({ batchId: 'batch-1', rowNumber: 2, status: 'ERROR' });
+
+      expect(result.stagingBatchId).toBe('batch-1');
+    });
+
+    it('does not open a staging batch when every row imports cleanly', async () => {
+      vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+      const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+      expect(result.success).toBe(1);
+      expect(result.errors).toHaveLength(0);
+      expect(importBatchesCollection.insertOne).not.toHaveBeenCalled();
+      expect(importStagingRecordsCollection.insertMany).not.toHaveBeenCalled();
+      expect(result.stagingBatchId).toBeNull();
+    });
+
+    // The existing "sem dados sensíveis" posture (sanitizeRowForError, used
+    // in every results.errors push above) is about the HTTP response, not
+    // server-side persistence -- quarantining the row server-side is a
+    // different thing and must not leak into what importPatients itself
+    // returns to its caller.
+    it('does not carry row data on the returned per-row error, even though the row is quarantined server-side', async () => {
+      vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, email: 'not-an-email' }]);
+
+      const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+      expect(result.errors[0].data).toEqual({});
+      expect(JSON.stringify(result.errors[0])).not.toMatch(/Maria Silva/);
+    });
+
+    it('records the acting user as createdBy on the quarantine batch', async () => {
+      vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, email: 'not-an-email' }]);
+
+      await service.importPatients(
+        db,
+        { path: '/x.csv', originalname: 'x.csv' },
+        { actor: { userID: 'user-123', userId: 'user-123' } }
+      );
+
+      expect(importBatchesCollection.insertOne.mock.calls[0][0].createdBy).toBe('user-123');
+    });
   });
 });

@@ -410,6 +410,7 @@ class ImportLGPDService {
    */
   async importPatients(db, file, options = {}) {
     const groupFields = options?.groupFields || {};
+    const actor = options?.actor || {};
     const results = {
       total: 0,
       success: 0,
@@ -692,6 +693,23 @@ class ImportLGPDService {
         }
       }
 
+      // RNF011 AC#4 / RF029 AC#5-6 (#814): quarantines rejected patient rows
+      // the same way #787 already does for samples -- reuses
+      // quarantineRejectedSampleRows with a distinct batch `type` so a
+      // patient batch and a sample batch never collide in the shared
+      // import_batches collection. `getQuarantineBatch`/`listQuarantineBatches`
+      // still filter on 'LGPD_SAMPLE_CSV' only, so a patient batch is written
+      // but not yet readable through those two endpoints -- widening those
+      // readers is out of scope here (out-of-scope per #814's brief).
+      const stagingBatchId = await this.quarantineRejectedSampleRows(db, {
+        type: 'LGPD_PATIENT_CSV',
+        importOptions: { groupFields },
+        fileName: file?.originalname || null,
+        rows,
+        results,
+        actor,
+      });
+
       // Log sanitizado (sem dados sensíveis)
       logger.info(`Importação de pacientes concluída: ${results.success}/${results.total} registros importados com sucesso`);
 
@@ -700,6 +718,7 @@ class ImportLGPDService {
         success: results.success,
         errors: results.errors,
         skipped: results.skipped,
+        stagingBatchId,
         // NÃO retorna IDs gerados (LGPD)
       };
 
@@ -1006,7 +1025,7 @@ class ImportLGPDService {
 
   async quarantineRejectedSampleRows(
     db,
-    { fileName = null, rows = [], results, actor = {}, importOptions = {} } = {}
+    { fileName = null, rows = [], results, actor = {}, importOptions = {}, type = 'LGPD_SAMPLE_CSV' } = {}
   ) {
     const rejected = Array.isArray(results?.errors) ? results.errors : [];
     if (rejected.length === 0) return null;
@@ -1015,7 +1034,7 @@ class ImportLGPDService {
       const now = new Date();
 
       const batchDoc = {
-        type: 'LGPD_SAMPLE_CSV',
+        type,
         source: 'LGPD',
         status: 'QUARANTINED',
         fileName: fileName ? String(fileName) : null,
@@ -2007,6 +2026,7 @@ class ImportLGPDService {
   async importPatientsSmart(db, file, options = {}) {
     const groupFields = options?.groupFields || {};
     const mapping = options?.mapping || {};
+    const actor = options?.actor || {};
 
     if (!mapping || Object.keys(mapping).length === 0) {
       throw new Error('Mapeamento inteligente é obrigatório para importação em lote');
@@ -2179,6 +2199,17 @@ class ImportLGPDService {
         results.errors.push({ row: rowNumber, errors: [error.message || 'Erro desconhecido ao processar linha'] });
       }
     }
+
+    // RNF011 AC#4 / RF029 AC#5-6 (#814): same quarantine reuse as
+    // importPatients above, with the same distinct 'LGPD_PATIENT_CSV' type.
+    results.stagingBatchId = await this.quarantineRejectedSampleRows(db, {
+      type: 'LGPD_PATIENT_CSV',
+      importOptions: { groupFields },
+      fileName: file?.originalname || null,
+      rows,
+      results,
+      actor,
+    });
 
     logger.info(`Smart import de pacientes concluído: ${results.success}/${results.total}`);
     return results;

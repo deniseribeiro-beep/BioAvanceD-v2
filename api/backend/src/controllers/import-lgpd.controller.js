@@ -363,7 +363,21 @@ class ImportLGPDController {
       const groupFields = parsedGroupFields.value;
 
       // Processa importação
-      const results = await importLGPDService.importPatients(db, file, { groupFields });
+      // #814 (RNF011 AC#4 / RF029 AC#5-6): actor is required so a quarantine
+      // batch for a rejected row records a real createdBy -- same shape
+      // importSamples already resolves (#911: req.user.userID is the JWT's
+      // real key, not id/_id).
+      const results = await importLGPDService.importPatients(db, file, {
+        groupFields,
+        actor: {
+          userID: req.user?.userID || req.user?.id || req.user?._id || null,
+          userId: req.user?.userID || req.user?.id || req.user?._id || null,
+          userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
+          userRole: req.user?.role || null,
+          ipAddress: req.ip || null,
+          userAgent: req.get?.('user-agent') || null
+        }
+      });
 
       // Registra log sanitizado (anonimizado via auditLogger)
       if (req.user) {
@@ -404,7 +418,12 @@ class ImportLGPDController {
             row: err.row,
             errors: Array.isArray(err.errors) ? err.errors : [err.errors]
             // NÃO inclui dados sensíveis
-          }))
+          })),
+          // #814 (RNF011 AC#4): points at the import_batches document holding
+          // any rejected rows, the same field the samples path already
+          // returns. Null when nothing was rejected, or when quarantining
+          // itself failed (logged server-side, not fatal to the import).
+          stagingBatchId: results.stagingBatchId ? String(results.stagingBatchId) : null
         }
       });
 
@@ -521,7 +540,21 @@ class ImportLGPDController {
         });
       }
 
-      const results = await importLGPDService.importPatientsSmart(db, file, { mapping, groupFields });
+      // #814 (RNF011 AC#4 / RF029 AC#5-6): same actor plumbing as
+      // importPatients above, so a quarantine batch opened for a rejected
+      // smart-import row records a real createdBy.
+      const results = await importLGPDService.importPatientsSmart(db, file, {
+        mapping,
+        groupFields,
+        actor: {
+          userID: req.user?.userID || req.user?.id || req.user?._id || null,
+          userId: req.user?.userID || req.user?.id || req.user?._id || null,
+          userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
+          userRole: req.user?.role || null,
+          ipAddress: req.ip || null,
+          userAgent: req.get?.('user-agent') || null
+        }
+      });
 
       const summaryReport = {
         processedAt: new Date().toISOString(),
@@ -591,7 +624,10 @@ class ImportLGPDController {
           errors: results.errors.length,
           errorsDetails: results.errors,
           summaryReport,
-          summaryReportId: String(persistedSummaryReport._id)
+          summaryReportId: String(persistedSummaryReport._id),
+          // #814 (RNF011 AC#4): same stagingBatchId field as importPatients
+          // and importSamples above.
+          stagingBatchId: results.stagingBatchId ? String(results.stagingBatchId) : null
         }
       });
     } catch (error) {

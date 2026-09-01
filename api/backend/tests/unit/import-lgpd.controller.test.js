@@ -326,7 +326,11 @@ describe('import-lgpd.controller', () => {
       const body = res.json.mock.calls[0][0];
       expect(body.success).toBe(true);
       expect(body.message).toContain('3 paciente(s) cadastrado(s)');
-      expect(body.data).toEqual({ total: 3, success: 3, errors: 0, errorsDetails: [] });
+      // #814: importPatients now carries stagingBatchId the way importSamples
+      // always has -- null here because a clean import quarantines nothing
+      // and therefore opens no batch. This assertion is a strict toEqual, so
+      // it is the one place in this file that had to move for the new field.
+      expect(body.data).toEqual({ total: 3, success: 3, errors: 0, errorsDetails: [], stagingBatchId: null });
     });
 
     it('happy path with partial errors returns 200 with partial message', async () => {
