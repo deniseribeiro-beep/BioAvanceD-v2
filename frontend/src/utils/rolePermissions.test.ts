@@ -40,13 +40,38 @@ describe('canRoleAccessRoute — the restrictive blocks still hold', () => {
     }
   });
 
-  it('keeps /reports and /logs to Administrador and Coordenador', () => {
-    for (const route of ['/reports', '/logs', '/logs/123', '/reports/templates']) {
+  it('keeps /logs to Administrador and Coordenador', () => {
+    for (const route of ['/logs', '/logs/123']) {
       expect(canRoleAccessRoute('Administrador', route)).toBe(true);
       expect(canRoleAccessRoute('Coordenador', route)).toBe(true);
       expect(canRoleAccessRoute('Técnico', route)).toBe(false);
       expect(canRoleAccessRoute('Usuário Externo', route)).toBe(false);
     }
+  });
+
+  // #825: /reports widened to include Usuário Externo (declared on its
+  // <Route> all along), but /reports/templates -- narrower, RF008 AC#6 --
+  // must stay Administrador+Coordenador even though it sits under /reports.
+  it('keeps /reports to Administrador, Coordenador, and Usuário Externo', () => {
+    expect(canRoleAccessRoute('Administrador', '/reports')).toBe(true);
+    expect(canRoleAccessRoute('Coordenador', '/reports')).toBe(true);
+    expect(canRoleAccessRoute('Usuário Externo', '/reports')).toBe(true);
+    expect(canRoleAccessRoute('Técnico', '/reports')).toBe(false);
+  });
+
+  it('keeps /reports/templates to Administrador and Coordenador only', () => {
+    expect(canRoleAccessRoute('Administrador', '/reports/templates')).toBe(true);
+    expect(canRoleAccessRoute('Coordenador', '/reports/templates')).toBe(true);
+    expect(canRoleAccessRoute('Técnico', '/reports/templates')).toBe(false);
+    expect(canRoleAccessRoute('Usuário Externo', '/reports/templates')).toBe(false);
+  });
+
+  it('grants Coordenador the TCLE builder but keeps the rest of /admin Administrador-only', () => {
+    expect(canRoleAccessRoute('Coordenador', '/admin/tcle/new')).toBe(true);
+    expect(canRoleAccessRoute('Coordenador', '/admin/tcle/edit/abc')).toBe(true);
+    expect(canRoleAccessRoute('Administrador', '/admin/tcle/new')).toBe(true);
+    expect(canRoleAccessRoute('Administrador', '/admin/dicionario')).toBe(true);
+    expect(canRoleAccessRoute('Coordenador', '/admin/dicionario')).toBe(false);
   });
 
   it('keeps the intake wizard to staff roles', () => {
@@ -73,6 +98,8 @@ describe('canRoleAccessRoute — routes reached with a concrete id', () => {
     expect(canRoleAccessRoute('Técnico', '/samples/68ab12cd34ef56ab78cd90ef/label')).toBe(true);
     expect(canRoleAccessRoute('Coordenador', '/reports/query/auditoria')).toBe(true);
     expect(canRoleAccessRoute('Técnico', '/reports/query/auditoria')).toBe(false);
+    expect(canRoleAccessRoute('Usuário Externo', '/reports/query/auditoria')).toBe(true);
+    expect(canRoleAccessRoute('Usuário Externo', '/reports/507f1f77bcf86cd799439011')).toBe(true);
   });
 });
 
@@ -120,5 +147,45 @@ describe('every route declared in App.tsx is covered by the allow-list', () => {
     });
 
     expect(unreachable).toEqual([]);
+  });
+
+  // #825: "reachable by at least one role" passed even while the table denied
+  // a role the <Route> itself granted, because ProtectedRoute's own
+  // requiredRole prop and canRoleAccessRoute intersect -- the table's silent
+  // narrowing never showed up as an unreachable route, only as a role that
+  // could see the sidebar link but hit "Acesso Negado" on it. Every role
+  // named in a <Route>'s own requiredRole array must therefore be granted by
+  // the table too, not just some role.
+  it('grants every role in a <Route>\'s own requiredRole array, not just one', () => {
+    const routeBlocks = Array.from(appSource.matchAll(/<Route\b[\s\S]*?\/>/g)).map((m) => m[0]);
+
+    const disagreements: string[] = [];
+
+    for (const block of routeBlocks) {
+      const pathMatch = block.match(/path="([^"]+)"/);
+      if (!pathMatch) continue;
+      const route = pathMatch[1];
+      if (PUBLIC_ROUTES.includes(route)) continue;
+
+      // Only routes declaring requiredRole as an array are in scope here --
+      // a single string (e.g. requiredRole="Administrador") has only one
+      // role to begin with, so "every role" is already covered by the
+      // at-least-one-role test above.
+      const roleArrayMatch = block.match(/requiredRole=\{\[([^\]]+)\]\}/);
+      if (!roleArrayMatch) continue;
+
+      const roles = Array.from(roleArrayMatch[1].matchAll(/'([^']+)'/g)).map(
+        (m) => m[1] as RoleName
+      );
+      const concrete = (route.startsWith('/') ? route : `/${route}`).replace(/:[^/]+/g, 'x');
+
+      for (const role of roles) {
+        if (!canRoleAccessRoute(role, concrete)) {
+          disagreements.push(`${role} denied ${concrete} (declared on <Route path="${route}">)`);
+        }
+      }
+    }
+
+    expect(disagreements).toEqual([]);
   });
 });

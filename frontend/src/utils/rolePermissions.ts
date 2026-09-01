@@ -85,12 +85,14 @@ const STAFF: readonly RoleName[] = ['Administrador', 'Coordenador', 'Técnico'];
  * route that exists today — this fix closes the open default, it does not
  * re-decide policy. Where a route's own `requiredRole` is narrower than the
  * old answer, the narrower one is used (that cannot widen anyone's access,
- * since ProtectedRoute requires both). Where the old answer was *stricter*
- * than the route's declaration it is kept as-is, which leaves two known
- * contradictions standing — `/reports` for `Usuário Externo` and
- * `/admin/tcle/*` for `Coordenador`, both declared on the `<Route>` and both
- * denied here. Resolving those means granting access, which is the owner's
- * call, not a side effect of this fix: see #825.
+ * since ProtectedRoute requires both).
+ *
+ * #825: the old answer was *stricter* than the route's declaration in two
+ * places — `/reports` (and its `/reports/:id` and `/reports/query/:type`
+ * children) denied `Usuário Externo`, and `/admin/tcle/*` denied
+ * `Coordenador` — even though both were granted on the `<Route>` itself.
+ * Both are resolved here. `/reports/templates` stays Administrador+Coordenador
+ * (RF008 AC#6) by sitting ahead of the now-widened `/reports` entry.
  */
 const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
   // Self-service security pages — deliberately open to every role.
@@ -105,10 +107,12 @@ const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
   ['/access', ADMIN],
   ['/backup', ADMIN],
   ['/settings/parameters', ADMIN],
+  ['/admin/tcle', ADMIN_COORD],
   ['/admin', ADMIN],
 
   // Reporting and audit.
-  ['/reports', ADMIN_COORD],
+  ['/reports/templates', ADMIN_COORD],
+  ['/reports', [...ADMIN_COORD, 'Usuário Externo']],
   ['/logs', ADMIN_COORD],
 
   // Intake wizard.
@@ -177,42 +181,6 @@ export function getRoleDescription(roleName: RoleName): string {
   };
   
   return descriptions[roleName] || 'Acesso básico';
-}
-
-/**
- * Obtém todas as rotas permitidas para uma role
- */
-export function getAllowedRoutes(roleName: RoleName | undefined): string[] {
-  if (!roleName) return ['/dashboard'];
-  
-  const allRoutes = [
-    '/dashboard',
-    '/patients',
-    '/samples',
-    '/results',
-    '/facility-management',
-    '/quality-descriptions',
-    '/import',
-    '/next/intake',
-    '/pacientes/novo-atendimento',
-    '/samples/withdrawal-return',
-    '/user/security',
-    '/security/mfa-setup',
-  ];
-  
-  if (roleName === 'Administrador' || roleName === 'Coordenador') {
-    allRoutes.push('/reports', '/logs');
-  }
-  
-  if (roleName === 'Administrador') {
-    allRoutes.push('/system-management', '/users', '/access', '/security', '/backup', '/admin/dicionario');
-  }
-  
-  if (roleName === 'Usuário Externo') {
-    return ['/dashboard', '/reports', '/user/security', '/security/mfa-setup'];
-  }
-  
-  return allRoutes;
 }
 
 /**

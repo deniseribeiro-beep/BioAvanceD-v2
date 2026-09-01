@@ -115,7 +115,7 @@ export default function Sidebar() {
       return false;
     }
     // Verifica se a role do usuário está na lista de roles permitidas
-    return item.roles.includes(roleName) || canRoleAccessRoute(roleName, item.path);
+    return item.roles.includes(roleName) && canRoleAccessRoute(roleName, item.path);
   });
 
   return (
