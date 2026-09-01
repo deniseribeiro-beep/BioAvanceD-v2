@@ -42,11 +42,11 @@ function makeDb({ sensors = [], lastReadingBySensor = {}, existingAlert = null }
     find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(sensors) })
   });
 
+  // #917: the query used to be `$or: [{ sensorId }, { sensorID: sensorId }]`.
+  // The second branch matched nothing -- TemperatureModel.create has never
+  // written a capitalised `sensorID` -- so it is now a plain `{ sensorId }`.
   const temperaturesCollection = makeCollection({
-    find: vi.fn((query) => {
-      const sensorId = query.$or[0].sensorId;
-      return makeFindChain(lastReadingBySensor[sensorId] ?? null);
-    })
+    find: vi.fn((query) => makeFindChain(lastReadingBySensor[query.sensorId] ?? null))
   });
 
   const alertsCollection = makeCollection({

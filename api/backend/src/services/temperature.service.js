@@ -150,12 +150,14 @@ class TemperatureService {
       const temperaturesCollection = db.collection('temperatures');
       const query = {};
 
+      // #917: `filters.sensorID` is a live *input* alias (the frontend's
+      // api.ts sends `sensorID` as a query param), so the coalesce stays. What
+      // went is the `{ sensorID: sensorIdValue }` query branch this used to
+      // pair it with: `TemperatureModel.create` writes `sensorId` only, and
+      // always has, so no stored reading ever carried the capitalised key.
       const sensorIdValue = filters.sensorId || filters.sensorID;
       if (sensorIdValue) {
-        query.$or = [
-          { sensorId: sensorIdValue },
-          { sensorID: sensorIdValue }
-        ];
+        query.sensorId = sensorIdValue;
       }
 
       if (filters.startDate || filters.endDate) {
@@ -167,20 +169,19 @@ class TemperatureService {
           dateQuery.$lte = new Date(filters.endDate);
         }
         
-        // Busca tanto em timestamp quanto em dateTime (compatibilidade)
-        if (query.$or) {
-          // Se já existe $or, usa $and para combinar
-          query.$and = [
-            { $or: query.$or },
-            { $or: [{ timestamp: dateQuery }, { dateTime: dateQuery }] }
-          ];
-          delete query.$or;
-        } else {
-          query.$or = [
-            { timestamp: dateQuery },
-            { dateTime: dateQuery }
-          ];
-        }
+        // Busca tanto em timestamp quanto em dateTime (compatibilidade).
+        //
+        // #917: this used to branch on `query.$or` already existing and, when
+        // it did, wrap both into an `$and`. The only thing that ever set
+        // `query.$or` before this point was the sensorId/sensorID pair above;
+        // now that the sensor filter is a plain key the merge branch is
+        // unreachable, and the two conditions compose as sibling keys --
+        // `{ sensorId, $or: [...] }` is the same query the `$and` built, one
+        // wrapper shallower.
+        query.$or = [
+          { timestamp: dateQuery },
+          { dateTime: dateQuery }
+        ];
       }
 
       // #636 (F3-G09): org-scoped caller sees only readings whose

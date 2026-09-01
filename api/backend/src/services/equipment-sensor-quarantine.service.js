@@ -135,13 +135,25 @@ function dedupeIds(ids) {
  * handle-agnostic by construction (see notificationDispatch.service.js's
  * resolveRecipientEmails for the same pattern against the same problem).
  */
+// #917: the `{ sensorID: { $in: variants } }` branch that used to sit second
+// here is gone, along with its five siblings in scheduler/sensor/temperature.
+// `sensorID` (capital ID) has NEVER been a persisted field: from the initial
+// commit onward every `SensorModel.create`/`TemperatureModel.create` writes
+// `sensorId: data.sensorId || data.sensorID`, coalescing the alias away on the
+// way in. So the filter branch could not match a document this codebase wrote
+// -- the #788/#843/#847 class, where a filter key nothing writes does not
+// match nothing but matches BSON null, and turns live the first time an
+// undefined variant reaches it.
+//
+// `sensorID` as an *input* alias is untouched and still live: the frontend's
+// Sensor type requires it, its create form binds it, and api.ts sends it as a
+// query param. Only the query-side branches went.
 function buildSensorLookup(sensorKey) {
   const raw = normalizeString(sensorKey);
   const variants = [raw];
   return {
     $or: [
       { sensorId: { $in: variants } },
-      { sensorID: { $in: variants } },
       { $expr: { $eq: [{ $toString: '$_id' }, raw] } },
       { macAddress: raw },
     ]
@@ -242,11 +254,16 @@ async function findEquipmentByMetadata(db, metadata = {}, options = {}) {
   // same handle-agnostic reason. The `equipmentID` numeric branch stays:
   // Equipment.js validates `equipmentID` as a number, so it cannot stand in
   // for `_id`.
+  //
+  // #917 item 4: the `{ id: { $in: variants } }` branch that used to sit third
+  // is gone, for the same reason as buildSensorLookup's `sensorID` branch.
+  // `EquipmentModel.create` writes no `id`, `equipment.routes.js` is the only
+  // insert path and it inserts that model's output, and no seed populates the
+  // collection -- so the key is never written and the branch never matched.
   return equipmentCollection.findOne({
     $or: [
       { $expr: { $eq: [{ $toString: '$_id' }, normalizedReference] } },
       { equipmentID: { $in: variants } },
-      { id: { $in: variants } },
     ]
   }, sessionOptions);
 }

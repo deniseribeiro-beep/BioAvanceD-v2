@@ -62,9 +62,13 @@ async function checkStaleTemperatureReadings(db) {
     const sensorId = sensor.sensorId || sensor.sensorID;
     if (!sensorId) continue;
 
-    const lastReading = await temperaturesCollection.find({
-      $or: [{ sensorId }, { sensorID: sensorId }]
-    })
+    // #917: was `$or: [{ sensorId }, { sensorID: sensorId }]`. Nothing has
+    // ever written `sensorID` onto a temperature reading --
+    // `TemperatureModel.create` coalesces the alias into `sensorId` and has
+    // done since the initial commit -- so the second branch never matched.
+    // The `sensor.sensorId || sensor.sensorID` read above is untouched: that
+    // is a property read, not a filter key.
+    const lastReading = await temperaturesCollection.find({ sensorId })
       .sort({ timestamp: -1, dateTime: -1, _id: -1 })
       .limit(1)
       .next();

@@ -153,7 +153,7 @@ describe('sensor.service (non-quarantine paths)', () => {
       const result = await sensorService.getSensor(db, 'S-1');
 
       expect(collection.findOne).toHaveBeenCalledWith({
-        $or: [{ sensorId: 'S-1' }, { sensorID: 'S-1' }, { _id: 'S-1' }]
+        $or: [{ sensorId: 'S-1' }, { _id: 'S-1' }]
       });
       expect(result).toBe(found);
     });
@@ -355,7 +355,7 @@ describe('sensor.service (non-quarantine paths)', () => {
       const result = await sensorService.updateSensor(db, 'S-1', { sensorModel: 'new-model' });
 
       expect(collection.updateOne).toHaveBeenCalledWith(
-        { $or: [{ sensorId: 'S-1' }, { sensorID: 'S-1' }, { _id: 'S-1' }] },
+        { $or: [{ sensorId: 'S-1' }, { _id: 'S-1' }] },
         { $set: expect.objectContaining({ sensorModel: 'new-model', updatedAt: expect.any(Date) }) }
       );
       expect(result).toEqual({ success: true, quarantine: { triggered: false } });
@@ -422,7 +422,7 @@ describe('sensor.service (non-quarantine paths)', () => {
       const result = await sensorService.deleteSensor(db, 'S-1');
 
       expect(collection.deleteOne).toHaveBeenCalledWith({
-        $or: [{ sensorId: 'S-1' }, { sensorID: 'S-1' }, { _id: 'S-1' }]
+        $or: [{ sensorId: 'S-1' }, { _id: 'S-1' }]
       });
       expect(result).toBe(true);
     });
@@ -512,7 +512,7 @@ describe('sensor.service (non-quarantine paths)', () => {
       const result = await sensorService.updateSensor(db, 'S-1', { maintenanceStatus: 'offline' });
 
       expect(collection.updateOne).toHaveBeenCalledWith(
-        { $or: [{ sensorId: 'S-1' }, { sensorID: 'S-1' }, { _id: 'S-1' }] },
+        { $or: [{ sensorId: 'S-1' }, { _id: 'S-1' }] },
         { $set: expect.objectContaining({ maintenanceStatus: 'offline' }) }
       );
       expect(quarantineBySensorStatus).toHaveBeenCalledWith(

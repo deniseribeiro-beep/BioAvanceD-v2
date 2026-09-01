@@ -102,13 +102,18 @@ class SensorService {
     }
   }
 
+  // #917: the `{ sensorID: sensorId }` branch is gone from all three lookups
+  // in this file (getSensor / updateSensor / deleteSensor). `sensorID` has
+  // never been a persisted field -- `SensorModel.create` writes
+  // `sensorId: data.sensorId || data.sensorID` and has since the initial
+  // commit -- so the branch matched nothing this codebase ever wrote. The
+  // `_id` branch stays; that one is real.
   async getSensor(db, sensorId) {
     try {
       const sensorsCollection = db.collection('sensors');
       const sensor = await sensorsCollection.findOne({
         $or: [
           { sensorId },
-          { sensorID: sensorId },
           { _id: sensorId }
         ]
       });
@@ -182,7 +187,7 @@ class SensorService {
       await assertOrganizationIdResolves(db, updateData && updateData.organizationId);
 
       const sensorsCollection = db.collection('sensors');
-      const query = { $or: [{ sensorId }, { sensorID: sensorId }, { _id: sensorId }] };
+      const query = { $or: [{ sensorId }, { _id: sensorId }] };
 
       // #875: normalizedUpdateData used to be an unfiltered spread of the
       // caller's updateData, reaching $set as-is on both the transaction
@@ -342,7 +347,6 @@ class SensorService {
       const result = await sensorsCollection.deleteOne({
         $or: [
           { sensorId },
-          { sensorID: sensorId },
           { _id: sensorId }
         ]
       });

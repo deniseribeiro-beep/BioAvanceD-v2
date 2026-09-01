@@ -46,7 +46,7 @@ describe('sensor.service quarantine flow', () => {
     expect(startSession).not.toHaveBeenCalled();
     expect(updateOne).toHaveBeenCalledTimes(1);
     expect(updateOne).toHaveBeenCalledWith(
-      { $or: [{ sensorId: 'S-100' }, { sensorID: 'S-100' }, { _id: 'S-100' }] },
+      { $or: [{ sensorId: 'S-100' }, { _id: 'S-100' }] },
       { $set: expect.objectContaining({ maintenanceStatus: 'operational' }) }
     );
   });
@@ -108,7 +108,7 @@ describe('sensor.service quarantine flow', () => {
     );
 
     expect(updateOne).toHaveBeenCalledWith(
-      { $or: [{ sensorId: 'S-200' }, { sensorID: 'S-200' }, { _id: 'S-200' }] },
+      { $or: [{ sensorId: 'S-200' }, { _id: 'S-200' }] },
       { $set: expect.objectContaining({ maintenanceStatus: 'offline' }) },
       { session }
     );

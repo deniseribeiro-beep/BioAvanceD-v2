@@ -291,7 +291,11 @@ describe('temperatureService.getTemperatureHistory', () => {
     expect(find).toHaveBeenCalledWith({});
   });
 
-  it('builds a sensorId-only $or filter', async () => {
+  // #917: was a two-branch `$or` over sensorId/sensorID. Nothing ever wrote
+  // the capitalised key -- TemperatureModel.create coalesces it into
+  // `sensorId` on the way in, and has since the initial commit -- so the
+  // second branch matched nothing and the filter is now a plain key.
+  it('builds a plain sensorId filter', async () => {
     const findOne = vi.fn().mockResolvedValue({ timestamp: new Date() });
     const chain = makeFindChain([]);
     const find = vi.fn().mockReturnValue(chain);
@@ -300,9 +304,7 @@ describe('temperatureService.getTemperatureHistory', () => {
 
     await temperatureService.getTemperatureHistory(db, { sensorId: 'sensor-1' });
 
-    expect(find).toHaveBeenCalledWith({
-      $or: [{ sensorId: 'sensor-1' }, { sensorID: 'sensor-1' }]
-    });
+    expect(find).toHaveBeenCalledWith({ sensorId: 'sensor-1' });
     expect(chain.sort).toHaveBeenCalledWith({ timestamp: -1 });
   });
 
@@ -326,7 +328,11 @@ describe('temperatureService.getTemperatureHistory', () => {
     expect(chain.sort).toHaveBeenCalledWith({ dateTime: -1 });
   });
 
-  it('merges sensorId + date-range filters into an $and query (dedicated branch)', async () => {
+  // #917: this used to assert an `$and` wrapper. That merge branch existed
+  // only because the sensor filter was itself an `$or`; with a plain
+  // `sensorId` key the two conditions compose as siblings, which is the same
+  // query one wrapper shallower. The date-range `$or` is unchanged.
+  it('composes sensorId + date-range filters as sibling keys, no $and wrapper', async () => {
     const findOne = vi.fn().mockResolvedValue({ timestamp: new Date() });
     const chain = makeFindChain([]);
     const find = vi.fn().mockReturnValue(chain);
@@ -340,10 +346,11 @@ describe('temperatureService.getTemperatureHistory', () => {
     });
 
     const calledQuery = find.mock.calls[0][0];
-    expect(calledQuery.$or).toBeUndefined();
-    expect(calledQuery.$and).toEqual([
-      { $or: [{ sensorId: 'sensor-9' }, { sensorID: 'sensor-9' }] },
-      { $or: [{ timestamp: { $gte: new Date(start) } }, { dateTime: { $gte: new Date(start) } }] }
+    expect(calledQuery.$and).toBeUndefined();
+    expect(calledQuery.sensorId).toBe('sensor-9');
+    expect(calledQuery.$or).toEqual([
+      { timestamp: { $gte: new Date(start) } },
+      { dateTime: { $gte: new Date(start) } }
     ]);
   });
 
