@@ -4,19 +4,32 @@ import { readFileSync } from 'fs';
 import { resolve as resolvePath } from 'path';
 import { mockLogin } from './helpers/mockAuth';
 
-// #819: Playwright global setup -- warms every lazy-loaded route once.
+// #819/#894/#930: Playwright global setup -- optionally warms every
+// lazy-loaded route once, before any spec runs.
+//
+// Off by default; opt in with E2E_WARMUP=1. It is off by default because
+// the Docker test frontend (`frontend-app-test`) serves a pre-built bundle
+// via `vite preview`, not a dev server with on-demand chunk compilation --
+// there is nothing left to warm, so running this on every Docker suite
+// bought nothing (#930).
+//
+// It stays available for the local dev-server path: when
+// PLAYWRIGHT_SKIP_WEBSERVER is unset, playwright.config.ts spawns a real
+// Vite dev server for `globalSetup`/the suite, and that path still has the
+// original failure mode #819 was written for:
 //
 // Every page in frontend/src/App.tsx is `lazy(() => import(...))`. Under the
-// Vite dev server (`frontend-app-test`), a chunk is transformed on its
-// *first* request, not at server start. Whichever spec happens to visit a
-// given route first pays that compile cost, and can exceed the 5s `expect`
-// timeout configured in playwright.config.ts -- which then reads as a
-// missing UI element rather than what it actually is: a compile stall. This
-// is per-*route*, not per-server-start; a confirmed instance surfaced 215
-// tests into a run, on a route no earlier spec happened to touch.
+// Vite dev server, a chunk is transformed on its *first* request, not at
+// server start. Whichever spec happens to visit a given route first pays
+// that compile cost, and can exceed the 5s `expect` timeout configured in
+// playwright.config.ts -- which then reads as a missing UI element rather
+// than what it actually is: a compile stall. This is per-*route*, not
+// per-server-start; a confirmed instance surfaced 215 tests into a run, on a
+// route no earlier spec happened to touch.
 //
-// The fix is to pre-visit every route once, before any spec runs, so the
-// on-demand compile happens here instead of inside a test's timeout budget.
+// When enabled, the fix is to pre-visit every route once, before any spec
+// runs, so the on-demand compile happens here instead of inside a test's
+// timeout budget.
 //
 // Authentication matters for this to actually warm anything: React.lazy only
 // fetches a chunk when the component *renders*. A protected route visited
@@ -121,13 +134,14 @@ function warnIfWarmListDrifted(): void {
 }
 
 export default async function globalSetup(_config: FullConfig): Promise<void> {
-  // Single-spec iteration (running one file directly) has no need to pay the
-  // warm-up cost every time.
-  warnIfWarmListDrifted();
-
-  if (process.env.E2E_SKIP_WARMUP === '1') {
+  // Opt-in (#930): the warm-up only runs when explicitly requested. Return
+  // before the drift check too, so a Docker/CI run that never opts in does
+  // not pay for (or get warned about) a list it is not using.
+  if (process.env.E2E_WARMUP !== '1') {
     return;
   }
+
+  warnIfWarmListDrifted();
 
   const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173';
 
