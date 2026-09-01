@@ -301,6 +301,34 @@ app.use("/api/protocols", createMasterDataRouter({
   idField: "protocolId",
   model: require("./src/models/Protocol")
 }));
+// #665: Assay and ReagentLot ride createMasterDataRouter's shared
+// requireRole(3, 4) write gate, so a Tecnico cannot POST either -- while
+// POST /api/nonconformances (same RF025 slice) is deliberately
+// requireRole(2, 3, 4). That asymmetry was investigated and the gate is
+// LEFT AS IS. Recorded here so the next audit does not re-open it.
+//
+// RF025's "Ator primario: Tecnico" does not carry authorization weight
+// anywhere in this repo: RF004, RF006 and RF016 all say the same thing and
+// are implemented as requirePermission capabilities (sample.routes.js), not
+// requireRole floors -- and RF002 AC#1, the one AC that describes what a
+// Tecnico may do, says "operacoes AUTORIZADAS de cadastro", deferring to
+// the authorization model rather than defining it. None of RF025's six ACs
+// has a grammatical subject; they are impersonal infinitives, and none says
+// who registers an Assay or a ReagentLot. dict-02 has no creator/owner
+// column for any entity -- Assay.operatorId (ELM-0292) records who RAN the
+// assay, which is data about the assay, not a statement about who may POST
+// the record. And equipment.routes.js, cited in #665 as the precedent for
+// a looser gate, is not one: it predates the factory by six days, was never
+// migrated into it, and gates writes on requirePermission('createPatient'),
+// which Tecnico does not hold -- so its effective create audience is the
+// same Coordenador/Administrador tier.
+//
+// INFERENCE, not a citation: the consistent reading is that a Tecnico runs
+// the assay (recorded as operatorId) while a Coordenador enters the
+// master-data record -- an ordinary separation of duties. Cheap to
+// overturn: createMasterDataRouter has no per-entity role override today,
+// and adding a `writeRoles` option (defaulting to [3, 4]) would let these
+// two mounts pass [2, 3, 4] without touching the other 12 entities.
 app.use("/api/assays/:assayId/files", require("./src/interface/routes/assay-file.routes"));
 app.use("/api/assays", createMasterDataRouter({
   collectionName: "assays",
