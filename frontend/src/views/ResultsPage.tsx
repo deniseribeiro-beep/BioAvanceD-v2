@@ -369,10 +369,18 @@ export default function ResultsPage() {
                     <label className="metric-label">{t('results.metrics.failureLabel', 'Falhas')}</label>
                     <span className="metric-value metric-failure">{selectedJob.metrics.failedRecords}</span>
                   </div>
-                  <div className="metric-item">
-                    <label className="metric-label">{t('results.metrics.duplicates', 'Duplicados')}</label>
-                    <span className="metric-value">{selectedJob.metrics.duplicatesFound}</span>
-                  </div>
+                  {/* #925: nothing computes duplicatesFound -- no worker
+                      writes it and getJobReport no longer defaults it to 0.
+                      Rendered only when a value actually arrives, the same
+                      shape processingTime below already uses, so the report
+                      stops asserting "there were no duplicates" when what it
+                      means is "nobody counted". */}
+                  {selectedJob.metrics.duplicatesFound !== undefined && (
+                    <div className="metric-item">
+                      <label className="metric-label">{t('results.metrics.duplicates', 'Duplicados')}</label>
+                      <span className="metric-value">{selectedJob.metrics.duplicatesFound}</span>
+                    </div>
+                  )}
                   {selectedJob.metrics.processingTime && (
                     <div className="metric-item">
                       <label className="metric-label">{t('results.metrics.processingTime', 'Tempo de Processamento')}</label>

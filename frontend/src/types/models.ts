@@ -888,8 +888,13 @@ export interface ImportMetrics {
   totalRecords: number;
   successfulRecords: number;
   failedRecords: number;
-  skippedRecords: number;
-  duplicatesFound: number;
+  // #925: both were declared required and neither is ever produced.
+  // skippedRecords is written by nothing and read by nothing; duplicatesFound
+  // was read by the report modal against a `?? 0` default that made "nobody
+  // counted" indistinguishable from "none found". Optional now, so a consumer
+  // has to decide what an absent value means instead of being handed a zero.
+  skippedRecords?: number;
+  duplicatesFound?: number;
   processingTime?: number; // em segundos
   recordsPerSecond?: number;
 }

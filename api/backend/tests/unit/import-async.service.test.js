@@ -680,7 +680,11 @@ describe('import-async.service', () => {
           totalRecords: 10,
           successfulRecords: 9,
           failedRecords: 1,
-          duplicatesFound: 0,
+          // #925: was `duplicatesFound: 0`, which pinned a `?? 0` default
+          // over a field no writer anywhere sets -- so the report asserted
+          // "no duplicates" where it meant "nobody counted". undefined is the
+          // honest value and is what lets the modal omit the tile.
+          duplicatesFound: undefined,
         },
         progress: 100,
         createdAt: job.createdAt,

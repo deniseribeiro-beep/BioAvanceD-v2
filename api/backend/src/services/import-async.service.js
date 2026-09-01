@@ -600,7 +600,12 @@ class ImportAsyncService {
           totalRecords: job.totalRecords,
           successfulRecords: job.successCount,
           failedRecords: job.errorCount,
-          duplicatesFound: job.duplicatesFound ?? 0,
+          // #925: no `?? 0`. Nothing anywhere writes job.duplicatesFound --
+          // the worker's updateJobStatus payload has no such field -- so the
+          // default was turning "nobody counted duplicates" into the claim
+          // "there were none", which the report modal then displayed as fact.
+          // Passing undefined through lets the modal omit the tile.
+          duplicatesFound: job.duplicatesFound,
         },
         progress: job.progress,
         createdAt: job.createdAt,
