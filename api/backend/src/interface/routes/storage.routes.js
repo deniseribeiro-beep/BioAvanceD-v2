@@ -43,8 +43,9 @@ router.use((req, res, next) => {
 // enforce this independently of what the frontend hides.
 //
 // Why a role gate and not a requirePermission: the RBAC catalog defines
-// no storage-scoped permission code at all (21 codes, none about
-// storage, allocation or movement), so a requirePermission here would
+// no storage-scoped permission code at all (24 codes, per
+// Object.keys(PERMISSION_CATALOG).length in rbac-catalog-seed.service.js,
+// none about storage, allocation or movement), so a requirePermission here would
 // have to borrow a wrong-domain code -- the mistake this file's one
 // pre-existing gate already makes with 'createPatient' on a freezer
 // route. Proper codes belong in the catalog and touch the canonical

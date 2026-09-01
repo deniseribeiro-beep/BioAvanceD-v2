@@ -1050,8 +1050,17 @@ describe('storage.routes', () => {
 
   describe('PATCH /freezer/:freezerId/room', () => {
     it('returns 403 when the permission gate denies the caller (issue #856: requirePermission seam)', async () => {
+      // Records the arguments the middleware FACTORY was called with, not
+      // just that a 403 came back -- an unconditional-403 stub that
+      // discarded the code argument would pass identically whether the
+      // route's real gate were requirePermission('createPatient') or any
+      // other code (issue #888).
+      const recordedCalls = [];
       const { router } = loadRoute({
-        requirePermissionImpl: () => (req, res) => res.status(403).json({ success: false, error: 'Acesso negado' }),
+        requirePermissionImpl: (...args) => {
+          recordedCalls.push(args);
+          return (req, res) => res.status(403).json({ success: false, error: 'Acesso negado' });
+        },
       });
       const app = buildApp(router, { collection: () => ({}) });
 
@@ -1060,6 +1069,7 @@ describe('storage.routes', () => {
         .send({ roomId: '507f1f77bcf86cd799439012' });
 
       expect(res.status).toBe(403);
+      expect(recordedCalls).toEqual([['createPatient']]);
     });
 
     it('returns 400 for a non-ObjectId freezerId (issue #856)', async () => {
@@ -1156,26 +1166,42 @@ describe('storage.routes authorization (#859)', () => {
   // disallowed level, so the assertion is about the gate being applied at
   // all -- not about resolveUserHierarchyLevel's own logic, which
   // rbac.js's own tests cover.
+  // Records the arguments the middleware FACTORY was called with (not just
+  // that a 403 came back), so a mutation route swapped to a wrong/empty
+  // role list -- which the plain denyingRequireRole below could never
+  // catch, since it 403s unconditionally regardless of what it received --
+  // is caught here instead.
   function denyingRequireRole() {
-    return () => (req, res) =>
-      res.status(403).json({ success: false, error: 'Acesso negado' });
+    const recordedCalls = [];
+    const factory = (...args) => {
+      recordedCalls.push(args);
+      return (req, res) => res.status(403).json({ success: false, error: 'Acesso negado' });
+    };
+    factory.recordedCalls = recordedCalls;
+    return factory;
   }
 
   const MUTATIONS = [
-    { method: 'post', path: '/api/storage/allocate' },
-    { method: 'post', path: '/api/storage/allocate/auto' },
-    { method: 'post', path: '/api/storage/move' },
-    { method: 'delete', path: '/api/storage/release/sample-1' },
+    { method: 'post', path: '/api/storage/allocate', expectedRoles: [2, 3, 4] },
+    { method: 'post', path: '/api/storage/allocate/auto', expectedRoles: [2, 3, 4] },
+    { method: 'post', path: '/api/storage/move', expectedRoles: [2, 3, 4] },
+    { method: 'delete', path: '/api/storage/release/sample-1', expectedRoles: [2, 3, 4] },
   ];
 
-  for (const { method, path } of MUTATIONS) {
+  for (const { method, path, expectedRoles } of MUTATIONS) {
     it(`refuses ${method.toUpperCase()} ${path} for a role the gate rejects`, async () => {
-      const { router } = loadRoute({ requireRoleImpl: denyingRequireRole() });
+      const requireRoleImpl = denyingRequireRole();
+      const { router } = loadRoute({ requireRoleImpl });
       const app = buildApp(router, { collection: () => ({}) });
 
       const res = await request(app)[method](path).send({});
 
       expect(res.status).toBe(403);
+      // Pins the role list the route registered requireRole with -- without
+      // this, the stub's unconditional 403 would pass identically whether
+      // the real gate were requireRole(2,3,4), requireRole(4), or
+      // requireRole() (issue #888).
+      expect(requireRoleImpl.recordedCalls).toEqual([expectedRoles]);
     });
   }
 

@@ -70,8 +70,14 @@ const ADDITIONAL_ROLES_SEED = [
 
 /**
  * #630: `allowedActions` below was audited against every real
- * `requirePermission(code)` call site in `src/interface/routes/` (17
- * codes, 107 call sites) rather than trusted as-is — several codes were
+ * `requirePermission(code)` call site (22 distinct codes in use, 125 call
+ * sites total — 116 in `src/interface/routes/` plus 9 in `src/routes/`, a
+ * second, separate routes directory the original 17-codes/107-call-sites
+ * count appears to have missed; re-measured by grepping for
+ * requirePermission( occurrences and their literal string argument across
+ * both directories, then counting occurrences for the call-site total and
+ * distinct values for the code count) rather than trusted as-is — several
+ * codes were
  * badly stale (e.g. `manageOrganizations` claimed only `UPDATE` while
  * `organization.routes.js` has gated `POST`/`DELETE` under it since
  * #576). Per-call-site action was derived from HTTP verb (GET->READ,
