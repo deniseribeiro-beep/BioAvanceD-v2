@@ -11,6 +11,12 @@ const { createCollectionMock, createDbMock } = require('../factories/db.factory'
 const { buildRbacCollections } = require('../factories/rbac.factory');
 
 const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: 'qa-1', accessType: 4 }]);
+// #913: real RBAC fixtures for the Técnico/Coordenador role-gate tests below --
+// without these, resolveUserHierarchyLevel finds no UserRoleAssignment and
+// returns null, and rbac.js:50's `userLevel === null || !allowedRoles.includes(userLevel)`
+// short-circuits on the null branch before the role list is ever consulted.
+const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: 'qa-1', accessType: 2 }]);
+const rbacCollectionsCoordenador = buildRbacCollections([{ userAccountId: 'qa-1', accessType: 3 }]);
 
 // Tests for createMasterDataRouter — covers all 5 mounted instances via
 // /api/measurement-units (all branches of the factory router are shared code)
@@ -108,7 +114,7 @@ describe('POST /api/measurement-units', () => {
   });
 
   it('returns 403 for Técnico (requireRole(3,4))', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...rbacCollectionsTechnician });
     const res = await request(app)
       .post('/api/measurement-units')
       .set('Authorization', `Bearer ${makeToken(2)}`)
@@ -116,11 +122,32 @@ describe('POST /api/measurement-units', () => {
     expect(res.status).toBe(403);
   });
 
-  it('returns 403 for Coordenador', async () => {
-    app.locals.db = createDbMock({});
+  // #913: Coordenador is hierarchyLevel 3, and the gate is requireRole(3, 4)
+  // -- Coordenador is PERMITTED. With a real RBAC fixture seeded, the role
+  // check passes and the request proceeds to MeasurementUnitModel.validate,
+  // which rejects this payload for missing `description` (confirmed by
+  // running: see report). A 403 assertion here would be asserting the
+  // opposite of real behaviour.
+  it('does not 403 for Coordenador -- the role gate lets Coordenador through, so the rejection is model validation', async () => {
+    app.locals.db = createDbMock({ ...rbacCollectionsCoordenador });
     const res = await request(app)
       .post('/api/measurement-units')
       .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ name: 'µL', symbol: 'µL' });
+    expect(res.status).toBe(422);
+    expect(res.body.success).toBe(false);
+  });
+
+  // #913: with no RBAC collections seeded at all, resolveUserHierarchyLevel
+  // finds no UserRoleAssignment and returns null -- this is the branch the
+  // four role-gate tests above used to hit by accident before they seeded
+  // real fixtures. Kept as its own test so that branch stays covered now
+  // that the others no longer exercise it.
+  it('returns 403 when the caller has no resolvable role assignment at all (null hierarchy level)', async () => {
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .post('/api/measurement-units')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ name: 'µL', symbol: 'µL' });
     expect(res.status).toBe(403);
   });
@@ -158,7 +185,7 @@ describe('PUT /api/measurement-units/:id', () => {
   });
 
   it('returns 403 for Técnico', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...rbacCollectionsTechnician });
     const res = await request(app)
       .put('/api/measurement-units/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(2)}`)
@@ -241,7 +268,7 @@ describe('DELETE /api/measurement-units/:id', () => {
   });
 
   it('returns 403 for Técnico', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...rbacCollectionsTechnician });
     const res = await request(app)
       .delete('/api/measurement-units/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(2)}`);
