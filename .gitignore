@@ -86,7 +86,22 @@ backend/uploads/temp/*
 !backend/uploads/temp/.gitkeep
 api/backend/uploads/temp/*
 !api/backend/uploads/temp/.gitkeep
-api/backend/src/storage/results/
+api/backend/uploads/analysis/
+api/backend/uploads/staging-imports/
+api/backend/uploads/quarantine/
+# #927: the whole runtime storage tree. Only `results/` was ignored, under
+# the path result.routes.js used before #893 -- src/storage/, which resolved
+# one level deeper than every other storage writer because that file sits in
+# src/interface/routes/ rather than src/controllers/. #893 unified it onto
+# STORAGE_BASE, which moved it OUT of this ignore and into api/backend/
+# storage/, so the ignore has to follow. The three siblings were never
+# ignored at all.
+#
+# Already-tracked files are unaffected by a gitignore rule, which matters
+# here: api/backend/storage/samples/<id>/files/ holds one committed PDF and
+# it stays tracked and versioned.
+api/backend/src/storage/
+api/backend/storage/
 
 # =========================
 # Local runtime data (Docker volumes / databases)
