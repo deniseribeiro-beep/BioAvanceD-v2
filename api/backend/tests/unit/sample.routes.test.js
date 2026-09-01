@@ -1682,6 +1682,70 @@ describe('sample.routes', () => {
       expect(res.status).toBe(200);
       expect(listSamples).toHaveBeenCalledWith(db, expect.objectContaining({ participantId: '12345678' }));
     });
+
+    // #789: the asymmetry this closes. POST /api/samples 422s a body carrying
+    // any of the prohibited pre-rename names; GET silently ignored the same
+    // names, which is the mechanism behind #533 (currentStatus) and #785
+    // (patientID) -- both answered 200 with a full unfiltered page and
+    // nothing to distinguish it from a correctly-filtered one.
+    it.each([
+      ['patientID', '12345678'],
+      ['sampleID', 's1'],
+      ['sampleId', 's1'],
+      ['registerDate', '2026-01-01'],
+      ['registrationDate', '2026-01-01'],
+      ['currentStatus', 'ACTIVE'],
+      ['merkle_root', 'abc123'],
+    ])('rejects %s as a non-canonical query alias with the same 422 contract as POST', async (field, value) => {
+      const listSamples = vi.fn().mockResolvedValue({ samples: [], total: 0 });
+      const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get(`/api/samples?${field}=${encodeURIComponent(value)}`);
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+      expect(res.body.fields).toContain(field);
+      // The prohibited name is refused at the boundary -- the query never runs.
+      expect(listSamples).not.toHaveBeenCalled();
+    });
+
+    // #789: an unrecognised-but-not-prohibited key stays a soft failure (#780
+    // made the same call for sortBy), but it stops being a SILENT one.
+    it('reports an unrecognised query parameter as ignored instead of dropping it silently', async () => {
+      const listSamples = vi.fn().mockResolvedValue({ samples: [], total: 0 });
+      const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
+      const emptyCollection = { findOne: vi.fn().mockResolvedValue(null), countDocuments: vi.fn().mockResolvedValue(0) };
+      const db = { collection: () => emptyCollection };
+      const app = buildApp(router, db);
+
+      const res = await request(app).get('/api/samples?specimenStatus=STORED&notAFilter=1');
+
+      expect(res.status).toBe(200);
+      expect(res.body.ignoredQueryParams).toEqual(
+        expect.arrayContaining(['specimenStatus', 'notAFilter'])
+      );
+      expect(listSamples).toHaveBeenCalledWith(db, expect.not.objectContaining({ notAFilter: expect.anything() }));
+    });
+
+    it('echoes the filters it actually applied', async () => {
+      const listSamples = vi.fn().mockResolvedValue({ samples: [], total: 0 });
+      const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
+      const emptyCollection = { findOne: vi.fn().mockResolvedValue(null), countDocuments: vi.fn().mockResolvedValue(0) };
+      const db = { collection: () => emptyCollection };
+      const app = buildApp(router, db);
+
+      const res = await request(app).get('/api/samples?participantId=12345678&limit=10&skip=5');
+
+      expect(res.status).toBe(200);
+      expect(res.body.appliedFilters).toEqual({
+        participantId: '12345678',
+        sampleType: null,
+        limit: 10,
+        skip: 5,
+      });
+      expect(res.body.ignoredQueryParams).toEqual([]);
+    });
   });
 
   // #646 Wave 3 (RF016 AC#4): batch label generation given a list of

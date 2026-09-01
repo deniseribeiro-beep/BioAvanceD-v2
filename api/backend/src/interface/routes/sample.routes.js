@@ -98,18 +98,44 @@ const {
   MIABIS_QUALITY_IDS,
 } = require('../../config/constants/specimen.constants');
 
+// #789: the prohibited pre-rename vocabulary, in ONE place. It was inlined
+// in validateCreateSamplePayload only, so `GET /` had no way to reject the
+// same names and silently ignored them instead -- the mechanism behind #533
+// (currentStatus) and #785 (patientID). Both guards now read this list.
+const NON_CANONICAL_SAMPLE_ALIASES = Object.freeze([
+  'patientID',
+  'sampleID',
+  'sampleId',
+  'registerDate',
+  'registrationDate',
+  'currentStatus',
+  'merkle_root',
+]);
+
+// #789: the query keys `GET /` actually applies. listSamples reads exactly
+// these; anything else was dropped in flight with no signal, which is what
+// #533 and #785 both were. Kept next to the alias list so the two stay in
+// view of each other.
+const RECOGNIZED_SAMPLE_QUERY_KEYS = Object.freeze([
+  'participantId',
+  'sampleType',
+  'limit',
+  'skip',
+]);
+
+function findNonCanonicalAliases(source) {
+  const bag = source || {};
+  return NON_CANONICAL_SAMPLE_ALIASES.filter((alias) =>
+    Object.prototype.hasOwnProperty.call(bag, alias)
+  );
+}
+
 function validateCreateSamplePayload(req, res, next) {
   const payload = req.body || {};
   const errors = [];
   const aliasFields = [];
 
-  if (Object.prototype.hasOwnProperty.call(payload, 'patientID')) aliasFields.push('patientID');
-  if (Object.prototype.hasOwnProperty.call(payload, 'sampleID')) aliasFields.push('sampleID');
-  if (Object.prototype.hasOwnProperty.call(payload, 'sampleId')) aliasFields.push('sampleId');
-  if (Object.prototype.hasOwnProperty.call(payload, 'registerDate')) aliasFields.push('registerDate');
-  if (Object.prototype.hasOwnProperty.call(payload, 'registrationDate')) aliasFields.push('registrationDate');
-  if (Object.prototype.hasOwnProperty.call(payload, 'currentStatus')) aliasFields.push('currentStatus');
-  if (Object.prototype.hasOwnProperty.call(payload, 'merkle_root')) aliasFields.push('merkle_root');
+  aliasFields.push(...findNonCanonicalAliases(payload));
 
   if (aliasFields.length > 0) {
     return res.status(422).json({
@@ -480,6 +506,35 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
       });
     }
 
+    // #789: the prohibited pre-rename names are now rejected on the way IN
+    // here too, with the same 422 NON_CANONICAL_FIELD contract
+    // validateCreateSamplePayload applies to the POST body. Same vocabulary
+    // migration, same feedback -- previously GET answered 200 with a full
+    // unfiltered page and nothing to distinguish it from a filtered one.
+    const queryAliases = findNonCanonicalAliases(req.query);
+    if (queryAliases.length > 0) {
+      return res.status(422).json({
+        success: false,
+        error: 'NON_CANONICAL_FIELD',
+        fields: [...new Set(queryAliases)]
+      });
+    }
+
+    // #789: an unrecognised-but-not-prohibited key is still not a hard error
+    // -- unknown callers currently get a soft failure and #780 deliberately
+    // chose a fallback over a rejection for exactly that reason. What changes
+    // is that the drop stops being silent: it is logged, and the response
+    // echoes what was actually applied, the way log.service.js echoes the
+    // sort it actually used.
+    const ignoredQueryParams = Object.keys(req.query || {}).filter(
+      (key) => !RECOGNIZED_SAMPLE_QUERY_KEYS.includes(key)
+    );
+    if (ignoredQueryParams.length > 0) {
+      logger.warn(
+        `[SAMPLES] Parâmetros de consulta não reconhecidos, ignorados: ${ignoredQueryParams.join(', ')}`
+      );
+    }
+
     // #533: currentStatus was accepted here but sample.service.js#listSamples
     // never applied it to the query (only participantId/specimenStatus/
     // sampleType are) — dropped rather than wired up, since no frontend
@@ -591,7 +646,16 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
     return res.status(200).json({
       success: true,
       data: enrichedSamples,
-      total: result.total
+      total: result.total,
+      // #789: what the server actually filtered on. Without this the drop of
+      // an unrecognised parameter is as invisible as the bug it replaces.
+      appliedFilters: {
+        participantId: filters.participantId ?? null,
+        sampleType: filters.sampleType ?? null,
+        limit: filters.limit,
+        skip: filters.skip
+      },
+      ignoredQueryParams
     });
   } catch (error) {
     logger.error('Erro ao listar amostras:', error.message);
