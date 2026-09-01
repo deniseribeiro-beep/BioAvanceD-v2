@@ -11,11 +11,12 @@
  * (no `upsert` on this write, unlike commitBatch's) must not be allowed to
  * leave the staging record marked COMMITTED with no sample behind it.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const fhirImportStagingService = require('../../src/services/fhir-import-staging.service');
+const quarantineActionService = require('../../src/services/quarantine-action.service');
 
 function createCollection() {
   const docs = [];
@@ -137,5 +138,82 @@ describe('fhir-import-staging.service#attachExternalDocument -- validation gate 
     expect(record.consentStatus).toBeUndefined();
     expect(record.quarantineStatus).toBeUndefined();
     expect(record.externalDocument).toBeUndefined();
+  });
+});
+
+/**
+ * #918: releasing the specimen and committing the staging record used to be
+ * two separate writes. On a deployment `isTransactionCapable` recognises
+ * (replica set / mongos), both writes -- plus the quarantine release --
+ * must run inside one Mongo transaction, threaded through with `{ session }`.
+ */
+describe('fhir-import-staging.service#attachExternalDocument -- transactional release (#918)', () => {
+  let db;
+
+  beforeEach(() => {
+    db = createDb();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** A fake MongoClient whose `hello` reports a replica set. */
+  function makeCapableClient(mockSession) {
+    return {
+      db: (name) => (name === 'admin' ? { command: vi.fn(async () => ({ setName: 'rs0' })) } : undefined),
+      startSession: vi.fn(() => mockSession),
+    };
+  }
+
+  it('runs the release inside a transaction, threading { session } through the sample write, the staging write, and releaseActiveAction', async () => {
+    const { batchId, recordId } = await seedFhirBatch(db);
+    await db.collection('samples').insertOne({ specimenId: 'SPEC-801', specimenStatus: 'quarantined' });
+
+    const mockSession = {
+      withTransaction: vi.fn(async (fn) => {
+        await fn();
+      }),
+      endSession: vi.fn(async () => {}),
+    };
+    db.client = makeCapableClient(mockSession);
+
+    const releaseSpy = vi.spyOn(quarantineActionService, 'releaseActiveAction');
+
+    await fhirImportStagingService.attachExternalDocument(db, batchId, recordId, { userID: 'op-1' });
+
+    expect(mockSession.withTransaction).toHaveBeenCalledTimes(1);
+
+    const sampleFindCall = db.collections.samples.findOne.mock.calls.find((call) => call[1]);
+    expect(sampleFindCall[1]).toEqual({ session: mockSession });
+
+    const sampleUpdateCall = db.collections.samples.updateOne.mock.calls.find((call) => call[2]);
+    expect(sampleUpdateCall[2]).toEqual({ session: mockSession });
+
+    const stagingUpdateCall = db.collections.import_staging_records.updateOne.mock.calls.find((call) => call[2]);
+    expect(stagingUpdateCall[2]).toEqual({ session: mockSession });
+
+    expect(releaseSpy).toHaveBeenCalledWith(db, expect.any(String), 'op-1', undefined, mockSession);
+  });
+
+  it('aborts the transaction when samples.updateOne matches nothing, and never runs the staging write', async () => {
+    const { batchId, recordId } = await seedFhirBatch(db);
+    // Deliberately no matching `samples` document for SPEC-801.
+
+    const mockSession = {
+      withTransaction: vi.fn(async (fn) => {
+        await fn();
+      }),
+      endSession: vi.fn(async () => {}),
+    };
+    db.client = makeCapableClient(mockSession);
+
+    await expect(
+      fhirImportStagingService.attachExternalDocument(db, batchId, recordId, {})
+    ).rejects.toMatchObject({ statusCode: 404 });
+
+    expect(db.collections.import_staging_records.updateOne).not.toHaveBeenCalled();
+    const record = db.collections.import_staging_records.docs[0];
+    expect(record.status).toBe(fhirImportStagingService.STATUS.NEEDS_REVIEW);
   });
 });

@@ -8,6 +8,7 @@ const { SampleModel } = require('../models/Sample');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const participantIdentityService = require('./participantIdentity.service');
 const quarantineActionService = require('./quarantine-action.service');
+const { withMongoTransaction, isTransactionCapable } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 
@@ -1152,31 +1153,6 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
   const normalized = record.normalized || {};
   const now = new Date();
 
-  const existingSample = await samples.findOne({ specimenId: normalized.specimenId });
-  const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
-
-  const sampleUpdateResult = await samples.updateOne(
-    { specimenId: normalized.specimenId },
-    {
-      $set: {
-        consentStatus: 'EXTERNAL_ATTACHED',
-        quarantineReason: null,
-        specimenStatus: 'available',
-        updatedAt: now,
-      },
-    }
-  );
-
-  // #801: matchedCount 0 means no sample stands behind this record (this
-  // write carries no `upsert`, unlike commitBatch's). Leaving the staging
-  // record COMMITTED in that case is exactly the silent-commit RNF011 AC#4
-  // exists to prevent, so refuse instead of writing it.
-  if (!sampleUpdateResult || sampleUpdateResult.matchedCount === 0) {
-    const error = new Error('Nenhuma amostra encontrada para o specimenId deste registro; documentação externa não anexada.');
-    error.statusCode = 404;
-    throw error;
-  }
-
   const updatedRecord = {
     consentStatus: 'EXTERNAL_ATTACHED',
     quarantineStatus: 'RELEASED',
@@ -1193,10 +1169,56 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
     updatedAt: now,
   };
 
-  await staging.updateOne({ _id: recordId, batchId }, { $set: updatedRecord });
+  // #918: releasing the specimen (samples.updateOne) and marking this
+  // staging record COMMITTED (staging.updateOne) used to be two independent
+  // writes -- if the second failed, the specimen was already
+  // available/EXTERNAL_ATTACHED with no staging or audit record explaining
+  // the release. Refusing here on matchedCount === 0 (before the staging
+  // write runs) only mitigates that by ordering: it is not atomicity, and on
+  // a standalone deployment (no replica set / mongos -- see
+  // isTransactionCapable) there is still a residual window between the two
+  // writes where a crash leaves the specimen released with its staging
+  // record stuck at NEEDS_REVIEW. Where the deployment supports it, both
+  // writes plus the quarantine release run inside one transaction instead.
+  const capable = await isTransactionCapable(db);
 
-  if (existingSample && wasQuarantined) {
-    await quarantineActionService.releaseActiveAction(db, String(existingSample._id), options.userID || 'SYSTEM');
+  const doRelease = async (session) => {
+    const dbOptions = session ? { session } : undefined;
+
+    const existingSample = await samples.findOne({ specimenId: normalized.specimenId }, dbOptions);
+    const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
+
+    const sampleUpdateResult = await samples.updateOne(
+      { specimenId: normalized.specimenId },
+      {
+        $set: {
+          consentStatus: 'EXTERNAL_ATTACHED',
+          quarantineReason: null,
+          specimenStatus: 'available',
+          updatedAt: now,
+        },
+      },
+      dbOptions
+    );
+
+    if (!sampleUpdateResult || sampleUpdateResult.matchedCount === 0) {
+      const error = new Error('Nenhuma amostra encontrada para o specimenId deste registro; documentação externa não anexada.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    await staging.updateOne({ _id: recordId, batchId }, { $set: updatedRecord }, dbOptions);
+
+    if (existingSample && wasQuarantined) {
+      await quarantineActionService.releaseActiveAction(db, String(existingSample._id), options.userID || 'SYSTEM', undefined, session);
+    }
+  };
+
+  if (capable) {
+    await withMongoTransaction(db, (session) => doRelease(session));
+  } else {
+    logger.warn('[FHIR_IMPORT] attachExternalDocument: MongoDB standalone (sem replica set/mongos) -- release da amostra e commit do registro staging seguem como duas escritas sequenciais, não atômicas.', { batchId, recordId });
+    await doRelease(undefined);
   }
 
   await audit(db, 'FHIR_IMPORT_EXTERNAL_DOCUMENT_ATTACHED', { batchId, recordId, participantId: normalized.participantId, specimenId: normalized.specimenId });
