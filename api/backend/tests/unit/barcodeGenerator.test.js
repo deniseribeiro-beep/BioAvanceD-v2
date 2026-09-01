@@ -21,6 +21,38 @@ function makeDecoyCollection(collectionName) {
   };
 }
 
+// #779: the generator no longer scans the year on every call — it seeds a
+// `counters` document once per year and then does an atomic
+// findOneAndUpdate($inc). A decoy for 'counters' would make every test throw,
+// and a stub returning a fixed number could not see the increment, so this is
+// a real in-memory counter: it honours $setOnInsert-on-upsert, $inc, and
+// returnDocument:'after' (the v5+ driver shape #294 was bitten by — the
+// document directly, not `{ value: doc }`).
+function makeCountersCollection(store = {}) {
+  return {
+    findOne: vi.fn(async (query) => (query._id in store ? { _id: query._id, ...store[query._id] } : null)),
+    updateOne: vi.fn(async (query, update, options = {}) => {
+      if (!(query._id in store)) {
+        if (!options.upsert) return { matchedCount: 0 };
+        store[query._id] = { ...(update.$setOnInsert || {}) };
+        return { upsertedCount: 1 };
+      }
+      return { matchedCount: 1 };
+    }),
+    findOneAndUpdate: vi.fn(async (query, update, options = {}) => {
+      if (!(query._id in store)) {
+        if (!options.upsert) return null;
+        store[query._id] = { ...(update.$setOnInsert || {}) };
+      }
+      for (const [field, by] of Object.entries(update.$inc || {})) {
+        store[query._id][field] = (store[query._id][field] || 0) + by;
+      }
+      return { _id: query._id, ...store[query._id] };
+    }),
+    __store: store
+  };
+}
+
 // `priorBarcodes` backs the year's existing codes. Since #775 the generator
 // reads them with find().toArray() and takes the numeric maximum itself,
 // rather than asking the database to sort a numeric sequence as a string.
@@ -31,14 +63,16 @@ function makeDb(findOneImpl, priorBarcodes = []) {
   }));
   const samplesCollection = { findOne, find };
 
+  const counters = makeCountersCollection();
   const decoys = {};
   const collection = vi.fn((name) => {
     if (name === RESOLVED_SAMPLES_NAME) return samplesCollection;
+    if (name === 'counters') return counters;
     if (!decoys[name]) decoys[name] = makeDecoyCollection(name);
     return decoys[name];
   });
 
-  return { db: { collection }, findOne, find, collection };
+  return { db: { collection }, findOne, find, collection, counters };
 }
 
 const currentYear = new Date().getFullYear();
@@ -164,14 +198,16 @@ function makeMongoLikeDb(barcodes) {
     }))
   };
 
+  const counters = makeCountersCollection();
   const decoys = {};
   const collection = vi.fn((name) => {
     if (name === RESOLVED_SAMPLES_NAME) return samplesCollection;
+    if (name === 'counters') return counters;
     if (!decoys[name]) decoys[name] = makeDecoyCollection(name);
     return decoys[name];
   });
 
-  return { db: { collection }, collection };
+  return { db: { collection }, collection, counters };
 }
 
 function yearRange(from, to, width = 3) {
@@ -214,5 +250,87 @@ describe('generateUniqueBarcode past the 999th sample of a year (#775)', () => {
   it('still returns the next code for a year that has not reached 999', async () => {
     const { db } = makeMongoLikeDb(yearRange(1, 42));
     await expect(generateUniqueBarcode(db)).resolves.toBe(`BR-${currentYear}-043`);
+  });
+});
+
+// #779: the generator was O(codes created this year) per sample -- a scan of
+// the samples collection on every creation, and import-lgpd.service.js calls
+// it per row, so a 5,000-row import paid 5,000 scans over a set that grew
+// during the import itself. It is now an atomic counter, with the scan
+// surviving only as a one-time-per-year seed.
+describe('generateUniqueBarcode is O(1) after the year is seeded (#779)', () => {
+  it('scans the samples collection once, not once per barcode', async () => {
+    const { db, find } = makeDb(() => Promise.resolve(null));
+
+    const first = await generateUniqueBarcode(db);
+    const second = await generateUniqueBarcode(db);
+    const third = await generateUniqueBarcode(db);
+
+    expect([first, second, third]).toEqual([
+      `BR-${currentYear}-001`,
+      `BR-${currentYear}-002`,
+      `BR-${currentYear}-003`,
+    ]);
+    // The year scan is the expensive part. Once.
+    expect(find).toHaveBeenCalledTimes(1);
+  });
+
+  it('seeds the counter from the existing maximum so an existing deployment does not restart at 001', async () => {
+    const { db, counters, find } = makeDb(() => Promise.resolve(null), [
+      `BR-${currentYear}-004`,
+      `BR-${currentYear}-482`,
+      `BR-${currentYear}-017`,
+    ]);
+
+    const barcode = await generateUniqueBarcode(db);
+
+    expect(barcode).toBe(`BR-${currentYear}-483`);
+    expect(counters.__store[`sample_barcode_${currentYear}`].seq).toBe(483);
+    expect(find).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-seed once the counter exists, even across many generations', async () => {
+    const { db, counters, find } = makeDb(() => Promise.resolve(null), [`BR-${currentYear}-010`]);
+
+    for (let i = 0; i < 5; i++) await generateUniqueBarcode(db);
+
+    expect(counters.__store[`sample_barcode_${currentYear}`].seq).toBe(15);
+    expect(find).toHaveBeenCalledTimes(1);
+    // findOne on `counters` is the cheap existence check that replaces it.
+    expect(counters.findOne).toHaveBeenCalledTimes(5);
+  });
+
+  it('advances the counter atomically via $inc rather than read-then-write', async () => {
+    const { db, counters } = makeDb(() => Promise.resolve(null));
+
+    await generateUniqueBarcode(db);
+
+    const [query, update, options] = counters.findOneAndUpdate.mock.calls[0];
+    expect(query).toEqual({ _id: `sample_barcode_${currentYear}` });
+    expect(update.$inc).toEqual({ seq: 1 });
+    expect(options.returnDocument).toBe('after');
+  });
+
+  // dict-02 ELM-0116 requires `Único`, not contiguous: a burned number is a
+  // gap in the label sequence and that is acceptable. This pins that the
+  // generator does NOT try to reclaim it -- reuse would be the actual
+  // compliance problem, since the label must be unique.
+  it('leaves a gap rather than reusing a number that a failed insert burned', async () => {
+    const { db, counters } = makeDb(() => Promise.resolve(null));
+
+    const first = await generateUniqueBarcode(db);
+    // Caller's insert fails here -- nothing hands the number back.
+    const second = await generateUniqueBarcode(db);
+
+    expect(first).toBe(`BR-${currentYear}-001`);
+    expect(second).toBe(`BR-${currentYear}-002`);
+    expect(counters.__store[`sample_barcode_${currentYear}`].seq).toBe(2);
+  });
+
+  it('keeps a separate counter per year', async () => {
+    const { db, counters } = makeDb(() => Promise.resolve(null));
+    await generateUniqueBarcode(db);
+
+    expect(Object.keys(counters.__store)).toEqual([`sample_barcode_${currentYear}`]);
   });
 });

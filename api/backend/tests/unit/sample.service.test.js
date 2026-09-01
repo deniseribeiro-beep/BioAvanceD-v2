@@ -33,8 +33,42 @@ function makeCollection(name) {
     updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
     countDocuments: vi.fn().mockResolvedValue(0),
-    findOneAndUpdate: vi.fn().mockResolvedValue({ value: { seq: 1 } }),
+    // #779: was `{ value: { seq: 1 } }` -- the PRE-v5 driver shape, which
+    // #294 already established is wrong for this repo's mongodb version
+    // (v5+/6.x returns the modified document directly; the wrapped form only
+    // appears with `includeResultMetadata: true`). A generic fake asserting
+    // the legacy shape is the same defect #294 fixed in product code, one
+    // layer down, and it is what made every counter consumer read
+    // `undefined`. See `counters` in makeDb for a real stateful counter.
+    findOneAndUpdate: vi.fn().mockResolvedValue({ seq: 1 }),
     createIndex: vi.fn().mockResolvedValue(true)
+  };
+}
+
+// #779: a real in-memory `counters` collection -- honours $setOnInsert on
+// upsert, $inc, and the v5+ `returnDocument: 'after'` shape (the document
+// directly, not `{ value: doc }`; see #294).
+function makeCountersCollection() {
+  const store = {};
+  return {
+    collectionName: 'counters',
+    findOne: vi.fn(async (query) => (query._id in store ? { _id: query._id, ...store[query._id] } : null)),
+    updateOne: vi.fn(async (query, update, options = {}) => {
+      if (!(query._id in store) && options.upsert) store[query._id] = { ...(update.$setOnInsert || {}) };
+      return { acknowledged: true };
+    }),
+    findOneAndUpdate: vi.fn(async (query, update, options = {}) => {
+      if (!(query._id in store)) {
+        if (!options.upsert) return null;
+        store[query._id] = { ...(update.$setOnInsert || {}) };
+      }
+      for (const [field, by] of Object.entries(update.$inc || {})) {
+        store[query._id][field] = (store[query._id][field] || 0) + by;
+      }
+      return { _id: query._id, ...store[query._id] };
+    }),
+    createIndex: vi.fn().mockResolvedValue(true),
+    __store: store
   };
 }
 
@@ -53,7 +87,10 @@ function makeDb(overrides = {}) {
   const collections = {
     samples: makeCollection('samples'),
     sample_movements: makeCollection('sample_movements'),
-    counters: makeCollection('counters'),
+    // #779: generateUniqueBarcode seeds a per-year counter then advances it
+    // atomically, so this one has to hold state -- a fixed `seq` cannot
+    // advance, and every barcode after the first would collide.
+    counters: makeCountersCollection(),
     patients: makeCollection('patients'),
     storageBoxes: makeCollection('storageBoxes'),
     storageContainers: makeCollection('storageContainers'),

@@ -116,8 +116,32 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     find: vi.fn(() => ({ sort: () => ({ limit: () => ({ toArray: async () => [], next: async () => null }) }) })),
     createIndex: vi.fn().mockResolvedValue(true),
   };
+  // #779: generateUniqueBarcode now seeds a per-year `counters` document
+  // (findOne + upserting updateOne) and then advances it atomically. A stub
+  // returning a fixed `{ seq: 1 }` could not advance, so every generated
+  // barcode after the first would collide -- the mock has to be a real
+  // counter or it encodes the bug the change removes.
+  const countersStore = {};
   const countersCollection = {
-    findOneAndUpdate: vi.fn().mockResolvedValue({ seq: 1 }),
+    findOne: vi.fn(async (query) =>
+      query._id in countersStore ? { _id: query._id, ...countersStore[query._id] } : null
+    ),
+    updateOne: vi.fn(async (query, update, options = {}) => {
+      if (!(query._id in countersStore) && options.upsert) {
+        countersStore[query._id] = { ...(update.$setOnInsert || {}) };
+      }
+      return { acknowledged: true };
+    }),
+    findOneAndUpdate: vi.fn(async (query, update, options = {}) => {
+      if (!(query._id in countersStore)) {
+        if (!options.upsert) return null;
+        countersStore[query._id] = { ...(update.$setOnInsert || {}) };
+      }
+      for (const [field, by] of Object.entries(update.$inc || {})) {
+        countersStore[query._id][field] = (countersStore[query._id][field] || 0) + by;
+      }
+      return { _id: query._id, ...countersStore[query._id] };
+    }),
   };
   const storagePathsCollection = {
     findOne: vi.fn().mockResolvedValue(null),
