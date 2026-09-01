@@ -984,3 +984,120 @@ describe('DELETE /api/results/:id', () => {
     expect(res.body.message).toBe('delete failed');
   });
 });
+
+// #910: ROUTE_ACCESS granted Usuario Externo ALL_ROLES on /results, and the
+// three backend read routes carried `authenticate` ONLY -- no permission, no
+// organization scope. Any authenticated principal could list every analysis
+// result, read any by id, and DOWNLOAD any result file, which is the analysis
+// data itself rather than a summary. RF002 AC#4 entitles Usuario Externo to
+// "somente dados e relatorios previamente autorizados"; RNF008 AC#1 makes
+// deny-by-default the policy.
+//
+// Every pre-existing test in this file authenticates as makeToken(4)
+// (Administrador -> scope 'global'), so none of them exercises the gate at
+// all -- they were green before this fix and after it. These are the tests
+// that would go red if the gate were removed.
+describe('GET /api/results organization scoping (#910)', () => {
+  const IN_SCOPE_SPECIMEN = 'SPX-IN-SCOPE';
+  const OUT_SCOPE_SPECIMEN = 'SPX-OTHER-ORG';
+  // buildRbacCollections gives every non-accessType-4 user
+  // scopeType 'organization' with scopeId 'test-org-default'.
+  const MY_ORG = 'test-org-default';
+
+  const SAMPLES = [
+    { specimenId: IN_SCOPE_SPECIMEN, collectionSite: MY_ORG },
+    { specimenId: OUT_SCOPE_SPECIMEN, collectionSite: 'some-other-org' },
+  ];
+
+  // Honours the filter it is handed rather than returning a canned list --
+  // a distinct() mock that ignored its filter would pass whether or not the
+  // route scoped anything, which is the #797/#803 mock-fidelity trap.
+  function amostrasMock() {
+    return createCollectionMock({
+      distinct: vi.fn(async (field, filter = {}) => {
+        const allowed = filter.collectionSite && filter.collectionSite.$in;
+        const matched = allowed
+          ? SAMPLES.filter((d) => allowed.includes(d.collectionSite))
+          : SAMPLES;
+        return [...new Set(matched.map((d) => d[field]))];
+      }),
+      findOne: vi.fn(async (query = {}) => SAMPLES.find((d) => d.specimenId === query.specimenId) || null),
+    });
+  }
+
+  it('narrows the list query to the specimenIds of in-scope samples', async () => {
+    const findSpy = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) });
+    app.locals.db = createDbMock({ results: createCollectionMock({ find: findSpy }), amostras: amostrasMock() });
+
+    const res = await request(app).get('/api/results').set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    expect(findSpy).toHaveBeenCalledWith({ specimenId: { $in: [IN_SCOPE_SPECIMEN] } });
+  });
+
+  it('leaves the list query unfiltered for a global scope, preserving the Administrador bypass', async () => {
+    const findSpy = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) });
+    app.locals.db = createDbMock({ results: createCollectionMock({ find: findSpy }), amostras: amostrasMock() });
+
+    const res = await request(app).get('/api/results').set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(200);
+    expect(findSpy).toHaveBeenCalledWith({});
+  });
+
+  it('403s a detail read of a result whose sample belongs to another organization', async () => {
+    const outOfScope = { ...FAKE_RESULT, specimenId: OUT_SCOPE_SPECIMEN };
+    app.locals.db = createDbMock({
+      results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(outOfScope) }),
+      amostras: amostrasMock(),
+    });
+
+    const res = await request(app).get(`/api/results/${RESULT_OID}`).set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.message).toBe('Este resultado pertence a outra organização');
+  });
+
+  it('allows a detail read of an in-scope result', async () => {
+    const inScope = { ...FAKE_RESULT, specimenId: IN_SCOPE_SPECIMEN };
+    app.locals.db = createDbMock({
+      results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(inScope) }),
+      amostras: amostrasMock(),
+    });
+
+    const res = await request(app).get(`/api/results/${RESULT_OID}`).set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+  });
+
+  it('403s the download of an out-of-scope result WITHOUT leaking its external URL', async () => {
+    // The sharp leg: this route redirects to result.filePath when it is an
+    // external URL, so a check placed after that point would still hand the
+    // caller the location of the file.
+    const outOfScope = { ...FAKE_RESULT, specimenId: OUT_SCOPE_SPECIMEN, filePath: 'https://example.invalid/secret.pdf' };
+    app.locals.db = createDbMock({
+      results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(outOfScope) }),
+      amostras: amostrasMock(),
+    });
+
+    const res = await request(app).get(`/api/results/${RESULT_OID}/download`).set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.redirect).toBeUndefined();
+    expect(res.body.url).toBeUndefined();
+  });
+
+  it('fails closed when a result has no specimenId to resolve a sample from', async () => {
+    // An orphaned result is precisely what an attacker would reach for if the
+    // join were treated as "no sample, no restriction".
+    const orphan = { ...FAKE_RESULT, specimenId: undefined };
+    app.locals.db = createDbMock({
+      results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(orphan) }),
+      amostras: amostrasMock(),
+    });
+
+    const res = await request(app).get(`/api/results/${RESULT_OID}`).set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(403);
+  });
+});

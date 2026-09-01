@@ -5,11 +5,35 @@ const crypto = require('crypto');
 const multer = require('multer');
 const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
+const { applyOrganizationScopeFilter, isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
 const { enforceCommercialConsent } = require('../../infrastructure/middleware/consent.enforcement');
 const logger = require('../../utils/logger');
 const ResultModel = require('../../models/Result');
 const { STORAGE_BASE } = require('../../config/uploadConfig');
+
+// #910: Result carries no organization field of its own (see models/Result.js
+// create()), so scope is reached through the join Result.specimenId ->
+// amostras.collectionSite -- the same field sample.routes.js and
+// sample-file.controller.js already scope on.
+//
+// Fails CLOSED: a result whose specimenId resolves to no sample is out of
+// scope for anyone who is not 'global', matching isRecordInOrganizationScope's
+// own treatment of a record with no value in the scoped field. An orphaned
+// result is exactly the case an attacker would reach for otherwise.
+const isResultInOrganizationScope = async (db, result, scope) => {
+  if (!scope || scope.scope === 'global') return true;
+  if (!result || !result.specimenId) return false;
+  const sample = await db.collection('amostras').findOne({ specimenId: result.specimenId });
+  if (!sample) return false;
+  return isRecordInOrganizationScope(sample, scope, 'collectionSite');
+};
+
+const denyOutOfScope = (res) => res.status(403).json({
+  success: false,
+  error: 'Acesso negado',
+  message: 'Este resultado pertence a outra organização'
+});
 
 const getResultFileType = (fileName) => {
   const ext = path.extname(fileName).toLowerCase();
@@ -67,12 +91,24 @@ const resultUpload = multer({
 });
 
 // CRUD de Arquivos de Analise
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
     const resultsCollection = db.collection('results');
     const query = {};
+
+    // #910: this list carried `authenticate` only, so any authenticated
+    // principal -- including Usuario Externo, whose documented entitlement is
+    // "somente dados e relatorios previamente autorizados" (RF002 AC#4) --
+    // could enumerate every analysis result. Narrowed to the specimenIds whose
+    // sample is in the caller's organization scope; 'global' is left unfiltered,
+    // the same bypass every other RBAC gate gives Administrador.
+    if (req.organizationScope && req.organizationScope.scope !== 'global') {
+      const inScopeSpecimenIds = await db.collection('amostras')
+        .distinct('specimenId', applyOrganizationScopeFilter({}, req.organizationScope, 'collectionSite'));
+      query.specimenId = { $in: inScopeSpecimenIds };
+    }
 
     if (req.query.importJobID) {
       query.importJobID = req.query.importJobID;
@@ -241,7 +277,7 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpl
   }
 });
 
-router.get('/:id', authenticate, async (req, res) => {
+router.get('/:id', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -267,6 +303,13 @@ router.get('/:id', authenticate, async (req, res) => {
         success: false,
         error: 'Arquivo de analise não encontrado'
       });
+    }
+
+    // #910: post-fetch 403 rather than a filtered query, matching
+    // sample.routes.js's #624/#340 precedent -- an out-of-scope record that
+    // exists 403s rather than 404s.
+    if (!(await isResultInOrganizationScope(db, result, req.organizationScope))) {
+      return denyOutOfScope(res);
     }
 
     // Registra log de busca
@@ -297,7 +340,7 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
-router.get('/:id/download', authenticate, async (req, res) => {
+router.get('/:id/download', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -323,6 +366,15 @@ router.get('/:id/download', authenticate, async (req, res) => {
         success: false,
         error: 'Arquivo de analise não encontrado'
       });
+    }
+
+    // #910: the scope check goes BEFORE the success audit, before the
+    // external-URL redirect and before res.download -- otherwise an
+    // out-of-scope caller still learns the external URL, or gets the bytes.
+    // This is the sharp leg of #910: the payload here is the analysis data
+    // itself, not a summary.
+    if (!(await isResultInOrganizationScope(db, result, req.organizationScope))) {
+      return denyOutOfScope(res);
     }
 
     // Registra log de download
