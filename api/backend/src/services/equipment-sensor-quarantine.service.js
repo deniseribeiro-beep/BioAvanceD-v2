@@ -1,4 +1,3 @@
-const { ObjectId } = require('mongodb');
 const SampleMovementModel = require('../models/SampleMovement');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
@@ -124,15 +123,26 @@ function dedupeIds(ids) {
   return result;
 }
 
+/**
+ * #912: `_id` is compared via `$expr`/`$toString` rather than an `$in` of
+ * an ObjectId variant. This service is reached with both the mongoose
+ * connection (incident.controller.js, iot.controller.js) and the native
+ * mongodb connection (TelemetryMonitor.js), so no single ObjectId
+ * constructor is correct for every caller -- a top-level `mongodb`
+ * ObjectId instance handed to a query run through the mongoose connection
+ * throws "Unsupported BSON version, bson types must be from bson 7.x.x".
+ * `$expr`/`$toString` never constructs an ObjectId at all, so it is
+ * handle-agnostic by construction (see notificationDispatch.service.js's
+ * resolveRecipientEmails for the same pattern against the same problem).
+ */
 function buildSensorLookup(sensorKey) {
   const raw = normalizeString(sensorKey);
   const variants = [raw];
-  if (ObjectId.isValid(raw)) variants.push(new ObjectId(raw));
   return {
     $or: [
       { sensorId: { $in: variants } },
       { sensorID: { $in: variants } },
-      { _id: { $in: variants } },
+      { $expr: { $eq: [{ $toString: '$_id' }, raw] } },
       { macAddress: raw },
     ]
   };
@@ -222,16 +232,19 @@ async function findEquipmentByMetadata(db, metadata = {}, options = {}) {
 
   const equipmentCollection = db.collection('equipment');
   const sessionOptions = options.session ? { session: options.session } : undefined;
-  const variants = [equipmentReference, normalizeString(equipmentReference)];
-  if (ObjectId.isValid(normalizeString(equipmentReference))) {
-    variants.push(new ObjectId(normalizeString(equipmentReference)));
-  }
+  const normalizedReference = normalizeString(equipmentReference);
+  const variants = [equipmentReference, normalizedReference];
   const numeric = Number(equipmentReference);
   if (Number.isFinite(numeric)) variants.push(numeric);
 
+  // #912: see buildSensorLookup's comment -- `_id` compared via
+  // `$expr`/`$toString` instead of an `$in` of an ObjectId variant, for the
+  // same handle-agnostic reason. The `equipmentID` numeric branch stays:
+  // Equipment.js validates `equipmentID` as a number, so it cannot stand in
+  // for `_id`.
   return equipmentCollection.findOne({
     $or: [
-      { _id: { $in: variants } },
+      { $expr: { $eq: [{ $toString: '$_id' }, normalizedReference] } },
       { equipmentID: { $in: variants } },
       { id: { $in: variants } },
     ]

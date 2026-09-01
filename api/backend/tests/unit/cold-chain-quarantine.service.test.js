@@ -3,6 +3,46 @@ const { ObjectId } = require('mongodb');
 
 const quarantineService = require('../../src/services/equipment-sensor-quarantine.service');
 const { matchesFilter } = require('../factories/filter.factory');
+const { createForeignBsonGuardCollectionMock } = require('../factories/db.factory');
+
+/**
+ * #912: local `$expr`/`$toString` extension of the shared `matchesFilter`
+ * matcher, confined to this file (the shared factory in
+ * `tests/factories/filter.factory.js` documents `$expr` as unsupported).
+ * `buildSensorLookup`/`findEquipmentByMetadata`'s `_id` branch now reads
+ * `{ $expr: { $eq: [{ $toString: '$_id' }, raw] } }` instead of an `$in` of
+ * ObjectId variants, so the two pinned `_id`-branch tests below need this
+ * matcher to understand that shape to keep passing -- their assertions are
+ * unchanged, only what the mock understands is extended.
+ */
+function evalExprToStringEq(doc, expr) {
+  if (!expr || !Array.isArray(expr.$eq)) return false;
+  const resolve = (side) => {
+    if (side && typeof side === 'object' && typeof side.$toString === 'string') {
+      const path = side.$toString.replace(/^\$/, '');
+      const raw = path.split('.').reduce((value, key) => (value == null ? undefined : value[key]), doc);
+      return raw === undefined || raw === null ? null : String(raw);
+    }
+    return side;
+  };
+  const [left, right] = expr.$eq;
+  return resolve(left) === resolve(right);
+}
+
+function matchesFilterWithExpr(doc, filter = {}) {
+  return Object.entries(filter).every(([key, condition]) => {
+    if (key === '$or') {
+      return Array.isArray(condition) && condition.some((entry) => matchesFilterWithExpr(doc, entry));
+    }
+    if (key === '$and') {
+      return Array.isArray(condition) && condition.every((entry) => matchesFilterWithExpr(doc, entry));
+    }
+    if (key === '$expr') {
+      return evalExprToStringEq(doc, condition);
+    }
+    return matchesFilter(doc, { [key]: condition });
+  });
+}
 
 function makeCursor(items) {
   return {
@@ -18,8 +58,8 @@ function makeCollection(seed = []) {
   const collection = {
     collectionName: 'mock',
     docs,
-    find: vi.fn((filter = {}) => makeCursor(docs.filter((doc) => matchesFilter(doc, filter)))),
-    findOne: vi.fn(async (filter = {}) => docs.find((doc) => matchesFilter(doc, filter)) || null),
+    find: vi.fn((filter = {}) => makeCursor(docs.filter((doc) => matchesFilterWithExpr(doc, filter)))),
+    findOne: vi.fn(async (filter = {}) => docs.find((doc) => matchesFilterWithExpr(doc, filter)) || null),
     updateOne: vi.fn(async (filter, update) => {
       const doc = docs.find((entry) => matchesFilter(entry, filter));
       if (doc && update?.$set) Object.assign(doc, update.$set);
@@ -456,5 +496,37 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     // buildColdChainIncidentReason), so the `|| 'Quarentena automática por
     // falha...'` fallback text at line 316 is unreachable in practice.
     expect(movement.observations).toBe(result.reason);
+  });
+
+  // #912: `createForeignBsonGuardCollectionMock` (tests/factories/db.factory.js,
+  // added under #651) throws the real "Unsupported BSON version..." error if
+  // any filter value handed to find/findOne is a top-level `mongodb.ObjectId`
+  // instance. These prove buildSensorLookup/findEquipmentByMetadata no longer
+  // construct one, regardless of what the raw input looks like.
+  it('buildSensorLookup never hands a foreign mongodb.ObjectId into the sensors filter', async () => {
+    const objectIdSensorKey = new ObjectId().toString();
+    const sensorsGuard = createForeignBsonGuardCollectionMock();
+    const collections = {
+      sensors: sensorsGuard,
+      sensorMetadata: makeCollection([]),
+    };
+    const db = buildDb(collections);
+
+    await expect(quarantineService.findBoxIdsBySensorKey(db, objectIdSensorKey)).resolves.toEqual([]);
+    expect(sensorsGuard.find).toHaveBeenCalled();
+  });
+
+  it('findEquipmentByMetadata never hands a foreign mongodb.ObjectId into the equipment filter', async () => {
+    const equipmentObjectId = new ObjectId();
+    const equipmentGuard = createForeignBsonGuardCollectionMock();
+    const collections = {
+      sensors: makeCollection([]),
+      sensorMetadata: makeCollection([{ sensorId: 'sensor-guard', equipment: equipmentObjectId.toString() }]),
+      equipment: equipmentGuard,
+    };
+    const db = buildDb(collections);
+
+    await expect(quarantineService.findBoxIdsBySensorKey(db, 'sensor-guard')).resolves.toEqual([]);
+    expect(equipmentGuard.findOne).toHaveBeenCalled();
   });
 });
