@@ -655,6 +655,10 @@ describe('import-async.service', () => {
         // `importErrors`, a field no writer ever set, pinning the broken
         // mapping as if correct (the #803 mock-fidelity class).
         errors: [{ row: 3, error: 'line 3 invalid' }],
+        // #931: processingTime and skippedRecords now land on the job
+        // document via import-worker.js's completion payload.
+        processingTime: 4.2,
+        skippedRecords: 2,
         progress: 100,
         createdAt: new Date('2026-01-01'),
         startedAt: new Date('2026-01-01'),
@@ -680,6 +684,10 @@ describe('import-async.service', () => {
           totalRecords: 10,
           successfulRecords: 9,
           failedRecords: 1,
+          // #931: mapped straight from the job document -- see the
+          // dedicated test below for the real-value case.
+          processingTime: 4.2,
+          skippedRecords: 2,
           // #925: was `duplicatesFound: 0`, which pinned a `?? 0` default
           // over a field no writer anywhere sets -- so the report asserted
           // "no duplicates" where it meant "nobody counted". undefined is the
@@ -692,6 +700,23 @@ describe('import-async.service', () => {
         completedAt: job.completedAt,
         fhirResources: ['Patient/1'],
       });
+    });
+
+    // #931: dedicated positive coverage for the two fields import-worker.js
+    // now writes -- a completed job's report should carry the real values,
+    // not just pass an already-asserted fixture through.
+    it('#931: maps real processingTime and skippedRecords from a completed job onto metrics', async () => {
+      vi.spyOn(service, 'getJobStatus').mockResolvedValue({
+        jobID: 'j-931',
+        status: 'completed',
+        processingTime: 7.75,
+        skippedRecords: 5,
+      });
+
+      const report = await service.getJobReport({}, 'j-931');
+
+      expect(report.metrics.processingTime).toBe(7.75);
+      expect(report.metrics.skippedRecords).toBe(5);
     });
 
     it('falls back to a legacy importErrors field when errors is absent (#905 belt)', async () => {

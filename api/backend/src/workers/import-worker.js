@@ -204,6 +204,8 @@ async function initWorker() {
             errors: result.errors,
             unprocessedFormats: result.unprocessedFormats || 0,
             fhirResources: result.fhirResources || [],
+            processingTime: result.processingTime || 0,
+            skippedRecords: result.skipped || 0,
             completedAt: new Date(),
           });
 

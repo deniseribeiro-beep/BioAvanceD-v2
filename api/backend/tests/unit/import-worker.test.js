@@ -566,6 +566,69 @@ describe('workers/import-worker', () => {
       );
     });
 
+    // #931: processingTime was already computed by the sub-workers but never
+    // reached the job document; skippedRecords surfaces results.skipped
+    // (dropped at the worker boundary until now).
+    it('#931: on success, the completion payload carries real processingTime and skippedRecords from the result', async () => {
+      const processor = await getProcessor();
+      fakePatientWorker.process.mockResolvedValue(makeWorkerResult({ skipped: 3, processingTime: 12.5 }));
+
+      const updateOneMock = vi.fn().mockResolvedValue({ acknowledged: true });
+      fakeDb.collection.mockReturnValue({ updateOne: updateOneMock });
+
+      const job = {
+        id: 'j7d',
+        name: 'import',
+        data: {
+          jobID: 'j7d',
+          userID: 'u7d',
+          dataType: 'patients',
+          filePath: '/tmp/p.csv',
+          fileName: 'p.csv',
+          options: {},
+        },
+      };
+
+      await processor(job);
+
+      const completeWrite = updateOneMock.mock.calls[1][1].$set;
+      expect(completeWrite.processingTime).toBe(12.5);
+      expect(completeWrite.skippedRecords).toBe(3);
+    });
+
+    // #931: an older or partial result carrying neither field must not write
+    // `undefined` onto the job document.
+    it('#931: on success, the completion payload defaults processingTime and skippedRecords to 0 when the result lacks them', async () => {
+      const processor = await getProcessor();
+      fakePatientWorker.process.mockResolvedValue({
+        total: 10,
+        success: 8,
+        errors: [],
+      });
+
+      const updateOneMock = vi.fn().mockResolvedValue({ acknowledged: true });
+      fakeDb.collection.mockReturnValue({ updateOne: updateOneMock });
+
+      const job = {
+        id: 'j7e',
+        name: 'import',
+        data: {
+          jobID: 'j7e',
+          userID: 'u7e',
+          dataType: 'patients',
+          filePath: '/tmp/p.csv',
+          fileName: 'p.csv',
+          options: {},
+        },
+      };
+
+      await processor(job);
+
+      const completeWrite = updateOneMock.mock.calls[1][1].$set;
+      expect(completeWrite.processingTime).toBe(0);
+      expect(completeWrite.skippedRecords).toBe(0);
+    });
+
     // #890: a result-import run that finishes normally but writes nothing
     // because every processed entry hit an unimplemented/unsupported format
     // stub must be reported as 'completed_no_data', not a plain 'completed'

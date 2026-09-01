@@ -600,6 +600,8 @@ class ImportAsyncService {
           totalRecords: job.totalRecords,
           successfulRecords: job.successCount,
           failedRecords: job.errorCount,
+          processingTime: job.processingTime,
+          skippedRecords: job.skippedRecords,
           // #925: no `?? 0`. Nothing anywhere writes job.duplicatesFound --
           // the worker's updateJobStatus payload has no such field -- so the
           // default was turning "nobody counted duplicates" into the claim

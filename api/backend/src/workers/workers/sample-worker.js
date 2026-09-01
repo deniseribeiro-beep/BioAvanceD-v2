@@ -64,6 +64,7 @@ class SampleWorker {
         total: results.total,
         success: results.success,
         errors: results.errors,
+        skipped: results.skipped,
         processingTime,
       };
     } catch (error) {
