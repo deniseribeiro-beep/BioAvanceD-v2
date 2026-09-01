@@ -442,6 +442,46 @@ describe('import-lgpd.controller', () => {
   });
 
   describe('importSamples', () => {
+    // #911: the actor handed to importSamples was resolved as
+    // `req.user?.id || req.user?._id`, and NEITHER key exists on req.user.
+    // auth.service.js signs { userID, email, username, accessType, name,
+    // mfaVerified, jti } and `authenticate` assigns req.user = decoded
+    // verbatim, so the actor identity was null on every real request --
+    // which is what quarantineRejectedSampleRows records as the batch's
+    // createdBy. The pre-existing fixtures in this file all use { id: 'u1' },
+    // a shape the app never produces, so they could not have caught it.
+    // This test uses the REAL token payload.
+    it('resolves the actor identity from the JWT userID, not a nonexistent id (#911)', async () => {
+      const db = createDb();
+      const file = { path: '/tmp/s.csv', originalname: 's.csv' };
+      const req = {
+        app: { locals: { db } },
+        file,
+        body: {},
+        // Exactly what auth.service.js#signAccessToken puts in the token.
+        user: { userID: '507f1f77bcf86cd799439011', email: 'op@lab.test', username: 'op', accessType: 2, name: 'Operador' },
+        get: () => 'jest-agent',
+      };
+      const res = createRes();
+
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      const importSpy = vi.spyOn(importLGPDService, 'importSamples')
+        .mockResolvedValue({ total: 1, success: 1, errors: [] });
+      vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+
+      await controller.importSamples(req, res);
+
+      expect(importSpy).toHaveBeenCalled();
+      const callArgs = importSpy.mock.calls[0];
+      const options = callArgs[callArgs.length - 1];
+      // Both spellings are live consumers: quarantineRejectedSampleRows reads
+      // actor?.userID for createdBy, the storage-allocation audit trail reads
+      // actor?.userId. Neither may be null for an authenticated request.
+      expect(options.actor.userID).toBe('507f1f77bcf86cd799439011');
+      expect(options.actor.userId).toBe('507f1f77bcf86cd799439011');
+      expect(options.actor.userName).toBe('Operador');
+    });
+
     it('returns 503 when no db', async () => {
       const req = { app: { locals: {} } };
       const res = createRes();

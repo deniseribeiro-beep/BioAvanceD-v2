@@ -533,7 +533,12 @@ class ImportLGPDController {
       const persistedSummaryReport = await this.persistSmartImportSummary(db, {
         summaryReport,
         fileName: file.originalname,
-        userId: req.user?.id || req.user?._id || null,
+        // #911: the JWT carries `userID` (auth.service.js signs userID/email/
+        // username/accessType/name), and `authenticate` assigns req.user =
+        // decoded verbatim -- so `id`/`_id` are both undefined and this
+        // recorded null for every smart import ever run. Canonical key first,
+        // matching fhir-import-staging.controller.js's own actor resolution.
+        userId: req.user?.userID || req.user?.id || req.user?._id || null,
         userName: req.user?.name || req.user?.username || null,
         totalSucesso: results.success,
         totalFalhas: results.errors.length,
@@ -685,8 +690,13 @@ class ImportLGPDController {
         autoIncrement,
         groupFields,
         neo4jDriver: req.app.locals.neo4jDriver || null,
+        // #911: same null-actor bug as above. `userID` is emitted too because
+        // quarantineRejectedSampleRows reads `actor?.userID` first for the
+        // batch's createdBy, while the storage-allocation audit trail reads
+        // `actor?.userId` -- both spellings are live consumers.
         actor: {
-          userId: req.user?.id || req.user?._id || null,
+          userID: req.user?.userID || req.user?.id || req.user?._id || null,
+          userId: req.user?.userID || req.user?.id || req.user?._id || null,
           userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
           userRole: req.user?.role || null,
           ipAddress: req.ip || null,
