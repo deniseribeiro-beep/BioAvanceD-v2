@@ -380,6 +380,19 @@ router.get('/freezer/:freezerId/stats', createGetFreezerStatsController());
  *     "stats": { ... }
  *   }
  * }
+ *
+ * Response 404 (caixa inexistente) -- #892:
+ * {
+ *   "success": false,
+ *   "error": "BOX_NOT_FOUND",
+ *   "data": { "valid": false, "error": "BOX_NOT_FOUND" }
+ * }
+ *
+ * Ate o #892 esta rota devolvia 400 tambem para a caixa inexistente, porque
+ * o repositorio relata os dois casos pelo mesmo `valid: false`. Era a unica
+ * rota deste router que respondia 400 para entidade ausente, e contrariava a
+ * tabela de codigos de `docs/STORAGE_API_EXAMPLES.js`, que lista
+ * BOX_NOT_FOUND em "404 - Nao encontrado".
  */
 router.get('/box/:boxId/integrity', createCheckBoxIntegrityController());
 

@@ -628,9 +628,37 @@ describe('storage.routes', () => {
       });
     });
 
+    // #892 item 1. `checkBoxIntegrity` reports a missing box through the same
+    // `valid: false` channel as a genuinely inconsistent one, and the
+    // controller used to map both to 400. STORAGE_API_EXAMPLES.js's own error
+    // table lists BOX_NOT_FOUND under "404 - Não encontrado", every sibling
+    // route in this router answers 404 for a missing entity, and
+    // auto-assign-sample.controller already maps this exact code to 404 --
+    // so 400 here was the outlier, not a policy choice.
+    it('answers 404 with a top-level BOX_NOT_FOUND for a box that does not exist (#892)', async () => {
+      const { router } = loadRoute();
+      const storageBoxes = createMatchingCollection([]);
+      const samples = createMatchingCollection([]);
+      const app = buildApp(router, {
+        collection: (name) => (name === 'storageBoxes' ? storageBoxes : name === 'samples' ? samples : null),
+      });
+
+      const res = await request(app).get('/api/storage/box/box-missing/integrity');
+
+      expect(res.status).toBe(404);
+      expect(res.body.success).toBe(false);
+      // The caller can tell "no such box" from "box is inconsistent" without
+      // parsing `data` -- which was the second half of #892 item 1.
+      expect(res.body.error).toBe('BOX_NOT_FOUND');
+      expect(res.body.data).toMatchObject({ valid: false, error: 'BOX_NOT_FOUND' });
+      expect(res.body.data.errors).toBeUndefined();
+    });
+
     // Survey claim under test: valid-but-inconsistent answers 400 (not 404
     // or 409), success:false, with an errors array -- an orphaned position
-    // reference plus a currentOccupancy/actualOccupancy mismatch.
+    // reference plus a currentOccupancy/actualOccupancy mismatch. #892 left
+    // this arm exactly as it was: an inconsistent box is a real 400, and
+    // STORAGE_API_EXAMPLES.js's example 8B documents it as one.
     it('answers 400 with success:false and an errors array for an orphaned/miscounted box', async () => {
       const { router } = loadRoute();
       const storageBoxes = createMatchingCollection([
