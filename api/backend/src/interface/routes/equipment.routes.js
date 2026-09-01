@@ -192,7 +192,7 @@ router.get('/:id', authenticate, requireOrganizationScope, async (req, res) => {
   }
 });
 
-router.post('/', authenticate, requirePermission('createPatient'), async (req, res) => {
+router.post('/', authenticate, requirePermission('manageStorageTopology'), async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -273,7 +273,7 @@ router.post('/', authenticate, requirePermission('createPatient'), async (req, r
   }
 });
 
-router.put('/:id', authenticate, requirePermission('createPatient'), async (req, res) => {
+router.put('/:id', authenticate, requirePermission('manageStorageTopology'), async (req, res) => {
   try {
     const quarantineService = req.app?.locals?.quarantineService || defaultQuarantineService;
     const db = req.app.locals.db;
@@ -503,7 +503,7 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
   }
 });
 
-router.delete('/:id', authenticate, requirePermission('createPatient'), async (req, res) => {
+router.delete('/:id', authenticate, requirePermission('manageStorageTopology'), async (req, res) => {
   try {
     const db = req.app.locals.db;
 

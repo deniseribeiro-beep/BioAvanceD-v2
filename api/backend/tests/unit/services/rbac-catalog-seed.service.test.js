@@ -153,6 +153,12 @@ describe('rbac-catalog-seed.service', () => {
       ['deleteResult', ['DELETE']],
       ['reidentifyParticipant', ['READ']],
       ['manageAccessRequests', ['CREATE', 'READ', 'UPDATE']],
+      // #929: both storage codes were absent from this table, so #888 could
+      // introduce manageStorageTopology with a READ/UPDATE-only set and
+      // nothing here would have objected when #929 pointed POST/PUT/DELETE
+      // routes at it. Pinned now, in the table that claims to be the audit.
+      ['manageStorageAllocation', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
+      ['manageStorageTopology', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
     ])('%s allows exactly %j', (permissionCode, expectedActions) => {
       expect(PERMISSION_CATALOG[permissionCode].allowedActions).toEqual(expectedActions);
     });

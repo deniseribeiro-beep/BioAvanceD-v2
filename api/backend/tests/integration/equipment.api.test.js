@@ -180,7 +180,7 @@ describe('POST /api/equipment', () => {
     expect(res.status).toBe(401);
   });
 
-  it('returns 403 for Técnico (accessType 2 — no createPatient permission)', async () => {
+  it('returns 403 for Técnico (accessType 2 — no manageStorageTopology permission, #929)', async () => {
     app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, });
     const res = await request(app)
       .post('/api/equipment')

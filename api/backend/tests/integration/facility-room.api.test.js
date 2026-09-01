@@ -93,7 +93,7 @@ describe('POST /api/facilities', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects Tecnico (accessType 2) with 403 — createPatient requires Coordenador/Administrador', async () => {
+  it('rejects Tecnico (accessType 2) with 403 — manageStorageTopology requires Coordenador/Administrador (#929)', async () => {
     const coll = createCollectionMock();
     app.locals.db = dbWithRbac({ facilities: coll }, 2);
 

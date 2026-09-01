@@ -113,7 +113,13 @@ const PERMISSION_CATALOG = {
   // every release. Left out deliberately; it needs a METHOD_TO_ACTION change
   // or an explicit second argument, and neither belongs in this issue.
   manageStorageAllocation: { resourceType: 'StorageAssignment', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar alocação de armazenamento' },
-  manageStorageTopology: { resourceType: 'StorageContainer', allowedActions: ['READ', 'UPDATE'], displayName: 'Gerenciar topologia de armazenamento' },
+  // #929: broadened from ['READ', 'UPDATE']. #888 created this code with the
+  // only two verbs storage.routes.js then used (PATCH /freezer/:id/room), but
+  // equipment/facility/room .routes.js each gate POST, PUT and DELETE with it
+  // as of #929. Since the derived action is the HTTP verb's and not chosen, a
+  // READ/UPDATE-only set would 403 every create and every delete on those
+  // three routers -- six of the nine sites -- while looking like a rename.
+  manageStorageTopology: { resourceType: 'StorageContainer', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar topologia de armazenamento' },
   uploadSampleFiles: { resourceType: 'SampleFile', allowedActions: ['CREATE'], displayName: 'Enviar arquivos da amostra' },
   deleteSampleFiles: { resourceType: 'SampleFile', allowedActions: ['DELETE'], displayName: 'Excluir arquivos da amostra' },
   // #632: broadened from ['UPDATE'] to cover backup.routes.js's real
