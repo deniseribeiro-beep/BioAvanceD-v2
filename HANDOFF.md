@@ -1,8 +1,8 @@
 # HANDOFF
 
 **Written 2026-09-01, after a 10-issue sitting with Docker ON and a full
-gate run.** Dennis asked for 10 issues and to use agents. **6 closed, 3
-filed, 11 commits pushed, full gate green.** The session was not declared
+gate run.** Dennis asked for 10 issues and to use agents. **6 closed, 7
+filed, 13 commits pushed, full gate green.** The session was not declared
 over by the user — it may continue. Re-derive every count rather than
 trusting it.
 
@@ -89,6 +89,22 @@ tell you:
   already sound" claim is false — three of its four master-data hooks
   expose no mutations. **#934** was split off for the two hooks RF020
   never covered.
+- **#938 is the sharpest thing filed this sitting, and it is security
+  relevant.** `encryptFileBuffer` returns `null` with only a warn log when
+  `ENCRYPTION_KEY` is unset, and **both upload callers treat that null as
+  skip-encryption** — so the plaintext file stays on disk and the upload
+  still returns success. Both shipped env templates ship the key blank.
+  **[read it]**, and it also qualifies **#807**'s premise: "encrypted at
+  rest everywhere else" is only true where a key is configured. #734 set
+  the precedent of failing loudly instead; whether uploads should do the
+  same is a product call.
+- **#935 #936 #937** came out of this sitting's own close comments —
+  each was a gap named in a comment with nothing tracking it. #937 is the
+  narrow backup half of #938.
+- **Pack #645** records that `Edit`'s fallback after a classifier-denied
+  `sed -i` needs a prior `Read` *tool* call, which a Bash read does not
+  satisfy — so the recovery costs two reads per file, not the one retry
+  #530 priced. Rule 0: only a pack-repo session can act on it.
 - **#893 #921 #923 #892 #884 #881 #902 #903** remain prior sittings'
   decisions, unexamined this sitting.
 
