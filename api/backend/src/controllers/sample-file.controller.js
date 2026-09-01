@@ -10,7 +10,7 @@ const { isRecordInOrganizationScope } = require('../services/rbac-assignment.ser
 // #643: extracted to a shared module so the Assay/Dataset scientific-file
 // linkage controllers reuse the exact same crypto path instead of a second
 // implementation -- see fileCrypto.js for the RF007/RNF029 rationale.
-const { encryptFileBuffer, decryptFileBuffer, computeChecksum } = require('../utils/fileCrypto');
+const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
 const { STORAGE_BASE } = require('../config/uploadConfig');
 
 /**
@@ -207,6 +207,15 @@ class SampleFileController {
       // disco é substituído pelo ciphertext; o checksum é sempre calculado
       // sobre o plaintext, já que é isso que RNF029 usa para provar
       // integridade do que o cliente enviou.
+      // #938: fail closed BEFORE the plaintext multer already wrote to disk
+      // can be left there. This used to read `if (encryption)` as
+      // "skip encryption when no key is configured", so a keyless
+      // deployment stored every upload in plaintext and still returned
+      // success. RNF029 AC#5 makes encryption follow the data's
+      // classification, and scientific files are classified encrypted at
+      // rest (#566) -- so a missing key is a refusal, not a downgrade.
+      // Same shape as #734's backup guard.
+      assertFileEncryptionConfigured();
       const plaintext = fs.readFileSync(file.path);
       const checksum = computeChecksum(plaintext);
       const encryption = encryptFileBuffer(plaintext);
@@ -321,7 +330,11 @@ class SampleFileController {
         }
       }
 
-      return res.status(400).json({
+      // #938: honour an explicit statusCode. The gate above throws 500 for a
+      // missing ENCRYPTION_KEY -- a server misconfiguration the uploader can
+      // do nothing about -- and answering the blanket 400 would blame the
+      // client for it. Everything else keeps the 400 it always had.
+      return res.status(error?.statusCode || 400).json({
         success: false,
         error: req.t ? req.t('sampleFiles.uploadError') : 'Erro ao fazer upload de arquivo',
         message: error.message
@@ -794,6 +807,15 @@ class SampleFileController {
 
       // Mesmo tratamento de checksum/cifra do upload (RF007 AC#3/AC#4,
       // RNF029) aplicado ao novo conteúdo.
+      // #938: fail closed BEFORE the plaintext multer already wrote to disk
+      // can be left there. This used to read `if (encryption)` as
+      // "skip encryption when no key is configured", so a keyless
+      // deployment stored every upload in plaintext and still returned
+      // success. RNF029 AC#5 makes encryption follow the data's
+      // classification, and scientific files are classified encrypted at
+      // rest (#566) -- so a missing key is a refusal, not a downgrade.
+      // Same shape as #734's backup guard.
+      assertFileEncryptionConfigured();
       const plaintext = fs.readFileSync(file.path);
       const checksum = computeChecksum(plaintext);
       const encryption = encryptFileBuffer(plaintext);
@@ -904,7 +926,9 @@ class SampleFileController {
     } catch (error) {
       logger.error('Erro ao substituir arquivo:', error.message);
       cleanupUploadedFile();
-      return res.status(400).json({
+      // #938: see the upload handler's catch -- a missing ENCRYPTION_KEY is
+      // a 500, not the client's fault.
+      return res.status(error?.statusCode || 400).json({
         success: false,
         error: req.t ? req.t('sampleFiles.replaceError') : 'Erro ao substituir arquivo',
         message: error.message

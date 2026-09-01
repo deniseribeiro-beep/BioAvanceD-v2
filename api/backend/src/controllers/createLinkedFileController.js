@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const logger = require('../utils/logger');
 const { getUserAnonId } = require('../utils/userAnonymization');
-const { encryptFileBuffer, decryptFileBuffer, computeChecksum } = require('../utils/fileCrypto');
+const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
 const { STORAGE_BASE } = require('../config/uploadConfig');
 
 // #643 (RF007 AC#6/gate F3-G05): generalizes sample-file.controller.js's
@@ -167,6 +167,15 @@ function createLinkedFileController(opts) {
 
       const fileType = (extensionOf(file.originalname) || '').replace(/^\./, '').toUpperCase();
 
+      // #938: fail closed BEFORE the plaintext multer already wrote to disk
+      // can be left there. This used to read `if (encryption)` as
+      // "skip encryption when no key is configured", so a keyless
+      // deployment stored every upload in plaintext and still returned
+      // success. RNF029 AC#5 makes encryption follow the data's
+      // classification, and scientific files are classified encrypted at
+      // rest (#566) -- so a missing key is a refusal, not a downgrade.
+      // Same shape as #734's backup guard.
+      assertFileEncryptionConfigured();
       const plaintext = fs.readFileSync(file.path);
       const checksum = computeChecksum(plaintext);
       const encryption = encryptFileBuffer(plaintext);
@@ -228,7 +237,9 @@ function createLinkedFileController(opts) {
     } catch (error) {
       logger.error('Erro ao fazer upload de arquivo:', error.message);
       cleanupUploadedFile(req);
-      return res.status(400).json({ success: false, error: 'Erro ao fazer upload de arquivo', message: error.message });
+      // #938: a missing ENCRYPTION_KEY is a 500 (server misconfiguration),
+      // not the uploader's fault. Everything else keeps its 400.
+      return res.status(error?.statusCode || 400).json({ success: false, error: 'Erro ao fazer upload de arquivo', message: error.message });
     }
   }
 
@@ -427,6 +438,15 @@ function createLinkedFileController(opts) {
         return res.status(400).json({ success: false, error: 'Tipo de arquivo inválido' });
       }
 
+      // #938: fail closed BEFORE the plaintext multer already wrote to disk
+      // can be left there. This used to read `if (encryption)` as
+      // "skip encryption when no key is configured", so a keyless
+      // deployment stored every upload in plaintext and still returned
+      // success. RNF029 AC#5 makes encryption follow the data's
+      // classification, and scientific files are classified encrypted at
+      // rest (#566) -- so a missing key is a refusal, not a downgrade.
+      // Same shape as #734's backup guard.
+      assertFileEncryptionConfigured();
       const plaintext = fs.readFileSync(file.path);
       const checksum = computeChecksum(plaintext);
       const encryption = encryptFileBuffer(plaintext);
@@ -499,7 +519,8 @@ function createLinkedFileController(opts) {
     } catch (error) {
       logger.error('Erro ao substituir arquivo:', error.message);
       cleanupUploadedFile(req);
-      return res.status(400).json({ success: false, error: 'Erro ao substituir arquivo', message: error.message });
+      // #938: as above.
+      return res.status(error?.statusCode || 400).json({ success: false, error: 'Erro ao substituir arquivo', message: error.message });
     }
   }
 
