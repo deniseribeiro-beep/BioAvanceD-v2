@@ -454,6 +454,9 @@ export default function SampleDetailsPage() {
                 <Button variant="secondary" onClick={() => navigate(`/samples/${id}/chain`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }} data-testid="sample-detail-chain-button">
                   {t('samples.chain') || 'Cadeia de Custódia'}
                 </Button>
+                <Button variant="secondary" onClick={() => navigate(`/samples/${id}/label`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }} data-testid="sample-detail-label-button">
+                  {t('samples.printLabels') || 'Imprimir Etiquetas'}
+                </Button>
                 <Button
                   variant="secondary"
                   onClick={() => navigate('/samples')}
