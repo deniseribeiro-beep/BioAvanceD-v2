@@ -12,7 +12,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { isTransactionCapable } = require('../../../src/utils/mongoTransaction');
+const { isTransactionCapable, isKnownStandaloneDeployment } = require('../../../src/utils/mongoTransaction');
 
 function createDb(commandImpl) {
   const command = vi.fn(commandImpl);
@@ -47,6 +47,43 @@ describe('isTransactionCapable', () => {
       throw new Error('not authorized on admin to execute command');
     });
 
+    await expect(isTransactionCapable(db)).resolves.toBe(false);
+  });
+});
+
+// #923: isKnownStandaloneDeployment is deliberately NOT the negation of
+// isTransactionCapable. The two callers want opposite defaults when the
+// topology cannot be determined -- "may I use a transaction?" must answer no,
+// "should I refuse with a topology error?" must also answer no. Collapsing
+// them into one boolean made every test fake that mocks a client without
+// mocking `hello` look like a standalone deployment, which turned 18 existing
+// storage tests red for a reason that had nothing to do with their subject.
+describe('isKnownStandaloneDeployment (#923)', () => {
+  it('is true only on a positive standalone answer from hello', async () => {
+    const { db } = createDb(async () => ({ ismaster: true, maxBsonObjectSize: 16777216 }));
+    await expect(isKnownStandaloneDeployment(db)).resolves.toBe(true);
+  });
+
+  it('is false for a replica set', async () => {
+    const { db } = createDb(async () => ({ setName: 'rs0', ismaster: true }));
+    await expect(isKnownStandaloneDeployment(db)).resolves.toBe(false);
+  });
+
+  it('is false for a mongos', async () => {
+    const { db } = createDb(async () => ({ msg: 'isdbgrid' }));
+    await expect(isKnownStandaloneDeployment(db)).resolves.toBe(false);
+  });
+
+  it('is false when hello throws -- unknown is not standalone', async () => {
+    const { db } = createDb(async () => { throw new Error('no admin'); });
+    await expect(isKnownStandaloneDeployment(db)).resolves.toBe(false);
+    // The mirror question answers false too: unknown is not capable either.
+    await expect(isTransactionCapable(db)).resolves.toBe(false);
+  });
+
+  it('is false for a mock client with no db() at all -- the 18-red case', async () => {
+    const db = { client: { startSession: () => ({}) } };
+    await expect(isKnownStandaloneDeployment(db)).resolves.toBe(false);
     await expect(isTransactionCapable(db)).resolves.toBe(false);
   });
 });

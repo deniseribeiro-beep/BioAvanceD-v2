@@ -40,26 +40,60 @@ const transactionCapabilityCache = new WeakMap();
  * @returns {Promise<boolean>}
  */
 async function isTransactionCapable(db) {
+  return (await probeTopology(db)) === 'transactional';
+}
+
+/**
+ * #923: the mirror question, and it is NOT `!isTransactionCapable(db)`.
+ *
+ * The two callers want opposite defaults when the topology cannot be
+ * determined:
+ *
+ *   - "may I USE a transaction?" (#918) — unknown must mean NO, so the
+ *     caller takes its sequential fallback rather than throwing.
+ *   - "should I REFUSE with a topology error?" (#923) — unknown must mean
+ *     NO, so the caller proceeds and lets Mongo answer for itself.
+ *
+ * Collapsing them into one boolean makes every test fake that mocks a
+ * client without mocking `hello` look like a standalone deployment, which
+ * is exactly what it is not. So this returns true only on a POSITIVE
+ * determination: `hello` answered, and named neither a replica set nor a
+ * mongos.
+ *
+ * @param {import('mongodb').Db} db
+ * @returns {Promise<boolean>}
+ */
+async function isKnownStandaloneDeployment(db) {
+  return (await probeTopology(db)) === 'standalone';
+}
+
+/**
+ * @param {import('mongodb').Db} db
+ * @returns {Promise<'transactional'|'standalone'|'unknown'>}
+ */
+async function probeTopology(db) {
   const client = db?.client || db?.s?.client;
   if (!client || typeof client.db !== 'function') {
-    return false;
+    return 'unknown';
   }
 
   if (transactionCapabilityCache.has(client)) {
     return transactionCapabilityCache.get(client);
   }
 
-  const capable = await (async () => {
+  const topology = await (async () => {
     try {
       const hello = await client.db('admin').command({ hello: 1 });
-      return Boolean(hello?.setName) || hello?.msg === 'isdbgrid';
+      if (!hello) return 'unknown';
+      if (hello.setName || hello.msg === 'isdbgrid') return 'transactional';
+      return 'standalone';
     } catch {
-      return false;
+      return 'unknown';
     }
   })();
 
-  transactionCapabilityCache.set(client, capable);
-  return capable;
+  transactionCapabilityCache.set(client, topology);
+  return topology;
 }
 
-module.exports = { withMongoTransaction, isTransactionCapable };
+module.exports = { withMongoTransaction, isTransactionCapable, isKnownStandaloneDeployment };

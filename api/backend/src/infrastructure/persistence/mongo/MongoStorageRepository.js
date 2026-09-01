@@ -1,5 +1,9 @@
 const { ObjectId } = require('mongodb');
 const { getCollection } = require('../../../utils/collectionResolver');
+// #923: shared with fhir-import-staging.service.js rather than copied. #918
+// added this probe there; writing a second one here is how the insufficient
+// startSession() guard came to exist in two places already.
+const { isKnownStandaloneDeployment } = require('../../../utils/mongoTransaction');
 const StorageAssignmentModel = require('../../../models/StorageAssignment');
 const positionGrid = require('../../../utils/storagePositionGrid');
 
@@ -22,6 +26,33 @@ class MongoStorageRepository {
     const client = this.db?.client || this.db?.s?.client;
     if (!client || typeof client.startSession !== 'function') {
       throw new Error('Cliente Mongo não suporta transação');
+    }
+
+    // #923: the guard above only ever detected a MOCK. A real MongoClient
+    // always exposes startSession(), on a standalone mongod as much as on a
+    // replica set -- so control reached session.withTransaction() and Mongo
+    // answered `MongoServerError` code 20, "Transaction numbers are only
+    // allowed on a replica set member or mongos". Nothing in that message
+    // says which deployment is wrong or why, and only compose.test.yml runs
+    // mongo with --replSet: compose.yml, compose.dev.yml and compose.prod.yml
+    // declare no `command:` at all. So POST /storage/allocate, /move and
+    // DELETE /release have been failing unattributably on three of four
+    // stacks.
+    //
+    // This makes the failure legible. It does NOT make the endpoints work
+    // there -- whether a non-replica-set deployment should degrade to
+    // sequential writes (the shape sensor.service.js:237-268 and #918 use) or
+    // whether dev/prod mongo should become replica sets (the shape
+    // compose.test.yml already proves) is a live question on #923, and the
+    // two answers differ for chain-of-custody auditing: a degraded move
+    // writes the specimen's new position with no guarantee the immutable
+    // audit row landed with it.
+    if (await isKnownStandaloneDeployment(this.db)) {
+      throw new Error(
+        'Transação Mongo indisponível: esta implantação não é um replica set nem mongos. ' +
+        'Alocação, movimentação e liberação de amostras exigem transação (RF006 item 7, F3-G10). ' +
+        'Configure o mongod com --replSet (ver compose.test.yml) ou aponte MONGO_URI para um replica set.'
+      );
     }
 
     const session = client.startSession();
