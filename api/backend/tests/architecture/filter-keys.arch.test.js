@@ -212,9 +212,15 @@ const RETIRED_KEY_EXEMPT = new Set([
   'interface/routes/result.routes.js:543',
   'services/result-specimenid-backfill.service.js:56',
   // #857: _id -> specimenId -> legacy sampleID/sampleId/barcode.
-  'interface/routes/sample.routes.js:619',
-  'interface/routes/sample.routes.js:696',
-  'interface/routes/sample.routes.js:789',
+  // :619/:696/:789 -> :683/:760/:853, a uniform +64 shift, when #789 added
+  // the shared NON_CANONICAL_SAMPLE_ALIASES constant, the GET query guard
+  // and the applied-filter echo above all three sites. The sites themselves
+  // are unchanged -- same reason the result.routes.js entry above moved
+  // under #875. Line-keyed exemptions are load-bearing bookkeeping: this
+  // guard went red on the shift alone, which is the intended behaviour.
+  'interface/routes/sample.routes.js:683',
+  'interface/routes/sample.routes.js:760',
+  'interface/routes/sample.routes.js:853',
   'services/analysisValidation.service.js:29'
 ]);
 

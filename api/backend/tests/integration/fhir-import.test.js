@@ -913,6 +913,14 @@ describe('FHIR import staging', () => {
       };
       const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
       const recordId = db.collections.import_staging_records.docs[0]._id;
+      // #801: this fixture never seeded a sample, and passed only because
+      // attachExternalDocument discarded its samples.updateOne result -- so a
+      // matchedCount of 0 left the record COMMITTED with nothing behind it.
+      // Now that the write is checked, the fixture has to be complete. The
+      // sibling test above ("anexa documentação externa...") always seeded
+      // one; this one is brought in line with it rather than the guard being
+      // relaxed.
+      db.collections.samples.docs.push({ _id: 'sample-ext2', specimenId: 'S-EXT2' });
 
       await fhirImportStagingService.attachExternalDocument(db, staged.batch._id, recordId, { userID: 'admin-1', note: '  Documento validado manualmente  ' });
 
