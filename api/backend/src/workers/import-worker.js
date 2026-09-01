@@ -206,6 +206,11 @@ async function initWorker() {
             fhirResources: result.fhirResources || [],
             processingTime: result.processingTime || 0,
             skippedRecords: result.skipped || 0,
+            // #931: quantas das `errorCount` rejeicoes foram por duplicidade.
+            // Subconjunto de errorCount, nao um balde a mais -- os tres sites
+            // de deteccao em import-lgpd.service empurram para `errors` e
+            // fazem `continue`, entao a linha ja esta contada la.
+            duplicatesFound: result.duplicates || 0,
             completedAt: new Date(),
           });
 

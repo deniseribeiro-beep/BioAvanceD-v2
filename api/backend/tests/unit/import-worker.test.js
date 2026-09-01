@@ -627,6 +627,58 @@ describe('workers/import-worker', () => {
       const completeWrite = updateOneMock.mock.calls[1][1].$set;
       expect(completeWrite.processingTime).toBe(0);
       expect(completeWrite.skippedRecords).toBe(0);
+      expect(completeWrite.duplicatesFound).toBe(0);
+    });
+
+    // #931: duplicatesFound is the third field, and the one that needed a
+    // decision rather than plumbing. It is a LABELLED SUBSET of errorCount --
+    // all three detection sites in import-lgpd.service push onto `errors` and
+    // `continue`, so the row is already counted there. The arithmetic below
+    // is the property under test, and it is deliberate: success + errors +
+    // duplicates exceeds total.
+    it('#931: duplicatesFound is written as a subset of errorCount, not a separate bucket', async () => {
+      const processor = await getProcessor();
+      fakePatientWorker.process.mockResolvedValue(
+        makeWorkerResult({
+          total: 10,
+          success: 6,
+          // 4 rejections, of which 3 were duplicates
+          errors: [{ row: 2 }, { row: 3 }, { row: 4 }, { row: 5 }],
+          duplicates: 3,
+          skipped: 0,
+          processingTime: 1,
+        })
+      );
+
+      const updateOneMock = vi.fn().mockResolvedValue({ acknowledged: true });
+      fakeDb.collection.mockReturnValue({ updateOne: updateOneMock });
+
+      const job = {
+        id: 'j7f',
+        name: 'import',
+        data: {
+          jobID: 'j7f',
+          userID: 'u7f',
+          dataType: 'patients',
+          filePath: '/tmp/p.csv',
+          fileName: 'p.csv',
+          options: {},
+        },
+      };
+
+      await processor(job);
+
+      const completeWrite = updateOneMock.mock.calls[1][1].$set;
+      expect(completeWrite.duplicatesFound).toBe(3);
+      // Still inside errorCount, not carved out of it.
+      expect(completeWrite.errorCount).toBe(4);
+      expect(completeWrite.successCount).toBe(6);
+      expect(completeWrite.totalRecords).toBe(10);
+      expect(completeWrite.duplicatesFound).toBeLessThanOrEqual(completeWrite.errorCount);
+      // The arithmetic the label "(dos quais)" exists to explain.
+      expect(
+        completeWrite.successCount + completeWrite.errorCount + completeWrite.duplicatesFound
+      ).toBeGreaterThan(completeWrite.totalRecords);
     });
 
     // #890: a result-import run that finishes normally but writes nothing

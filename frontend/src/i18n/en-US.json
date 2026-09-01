@@ -1005,7 +1005,7 @@
     "import": "Import Results",
     "importJobID": "Import Job ID",
     "metrics": {
-      "duplicates": "Duplicates",
+      "duplicates": "Duplicates (of which)",
       "failures": "Failures",
       "processingTime": "Processing Time",
       "success": "Success",

@@ -369,15 +369,24 @@ export default function ResultsPage() {
                     <label className="metric-label">{t('results.metrics.failureLabel', 'Falhas')}</label>
                     <span className="metric-value metric-failure">{selectedJob.metrics.failedRecords}</span>
                   </div>
-                  {/* #925: nothing computes duplicatesFound -- no worker
-                      writes it and getJobReport no longer defaults it to 0.
-                      Rendered only when a value actually arrives, the same
-                      shape processingTime below already uses, so the report
-                      stops asserting "there were no duplicates" when what it
-                      means is "nobody counted". */}
+                  {/* #925 made this conditional: nothing wrote duplicatesFound,
+                      so a `?? 0` default was turning "nobody counted" into
+                      "there were none". #931 gave it a writer, and the
+                      condition stays for jobs that completed before that --
+                      they still have no field and must still omit the tile.
+
+                      #931: the label says "dos quais" because this is a
+                      LABELLED SUBSET of Falhas, not a sibling of it. A
+                      duplicate row is pushed onto `errors` at all three
+                      detection sites, so it is already inside failedRecords;
+                      without the qualifier the grid reads as
+                      success + failures + duplicates = total, which it is
+                      deliberately not. */}
                   {selectedJob.metrics.duplicatesFound !== undefined && (
                     <div className="metric-item">
-                      <label className="metric-label">{t('results.metrics.duplicates', 'Duplicados')}</label>
+                      <label className="metric-label">
+                        {t('results.metrics.duplicates', 'Duplicados (dos quais)')}
+                      </label>
                       <span className="metric-value">{selectedJob.metrics.duplicatesFound}</span>
                     </div>
                   )}

@@ -1005,7 +1005,7 @@
     "import": "Importar resultados",
     "importJobID": "ID del job de importación",
     "metrics": {
-      "duplicates": "Duplicados",
+      "duplicates": "Duplicados (de los cuales)",
       "failures": "Fallos",
       "processingTime": "Tiempo de procesamiento",
       "success": "Éxito",

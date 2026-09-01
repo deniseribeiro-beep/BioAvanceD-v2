@@ -447,6 +447,12 @@ class ImportLGPDService {
       success: 0,
       errors: [],
       skipped: 0, // #798: linhas em branco ignoradas (isEmptyRow), fora de total
+      // #931: SUBCONJUNTO ROTULADO de `errors`, nao um balde separado. Uma
+      // linha duplicada ja entra em `errors` e faz `continue`; este contador
+      // apenas diz quantos desses erros foram duplicidade. Somar
+      // success + errors + duplicates ultrapassaria o total -- ver o
+      // comentario em getJobReport.
+      duplicates: 0,
       generatedIDs: [] // Não será exposto na resposta final
     };
 
@@ -681,6 +687,8 @@ class ImportLGPDService {
               errors: [`Paciente duplicado: já existe um paciente com o nome "${patientData.patientName}" e data de nascimento "${birthDateStr}" cadastrado no sistema`],
               data: this.sanitizeRowForError(row)
             });
+            // #931: chave de duplicidade deste caminho = nome + data de nascimento.
+            results.duplicates += 1;
             continue;
           }
 
@@ -1195,6 +1203,7 @@ class ImportLGPDService {
       success: 0,
       errors: [],
       skipped: 0, // #798: linhas em branco ignoradas (isEmptyRow), fora de total
+      duplicates: 0, // #931: subconjunto rotulado de `errors` (ver importPatients)
       importedSampleIds: []
     };
 
@@ -1410,6 +1419,11 @@ class ImportLGPDService {
                 errors: [`Já existe uma amostra com o código de barras ${sampleData.barcode}`],
                 data: { participantId: participantIdStr, barcode: sampleData.barcode }
               });
+              // #931: chave de duplicidade deste caminho = barcode (RF004).
+              // Diferente da chave usada em importPatients, de proposito: sao
+              // entidades diferentes. Por isso `duplicatesFound` conta "linhas
+              // rejeitadas por duplicidade", nao "duplicidade por <uma> chave".
+              results.duplicates += 1;
               continue;
             }
           }
@@ -2130,7 +2144,8 @@ class ImportLGPDService {
       total: 0,
       success: 0,
       errors: [],
-      skipped: 0 // #798: linhas em branco ignoradas (isEmptyRow), fora de total
+      skipped: 0, // #798: linhas em branco ignoradas (isEmptyRow), fora de total
+      duplicates: 0 // #931: subconjunto rotulado de `errors` (ver importPatients)
     };
 
     const rows = await this.readFile(file.path, file.originalname, 'patients');
@@ -2220,6 +2235,9 @@ class ImportLGPDService {
         const duplicate = await patientService.checkDuplicatePatient(db, patientData);
         if (duplicate) {
           results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Paciente duplicado detectado`] });
+          // #931: mesma chave que importPatients (nome + data de nascimento) --
+          // ambos chamam patientService.checkDuplicatePatient.
+          results.duplicates += 1;
           continue;
         }
 

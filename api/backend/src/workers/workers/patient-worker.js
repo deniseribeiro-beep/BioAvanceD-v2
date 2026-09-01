@@ -34,6 +34,7 @@ class PatientWorker {
         success: results.success,
         errors: results.errors,
         skipped: results.skipped,
+        duplicates: results.duplicates, // #931
         processingTime,
       };
     } catch (error) {

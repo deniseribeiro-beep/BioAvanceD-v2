@@ -894,6 +894,14 @@ export interface ImportMetrics {
   // counted" indistinguishable from "none found". Optional now, so a consumer
   // has to decide what an absent value means instead of being handed a zero.
   skippedRecords?: number;
+  /**
+   * #931: a labelled SUBSET of `failedRecords`, not a sibling of it. Every
+   * duplicate row is pushed onto the import's `errors` array and skipped, so
+   * it is already inside `failedRecords` -- `successfulRecords +
+   * failedRecords + duplicatesFound` deliberately exceeds `totalRecords`.
+   * Present only on jobs run since #931; still optional so pre-#931 jobs omit
+   * the tile rather than claiming zero (#925).
+   */
   duplicatesFound?: number;
   processingTime?: number; // em segundos
   recordsPerSecond?: number;

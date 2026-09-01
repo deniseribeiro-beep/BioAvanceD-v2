@@ -1005,7 +1005,7 @@
     "import": "Importar Arquivos de Análise",
     "importJobID": "ID do Job de Importação",
     "metrics": {
-      "duplicates": "Duplicados",
+      "duplicates": "Duplicados (dos quais)",
       "failures": "Falhas",
       "processingTime": "Tempo de Processamento",
       "success": "Sucesso",

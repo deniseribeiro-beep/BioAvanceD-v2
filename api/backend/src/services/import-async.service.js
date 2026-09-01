@@ -602,11 +602,23 @@ class ImportAsyncService {
           failedRecords: job.errorCount,
           processingTime: job.processingTime,
           skippedRecords: job.skippedRecords,
-          // #925: no `?? 0`. Nothing anywhere writes job.duplicatesFound --
-          // the worker's updateJobStatus payload has no such field -- so the
-          // default was turning "nobody counted duplicates" into the claim
-          // "there were none", which the report modal then displayed as fact.
-          // Passing undefined through lets the modal omit the tile.
+          // #925 established there must be no `?? 0` here: while nothing
+          // wrote job.duplicatesFound, a default turned "nobody counted
+          // duplicates" into the claim "there were none". #931 gave it a
+          // writer -- import-worker's completion payload now sets it from
+          // the sub-workers' `duplicates` -- so a job run since then carries
+          // a real number, including a real 0.
+          //
+          // The pass-through stays deliberately undefaulted anyway: a job
+          // completed BEFORE #931 has no such field, and those must keep
+          // omitting the tile rather than newly claiming zero. Same reason as
+          // #925, one field-lifetime later.
+          //
+          // #931: this is a LABELLED SUBSET of failedRecords, not a sibling
+          // of it. A duplicate row is pushed onto `errors` and `continue`d at
+          // all three detection sites, so it is already inside errorCount --
+          // successfulRecords + failedRecords + duplicatesFound deliberately
+          // exceeds totalRecords, and the UI must read it as "of which".
           duplicatesFound: job.duplicatesFound,
         },
         progress: job.progress,
