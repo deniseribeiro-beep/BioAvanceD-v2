@@ -57,15 +57,26 @@ const FHIR_BATCH = {
   createdAt: new Date('2026-08-25T10:00:00Z'),
 };
 
-/** Honours the filter, sort, skip and limit it is handed -- a stub that ignored them could not see either property under test. */
+/**
+ * Honours the filter, sort, skip and limit it is handed -- a stub that ignored
+ * them could not see either property under test. Since #915 the type filter is
+ * an `$in` over the readable type set, so the matcher understands `$in` too.
+ */
+function batchMatches(doc, filter) {
+  return Object.entries(filter).every(([key, expected]) => {
+    if (expected && typeof expected === 'object' && Array.isArray(expected.$in)) {
+      return expected.$in.some((v) => String(doc[key]) === String(v));
+    }
+    return String(doc[key]) === String(expected);
+  });
+}
+
 function makeDb(batches) {
   const calls = {};
   const batchesCollection = {
     find: vi.fn((filter = {}) => {
       calls.filter = filter;
-      let matched = batches.filter((b) =>
-        Object.entries(filter).every(([k, v]) => String(b[k]) === String(v))
-      );
+      let matched = batches.filter((b) => batchMatches(b, filter));
       const cursor = {
         sort: vi.fn((spec) => {
           calls.sort = spec;
@@ -81,9 +92,7 @@ function makeDb(batches) {
       };
       return cursor;
     }),
-    countDocuments: vi.fn(async (filter = {}) =>
-      batches.filter((b) => Object.entries(filter).every(([k, v]) => String(b[k]) === String(v))).length
-    ),
+    countDocuments: vi.fn(async (filter = {}) => batches.filter((b) => batchMatches(b, filter)).length),
   };
   return {
     collection: vi.fn((name) => {
@@ -101,7 +110,7 @@ describe('ImportLGPDService.listQuarantineBatches (#794 item 2)', () => {
     const result = await service.listQuarantineBatches(db);
 
     expect(result.batches.map((b) => b._id)).toEqual(['batch-newer', 'batch-older']);
-    expect(db._calls.filter).toMatchObject({ type: 'LGPD_SAMPLE_CSV' });
+    expect(db._calls.filter).toMatchObject({ type: { $in: ['LGPD_SAMPLE_CSV'] } });
     expect(db._calls.sort).toMatchObject({ createdAt: -1 });
   });
 

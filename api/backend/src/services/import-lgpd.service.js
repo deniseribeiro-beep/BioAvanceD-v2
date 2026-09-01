@@ -34,6 +34,37 @@ const LineageRepository = require('../infrastructure/database/neo4j/LineageRepos
 
 const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
 
+/**
+ * Os dois tipos de lote de quarentena que a importacao LGPD escreve em
+ * `import_batches` (#787 para amostras, #814 para participantes).
+ *
+ * A colecao e compartilhada com a importacao FHIR (`FHIR_BUNDLE`) e com o
+ * motor assincrono (`ASYNC_BATCH_IMPORT`), que tem outras permissoes -- por
+ * isso os leitores filtram por tipo em vez de so por `_id` (#799 foi
+ * exatamente esse vazamento no sentido oposto).
+ */
+const QUARANTINE_BATCH_TYPES = Object.freeze({
+  SAMPLE: 'LGPD_SAMPLE_CSV',
+  PATIENT: 'LGPD_PATIENT_CSV',
+});
+
+const READABLE_QUARANTINE_TYPES = Object.freeze(Object.values(QUARANTINE_BATCH_TYPES));
+
+/**
+ * #915: normaliza o conjunto de tipos que um leitor de quarentena pode ver.
+ *
+ * Descarta o que nao for um tipo LGPD conhecido -- um `type` vindo de query
+ * string nunca deve alargar o filtro para `FHIR_BUNDLE`/`ASYNC_BATCH_IMPORT`
+ * -- e cai no padrao so-amostras quando sobra vazio, para que um conjunto
+ * vazio nunca vire um `$in: []` (que nao casa nada) nem um filtro ausente
+ * (que casaria tudo).
+ */
+function normalizeQuarantineTypes(types) {
+  const requested = Array.isArray(types) ? types : [types];
+  const allowed = READABLE_QUARANTINE_TYPES.filter((t) => requested.includes(t));
+  return allowed.length > 0 ? allowed : [QUARANTINE_BATCH_TYPES.SAMPLE];
+}
+
 function buildIdVariants(...ids) {
   const variants = [];
   const seen = new Set();
@@ -697,12 +728,11 @@ class ImportLGPDService {
       // the same way #787 already does for samples -- reuses
       // quarantineRejectedSampleRows with a distinct batch `type` so a
       // patient batch and a sample batch never collide in the shared
-      // import_batches collection. `getQuarantineBatch`/`listQuarantineBatches`
-      // still filter on 'LGPD_SAMPLE_CSV' only, so a patient batch is written
-      // but not yet readable through those two endpoints -- widening those
-      // readers is out of scope here (out-of-scope per #814's brief).
+      // import_batches collection. #915 then made both readers type-scoped,
+      // so this batch is readable by a caller holding `createPatient` -- the
+      // same permission this import itself requires.
       const stagingBatchId = await this.quarantineRejectedSampleRows(db, {
-        type: 'LGPD_PATIENT_CSV',
+        type: QUARANTINE_BATCH_TYPES.PATIENT,
         importOptions: { groupFields },
         fileName: file?.originalname || null,
         rows,
@@ -909,16 +939,24 @@ class ImportLGPDService {
    * mesmas duas colecoes, mesma forma lote-mais-linhas, mesmo 404 via
    * `error.statusCode`, mesma ordenacao por rowNumber.
    *
-   * Diferenca deliberada em relacao ao original: filtra tambem por
-   * `type: 'LGPD_SAMPLE_CSV'`. As duas rotas de importacao compartilham
-   * `import_batches`, e um leitor que filtra so por `_id` entrega o lote da
-   * outra rota a quem tem a permissao errada -- as linhas em quarentena
-   * carregam identificadores civis. O leitor FHIR ainda tem esse vazamento;
-   * esta rastreado no #799 e nao e reproduzido aqui.
+   * Diferenca deliberada em relacao ao original: filtra tambem por `type`.
+   * As rotas de importacao compartilham `import_batches`, e um leitor que
+   * filtra so por `_id` entrega o lote de outra rota a quem tem a permissao
+   * errada -- as linhas em quarentena carregam identificadores civis. O
+   * leitor FHIR ainda tem esse vazamento; esta rastreado no #799 e nao e
+   * reproduzido aqui.
+   *
+   * #915: `types` diz *quais* tipos LGPD este chamador pode ler. O #814
+   * passou a escrever lotes de participantes com `LGPD_PATIENT_CSV`, e
+   * enquanto este filtro era fixo em `LGPD_SAMPLE_CSV` esses lotes eram
+   * gravados e ficavam ilegiveis -- 404 ate com o id correto. O padrao
+   * continua so-amostras: quem chama e que decide alargar, aplicando a regra
+   * que `import-lgpd.routes.js` ja enunciava para o lote de amostras -- a
+   * mesma permissao da importacao que produziu o lote.
    *
    * Um id malformado e 400, nao um cast de BSON estourando como 500.
    */
-  async getQuarantineBatch(db, batchIdRaw) {
+  async getQuarantineBatch(db, batchIdRaw, { types } = {}) {
     // ObjectId e exigido inline neste arquivo (ver linhas 503/803), nao no topo.
     const { ObjectId } = require('mongodb');
     const raw = String(batchIdRaw || '').trim();
@@ -933,7 +971,7 @@ class ImportLGPDService {
 
     const batch = await db.collection('import_batches').findOne({
       _id: batchId,
-      type: 'LGPD_SAMPLE_CSV',
+      type: { $in: normalizeQuarantineTypes(types) },
     });
 
     if (!batch) {
@@ -961,10 +999,11 @@ class ImportLGPDService {
    * ele nunca chegou a uma tela. Sem listagem nao existe ponto de entrada
    * navegavel, e uma tela de revisao seria codigo inalcancavel.
    *
-   * Filtra por `type: 'LGPD_SAMPLE_CSV'` pelo mesmo motivo que
-   * `getQuarantineBatch`: `import_batches` e compartilhada com a importacao
-   * FHIR e as duas rotas tem permissoes diferentes (#799 foi exatamente esse
-   * defeito no sentido oposto).
+   * Filtra por `type` pelo mesmo motivo que `getQuarantineBatch`:
+   * `import_batches` e compartilhada com a importacao FHIR e as rotas tem
+   * permissoes diferentes (#799 foi exatamente esse defeito no sentido
+   * oposto). `types` (#915) recebe o conjunto que este chamador pode ler; o
+   * padrao e so-amostras.
    *
    * Devolve **so o resumo do lote** -- deliberadamente nao le
    * `import_staging_records`. As linhas carregam `row`, a linha original da
@@ -972,12 +1011,12 @@ class ImportLGPDService {
    * deles, e transformar "um lote" em "todos os lotes" seria ampliar a
    * exposicao na direcao errada.
    */
-  async listQuarantineBatches(db, { limit = 20, page = 1 } = {}) {
+  async listQuarantineBatches(db, { limit = 20, page = 1, types } = {}) {
     const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
     const safePage = Math.max(parseInt(page, 10) || 1, 1);
     const skip = (safePage - 1) * safeLimit;
 
-    const filter = { type: 'LGPD_SAMPLE_CSV' };
+    const filter = { type: { $in: normalizeQuarantineTypes(types) } };
     const collection = db.collection('import_batches');
 
     const [batches, total] = await Promise.all([
@@ -2387,4 +2426,7 @@ class ImportLGPDService {
 }
 
 module.exports = new ImportLGPDService();
+// #915: os leitores de quarentena recebem o conjunto de tipos legiveis, e
+// quem monta esse conjunto (o controller) precisa dos nomes.
+module.exports.QUARANTINE_BATCH_TYPES = QUARANTINE_BATCH_TYPES;
 

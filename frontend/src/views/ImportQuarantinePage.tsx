@@ -145,6 +145,9 @@ export default function ImportQuarantinePage() {
               <thead>
                 <tr>
                   <th style={headStyle}>Arquivo</th>
+                  {/* #915: participant batches share this listing with specimen
+                      ones, so the origin has to be visible. */}
+                  <th style={headStyle}>Origem</th>
                   <th style={headStyle}>Data</th>
                   <th style={headStyle}>Linhas</th>
                   <th style={headStyle}>Importadas</th>
@@ -157,6 +160,7 @@ export default function ImportQuarantinePage() {
                 {summaries.map((summary) => (
                   <tr key={summary.id} style={summary.id === selectedId ? { background: '#eff6ff' } : undefined}>
                     <td style={cellStyle}>{summary.fileName}</td>
+                    <td style={cellStyle}>{summary.kindLabel}</td>
                     <td style={cellStyle}>{summary.createdAtLabel}</td>
                     <td style={cellStyle}>{summary.total}</td>
                     <td style={cellStyle}>{summary.imported}</td>

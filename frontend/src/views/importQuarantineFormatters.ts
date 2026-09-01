@@ -9,6 +9,13 @@
 
 export interface QuarantineBatch {
   _id: string;
+  /**
+   * #915: the listing now carries participant batches ('LGPD_PATIENT_CSV')
+   * alongside specimen ones ('LGPD_SAMPLE_CSV'), for a caller holding both
+   * import permissions. The two have different rejected-row shapes, so the
+   * operator has to be able to tell them apart in one table.
+   */
+  type?: string | null;
   fileName?: string | null;
   status?: string | null;
   counts?: { total?: number; success?: number; errors?: number } | null;
@@ -42,7 +49,20 @@ export interface BatchSummary {
   sourceFileRetained: boolean;
   /** #806: the error a FAILED batch's throw carried. Null for any other status. */
   errorMessage: string | null;
+  /** #915: human label for the batch's origin -- 'Amostras', 'Participantes', or the raw type. */
+  kindLabel: string;
 }
+
+/**
+ * #915: the two LGPD quarantine batch types, as the operator should read
+ * them. An unknown type is shown verbatim rather than guessed at or hidden --
+ * `import_batches` is shared with the FHIR and async importers, and if one of
+ * those ever reaches this list the label should say so loudly.
+ */
+const BATCH_KIND_LABELS: Record<string, string> = {
+  LGPD_SAMPLE_CSV: 'Amostras',
+  LGPD_PATIENT_CSV: 'Participantes',
+};
 
 function toDateLabel(value: string | Date | null | undefined): string {
   if (!value) return '--';
@@ -67,6 +87,7 @@ export function formatBatchSummary(batch: QuarantineBatch): BatchSummary {
     // #806: only a FAILED batch carries an error -- a QUARANTINED batch's
     // rejections live on its records, not on the batch itself.
     errorMessage: batch?.status === 'FAILED' ? (batch?.error || null) : null,
+    kindLabel: BATCH_KIND_LABELS[String(batch?.type ?? '')] || String(batch?.type ?? '--'),
   };
 }
 

@@ -227,13 +227,21 @@ describe('ImportLGPDService.getQuarantineBatch', () => {
     status: 'STAGED',
   };
 
+  // #915 turned the type discriminator into an `$in` over the type set the
+  // caller may read, so the mock has to understand `$in` -- a stub that only
+  // compared scalars would report "not found" for every widened read.
+  function batchMatches(doc, filter) {
+    return Object.entries(filter).every(([key, expected]) => {
+      if (expected && typeof expected === 'object' && Array.isArray(expected.$in)) {
+        return expected.$in.some((v) => String(doc[key]) === String(v));
+      }
+      return String(doc[key]) === String(expected);
+    });
+  }
+
   function makeDb(batches, records = []) {
     const batchesCollection = {
-      findOne: vi.fn(async (filter = {}) =>
-        batches.find((b) =>
-          Object.entries(filter).every(([k, v]) => String(b[k]) === String(v))
-        ) || null
-      ),
+      findOne: vi.fn(async (filter = {}) => batches.find((b) => batchMatches(b, filter)) || null),
     };
     const recordsCollection = {
       find: vi.fn(() => ({ sort: () => ({ toArray: async () => records }) })),
@@ -262,8 +270,11 @@ describe('ImportLGPDService.getQuarantineBatch', () => {
     });
 
     // And the discriminator really was part of the query, not just absent
-    // from the fixture.
-    expect(db._batches.findOne.mock.calls[0][0]).toMatchObject({ type: 'LGPD_SAMPLE_CSV' });
+    // from the fixture. Since #915 it is an `$in` over the readable set, whose
+    // default is still sample-only.
+    expect(db._batches.findOne.mock.calls[0][0]).toMatchObject({
+      type: { $in: ['LGPD_SAMPLE_CSV'] },
+    });
   });
 
   it('404s an id that matches no batch', async () => {

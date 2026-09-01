@@ -85,6 +85,29 @@ describe('formatBatchSummary', () => {
     expect(summary.status).toBe('QUARANTINED');
     expect(summary.errorMessage).toBeNull();
   });
+
+  // #915: participant batches (written since #814) now reach this listing for
+  // a caller holding both import permissions, so the two kinds share one
+  // table and have to be distinguishable in it.
+  it('labels a specimen batch and a participant batch differently', () => {
+    expect(formatBatchSummary({ _id: 'b1', type: 'LGPD_SAMPLE_CSV' }).kindLabel).toBe('Amostras');
+    expect(formatBatchSummary({ _id: 'b2', type: 'LGPD_PATIENT_CSV' }).kindLabel).toBe(
+      'Participantes'
+    );
+  });
+
+  // import_batches is shared with the FHIR and async importers. Neither should
+  // reach this listing, but if one does the label says which rather than
+  // silently reading as a specimen batch.
+  it('shows an unrecognised batch type verbatim instead of guessing', () => {
+    expect(formatBatchSummary({ _id: 'b3', type: 'ASYNC_BATCH_IMPORT' }).kindLabel).toBe(
+      'ASYNC_BATCH_IMPORT'
+    );
+  });
+
+  it('falls back to -- when the batch carries no type at all', () => {
+    expect(formatBatchSummary({ _id: 'b4' }).kindLabel).toBe('--');
+  });
 });
 
 describe('formatRecordErrors', () => {

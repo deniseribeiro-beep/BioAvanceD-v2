@@ -149,11 +149,49 @@ class ImportLGPDController {
   }
 
   /**
+   * #915: quais tipos de lote de quarentena LGPD este chamador pode ler.
+   *
+   * A regra e a que `import-lgpd.routes.js` ja enunciava para os lotes de
+   * amostra -- **a mesma permissao da importacao que produziu o lote**. As
+   * duas rotas `/batches*` sao gatilhadas por `createSample`, entao um lote
+   * de amostra e sempre legivel aqui; um lote de participante (#814) so
+   * entra se o chamador tambem tiver `createPatient`, isto e, se ele mesmo
+   * pudesse te-lo produzido. Ninguem passa a ver linhas que ja nao pudesse
+   * gerar.
+   *
+   * Falha fechada: se a consulta de permissao estourar, devolve o conjunto
+   * estreito em vez de 500 ou de alargar.
+   *
+   * Nao substitui o #800 (nenhum dos dois leitores restringe por dono/
+   * organizacao) -- so evita que essa questao seja decidida duas vezes, uma
+   * por tipo de lote.
+   */
+  async resolveReadableQuarantineTypes(db, req) {
+    const { QUARANTINE_BATCH_TYPES } = importLGPDService;
+    const types = [QUARANTINE_BATCH_TYPES.SAMPLE];
+    try {
+      const { userHasPermission } = require('../services/rbac-assignment.service');
+      if (await userHasPermission(db, req.user?.userID, 'createPatient')) {
+        types.push(QUARANTINE_BATCH_TYPES.PATIENT);
+      }
+    } catch (error) {
+      logger.warn(
+        'Falha ao resolver permissao createPatient para a quarentena LGPD; mantendo apenas lotes de amostra:',
+        error.message || error
+      );
+    }
+    return types;
+  }
+
+  /**
    * GET /api/import-lgpd/batches/:batchId (#794, RNF011 AC#4)
    *
    * Le de volta um lote de quarentena criado pelo #787. Sem isto as linhas
    * rejeitadas sobrevivem mas ninguem consegue revisa-las -- o que e um log
    * bem organizado, nao staging.
+   *
+   * #915: o conjunto de tipos legiveis vem de
+   * `resolveReadableQuarantineTypes`, nao mais fixo em amostras.
    */
   async getQuarantineBatch(req, res) {
     try {
@@ -162,7 +200,10 @@ class ImportLGPDController {
         return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
       }
 
-      const { batch, records } = await importLGPDService.getQuarantineBatch(db, req.params.batchId);
+      const types = await this.resolveReadableQuarantineTypes(db, req);
+      const { batch, records } = await importLGPDService.getQuarantineBatch(db, req.params.batchId, {
+        types,
+      });
 
       return res.status(200).json({ success: true, batch, records });
     } catch (error) {
@@ -182,6 +223,10 @@ class ImportLGPDController {
    *
    * O ponto de entrada navegavel da quarentena. Sem ele so da para abrir um
    * lote de quem ja conhece o id, e nada no frontend conhece (#808).
+   *
+   * #915: lista tambem os lotes de participante quando o chamador tem
+   * `createPatient`. `type` vai em cada documento de lote, entao a UI
+   * distingue um lote de participante de um de amostra sem campo novo.
    */
   async listQuarantineBatches(req, res) {
     try {
@@ -190,9 +235,11 @@ class ImportLGPDController {
         return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
       }
 
+      const types = await this.resolveReadableQuarantineTypes(db, req);
       const result = await importLGPDService.listQuarantineBatches(db, {
         limit: req.query.limit,
         page: req.query.page,
+        types,
       });
 
       return res.status(200).json({
