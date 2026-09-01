@@ -1410,7 +1410,11 @@ class ImportLGPDService {
             }
           }
 
-          // RF004 - Verifica duplicidade por barcode (se fornecido)
+          // #944: era "RF004". Nenhum criterio do RF004 menciona barcode --
+          // AC#2 e sobre specimenId, outro identificador com outro gerador.
+          // O requisito que esta checagem serve e dict-02 ELM-0116
+          // (Specimen.barcodeValue), coluna Unicidade = `Unico`.
+          // Verifica duplicidade por barcode (se fornecido)
           if (sampleData.barcode) {
             const existingSample = await samplesCollection.findOne({ barcode: sampleData.barcode });
             if (existingSample) {
@@ -1916,7 +1920,7 @@ class ImportLGPDService {
       sampleType: row.sampleType?.trim() || null,
       sampleOrigin: this.normalizeCatalogValue(row.sampleOrigin, SAMPLE_ORIGINS),
       extractionProtocol: this.normalizeCatalogValue(row.extractionProtocol, EXTRACTION_PROTOCOLS),
-      barcode: row.barcode ? String(row.barcode).trim() : null, // RF004 - barcode como string
+      barcode: row.barcode ? String(row.barcode).trim() : null, // dict-02 ELM-0116 -- barcode como string (#944)
       registeredAt: registeredAt,
       quantity: row.quantity ? parseFloat(row.quantity) : null,
       quality: parseQualityMIABIS(row.quality), // Valida e converte para id MIABIS canônico

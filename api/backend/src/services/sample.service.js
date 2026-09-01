@@ -287,7 +287,9 @@ class SampleService {
         // Converte para string se necessário
         sampleData.barcode = String(sampleData.barcode).trim();
         
-        // RF004 - Verifica duplicidade por barcode (se fornecido)
+        // #944: era "RF004", que nao menciona barcode em nenhum criterio.
+        // O requisito e dict-02 ELM-0116 (Specimen.barcodeValue, Unico).
+        // Verifica duplicidade por barcode (se fornecido)
         const existingSample = await samplesCollection.findOne({ barcode: sampleData.barcode });
         if (existingSample) {
           throw new Error(`Já existe uma amostra com o código de barras ${sampleData.barcode}`);
