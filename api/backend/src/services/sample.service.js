@@ -281,7 +281,7 @@ class SampleService {
 
       // Gera código de barras automaticamente se não fornecido
       if (!sampleData.barcode || (typeof sampleData.barcode === 'string' && sampleData.barcode.trim() === '')) {
-        sampleData.barcode = await generateUniqueBarcode(db, 'samples');
+        sampleData.barcode = await generateUniqueBarcode(db);
         logger.info(`Código de barras gerado automaticamente: ${sampleData.barcode}`);
       } else {
         // Converte para string se necessário

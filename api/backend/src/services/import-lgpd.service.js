@@ -1447,7 +1447,7 @@ class ImportLGPDService {
           // Gera código de barras automaticamente se não fornecido
           if (!sampleData.barcode || (typeof sampleData.barcode === 'string' && sampleData.barcode.trim() === '')) {
             const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
-            sampleData.barcode = await generateUniqueBarcode(db, 'amostras');
+            sampleData.barcode = await generateUniqueBarcode(db);
             logger.info(`Código de barras gerado automaticamente para linha ${rowNumber}: ${sampleData.barcode}`);
           } else {
             // Converte para string se necessário

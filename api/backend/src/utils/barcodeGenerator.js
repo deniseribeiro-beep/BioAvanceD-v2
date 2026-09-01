@@ -1,4 +1,5 @@
 const logger = require('./logger');
+const { getCollection } = require('./collectionResolver');
 
 // A colisão só acontece quando outro processo grava o mesmo número entre a
 // leitura do máximo e a inserção do chamador — algumas tentativas bastam.
@@ -13,16 +14,21 @@ const MAX_COLLISION_ATTEMPTS = 10;
  * A partir do milésimo código do ano o número passa a ter 4 dígitos
  * (BR-2024-1000) — o padding é o mínimo, não um limite.
  *
+ * #932: a collection é resolvida via collectionResolver (a mesma chave
+ * 'samples' que sample.service.js e import-lgpd.service.js usam para ler e
+ * gravar amostras), em vez de aceita como parâmetro — um chamador não tem
+ * mais como apontar a verificação de unicidade para uma collection diferente
+ * daquela em que as amostras realmente são gravadas.
+ *
  * @param {Object} db - Instância do banco de dados MongoDB
- * @param {string} collectionName - Nome da collection (padrão: 'amostras')
  * @returns {Promise<string>} Código de barras único no formato BR-YYYY-NNN
  */
-async function generateUniqueBarcode(db, collectionName = 'amostras') {
+async function generateUniqueBarcode(db) {
   const currentYear = new Date().getFullYear();
   const prefix = `BR-${currentYear}-`;
   const sequencePattern = new RegExp(`^${prefix}([0-9]+)$`);
 
-  const samplesCollection = db.collection(collectionName);
+  const samplesCollection = await getCollection(db, 'samples');
 
   // #775: o sequencial é um número renderizado como string, então ordenar por
   // `barcode` no banco ordena lexicograficamente — 'BR-2026-999' vence

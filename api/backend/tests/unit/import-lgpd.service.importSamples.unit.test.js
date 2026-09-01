@@ -83,6 +83,22 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
       }
       return Promise.resolve(existingBarcode);
     }),
+    // #932: backs generateUniqueBarcode's scan for the year's existing codes,
+    // a plain find().toArray() since #775. This used to live on a SEPARATE
+    // `amostras` fake, because the generator was called with that legacy
+    // collection name while rows were inserted here -- so the fixture
+    // faithfully reproduced the production split, and a generated duplicate
+    // could not have been caught by this suite either. One collection now,
+    // which is the whole point of #932. Chainable so sort()/limit() callers
+    // keep working.
+    find: vi.fn(() => {
+      const cursor = {
+        sort: () => cursor,
+        limit: () => cursor,
+        toArray: async () => []
+      };
+      return cursor;
+    }),
   };
   const patientsCollection = {
     updateOne: vi.fn().mockResolvedValue({}),
@@ -93,20 +109,6 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
   const sampleTypesCollection = { findOne: vi.fn().mockResolvedValue(sampleTypeFound ? { id: 'PLASMA', description: 'Plasma' } : null) };
   const sampleOriginsCollection = { findOne: vi.fn().mockResolvedValue(sampleOriginFound ? { id: 'VENOUS_BLOOD', description: 'Sangue Venoso Periferico' } : null) };
   const extractionProtocolsCollection = { findOne: vi.fn().mockResolvedValue(protocolFound ? { id: 'TUBE_EDTA', description: 'Tubo EDTA (Tampa Roxa)' } : null) };
-  const amostrasCollection = {
-    // Backs generateUniqueBarcode's own lookup for the year's existing codes,
-    // which is a plain find().toArray() since #775 -- chainable so the
-    // sort()/limit() callers in this suite keep working too.
-    find: vi.fn(() => {
-      const cursor = {
-        sort: () => cursor,
-        limit: () => cursor,
-        toArray: async () => []
-      };
-      return cursor;
-    }),
-    findOne: vi.fn().mockResolvedValue(null),
-  };
   // AllocateSampleUseCase's audit trail (MongoAuditRepository) and
   // storagePaths hierarchy lookup (MongoStorageRepository.openStorageAssignment).
   const sampleMovementsCollection = {
@@ -156,7 +158,6 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     sampleTypes: sampleTypesCollection,
     sampleOrigins: sampleOriginsCollection,
     extractionProtocols: extractionProtocolsCollection,
-    amostras: amostrasCollection,
     sample_movements: sampleMovementsCollection,
     counters: countersCollection,
     storagePaths: storagePathsCollection,

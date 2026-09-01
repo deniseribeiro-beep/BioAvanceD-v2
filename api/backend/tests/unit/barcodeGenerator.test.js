@@ -1,5 +1,25 @@
 import { describe, it, expect, vi } from 'vitest';
 const { generateUniqueBarcode } = require('../../src/utils/barcodeGenerator');
+const { resolveCollectionName } = require('../../src/utils/collectionResolver');
+
+// #932: generateUniqueBarcode no longer takes a collectionName parameter — it
+// resolves the same 'samples' key every other service does via
+// collectionResolver. RESOLVED_SAMPLES_NAME is that resolved name, and every
+// fake below only serves real data under it. Any other name (e.g. the old
+// 'amostras' default) is wired to a decoy collection that throws, so a
+// regression that reintroduces a mismatched collection name fails loudly
+// instead of silently reading/writing the wrong place.
+const RESOLVED_SAMPLES_NAME = resolveCollectionName({}, 'samples');
+
+function makeDecoyCollection(collectionName) {
+  const message = `unexpected db.collection() call for '${collectionName}' — generateUniqueBarcode must only scan the resolved samples collection ('${RESOLVED_SAMPLES_NAME}')`;
+  return {
+    findOne: vi.fn(() => Promise.reject(new Error(message))),
+    find: vi.fn(() => {
+      throw new Error(message);
+    })
+  };
+}
 
 // `priorBarcodes` backs the year's existing codes. Since #775 the generator
 // reads them with find().toArray() and takes the numeric maximum itself,
@@ -9,7 +29,15 @@ function makeDb(findOneImpl, priorBarcodes = []) {
   const find = vi.fn(() => ({
     toArray: () => Promise.resolve(priorBarcodes.map((barcode) => ({ barcode })))
   }));
-  const collection = vi.fn(() => ({ findOne, find }));
+  const samplesCollection = { findOne, find };
+
+  const decoys = {};
+  const collection = vi.fn((name) => {
+    if (name === RESOLVED_SAMPLES_NAME) return samplesCollection;
+    if (!decoys[name]) decoys[name] = makeDecoyCollection(name);
+    return decoys[name];
+  });
+
   return { db: { collection }, findOne, find, collection };
 }
 
@@ -70,22 +98,40 @@ describe('generateUniqueBarcode', () => {
     );
   });
 
-  it('passes the given collectionName through to db.collection', async () => {
-    const { db, collection } = makeDb(() => Promise.resolve(null));
-    await generateUniqueBarcode(db, 'minhas_amostras');
-    expect(collection).toHaveBeenCalledWith('minhas_amostras');
-  });
-
-  it('uses the default collectionName "amostras" when omitted', async () => {
+  it('resolves the samples collection via collectionResolver (#932) rather than accepting a collectionName parameter', async () => {
     const { db, collection } = makeDb(() => Promise.resolve(null));
     await generateUniqueBarcode(db);
-    expect(collection).toHaveBeenCalledWith('amostras');
+    expect(collection).toHaveBeenCalledWith(RESOLVED_SAMPLES_NAME);
+    expect(collection).not.toHaveBeenCalledWith('amostras');
   });
 
   it('does not truncate sequence numbers >= 1000 via padStart', async () => {
     const { db } = makeDb(() => Promise.resolve(null), [`BR-${currentYear}-1233`]);
     const barcode = await generateUniqueBarcode(db);
     expect(barcode).toBe(`BR-${currentYear}-1234`);
+  });
+
+  // #932: generateUniqueBarcode used to scan a caller-supplied collection
+  // name (import-lgpd.service.js passed the legacy 'amostras', which is not
+  // even a CANONICAL_COLLECTIONS key) while samples themselves were read and
+  // written via getCollection(db, 'samples') — so its uniqueness guarantee
+  // was void on that path: a barcode already present in the real samples
+  // collection could be handed out again. This proves the generator scans
+  // the same collection samples are written to (the decoy in makeDb throws
+  // if any other name is requested), and that an existing barcode there is
+  // never re-issued.
+  it('scans the same collection samples are written to, and does not hand out a barcode already present there (#932)', async () => {
+    const existingBarcode = `BR-${currentYear}-001`;
+    const { db, collection } = makeDb(
+      (query) => Promise.resolve(query.barcode === existingBarcode ? { barcode: existingBarcode } : null),
+      [existingBarcode]
+    );
+
+    const barcode = await generateUniqueBarcode(db);
+
+    expect(collection).toHaveBeenCalledWith(RESOLVED_SAMPLES_NAME);
+    expect(barcode).not.toBe(existingBarcode);
+    expect(barcode).toBe(`BR-${currentYear}-002`);
   });
 });
 
@@ -104,7 +150,7 @@ function makeMongoLikeDb(barcodes) {
     return false;
   };
 
-  const collection = {
+  const samplesCollection = {
     findOne: vi.fn(async (query, options) => {
       const found = docs.filter((doc) => matches(doc, query));
       if (options && options.sort && options.sort.barcode === -1) {
@@ -118,7 +164,14 @@ function makeMongoLikeDb(barcodes) {
     }))
   };
 
-  return { db: { collection: vi.fn(() => collection) }, collection };
+  const decoys = {};
+  const collection = vi.fn((name) => {
+    if (name === RESOLVED_SAMPLES_NAME) return samplesCollection;
+    if (!decoys[name]) decoys[name] = makeDecoyCollection(name);
+    return decoys[name];
+  });
+
+  return { db: { collection }, collection };
 }
 
 function yearRange(from, to, width = 3) {
