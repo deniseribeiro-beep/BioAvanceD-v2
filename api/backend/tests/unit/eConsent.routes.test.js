@@ -701,3 +701,143 @@ describe('eConsent.routes POST /consents/:id/revoke (#684)', () => {
     expect(revokeSpy).toHaveBeenCalledWith(expect.anything(), 'consent-1');
   });
 });
+
+// Issue #921 slice 5: table-driven RBAC gate-argument pinning. Every test
+// above this point asserts gate PRESENCE (401/403 outcomes) but not the
+// arguments the route handed the gate factory, so a stub that discards its
+// arguments -- `rbacModule.requirePermission = () => (req, res, next) =>
+// next();` above included -- would answer identically no matter what
+// permission code or role list the route actually declared (issue #888).
+// Pattern copied from tests/unit/storage.routes.test.js:1174-1205 (read in
+// full and confirmed against source before use): a factory stub records its
+// own `...args` into a `recordedCalls` array the test then asserts against.
+//
+// #888: POST /generate-link's requirePermission('createPatient') is a
+// Patient-domain permission code gating a Consent-domain route (confirmed
+// against eConsent.js:19). This suite pins that argument exactly as the
+// route declares it today; whether 'createPatient' is the *right* code is
+// #888's question, not this one's -- pinning only makes a future change to
+// it visible in a test.
+//
+// requireOrganizationScope: eConsent.js destructures only
+// `{ requireRole, requirePermission }` from rbac (eConsent.js:7) and never
+// references requireOrganizationScope anywhere in the file -- there is no
+// per-route presence/absence to pin because there is no call site.
+describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearRouteCache();
+  });
+
+  it('never references requireOrganizationScope in the router source (no call site to pin)', () => {
+    const fs = require('fs');
+    const source = fs.readFileSync(routePath, 'utf8');
+    expect(source).not.toContain('requireOrganizationScope');
+  });
+
+  // Adapted from storage.routes.test.js:1174-1205: that file's router is
+  // loaded once and a permanent proxy defers the factory call to request
+  // time, so its factory is invoked exactly once per test (only for the
+  // route actually hit). This file's loadRouterWithGate instead does a
+  // FRESH require(routePath) per test (matching loadAuthenticatedRouter's
+  // existing convention above), which re-executes every `requireRole(...)`
+  // / `requirePermission(...)` call in eConsent.js at require time -- so if
+  // the factory itself pushed to recordedCalls, every one of the file's
+  // gated registrations would land in the array on every test, not just
+  // the one under test (confirmed the hard way: first run of this suite
+  // showed exactly that -- every prior test case's args accumulating in
+  // recordedCalls). Recording inside the returned middleware instead defers
+  // the push to request time, so only the one route actually reached by
+  // the test's request pushes its args.
+  function denyingRequirePermission() {
+    const recordedCalls = [];
+    const factory = (...args) => (req, res) => {
+      recordedCalls.push(args);
+      return res.status(403).json({ success: false, error: 'Acesso negado', gate: 'permission' });
+    };
+    factory.recordedCalls = recordedCalls;
+    return factory;
+  }
+
+  function denyingRequireRole() {
+    const recordedCalls = [];
+    const factory = (...args) => (req, res) => {
+      recordedCalls.push(args);
+      return res.status(403).json({ success: false, error: 'Acesso negado', gate: 'role' });
+    };
+    factory.recordedCalls = recordedCalls;
+    return factory;
+  }
+
+  // Loads the router with `authenticate` passing through (so the gate under
+  // test -- not the auth step ahead of it -- is what answers), swapping in
+  // the given requirePermission/requireRole factory BEFORE the single
+  // require(routePath) call below. Same freeze-at-require-time reasoning as
+  // loadAuthenticatedRouter above: eConsent.js destructures both gates from
+  // rbac at require time, so the module-level rbacModule properties have to
+  // be set first or the route would keep whatever implementation was
+  // current at its own require().
+  function loadRouterWithGate({ requirePermissionImpl, requireRoleImpl } = {}) {
+    clearRouteCache();
+    const authModule = require(authPath);
+    authModule.authenticate = (req, res, next) => {
+      req.user = { id: 'staff-1', userID: 'staff-1', roleName: 'Coordenador' };
+      next();
+    };
+    const rbacModule = require(rbacPath);
+    rbacModule.requirePermission = requirePermissionImpl || (() => (req, res, next) => next());
+    rbacModule.requireRole = requireRoleImpl || (() => (req, res, next) => next());
+    return require(routePath);
+  }
+
+  // One entry per requireRole-gated registration -- 10 of the file's 11
+  // gated sites (re-derived via `git grep -n -I -E
+  // "requirePermission[(]|requireRole[(]|requireOrganizationScope" --
+  // api/backend/src/routes/eConsent.js`: 12 matching lines, one of which,
+  // eConsent.js:265, is a comment referencing requireRole(3, 4) in prose,
+  // not a call site -- 11 real sites). The 11th, the single
+  // requirePermission call, is pinned separately below.
+  const ROLE_CASES = [
+    { label: 'GET /consent-policies/:id/pending-patients', method: 'get', path: '/consent-policies/cp1/pending-patients', expectedArgs: [3, 4] },
+    { label: 'POST /consent-templates', method: 'post', path: '/consent-templates', expectedArgs: [4] },
+    { label: 'GET /consent-templates', method: 'get', path: '/consent-templates', expectedArgs: [3, 4] },
+    { label: 'GET /consent-templates/:id', method: 'get', path: '/consent-templates/tmpl-1', expectedArgs: [4] },
+    { label: 'PUT /consent-templates/:id', method: 'put', path: '/consent-templates/tmpl-1', expectedArgs: [4] },
+    { label: 'POST /consent-policies', method: 'post', path: '/consent-policies', expectedArgs: [3, 4] },
+    { label: 'PUT /consent-policies/:id', method: 'put', path: '/consent-policies/cp1', expectedArgs: [3, 4] },
+    { label: 'GET /consent-policies/history', method: 'get', path: '/consent-policies/history', expectedArgs: [3, 4] },
+    { label: 'GET /consent-policies', method: 'get', path: '/consent-policies', expectedArgs: [3, 4] },
+    { label: 'POST /consents/:id/revoke', method: 'post', path: '/consents/consent-1/revoke', expectedArgs: [3, 4] },
+  ];
+
+  for (const { label, method, path, expectedArgs } of ROLE_CASES) {
+    it(`pins requireRole(${expectedArgs.join(', ')}) for ${label}`, async () => {
+      const requireRoleImpl = denyingRequireRole();
+      const router = loadRouterWithGate({ requireRoleImpl });
+      const app = buildApp(router);
+
+      const res = await request(app)[method](`/e-consent${path}`).send({});
+
+      expect(res.status).toBe(403);
+      expect(res.body.gate).toBe('role');
+      // The load-bearing assertion: a stub that discarded its arguments
+      // would 403 identically no matter which role list the route
+      // actually declared requireRole with.
+      expect(requireRoleImpl.recordedCalls).toEqual([expectedArgs]);
+    });
+  }
+
+  it("pins requirePermission('createPatient') for POST /generate-link (#888: a Patient-domain code on a Consent-domain route)", async () => {
+    const requirePermissionImpl = denyingRequirePermission();
+    const router = loadRouterWithGate({ requirePermissionImpl });
+    const app = buildApp(router);
+
+    const res = await request(app)
+      .post('/e-consent/generate-link')
+      .send({ participantId: '12345678', email: 'a@b.com' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.gate).toBe('permission');
+    expect(requirePermissionImpl.recordedCalls).toEqual([['createPatient']]);
+  });
+});
