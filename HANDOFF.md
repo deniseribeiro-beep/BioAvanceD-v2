@@ -1,141 +1,156 @@
 # HANDOFF
 
-**Written 2026-09-01, after a 10-issue queue sitting with Docker ON and a
-full gate run.** Dennis asked for 10 issues; the sitting **closed 13** and
-**filed 8**, working 6 of the 8 to closure. The session was not declared
-over by the user — it may continue. Re-derive every count rather than
-trusting it.
+**INTERIM — written mid-sitting, 2026-09-01. The session is CONTINUING.**
+Dennis asked for 10 issues and to use agents. Seven are committed, two
+write briefs are still in flight, and **the end-of-loop gate has not run
+at all.** Written now because the Stop checkpoint fired, not because the
+sitting ended. Re-derive every count rather than trusting it.
 
 ---
 
 ## Repo state
 
-- Branch `feature/docker-e2e-backend-integration`, pushed, clean and
-  matching origin. `main` untouched, no PR.
-- Last substantive commit: `8dc19916` (#928).
-- **`git status` is genuinely clean now** — the standing "never `git add
-  -A`, `api/backend/storage/assays/` is deliberately untracked" warning
-  several handoffs carried is **retired**. #927 gitignored the runtime
-  `storage/` and `uploads/` trees, which is what that warning worked
-  around. One committed PDF under `storage/samples/` stays tracked; a
-  gitignore rule does not untrack.
+- Branch `feature/docker-e2e-backend-integration`. **8 commits ahead of
+  origin and NOT pushed.** `main` untouched, no PR.
+- Working tree is **dirty by design** — two `fix-writer` agents are
+  editing. Do not assume `git status` is clean; check what is staged
+  before adding anything.
 - No new dependencies.
 
-## Verification state — FULL gate, all green [ran it]
+## THE IMPORTANT THING: nothing here has been gated
 
-| Gate | Result |
-|---|---|
-| backend `tests/unit tests/integration tests/compliance` | **8190 passed / 449 files / 0 failed** |
-| frontend (27 files) | **225 passed** |
-| `test:architecture` | **106 / 106** |
-| `npx tsc --noEmit` (frontend) | **exit 0** |
-| **e2e, full ordered suite, `--workers=1`** | **221 passed / 0 failed / 2.3 min** |
+Every commit below was verified only by **targeted native vitest runs**
+plus a scoped consumer sweep. Not run this sitting, at all:
 
-Backend was 8084 last sitting (+106). Arch was 104 (+2, the new
-route-shadowing guard).
+- the full backend suite
+- the full frontend suite
+- `npm run test:architecture`
+- `npx tsc --noEmit` for frontend or backend (only `typecheck:e2e`)
+- **any Docker anything, and the e2e suite**
+
+Two commits specifically need gates that have not happened:
+
+- **#930 (`568fb15f`) is unproven.** It changes Playwright's
+  `globalSetup`. Its only verification was `npm run typecheck:e2e`. The
+  full ordered e2e suite is the actual proof and it has not been run.
+- **#929 (`385b46f2`) widens an RBAC catalog entry.** Arch guards were
+  not run.
 
 ## Docker state
 
-**Stack DOWN. Volumes dropped (`down -v`). Nothing running.** So the next
-gate needs the **full bootstrap chain re-run**: the 12-service core, then
-`admin-bootstrap-test`, then the 17 reference-data one-shots.
-`docker-workflow`'s bioavanced overlay has the recipe and it is accurate —
-**including the 17, which is right; a grep of `^  reference-data-bootstrap`
-undercounts to 15 because `[a-z-]*` excludes the digits in `icd10`/`icd11`.**
+**Stack DOWN, volumes dropped, nothing running** — inherited from the
+previous sitting and unchanged, because this sitting never touched
+Docker. So the gate needs the **full bootstrap chain**: the 12-service
+core, then `admin-bootstrap-test`, then the 17 reference-data one-shots.
+`docker-workflow`'s bioavanced overlay has the recipe.
 
-Images rebuilt this sitting: `backend-app-test`, `worker-test`,
-`neo4j-projection-worker-test`, `frontend-app-test`.
+**Rebuild `backend-app-test` before any gate meant to exercise backend
+changes** — seven of the eight commits are backend, and a bring-up
+reuses whatever image already exists.
 
-**Rebuild the backend images before any gate that is meant to exercise
-backend changes.** Bringing the stack up reuses whatever
-`bioavanced-test-backend-app-test:latest` exists, and this sitting spent a
-full bring-up on a stale one — the giveaway was the RBAC boot-seed log line
-being absent for pre-#916 code.
+## Committed this sitting (8)
 
-## What closed (13)
+| Commit | Issue | Scope |
+|---|---|---|
+| `31c128fb` | #791 | full |
+| `a4329bb1` | #714 | FamilyHistory only |
+| `bc381020` | #931 | 2 of 3 fields |
+| `568fb15f` | #930 | needs e2e gate |
+| `cf7b1f74` | #762 | full |
+| `385b46f2` | #929 | 9 of 10 sites |
+| `9125b2c5` | #806 | full |
+| (this file) | — | interim rotation |
 
-`#659 #819 #888 #891 #905 #910 #918 #922 #924 #925 #926 #927 #928` — six of
-them filed by this sitting. Read each close comment for the evidence.
+**No issue has been closed.** #791, #762 and #806 are resolved and are
+waiting on the gate + push before closing. Read each issue's comment
+thread for what shipped.
 
-## Open, and why — the judgment a query cannot carry
+## In flight when this was written
 
-Query the board (`gh issue list --state open`, same with `--repo
-DyeAllPies/dyeallpies-skills-pack`). What the query will not tell you:
+Two `fix-writer` agents, both unverified and uncommitted:
 
-- **#923 is the sharpest open item.** `POST /storage/allocate`,
-  `/allocate/auto`, `/move` and `DELETE /release` cannot complete on
-  `compose.yml`, `compose.dev.yml` or `compose.prod.yml`. **[ran it]**
-  against a live standalone `mongo:7`: `hello` returns no `setName`, the
-  probe classifies it standalone, `withTransaction` refuses. Half shipped
-  (`d16933a3` makes the failure legible instead of `MongoServerError` code
-  20). **The remaining half is a genuine fork and it is yours** — degrade to
-  sequential writes (`sensor.service.js:237-268`, #918) or make dev/prod
-  replica sets (`compose.test.yml:85`). They differ on chain-of-custody: a
-  degraded `/move` writes the specimen's new position with no guarantee the
-  immutable audit row landed with it. The repo has done both, for reasons
-  that do not transfer, which is why I did not infer one.
-- **#893 is open on one unobserved step.** Code half verified natively,
-  and the ownership risk the plan flagged is now **[ran it]** — the prod
-  image's `/data/*` volumes are writable as uid 100 while `/app` is
-  refused. What is unobserved is an upload actually landing. **You cannot
-  smoke-test `compose.prod.yml` from the repo as shipped**: it guards nine
-  secrets with `${VAR:?}` and `.env.production.example` ships them present
-  but **blank**, which `:?` rejects. That is correct behaviour and also the
-  reason #893 and #924 both survived undetected. A real `.env` is the
-  precondition for any prod verification.
-- **#921 is open with ~80 of 228 gate sites pinned** across five routers.
-  Its original numbers were wrong by 4.3x. Every slice so far found a real
-  defect, so budget the rest as fix-work rather than coverage.
-- **#915 and #892 were deliberately excluded from this queue** — #915's own
-  body sequences it after #800, and #892's item 1 is parked behind #884.
-  Blocked on owner decisions, not on work.
-- **#902/#884/#881/#903/#908/#909** remain prior sittings' decisions.
-- Pack **#637/#638** carry this sitting's workflow findings. Both are Rule 0
-  — only a pack-repo session can act on them.
+- **#734** — backup encryption gated on `encryptionEnabled`. Files:
+  `backup.service.js`, `backup.service.test.js`,
+  `backup.service.jsonFallback.test.js`.
+- **#932** — barcode collection mismatch. Files: `barcodeGenerator.js`,
+  `import-lgpd.service.js`, `sample.service.js`,
+  `barcodeGenerator.test.js`.
+
+If the sitting died before these returned, **check the working tree for
+partial edits in those files** and either finish or revert them; do not
+gate on top of a half-applied change.
+
+## Filed this sitting (3) — all from contradicted premises
+
+Query the board (`gh issue list --state open`). What the query cannot
+carry:
+
+- **#932 is the sharpest.** `generateUniqueBarcode` scans `amostras`
+  while the LGPD import writes to `samples`. **[read it]** the RF004
+  duplicate guard is `if (sampleData.barcode)` and fires ~83 lines
+  *before* generation, so generated codes are never checked against
+  `samples`; the collision retry re-checks the same wrong collection;
+  and **[read it]** `Sample.js:35` has a non-unique index. Mechanism is
+  settled; **field impact is [not established]** — there is no
+  deployment, so nothing is corrupted today. **Blocks #779**, whose cost
+  model it invalidates.
+- **#933** — if every Administrador is `mfaLocked`, nothing in the app
+  unlocks anyone. **[read it]** `reset-mfa` refuses admin targets
+  (`user.routes.js:883-889`), `disable-mfa` needs an *authenticated*
+  admin (`:981-988`), and `resetMFA` is Administrador-only. Distinct
+  from #762's deploy-timing concern; this is a standing property.
+- **#934** — split from #908. **[read it]** `ReportQueryPage.tsx:7`
+  imports `reportsService` directly, so `useReports` is a *redundant*
+  second client, not prepared plumbing — that half is answerable and the
+  suggestion on the issue is to delete it. The `useAccess` half is
+  genuinely Dennis's.
+
+## Also changed on the tracker
+
+- **#908 was rescoped and retitled**, not closed. Its "the plumbing is
+  already sound" claim is false: three of its four master-data hooks
+  expose no mutations and their services have no update/delete.
+- **#714, #931, #929 carry `premise-corrected`** — each shipped work
+  required correcting the issue's own claims first.
+- **#734 is no longer an architecture call.** Its blocker was the belief
+  that encrypting backups breaks the RNF010 AC#5 checksum property.
+  **[read it]** It does not: the checksum is compared only inside
+  `runControlledRestoreTest`, against a recompute over the *same
+  directory in the same call* — never across runs — and `restoreBackup`
+  compares no checksum at all. Random IVs are irrelevant to it.
 
 ## Conventions this sitting relied on / established
 
-- **A `git grep` pattern beginning with `/` is MSYS path-mangled on this
-  machine** — silent under-match, exit 0. `"/label|SampleLabel"` returned 10
-  hits where `"[/]label|SampleLabel"` returned 19, in one file. It defeated
-  #659's original evidence **and my re-verification of it**. Bracket the
-  slash. Pack #637.
-- **A character class silently excludes what you did not think to include.**
-  Same family, twice in one sitting: `[a-z-]*` hid `icd10`/`icd11` and made
-  me report the overlay as stale when it was correct. Both failures produce
-  a confident wrong count, not an error.
-- **`full-suite-guard`'s sanctioned frontend whole-suite command cannot
-  work** — vitest positional args are filters, not globs, and the hook
-  blocks the only alternative it names. What works: `npx vitest run
-  src/components src/contexts src/foundation src/hooks src/pages src/utils
-  src/views`. Pack #638.
-- **Arch-guard exemptions travel with any change that moves them**, again:
-  `filter-keys.arch.test.js`'s three `result.routes.js` entries were
-  re-keyed **twice** in this one sitting. The gate caught it both times.
-- **Three distinct mechanisms produce a vacuous gate test**, and no single
-  guard catches all three: an argument-discarding stub (#888), an empty db
-  mock (#913), and a proxy that calls the middleware factory once at
-  require time so the seam is structurally inert (`sample.routes.test.js`,
-  fixed in `b96bbc69`).
-- **`requirePermission`'s `allowedActions` is derived from the HTTP verb**
-  (`METHOD_TO_ACTION`, `rbac.js:82`), not chosen. A code whose
-  `allowedActions` omits the verb's derived action denies every request to
-  that route — which is why dict-02's `RELEASE` could not be used for
-  `DELETE /release/:sampleId`.
-- **A predicate and its negation can want opposite defaults.**
-  `isKnownStandaloneDeployment` is deliberately not `!isTransactionCapable`;
-  collapsing them cost 18 red tests. "May I use a transaction" and "should I
-  refuse" must both answer no when the topology is unknown.
-- **A red gate is not evidence about the change you just made.** The first
-  full e2e run came back 38 red and none of it was the compose change under
-  test — `TEST_SUPPORT_SECRET` was unset in the host shell (#928, fixed).
-  The failures surfaced as 403s and `response.ok() === false` in the RF029
-  ingestion blocks, which read exactly like product breakage.
+- **A `[read it]` premise in an issue body is worth re-checking before
+  building on it.** Five of nine triaged issues had a materially wrong
+  claim, and two would have shipped defects: #929's "runtime no-op" swap
+  would have 403'd six of nine routes, and #931's literal reading
+  produces tiles that do not add up.
+- **The two-hop consumer sweep paid twice more.**
+  `tests/unit/workers.unit.test.js` pins the sub-worker return shape and
+  no brief named it; `tests/integration/facility-room.api.test.js` was
+  missed by a `facility.routes` grep because the filename does not match
+  the router's.
+- **`sed -i` on product source is denied by the auto-mode permission
+  classifier on this machine.** The Edit tool is the working fallback —
+  but it requires a prior `Read` *tool* call, which `cat`/`sed -n` does
+  not satisfy.
+- **A quoted heredoc writing a long Markdown body failed to parse**
+  through the Bash tool; the `Write` tool succeeded with identical
+  content. Prefer `Write` + `gh --body-file` for issue bodies.
+- **`npm run typecheck:e2e` is safe beside a frontend write brief** —
+  root `tsconfig.json` includes only `playwright/**` and `tests/e2e/**`.
+  The full `npm run typecheck` is NOT: it recurses frontend and backend.
+- **`api/backend/tests/integration/` runs natively**, re-confirmed —
+  `equipment.api.test.js` and `facility-room.api.test.js` both ran with
+  zero containers up.
 
 ## Recommended next
 
-**None queued** — Dennis named no task beyond the 10.
+**None queued** — Dennis named no task beyond the 10, and this sitting
+is not over.
 
-Highest value now: **#923's remedy fork** (needs your call, everything else
-about it is measured) and **#921's remaining slices** (mechanical, and each
-one so far has found a real defect).
+The immediate next actions, in order: land or revert the two in-flight
+agents' work, **then run the full gate** (native suites, architecture,
+both typechecks, then Docker bring-up + bootstrap + ordered e2e), then
+push, then close #791/#762/#806.
