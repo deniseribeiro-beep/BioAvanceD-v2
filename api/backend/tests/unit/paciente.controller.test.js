@@ -397,7 +397,15 @@ describe('paciente.controller', () => {
       vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', patientName: 'Foo' });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
-      const db = createDbMock({});
+      // #919: seeded as a real level-1 (UsuarioExterno) assignment rather
+      // than an empty db. The controller decides via
+      // userHasPermission(db, userID, 'createPatient') and never reads
+      // req.user.accessType -- so with createDbMock({}) the reduced-field
+      // branch fired because there was no RBAC at all, and the test's stated
+      // subject ("operational role") was pinned by nothing. UsuarioExterno
+      // genuinely lacks createPatient (it holds only viewReports), so the
+      // assertion is unchanged; what changes is that it now tests the role.
+      const db = createDbMock({ ...buildRbacCollections([{ userAccountId: 'operational-user', accessType: 1 }]) });
       const req = createReq({ app: { locals: { db } }, params: { id: '12345678' }, user: { accessType: 1, userID: 'operational-user' } });
       const res = createRes();
 
@@ -898,7 +906,15 @@ describe('paciente.controller', () => {
         limit: 50,
         skip: 0
       });
-      const db = createDbMock({});
+      // #919: seeded as a real level-1 (UsuarioExterno) assignment rather
+      // than an empty db. The controller decides via
+      // userHasPermission(db, userID, 'createPatient') and never reads
+      // req.user.accessType -- so with createDbMock({}) the reduced-field
+      // branch fired because there was no RBAC at all, and the test's stated
+      // subject ("operational role") was pinned by nothing. UsuarioExterno
+      // genuinely lacks createPatient (it holds only viewReports), so the
+      // assertion is unchanged; what changes is that it now tests the role.
+      const db = createDbMock({ ...buildRbacCollections([{ userAccountId: 'operational-user', accessType: 1 }]) });
       const req = createReq({ app: { locals: { db } }, params: { id: '12345678' }, user: { accessType: 1, userID: 'operational-user' } });
       const res = createRes();
 
