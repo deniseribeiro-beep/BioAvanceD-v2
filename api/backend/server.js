@@ -13,6 +13,7 @@ const env = require("./src/config/env");
 const { initScheduler } = require("./src/services/scheduler.service");
 const { initializeSecuritySystem } = require("./src/infrastructure/middleware/integrationSecurityMiddleware");
 const { seedReportTemplates } = require("./src/services/report-template-seed.service");
+const { seedRolesAndPermissions } = require("./src/services/rbac-catalog-seed.service");
 
 let httpServerInstance = null;
 
@@ -55,6 +56,33 @@ async function startServer() {
     logger.info("🔐 Ativando sistema de segurança e conformidade LGPD...");
     await initializeSecuritySystem(app, db);
     logger.info("✅ Sistema de segurança ativado com sucesso");
+
+    // #916: the RBAC catalog reached a live database ONLY at first-admin
+    // bootstrap -- createFirstAdmin early-returns on `users_exist`, and the
+    // two standalone scripts have no npm entry and no compose service. So a
+    // permission code added after a deployment's first boot had no Permission
+    // document, and userHasPermission answers false for a missing document:
+    // every route using that code 403s for every user including Administrador,
+    // silently, with nothing failing loudly. (An unknown code is the LOUD
+    // failure -- requirePermission 500s on that. The missing-document case is
+    // the quiet one.)
+    //
+    // #737's comment below cites "the same self-sufficiency #437 gave the RBAC
+    // catalog" -- a property the catalog did not actually have. This is what
+    // makes that sentence true.
+    //
+    // Safe to run every boot: upsertByKey inserts a missing permissionCode,
+    // and upsertRole MERGES freshly computed permissionIds into an existing
+    // role rather than skipping it (#646, test-pinned), which is exactly the
+    // "new permission granted to an existing role" case. Permitted on the boot
+    // path -- seed-boundary.arch.test.js fences off seed-essential-reference-
+    // data specifically, not this. Non-fatal, same shape as the seed below.
+    try {
+      const { roles, permissions } = await seedRolesAndPermissions(db);
+      logger.info(`🔑 Catálogo RBAC garantido: ${roles.length} papéis, ${permissions.length} permissões`);
+    } catch (rbacSeedError) {
+      logger.error("Erro ao semear catálogo RBAC:", rbacSeedError.message);
+    }
 
     // #737: reports.routes.js's buildPreviewData (#726) dispatches only via a
     // ReportTemplate lookup by code -- with the system rows missing, every
