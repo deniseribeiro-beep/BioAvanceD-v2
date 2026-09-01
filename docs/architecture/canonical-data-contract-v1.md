@@ -1368,10 +1368,19 @@ administered), `medicationStatus` mapped from `treatmentStatus`
 **The literal real-backend Playwright e2e proof is tracked separately as
 #696**, not yet built.
 
-**`AllergyIntolerance`/`FamilyHistory`/`Procedure` not yet landed
-(follow-up tracked as #697):** no live caller creates any of these three
-— unlike `MedicationExposure`, none has a corresponding data source in
-the intake wizard's current UI at all. #697 is a marker, not picked up.
+**`AllergyIntolerance`/`FamilyHistory`/`Procedure` landed in #708/#709/
+#710; #697 is closed.** This paragraph previously said the opposite —
+that none had a live caller and #697 was an unpicked-up marker — while
+the same file already documented all three as wired. Corrected #929's
+sitting.
+
+`src/routes/intakeWizard.js` creates all three today. Note the *coding*
+gates differ: `FamilyHistory.familyCondition` is validated against an
+active `ReferenceDatasetRelease` (#714), because ORPHA/ICD-11/MONDO are
+all inside RF005 AC#4's enumeration. `AllergyIntolerance.allergenCoding`
+(DCB/SNOMED) and `Procedure.procedureCoding` (SNOMED/institutional) are
+**not** enumerated by AC#4 and are deliberately ungated pending the
+interpretation question open on #714.
 
 ### Consent
 
