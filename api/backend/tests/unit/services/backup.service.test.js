@@ -1144,4 +1144,215 @@ describe('backup.service', () => {
       }));
     });
   });
+
+  // #734: encryptionEnabled is read from the admin-editable BackupPolicy
+  // (mirroring #728's retentionDays wiring) and threaded into the JSON
+  // fallback writer. These run against real temp directories, not mocked
+  // fs, the same way the #742 checksum test does above -- the property
+  // under test is what actually lands on disk and whether it survives a
+  // real decrypt/restore round trip, which a mocked fs would only hand
+  // back to us unchanged.
+  describe('#734: backup encryption at rest', () => {
+    function makeAppDbWithPolicy(encryptionEnabled) {
+      const policyDoc = {
+        _id: 'main',
+        cronExpression: '0 3 * * *',
+        retentionDays: 30,
+        encryptionEnabled,
+        rpoHours: 24,
+        rtoHours: 12,
+        updatedBy: null,
+        updatedAt: null,
+      };
+      const backupPolicyFindOne = vi.fn().mockResolvedValue(policyDoc);
+      const historyInsertOne = vi.fn().mockResolvedValue({ insertedId: 'h1' });
+      return {
+        collection: vi.fn((name) => {
+          if (name === 'backup_policy') return { findOne: backupPolicyFindOne };
+          return { insertOne: historyInsertOne };
+        }),
+      };
+    }
+
+    // mongodump missing forces performBackup onto the JSON-fallback writer
+    // (writeJsonBackup) -- the same trick the pre-existing "falls back to a
+    // JSON backup" test above uses.
+    function mockMongodumpAndMongorestoreMissing() {
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb({ message: "'mongodump' is not recognized as an internal or external command" }, '', 'is not recognized');
+      });
+    }
+
+    it('encrypts JSON-fallback payload files in place (unreadable on disk, checksum still verifies) and restores the original data through testRestoreBackup', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const os = require('os');
+      const baseDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-734-on-'));
+      env.BACKUP_DIR = baseDir;
+
+      try {
+        mockMongodumpAndMongorestoreMissing();
+
+        const plaintextMarker = 'PLAINTEXT-SSN-MARKER-42';
+        const fakeCollection = {
+          find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ _id: 1, ssn: plaintextMarker }]) })),
+          deleteMany: vi.fn().mockResolvedValue({}),
+          insertMany: vi.fn().mockResolvedValue({})
+        };
+        const fakeBackupDb = {
+          listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'patients' }]) })),
+          collection: vi.fn(() => fakeCollection)
+        };
+        const fakeClient = {
+          connect: vi.fn().mockResolvedValue(),
+          db: vi.fn(() => fakeBackupDb),
+          close: vi.fn().mockResolvedValue()
+        };
+        vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+        const backupService = freshBackupService();
+        const appDb = makeAppDbWithPolicy(true);
+        const result = await backupService.runBackup(appDb);
+
+        expect(result.success).toBe(true);
+        expect(result.mode).toBe('json-fallback');
+
+        // Unreadable as plaintext: the marker isn't present and the bytes
+        // on disk don't even parse as JSON any more.
+        const patientsPath = path.join(result.path, 'patients.json');
+        const onDiskBuffer = await fs.promises.readFile(patientsPath);
+        expect(onDiskBuffer.toString('utf8')).not.toContain(plaintextMarker);
+        expect(() => JSON.parse(onDiskBuffer.toString('utf8'))).toThrow();
+
+        const manifest = JSON.parse(await fs.promises.readFile(path.join(result.path, 'manifest.json'), 'utf8'));
+        const patientsEntry = manifest.collections.find((entry) => entry.file === 'patients.json');
+        expect(patientsEntry.encrypted).toBe(true);
+        expect(patientsEntry.encryptionAlgorithm).toBe('aes-256-gcm');
+        expect(typeof patientsEntry.encryptionKeyId).toBe('string');
+        expect(typeof patientsEntry.encryptionIv).toBe('string');
+        expect(typeof patientsEntry.encryptionTag).toBe('string');
+
+        // checksumVerified recomputes over the real on-disk ciphertext
+        // bytes and compares to the manifest's stored digest -- proof the
+        // checksum was taken over what's actually stored, not the
+        // plaintext, and that the random per-file IV doesn't perturb it.
+        const testResult = await backupService.testRestoreBackup(result.path);
+        expect(testResult.success).toBe(true);
+        expect(testResult.checksumVerified).toBe(true);
+        expect(testResult.mode).toBe('json-fallback');
+
+        // Round trip: the restore path decrypted the file and handed the
+        // original plaintext document to insertMany.
+        expect(fakeCollection.insertMany).toHaveBeenCalledTimes(1);
+        const [insertedDocs] = fakeCollection.insertMany.mock.calls[0];
+        expect(insertedDocs).toHaveLength(1);
+        expect(Number(insertedDocs[0]._id)).toBe(1);
+        expect(insertedDocs[0].ssn).toBe(plaintextMarker);
+      } finally {
+        await fs.promises.rm(baseDir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not encrypt when the policy has encryptionEnabled=false -- byte-for-byte the pre-#734 plaintext behaviour', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const os = require('os');
+      const baseDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-734-off-'));
+      env.BACKUP_DIR = baseDir;
+
+      try {
+        mockMongodumpAndMongorestoreMissing();
+
+        const docs = [{ _id: 1, ssn: 'not-encrypted' }];
+        const fakeCollection = {
+          find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue(docs) }))
+        };
+        const fakeBackupDb = {
+          listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'patients' }]) })),
+          collection: vi.fn(() => fakeCollection)
+        };
+        const fakeClient = {
+          connect: vi.fn().mockResolvedValue(),
+          db: vi.fn(() => fakeBackupDb),
+          close: vi.fn().mockResolvedValue()
+        };
+        vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+        const backupService = freshBackupService();
+        const appDb = makeAppDbWithPolicy(false);
+        const result = await backupService.runBackup(appDb);
+
+        expect(result.success).toBe(true);
+
+        const patientsPath = path.join(result.path, 'patients.json');
+        const onDiskContent = await fs.promises.readFile(patientsPath, 'utf8');
+        // Exactly what writeJsonBackup wrote before #734 -- the serialized
+        // JSON text, untouched.
+        expect(onDiskContent).toBe(backupService.serializeBackupDocs(docs));
+
+        const manifest = JSON.parse(await fs.promises.readFile(path.join(result.path, 'manifest.json'), 'utf8'));
+        const patientsEntry = manifest.collections.find((entry) => entry.file === 'patients.json');
+        // No encryption fields at all when encryption is off -- the
+        // manifest shape is unchanged from before #734.
+        expect(Object.keys(patientsEntry).sort()).toEqual(['count', 'file', 'name']);
+
+        const expectedChecksum = crypto.createHash('sha256')
+          .update('patients.json')
+          .update(Buffer.from(onDiskContent))
+          .digest('hex');
+        expect(manifest.checksum).toBe(expectedChecksum);
+      } finally {
+        await fs.promises.rm(baseDir, { recursive: true, force: true });
+      }
+    });
+
+    it('fails the backup loudly instead of writing plaintext when encryption is enabled but no key is configured', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const os = require('os');
+      const baseDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-734-nokey-'));
+      env.BACKUP_DIR = baseDir;
+
+      const originalEncryptionKey = process.env.ENCRYPTION_KEY;
+      delete process.env.ENCRYPTION_KEY;
+
+      try {
+        mockMongodumpAndMongorestoreMissing();
+
+        const fakeCollection = {
+          find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ _id: 1, ssn: 'x' }]) }))
+        };
+        const fakeBackupDb = {
+          listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'patients' }]) })),
+          collection: vi.fn(() => fakeCollection)
+        };
+        const fakeClient = {
+          connect: vi.fn().mockResolvedValue(),
+          db: vi.fn(() => fakeBackupDb),
+          close: vi.fn().mockResolvedValue()
+        };
+        vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+        const backupService = freshBackupService();
+        const appDb = makeAppDbWithPolicy(true);
+        const result = await backupService.runBackup(appDb);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('ENCRYPTION_KEY');
+
+        // The failure happens before performBackup ever runs mongodump or
+        // writeJsonBackup touches disk -- nothing (plaintext or otherwise)
+        // was written under the backup base dir.
+        const entries = await fs.promises.readdir(baseDir, { recursive: true });
+        expect(entries.filter((entry) => String(entry).endsWith('patients.json'))).toHaveLength(0);
+      } finally {
+        if (originalEncryptionKey === undefined) {
+          delete process.env.ENCRYPTION_KEY;
+        } else {
+          process.env.ENCRYPTION_KEY = originalEncryptionKey;
+        }
+        await fs.promises.rm(baseDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

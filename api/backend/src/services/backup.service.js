@@ -1,11 +1,14 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 const { exec } = require('child_process');
 const { MongoClient, BSON } = require('mongodb');
 const logger = require('../utils/logger');
 const env = require('../config/env');
 const backupPolicyService = require('./backup-policy.service');
+const keyRegistry = require('../config/keyRegistry');
+const { encryptFileBuffer, decryptFileBuffer } = require('../utils/fileCrypto');
 
 const DEFAULT_RETENTION_DAYS = 30;
 
@@ -30,6 +33,136 @@ async function resolveRetentionDays(db) {
   }
 
   return Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
+}
+
+// #734: mirrors resolveRetentionDays's db-optional, fail-open-to-prior-
+// behavior pattern, but for encryptionEnabled rather than retentionDays.
+// "Prior behavior" here is plaintext (encryption never existed before this
+// change), so the no-db and policy-lookup-failed paths both resolve to
+// false -- every existing caller that never threaded a db through keeps
+// writing exactly the bytes it always did. Only a policy actually read
+// (successfully, with an explicit boolean) can turn encryption on.
+async function resolveEncryptionEnabled(db) {
+  if (!db) return false;
+
+  try {
+    const policy = await backupPolicyService.getPolicy(db);
+    if (typeof policy?.encryptionEnabled === 'boolean') {
+      return policy.encryptionEnabled;
+    }
+  } catch (error) {
+    logger.error('Erro ao buscar política de criptografia de backup, usando padrão:', error.message);
+  }
+
+  return false;
+}
+
+// #734: encryptFileBuffer (fileCrypto.js) returns null rather than throwing
+// when ENCRYPTION_KEY isn't configured -- the right behavior for its other
+// caller (sample-file.controller.js), which falls back to storing
+// plaintext. That silent fallback is exactly the defect this issue is
+// about, so backups check for a configured key up front and abort loudly
+// instead of ever reaching that null.
+function assertEncryptionKeyConfigured() {
+  if (!keyRegistry.getActiveKey()) {
+    throw new Error(
+      'Criptografia de backup habilitada (encryptionEnabled) mas nenhuma chave de criptografia está configurada (ENCRYPTION_KEY). Backup abortado para não gravar dados em texto plano.'
+    );
+  }
+}
+
+// Encrypts one file's bytes in place, returning the per-file envelope
+// (algorithm/keyId/iv/tag) to be recorded in manifest.json. Field names
+// match sample-file.controller.js's persisted shape so decryptFileBuffer
+// can be handed the entry object directly on restore.
+async function encryptFileInPlace(filePath) {
+  const plaintext = await fs.promises.readFile(filePath);
+  const encryption = encryptFileBuffer(plaintext);
+  if (!encryption) {
+    // assertEncryptionKeyConfigured() is always called before this, so
+    // reaching here means the key vanished between the two checks -- still
+    // fail loudly rather than silently leaving plaintext on disk.
+    assertEncryptionKeyConfigured();
+  }
+  await fs.promises.writeFile(filePath, encryption.ciphertext);
+  return {
+    encrypted: true,
+    encryptionAlgorithm: encryption.algorithm,
+    encryptionKeyId: encryption.keyId,
+    encryptionIv: encryption.iv,
+    encryptionTag: encryption.tag
+  };
+}
+
+// mongodump path: encrypts every file under dirPath recursively (the dump
+// tree can nest a subdirectory per database), skipping the top-level
+// manifest.json exactly like computeDirChecksum does, and returns one
+// envelope entry per file (relative path) for manifest.json.
+async function encryptDirectoryFilesInPlace(dirPath) {
+  const entries = [];
+
+  async function walk(currentPath, relativePath) {
+    const items = await fs.promises.readdir(currentPath, { withFileTypes: true });
+    for (const item of items) {
+      if (!relativePath && item.name === CHECKSUM_MANIFEST_FILE) continue;
+      const itemPath = path.join(currentPath, item.name);
+      const itemRelative = relativePath ? `${relativePath}/${item.name}` : item.name;
+      if (item.isDirectory()) {
+        // eslint-disable-next-line no-await-in-loop
+        await walk(itemPath, itemRelative);
+      } else if (item.isFile()) {
+        // eslint-disable-next-line no-await-in-loop
+        const envelope = await encryptFileInPlace(itemPath);
+        entries.push({ file: itemRelative, ...envelope });
+      }
+    }
+  }
+
+  await walk(dirPath, '');
+  return entries;
+}
+
+// #734: mongorestore reads BSON straight off disk and cannot handle
+// ciphertext, so a mongodump-encrypted backup has to be decrypted into a
+// disposable scratch copy before mongorestore ever sees it -- the original
+// backup directory (and its checksummed ciphertext bytes) is never touched.
+// manifest.json itself is not copied; mongorestore only wants the dump
+// tree.
+async function prepareDecryptedRestoreCopy(backupPath, manifest) {
+  const scratchDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-restore-decrypt-'));
+  await fs.promises.cp(backupPath, scratchDir, {
+    recursive: true,
+    filter: (src) => path.basename(src) !== CHECKSUM_MANIFEST_FILE
+  });
+
+  const encryptedFiles = Array.isArray(manifest?.encryptedFiles) ? manifest.encryptedFiles : [];
+  for (const entry of encryptedFiles) {
+    if (!entry || typeof entry.file !== 'string') continue;
+    // eslint-disable-next-line no-await-in-loop
+    const filePath = path.join(scratchDir, ...entry.file.split('/'));
+    // eslint-disable-next-line no-await-in-loop
+    const ciphertext = await fs.promises.readFile(filePath);
+    const plaintext = decryptFileBuffer(ciphertext, entry);
+    // eslint-disable-next-line no-await-in-loop
+    await fs.promises.writeFile(filePath, plaintext);
+  }
+
+  return scratchDir;
+}
+
+// A decrypt-scratch teardown failure must never mask the restore's own
+// result, same reasoning as dropScratch() below for the scratch database.
+async function cleanupDecryptedRestoreCopy(scratchDir) {
+  if (!scratchDir) return;
+  try {
+    await fs.promises.rm(scratchDir, { recursive: true, force: true });
+  } catch (error) {
+    logger.error(`Erro ao remover cópia temporária descriptografada ${scratchDir}:`, error?.message || String(error));
+  }
+}
+
+function isEncryptedMongodumpManifest(manifest) {
+  return !!(manifest && manifest.type === 'mongodump' && manifest.encrypted && Array.isArray(manifest.encryptedFiles));
 }
 
 // #723 (RF013 AC#3): sha256 over every file under dirPath, recursively,
@@ -153,13 +286,20 @@ function runCommand(command) {
 }
 
 // #738 (RF013 AC#3): the JSON fallback was written as a degraded-mode
-// safety net, but the Docker images ship no mongodump/mongorestore, so on
-// every containerized deployment it is the *only* path. JSON.stringify /
-// JSON.parse do not round-trip BSON: ObjectId _ids and refs came back as
-// 24-character strings and Dates as ISO strings, so after a restore every
-// `findOne({ _id: new ObjectId(id) })` and every date-range query in the
-// app would silently stop matching. AC#3's checksum is computed over the
-// JSON files, so it could not catch the corruption either.
+// safety net. At the time this comment was first written the Docker images
+// shipped no mongodump/mongorestore, which made the fallback the *only*
+// path on every containerized deployment -- that gap was closed by the
+// same commit (mongodb-tools is installed in Dockerfile.dev and
+// Dockerfile.prod), so mongodump is now the primary containerized path and
+// the JSON writer is the degraded-mode fallback it was designed to be,
+// taken only when the mongodump/mongorestore binaries are unavailable.
+// The round-trip risk below still applies whenever that fallback runs:
+// JSON.stringify / JSON.parse do not round-trip BSON -- ObjectId _ids and
+// refs came back as 24-character strings and Dates as ISO strings, so
+// after a restore every `findOne({ _id: new ObjectId(id) })` and every
+// date-range query in the app would silently stop matching. AC#3's
+// checksum is computed over the JSON files, so it could not catch the
+// corruption either.
 //
 // Extended JSON in canonical mode (`relaxed: false`) wraps values in their
 // type ($oid, $date, $numberDecimal, ...) so the round trip is lossless.
@@ -435,29 +575,45 @@ async function restoreFromJsonBackup(backupPath, mongoUri, targetDbName) {
     await client.connect();
     const db = client.db(dbName);
 
-    let jsonFiles = [];
+    // #734: manifest.collections entries may carry a per-file crypto
+    // envelope (encrypted/encryptionAlgorithm/encryptionKeyId/
+    // encryptionIv/encryptionTag) -- kept alongside the filename here so
+    // the loop below knows how to read each file, instead of the previous
+    // map-to-filename-only that discarded it.
+    let jsonFileEntries = [];
     let restoredDocuments = 0;
 
     if (manifest?.collections && Array.isArray(manifest.collections)) {
-      jsonFiles = manifest.collections
-        .map((entry) => entry?.file)
-        .filter((file) => typeof file === 'string' && file.endsWith('.json'));
+      jsonFileEntries = manifest.collections
+        .filter((entry) => entry && typeof entry.file === 'string' && entry.file.endsWith('.json'))
+        .map((entry) => ({ ...entry }));
     }
 
-    if (jsonFiles.length === 0) {
-      jsonFiles = (await fs.promises.readdir(backupPath))
+    if (jsonFileEntries.length === 0) {
+      const files = (await fs.promises.readdir(backupPath))
         .filter((file) => file.endsWith('.json') && file !== 'manifest.json');
+      // No manifest metadata to go on for these -- always plaintext, same
+      // as every backup written before this change.
+      jsonFileEntries = files.map((file) => ({ file, encrypted: false }));
     }
 
-    if (jsonFiles.length === 0) {
+    if (jsonFileEntries.length === 0) {
       throw new Error('Nenhum arquivo JSON de backup encontrado para restore');
     }
 
-    for (const fileName of jsonFiles) {
-      const collectionName = fileName.replace(/\.json$/i, '');
-      const fullPath = path.join(backupPath, fileName);
+    for (const entry of jsonFileEntries) {
+      const collectionName = entry.file.replace(/\.json$/i, '');
+      const fullPath = path.join(backupPath, entry.file);
 
-      const raw = await fs.promises.readFile(fullPath, 'utf8');
+      let raw;
+      if (entry.encrypted) {
+        const ciphertext = await fs.promises.readFile(fullPath);
+        const plaintext = decryptFileBuffer(ciphertext, entry);
+        raw = plaintext.toString('utf8');
+      } else {
+        raw = await fs.promises.readFile(fullPath, 'utf8');
+      }
+
       const docs = parseBackupDocs(raw);
 
       const collection = db.collection(collectionName);
@@ -477,7 +633,7 @@ async function restoreFromJsonBackup(backupPath, mongoUri, targetDbName) {
       restoredFrom: path.basename(backupPath),
       restoredAt: new Date(),
       mode: 'json-fallback',
-      collections: jsonFiles.length,
+      collections: jsonFileEntries.length,
       documents: restoredDocuments
     };
   } finally {
@@ -548,7 +704,7 @@ function stripDefaultDatabase(mongoUri) {
   return String(mongoUri).replace(/^(mongodb(?:\+srv)?:\/\/[^/?]*)(?:\/[^?]*)?/, '$1/');
 }
 
-async function writeJsonBackup(backupDir, mongoUri) {
+async function writeJsonBackup(backupDir, mongoUri, encryptionEnabled = false) {
   const dbName = resolveDatabaseName(mongoUri);
   const client = new MongoClient(mongoUri);
 
@@ -579,6 +735,20 @@ async function writeJsonBackup(backupDir, mongoUri) {
       });
     }
 
+    // #734: encrypt each collection's payload file in place, AFTER it has
+    // been written and BEFORE the checksum below -- so the checksum is
+    // computed over the same ciphertext bytes that end up on disk, at
+    // exactly the point it was already being computed.
+    if (encryptionEnabled) {
+      assertEncryptionKeyConfigured();
+      for (const entry of manifest.collections) {
+        const filePath = path.join(backupDir, entry.file);
+        // eslint-disable-next-line no-await-in-loop
+        const envelope = await encryptFileInPlace(filePath);
+        Object.assign(entry, envelope);
+      }
+    }
+
     const checksum = await computeDirChecksum(backupDir);
     manifest.checksum = checksum;
 
@@ -600,11 +770,24 @@ async function writeJsonBackup(backupDir, mongoUri) {
   }
 }
 
-async function performBackup(retentionDaysOverride) {
+async function performBackup(retentionDaysOverride, encryptionEnabled = false) {
   const mongoUri = env.MONGO_URI;
   if (!mongoUri) {
     logger.warn('Backup ignorado: MONGO_URI não configurado.');
     return { success: false, skipped: true, reason: 'missing_mongo_uri' };
+  }
+
+  // #734: checked before mongodump ever runs (or the JSON fallback ever
+  // writes a byte) -- a backup that believes it is encrypted and is not is
+  // exactly this issue's defect, so a missing key must fail loudly up
+  // front rather than after plaintext already exists on disk.
+  if (encryptionEnabled) {
+    try {
+      assertEncryptionKeyConfigured();
+    } catch (keyError) {
+      logger.error('Erro ao executar backup:', keyError.message);
+      return { success: false, error: keyError.message };
+    }
   }
 
   const baseDir = getBackupBaseDir();
@@ -619,6 +802,19 @@ async function performBackup(retentionDaysOverride) {
     await runCommand(command);
     logger.info(`✅ Backup concluído: ${backupDir}`);
 
+    // #734: encrypt the dump tree's files in place, AFTER mongodump
+    // completes and BEFORE the checksum below -- so the checksum is
+    // computed over the same ciphertext bytes that end up on disk, at
+    // exactly the point it was already being computed. The key was
+    // already confirmed present above; re-checked here too since
+    // assertEncryptionKeyConfigured() is cheap and this is the one place
+    // that would otherwise silently write ciphertext-less files.
+    let encryptedFiles = null;
+    if (encryptionEnabled) {
+      assertEncryptionKeyConfigured();
+      encryptedFiles = await encryptDirectoryFilesInPlace(backupDir);
+    }
+
     const checksum = await computeDirChecksum(backupDir);
     await fs.promises.writeFile(
       path.join(backupDir, 'manifest.json'),
@@ -626,7 +822,8 @@ async function performBackup(retentionDaysOverride) {
         createdAt: new Date().toISOString(),
         dbName: resolveDatabaseName(mongoUri),
         type: 'mongodump',
-        checksum
+        checksum,
+        ...(encryptionEnabled ? { encrypted: true, encryptedFiles } : {})
       }, null, 2),
       'utf8'
     );
@@ -642,7 +839,7 @@ async function performBackup(retentionDaysOverride) {
     if (dumpBinaryMissing) {
       try {
         logger.warn('mongodump indisponível. Usando fallback de backup em JSON.');
-        const fallbackResult = await writeJsonBackup(backupDir, mongoUri);
+        const fallbackResult = await writeJsonBackup(backupDir, mongoUri, encryptionEnabled);
 
         const retentionDays = Number.isFinite(Number(retentionDaysOverride)) ? Number(retentionDaysOverride) : Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
         await cleanupOldBackups(baseDir, retentionDays);
@@ -669,7 +866,8 @@ async function performBackup(retentionDaysOverride) {
 async function runBackup(db) {
   const startedAt = new Date();
   const retentionDays = await resolveRetentionDays(db);
-  const result = await performBackup(retentionDays);
+  const encryptionEnabled = await resolveEncryptionEnabled(db);
+  const result = await performBackup(retentionDays, encryptionEnabled);
 
   await recordBackupHistory(db, {
     startedAt,
@@ -694,33 +892,61 @@ async function restoreBackup(backupPath) {
     return { success: false, error: 'Backup não encontrado' };
   }
 
-  const dbArg = env.MONGO_DB ? ` --nsInclude="${env.MONGO_DB}.*"` : '';
-  const command = `mongorestore --uri="${stripDefaultDatabase(mongoUri)}" --drop${dbArg} "${backupPath}"`;
+  // #734: mongorestore reads BSON straight off disk and cannot handle a
+  // mongodump-encrypted backup's ciphertext -- decrypt into a disposable
+  // scratch copy first and restore from that instead, leaving the original
+  // (checksummed) backup directory untouched. A manifest read failure here
+  // is treated the same as "no manifest" (unencrypted / pre-existing
+  // backup), matching runControlledRestoreTest's own tolerance for it.
+  let manifest = null;
+  const manifestPath = path.join(backupPath, 'manifest.json');
+  if (fs.existsSync(manifestPath)) {
+    try {
+      manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8'));
+    } catch (_) {
+      manifest = null;
+    }
+  }
+
+  let restoreSourcePath = backupPath;
+  let scratchDecryptDir = null;
 
   try {
-    await runCommand(command);
-    return {
-      success: true,
-      restoredFrom: path.basename(backupPath),
-      restoredAt: new Date(),
-      mode: 'mongorestore'
-    };
-  } catch (err) {
-    const details = err && err.error ? err.error.message : err?.message;
-    const restoreBinaryMissing = /mongorestore: not found|is not recognized|ENOENT/i.test(String(details || ''));
-
-    if (restoreBinaryMissing) {
-      try {
-        logger.warn('mongorestore indisponível. Usando fallback de restore em JSON.');
-        return await restoreFromJsonBackup(backupPath, mongoUri);
-      } catch (fallbackError) {
-        const fallbackDetails = fallbackError?.message || String(fallbackError);
-        logger.error('Erro no fallback de restore JSON:', fallbackDetails);
-        return { success: false, error: fallbackDetails };
-      }
+    if (isEncryptedMongodumpManifest(manifest)) {
+      scratchDecryptDir = await prepareDecryptedRestoreCopy(backupPath, manifest);
+      restoreSourcePath = scratchDecryptDir;
     }
 
-    return { success: false, error: details || 'Erro ao restaurar backup' };
+    const dbArg = env.MONGO_DB ? ` --nsInclude="${env.MONGO_DB}.*"` : '';
+    const command = `mongorestore --uri="${stripDefaultDatabase(mongoUri)}" --drop${dbArg} "${restoreSourcePath}"`;
+
+    try {
+      await runCommand(command);
+      return {
+        success: true,
+        restoredFrom: path.basename(backupPath),
+        restoredAt: new Date(),
+        mode: 'mongorestore'
+      };
+    } catch (err) {
+      const details = err && err.error ? err.error.message : err?.message;
+      const restoreBinaryMissing = /mongorestore: not found|is not recognized|ENOENT/i.test(String(details || ''));
+
+      if (restoreBinaryMissing) {
+        try {
+          logger.warn('mongorestore indisponível. Usando fallback de restore em JSON.');
+          return await restoreFromJsonBackup(backupPath, mongoUri);
+        } catch (fallbackError) {
+          const fallbackDetails = fallbackError?.message || String(fallbackError);
+          logger.error('Erro no fallback de restore JSON:', fallbackDetails);
+          return { success: false, error: fallbackDetails };
+        }
+      }
+
+      return { success: false, error: details || 'Erro ao restaurar backup' };
+    }
+  } finally {
+    await cleanupDecryptedRestoreCopy(scratchDecryptDir);
   }
 }
 
@@ -806,13 +1032,16 @@ async function runControlledRestoreTest(backupPath) {
     }
   }
 
+  // #734: computed over backupPath exactly as before -- the checksum's job
+  // is on-disk tamper detection of what's actually stored, which for an
+  // encrypted backup is the ciphertext. This recompute (and the manifest
+  // value it's compared against) is over the ciphertext bytes in both
+  // cases, so a random per-file IV never perturbs it.
   const recomputedChecksum = await computeDirChecksum(backupPath);
   const checksumVerified = !!(manifest && manifest.checksum && manifest.checksum === recomputedChecksum);
 
   const sourceDbName = (manifest && manifest.dbName) || resolveDatabaseName(mongoUri);
   const scratchDb = `${sourceDbName}_restoretest_${Date.now()}`;
-
-  const command = `mongorestore --uri="${stripDefaultDatabase(mongoUri)}" --drop --nsFrom="${sourceDbName}.*" --nsTo="${scratchDb}.*" "${backupPath}"`;
 
   // #750: the scratch database has to come down on every exit path, not just
   // the two success ones. mongorestore (and the JSON fallback) writes
@@ -830,7 +1059,22 @@ async function runControlledRestoreTest(backupPath) {
     }
   };
 
+  // #734: same reasoning as restoreBackup -- mongorestore cannot read a
+  // mongodump-encrypted backup's ciphertext, so it is decrypted into a
+  // disposable scratch copy (never the checksummed original) and restored
+  // from that. Declared here so the outer finally can always clean it up,
+  // including when preparing it is what fails.
+  let scratchDecryptDir = null;
+
   try {
+    let restoreSourcePath = backupPath;
+    if (isEncryptedMongodumpManifest(manifest)) {
+      scratchDecryptDir = await prepareDecryptedRestoreCopy(backupPath, manifest);
+      restoreSourcePath = scratchDecryptDir;
+    }
+
+    const command = `mongorestore --uri="${stripDefaultDatabase(mongoUri)}" --drop --nsFrom="${sourceDbName}.*" --nsTo="${scratchDb}.*" "${restoreSourcePath}"`;
+
     await runCommand(command);
     const { collections: restoredCollections, documents: restoredDocuments } =
       await countScratchContents(mongoUri, scratchDb);
@@ -874,6 +1118,7 @@ async function runControlledRestoreTest(backupPath) {
     return { success: false, error: details || 'Erro ao testar restauração', checksumVerified };
   } finally {
     await dropScratch();
+    await cleanupDecryptedRestoreCopy(scratchDecryptDir);
   }
 }
 
