@@ -15,7 +15,10 @@ const {
   createGetFreezerTreeController
 } = require('../controllers/storage-query.controller');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission, requireRole } = require('../../infrastructure/middleware/rbac');
+// #888: requireRole is no longer imported -- every gate on this router is now
+// a permission code. The role list it carried lives on as the grant list for
+// manageStorageAllocation in rbac-catalog-seed.service.js.
+const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const { ObjectId } = require('mongodb');
 const logger = require('../../utils/logger');
 
@@ -37,26 +40,39 @@ router.use((req, res, next) => {
 });
 
 // ==================== AUTORIZACAO ====================
-// #859: authenticate alone is not authorization. Every mutation below
-// carries MUTATION_ROLES so that a level-1 Usuario Externo cannot move,
-// allocate or release a sample -- RF002 AC#5 requires the backend to
-// enforce this independently of what the frontend hides.
+// #859: authenticate alone is not authorization. Every mutation below is
+// gated so that a level-1 Usuario Externo cannot move, allocate or release
+// a sample -- RF002 AC#5 requires the backend to enforce this independently
+// of what the frontend hides.
 //
-// Why a role gate and not a requirePermission: the RBAC catalog defines
-// no storage-scoped permission code at all (24 codes, per
-// Object.keys(PERMISSION_CATALOG).length in rbac-catalog-seed.service.js,
-// none about storage, allocation or movement), so a requirePermission here would
-// have to borrow a wrong-domain code -- the mistake this file's one
-// pre-existing gate already makes with 'createPatient' on a freezer
-// route. Proper codes belong in the catalog and touch the canonical
-// dictionary; that is filed separately.
+// #888: this used to read "the RBAC catalog defines no storage-scoped
+// permission code at all, so a requirePermission here would have to borrow a
+// wrong-domain code", and gated on a MUTATION_ROLES = [2, 3, 4] constant
+// instead. The catalog now has two storage codes (26 codes, per
+// Object.keys(PERMISSION_CATALOG).length in rbac-catalog-seed.service.js):
 //
-// Why 2 and not 3 as the floor: RF006 (custody and movement) names the
-// Tecnico as primary actor, RF017 (storage topology) names the
-// Coordenador. They disagree about whether the floor is 2 or 3, and this
-// constant deliberately does not settle that -- it encodes only the part
-// both agree on, that level 1 is excluded.
-const MUTATION_ROLES = [2, 3, 4];
+//   manageStorageAllocation (StorageAssignment) -- WHERE a specimen sits:
+//     POST /allocate, /allocate/auto, /move, DELETE /release/:sampleId.
+//     Granted to Tecnico + Coordenador + Administrador, which reproduces the
+//     old MUTATION_ROLES [2, 3, 4] exactly, so the swap is behaviour-
+//     preserving rather than a re-authorization.
+//   manageStorageTopology (StorageContainer) -- WHAT the container tree is:
+//     PATCH /freezer/:freezerId/room. Granted to Coordenador +
+//     Administrador, which is both RF017's stated actor and, conveniently,
+//     'createPatient''s existing grant -- so that swap is a runtime no-op
+//     and stops recording a Patient-domain authorization for a freezer
+//     action.
+//
+// This deliberately does NOT settle the RF006-vs-RF017 actor disagreement:
+// RF006 (custody and movement) names the Tecnico as primary actor, RF017
+// (storage topology) names the Coordenador. The technician floor on
+// allocation freezes #859's status quo rather than resolving it; that
+// question stays open.
+//
+// The other four files borrowing 'createPatient' (equipment.routes.js,
+// facility.routes.js, room.routes.js, routes/eConsent.js) are deliberately
+// left alone here -- see #888 for why folding them in would bury the
+// catalog change, which is the actually-risky part.
 
 // ==================== ENDPOINTS ====================
 
@@ -143,7 +159,7 @@ router.get('/samples/search', createSearchSamplesController());
  *   "occupiedBySampleId": "507f..."
  * }
  */
-router.post('/allocate', requireRole(...MUTATION_ROLES), createAllocateSampleController());
+router.post('/allocate', requirePermission('manageStorageAllocation'), createAllocateSampleController());
 
 /**
  * POST /api/storage/allocate/auto
@@ -188,7 +204,7 @@ router.post('/allocate', requireRole(...MUTATION_ROLES), createAllocateSampleCon
  *   "message": "..."
  * }
  */
-router.post('/allocate/auto', requireRole(...MUTATION_ROLES), createAutoAssignSampleController());
+router.post('/allocate/auto', requirePermission('manageStorageAllocation'), createAutoAssignSampleController());
 
 /**
  * POST /api/storage/move
@@ -203,7 +219,7 @@ router.post('/allocate/auto', requireRole(...MUTATION_ROLES), createAutoAssignSa
  *   "notes": "Movido durante inventário"
  * }
  */
-router.post('/move', requireRole(...MUTATION_ROLES), createMoveSampleController());
+router.post('/move', requirePermission('manageStorageAllocation'), createMoveSampleController());
 
 /**
  * DELETE /api/storage/release/:sampleId
@@ -220,7 +236,7 @@ router.post('/move', requireRole(...MUTATION_ROLES), createMoveSampleController(
  *   "message": "Amostra liberada de A1"
  * }
  */
-router.delete('/release/:sampleId', requireRole(...MUTATION_ROLES), createReleaseSampleController());
+router.delete('/release/:sampleId', requirePermission('manageStorageAllocation'), createReleaseSampleController());
 
 /**
  * GET /api/storage/sample/:sampleId
@@ -463,7 +479,7 @@ router.get('/freezer/:freezerId/tree', createGetFreezerTreeController());
  *   "error": "NOT_A_FREEZER"
  * }
  */
-router.patch('/freezer/:freezerId/room', authenticate, requirePermission('createPatient'), async (req, res) => {
+router.patch('/freezer/:freezerId/room', authenticate, requirePermission('manageStorageTopology'), async (req, res) => {
   try {
     const db = req.app.locals.db;
 

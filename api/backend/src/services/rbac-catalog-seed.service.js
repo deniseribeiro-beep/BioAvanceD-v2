@@ -38,17 +38,17 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 2,
       roleName: 'Tecnico',
-      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'uploadFiles', 'viewReports'],
+      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'uploadFiles', 'viewReports', 'manageStorageAllocation'],
     },
     {
       accessType: 3,
       roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates'],
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
     },
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates'],
+      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
     },
   ],
 };
@@ -99,6 +99,21 @@ const PERMISSION_CATALOG = {
   editSample: { resourceType: 'Sample', allowedActions: ['UPDATE'], displayName: 'Editar amostra' },
   deleteSample: { resourceType: 'Sample', allowedActions: ['DELETE'], displayName: 'Excluir amostra' },
   createPatient: { resourceType: 'Patient', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Criar paciente' },
+  // #888: the catalog had no storage-scoped code at all, so storage.routes.js
+  // could only be gated by role, and its one requirePermission site borrowed
+  // 'createPatient' -- a Patient-domain authorization recorded for a freezer
+  // action. Two codes rather than one, because the router has two genuinely
+  // different concerns: WHERE a specimen sits, and WHAT the container tree is.
+  //
+  // allowedActions is derived from METHOD_TO_ACTION (rbac.js:82), not from
+  // taste: POST -> CREATE, PATCH -> UPDATE, DELETE -> DELETE. dict-02's
+  // Permission vocabulary also offers RELEASE, which maps neatly onto
+  // DELETE /release/:sampleId, but the verb map derives DELETE for that route
+  // and requirePermission checks the derived action -- so RELEASE would deny
+  // every release. Left out deliberately; it needs a METHOD_TO_ACTION change
+  // or an explicit second argument, and neither belongs in this issue.
+  manageStorageAllocation: { resourceType: 'StorageAssignment', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar alocação de armazenamento' },
+  manageStorageTopology: { resourceType: 'StorageContainer', allowedActions: ['READ', 'UPDATE'], displayName: 'Gerenciar topologia de armazenamento' },
   uploadSampleFiles: { resourceType: 'SampleFile', allowedActions: ['CREATE'], displayName: 'Enviar arquivos da amostra' },
   deleteSampleFiles: { resourceType: 'SampleFile', allowedActions: ['DELETE'], displayName: 'Excluir arquivos da amostra' },
   // #632: broadened from ['UPDATE'] to cover backup.routes.js's real

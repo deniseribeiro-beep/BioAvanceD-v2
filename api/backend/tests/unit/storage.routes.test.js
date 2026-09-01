@@ -1053,8 +1053,8 @@ describe('storage.routes', () => {
       // Records the arguments the middleware FACTORY was called with, not
       // just that a 403 came back -- an unconditional-403 stub that
       // discarded the code argument would pass identically whether the
-      // route's real gate were requirePermission('createPatient') or any
-      // other code (issue #888).
+      // route's real gate were requirePermission('manageStorageTopology')
+      // or any other code (issue #888).
       const recordedCalls = [];
       const { router } = loadRoute({
         requirePermissionImpl: (...args) => {
@@ -1069,7 +1069,10 @@ describe('storage.routes', () => {
         .send({ roomId: '507f1f77bcf86cd799439012' });
 
       expect(res.status).toBe(403);
-      expect(recordedCalls).toEqual([['createPatient']]);
+      // #888: was ['createPatient'] -- a Patient-domain code on a freezer
+      // route. manageStorageTopology carries the same grant (Coordenador +
+      // Administrador), so this swap is a runtime no-op.
+      expect(recordedCalls).toEqual([['manageStorageTopology']]);
     });
 
     it('returns 400 for a non-ObjectId freezerId (issue #856)', async () => {
@@ -1171,7 +1174,7 @@ describe('storage.routes authorization (#859)', () => {
   // role list -- which the plain denyingRequireRole below could never
   // catch, since it 403s unconditionally regardless of what it received --
   // is caught here instead.
-  function denyingRequireRole() {
+  function denyingRequirePermission() {
     const recordedCalls = [];
     const factory = (...args) => {
       recordedCalls.push(args);
@@ -1181,36 +1184,47 @@ describe('storage.routes authorization (#859)', () => {
     return factory;
   }
 
+  // #888: these four were `requireRole(...MUTATION_ROLES)` with
+  // expectedRoles [2, 3, 4]. The role list did not change meaning -- it
+  // became the grant list for manageStorageAllocation
+  // (rbac-catalog-seed.service.js: Tecnico, Coordenador, Administrador), so
+  // the swap is behaviour-preserving. What changed is that the audit trail
+  // now records a storage authorization rather than a role tier.
   const MUTATIONS = [
-    { method: 'post', path: '/api/storage/allocate', expectedRoles: [2, 3, 4] },
-    { method: 'post', path: '/api/storage/allocate/auto', expectedRoles: [2, 3, 4] },
-    { method: 'post', path: '/api/storage/move', expectedRoles: [2, 3, 4] },
-    { method: 'delete', path: '/api/storage/release/sample-1', expectedRoles: [2, 3, 4] },
+    { method: 'post', path: '/api/storage/allocate', expectedArgs: ['manageStorageAllocation'] },
+    { method: 'post', path: '/api/storage/allocate/auto', expectedArgs: ['manageStorageAllocation'] },
+    { method: 'post', path: '/api/storage/move', expectedArgs: ['manageStorageAllocation'] },
+    { method: 'delete', path: '/api/storage/release/sample-1', expectedArgs: ['manageStorageAllocation'] },
   ];
 
-  for (const { method, path, expectedRoles } of MUTATIONS) {
-    it(`refuses ${method.toUpperCase()} ${path} for a role the gate rejects`, async () => {
-      const requireRoleImpl = denyingRequireRole();
-      const { router } = loadRoute({ requireRoleImpl });
+  for (const { method, path, expectedArgs } of MUTATIONS) {
+    it(`refuses ${method.toUpperCase()} ${path} when the permission gate denies the caller`, async () => {
+      const requirePermissionImpl = denyingRequirePermission();
+      const { router } = loadRoute({ requirePermissionImpl });
       const app = buildApp(router, { collection: () => ({}) });
 
       const res = await request(app)[method](path).send({});
 
       expect(res.status).toBe(403);
-      // Pins the role list the route registered requireRole with -- without
+      // Pins the code the route registered requirePermission with -- without
       // this, the stub's unconditional 403 would pass identically whether
-      // the real gate were requireRole(2,3,4), requireRole(4), or
-      // requireRole() (issue #888).
-      expect(requireRoleImpl.recordedCalls).toEqual([expectedRoles]);
+      // the real gate were 'manageStorageAllocation', 'createPatient', or
+      // any other code (issue #888). The module proxy dispatches through the
+      // closure per REQUEST, so exactly the route hit is recorded.
+      expect(requirePermissionImpl.recordedCalls).toEqual([expectedArgs]);
     });
   }
 
-  it('leaves the read-only routes reachable without a role gate', async () => {
+  it('leaves the read-only routes reachable without an authorization gate', async () => {
     // The mutations are the hole; the GETs are not. RF002 AC#1 puts
     // "custodia e armazenamento" inside what the Tecnico may see, and the
     // sibling sample.routes.js gates only its mutations too. A denying
-    // role gate must therefore NOT be reached on a read.
-    const { router } = loadRoute({ requireRoleImpl: denyingRequireRole() });
+    // gate must therefore NOT be reached on a read.
+    //
+    // #888: was requireRoleImpl. The router no longer imports requireRole at
+    // all, so a denying role stub could never be reached and the test would
+    // have passed vacuously -- exactly the class this slice exists to remove.
+    const { router } = loadRoute({ requirePermissionImpl: denyingRequirePermission() });
     const collection = createMatchingCollection([], { key: 'storageContainers' });
     const app = buildApp(router, {
       collection: (name) => (name === 'storageContainers' ? collection : null),
