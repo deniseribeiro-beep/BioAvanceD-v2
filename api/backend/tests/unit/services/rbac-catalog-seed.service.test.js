@@ -128,12 +128,28 @@ describe('rbac-catalog-seed.service', () => {
     expect(db.collections.roles.docs).toHaveLength(5);
   });
 
-  // #630: allowedActions audited against every real requirePermission()
-  // call site in src/interface/routes/ — these are the corrected sets,
-  // not the original stale ones (e.g. manageOrganizations used to claim
-  // only UPDATE while organization.routes.js also gates POST/DELETE
-  // under it).
-  describe('PERMISSION_CATALOG allowedActions (#630 audit)', () => {
+  // #921 finding 2: this comment used to claim the table below was
+  // "audited against every real requirePermission() call site in
+  // src/interface/routes/". It is not, and never was — this file reads no
+  // route file, so it cannot detect the drift that wording promises. #929
+  // is the worked example: both storage codes were missing from the table
+  // entirely, and nothing here objected.
+  //
+  // The real derivation now lives in
+  // `tests/architecture/rbac-actions.arch.test.js`, which reads all 190
+  // call sites across both route directories and checks each one's derived
+  // action against its code's allowedActions.
+  //
+  // This table is kept, with its claim corrected: it pins **specific
+  // expected sets** for 22 codes, which the derived guard deliberately does
+  // not — that one checks call sites are *inside* allowedActions, so it
+  // would not notice a set that grew a permission nothing uses. The two
+  // assertions are complementary; only the completeness claim was false.
+  //
+  // These are the corrected sets from #630, not the original stale ones
+  // (e.g. manageOrganizations used to claim only UPDATE while
+  // organization.routes.js also gates POST/DELETE under it).
+  describe('PERMISSION_CATALOG allowedActions (#630 sets, hand-pinned)', () => {
     it.each([
       ['viewReports', ['CREATE', 'READ', 'DELETE', 'EXPORT']],
       ['createSample', ['CREATE', 'READ']],
