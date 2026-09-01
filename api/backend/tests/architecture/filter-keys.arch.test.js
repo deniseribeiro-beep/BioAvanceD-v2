@@ -661,10 +661,87 @@ function bareIdentifierFilterSites(content) {
   return sites;
 }
 
+// #849: comments are not code, and the written-field vocabulary must not
+// read them.
+//
+// OBJECT_KEY sweeps raw source for `key:`, and a `//` or block comment is
+// raw source. So any comment containing that shape silently vouches for the
+// key — and the comment most likely to contain it is the one *explaining a
+// filter key that was removed for never being written*. #917 is the
+// measured instance: its own explanatory comments quote
+// `` `{ sensorID: { $in: variants } }` `` verbatim in four files, which put
+// `sensorID` back into the vocabulary, so re-introducing that exact filter
+// branch passed this guard 9/9 green. Confirmed by injecting it and running
+// the suite, 2026-09-01. Documenting a bad key immunised it.
+//
+// **[ran it]** Sweeping src/ both ways: 2944 keys from raw source, 2748
+// with comments blanked — **196 keys (6.7%) were vouched for by a comment
+// alone**, among them plausible filter names like `targetBoxId`,
+// `targetPosition`, `movedAt` and `container`, alongside prose fragments
+// (`Regras`, `above`, `way`) that were never field names at all.
+//
+// Blanking is length-preserving (every character becomes a space, newlines
+// kept) because analyze() addresses `stripped` by indices taken from
+// `content` — a real deletion would silently misalign every later blank
+// span and every reported line number. Strings are handled only enough to
+// avoid mistaking a `//` or `/*` inside one for a comment opener; their
+// *contents* are still swept, which stays a known under-collection risk of
+// the same shape this file's other regexes carry.
+function blankComments(source) {
+  const out = source.split('');
+  let i = 0;
+  let quote = null; // "'", '"', '`' while inside a string
+
+  const blank = (from, to) => {
+    for (let j = from; j < to && j < out.length; j++) {
+      if (out[j] !== '\n') out[j] = ' ';
+    }
+  };
+
+  while (i < source.length) {
+    const ch = source[i];
+
+    if (quote) {
+      if (ch === '\\') { i += 2; continue; }
+      if (ch === quote) quote = null;
+      i += 1;
+      continue;
+    }
+
+    if (ch === "'" || ch === '"' || ch === '`') { quote = ch; i += 1; continue; }
+
+    if (ch === '/' && source[i + 1] === '/') {
+      const end = source.indexOf('\n', i);
+      const stop = end === -1 ? source.length : end;
+      blank(i, stop);
+      i = stop;
+      continue;
+    }
+
+    if (ch === '/' && source[i + 1] === '*') {
+      const end = source.indexOf('*/', i + 2);
+      const stop = end === -1 ? source.length : end + 2;
+      blank(i, stop);
+      i = stop;
+      continue;
+    }
+
+    i += 1;
+  }
+
+  return out.join('');
+}
+
 // Returns { filterSites, writtenFields } from one pass over a source text.
 // The filter specs are blanked out before the write sweep runs, so a
 // filter's own keys never end up vouching for themselves.
-function analyze(content) {
+//
+// #849: comments are blanked first, for the same reason and by the same
+// rule — see blankComments above. Site detection reads the blanked text
+// too, so a commented-out `.findOne({ patientID: x })` is no longer
+// reported as a live offender.
+function analyze(rawContent) {
+  const content = blankComments(rawContent);
   const filterSites = [];
   let stripped = content;
 
@@ -1250,6 +1327,84 @@ test('#849: a .find()/.findOne() filter passed as a pre-built variable is resolv
     [],
     'a cross-function origin (Band B) is being resolved (or guessed at) rather than silently skipped'
   );
+});
+
+test('#849: a comment does not vouch for a filter key, and a commented-out filter is not an offender', () => {
+  // The measured instance (#917): a comment written to explain why a bad
+  // filter key was REMOVED quotes that key verbatim, which put it straight
+  // back into the written-field vocabulary. So the act of documenting the
+  // defect immunised the defect. Sweeping src/ both ways found 196 keys
+  // (2944 -> 2748) vouched for by a comment alone.
+
+  // A line comment carrying the key, and nothing else writing it.
+  const lineComment = [
+    '// #917: was `$or: [{ sensorId }, { neverWrittenByCode: sensorId }]` — removed.',
+    'const doc = { sensorId: id };',
+    'const found = await sensors.findOne({ neverWrittenByCode: id });'
+  ].join('\n');
+
+  const offendersLine = offendersInSynthetic(lineComment);
+  assert.equal(offendersLine.length, 1, 'a line comment is still vouching for a filter key');
+  assert.match(offendersLine[0], /neverWrittenByCode/);
+
+  // Same for a block comment, including the JSDoc response-example shape
+  // this codebase writes a lot of (storage.routes.js et al).
+  const blockComment = [
+    '/**',
+    ' * Response 200:',
+    ' * { "neverWrittenByCode": "abc", "ok": true }',
+    ' */',
+    'const doc = { sensorId: id };',
+    'const found = await sensors.findOne({ neverWrittenByCode: id });'
+  ].join('\n');
+
+  const offendersBlock = offendersInSynthetic(blockComment);
+  assert.equal(offendersBlock.length, 1, 'a block/JSDoc comment is still vouching for a filter key');
+  assert.match(offendersBlock[0], /neverWrittenByCode/);
+
+  // A `//` inside a string is not a comment opener — blanking from there
+  // would swallow real code to the end of the line, which would silently
+  // shrink the vocabulary and make the guard pass more easily. This is the
+  // under-collection direction, so it is asserted explicitly.
+  const urlInString = [
+    'const base = "https://example.test/api"; const doc = { writtenAfterAUrl: 1 };',
+    'const found = await things.findOne({ writtenAfterAUrl: 1 });'
+  ].join('\n');
+
+  assert.deepEqual(
+    offendersInSynthetic(urlInString),
+    [],
+    'a "//" inside a string literal is being treated as a comment opener, blanking real code after it'
+  );
+
+  // The converse: a filter written inside a comment is not live code and
+  // must not be reported as an offender.
+  const commentedOutFilter = [
+    'const doc = { participantId: id };',
+    '// const old = await consents.findOne({ patientId: id });',
+    'const found = await consents.findOne({ participantId: id });'
+  ].join('\n');
+
+  assert.deepEqual(
+    offendersInSynthetic(commentedOutFilter),
+    [],
+    'a commented-out filter is being reported as a live offender'
+  );
+
+  // And blanking must be length-preserving: analyze() addresses `stripped`
+  // by indices taken from the blanked content, and reports line numbers the
+  // same way, so a real deletion would misalign both. Pin the line number.
+  const lineNumbering = [
+    'const doc = { participantId: id };',
+    '/* a block comment',
+    '   spanning several lines',
+    '   with a { key: value } in it */',
+    'const found = await consents.findOne({ neverWrittenByCode: id });'
+  ].join('\n');
+
+  const offendersLines = offendersInSynthetic(lineNumbering);
+  assert.equal(offendersLines.length, 1);
+  assert.match(offendersLines[0], /synthetic\.js:5 /, 'blanking shifted the reported line number');
 });
 
 test('#788: a filter spec does not vouch for its own keys', () => {
