@@ -603,17 +603,26 @@ services:
     networks: [bioavanced-test]
 
   frontend-app-test:
+    # #891/#819: a pre-built bundle served by `vite preview`, not a dev server.
+    # There is no bind mount here and cannot be one -- a reproducible test stack
+    # bakes its source in (Dockerfile.dev's `COPY . .`) -- so dev mode bought no
+    # HMR while costing a per-route on-demand transform inside each spec's 5s
+    # expect budget, plus a 300ms polling watcher over an immutable tree.
+    # Service name, ports, healthcheck and network are unchanged, so
+    # playwright-runner, frontend-unit-runner's depends_on, test:e2e:docker and
+    # ci-pipeline.yml all keep working untouched.
     build:
       context: ./frontend
-      dockerfile: Dockerfile.dev
-    environment:
-      # Baked in at Vite dev-server start, consumed by the browser that loads
-      # the app — that's the *host* browser via the published 5173 port for
-      # the per-spec/host-based Playwright workflow (test:e2e:docker), which
-      # can't resolve compose-internal hostnames like backend-app-test.
-      VITE_API_BASE_URL: http://localhost:3000/api
-      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: frontend-app-test
-    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+      dockerfile: Dockerfile.prod
+      target: preview
+      args:
+        # Baked in at BUILD time now -- a static bundle reads no container env.
+        # Same value the dev server was given, and for the same reason: it is
+        # consumed by the *host* browser via the published 5173 port for the
+        # per-spec/host-based Playwright workflow (test:e2e:docker), which can't
+        # resolve compose-internal hostnames like backend-app-test.
+        VITE_API_BASE_URL: http://localhost:3000/api
+    command: ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]
     depends_on:
       backend-app-test:
         condition: service_healthy

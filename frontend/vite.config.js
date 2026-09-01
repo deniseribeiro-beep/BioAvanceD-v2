@@ -29,6 +29,18 @@ export default defineConfig(async () => {
         interval: 300,
       },
     },
+    // #891/#819: the e2e stack (compose.test.yml's frontend-app-test) serves a
+    // pre-built bundle through `vite preview`, not the dev server above. Preview
+    // has its own host allow-list and its own default port (4173), so neither is
+    // inherited from `server` and both have to be stated here.
+    preview: {
+      host: '0.0.0.0',
+      port: 5173,
+      strictPort: true,
+      // Reached as frontend-app-test:5173 from inside the compose network and as
+      // localhost:5173 from the host, so the allow-list cannot be enumerated.
+      allowedHosts: true,
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, 'src'),

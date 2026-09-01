@@ -2,8 +2,27 @@ FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
+# Same npm/cli#4828 fallback Dockerfile.dev carries, and this stage needs it at
+# least as much: `vite build` is the rollup-invoking step, so a missing
+# @rollup/rollup-linux-x64-musl fails here rather than at dev-server start.
+# No-op when npm ci already installed the musl binary. (#891)
+RUN node -e "require('@rollup/rollup-linux-x64-musl')" 2>/dev/null || npm install @rollup/rollup-linux-x64-musl --no-save --no-audit --no-fund
+# A static bundle has no server-side env, so the API base is baked in here.
+# Defaults to empty, which is falsy in import.meta.env and leaves the runtime
+# hostname fallback in charge -- i.e. compose.prod.yml's behaviour is unchanged.
+ARG VITE_API_BASE_URL=""
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 COPY . .
 RUN npm run build
+
+# #891/#819: the e2e stack serves this pre-built bundle instead of a Vite dev
+# server. Every chunk exists on disk before the first request, so there is no
+# on-demand transform for a spec to race and no HMR socket holding the network
+# busy. Deliberately placed BEFORE `runtime` so `runtime` stays the last stage
+# and compose.prod.yml (which names no `target:`) is unaffected.
+FROM build AS preview
+EXPOSE 5173
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]
 
 FROM nginx:1.27-alpine AS runtime
 COPY --from=build /app/dist /usr/share/nginx/html
@@ -12,4 +31,3 @@ RUN addgroup -S app && adduser -S app -G app && chown -R app:app /var/cache/ngin
 USER app
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
-
