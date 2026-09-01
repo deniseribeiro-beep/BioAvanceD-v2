@@ -231,8 +231,18 @@ services:
         condition: service_healthy
     read_only: true
     cap_drop: ["ALL"]
+    # #924: was `node -e "fetch(...)"`, copied from the backend's healthcheck.
+    # The backend runs node:22-alpine; this service's runtime stage is
+    # nginx:1.27-alpine, which ships no node binary -- verified by running the
+    # image: `command -v wget` -> /usr/bin/wget, `command -v node` -> absent.
+    # So the old check could never pass and this container could only ever be
+    # unhealthy. Nothing in this file waits on it with
+    # `condition: service_healthy`, which is the only reason the stack still
+    # came up at all.
+    #
+    # BusyBox wget is the idiom compose.test.yml:624 already uses.
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 20
