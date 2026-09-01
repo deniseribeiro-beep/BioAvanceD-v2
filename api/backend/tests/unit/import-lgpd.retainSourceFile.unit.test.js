@@ -166,4 +166,73 @@ describe('#792: retaining the LGPD import source file when rows were quarantined
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
     });
   });
+
+  // #806 (RNF011 AC#4): a header-level throw (missing required headers, no
+  // patient identification columns) happens ABOVE importSamples' row loop --
+  // quarantineRejectedSampleRows never runs, so #792's retention above never
+  // had a batch to key off. This is the gap #806 closes: the file must still
+  // be retained, this time against a FAILED batch the controller opens for
+  // the throw itself, rather than deleted as evidence.
+  describe('#806: retaining the source file when the import throws at header level', () => {
+    function createRes() {
+      return { status: vi.fn().mockReturnThis(), json: vi.fn() };
+    }
+
+    it('opens a FAILED batch carrying the error and retains the file against it', async () => {
+      const file = createUploadedFile(tempDir);
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'batch-failed-806' });
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne, updateOne }) };
+      const req = { app: { locals: { db } }, file, body: {} };
+      const res = createRes();
+
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      vi.spyOn(importLGPDService, 'importSamples').mockRejectedValue(
+        new Error('Campos obrigatórios ausentes: sampleType, sampleOrigin')
+      );
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+
+      await controller.importSamples(req, res);
+
+      // Moved out of temp/, not deleted.
+      expect(cleanupSpy).not.toHaveBeenCalled();
+      expect(fs.existsSync(file.path)).toBe(false);
+
+      expect(insertOne).toHaveBeenCalledTimes(1);
+      const insertedBatch = insertOne.mock.calls[0][0];
+      expect(insertedBatch.status).toBe('FAILED');
+      expect(insertedBatch.type).toBe('LGPD_SAMPLE_CSV');
+      expect(insertedBatch.error).toContain('Campos obrigatórios ausentes');
+
+      expect(updateOne).toHaveBeenCalledTimes(1);
+      const [filter, update] = updateOne.mock.calls[0];
+      expect(filter).toEqual({ _id: 'batch-failed-806' });
+      expect(update.$set.sourceFile.originalName).toBe('amostras.csv');
+
+      expect(res.status).toHaveBeenCalledWith(500);
+    });
+
+    it('falls back to deleting the file when retention itself fails, and still reports the original error', async () => {
+      const file = createUploadedFile(tempDir);
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'batch-failed-807' });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
+      const req = { app: { locals: { db } }, file, body: {} };
+      const res = createRes();
+
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      vi.spyOn(importLGPDService, 'importSamples').mockRejectedValue(new Error('sample boom'));
+      // Retention itself fails (e.g. disk full moving the file out of temp/)
+      // even though the FAILED batch was created successfully above.
+      vi.spyOn(importLGPDService, 'retainSourceFileForBatch').mockRejectedValue(new Error('disk full'));
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+
+      await controller.importSamples(req, res);
+
+      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
+      expect(res.status).toHaveBeenCalledWith(500);
+      const body = res.json.mock.calls[0][0];
+      // The original service error reaches the client, not "disk full".
+      expect(body.message).toBe('sample boom');
+    });
+  });
 });

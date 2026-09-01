@@ -791,10 +791,47 @@ class ImportLGPDController {
 
     } catch (error) {
       logger.error('Erro ao importar amostras:', error.message);
-      
-      // Limpa arquivo em caso de erro
+
+      // #806 (RNF011 AC#4): a throw here is a header-level failure (campos
+      // obrigatórios ausentes, identificação do paciente ausente) -- the one
+      // failure mode where the uploaded file itself is the likeliest culprit.
+      // Deleting it unconditionally destroyed exactly the evidence a
+      // reviewer would need. #792 already retains the file when individual
+      // rows are quarantined; this closes the gap for the throw path the
+      // same way: open a FAILED batch carrying the error, then retain the
+      // file against it. If either step itself fails, fall back to the old
+      // cleanup rather than mask the original failure or leave the file
+      // orphaned in temp/ -- the response below always reports the ORIGINAL
+      // error, not a secondary one from this fallback.
       if (req.file) {
-        importLGPDService.cleanupFile(req.file.path);
+        const db = req.app.locals?.db;
+        if (db) {
+          try {
+            const rawAutoIncrement = req.body?.autoIncrement;
+            const batchId = await importLGPDService.recordFailedImportBatch(db, {
+              fileName: req.file.originalname,
+              error,
+              actor: {
+                userID: req.user?.userID || req.user?.id || req.user?._id || null,
+                userId: req.user?.userID || req.user?.id || req.user?._id || null,
+              },
+              importOptions: {
+                startBoxId: req.body?.boxId || null,
+                autoIncrement: rawAutoIncrement === 'true' || rawAutoIncrement === true || rawAutoIncrement === '1',
+                groupFields: parseGroupFields(req.body?.groupFields).value || {},
+              },
+            });
+            await importLGPDService.retainSourceFileForBatch(db, req.file, batchId);
+          } catch (failureBatchError) {
+            logger.error(
+              'Falha ao registrar lote FAILED / reter arquivo de importação de amostras (RNF011 AC#4):',
+              failureBatchError.message || failureBatchError
+            );
+            importLGPDService.cleanupFile(req.file.path);
+          }
+        } else {
+          importLGPDService.cleanupFile(req.file.path);
+        }
       }
 
       return res.status(500).json({

@@ -1094,6 +1094,61 @@ class ImportLGPDService {
       return null;
     }
   }
+  /**
+   * Grava um lote FAILED quando a importacao de amostras lanca a nivel de
+   * cabecalho (#806, RNF011 AC#4).
+   *
+   * `quarantineRejectedSampleRows` acima so entra em jogo depois que pelo
+   * menos uma linha foi processada e rejeitada -- um throw de cabecalho
+   * (campos obrigatorios ausentes, identificacao do paciente ausente)
+   * acontece ANTES do loop de linhas (ver o guard `rows.length > 0` em
+   * `importSamples`), entao nenhuma linha e encaminhada e nenhum lote
+   * existe para `retainSourceFileForBatch` reter o arquivo contra ele --
+   * essa funcao exige um `_id` de lote ja gravado. Sem este lote o catch do
+   * controller so podia apagar o arquivo, exatamente o modo de falha em que
+   * o proprio arquivo e o suspeito mais provavel.
+   *
+   * Usa o mesmo `type` que `quarantineRejectedSampleRows` grava para lotes
+   * de amostras ('LGPD_SAMPLE_CSV'), para que `listQuarantineBatches` (que
+   * filtra so por `type`) e `getQuarantineBatch` (que tolera um lote sem
+   * `import_staging_records`) enxerguem este lote sem mudanca nenhuma.
+   *
+   * Ao contrario de `quarantineRejectedSampleRows` e
+   * `retainSourceFileForBatch`, esta funcao NAO e best-effort: se a gravacao
+   * falhar, o erro sobe para o controller decidir o fallback (apagar o
+   * arquivo como antes) em vez de mascarar silenciosamente a perda do lote.
+   */
+  async recordFailedImportBatch(db, { fileName = null, error, actor = {}, importOptions = {}, type = 'LGPD_SAMPLE_CSV' } = {}) {
+    const now = new Date();
+    const errorMessage = (error && error.message) ? error.message : String(error || 'Erro desconhecido');
+
+    const batchDoc = {
+      type,
+      source: 'LGPD',
+      status: 'FAILED',
+      fileName: fileName ? String(fileName) : null,
+      counts: {
+        total: 0,
+        success: 0,
+        errors: 0,
+      },
+      error: errorMessage,
+      importOptions: this.sanitizeImportOptions(importOptions),
+      createdBy: actor?.userID || actor?.userId || null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const batchResult = await db.collection('import_batches').insertOne(batchDoc);
+    const batchId = batchResult.insertedId;
+
+    logger.warn(
+      `[IMPORT_LGPD] Importacao de amostras falhou a nivel de cabecalho, lote FAILED aberto (batch ${batchId}): ${errorMessage}`
+    );
+
+    return batchId;
+  }
+
   async importSamples(db, file, options = {}) {
     const { startBoxId = null, autoIncrement = false, groupFields = {}, neo4jDriver = null, actor = {} } = options;
     const results = {

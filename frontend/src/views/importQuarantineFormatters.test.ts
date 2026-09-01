@@ -52,6 +52,39 @@ describe('formatBatchSummary', () => {
   it('renders an invalid date as -- rather than "Invalid Date"', () => {
     expect(formatBatchSummary({ _id: 'b3', createdAt: 'not-a-date' }).createdAtLabel).toBe('--');
   });
+
+  // #806 (RNF011 AC#4): a header-level throw opens a FAILED batch instead of
+  // deleting the source file. It has no rows -- counts are zeroed -- so the
+  // status and the error message are the only things distinguishing it from
+  // a clean import in the UI.
+  it('surfaces the FAILED status and its error message', () => {
+    const summary = formatBatchSummary({
+      _id: 'b4',
+      fileName: 'amostras.csv',
+      status: 'FAILED',
+      error: 'Campos obrigatórios ausentes: sampleType, sampleOrigin',
+      counts: { total: 0, success: 0, errors: 0 },
+      sourceFile: { storedPath: '/x/b4.csv', originalName: 'amostras.csv' },
+    });
+
+    expect(summary.status).toBe('FAILED');
+    expect(summary.errorMessage).toBe('Campos obrigatórios ausentes: sampleType, sampleOrigin');
+    expect(summary.sourceFileRetained).toBe(true);
+  });
+
+  // A QUARANTINED batch's rejections live on its records, not on the batch
+  // document -- `error` must not leak from an unrelated status.
+  it('does not surface an error message for a non-FAILED batch', () => {
+    const summary = formatBatchSummary({
+      _id: 'b5',
+      status: 'QUARANTINED',
+      error: 'should not appear',
+      counts: { total: 10, success: 9, errors: 1 },
+    });
+
+    expect(summary.status).toBe('QUARANTINED');
+    expect(summary.errorMessage).toBeNull();
+  });
 });
 
 describe('formatRecordErrors', () => {

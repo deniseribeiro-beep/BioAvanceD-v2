@@ -201,7 +201,18 @@ export default function ImportQuarantinePage() {
           {loadingBatch ? (
             <p>Carregando linhas...</p>
           ) : records.length === 0 ? (
-            <p style={{ color: '#4b5563' }}>Nenhuma linha rejeitada neste lote.</p>
+            // #806: a FAILED batch (throw at header level) also has zero
+            // records -- "nenhuma linha rejeitada" would misleadingly read as
+            // a clean import instead of an import that never got past its
+            // headers.
+            selectedBatch?.status === 'FAILED' ? (
+              <p style={{ color: '#b91c1c' }}>
+                Esta importação falhou antes de processar qualquer linha
+                {selectedBatch?.error ? `: ${selectedBatch.error}` : '.'}
+              </p>
+            ) : (
+              <p style={{ color: '#4b5563' }}>Nenhuma linha rejeitada neste lote.</p>
+            )
           ) : (
             records.map((record) => {
               const errors = formatRecordErrors(record);

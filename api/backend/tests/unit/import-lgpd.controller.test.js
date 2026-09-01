@@ -600,8 +600,49 @@ describe('import-lgpd.controller', () => {
       });
     });
 
-    it('returns 500 when service throws, cleans up if req.file present', async () => {
+    // #806 (RNF011 AC#4): a throw at header level no longer deletes the
+    // upload unconditionally -- it opens a FAILED batch (via
+    // recordFailedImportBatch) and retains the file against it instead, the
+    // same way #792 already retains a file when individual rows are
+    // quarantined. `db` here is this file's own createDb() mock, whose
+    // `insertOne` resolves, so the FAILED batch is created successfully;
+    // `retainSourceFileForBatch`'s real implementation then no-ops because
+    // '/tmp/s.csv' does not exist on disk in this test -- either way,
+    // `cleanupFile` must NOT be the fallback path taken. This assertion used
+    // to require cleanupSpy to have been called; #806 inverts it.
+    it('returns 500 when service throws, opens a FAILED batch instead of cleaning up if req.file present', async () => {
       const db = createDb();
+      const file = { path: '/tmp/s.csv', originalname: 's.csv' };
+      const req = { app: { locals: { db } }, file, body: {} };
+      const res = createRes();
+
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      vi.spyOn(importLGPDService, 'importSamples').mockRejectedValue(new Error('sample boom'));
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await controller.importSamples(req, res);
+
+      expect(cleanupSpy).not.toHaveBeenCalled();
+      const insertedBatch = db.__collection.insertOne.mock.calls[0][0];
+      expect(insertedBatch.status).toBe('FAILED');
+      expect(insertedBatch.error).toBe('sample boom');
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Erro ao importar amostras',
+        message: 'sample boom'
+      });
+    });
+
+    // #806: the FAILED-batch path is not best-effort the way row-level
+    // quarantine is -- if recordFailedImportBatch (or retention) itself
+    // fails, the controller must fall back to the pre-#806 cleanup rather
+    // than leave the upload orphaned in temp/, and the client must still see
+    // the ORIGINAL import error, not the secondary failure.
+    it('falls back to cleaning up the file when recording the FAILED batch itself fails', async () => {
+      const db = createDb();
+      db.__collection.insertOne.mockRejectedValue(new Error('db unavailable'));
       const file = { path: '/tmp/s.csv', originalname: 's.csv' };
       const req = { app: { locals: { db } }, file, body: {} };
       const res = createRes();
@@ -618,6 +659,7 @@ describe('import-lgpd.controller', () => {
       expect(res.json).toHaveBeenCalledWith({
         success: false,
         error: 'Erro ao importar amostras',
+        // The original service error, not "db unavailable".
         message: 'sample boom'
       });
     });

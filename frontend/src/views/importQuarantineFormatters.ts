@@ -16,6 +16,8 @@ export interface QuarantineBatch {
   createdBy?: string | null;
   /** Written by #792 when the upload was retained. Best-effort, so legitimately absent. */
   sourceFile?: { storedPath?: string; originalName?: string; size?: number } | null;
+  /** Written by #806 on a FAILED batch: recordFailedImportBatch's error message. */
+  error?: string | null;
 }
 
 export interface QuarantineRecord {
@@ -38,6 +40,8 @@ export interface BatchSummary {
   rejected: number;
   createdAtLabel: string;
   sourceFileRetained: boolean;
+  /** #806: the error a FAILED batch's throw carried. Null for any other status. */
+  errorMessage: string | null;
 }
 
 function toDateLabel(value: string | Date | null | undefined): string {
@@ -60,6 +64,9 @@ export function formatBatchSummary(batch: QuarantineBatch): BatchSummary {
     // #792 retention is best-effort, so this is a real distinction to surface:
     // "the file is still available for review" vs "it was not kept".
     sourceFileRetained: Boolean(batch?.sourceFile?.storedPath),
+    // #806: only a FAILED batch carries an error -- a QUARANTINED batch's
+    // rejections live on its records, not on the batch itself.
+    errorMessage: batch?.status === 'FAILED' ? (batch?.error || null) : null,
   };
 }
 
