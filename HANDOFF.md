@@ -1,10 +1,14 @@
 # HANDOFF
 
 **Written 2026-09-01, after a 10-issue sitting with Docker ON and a full
-gate run.** Dennis asked for 10 issues and to use agents. **6 closed, 7
-filed, 13 commits pushed, full gate green.** The session was not declared
-over by the user — it may continue. Re-derive every count rather than
-trusting it.
+gate run.** Dennis asked for 10 issues and to use agents. **8 closed, 7
+filed (2 of them also closed here), 15 commits pushed, full gate green.**
+The session was not declared over by the user — it may continue.
+Re-derive every count rather than trusting it.
+
+**Everything after commit `8fea2a33` landed AFTER the full gate ran** —
+`.env.*.example` comments, a docs paragraph, and this file. All are
+comments or prose; no runtime code changed post-gate.
 
 ---
 
@@ -98,9 +102,19 @@ tell you:
   rest everywhere else" is only true where a key is configured. #734 set
   the precedent of failing loudly instead; whether uploads should do the
   same is a product call.
-- **#935 #936 #937** came out of this sitting's own close comments —
-  each was a gap named in a comment with nothing tracking it. #937 is the
-  narrow backup half of #938.
+- **#935 and #937 were filed and closed in the same sitting**, and how
+  they closed is the useful part. **#935 dissolved on its own
+  `[not established]` item**: I claimed a zero-row LGPD file slips
+  through the success path, then traced the readers — `readCSV` rejects
+  at `:207` and `readExcel` throws on zero data rows, so `rows` can never
+  be empty at the guard I cited. The bug cannot occur. **#937** shipped
+  its two actionable halves (template comments, a #682 checklist item)
+  and its third is subsumed by #938.
+- **#936 is open and is the one I chose to stop on**, not one I was
+  blocked on. Adding a partial unique index on `barcode` is cheap *now*
+  precisely because there is no deployment and therefore no violating
+  data — but it is a schema change, and adding one after the gate had
+  already run and Docker was torn down would ship it unverified.
 - **Pack #645** records that `Edit`'s fallback after a classifier-denied
   `sed -i` needs a prior `Read` *tool* call, which a Bash read does not
   satisfy — so the recovery costs two reads per file, not the one retry
