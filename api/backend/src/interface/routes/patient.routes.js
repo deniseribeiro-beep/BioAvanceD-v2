@@ -17,6 +17,13 @@ router.get('/', authenticate, requireOrganizationScope, patientController.listar
 // use there.
 router.get('/search', authenticate, requireOrganizationScope, patientController.search.bind(patientController));
 
+// Rota para modulo operacional - lista apenas IDs (sem dados sensiveis).
+// #926: MUST stay above GET /:id. Express matches router registrations in
+// file order with no static-over-parameter priority, so registered below it
+// this route was answered by patientController.buscar with id='operational'
+// and was dead code. /search above is ordered correctly and is the precedent.
+router.get('/operational', authenticate, requireOrganizationScope, patientController.listar.bind(patientController));
+
 // Buscar consentimento atual do paciente
 router.get('/:patientId/consent', authenticate, consentController.getPatientConsent.bind(consentController));
 
@@ -45,8 +52,6 @@ router.post('/validate-id', authenticate, patientController.validateID.bind(pati
 // Buscar paciente para edição (apenas módulo de cadastro)
 router.post('/find-for-edit', authenticate, requirePermission('createPatient'), patientController.findForEdit.bind(patientController));
 
-// Rota para módulo operacional - lista apenas IDs (sem dados sensíveis)
-router.get('/operational', authenticate, requireOrganizationScope, patientController.listar.bind(patientController));
 
 module.exports = router;
 

@@ -152,12 +152,11 @@ describe('user.routes authorization gates (issue #921)', () => {
   // (and whatever the real logService.getLogs endpoint is meant to enforce)
   // is unreachable. Pinned here as observed; not fixed (out of this file's
   // boundary) -- see the report for the suggested follow-up issue.
-  it('GET /logs is shadowed by GET /:id (user.routes.js registration order) -- pinned pending investigation', async () => {
+  it('GET /logs reaches its own registration, not GET /:id (#926)', async () => {
     const { router } = loadRoute();
     // GET /:id's handler queries db.collection('users').findOne(...) and
-    // returns 404 when nothing matches -- distinct from GET /logs's own
-    // handler, which would call logService.getLogs and either succeed (200)
-    // or fail differently (500), never with this 404/'users.notFound' shape.
+    // answers 404 'users.notFound' when nothing matches. GET /logs's own
+    // handler never produces that shape, so the absence of it is the signal.
     const usersCollectionStub = { findOne: async () => null };
     const app = buildApp(router, {
       db: { collection: () => usersCollectionStub },
@@ -165,12 +164,12 @@ describe('user.routes authorization gates (issue #921)', () => {
 
     const res = await request(app).get('/api/users/logs');
 
-    // If GET /logs's own registration (line 823, logService.getLogs) were
-    // actually reached, this would not be a 404 with 'users.notFound' --
-    // it would be a 200 (or a differently-shaped 500). It is 404/
-    // 'users.notFound' instead, because GET /:id (line 172) matches first
-    // and treats 'logs' as the target user id.
-    expect(res.status).toBe(404);
-    expect(res.body.error).toBe('users.notFound');
+    // #926: this asserted 404 / 'users.notFound' when it was written --
+    // GET /logs sat at the bottom of the file, below GET /:id, so the
+    // parameterised route matched first with id='logs' and the logs endpoint
+    // was dead code. The registration moved above GET /:id. Asserting the
+    // absence of the /:id shape rather than a specific success status keeps
+    // this independent of whatever logService.getLogs does with a stub db.
+    expect(res.body.error).not.toBe('users.notFound');
   });
 });

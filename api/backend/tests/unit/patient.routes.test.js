@@ -228,16 +228,18 @@ describe('patient.routes authorization gates (issue #921)', () => {
   // wrong controller method (buscar, not listar) answers a real request
   // to that path. Pinned here as observed; not fixed (out of this file's
   // boundary) -- see the report for the suggested follow-up issue.
-  it('GET /operational is shadowed by GET /:id (patient.routes.js registration order) -- pinned pending investigation', async () => {
+  it('GET /operational reaches its own registration, not GET /:id (#926)', async () => {
     const { router } = loadRoute();
     const app = buildApp(router);
 
     const res = await request(app).get('/api/patients/operational');
 
     expect(res.status).toBe(200);
-    // If GET /operational's own registration (line 49, patientController.listar)
-    // were actually reached, this would be 'listar'. It is 'buscar' instead,
-    // because GET /:id (line 31) matches first.
-    expect(res.body.stub).toBe('buscar');
+    // #926: this asserted 'buscar' when it was written -- GET /operational was
+    // registered below GET /:id, so the parameterised route matched first with
+    // id='operational' and the operational endpoint was dead code. The
+    // registration moved above GET /:id; 'listar' is the endpoint's own
+    // controller method and this assertion is what will catch it moving back.
+    expect(res.body.stub).toBe('listar');
   });
 });

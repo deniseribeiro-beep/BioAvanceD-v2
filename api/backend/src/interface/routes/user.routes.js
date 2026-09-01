@@ -169,6 +169,38 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
   }
 });
 
+// #926: MUST stay above GET /:id below. Express matches router
+// registrations in file order with no static-over-parameter priority, so
+// while this sat at the bottom of the file /api/users/logs was answered by
+// the /:id handler as a 404 users.notFound and logService.getLogs was
+// never reached.
+router.get('/logs', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const logService = require('../../services/log.service');
+    const result = await logService.getLogs(db, req.query);
+
+    return res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    logger.error('Erro ao buscar logs:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: req.t('users.getLogsError'),
+      message: error.message
+    });
+  }
+});
+
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
@@ -815,33 +847,6 @@ router.post('/register-sensor', authenticate, requirePermission('viewTemperature
     return res.status(400).json({
       success: false,
       error: req.t('users.registerSensorError'),
-      message: error.message
-    });
-  }
-});
-
-router.get('/logs', authenticate, async (req, res) => {
-  try {
-    const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
-
-    const logService = require('../../services/log.service');
-    const result = await logService.getLogs(db, req.query);
-
-    return res.status(200).json({
-      success: true,
-      data: result
-    });
-  } catch (error) {
-    logger.error('Erro ao buscar logs:', error.message);
-    return res.status(500).json({
-      success: false,
-      error: req.t('users.getLogsError'),
       message: error.message
     });
   }
