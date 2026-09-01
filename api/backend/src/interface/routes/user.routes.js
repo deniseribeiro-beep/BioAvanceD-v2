@@ -9,30 +9,9 @@ const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCas
 const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
 const { getCollection } = require('../../utils/collectionResolver');
 const { ObjectId } = require('mongodb');
-
-function buildUserFilterById(id) {
-  const rawId = String(id || '').trim();
-  const filters = [];
-
-  if (!rawId) {
-    return { _id: null };
-  }
-
-  if (ObjectId.isValid(rawId)) {
-    filters.push({ _id: new ObjectId(rawId) });
-  }
-
-  filters.push({ _id: rawId });
-  filters.push({ id: rawId });
-  filters.push({ userID: rawId });
-
-  const numericId = Number(rawId);
-  if (Number.isFinite(numericId)) {
-    filters.push({ userID: numericId });
-  }
-
-  return { $or: filters };
-}
+// #933: extraída para src/utils/userFilter.js para que os scripts de
+// manutenção em src/scripts/ usem exatamente esta regra em vez de uma cópia.
+const { buildUserFilterById } = require('../../utils/userFilter');
 
 // RF003 - Cadastro de usuário
 router.post('/register',
