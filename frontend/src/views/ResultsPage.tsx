@@ -31,6 +31,26 @@ export function deriveJobMetrics(job: ImportJob): { totalRecords: number; succes
   };
 }
 
+// #905: the report modal read `validationErrors`/`processingErrors`, fields
+// no backend path has ever returned (getJobReport returns `errors`, see
+// import-async.service.js:595). The worker writes the human-readable text
+// under the `error` key (result-worker.js:90,111,147,316,329,343), not
+// `message` -- reading `message` here would render every row blank.
+// Exported for the co-located unit test.
+export function formatImportErrorRow(item: NonNullable<ImportJob['errors']>[number]): {
+  row: number | undefined;
+  code: string | undefined;
+  file: string | undefined;
+  message: string;
+} {
+  return {
+    row: item.row,
+    code: item.code,
+    file: item.fileName ?? item.filePath,
+    message: item.error,
+  };
+}
+
 export default function ResultsPage() {
   const { t, language } = useLanguage();
   const locale = language;
@@ -363,31 +383,24 @@ export default function ResultsPage() {
               </div>
             )}
 
-            {selectedJob.validationErrors && selectedJob.validationErrors.length > 0 && (
+            {selectedJob.errors && selectedJob.errors.length > 0 && (
               <div className="report-errors">
-                <h4 className="report-subtitle">{t('results.validationErrorsTitle', 'Erros de Validação')}</h4>
+                <h4 className="report-subtitle">{t('results.errorsTitle', 'Erros')}</h4>
                 <div className="errors-list">
-                  {selectedJob.validationErrors.slice(0, 10).map((error, index) => (
-                    <div key={index} className="error-item">
-                      {error.row && <span>{t('results.rowLabel', 'Linha')} {error.row}: </span>}
-                      {error.field && <span>{error.field}: </span>}
-                      {error.message}
-                    </div>
-                  ))}
-                  {selectedJob.validationErrors.length > 10 && (
-                <p className="errors-more">{t('results.moreErrors', '... e mais {count} erros').replace('{count}', String(selectedJob.validationErrors.length - 10))}</p>
+                  {selectedJob.errors.slice(0, 10).map((error, index) => {
+                    const row = formatImportErrorRow(error);
+                    return (
+                      <div key={index} className="error-item">
+                        {row.row !== undefined && <span>{t('results.rowLabel', 'Linha')} {row.row}: </span>}
+                        {row.code && <span>{row.code}: </span>}
+                        {row.file && <span>{row.file}: </span>}
+                        {row.message}
+                      </div>
+                    );
+                  })}
+                  {selectedJob.errors.length > 10 && (
+                <p className="errors-more">{t('results.moreErrors', '... e mais {count} erros').replace('{count}', String(selectedJob.errors.length - 10))}</p>
                   )}
-                </div>
-              </div>
-            )}
-
-            {selectedJob.processingErrors && selectedJob.processingErrors.length > 0 && (
-              <div className="report-errors">
-                <h4 className="report-subtitle">{t('results.processingErrorsTitle', 'Erros de Processamento')}</h4>
-                <div className="errors-list">
-                  {selectedJob.processingErrors.map((error, index) => (
-                    <div key={index} className="error-item">{error}</div>
-                  ))}
                 </div>
               </div>
             )}

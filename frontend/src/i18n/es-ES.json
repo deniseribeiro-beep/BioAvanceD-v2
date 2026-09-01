@@ -1043,6 +1043,7 @@
     },
     "subtitle": "Resultados de análisis de laboratorio",
     "title": "Resultados",
+    "errorsTitle": "Errores",
     "validationErrorsTitle": "Errores de validación",
     "processingErrorsTitle": "Errores de procesamiento",
     "view": "Ver"

@@ -1043,6 +1043,7 @@
     },
     "subtitle": "Arquivos de análises laboratoriais",
     "title": "Arquivos de Análise",
+    "errorsTitle": "Erros",
     "validationErrorsTitle": "Erros de Validação",
     "processingErrorsTitle": "Erros de Processamento",
     "view": "Ver"

@@ -1043,6 +1043,7 @@
     },
     "subtitle": "Laboratory analysis results",
     "title": "Results",
+    "errorsTitle": "Errors",
     "validationErrorsTitle": "Validation Errors",
     "processingErrorsTitle": "Processing Errors",
     "view": "View"
