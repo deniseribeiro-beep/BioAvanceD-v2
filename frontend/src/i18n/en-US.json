@@ -2060,6 +2060,12 @@
       "selectSprecSecondCentrifugation": "Select second centrifugation",
       "selectTcle": "Select an informed consent form"
     },
+    "clinicalEntitiesWarning": {
+      "notRecorded": "not recorded",
+      "specimen": "Specimen",
+      "title": "Some clinical records were not saved",
+      "toastMessage": "Specimen saved successfully, but some clinical records were not saved."
+    },
     "sampleLabel": {
       "patient": "Patient",
       "title": "Sample Label",

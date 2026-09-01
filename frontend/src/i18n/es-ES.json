@@ -2060,6 +2060,12 @@
       "selectSprecSecondCentrifugation": "Selecione a segunda centrifugação",
       "selectTcle": "Selecione um TCLE"
     },
+    "clinicalEntitiesWarning": {
+      "notRecorded": "no registrado",
+      "specimen": "Muestra",
+      "title": "Algunos registros clínicos no se guardaron",
+      "toastMessage": "Muestra guardada con éxito, pero algunos registros clínicos no se guardaron."
+    },
     "sampleLabel": {
       "patient": "Paciente",
       "title": "Etiqueta de Amostra",

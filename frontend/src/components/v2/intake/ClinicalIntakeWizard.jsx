@@ -1616,6 +1616,7 @@ export default function ClinicalIntakeWizard(props) {
   const [biomarkerRequestError, setBiomarkerRequestError] = useState('');
   const [sampleMerkleRoot, setSampleMerkleRoot] = useState('');
   const [sampleLabel, setSampleLabel] = useState(null);
+  const [failedClinicalEntities, setFailedClinicalEntities] = useState([]);
   const preAnalyticalUnknownBackupRef = React.useRef(null);
 
   const stepMeta = useMemo(() => ([
@@ -2625,6 +2626,7 @@ export default function ClinicalIntakeWizard(props) {
     setTouched(true);
     setStep1Attempted(true);
     setSubmitError('');
+    setFailedClinicalEntities([]);
 
     if (!isStep1Valid || !isStep2Valid || !isStep3Valid) {
       const errors = {
@@ -2673,11 +2675,23 @@ export default function ClinicalIntakeWizard(props) {
         storageLocation: response?.data?.storageLocation || createdSample?.storageLocation || null,
       });
 
-      notifyApiToast({
-        message,
-        type: 'success',
-        duration: 4500,
-      });
+      const clinicalEntitiesFailedRaw = response?.data?.clinicalEntities?.failed;
+      const clinicalEntitiesFailed = Array.isArray(clinicalEntitiesFailedRaw) ? clinicalEntitiesFailedRaw : [];
+      setFailedClinicalEntities(clinicalEntitiesFailed);
+
+      if (clinicalEntitiesFailed.length > 0) {
+        notifyApiToast({
+          message: t('wizard.clinicalEntitiesWarning.toastMessage', 'Amostra salva com sucesso, mas alguns registros clínicos não foram salvos.'),
+          type: 'warning',
+          duration: 4500,
+        });
+      } else {
+        notifyApiToast({
+          message,
+          type: 'success',
+          duration: 4500,
+        });
+      }
 
       setFormData({
         ...initialState,
@@ -3806,6 +3820,23 @@ export default function ClinicalIntakeWizard(props) {
                   </a>
                 </div>
               </div>
+            </div>
+          </Card>
+        )}
+        {failedClinicalEntities.length > 0 && (
+          <Card className="rounded-2xl border border-amber-200 bg-amber-50">
+            <div data-testid="clinical-entities-warning">
+              <div className="text-sm font-semibold text-amber-900">
+                {t('wizard.clinicalEntitiesWarning.title', 'Alguns registros clínicos não foram salvos')}
+                {(sampleLabel?.specimenId || sampleLabel?.code) ? ` — ${t('wizard.clinicalEntitiesWarning.specimen', 'Amostra')}: ${sampleLabel.specimenId || sampleLabel.code}` : ''}
+              </div>
+              <ul className="mt-2 text-sm text-amber-800 list-disc list-inside">
+                {failedClinicalEntities.map((failure, index) => (
+                  <li key={`${failure?.entity || 'entity'}-${index}`} data-testid="clinical-entities-warning-item">
+                    {failure?.entity}{failure?.reference ? ` (${failure.reference})` : ''} {t('wizard.clinicalEntitiesWarning.notRecorded', 'não registrado')}
+                  </li>
+                ))}
+              </ul>
             </div>
           </Card>
         )}
