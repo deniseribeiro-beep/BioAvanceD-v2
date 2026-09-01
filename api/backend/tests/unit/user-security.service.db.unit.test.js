@@ -6,6 +6,26 @@ const require = createRequire(import.meta.url);
 const userSecurityService = require('../../src/services/user-security.service');
 const sessionService = require('../../src/services/session.service');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+
+function hashToken(token) {
+  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+}
+
+// Minimal Mongo-query matcher covering the shapes revokeAllOtherSessions
+// builds (top-level equality, $and, $ne), so the mocked updateMany can
+// actually filter/mutate fake documents instead of just recording calls.
+function matchesMongoQuery(doc, query) {
+  return Object.entries(query).every(([key, condition]) => {
+    if (key === '$and') {
+      return condition.every((clause) => matchesMongoQuery(doc, clause));
+    }
+    if (condition && typeof condition === 'object' && '$ne' in condition) {
+      return doc[key] !== condition.$ne;
+    }
+    return doc[key] === condition;
+  });
+}
 
 function buildDb(collections) {
   return {
@@ -332,6 +352,43 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(sessions.updateMany).toHaveBeenCalledTimes(1);
       expect(sessionService.sessions.has('other')).toBe(false);
       expect(sessionService.sessions.has('current')).toBe(true);
+    });
+
+    it('marks revoked documents isRevoked: true and spares a session identified only by tokenHash (Refs #920)', async () => {
+      const currentToken = 'current-token';
+      const currentHash = hashToken(currentToken);
+
+      // doc1 is the caller's own session -- stored (like real sessions) by
+      // tokenHash only, no plaintext token field. doc2 is another session,
+      // still on legacy plaintext token.
+      const docs = [
+        { _id: '1', userID: USER_ID, tokenHash: currentHash, isActive: true },
+        { _id: '2', userID: USER_ID, token: 'other-token', isActive: true }
+      ];
+
+      const sessions = buildCollection({
+        updateMany: vi.fn(async (query, update) => {
+          const matched = docs.filter((doc) => matchesMongoQuery(doc, query));
+          matched.forEach((doc) => Object.assign(doc, update.$set));
+          return { matchedCount: matched.length };
+        })
+      });
+      const db = buildDb({ sessions });
+
+      await userSecurityService.revokeAllSessions(db, USER_ID, currentToken);
+
+      // Session matched only by tokenHash must NOT be revoked -- proves the
+      // exclusion isn't plaintext-`token`-only.
+      expect(docs[0].isRevoked).toBeUndefined();
+      expect(docs[0].isActive).toBe(true);
+
+      // The other user's session gets revoked, and carries isRevoked: true
+      // (the field session.service.js siblings set that the old
+      // revokeAllSessions omitted).
+      expect(docs[1].isRevoked).toBe(true);
+      expect(docs[1].isActive).toBe(false);
+      expect(docs[1].revokedAt).toBeInstanceOf(Date);
+      expect(docs[1].updatedAt).toBeInstanceOf(Date);
     });
   });
 

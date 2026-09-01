@@ -580,34 +580,16 @@ class UserSecurityService {
 
   /**
    * Revoga todas as sessões do usuário (exceto a atual)
+   *
+   * Refs #920: delega para session.service.js#revokeAllOtherSessions em vez
+   * de reimplementar o write. As duas rotas de "encerrar outras sessões"
+   * (esta e DELETE /sessions/all-others) precisam produzir o mesmo formato
+   * de documento revogado -- delegar impede que voltem a divergir.
    */
   async revokeAllSessions(db, userID, currentToken) {
     try {
-      const sessionsCollection = db.collection('sessions');
-      
-      await sessionsCollection.updateMany(
-        {
-          userID: userID.toString(),
-          token: { $ne: currentToken }, // Não revoga a sessão atual
-          isActive: true
-        },
-        {
-          $set: {
-            isActive: false,
-            revokedAt: new Date()
-          }
-        }
-      );
-
-      // Limpa cache em memória do sessionService (exceto sessão atual)
       const sessionService = require('./session.service');
-      if (sessionService.sessions) {
-        for (const [sessionID, session] of sessionService.sessions.entries()) {
-          if (session.userID === userID.toString() && session.token !== currentToken) {
-            sessionService.sessions.delete(sessionID);
-          }
-        }
-      }
+      await sessionService.revokeAllOtherSessions(db, userID, currentToken);
     } catch (error) {
       logger.error('Erro ao revogar todas as sessões:', error.message);
       throw error;
