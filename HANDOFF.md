@@ -1,9 +1,9 @@
 # HANDOFF
 
 **Written 2026-09-01, after a 10-issue queue sitting.** Dennis asked for
-"the next 10 issues, docker is still on". **6 closed, 4 left open with a
-shipped slice each, 6 new issues filed, 8 commits pushed, full native gate
-green.**
+"the next 10 issues, docker is still on". **7 closed (6 queue members plus #944, filed and
+worked here), 3 queue members left open with a shipped slice each, 6 new
+issues filed, 10 commits pushed, full native gate green.**
 
 **INTERIM — the session was not declared over by the user.** It may
 continue; do not read this as a completed sitting. Re-derive every count
@@ -56,11 +56,12 @@ bioavanced overlay has the recipe; the previous handoff confirmed the
   `getCollection(db, 'samples')`. First real stack bring-up is the first
   time it is built against seeded data.
 
-## What closed (6)
+## What closed (7)
 
-`#915 #892 #917 #931 #779 #938`. Read each close comment for evidence.
+`#915 #892 #917 #931 #779 #938` from the queue, plus `#944` — filed by this
+sitting and worked in it. Read each close comment for evidence.
 
-## Left open with a shipped slice (4) — the judgment a query cannot carry
+## Left open with a shipped slice (3, plus #682) — the judgment a query cannot carry
 
 Query the board (`gh issue list --state open`, 74 open). What it will not
 tell you:
@@ -89,7 +90,7 @@ tell you:
   rests on it.
 - **#682** — gained a third checklist item from #938.
 
-## Filed this sitting (6), all open
+## Filed this sitting (6) — one closed, five open
 
 `#939` (ASYNC_BATCH_IMPORT batches unreadable — the third writer to
 `import_batches`), `#940` (frontend still treats `sensorID` as canonical;
@@ -98,8 +99,11 @@ types *require* a field the backend never wrote), **`#941` (largest:
 `Schema.index()` in `src/models/` is decorative — nine unique constraints
 unenforced)**, `#942` (import duplicate detection never compares within
 the submitted file), `#943` (`canonical.v1.file` has no production
-caller), `#944` (the barcode guard's "RF004" comment cites a requirement
-whose criteria never mention barcodes).
+caller), and `#944` — **closed here**: the barcode guard cited RF004, whose criteria
+never mention barcodes; corrected at all three sites to dict-02 ELM-0116.
+
+**The other five are open because I chose to stop on them, not because
+anything blocks them.**
 
 **#941 is the one to read first.** It was found while fixing #936 and it
 invalidates any assumption that a declared index exists.
