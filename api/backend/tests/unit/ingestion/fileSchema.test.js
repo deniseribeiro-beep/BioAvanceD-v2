@@ -19,7 +19,14 @@ describe('canonical.v1.file (RF029 slice 4/6, #672)', () => {
     expect(errors).toEqual([]);
   });
 
-  it('accepts a minimal payload with just the required fields', () => {
+  // #681: fileRole and fileFormat are dict-02 1..1 (ELM-0317/0319) and, since
+  // #679, real fields on SampleFile — yet they stay OPTIONAL here, and this
+  // case is the pin for that. 1..1 on the stored entity is not the same as
+  // required on input: ELM-0317 documents a default of `raw` and
+  // SampleFileModel.create supplies it, deriving fileFormat from fileType.
+  // Requiring them would oblige a caller to send what the model already
+  // provides — a stricter contract than the dictionary asks for.
+  it('accepts a minimal payload without fileRole/fileFormat, which the model defaults and derives', () => {
     const { valid, errors } = validate('canonical.v1.file', {
       fileId: 'F-1',
       fileUri: 'objstore://samples/S-1/files/report.pdf',

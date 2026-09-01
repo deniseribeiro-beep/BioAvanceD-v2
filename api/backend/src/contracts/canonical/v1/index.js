@@ -261,13 +261,33 @@ const telemetrySchema = {
 // has no direct real-model equivalent yet (SampleFile.js has no id field
 // of its own beyond Mongo's `_id`) but is required here for the same
 // reason every other entity schema names its own id (participantId,
-// specimenId, sensorId). `fileRole`/`fileFormat` stay optional: dict-02
-// types both 1..1, but the real model's closed `fileType` enum
-// (RAW|ZIP|CSV|XLS|XLSX|PDF|TXT, a technical container format) isn't the
-// same vocabulary as either dict-02 field (fileFormat is EDAM/MIME-coded;
-// fileRole is a raw|intermediate|processed|derived|report|manifest
-// processing-stage marker) -- reconciling that vocabulary mismatch is out
-// of this thin slice's scope. `specimenId` isn't part of dict-02's own
+// specimenId, sensorId).
+//
+// `fileRole`/`fileFormat` stay optional -- but NOT for the reason this
+// comment gave until #681. The vocabulary mismatch it cited as unresolved
+// ("the real model's closed `fileType` enum isn't the same vocabulary as
+// either dict-02 field") was resolved on the model side by #679, which gave
+// `SampleFile.js` real `fileRole` and `fileFormat` fields:
+// `SampleFileModel.create` writes `fileRole: data.fileRole || 'raw'` and
+// `fileFormat: data.fileFormat || getFileFormatFromType(data.fileType)`,
+// with `fileRole` validated against dict-02 ELM-0317's own closed list.
+//
+// They stay optional because **1..1 on the stored entity is not the same as
+// required on input**, and dict-02 says so itself: ELM-0317 carries a
+// documented default of `raw`, and ELM-0319's Coding is derivable from the
+// container format. `SampleFileModel.create` implements exactly that -- it
+// defaults one and derives the other -- so a caller that omits them still
+// produces a conformant stored record. Requiring them here would oblige an
+// ingesting party to send what the model already supplies, which is a
+// stricter contract than the dictionary asks for, not a faithful one.
+//
+// What is genuinely still missing is a *production* caller: the only path
+// that validates against this schema today is the RF029 test-support probe
+// (`/api/_test-support/ingestion/probe`), which takes a fully
+// caller-supplied payload rather than one derived from a real SampleFile
+// record. That remains open -- see #681.
+//
+// `specimenId` isn't part of dict-02's own
 // DataFile entity, but RF007 AC#6 already links files to a specimen in
 // practice -- included here, optional, for reference-checking.
 const fileSchema = {
