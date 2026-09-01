@@ -1134,8 +1134,49 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
     throw error;
   }
 
+  // #801: this endpoint's job is bypassing the *consent* gate out of band --
+  // not the validation gate. Same notion of "blocking" sendConsents already
+  // uses (everything except NEEDS_EMAIL, since routing around a missing
+  // e-mail is this endpoint's whole purpose): a record still carrying a
+  // blocking validation error must be refused rather than driven straight to
+  // COMMITTED/RELEASED/AVAILABLE. Deliberately not gated on
+  // `status === READY_TO_COMMIT` (unlike commitBatch) -- a consent-blocked
+  // record legitimately never reaches that status, and that's exactly the
+  // case this endpoint exists to unblock.
+  const errors = Array.isArray(record.errors) ? record.errors : [];
+  const blockingErrors = errors.filter((error) => error.code !== 'NEEDS_EMAIL');
+  if (blockingErrors.length > 0) {
+    throw createBadRequest('Registro possui erros de validação bloqueantes e não pode receber documentação externa.');
+  }
+
   const normalized = record.normalized || {};
   const now = new Date();
+
+  const existingSample = await samples.findOne({ specimenId: normalized.specimenId });
+  const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
+
+  const sampleUpdateResult = await samples.updateOne(
+    { specimenId: normalized.specimenId },
+    {
+      $set: {
+        consentStatus: 'EXTERNAL_ATTACHED',
+        quarantineReason: null,
+        specimenStatus: 'available',
+        updatedAt: now,
+      },
+    }
+  );
+
+  // #801: matchedCount 0 means no sample stands behind this record (this
+  // write carries no `upsert`, unlike commitBatch's). Leaving the staging
+  // record COMMITTED in that case is exactly the silent-commit RNF011 AC#4
+  // exists to prevent, so refuse instead of writing it.
+  if (!sampleUpdateResult || sampleUpdateResult.matchedCount === 0) {
+    const error = new Error('Nenhuma amostra encontrada para o specimenId deste registro; documentação externa não anexada.');
+    error.statusCode = 404;
+    throw error;
+  }
+
   const updatedRecord = {
     consentStatus: 'EXTERNAL_ATTACHED',
     quarantineStatus: 'RELEASED',
@@ -1153,21 +1194,6 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
   };
 
   await staging.updateOne({ _id: recordId, batchId }, { $set: updatedRecord });
-
-  const existingSample = await samples.findOne({ specimenId: normalized.specimenId });
-  const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
-
-  await samples.updateOne(
-    { specimenId: normalized.specimenId },
-    {
-      $set: {
-        consentStatus: 'EXTERNAL_ATTACHED',
-        quarantineReason: null,
-        specimenStatus: 'available',
-        updatedAt: now,
-      },
-    }
-  );
 
   if (existingSample && wasQuarantined) {
     await quarantineActionService.releaseActiveAction(db, String(existingSample._id), options.userID || 'SYSTEM');
