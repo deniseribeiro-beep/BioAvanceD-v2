@@ -106,6 +106,11 @@ module.exports = {
 
   // Backup / Monitoring
   BACKUP_DIR: process.env.BACKUP_DIR,
+  // #893: writable-storage roots, mirroring BACKUP_DIR's shape -- default
+  // reproduces today's __dirname-relative uploads/storage paths exactly,
+  // set only so prod can point them at a volume mounted outside /app.
+  UPLOAD_DIR: process.env.UPLOAD_DIR,
+  STORAGE_DIR: process.env.STORAGE_DIR,
   BACKUP_CRON: process.env.BACKUP_CRON,
   BACKUP_RETENTION_DAYS: process.env.BACKUP_RETENTION_DAYS,
   // #749: read by scheduler.service.js#startRetentionSweepSchedule since it

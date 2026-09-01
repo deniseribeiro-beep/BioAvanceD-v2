@@ -1,12 +1,11 @@
 const path = require('path');
 const fs = require('fs');
 const logger = require('../utils/logger');
-const { upload, UPLOAD_ROOT } = require('../config/uploadConfig');
+const { upload, UPLOAD_ROOT, UPLOADS_BASE } = require('../config/uploadConfig');
 const analysisValidationService = require('../services/analysisValidation.service');
 
 const getRelativePath = (absolutePath) => {
-  const basePath = path.join(__dirname, '../../uploads');
-  const relative = path.relative(basePath, absolutePath);
+  const relative = path.relative(UPLOADS_BASE, absolutePath);
   return relative.split(path.sep).join('/');
 };
 

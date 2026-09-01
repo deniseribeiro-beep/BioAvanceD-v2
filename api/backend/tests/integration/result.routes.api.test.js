@@ -241,7 +241,7 @@ describe('POST /api/results/upload', () => {
 
     expect(res.status).toBe(503);
 
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -270,7 +270,7 @@ describe('POST /api/results/upload', () => {
     expect(findOneSpy).toHaveBeenCalledWith({ sampleID: 42 });
     expect(res.body.data.specimenId).toBe(SPECIMEN_ID);
 
-    const resultDir = path.join(__dirname, '../../src/storage/results', '42');
+    const resultDir = path.join(__dirname, '../../storage/results', '42');
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -290,7 +290,7 @@ describe('POST /api/results/upload', () => {
     expect(res.status).toBe(400);
     expect(res.body.message).toBe('insert failed');
 
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -311,7 +311,7 @@ describe('POST /api/results/upload', () => {
     // time consent validation resolves it.
     expect(spy).toHaveBeenCalledWith(SAMPLE_OID, 'uso_comercial');
 
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -357,7 +357,7 @@ describe('POST /api/results/upload', () => {
     expect(res.body.error).toBe('Amostra não encontrada');
 
     // Cleanup any file written by multer's diskStorage before the route deleted it
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -377,7 +377,7 @@ describe('POST /api/results/upload', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Invalid Analysis Method');
 
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -405,7 +405,7 @@ describe('POST /api/results/upload', () => {
     expect(res.body.data.specimenId).toBe(SPECIMEN_ID);
     expect(insertOne).toHaveBeenCalledTimes(1);
 
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     expect(fs.existsSync(resultDir)).toBe(true);
     fs.rmSync(resultDir, { recursive: true, force: true });
   });
@@ -429,7 +429,7 @@ describe('POST /api/results/upload', () => {
       expect(res.body.data.fileType).toBe(expectedType);
     }
 
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -450,7 +450,7 @@ describe('POST /api/results/upload', () => {
     expect(res.status).toBe(201);
     expect(res.body.data.equipmentID).toBe(7);
 
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -486,7 +486,7 @@ describe('POST /api/results/upload', () => {
     expect(res.body.error).toBe('Amostra não encontrada');
 
     existsSpy.mockRestore();
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -508,7 +508,7 @@ describe('POST /api/results/upload', () => {
     expect(res.body.error).toBe('Invalid Analysis Method');
 
     existsSpy.mockRestore();
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -530,7 +530,7 @@ describe('POST /api/results/upload', () => {
     expect(res.body.message).toBe('insert failed');
 
     existsSpy.mockRestore();
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -552,7 +552,7 @@ describe('POST /api/results/upload', () => {
     expect(res.body.message).toBe('insert failed');
 
     unlinkSpy.mockRestore();
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -574,7 +574,7 @@ describe('POST /api/results/upload', () => {
     expect(res.status).toBeGreaterThanOrEqual(400);
 
     mkdirSpy.mockRestore();
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -604,7 +604,7 @@ describe('POST /api/results/upload', () => {
     expect(res.status).toBeGreaterThanOrEqual(400);
 
     randomBytesSpy.mockRestore();
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
@@ -625,7 +625,7 @@ describe('POST /api/results/upload', () => {
     // so Express falls back to its default error responder.
     expect(res.status).toBeGreaterThanOrEqual(400);
 
-    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    const resultDir = path.join(__dirname, '../../storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 });

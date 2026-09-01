@@ -6,6 +6,7 @@ const { ObjectId } = require('mongodb');
 const logger = require('../utils/logger');
 const { getUserAnonId } = require('../utils/userAnonymization');
 const { encryptFileBuffer, decryptFileBuffer, computeChecksum } = require('../utils/fileCrypto');
+const { STORAGE_BASE } = require('../config/uploadConfig');
 
 // #643 (RF007 AC#6/gate F3-G05): generalizes sample-file.controller.js's
 // upload/list/download/delete/replace + checksum/encryption/audit shape to
@@ -69,7 +70,7 @@ function createLinkedFileController(opts) {
           return cb(new Error(`${parentIdParam} é obrigatório`), null);
         }
 
-        const dir = path.join(__dirname, '../../storage', storageSubdir, String(parentId), 'files');
+        const dir = path.join(STORAGE_BASE, storageSubdir, String(parentId), 'files');
         fs.mkdirSync(dir, { recursive: true });
         cb(null, dir);
       } catch (error) {

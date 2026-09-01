@@ -9,6 +9,7 @@ const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const { enforceCommercialConsent } = require('../../infrastructure/middleware/consent.enforcement');
 const logger = require('../../utils/logger');
 const ResultModel = require('../../models/Result');
+const { STORAGE_BASE } = require('../../config/uploadConfig');
 
 const getResultFileType = (fileName) => {
   const ext = path.extname(fileName).toLowerCase();
@@ -27,7 +28,10 @@ const resultStorage = multer.diskStorage({
         return cb(new Error('specimenId é obrigatório'), null);
       }
 
-      const resultDir = path.join(__dirname, '../../storage/results', String(specimenId));
+      // #893: derived from STORAGE_BASE (env STORAGE_DIR, defaulting to the
+      // same __dirname-relative path as before) so a read_only:true deployment
+      // can mount a writable volume outside the application directory.
+      const resultDir = path.join(STORAGE_BASE, 'results', String(specimenId));
       if (!fs.existsSync(resultDir)) {
         fs.mkdirSync(resultDir, { recursive: true });
       }

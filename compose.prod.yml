@@ -133,6 +133,18 @@ services:
     cap_drop: ["ALL"]
     tmpfs:
       - /tmp
+    # #893: the app writes uploads, staged import files, sample/result
+    # attachments and backups. read_only:true is correct and stays -- what was
+    # wrong is that those paths were hardcoded under /app, the one place a
+    # hardened container must not be writable. UPLOAD_DIR/STORAGE_DIR/BACKUP_DIR
+    # (.env.production.example) move them here. The worker mounts the SAME
+    # volumes: the API writes the staged file and the worker reads it back by
+    # the absolute path in rawData.storagePath, which is why compose.test.yml
+    # already shares uploads-test-data between its own pair.
+    volumes:
+      - uploads_data:/data/uploads
+      - storage_data:/data/storage
+      - backups_data:/data/backups
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
@@ -168,6 +180,12 @@ services:
     cap_drop: ["ALL"]
     tmpfs:
       - /tmp
+    # #893: same three volumes as backend, and they must be the same ones --
+    # the worker reads back files the API wrote, by absolute path.
+    volumes:
+      - uploads_data:/data/uploads
+      - storage_data:/data/storage
+      - backups_data:/data/backups
 
   neo4j-projection-worker:
     # Drains graph_projection_outbox into Neo4j (#309, follow-up from RF023/#292)
@@ -225,3 +243,8 @@ volumes:
   neo4j_data:
   influxdb_data:
   redis_data:
+  # #893: writable application data, deliberately outside /app so backend and
+  # worker keep read_only:true.
+  uploads_data:
+  storage_data:
+  backups_data:

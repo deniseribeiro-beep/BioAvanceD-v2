@@ -6,10 +6,11 @@ const StagingImport = require('../models/StagingImport');
 const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
 const { getQueue } = require('../config/queue');
 const logger = require('../utils/logger');
+const { UPLOADS_BASE } = require('../config/uploadConfig');
 
 class StagingImportService {
   getStagingDirectory() {
-    return path.join(__dirname, '../../uploads/staging-imports');
+    return path.join(UPLOADS_BASE, 'staging-imports');
   }
 
   sanitizeFileName(fileName) {

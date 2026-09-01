@@ -16,6 +16,7 @@ const {
   EXTRACTION_PROTOCOLS,
   MIABIS_QUALITY,
 } = require('../config/constants/specimen.constants');
+const { UPLOADS_BASE } = require('../config/uploadConfig');
 
 // #815: the patient template's columns and its example row, shared by the
 // xlsx builder (downloadPatientTemplateExcel) and the CSV builder
@@ -82,7 +83,7 @@ const PATIENT_TEMPLATE_EXAMPLE_ROW = [
 // Configuração do multer para upload
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadsDir = path.join(__dirname, '../../uploads/temp');
+    const uploadsDir = path.join(UPLOADS_BASE, 'temp');
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }

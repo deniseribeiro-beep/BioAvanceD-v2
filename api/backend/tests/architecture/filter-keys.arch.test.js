@@ -203,13 +203,13 @@ const RETIRED_FILTER_KEYS = [
 // sampleID as the legacy form. If it was never written, that leg is dead
 // and should be dropped, which would shrink these four exemptions.
 const RETIRED_KEY_EXEMPT = new Set([
-  'interface/routes/result.routes.js:137',
-  'interface/routes/result.routes.js:384',
+  'interface/routes/result.routes.js:141',
+  'interface/routes/result.routes.js:388',
   // :522 -> :543 when #875's allowlist rework added ~21 lines above the
   // link-sample legacy-resolution tier (the entry itself is #628's
   // deliberate _id -> specimenId -> legacy sampleID fallback; #804 owns
   // sampleID's eventual retirement).
-  'interface/routes/result.routes.js:543',
+  'interface/routes/result.routes.js:547',
   'services/result-specimenid-backfill.service.js:56',
   // #857: _id -> specimenId -> legacy sampleID/sampleId/barcode.
   // :619/:696/:789 -> :683/:760/:853, a uniform +64 shift, when #789 added

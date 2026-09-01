@@ -11,6 +11,7 @@ const { isRecordInOrganizationScope } = require('../services/rbac-assignment.ser
 // linkage controllers reuse the exact same crypto path instead of a second
 // implementation -- see fileCrypto.js for the RF007/RNF029 rationale.
 const { encryptFileBuffer, decryptFileBuffer, computeChecksum } = require('../utils/fileCrypto');
+const { STORAGE_BASE } = require('../config/uploadConfig');
 
 /**
  * Controller de Upload de Arquivos de Análise de Amostras
@@ -33,7 +34,7 @@ class SampleFileController {
           }
 
           // Cria diretório organizado por specimenId
-          const sampleDir = path.join(__dirname, '../../storage/samples', String(specimenId), 'files');
+          const sampleDir = path.join(STORAGE_BASE, 'samples', String(specimenId), 'files');
           if (!fs.existsSync(sampleDir)) {
             fs.mkdirSync(sampleDir, { recursive: true });
           }

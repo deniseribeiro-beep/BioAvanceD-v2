@@ -4,11 +4,12 @@ const fs = require('fs');
 const importService = require('../services/import.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
+const { UPLOADS_BASE } = require('../config/uploadConfig');
 
 // Configuração do multer para upload
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadsDir = path.join(__dirname, '../../uploads/temp');
+    const uploadsDir = path.join(UPLOADS_BASE, 'temp');
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }

@@ -4,11 +4,12 @@ const fs = require('fs');
 const importAsyncService = require('../services/import-async.service');
 const logger = require('../utils/logger');
 const { parseGroupFields } = require('../utils/importGroupFields');
+const { UPLOADS_BASE } = require('../config/uploadConfig');
 
 // Configuração do multer para upload
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadsDir = path.join(__dirname, '../../uploads/temp');
+    const uploadsDir = path.join(UPLOADS_BASE, 'temp');
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }

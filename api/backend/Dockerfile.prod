@@ -14,6 +14,13 @@ RUN addgroup -S app && adduser -S app -G app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN chown -R app:app /app
+# #893: pre-create the writable data roots and give them to the app user
+# BEFORE the volumes mount over them. Docker copies the image path's ownership
+# onto a fresh named volume, so without this the volumes arrive root-owned and
+# every mkdirSync under them fails EACCES -- swapping one permission error for
+# another. compose.prod.yml mounts uploads_data/storage_data/backups_data here
+# and .env.production.example points UPLOAD_DIR/STORAGE_DIR/BACKUP_DIR at them.
+RUN mkdir -p /data/uploads /data/storage /data/backups && chown -R app:app /data
 USER app
 EXPOSE 3000
 CMD ["node", "server.js"]
