@@ -19,6 +19,17 @@ try {
   logger.warn('Job daily-merkle não registrado:', err.message || err);
 }
 
+// #977: deliberate posture -- for THIS process any Redis failure is fatal,
+// whether it is a configuration policy failure (validateRedisOnly), an
+// uninitialised client (initRedis) or plain connectivity
+// (testRedisConnection). The worker has no job other than draining BullMQ
+// queues, so staying up without Redis would be a "healthy" container that
+// processes nothing. Hence the process.exit(1) calls below plus the compose
+// restart policy, rather than a degraded mode.
+//
+// The backend makes the OPPOSITE choice over the same three checks and only
+// logs (server.js, the "Iniciar fila (Redis)" block). Read #977 before
+// aligning the two ends, and change both or neither.
 /**
  * Inicializa worker com testes automáticos
  */

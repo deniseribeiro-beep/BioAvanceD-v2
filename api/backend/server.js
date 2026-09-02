@@ -194,6 +194,17 @@ async function startServer() {
     require("./src/services/notification.service").initSocketIO(io);
     require("./src/services/iot-streaming.service").initSocketIO(io);
 
+    // #977: deliberate posture -- a Redis configuration or connectivity
+    // failure is NOT fatal for the backend. The synchronous HTTP routes do
+    // not depend on the queue; only import enqueueing degrades, and
+    // getQueue() retries on demand. Hence the catch below logs and falls
+    // through to listen(), leaving the container healthy.
+    //
+    // The worker process makes the OPPOSITE choice (src/workers/worker.js,
+    // process.exit(1)) over exactly the same three checks -- validateRedisOnly,
+    // initRedis and testRedisConnection. The divergence is intentional, not an
+    // oversight: read #977 before changing either end, and change both or
+    // neither.
     // Iniciar fila (Redis)
     try {
       const { initQueue, testConnection } = require("./src/config/queue");
