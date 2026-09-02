@@ -50,8 +50,6 @@
     "test:unit": "vitest run",
     "test:unit:coverage": "vitest run --coverage",
     "test:coverage": "vitest run --coverage",
-    "cleanup": "node scripts/cleanup.js",
-    "clean": "node scripts/cleanup.js",
     "clean:cache": "powershell -Command \"if (Test-Path node_modules\\.vite) { Remove-Item -Recurse -Force node_modules\\.vite; Write-Host 'Cache limpo' } else { Write-Host 'Cache nao existe' }\""
   }
 }
