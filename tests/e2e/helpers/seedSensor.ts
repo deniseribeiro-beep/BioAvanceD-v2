@@ -82,9 +82,15 @@ export async function seedSensorWithPolicy(
     updatedAt: new Date(),
   });
 
+  // #984: derive all three variable MAC octets from the full millisecond
+  // suffix (not suffix % 100, which wrapped every 100ms and let two seeds
+  // produce a byte-identical macAddress once SensorMetadata's unique index
+  // is actually built — see SensorMetadata.schema.js's macAddress index).
+  const macSuffix = suffix.toString(16).padStart(6, '0').slice(-6);
+
   await db.collection('sensorMetadata').insertOne({
     sensorId,
-    macAddress: `AA:BB:CC:00:00:${(suffix % 100).toString().padStart(2, '0')}`,
+    macAddress: `AA:BB:CC:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}:${macSuffix.slice(4, 6)}`,
     equipment: null,
     device: deviceResult.insertedId,
     temperaturePolicy: policyResult.insertedId,
@@ -232,9 +238,14 @@ export async function seedSensorWithFreezerSample(
     updatedAt: new Date(),
   });
 
+  // #984: see seedSensorWithPolicy's own comment above — same fix, same
+  // shared 24-bit space (deliberately not partitioned by function, since
+  // the unique index is on the whole sensorMetadata collection).
+  const macSuffix = suffix.toString(16).padStart(6, '0').slice(-6);
+
   await db.collection('sensorMetadata').insertOne({
     sensorId,
-    macAddress: `AA:BB:CC:01:00:${(suffix % 100).toString().padStart(2, '0')}`,
+    macAddress: `AA:BB:CC:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}:${macSuffix.slice(4, 6)}`,
     equipment: null,
     device: deviceResult.insertedId,
     temperaturePolicy: policyResult.insertedId,

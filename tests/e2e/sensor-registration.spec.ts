@@ -39,7 +39,13 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
     expect(authToken).toBeTruthy();
 
     const freezerId = await seedFreezerContainer();
-    const sensorId = `rf009-registration-e2e-${Date.now()}`;
+    const suffix = Date.now();
+    const sensorId = `rf009-registration-e2e-${suffix}`;
+    // #984: derive both varying MAC octets from the full suffix (not
+    // sensorId's last 2 decimal characters, a 100-value namespace that
+    // collides both within a run and across runs on this project's
+    // persistent bioavanced-test-* Mongo volume).
+    const macSuffix = suffix.toString(16).padStart(4, '0').slice(-4);
 
     try {
       const createResponse = await request.post(`${apiBaseURL}/api/sensors`, {
@@ -47,7 +53,7 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
         data: {
           sensorId,
           sensorType: 'temperature',
-          macAddress: `AA:BB:CC:11:${sensorId.slice(-2)}:00`,
+          macAddress: `AA:BB:CC:11:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`,
           storageContainer: freezerId,
         },
       });
@@ -68,7 +74,10 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
   // flagged as still broken (no macAddress/storageContainer inputs existed).
   test('the Novo Sensor form links SensorMetadata through a real UI submission', async ({ page, request }) => {
     const freezerId = await seedFreezerContainer();
-    const sensorId = `rf009-ui-registration-e2e-${Date.now()}`;
+    const suffix = Date.now();
+    const sensorId = `rf009-ui-registration-e2e-${suffix}`;
+    // #984: see the direct-API test above — same fix, same reasoning.
+    const macSuffix = suffix.toString(16).padStart(4, '0').slice(-4);
 
     try {
       let session;
@@ -85,7 +94,7 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
 
       await page.getByTestId('sensor-id-input').fill(sensorId);
       await page.getByTestId('sensor-type-input').fill('temperature');
-      await page.getByTestId('sensor-mac-address-input').fill(`AA:BB:CC:22:${sensorId.slice(-2)}:00`);
+      await page.getByTestId('sensor-mac-address-input').fill(`AA:BB:CC:22:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`);
       await page.getByTestId('sensor-storage-container-select').selectOption(freezerId);
 
       await page.getByTestId('sensor-form-submit').click();
