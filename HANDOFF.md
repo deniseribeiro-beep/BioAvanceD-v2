@@ -1,151 +1,150 @@
 # HANDOFF
 
-**Written 2026-09-01, after a 10-issue queue sitting.** Dennis asked for
-"the next 10 issues, docker is still on". **7 closed (6 queue members plus #944, filed and
-worked here), 3 queue members left open with a shipped slice each, 6 new
-issues filed, 10 commits pushed, full native gate green.**
+**Written 2026-09-02, during a 10-issue queue sitting.** Dennis asked for
+"the next 10 issues, Docker is on." **8 closed, 3 left open with a shipped
+slice, 12 commits pushed, 10 issues filed (8 here, 2 on the pack).**
 
 **INTERIM — the session was not declared over by the user.** It may
-continue; do not read this as a completed sitting. Re-derive every count
-rather than trusting it.
+continue. Re-derive every count rather than trusting it.
 
 ---
 
 ## Repo state
 
-- Branch `feature/docker-e2e-backend-integration`, **pushed, clean and
-  matching origin**. `main` untouched, no PR.
-- Last substantive commit: `720368c8` (#921 finding 2).
-- No new dependencies. One new env var: `ALLOW_UNENCRYPTED_FILE_STORAGE`
-  (#938; unset = encryption required).
+- Branch `feature/docker-e2e-backend-integration`. `main` untouched, no PR.
+- Last substantive commit: `abaf40d9` (#946/#947).
+- No new dependencies. No new env vars.
+- **One behaviour change a reader should know about:** `npm --prefix
+  frontend run typecheck` now aliases `typecheck:full` instead of a
+  four-file subset (#946). It passes — but it is a genuinely wider gate
+  than it was, so a future red there is not necessarily a new regression.
 
-## Verification state — full NATIVE gate, green [ran it]
+## Verification state
 
 | Gate | Result |
 |---|---|
-| backend `tests/unit tests/integration tests/compliance` | **8263 passed / 455 files / 0 failed** |
-| frontend (27 files) | **230 passed** |
-| `test:architecture` | **110 / 110** |
-| `npm run typecheck` (frontend core + backend lint 463 files + e2e) | **clean** |
-| **e2e** | **NOT RUN** — see Docker below |
+| backend `tests/unit tests/integration tests/compliance` | **re-running at rotation time — see below** |
+| `npm run test:architecture` | **110 / 110** [ran it] |
+| `npm --prefix frontend run typecheck:full` | **clean** [ran it] |
+| targeted per-issue vitest runs | green, named in each close comment |
+| **e2e / Docker** | **NOT RUN** |
 
-Was 8225/451, 227, 106 last sitting: **+38 backend tests, +4 files, +3
-frontend, +4 architecture**.
+**The full backend suite result is not in this file on purpose.** An
+earlier full run came back **2 failed / 8281 passed**, both failures caused
+by this sitting's own #941 wiring; `b170b50b` fixed the cause and the
+targeted consumer set went green. The re-run was still in flight when this
+was written. **[not established] — confirm it before treating the native
+gate as green.** Command:
+
+```
+cd api/backend && npx vitest run tests/unit tests/integration tests/compliance > <logfile> 2>&1
+```
+
+**Redirect it to a file; do not pipe it to `tail`.** A backgrounded
+`... | tail -8` produced a 0-byte output file and stalled at ~18 CPU-seconds
+over 35 minutes, indistinguishable from a hang. Re-running with plain
+redirection worked immediately. [ran it, both ways] Recorded on pack #655.
 
 ## Docker state
 
-**No containers, no stack, no bioavanced images.** Nothing was brought up.
+**No containers, no stack, no bioavanced images.** Base images present
+(`mongo:7`, `neo4j:5-community`, `redis:7-alpine`, `influxdb:2.7`); no
+application image built this sitting, nothing brought up, no bootstrap run.
 
-Two throwaway `mongo:7` containers were run and torn down (`--rm`,
-confirmed gone) to verify index and counter semantics — see #936/#779.
-That is *not* the Docker gate: no image built, no compose file read, no
-application started, no volume left.
+So the e2e gate needs a full image build **and** the full bootstrap chain —
+`docker-workflow`'s bioavanced overlay carries the recipe (12 core services
++ `admin-bootstrap-test` + the 17-service reference-data chain, `--workers=1`).
 
-**So the e2e gate still needs a full image rebuild AND the full bootstrap
-chain** — budget ~4 min build on top of bring-up. `docker-workflow`'s
-bioavanced overlay has the recipe; the previous handoff confirmed the
-17-service chain (`foundation-bootstrap-test` + 16
-`reference-data-bootstrap-*`) and it is unchanged.
+**Two things want that gate:**
 
-**Two things want that gate, neither blocking:**
+- **#948** — whether `node:22-alpine` ships an `openssl` CLI. One command:
+  `docker run --rm node:22-alpine sh -c 'which openssl || echo MISSING'`.
+  `Dockerfile.prod:12` installs only `mongodb-tools` while
+  `audit-tsa.service.js:29` shells out to `openssl`; `Dockerfile.dev:8`
+  installs it explicitly. **[not established]**
+- **#947** — the `.dockerignore` change is unverified against a real build.
 
-- **#938** — the RF007 e2e spec (`f1975718`) uploads a real file.
-  `compose.test.yml:26` sets `ENCRYPTION_KEY`, so it should be unaffected
-  by the new fail-closed gate. **[not established]** — not run.
-- **#936/#779** — `samples_barcode_unique_v1` is created on first
-  `getCollection(db, 'samples')`. First real stack bring-up is the first
-  time it is built against seeded data.
+## What closed (8)
 
-## What closed (7)
+`#902 #893 #940 #939 #936 #881` from the queue, plus `#946` and (partly)
+the work behind `#947` — both filed and worked in this sitting. Read each
+close comment for evidence; six carry `premise-corrected`.
 
-`#915 #892 #917 #931 #779 #938` from the queue, plus `#944` — filed by this
-sitting and worked in it. Read each close comment for evidence.
+## Left open with a shipped slice (4) — the judgment a query cannot carry
 
-## Left open with a shipped slice (3, plus #682) — the judgment a query cannot carry
+Query the board (`gh issue list --state open`). What it will not tell you:
 
-Query the board (`gh issue list --state open`, 74 open). What it will not
-tell you:
+- **#933 — direction 1 was already built and reachable by nobody.**
+  `clearMfaLockForUser.js` existed since `493962a0` with no npm script and
+  no compose service. Now wired (`mfa:clear-lock`). Open on directions 2/3.
+  Its body's "recovery requires direct database access" is now overstated.
+- **#941 — two indexes built, ten declarations deliberately left.** The
+  counts in the body are wrong (9 unique across *seven* files, 12 distinct
+  specs, 45 sites) and **the explicit-null trap applies to none of them**.
+  7 of 12 guard collections nothing writes; those should probably be
+  *deleted*, not built. Do not reach for `syncIndexes()` — it drops
+  indexes absent from the schema, and three collections would lose live
+  natively-built ones.
+- **#923 — the fork is still yours, but three things in its own prior
+  comment did not survive checking.** The RF006 conditional is re-scoped
+  rather than dropped; `/allocate/auto` has no audit row at all and bypasses
+  the refusal entirely; and **`sensor.service.js:243` is a third instance of
+  the defect, not the graceful-degradation precedent it was cited as**
+  (filed as #951). The real cost of the replica-set option is keyfile auth,
+  not `--replSet`.
+- **#914 — item 1 (the per-group sweep) is done.** 0 enforced / 30
+  shadow-enforced / 13 inert over 43 keys, and the body omits a real ninth
+  group (`lgpd`). "Inert" is the wrong frame for 30 of them — they are
+  redirects, not features to build. Suggested order: `session` first (it
+  has RNF021 AC#3 behind it), `enhancedSecurity` last (it is an override
+  layer).
 
-- **#936 — item 1 shipped, item 2 assessed and deliberately not changed.**
-  `samples.barcode` now has a real partial unique index. Item 2 (the RF004
-  guard running before generation) is argued *against* changing on the
-  issue: post-#932 the retry queries the right collection, and the new
-  index makes an escape loud. That argument is an **inference** from the
-  repo's narrow-change preference — no doc speaks to guard ordering — so
-  it is cheap to overturn.
-- **#849 — one slice shipped, and its body is now materially stale.**
-  Comments were polluting the guard's written-field vocabulary (196 keys,
-  6.7%); fixed. **Its three listed "options" are two-thirds already
-  built** — `$or` recursion shipped under #854, Band A of the pre-built
-  variable gap shipped too. What remains is Band B plus a *new* finding:
-  the vocabulary counts every object literal in `src/`, persisted or not,
-  which is now the largest false-negative source. Labelled
-  `premise-corrected`.
-- **#921 — finding 2 shipped, finding 1 untouched, and the count is
-  wrong.** `tests/architecture/rbac-actions.arch.test.js` derives the
-  #630 audit for real; zero violations across the population. **[ran it]
-  That population is 190 call sites, not the body's 53** (45 in
-  `src/routes`, 145 in `src/interface/routes`). The per-file table is
-  right; the denominator is not, and finding 1's "~40 of 53" framing
-  rests on it.
-- **#682** — gained a third checklist item from #938.
+## Filed this sitting (10)
 
-## Filed this sitting (6) — one closed, five open
+Eight here — `#945 #946 #947 #948 #949 #950 #951 #952` — and two on the
+pack, `#654` and `#655`. `#946` is closed; the rest are open.
 
-`#939` (ASYNC_BATCH_IMPORT batches unreadable — the third writer to
-`import_batches`), `#940` (frontend still treats `sensorID` as canonical;
-types *require* a field the backend never wrote), **`#941` (largest:
-`autoIndex: false` + no `syncIndexes` anywhere means every
-`Schema.index()` in `src/models/` is decorative — nine unique constraints
-unenforced)**, `#942` (import duplicate detection never compares within
-the submitted file), `#943` (`canonical.v1.file` has no production
-caller), and `#944` — **closed here**: the barcode guard cited RF004, whose criteria
-never mention barcodes; corrected at all three sites to dict-02 ELM-0116.
+**Read #952 first.** `failedLoginAttempts` is incremented **nowhere**, so
+failed *password* logins are uncounted and there is no password brute-force
+lockout — the existing lockout guards TOTP entry, after the password already
+passed. **RF014 AC#2 mandates it explicitly** (*"Configurar tentativas,
+bloqueios e regras de senha"*), so it is an unmet requirement at that
+requirement's own priority, not optional hardening. [read it]
 
-**The other five are open because I chose to stop on them, not because
-anything blocks them.**
-
-**#941 is the one to read first.** It was found while fixing #936 and it
-invalidates any assumption that a declared index exists.
+**#947 has a half only Denise can decide:** a named individual's CV PDF is
+**tracked** under `api/backend/storage/samples/`. The build context now
+excludes it; removing the file, or rewriting history, was deliberately not
+done.
 
 ## Conventions this sitting relied on / established
 
-- **An issue that calls its own remedy "the owner's call" is usually a
-  lookup that was not run.** Five of ten queue members said so; four were
-  answered by a citation — RNF029 AC#5 for #938, dict-02 ELM-0116 for
-  #779, ELM-0317's *default column* for #681, and the repo's own error
-  table for #892. The default column is the sharp one: doing what #681
-  literally asked (1..1 → required) would have shipped a contract
-  rejecting payloads the dictionary permits.
-- **`api/backend/docs/` is authoritative and is in no skill's docs list.**
-  `STORAGE_API_EXAMPLES.js`'s `CÓDIGOS DE ERRO` table settled #892 after
-  it had been parked four days as a repo-wide design call. Filed as pack
-  #647.
-- **The two-hop consumer sweep paid twice more.** #779's counter broke 25
-  tests across two files no brief would have named — and both doubles
-  encoded the defect: one returned the pre-v5 `{ value: doc }` driver
-  shape (the thing #294 fixed in product code), the other a fixed
-  `{ seq: 1 }` that cannot advance.
-- **A throwaway `docker run --rm mongo:7` is not the Docker gate**, and it
-  answered two questions no mock could: `sparse`/`$exists` both break on
-  an explicit `null`, and the counter seeds and increments as designed.
-  ~20 seconds each. Filed as pack #652 (the ladder jumps from "one
-  targeted test" straight to a full image build).
-- **`gh issue create --body "..."` with an unescaped backtick silently
-  corrupts the body** — it does *not* error. #943 was created with an
-  identifier command-substituted out, caught only by grepping the result.
-  Use `Write` + `--body-file`, always. Recurrence reported on pack #572.
-- **`git check-ignore` was run 0 times across ~35 product edits** in 10
-  routed iterations. Tallied on pack #648.
+- **A "confirmed, no change needed" resolution must be written into the
+  code that looks wrong**, not left in a tracker comment — otherwise the
+  next audit re-opens it. #936 is the worked example.
+- **Verify the premise before building on it — it paid on every one of six
+  research briefs.** Every issue whose premise was re-checked had something
+  materially wrong: #893's was fixed weeks earlier, #940's "probably dead"
+  block was live, #941's counts and null-trap were both wrong, #939's
+  "maybe delete it" was reachable by a Técnico uploading a CSV, #923's cited
+  precedent was a bug, #914 omitted a whole policy group.
+- **The two-hop consumer sweep is not optional and one hop is not it.**
+  Run one hop on #941 and the full native suite caught what it missed —
+  `pipeline.test.js` reaches the changed module only through
+  `graphProjection.service.js`.
+- **`git grep -- ':(top)api/backend/src'` cannot see `app.js` or
+  `server.js`** — they sit at `api/backend/` root, and `app.js` mounts every
+  router. Scope to `api/backend` for wiring questions. Filed as pack #654.
+- **An architecture guard here matches raw file text**, so a *comment*
+  naming a forbidden token fails it exactly as an import would
+  (`seed-boundary.arch.test.js:22`). Cost one red suite. Filed as #945; the
+  `stripComments` remedy already exists twice in that directory.
 
 ## Recommended next
 
 **None queued** — Dennis named no task beyond the 10.
 
-If the session continues, the two strongest candidates are **#941** (the
-inert-index finding, which touches nine unique constraints and is cheapest
-before any deployment exists) and **#921 finding 1**, now that its
-population is measured at 190 — its own three `[not established]` items
-still gate an honest build, and item 3 (the false-positive rate of the
-"test contains route path AND role literal" heuristic) is the one to
-measure first.
+If the session continues, the two strongest are **the Docker/e2e gate**
+(nothing has exercised this sitting's twelve commits against a live stack,
+and #948's one-line `openssl` check rides along) and **#952**, which is the
+only open item with an explicit requirement behind it and a security
+consequence.
