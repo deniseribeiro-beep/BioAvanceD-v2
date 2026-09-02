@@ -484,6 +484,13 @@ class AuthService {
         );
 
         user.password = newHash;
+
+        // #958 / RNF021 AC#2. Ordering is load-bearing: issueSessionTokens has
+        // NOT run yet, so every session this matches is a pre-reset one. Moving
+        // this below the token issue would revoke the session the caller is about
+        // to be handed. All sessions, for the same reason as the token reset --
+        // the caller has no session yet, so there is nothing to preserve.
+        await sessionService.invalidateUserSessions(db, user._id.toString(), 'password_change', user._id.toString());
       }
 
       // Atualiza último login
@@ -1015,6 +1022,12 @@ class AuthService {
           }
         }
       );
+
+      // #958 / RNF021 AC#2. No fork here: this route is unauthenticated, so
+      // there is no current session to preserve and every live session was
+      // authenticated with the password just replaced. revokedBy 'system'
+      // mirrors cleanupExpiredSessions -- there is no acting user on this route.
+      await sessionService.invalidateUserSessions(db, user._id.toString(), 'password_change', 'system');
 
       // Registra log (anonimizado via auditLogger)
       const auditLogger = require('../utils/auditLogger');

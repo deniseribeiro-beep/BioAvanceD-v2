@@ -392,7 +392,14 @@ class SessionService {
     return true;
   }
 
-  async revokeAllOtherSessions(db, userID, currentAccessToken) {
+  // #958: reason/revokedBy are optional and default to what this helper
+  // hardcoded before, so its two existing callers (auth.routes DELETE
+  // /sessions/all-others and user-security.service, per #920) are unchanged
+  // byte for byte. The password-change paths pass 'password_change', which is
+  // in P1X-0267's closed vocabulary and was previously unwritable here.
+  // Refs #974, which added the same optional pair to the other three helpers
+  // and deliberately left this one alone.
+  async revokeAllOtherSessions(db, userID, currentAccessToken, reason = 'user_request', revokedBy = null) {
     const sessionsCollection = db.collection('sessions');
     const currentHash = hashToken(currentAccessToken);
 
@@ -410,8 +417,8 @@ class SessionService {
           isActive: false,
           isRevoked: true,
           revokedAt: new Date(),
-          revocationReason: 'user_request',
-          revokedBy: String(userID),
+          revocationReason: reason,
+          revokedBy: revokedBy === null ? String(userID) : String(revokedBy),
           updatedAt: new Date()
         }
       }

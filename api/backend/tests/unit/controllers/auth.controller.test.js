@@ -669,7 +669,12 @@ describe('AuthController.changePassword', () => {
   it('updates the password and returns 200 on success', async () => {
     const user = { _id: 'u1', password: 'hashed-old', passwordHistory: ['hashed-oldest'] };
     const usersCollection = createUsersCollection(user);
-    const db = { collection: vi.fn().mockReturnValue(usersCollection) };
+    // #958: a named sessions collection, not the one-collection-for-every-name
+    // stub this file used -- a password change now revokes the user's OTHER
+    // sessions, and a mock without updateMany would throw into changePassword's
+    // catch and turn a 200 into a 400.
+    const sessionsCollection = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 2 }) };
+    const db = { collection: vi.fn((name) => (name === 'sessions' ? sessionsCollection : usersCollection)) };
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     vi.spyOn(bcrypt, 'hash').mockResolvedValue('hashed-new');
     vi.spyOn(passwordService, 'validateStrength').mockReturnValue(true);
@@ -696,6 +701,19 @@ describe('AuthController.changePassword', () => {
           failedLoginAttempts: 0,
         }),
       }
+    );
+    // #958 / RNF021 AC#2: "troca de senha ... revogam as sessoes afetadas".
+    // All-but-current: the session making this request just proved knowledge of
+    // BOTH the old and the new password, so it is not an affected session.
+    expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ userID: '507f1f77bcf86cd799439011', isActive: true }),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          isRevoked: true,
+          revocationReason: 'password_change',
+          revokedBy: '507f1f77bcf86cd799439011',
+        }),
+      })
     );
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({

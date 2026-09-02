@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
 const bcrypt = require('bcryptjs');
 const passwordService = require('../services/password.service');
+const sessionService = require('../services/session.service');
 
 const REFRESH_COOKIE_NAME = 'refresh_token';
 
@@ -371,6 +372,20 @@ class AuthController {
         }
       );
 
+      // #958 / RNF021 AC#2: "Logout, inativação, troca de senha ou alteração
+      // crítica de papel revogam as sessões afetadas." All-but-current, because
+      // the session making this request just proved knowledge of BOTH the old
+      // and the new password -- it is not an affected session. Every other live
+      // session was authenticated with a password that no longer exists.
+      //
+      // A missing Authorization header fails CLOSED for free: hashToken(undefined)
+      // hashes '' and matches no stored tokenHash, so nothing is excluded and all
+      // sessions die.
+      const currentToken = (req.headers && req.headers.authorization || '').replace('Bearer ', '');
+      await sessionService.revokeAllOtherSessions(
+        db, req.user.userID, currentToken, 'password_change', req.user.userID
+      );
+      
       return res.status(200).json({
         success: true,
         message: (req.t && req.t('auth.passwordChangeSuccess')) || 'Senha alterada com sucesso'

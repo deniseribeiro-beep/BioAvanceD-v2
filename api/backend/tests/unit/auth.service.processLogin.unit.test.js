@@ -786,3 +786,47 @@ describe('AuthService.resetPassword', () => {
     );
   });
 });
+
+// #958 / RNF021 AC#2. Unlike the two self-service paths, neither of these has a
+// current session to preserve: the token reset is unauthenticated, and the forced
+// reset runs BEFORE issueSessionTokens. So both revoke everything -- and for the
+// forced reset the ORDERING is load-bearing: revoking after the new token was
+// issued would kill the session the user is about to be handed.
+describe('#958: password changes revoke sessions', () => {
+  function dbWithSessions(collectionApi) {
+    const base = makeDb(collectionApi);
+    const sessionsCollection = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 3 }) };
+    return {
+      sessionsCollection,
+      db: {
+        ...base,
+        collection: vi.fn((name) => (name === 'sessions' ? sessionsCollection : base.collection(name))),
+      },
+    };
+  }
+
+  it('resetPassword revokes every session for the account', async () => {
+    // resetPassword verifies the token as a JWT before any lookup; the sibling
+    // happy-path test stubs it the same way.
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    const { db, sessionsCollection } = dbWithSessions({
+      findOne: vi.fn().mockResolvedValue({
+        ...BASE_USER,
+        passwordResetToken: 'tok',
+        passwordResetExpires: new Date(Date.now() + 100000),
+      }),
+      updateOne: vi.fn().mockResolvedValue({}),
+    });
+
+    await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
+
+    expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ userID: 'user-1', isActive: true }),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          isRevoked: true, revocationReason: 'password_change', revokedBy: 'system',
+        }),
+      })
+    );
+  });
+});
