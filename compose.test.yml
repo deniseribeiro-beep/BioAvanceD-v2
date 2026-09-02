@@ -64,6 +64,22 @@ x-test-env: &test-env
   # see utils/testSupportGate.js. This stack is exactly the "controlled
   # suite" the flag exists for.
   ENABLE_TEST_SUPPORT_ROUTES: "true"
+  # #959: these live on the SHARED anchor, not on backend-app-test alone.
+  # The container that runs the sealing job is worker-test, which inherits
+  # only <<: *test-env -- so while these sat in backend-app-test's own
+  # environment block, audit-tsa.service.js threw
+  # "AUDIT_RFC3161_TSA_URL nao configurado" in the one process that needed it.
+  #
+  # The /tsa and /witness SUFFIXES are load-bearing and were missing: the
+  # servers answer POST on exactly those paths (infra/tsa/tsa-server.js,
+  # infra/witness/witness-server.js) and 404 everything else, and
+  # audit-tsa.service.js fetches the configured URL verbatim. Without them
+  # every request landed on the 404 branch -> tsa_http_404 ->
+  # PENDING_TIMESTAMP, indistinguishable from a TSA that was never called.
+  # .env.docker.example already had the suffixed form; these were the outlier.
+  AUDIT_RFC3161_TSA_URL: http://tsa-test:8095/tsa
+  AUDIT_EXTERNAL_WITNESS_URL: http://witness-test:8096/witness
+  AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: ""
 
 services:
   mongodb-test:
@@ -237,9 +253,6 @@ services:
       <<: *test-env
       RUN_SERVER_IN_TEST: "1"
       TSA_URL: http://tsa-test:8095
-      AUDIT_RFC3161_TSA_URL: http://tsa-test:8095
-      AUDIT_EXTERNAL_WITNESS_URL: http://witness-test:8096
-      AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: ""
     command: ["npm", "start"]
     # #828: the API writes the uploaded staging file to /app/uploads and the
     # worker reads it back by absolute path (staging-import.service.js ->
@@ -582,6 +595,13 @@ services:
     volumes:
       - uploads-test-data:/app/uploads
     depends_on:
+      # #959: worker-test runs daily-merkle.job, which reaches the TSA and the
+      # witness. It depended on neither, so on a cold bring-up the job could
+      # fire against services that were not up yet.
+      tsa-test:
+        condition: service_healthy
+      witness-test:
+        condition: service_healthy
       backend-app-test:
         condition: service_healthy
     networks: [bioavanced-test]
