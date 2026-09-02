@@ -195,14 +195,17 @@ class SensorController {
       if (req.user) {
         const auditLogger = require('../utils/auditLogger');
         auditLogger.init(db);
+        const hasTemperatureValue = typeof reading?.temperatureValue === 'number';
         await auditLogger.log({
           action: 'READ',
           resourceType: 'Sensor',
           resourceId: req.params.id,
-          status: 'success',
-          severity: 'info',
-          message: `Leitura coletada do sensor: ${req.params.id}`,
-          payload: { temperature: reading?.temperatureValue || null },
+          status: hasTemperatureValue ? 'success' : 'warning',
+          severity: hasTemperatureValue ? 'info' : 'warning',
+          message: hasTemperatureValue
+            ? `Leitura coletada do sensor: ${req.params.id}`
+            : `Nenhum valor de temperatura foi obtido do sensor: ${req.params.id}`,
+          payload: { temperature: reading?.temperatureValue ?? null },
           req: req,
           module: 'Sensores'
         });

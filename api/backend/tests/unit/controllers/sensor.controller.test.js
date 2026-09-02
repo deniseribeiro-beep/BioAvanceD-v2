@@ -358,6 +358,50 @@ describe('sensor.controller', () => {
       expect(res.body).toEqual({ success: true, data: reading });
     });
 
+    // #956: sensorService.collectReading is a placeholder that resolves the
+    // sensor doc and returns { sensorId, sensorType, locationId, policyId,
+    // ready: true } -- no temperatureValue, nothing read from hardware. The
+    // audit must not claim a successful reading was collected.
+    it('logs a warning audit (not success) when the service returns its real shape with no temperatureValue', async () => {
+      const reading = { sensorId: 's1', sensorType: 'temp', locationId: 'loc-1', policyId: 'pol-1', ready: true };
+      collectReadingMock.mockResolvedValue(reading);
+      const req = createRequest({ user: { id: 'u1' }, params: { id: 's1' } });
+      const res = createResponse();
+
+      await sensorController.collectReading(req, res);
+
+      expect(auditLoggerLogMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'READ',
+          status: 'warning',
+          severity: 'warning',
+          payload: { temperature: null },
+        })
+      );
+      const call = auditLoggerLogMock.mock.calls[0][0];
+      expect(call.message).not.toBe(`Leitura coletada do sensor: ${req.params.id}`);
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toEqual({ success: true, data: reading });
+    });
+
+    // #956: 0 °C is a real, falsy reading -- `||` was recording it as null.
+    it('records a temperatureValue of 0 as 0, not null (?? fix)', async () => {
+      const reading = { temperatureValue: 0 };
+      collectReadingMock.mockResolvedValue(reading);
+      const req = createRequest({ user: { id: 'u1' }, params: { id: 's1' } });
+      const res = createResponse();
+
+      await sensorController.collectReading(req, res);
+
+      expect(auditLoggerLogMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'success',
+          severity: 'info',
+          payload: { temperature: 0 },
+        })
+      );
+    });
+
     it('handles a null reading without throwing and skips audit without req.user', async () => {
       collectReadingMock.mockResolvedValue(null);
       const req = createRequest({ params: { id: 's1' } });
