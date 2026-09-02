@@ -180,8 +180,12 @@ const UPDATE_SPREAD_EXEMPT = new Map([
   // validate: it cannot punish a request for a pre-existing defect it did
   // not cause. Two entries because the write happens twice, once inside a
   // transaction and once in the non-transactional fallback.
-  ['interface/routes/equipment.routes.js:387:updateData', 'validated (#868)'],
-  ['interface/routes/equipment.routes.js:416:updateData', 'validated (#868)'],
+  // Both moved down one line by #951, which added an `isTransactionCapable`
+  // require at the top of the file. The code and the reasoning are unchanged;
+  // only the line numbers moved, which is the "update the entry" case the
+  // companion test below names -- not the "delete the exemption" one.
+  ['interface/routes/equipment.routes.js:388:updateData', 'validated (#868)'],
+  ['interface/routes/equipment.routes.js:417:updateData', 'validated (#868)'],
 ]);
 
 test('#839: no NEW update document is built by spreading a request body', () => {

@@ -7,6 +7,7 @@ const EquipmentModel = require('../../models/Equipment');
 const { generateUniqueEquipmentID } = require('../../utils/equipmentIDGenerator');
 const defaultQuarantineService = require('../../services/equipment-sensor-quarantine.service');
 const { applyOrganizationScopeFilter, isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
+const { isTransactionCapable } = require('../../utils/mongoTransaction');
 
 function createEquipmentValidationError(message, statusCode = 422) {
   const error = new Error(message);
@@ -375,7 +376,7 @@ router.put('/:id', authenticate, requirePermission('manageStorageTopology'), asy
     const finalStatus = updateData.status !== undefined ? updateData.status : foundEquipment.status;
     const shouldTriggerQuarantine = quarantineService.isQuarantineTriggerStatus(finalStatus);
     const mongoClient = db?.client;
-    const canUseTransaction = shouldTriggerQuarantine && typeof mongoClient?.startSession === 'function';
+    const canUseTransaction = shouldTriggerQuarantine && (await isTransactionCapable(db));
 
     if (canUseTransaction) {
       const session = mongoClient.startSession();

@@ -141,6 +141,11 @@ describe('equipment.routes quarantine flow', () => {
     const session = { withTransaction, endSession };
     const startSession = vi.fn(() => session);
 
+    // #951: isTransactionCapable probes `hello` on the admin db, not just
+    // the presence of startSession -- a replica set answer (setName) is
+    // what makes this client transaction-capable.
+    const helloCommand = vi.fn(async () => ({ setName: 'rs0' }));
+
     const rbacCollections = buildRbacCollections([{ userAccountId: 'admin-test', accessType: 4 }]);
     const db = {
       collection: vi.fn((name) => {
@@ -151,7 +156,7 @@ describe('equipment.routes quarantine flow', () => {
         if (rbacCollections[name]) return rbacCollections[name];
         return logsCollection;
       }),
-      client: { startSession }
+      client: { startSession, db: vi.fn(() => ({ command: helloCommand })) }
     };
 
     isQuarantineTriggerStatusMock.mockReturnValue(true);
@@ -197,6 +202,90 @@ describe('equipment.routes quarantine flow', () => {
       { _id: expect.anything() },
       { $set: expect.objectContaining({ status: 'Maintenance' }) },
       { session }
+    );
+  });
+
+  // #951: `typeof client.startSession === 'function'` is true on a real
+  // MongoClient against a standalone mongod too -- it is not sufficient to
+  // gate transaction use. This client exposes startSession (like a real
+  // MongoClient would) but `hello` answers standalone, so
+  // isTransactionCapable must resolve false and the sequential fallback
+  // must run without ever calling startSession.
+  it('Gatilho sem suporte a transacao: standalone topology falls back to sequential write', async () => {
+    const foundEquipment = {
+      _id: '507f1f77bcf86cd799439011',
+      equipmentID: 303,
+      equipmentDescription: 'Freezer de teste',
+      status: 'Active'
+    };
+
+    const updateOne = vi.fn(async () => ({ matchedCount: 1 }));
+    const findOne = vi.fn(async () => foundEquipment);
+
+    const logsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'log-3' })) };
+    const equipmentCollection = { findOne, updateOne };
+    const sessionsCollection = {
+      findOne: vi.fn(async () => ({
+        sessionID: 'session-3',
+        tokenHash: 'mock-token-hash',
+        refreshTokenHash: 'mock-refresh-hash',
+        lastActivity: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+        refreshExpiresAt: new Date(Date.now() + 60_000),
+        inactiveTimeout: 60_000,
+        isActive: true,
+        isRevoked: false
+      })),
+      updateOne: vi.fn(async () => ({ matchedCount: 1 }))
+    };
+    const usersCollection = {
+      findOne: vi.fn(async () => ({ _id: 'admin-test', anonId: 'anon-admin-test' }))
+    };
+
+    const startSession = vi.fn();
+    const helloCommand = vi.fn(async () => ({}));
+
+    const rbacCollections = buildRbacCollections([{ userAccountId: 'admin-test', accessType: 4 }]);
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'equipment') return equipmentCollection;
+        if (name === 'sessions') return sessionsCollection;
+        if (name === 'users') return usersCollection;
+        if (name === 'logs') return logsCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return logsCollection;
+      }),
+      client: { startSession, db: vi.fn(() => ({ command: helloCommand })) }
+    };
+
+    isQuarantineTriggerStatusMock.mockReturnValue(true);
+    quarantineByEquipmentStatusMock.mockResolvedValue({
+      triggered: true,
+      matched: 1,
+      quarantined: 1,
+      movements: 1,
+      reason: 'status:maintenance'
+    });
+
+    const app = buildAppWithDb(db);
+    const token = buildAdminToken();
+
+    const response = await request(app)
+      .put('/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${token}`)
+      .set('user-agent', 'vitest-agent')
+      .send({ status: 'Maintenance' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.quarantine.triggered).toBe(true);
+
+    expect(startSession).not.toHaveBeenCalled();
+    expect(quarantineByEquipmentStatusMock).toHaveBeenCalledTimes(1);
+    expect(quarantineByEquipmentStatusMock.mock.calls[0][3]).not.toHaveProperty('session');
+
+    expect(updateOne).toHaveBeenCalledWith(
+      { _id: expect.anything() },
+      { $set: expect.objectContaining({ status: 'Maintenance' }) }
     );
   });
 });

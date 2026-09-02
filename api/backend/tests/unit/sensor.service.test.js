@@ -530,5 +530,50 @@ describe('sensor.service (non-quarantine paths)', () => {
         reason: 'status:offline'
       });
     });
+
+    // #951: `typeof client.startSession === 'function'` is true on a real
+    // MongoClient against a standalone mongod too -- it is not sufficient
+    // to gate transaction use. This client exposes startSession (like a
+    // real MongoClient would) but `hello` answers standalone, so
+    // isTransactionCapable must resolve false and the sequential fallback
+    // must run without ever calling startSession.
+    it('falls back to the sequential write when db.client.startSession exists but the topology is standalone', async () => {
+      const { db, collection } = makeDb();
+      const existing = { sensorId: 'S-1', maintenanceStatus: 'operational' };
+      collection.findOne.mockResolvedValue(existing);
+      collection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+      const startSession = vi.fn();
+      const helloCommand = vi.fn().mockResolvedValue({});
+      db.client = { startSession, db: vi.fn(() => ({ command: helloCommand })) };
+
+      const quarantineBySensorStatus = vi.fn().mockResolvedValue({
+        triggered: true,
+        matched: 1,
+        quarantined: 1,
+        movements: 1,
+        reason: 'status:offline'
+      });
+      sensorService.setQuarantineService({
+        isQuarantineTriggerStatus: vi.fn(() => true),
+        quarantineBySensorStatus
+      });
+
+      const result = await sensorService.updateSensor(db, 'S-1', { maintenanceStatus: 'offline' });
+
+      expect(startSession).not.toHaveBeenCalled();
+      expect(collection.updateOne).toHaveBeenCalledWith(
+        { $or: [{ sensorId: 'S-1' }, { _id: 'S-1' }] },
+        { $set: expect.objectContaining({ maintenanceStatus: 'offline' }) }
+      );
+      expect(quarantineBySensorStatus).toHaveBeenCalledWith(
+        db,
+        expect.objectContaining({ maintenanceStatus: 'offline' }),
+        'offline',
+        expect.objectContaining({ updateData: expect.objectContaining({ maintenanceStatus: 'offline' }) })
+      );
+      expect(quarantineBySensorStatus.mock.calls[0][3]).not.toHaveProperty('session');
+      expect(result.quarantine.triggered).toBe(true);
+    });
   });
 });

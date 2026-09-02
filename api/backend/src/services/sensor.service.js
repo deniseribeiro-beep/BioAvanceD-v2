@@ -3,6 +3,7 @@ const SensorModel = require('../models/Sensor');
 const logger = require('../utils/logger');
 const defaultQuarantineService = require('./equipment-sensor-quarantine.service');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
+const { isTransactionCapable } = require('../utils/mongoTransaction');
 
 function createSensorValidationError(message, statusCode = 422) {
   const error = new Error(message);
@@ -241,7 +242,7 @@ class SensorService {
 
       const shouldTriggerQuarantine = this.quarantineService.isQuarantineTriggerStatus(mergedStatus);
       const mongoClient = db?.client;
-      const canUseTransaction = shouldTriggerQuarantine && typeof mongoClient?.startSession === 'function';
+      const canUseTransaction = shouldTriggerQuarantine && (await isTransactionCapable(db));
       let result;
       let quarantineResult = null;
 

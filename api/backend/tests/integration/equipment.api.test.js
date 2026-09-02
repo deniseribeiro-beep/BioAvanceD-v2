@@ -648,7 +648,11 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     const withTransaction = vi.fn(async (cb) => cb());
     const endSession = vi.fn().mockResolvedValue(undefined);
     const startSession = vi.fn(() => ({ withTransaction, endSession }));
-    app.locals.db = { ...dbMock, client: { startSession } };
+    // #951: isTransactionCapable probes `hello` on the admin db, not just
+    // the presence of startSession -- a replica set answer (setName) is
+    // what makes this client transaction-capable.
+    const helloCommand = vi.fn().mockResolvedValue({ setName: 'rs0' });
+    app.locals.db = { ...dbMock, client: { startSession, db: vi.fn(() => ({ command: helloCommand })) } };
 
     const quarantineByEquipmentStatus = vi.fn().mockResolvedValue({
       triggered: true, matched: 1, quarantined: 1, movements: 1, reason: 'status:inactive'

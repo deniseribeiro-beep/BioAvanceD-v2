@@ -67,9 +67,13 @@ describe('sensor.service quarantine flow', () => {
     const session = { withTransaction, endSession };
     const startSession = vi.fn(() => session);
 
+    // #951: isTransactionCapable probes `hello` on the admin db, not just
+    // the presence of startSession -- a replica set answer (setName) is
+    // what makes this client transaction-capable.
+    const helloCommand = vi.fn(async () => ({ setName: 'rs0' }));
     const db = {
       collection: vi.fn(() => sensorsCollection),
-      client: { startSession }
+      client: { startSession, db: vi.fn(() => ({ command: helloCommand })) }
     };
 
     isQuarantineTriggerStatusMock.mockReturnValue(true);
