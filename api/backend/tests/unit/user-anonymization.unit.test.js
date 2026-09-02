@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 const { generateAnonId, maskUser, sanitizePayload, sanitizeMessage } = require('../../src/utils/userAnonymization');
 
 describe('generateAnonId', () => {
@@ -36,6 +36,41 @@ describe('generateAnonId', () => {
   it('accepts numeric userID (coerced to string)', () => {
     const result = generateAnonId(42);
     expect(result).toMatch(/^USR-[0-9A-F]{8}$/);
+  });
+
+  // #972: the fallback used to be the literal 'BioAdvanceD-LGPD-2024',
+  // committed to this public repository. With a known salt, USR-XXXX stops
+  // being a pseudonym -- sha256(userId + knownSalt) truncated to 8 hex chars
+  // is computable for any candidate id, so the de-identification is
+  // reversible by anyone holding the repo. Failing closed is the only safe
+  // behaviour, and it matches neo4jCanonicalProjection.service.js:36, which
+  // reads the same family of variables with no literal fallback.
+  describe('#972: no hardcoded salt fallback', () => {
+    const ORIGINAL = process.env.USER_ANON_SALT;
+    afterEach(() => {
+      if (ORIGINAL === undefined) delete process.env.USER_ANON_SALT;
+      else process.env.USER_ANON_SALT = ORIGINAL;
+    });
+
+    it('throws when neither an explicit salt nor USER_ANON_SALT is configured', () => {
+      delete process.env.USER_ANON_SALT;
+      expect(() => generateAnonId('user-123')).toThrow(/USER_ANON_SALT/);
+    });
+
+    it('throws when USER_ANON_SALT is set but empty', () => {
+      process.env.USER_ANON_SALT = '';
+      expect(() => generateAnonId('user-123')).toThrow(/USER_ANON_SALT/);
+    });
+
+    it('still returns USR-SYSTEM for a falsy userID without needing a salt', () => {
+      delete process.env.USER_ANON_SALT;
+      expect(generateAnonId(null)).toBe('USR-SYSTEM');
+    });
+
+    it('an explicit salt argument satisfies it without the env var', () => {
+      delete process.env.USER_ANON_SALT;
+      expect(generateAnonId('user-123', 'explicit-salt')).toMatch(/^USR-[0-9A-F]{8}$/);
+    });
   });
 });
 

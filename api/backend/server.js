@@ -22,8 +22,13 @@ let httpServerInstance = null;
 // =======================
 async function startServer() {
   try {
-    if (!env.MONGO_URI || !env.JWT_SECRET) {
-      logger.error("Variáveis críticas ausentes: MONGO_URI e JWT_SECRET são obrigatórias.");
+    // #972: USER_ANON_SALT juntou-se às críticas. Sem ele a pseudonimização
+    // de usuários (RNF007/LGPD) não tem salt, e generateAnonId agora falha
+    // fechado em vez de cair num literal público -- mas o erro apareceria no
+    // primeiro registro de usuário, não no boot. Aqui ele é alto e imediato,
+    // como MONGO_URI e JWT_SECRET.
+    if (!env.MONGO_URI || !env.JWT_SECRET || !env.USER_ANON_SALT) {
+      logger.error("Variáveis críticas ausentes: MONGO_URI, JWT_SECRET e USER_ANON_SALT são obrigatórias.");
       process.exit(1);
     }
 
