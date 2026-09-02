@@ -224,7 +224,18 @@ services:
     expose:
       - "8095"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8095/health >/dev/null"]
+      # #981: probe the port the service was actually told to use. This
+      # hardcoded 8095, which is also tsa-server.js's fallback -- so before
+      # TSA_PORT was wired up, changing it left the server on 8095 and this
+      # check passing, and the only symptom was a connection refused from
+      # another container.
+      #
+      # The $$ is load-bearing: a single $ is interpolated by Compose at
+      # config-parse time against the HOST environment, where TSA_PORT does
+      # not exist, so it renders to the literal 8095 and nothing is gained.
+      # $$ escapes it through to the container's shell, where TSA_PORT is
+      # set. Verified with `docker compose -f compose.test.yml config`.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${TSA_PORT:-8095}/health >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -239,7 +250,10 @@ services:
     expose:
       - "8096"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8096/health >/dev/null"]
+      # #981: same as tsa-test above -- probe the configured port, not a
+      # literal that happens to equal the server's fallback. The $$ escape
+      # matters for the same reason; see that comment.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${WITNESS_PORT:-8096}/health >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -252,7 +266,12 @@ services:
     environment:
       <<: *test-env
       RUN_SERVER_IN_TEST: "1"
-      TSA_URL: http://tsa-test:8095
+      # #981: TSA_URL was set here and read by NOTHING -- git grep over the
+      # whole tracked tree found this line and no reader. The variable the
+      # code actually reads is AUDIT_RFC3161_TSA_URL, which 67ac5405 moved
+      # onto the shared anchor above (with the load-bearing /tsa suffix this
+      # line was missing). So this was a near-miss name carrying the exact
+      # unsuffixed value that #959 item 4 had just finished fixing. Removed.
     command: ["npm", "start"]
     # #828: the API writes the uploaded staging file to /app/uploads and the
     # worker reads it back by absolute path (staging-import.service.js ->
