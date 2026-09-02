@@ -200,13 +200,10 @@ number, and note whether `--coverage` was involved this time.
    paragraph). Don't leave stale entries. The slice's own commit message
    is the narrative record — don't add one here.
 
-## ZERO coverage (0% lines) — 17 files as of the 2026-07-22 reconcile
+## ZERO coverage (0% lines) — 16 files as of the 2026-07-22 reconcile
 
-Real logic, but broken-by-issue — see caveat above, not a real gap:
-- `src/workers/worker.js` (self-executing bootstrap entrypoint — calls
-  `startWorker()`/`process.exit` at module load; disproportionately
-  expensive to test honestly, lower priority than it looks even once
-  untangled from #147)
+`src/workers/worker.js` was the sole "real logic, broken-by-issue" entry
+here and has moved to MID-HIGH — see below. That subheading is now empty.
 
 Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/core/application/ports/IAuditRepository.js`
@@ -233,13 +230,14 @@ Empty. Prior occupants (`audit-v2.service.js`,
 `neo4jCanonicalProjection.service.js`, `daily-merkle.job.js`) closed in
 earlier sessions — see git log / issue #272 for detail.
 
-## MID-HIGH coverage (70-84% lines) — 7 files as of the 2026-07-24 reconcile
+## MID-HIGH coverage (70-84% lines) — 8 files, 5 of them listed below
 
 Sorted ascending (worst first) — lines% / branches%. A lower branch%
 relative to lines% usually means untested error paths, a good tie-breaker
 when picking among these.
 
 ```
+src/workers/worker.js                            75.67 / 60.00   (#977, worker.entrypoint.test.js — remaining gap is the SIGTERM/SIGINT handlers and the daily-merkle registration catch)
 src/services/mqtt-telemetry.service.js           71.42 / 78.09   (accepted gap — mqtt.connect() can't be mocked, see exclusion note above)
 src/services/SampleGraphValidator.js             77.69 / 66.66   (issue #222 — legacy-schema migration, design fork, still open)
 src/workers/neo4jProjection.worker.js            79.62 / 73.33   (CLI entry block not coverable in-process, accepted gap)
