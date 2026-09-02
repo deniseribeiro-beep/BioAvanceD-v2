@@ -572,7 +572,7 @@ test.describe('Security policy management (RF014) — real backend', () => {
     });
     expect(before.ok()).toBeTruthy();
     const originalConfig = (await before.json()).data;
-    const originalVersion = originalConfig.metadata.version;
+    const originalVersion = originalConfig.configVersion;
 
     try {
       const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
@@ -583,7 +583,7 @@ test.describe('Security policy management (RF014) — real backend', () => {
       const update = await request.put(`${apiBaseURL}/api/security/config`, {
         headers: { Authorization: `Bearer ${admin.token}` },
         data: {
-          session: { timeoutMinutes: 45, maxSessionDuration: 8 },
+          session: { timeoutMinutes: 45, maxSessionDurationHours: 8 },
           authentication: { maxLoginAttempts: 4, requireMFA: !originalConfig.authentication.requireMFA },
           passwordRules: { minLength: 12 },
         },
@@ -592,14 +592,14 @@ test.describe('Security policy management (RF014) — real backend', () => {
       const updated = (await update.json()).data;
 
       expect(updated.session.timeoutMinutes).toBe(45);
-      expect(updated.session.maxSessionDuration).toBe(8);
+      expect(updated.session.maxSessionDurationHours).toBe(8);
       expect(updated.authentication.maxLoginAttempts).toBe(4);
       expect(updated.authentication.requireMFA).toBe(!originalConfig.authentication.requireMFA);
       expect(updated.passwordRules.minLength).toBe(12);
 
       // Criterion 5 — every update is a new version, not an overwrite.
-      expect(updated.metadata.version).toBe(originalVersion + 1);
-      expect(updated.metadata.lastUpdatedBy).toBeTruthy();
+      expect(updated.configVersion).toBe(originalVersion + 1);
+      expect(updated.lastUpdatedBy).toBeTruthy();
 
       // Criterion 7 — the change is registered as a critical AuditEvent.
       // requireMFA is one of security.service.js's own criticalPaths, so
@@ -633,7 +633,7 @@ test.describe('Security policy management (RF014) — real backend', () => {
       await request.put(`${apiBaseURL}/api/security/config`, {
         headers: { Authorization: `Bearer ${admin.token}` },
         data: {
-          session: { timeoutMinutes: originalConfig.session.timeoutMinutes, maxSessionDuration: originalConfig.session.maxSessionDuration },
+          session: { timeoutMinutes: originalConfig.session.timeoutMinutes, maxSessionDurationHours: originalConfig.session.maxSessionDurationHours },
           authentication: { maxLoginAttempts: originalConfig.authentication.maxLoginAttempts, requireMFA: originalConfig.authentication.requireMFA },
           passwordRules: { minLength: originalConfig.passwordRules.minLength },
         },

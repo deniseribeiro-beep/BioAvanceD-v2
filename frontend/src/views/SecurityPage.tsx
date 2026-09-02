@@ -348,8 +348,8 @@ export default function SecurityPage() {
                     type="number"
                     min="1"
                     max="1440"
-                    value={localConfig.authentication.lockoutDuration}
-                    onChange={(e) => handleConfigChange('authentication.lockoutDuration', parseInt(e.target.value))}
+                    value={localConfig.authentication.lockoutDurationMinutes}
+                    onChange={(e) => handleConfigChange('authentication.lockoutDurationMinutes', parseInt(e.target.value))}
                   />
                   <span className="config-help">{t('security.authentication.lockoutDurationHelp')}</span>
                 </div>
@@ -492,8 +492,8 @@ export default function SecurityPage() {
                     type="number"
                     min="1"
                     max="24"
-                    value={localConfig.session.maxSessionDuration}
-                    onChange={(e) => handleConfigChange('session.maxSessionDuration', parseInt(e.target.value))}
+                    value={localConfig.session.maxSessionDurationHours}
+                    onChange={(e) => handleConfigChange('session.maxSessionDurationHours', parseInt(e.target.value))}
                   />
                   <span className="config-help">{t('security.session.maxDurationHelp')}</span>
                 </div>
@@ -552,8 +552,8 @@ export default function SecurityPage() {
                     type="number"
                     min="1"
                     max="1440"
-                    value={localConfig.loginAttempts.lockoutDuration}
-                    onChange={(e) => handleConfigChange('loginAttempts.lockoutDuration', parseInt(e.target.value))}
+                    value={localConfig.loginAttempts.lockoutDurationMinutes}
+                    onChange={(e) => handleConfigChange('loginAttempts.lockoutDurationMinutes', parseInt(e.target.value))}
                   />
                 </div>
                 <label className="config-switch">

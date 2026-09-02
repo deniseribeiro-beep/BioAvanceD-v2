@@ -49,16 +49,35 @@ describe('SecurityService.detectChanges', () => {
     expect(changes.length).toBeGreaterThan(0);
   });
 
-  it('ignores metadata sibling field but still recurses into objects', () => {
-    // metadata key itself is ignored at any level when it equals 'metadata'
-    const oldCfg = { authentication: { requireMFA: true } };
-    const newCfg = { authentication: { requireMFA: true }, metadata: { version: 2 } };
-    // metadata is an object so it recurses; version inside is NOT 'metadata', so may appear
-    // The key insight: 'metadata' top-level is skipped as a direct key comparison
-    // Just verify no authentication changes detected
+  it('#953: skips the flat server-owned fields but still reports real group changes', () => {
+    // configVersion/lastUpdatedAt/lastUpdatedBy are rewritten on every save by
+    // definition, so they must never surface as user-visible policy changes.
+    // Before #953 they lived under a `metadata` OBJECT and were skipped by the
+    // typeof-object branch; flattened, they are scalars and only
+    // SERVER_OWNED_KEYS keeps them out.
+    const oldCfg = {
+      authentication: { requireMFA: false },
+      configVersion: 1,
+      lastUpdatedAt: new Date('2020-01-01'),
+      lastUpdatedBy: 'admin1'
+    };
+    const newCfg = {
+      authentication: { requireMFA: true },
+      configVersion: 2,
+      lastUpdatedAt: new Date('2021-01-01'),
+      lastUpdatedBy: 'admin2'
+    };
+
     const changes = securityService.detectChanges(oldCfg, newCfg);
-    const authChanges = changes.filter(c => c.path.startsWith('authentication'));
-    expect(authChanges).toHaveLength(0);
+    const paths = changes.map(c => c.path);
+
+    // The real change is reported...
+    expect(paths).toContain('authentication.requireMFA');
+    // ...and none of the three server-owned fields is.
+    expect(paths).not.toContain('configVersion');
+    expect(paths).not.toContain('lastUpdatedAt');
+    expect(paths).not.toContain('lastUpdatedBy');
+    expect(changes).toHaveLength(1);
   });
 });
 
@@ -116,9 +135,9 @@ describe('SecurityService.validateConfig', () => {
     })).toThrow('inválidas');
   });
 
-  it('throws for invalid session.maxSessionDuration', () => {
+  it('throws for invalid session.maxSessionDurationHours', () => {
     expect(() => securityService.validateConfig({
-      session: { maxSessionDuration: 48 },
+      session: { maxSessionDurationHours: 48 },
     })).toThrow('inválidas');
   });
 
@@ -223,7 +242,7 @@ describe('SecurityService.updateConfig', () => {
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue({});
 
-    const currentConfig = { authentication: { requireMFA: false }, metadata: { version: 1 } };
+    const currentConfig = { authentication: { requireMFA: false }, configVersion: 1 };
     const newConfig = { authentication: { requireMFA: true } };
     const req = { user: { userID: 'u1' } };
 
@@ -231,8 +250,8 @@ describe('SecurityService.updateConfig', () => {
 
     expect(updateOne).toHaveBeenCalledTimes(1);
     expect(result.authentication.requireMFA).toBe(true);
-    expect(result.metadata.version).toBe(2);
-    expect(result.metadata.lastUpdatedBy).toBe('u1');
+    expect(result.configVersion).toBe(2);
+    expect(result.lastUpdatedBy).toBe('u1');
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(logSpy.mock.calls[0][0].severity).toBe('critical');
   });
@@ -243,9 +262,9 @@ describe('SecurityService.updateConfig', () => {
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     vi.spyOn(auditLogger, 'log').mockResolvedValue({});
 
-    const result = await securityService.updateConfig(db, {}, { metadata: {} }, {});
+    const result = await securityService.updateConfig(db, {}, {}, {});
 
-    expect(result.metadata.lastUpdatedBy).toBe('SYSTEM');
+    expect(result.lastUpdatedBy).toBe('SYSTEM');
   });
 
   it('rejects and does not write to db when newConfig fails validation', async () => {
@@ -270,12 +289,12 @@ describe('SecurityService.updateConfig', () => {
     const currentConfig = {
       session: {
         timeoutMinutes: 30,
-        maxSessionDuration: 12,
+        maxSessionDurationHours: 12,
         allowMultipleSessions: false,
         autoRenewal: true,
         logExpiration: true
       },
-      metadata: { version: 1 }
+      configVersion: 1
     };
     const newConfig = { session: { timeoutMinutes: 45 } };
 
@@ -285,7 +304,7 @@ describe('SecurityService.updateConfig', () => {
     expect(result.session.allowMultipleSessions).toBe(false);
     expect(result.session.autoRenewal).toBe(true);
     expect(result.session.logExpiration).toBe(true);
-    expect(result.session.maxSessionDuration).toBe(12);
+    expect(result.session.maxSessionDurationHours).toBe(12);
 
     const setArg = updateOne.mock.calls[0][1].$set;
     expect(setArg.session.allowMultipleSessions).toBe(false);
@@ -293,20 +312,22 @@ describe('SecurityService.updateConfig', () => {
     expect(setArg.session.logExpiration).toBe(true);
   });
 
-  it('ignores caller-supplied metadata and keeps server-owned metadata handling', async () => {
+  it('#953: ignores caller-supplied server-owned fields and rewrites them itself', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
     const db = { collection: vi.fn(() => ({ updateOne })) };
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     vi.spyOn(auditLogger, 'log').mockResolvedValue({});
 
-    const currentConfig = { metadata: { version: 3, lastUpdatedBy: 'admin1' } };
-    const newConfig = { metadata: { version: 999, lastUpdatedBy: 'attacker', extra: 'x' } };
+    const currentConfig = { configVersion: 3, lastUpdatedBy: 'admin1' };
+    const newConfig = { configVersion: 999, lastUpdatedBy: 'attacker', extra: 'x' };
 
     const result = await securityService.updateConfig(db, newConfig, currentConfig, { user: { userID: 'admin2' } });
 
-    expect(result.metadata.version).toBe(4);
-    expect(result.metadata.lastUpdatedBy).toBe('admin2');
-    expect(result.metadata.extra).toBeUndefined();
+    // Server-owned: derived from the STORED value, never from the caller's.
+    expect(result.configVersion).toBe(4);
+    expect(result.lastUpdatedBy).toBe('admin2');
+    // And an unrecognised top-level key from the caller does not survive the merge.
+    expect(result.extra).toBeUndefined();
   });
 });
 

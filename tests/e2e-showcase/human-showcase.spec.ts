@@ -285,7 +285,7 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
           data: {
             session: {
               timeoutMinutes: originalSecurityConfig.session.timeoutMinutes,
-              maxSessionDuration: originalSecurityConfig.session.maxSessionDuration,
+              maxSessionDurationHours: originalSecurityConfig.session.maxSessionDurationHours,
             },
             authentication: {
               maxLoginAttempts: originalSecurityConfig.authentication.maxLoginAttempts,

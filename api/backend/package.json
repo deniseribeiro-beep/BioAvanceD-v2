@@ -36,6 +36,7 @@
     "user:create-admin": "npm run admin:create-first",
     "mfa:clear-lock": "node src/scripts/clearMfaLockForUser.js",
     "mfa:migrate-stale-locks": "node src/scripts/migrateClearStaleMfaLocks.js",
+    "migrate:security-config-keys": "node src/scripts/migrateSecurityConfigCanonicalKeys.js",
     "lab:test": "node scripts/lab-test-notifications.js",
     "iot:simulate": "node scripts/iot-simulator.js",
     "cleanup": "node ../scripts/cleanup-complete.js",

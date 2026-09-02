@@ -45,7 +45,7 @@ export interface SecurityConfig {
     mfaMethod: 'totp' | 'sms' | 'email';
     allowPasswordReset: boolean;
     maxLoginAttempts: number;
-    lockoutDuration: number;
+    lockoutDurationMinutes: number;
     requireStrongPassword: boolean;
   };
   passwordRules: {
@@ -60,14 +60,14 @@ export interface SecurityConfig {
   };
   session: {
     timeoutMinutes: number;
-    maxSessionDuration: number;
+    maxSessionDurationHours: number;
     allowMultipleSessions: boolean;
     autoRenewal?: boolean;
     logExpiration?: boolean;
   };
   loginAttempts: {
     maxAttempts: number;
-    lockoutDuration: number;
+    lockoutDurationMinutes: number;
     trackIP: boolean;
     blockIPAfterAttempts: number;
   };
@@ -99,11 +99,10 @@ export interface SecurityConfig {
     requireConsent: boolean;
     consentExpirationDays: number;
   };
-  metadata?: {
-    lastUpdated?: Date | string;
-    lastUpdatedBy?: string;
-    version?: number;
-  };
+  // #953: flat, per dict-02 P1X-0321/0322/0323.
+  configVersion?: number;
+  lastUpdatedAt?: Date | string;
+  lastUpdatedBy?: string;
 }
 
 export interface ProfilePermissions {
