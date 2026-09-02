@@ -899,7 +899,7 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
     // aceita _id/id/userID em forma string E numérica, então o parâmetro da
     // rota não é necessariamente igual ao userID gravado na sessão.
     const sessionService = require('../../services/session.service');
-    await sessionService.invalidateUserSessions(db, targetUser._id.toString());
+    await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID);
 
     return res.status(200).json({
       success: true,

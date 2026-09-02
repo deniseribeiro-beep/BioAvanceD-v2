@@ -203,7 +203,16 @@ router.post('/logout', authenticate, async (req, res) => {
       const sessionCheck = await sessionService.verifySession(db, token);
       
       if (sessionCheck.valid && sessionCheck.session?.sessionID) {
-        await sessionService.invalidateSession(db, sessionCheck.session.sessionID);
+        // #974: an explicit logout is 'user_request' by the session's own
+        // owner. req.user is not relied on here because this route reaches
+        // the revoke through verifySession rather than the authenticate
+        // middleware, so the session document is the authoritative actor.
+        await sessionService.invalidateSession(
+          db,
+          sessionCheck.session.sessionID,
+          'user_request',
+          sessionCheck.session.userID
+        );
       }
     }
 
@@ -357,7 +366,7 @@ router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
       clearRefreshCookie(res);
     }
 
-    const revoked = await sessionService.revokeSessionById(db, req.user.userID, sessionId);
+    const revoked = await sessionService.revokeSessionById(db, req.user.userID, sessionId, 'user_request', req.user.userID);
 
     if (!revoked) {
       return res.status(404).json({

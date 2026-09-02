@@ -379,7 +379,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
   describe('POST /logout', () => {
     it('invalidates the session, clears the refresh cookie and returns 200', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1', userID: 'u1' } });
       vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
       const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(true);
       const logLogoutSpy = vi.spyOn(auditLogger, 'logLogout').mockResolvedValue(undefined);
@@ -393,7 +393,10 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's1');
+      // #974: an explicit logout is 'user_request' by the session's own owner,
+      // so it is distinguishable from the 'expiration'/'system' pair the clock
+      // writes and from an admin's 'admin_action'.
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's1', 'user_request', 'u1');
       expect(logLogoutSpy).toHaveBeenCalledTimes(1);
       expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
     });

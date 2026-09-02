@@ -193,7 +193,12 @@ class SessionService {
 
       // Verifica se a sessão ainda está ativa
       if (!SessionModel.isSessionActive(session)) {
-        await this.invalidateSession(db, session.sessionID);
+        // #974: this is an inactivity/expiry eviction, not a revoke -- same
+        // event cleanupExpiredSessions records, so it carries the same
+        // 'expiration'/'system' pair. Without it, a session the clock killed
+        // was byte-identical to one an administrator killed, which is the
+        // whole subject of #974.
+        await this.invalidateSession(db, session.sessionID, 'expiration', 'system');
         return null;
       }
 
@@ -262,7 +267,8 @@ class SessionService {
 
       // Verifica se está ativa
       if (!SessionModel.isSessionActive(session)) {
-        await this.invalidateSession(db, session.sessionID);
+        // #974: same expiry eviction as updateActivity above.
+        await this.invalidateSession(db, session.sessionID, 'expiration', 'system');
         return { valid: false, reason: 'session_expired' };
       }
 
@@ -286,7 +292,7 @@ class SessionService {
         const sessionsCollection = db.collection('sessions');
         await sessionsCollection.updateOne(
           { sessionID },
-          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy, updatedAt: new Date() } }
+          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy: revokedBy == null ? revokedBy : String(revokedBy), updatedAt: new Date() } }
         );
       } catch (dbError) {
         logger.warn('Erro ao invalidar sessão no banco:', dbError.message);
@@ -322,7 +328,7 @@ class SessionService {
         const sessionsCollection = db.collection('sessions');
         await sessionsCollection.updateMany(
           { userID: ownerID, isActive: true },
-          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy, updatedAt: new Date() } }
+          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy: revokedBy == null ? revokedBy : String(revokedBy), updatedAt: new Date() } }
         );
       } catch (dbError) {
         logger.warn('Erro ao invalidar sessões do usuário no banco:', dbError.message);
@@ -428,7 +434,7 @@ class SessionService {
           isRevoked: true,
           revokedAt: new Date(),
           revocationReason: reason,
-          revokedBy,
+          revokedBy: revokedBy == null ? revokedBy : String(revokedBy),
           updatedAt: new Date()
         }
       }

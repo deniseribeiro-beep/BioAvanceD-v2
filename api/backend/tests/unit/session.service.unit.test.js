@@ -293,9 +293,19 @@ describe('SessionService.updateActivity', () => {
     const result = await sessionService.updateActivity(db, 'expired-token');
 
     expect(result).toBeNull();
+    // #974: the clock killing a session must not be byte-identical to an
+    // administrator killing one, so this eviction carries the same
+    // 'expiration'/'system' pair cleanupExpiredSessions writes.
     expect(collection.updateOne).toHaveBeenCalledWith(
       { sessionID: 'sess-expired' },
-      expect.objectContaining({ $set: expect.objectContaining({ isActive: false, isRevoked: true }) })
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          isActive: false,
+          isRevoked: true,
+          revocationReason: 'expiration',
+          revokedBy: 'system'
+        })
+      })
     );
   });
 
@@ -362,7 +372,20 @@ describe('SessionService.verifySession', () => {
 
     const result = await sessionService.verifySession(db, 'expired-token');
     expect(result).toEqual({ valid: false, reason: 'session_expired' });
-    expect(collection.updateOne).toHaveBeenCalled();
+    // #974: as in updateActivity's expiry test above -- a bare
+    // toHaveBeenCalled() here passed equally well before the reason was
+    // recorded at all, which is why it is spelled out.
+    expect(collection.updateOne).toHaveBeenCalledWith(
+      { sessionID: 'sess-exp' },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          isActive: false,
+          isRevoked: true,
+          revocationReason: 'expiration',
+          revokedBy: 'system'
+        })
+      })
+    );
   });
 
   it('returns valid:true with the session when active', async () => {
@@ -417,6 +440,37 @@ describe('SessionService.invalidateSession', () => {
 
     await expect(sessionService.invalidateSession(db, 'sess-1')).resolves.toBeUndefined();
   });
+
+  it('#974: writes the passed revocationReason and coerces a non-string revokedBy to String', async () => {
+    sessionService.sessions.set('sess-1', { sessionID: 'sess-1' });
+    const collection = makeCollection();
+    const db = makeDb(collection);
+    const objectIdLike = { toString: () => 'admin-1' };
+
+    await sessionService.invalidateSession(db, 'sess-1', 'admin_action', objectIdLike);
+
+    expect(collection.updateOne).toHaveBeenCalledWith(
+      { sessionID: 'sess-1' },
+      expect.objectContaining({
+        $set: expect.objectContaining({ revocationReason: 'admin_action', revokedBy: 'admin-1' })
+      })
+    );
+  });
+
+  it('#974: default-argument call still writes revocationReason and revokedBy as null', async () => {
+    sessionService.sessions.set('sess-1', { sessionID: 'sess-1' });
+    const collection = makeCollection();
+    const db = makeDb(collection);
+
+    await sessionService.invalidateSession(db, 'sess-1');
+
+    expect(collection.updateOne).toHaveBeenCalledWith(
+      { sessionID: 'sess-1' },
+      expect.objectContaining({
+        $set: expect.objectContaining({ revocationReason: null, revokedBy: null })
+      })
+    );
+  });
 });
 
 describe('SessionService.invalidateUserSessions', () => {
@@ -463,6 +517,21 @@ describe('SessionService.invalidateUserSessions', () => {
     // The in-memory cache used a strict === against the raw argument, so it
     // missed for the same reason the filter did.
     expect(sessionService.sessions.has('s1')).toBe(false);
+  });
+
+  it('#974: writes the passed revocationReason and coerces a non-string revokedBy to String', async () => {
+    const collection = makeCollection();
+    const db = makeDb(collection);
+    const objectIdLike = { toString: () => 'admin-1' };
+
+    await sessionService.invalidateUserSessions(db, 'u1', 'admin_action', objectIdLike);
+
+    expect(collection.updateMany).toHaveBeenCalledWith(
+      { userID: 'u1', isActive: true },
+      expect.objectContaining({
+        $set: expect.objectContaining({ revocationReason: 'admin_action', revokedBy: 'admin-1' })
+      })
+    );
   });
 });
 

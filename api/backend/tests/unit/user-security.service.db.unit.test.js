@@ -304,6 +304,23 @@ describe('UserSecurityService DB-backed methods', () => {
       await expect(userSecurityService.revokeSession(db, USER_ID, 'missing')).rejects.toThrow('Sessão não encontrada');
     });
 
+    it('#974: matches the isRevoked/revocationReason/revokedBy shape the other revoke routes write', async () => {
+      const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
+      const db = buildDb({ sessions });
+
+      await userSecurityService.revokeSession(db, USER_ID, 'sess-1');
+
+      const [, update] = sessions.updateOne.mock.calls[0];
+      expect(update.$set).toEqual(
+        expect.objectContaining({
+          isActive: false,
+          isRevoked: true,
+          revocationReason: 'user_request',
+          revokedBy: String(USER_ID)
+        })
+      );
+    });
+
     it('adds an _id clause to the query when sessionId is a valid ObjectId', async () => {
       const validObjectId = '507f1f77bcf86cd799439099';
       const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });

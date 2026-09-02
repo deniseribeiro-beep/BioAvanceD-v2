@@ -551,7 +551,10 @@ class UserSecurityService {
         {
           $set: {
             isActive: false,
-            revokedAt: new Date()
+            isRevoked: true,
+            revokedAt: new Date(),
+            revocationReason: 'user_request',
+            revokedBy: String(userID)
           }
         }
       );

@@ -94,6 +94,13 @@ describe('SessionModel - Unit Tests', () => {
       expect(session.sessionID).toBe(customSessionID);
       expect(session.sessionID).toMatch(/^session_/);
     });
+
+    it('#974: inicializa revokedBy e revocationReason como null em uma sessão nova', () => {
+      const session = SessionModel.create(validSessionData);
+
+      expect(session).toHaveProperty('revokedBy', null);
+      expect(session).toHaveProperty('revocationReason', null);
+    });
   });
 
   describe('validate()', () => {
