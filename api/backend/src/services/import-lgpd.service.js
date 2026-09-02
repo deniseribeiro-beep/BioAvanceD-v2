@@ -677,7 +677,20 @@ class ImportLGPDService {
             patientData.unitAcronym = PatientModel.fillAcronym(patientData.clinicalUnit);
           }
 
-          // Verifica duplicidade antes de inserir
+          // Verifica duplicidade antes de inserir.
+          //
+          // #942: esta checagem consulta o BANCO (participantIdentities, via
+          // checkDuplicatePatient) -- não há conjunto em memória das chaves já
+          // vistas NESTE arquivo. Duas linhas idênticas no mesmo CSV mesmo
+          // assim são pegas, mas SÓ porque o insert da linha N (:709) é
+          // aguardado antes da checagem da linha N+1: quando a linha B chega,
+          // a linha A já está no banco. A correção é consequência da ordem do
+          // laço, não do desenho.
+          //
+          // Portanto: NÃO transforme este laço em lote (insertMany, Promise.all,
+          // buffer) sem antes adicionar o conjunto em memória. O sintoma seria
+          // silencioso -- dois Participants para uma pessoa, diferindo apenas
+          // pelo participantId gerado.
           const duplicate = await patientService.checkDuplicatePatient(db, patientData);
           if (duplicate) {
             // patientData.birthDate is guaranteed a valid Date here (row 529's guard `continue`s otherwise)
@@ -1434,6 +1447,11 @@ class ImportLGPDService {
           // import. INFERENCIA da preferencia do repositorio por mudancas estreitas,
           // NAO citacao -- nenhum doc fala de ordem de guarda. Barato de reverter.
           // Verifica duplicidade por barcode (se fornecido)
+          // #942: mesma propriedade de importPatients -- esta checagem consulta
+          // o BANCO, e duas linhas com o mesmo barcode no mesmo arquivo só são
+          // pegas porque o insert da linha N (:1537) é aguardado antes da
+          // checagem da linha N+1. Não há conjunto em memória dos barcodes já
+          // vistos neste arquivo. Não transforme o laço em lote sem adicionar um.
           if (sampleData.barcode) {
             const existingSample = await samplesCollection.findOne({ barcode: sampleData.barcode });
             if (existingSample) {
@@ -2258,6 +2276,9 @@ class ImportLGPDService {
           }
         }
 
+        // #942: terceiro dos três sites -- ver a nota longa em importPatients
+        // (~:680). Também depende do insert aguardado (:2314) para pegar
+        // duplicatas dentro do mesmo arquivo; não há conjunto em memória.
         const duplicate = await patientService.checkDuplicatePatient(db, patientData);
         if (duplicate) {
           results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Paciente duplicado detectado`] });
