@@ -82,13 +82,11 @@ Os comandos prioritários deste branch são:
 
 ```bash
 npm --prefix api/backend run lint
-npm --prefix api/backend run typecheck
 npm --prefix api/backend run test:architecture
 npm --prefix api/backend run seed:validate:essential
 npm --prefix api/backend run seed:essential:dry-run
 npm --prefix api/backend run current-state:ci
 
-npm --prefix frontend run lint
 npm --prefix frontend run typecheck
 npm --prefix frontend run build
 ```
@@ -96,6 +94,12 @@ npm --prefix frontend run build
 Notas:
 
 - `test:architecture` usa `node --test`.
+- **Não há linter neste repositório** (#960). `api/backend`'s `lint` é
+  `scripts/lint.js`, uma passagem `node --check` de sintaxe sobre `src/` e
+  `scripts/`; o backend é JavaScript puro e não tem typecheck. O `typecheck`
+  do frontend é `tsc --noEmit`. Os aliases `api/backend run typecheck` e
+  `frontend run lint`, que apenas repetiam esses dois comandos sob um segundo
+  nome, foram removidos.
 - Vitest e Playwright legados permanecem fora do contrato atual.
 - As suítes reconstruídas no futuro deverão partir do estado canônico atual.
 

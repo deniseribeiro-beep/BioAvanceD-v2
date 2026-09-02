@@ -46,11 +46,13 @@ jobs:
       - name: Validate Git diff
         run: git diff --check
 
+      # #960: there is no separate "Backend typecheck" step because there is
+      # no backend typecheck. api/backend is plain JavaScript and
+      # scripts/lint.js is a `node --check` syntax pass over src/ and
+      # scripts/; the package.json `typecheck` alias that used to back a
+      # second step here ran that identical command.
       - name: Backend lint
         run: npm --prefix api/backend run lint
-
-      - name: Backend typecheck
-        run: npm --prefix api/backend run typecheck
 
       - name: Backend architecture tests
         run: npm --prefix api/backend run test:architecture
@@ -60,9 +62,10 @@ jobs:
           npm --prefix api/backend run seed:validate:essential
           npm --prefix api/backend run seed:essential:dry-run
 
-      - name: Frontend lint
-        run: npm --prefix frontend run lint
-
+      # #960: and no "Frontend lint" step, because there is no linter. There
+      # is no eslint config or dependency anywhere in this repo -- the
+      # frontend `lint` alias that used to back a step here ran
+      # `tsc --noEmit`, the identical command as the typecheck below.
       - name: Frontend typecheck
         run: npm --prefix frontend run typecheck
 

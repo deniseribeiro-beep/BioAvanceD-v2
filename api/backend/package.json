@@ -94,8 +94,7 @@
     "test:coverage": "vitest run --coverage",
     "test:smoke": "node scripts/test-smoke.js",
     "test:ci": "npm run current-state:ci && npm run test:unit:vitest",
-    "lint": "node scripts/lint.js",
-    "typecheck": "node scripts/lint.js"
+    "lint": "node scripts/lint.js"
   },
   "dependencies": {
     "@influxdata/influxdb-client": "1.35.0",
