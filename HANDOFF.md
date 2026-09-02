@@ -34,17 +34,21 @@ continue. Re-derive every count rather than trusting it.
 The full backend suite was the previous sitting's open `[not established]`
 item. It is now closed: **8284 passed, zero failures.**
 
-## Docker state — STACK IS UP AND FULLY BOOTSTRAPPED
+## Docker state — TORN DOWN COMPLETELY
 
-**Left running deliberately.** 12 core services healthy, **plus** the
-complete bootstrap: `admin-bootstrap-test` and all 17 chain services
-(`foundation-bootstrap-test` + 16 `reference-data-bootstrap-*`), every one
-`Exited (0)`. Volumes were **fresh** at the start of this run, so there is
-no fixture accumulation from prior sessions.
+The gate **ran** and then the stack was fully torn down on Dennis's
+explicit call at session end: `down --volumes`, all 24 session-tagged
+`bioavanced-test-*` images removed, build cache pruned 1.06GB → 0B.
 
-A next session can run e2e immediately without re-bootstrapping. If you
-tear it down, `docker compose -f compose.test.yml down` (no `-v`) keeps
-that state; `down --volumes` costs the whole bootstrap again.
+**So a next session starts from nothing** and pays the full cost again:
+image build, then `admin-bootstrap-test`, then the 17-service
+reference-data chain. Budget for it; the recipe is in `docker-workflow`'s
+bioavanced overlay. Base images (`mongo:7`, `neo4j:5-community`,
+`redis:7-alpine`, `influxdb:2.7`, `node:22-alpine`, …) are still present.
+
+What the gate established while it was up, so it need not be re-derived:
+12 core services healthy, all 18 bootstrap containers `Exited (0)` on
+**fresh** volumes, and **221/221 e2e passing single-worker in 2.0m**.
 
 ## What closed (3)
 
