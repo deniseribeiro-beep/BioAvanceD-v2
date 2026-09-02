@@ -34,6 +34,14 @@ router.get('/status/:jobId',
   importBatchController.getBatchImportStatus.bind(importBatchController)
 );
 
+// #939: le de volta um lote de quarentena (ASYNC_BATCH_IMPORT) que
+// quarantineRejectedRows gravou -- ate aqui nada lia esses lotes de volta.
+router.get('/batch/quarantine/:id',
+  authenticate,
+  requirePermission('uploadFiles'),
+  importBatchController.getQuarantineBatch.bind(importBatchController)
+);
+
 router.post('/fhir/stage',
   authenticate,
   requirePermission('uploadFiles'),

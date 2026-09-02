@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { ObjectId } = require('mongodb');
 
 const batchValidationEngine = require('../../src/services/batch-validation-engine.service');
 const patientService = require('../../src/services/patient.service');
@@ -743,5 +744,145 @@ describe('#813 quarantine of rejected rows', () => {
         counts: { total: 10, success: 8 },
       })
     ).resolves.toBeNull();
+  });
+});
+
+// #939: nothing could read an ASYNC_BATCH_IMPORT quarantine batch back --
+// the LGPD and FHIR readers both filter to their own `type`. These tests
+// pin getQuarantineBatch, the by-id reader added for this importer, mirroring
+// fhir-import-staging.batchTypeIsolation.unit.test.js's approach of
+// asserting on the filter object handed to the driver rather than on a
+// canned return value.
+describe('#939 reading a quarantined ASYNC_BATCH_IMPORT batch back', () => {
+  function createReaderDb(seedDocs = []) {
+    const batchDocs = seedDocs.filter((doc) => doc.__collection === 'import_batches');
+    const recordDocs = seedDocs.filter((doc) => doc.__collection === 'import_staging_records');
+
+    const importBatches = {
+      findOne: vi.fn(async (filter = {}) => {
+        return (
+          batchDocs.find((doc) =>
+            Object.entries(filter).every(([key, value]) => String(doc[key]) === String(value))
+          ) || null
+        );
+      }),
+    };
+
+    const importStagingRecords = {
+      find: vi.fn((filter = {}) => {
+        const matched = recordDocs
+          .filter((doc) => Object.entries(filter).every(([key, value]) => String(doc[key]) === String(value)))
+          .slice()
+          .sort((a, b) => a.rowNumber - b.rowNumber);
+        return {
+          sort: vi.fn().mockReturnThis(),
+          toArray: vi.fn(async () => matched),
+        };
+      }),
+    };
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'import_batches') return importBatches;
+        if (name === 'import_staging_records') return importStagingRecords;
+        return { findOne: vi.fn().mockResolvedValue(null), find: vi.fn() };
+      }),
+    };
+
+    return { db, importBatches, importStagingRecords };
+  }
+
+  it("queries import_batches with { type: 'ASYNC_BATCH_IMPORT' }, not just _id", async () => {
+    const batchId = new ObjectId();
+    const { db, importBatches } = createReaderDb([
+      { __collection: 'import_batches', _id: batchId, type: 'ASYNC_BATCH_IMPORT', status: 'QUARANTINED' },
+    ]);
+
+    const result = await batchValidationEngine.getQuarantineBatch(db, String(batchId));
+
+    expect(result.batch.status).toBe('QUARANTINED');
+    expect(importBatches.findOne).toHaveBeenCalledTimes(1);
+    const [filter] = importBatches.findOne.mock.calls[0];
+    expect(filter).toMatchObject({ type: 'ASYNC_BATCH_IMPORT' });
+    expect(String(filter._id)).toBe(String(batchId));
+  });
+
+  // #799's failure mode in the opposite direction: a batch belonging to
+  // another importer must not be readable through this endpoint.
+  it('404s on a batch of a different type instead of returning it', async () => {
+    const batchId = new ObjectId();
+    const { db } = createReaderDb([
+      { __collection: 'import_batches', _id: batchId, type: 'LGPD_SAMPLE_CSV', status: 'QUARANTINED' },
+    ]);
+
+    await expect(batchValidationEngine.getQuarantineBatch(db, String(batchId))).rejects.toMatchObject({
+      statusCode: 404,
+    });
+  });
+
+  it('returns import_staging_records rows sorted by rowNumber', async () => {
+    const batchId = new ObjectId();
+    const { db, importStagingRecords } = createReaderDb([
+      { __collection: 'import_batches', _id: batchId, type: 'ASYNC_BATCH_IMPORT', status: 'QUARANTINED' },
+      { __collection: 'import_staging_records', _id: new ObjectId(), batchId, rowNumber: 5 },
+      { __collection: 'import_staging_records', _id: new ObjectId(), batchId, rowNumber: 2 },
+    ]);
+
+    const { records } = await batchValidationEngine.getQuarantineBatch(db, String(batchId));
+
+    expect(records.map((record) => record.rowNumber)).toEqual([2, 5]);
+    expect(importStagingRecords.find.mock.results[0].value.sort).toHaveBeenCalledWith({ rowNumber: 1 });
+  });
+
+  it('400s on an id that is not a valid ObjectId', async () => {
+    const { db } = createReaderDb([]);
+
+    await expect(batchValidationEngine.getQuarantineBatch(db, 'not-an-object-id')).rejects.toMatchObject({
+      statusCode: 400,
+    });
+  });
+});
+
+// Follows the route-registration idiom cited at import-lgpd.controller.test.js
+// (~835-861): inspect router.stack for the registered path. That idiom alone
+// only proves the path exists, not which permission code gates it -- since
+// requirePermission('X') returns a fresh anonymous closure per call, the
+// closure itself carries no visible trace of X. To pin the gate itself
+// (not just that *a* gate is present), this spies on
+// rbac-assignment.service#userHasPermission -- the one place the captured
+// `permission` argument actually surfaces -- before import.routes.js (and
+// the rbac.js it requires) load for the first time in this file, then
+// drives the registered handler chain through a request an authenticated
+// user with no granted permissions would send.
+describe('#939 GET /batch/quarantine/:id route registration', () => {
+  it('routes GET /batch/quarantine/:id, and its permission gate checks uploadFiles specifically', async () => {
+    const rbacAssignmentService = require('../../src/services/rbac-assignment.service');
+    const userHasPermissionSpy = vi.spyOn(rbacAssignmentService, 'userHasPermission').mockResolvedValue(false);
+
+    const router = require('../../src/interface/routes/import.routes');
+
+    const layer = router.stack.find(
+      (item) => item.route && item.route.path === '/batch/quarantine/:id' && item.route.methods.get
+    );
+    expect(layer).toBeTruthy();
+    // authenticate, requirePermission('uploadFiles'), the controller handler.
+    expect(layer.route.stack).toHaveLength(3);
+
+    const req = { method: 'GET', user: { userID: 'user-939' }, app: { locals: { db: {} } } };
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+    const next = vi.fn();
+
+    // Middleware [0] is `authenticate`; invoking it would require a real JWT.
+    // req.user is set directly above to stand in for what `authenticate`
+    // would attach, so only the permission gate (index 1) is driven here.
+    await layer.route.stack[1].handle(req, res, next);
+
+    expect(userHasPermissionSpy).toHaveBeenCalledWith(req.app.locals.db, 'user-939', 'uploadFiles');
+    // mockResolvedValue(false) above means the gate must have denied, not
+    // called next() -- proves the mock was actually consulted, not bypassed.
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+
+    userHasPermissionSpy.mockRestore();
   });
 });

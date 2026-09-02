@@ -13,6 +13,13 @@ const logger = require('../utils/logger');
 
 const CHUNK_SIZE = 100;
 
+// #939: o discriminador proprio deste importador em import_batches /
+// import_staging_records. Hard-coded, nao parametrizado -- mesma forma que
+// FHIR_BATCH_TYPE em fhir-import-staging.service.js (findFhirBatch), pelo
+// mesmo motivo: o endpoint deste importador nao deve confirmar a existencia
+// de um lote de outro caminho de importacao (#799).
+const ASYNC_BATCH_IMPORT_TYPE = 'ASYNC_BATCH_IMPORT';
+
 class BatchValidationEngine {
   normalizeHeader(header) {
     return String(header || '')
@@ -959,6 +966,50 @@ class BatchValidationEngine {
       );
       return null;
     }
+  }
+
+  /**
+   * Resolve um lote deste importador, ou 404 (#939, precedente em #799).
+   *
+   * 404 em vez de 403 deliberadamente: o endpoint deste importador nao deve
+   * confirmar a existencia de um lote pertencente a outro caminho de
+   * importacao (LGPD/FHIR) que compartilha as mesmas colecoes -- mesmo
+   * raciocinio de `findFhirBatch` em fhir-import-staging.service.js.
+   */
+  async findAsyncBatchImport(db, batchId) {
+    const batch = await db.collection('import_batches').findOne({ _id: batchId, type: ASYNC_BATCH_IMPORT_TYPE });
+    if (!batch) {
+      const error = new Error('Lote de importação em lote não encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+    return batch;
+  }
+
+  /**
+   * Le de volta um lote de quarentena que `quarantineRejectedRows` escreveu,
+   * mais suas linhas em `import_staging_records` (#939). Ate aqui nada lia
+   * esses lotes de volta -- os leitores da LGPD e do FHIR filtram para os
+   * proprios tipos e descartam (LGPD) ou nunca souberam (FHIR) de
+   * `ASYNC_BATCH_IMPORT`.
+   */
+  async getQuarantineBatch(db, batchIdRaw) {
+    const raw = String(batchIdRaw || '').trim();
+    if (!ObjectId.isValid(raw)) {
+      const error = new Error('Identificador de lote de importação inválido.');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const batchId = new ObjectId(raw);
+    const batch = await this.findAsyncBatchImport(db, batchId);
+    const records = await db
+      .collection('import_staging_records')
+      .find({ batchId })
+      .sort({ rowNumber: 1 })
+      .toArray();
+
+    return { batch, records };
   }
 
   async processBatchImport(db, stagingImportId, job = null) {
