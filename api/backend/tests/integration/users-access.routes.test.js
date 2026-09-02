@@ -317,6 +317,71 @@ describe('Users and Access routes', () => {
     expect(usersCollection.updateOne).toHaveBeenCalled();
   });
 
+  // #933: these three guards had NO test. That is the finding, independent of
+  // whether direction 2 (letting reset-mfa clear mfaLocked on an admin target)
+  // is ever built: the refusals could have regressed at any point undetected,
+  // and a change to them should have to be deliberate. Pinning CURRENT
+  // behaviour here is deliberately NOT an endorsement of it -- #933 argues the
+  // admin-target refusal is too broad, since it blocks the unlock and the
+  // secret-reset together and only the second is sensitive.
+  it('#933: reset-mfa REFUSES an administrator target, writing nothing', async () => {
+    const handler = getHandler(userRoutes, 'post', '/:id/reset-mfa');
+    usersCollection.findOne.mockResolvedValueOnce({
+      _id: '507f1f77bcf86cd799439011',
+      accessType: 4, roleName: 'Administrador', mfaEnabled: true,
+    });
+
+    const req = createRequest({ params: { id: '507f1f77bcf86cd799439011' } });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(400);
+    // The refusal returns BEFORE the $set, so the whole mutation is blocked --
+    // mfaLocked and mfaFailedAttempts included, which is #933 direction 2's
+    // entire point.
+    expect(usersCollection.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('#933: disable-mfa REFUSES a non-administrator caller', async () => {
+    const handler = getHandler(userRoutes, 'post', '/:id/disable-mfa');
+
+    const req = createRequest({
+      params: { id: '507f1f77bcf86cd799439011' },
+      user: { userID: '507f1f77bcf86cd799439012', accessType: 2, roleName: 'Técnico' },
+    });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    // This is the half that makes the all-admins-locked estate unrecoverable
+    // in-app: the endpoint needs an admin who is already logged in, and the
+    // mfaLocked gate is what prevents that.
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('#933: disable-mfa REFUSES a non-administrator target -- it is admin-to-admin only', async () => {
+    const handler = getHandler(userRoutes, 'post', '/:id/disable-mfa');
+    usersCollection.findOne.mockResolvedValueOnce({
+      _id: '507f1f77bcf86cd799439012',
+      accessType: 2, roleName: 'Técnico', mfaEnabled: true,
+    });
+
+    const req = createRequest({ params: { id: '507f1f77bcf86cd799439012' } });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    // The half #933's body omits: both directions are gated, so disable-mfa is
+    // exactly the endpoint an all-admins-locked estate needs and exactly the
+    // one it cannot reach.
+    expect(res.statusCode).toBe(403);
+    expect(usersCollection.updateOne).not.toHaveBeenCalled();
+  });
+
   // #963 (RF003 AC#5, "Revogar sessões"): an admin resets MFA precisely
   // because they believe the second factor is compromised. Nothing on the
   // request path re-reads mfaEnabled -- the JWT still carries
