@@ -174,18 +174,43 @@ describe('Neo4jOutboxService', () => {
       expect(collection.indexes).toHaveLength(6);
     });
 
-    it('propagates (does not swallow) an index-build failure out of appendEvent, matching ensureIndexes\'s own throw posture', async () => {
+    // #941: appendEvent must NOT propagate an index-build failure. The index
+    // is a backstop and the append is the mechanism -- letting a failed build
+    // take down every outbox append would trade a missing index for a broken
+    // projection pipeline. ensureIndexes itself still throws, because its other
+    // caller (scripts/neo4j-canonical-rebuild.js) is ASKING for the indexes and
+    // a failure there IS its result. Two callers, opposite defaults -- the same
+    // split #923 documents for probeTopology.
+    //
+    // Found by a two-hop consumer sweep: the first draft threw, which broke
+    // tests/unit/reference-imports/pipeline.test.js, whose fake collection has
+    // no createIndex at all.
+    it('does not let an index-build failure break the append', async () => {
       const collection = makeCollection(async () => {
         throw new Error('E11000 duplicate key error');
       });
       const db = { collection: () => collection };
-      const service = new Neo4jOutboxService({ collectionName: '941_wiring_throws' });
+      const service = new Neo4jOutboxService({ collectionName: '941_wiring_logs' });
 
       await expect(
         service.appendEvent(db, { eventId: 'e1', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} })
-      ).rejects.toThrow('E11000 duplicate key error');
+      ).resolves.not.toThrow();
 
-      expect(collection.updates).toHaveLength(0);
+      expect(collection.updates).toHaveLength(1);
+      expect(collection.updates[0][0]).toEqual({ eventId: 'e1' });
+    });
+
+    it('survives a collection with no createIndex at all (the pipeline.test.js fake)', async () => {
+      const updates = [];
+      const collection = { updateOne: async (...args) => { updates.push(args); return { upsertedCount: 1 }; } };
+      const db = { collection: () => collection };
+      const service = new Neo4jOutboxService({ collectionName: '941_no_createIndex' });
+
+      await expect(
+        service.appendEvent(db, { eventId: 'e2', eventType: 'T', aggregateType: 'A', aggregateId: '2', payload: {} })
+      ).resolves.not.toThrow();
+
+      expect(updates).toHaveLength(1);
     });
   });
 
