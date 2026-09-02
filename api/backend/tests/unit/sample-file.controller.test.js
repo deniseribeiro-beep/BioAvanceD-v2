@@ -258,7 +258,7 @@ describe('sample-file.controller', () => {
       expect(unlinkSpy).toHaveBeenCalledWith('/tmp/file.csv');
     });
 
-    it('returns 400 and cleans up file when validation fails', async () => {
+    it('returns 422 and cleans up file when validation fails', async () => {
       const specimenId = new ObjectId().toString();
       const sample = { _id: new ObjectId(specimenId) };
       const db = createDb({
@@ -271,13 +271,23 @@ describe('sample-file.controller', () => {
       };
       const res = createRes();
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      // #884: readFileSync/writeFileSync are load-bearing here, not padding.
+      // Without them uploadFile threw ENOENT reading the plaintext at
+      // sample-file.controller.js:219 -- BEFORE SampleFileModel.validate --
+      // and landed in the function's outer catch-all, which also answered
+      // 400. So this test asserted the right number via the wrong branch and
+      // proved nothing about the validator. Invisible until the validator
+      // branch moved to 422 and the two diverged. The replaceFile sibling
+      // below already mocks both; this one did not.
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('file content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
       const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: false, errors: ['bad'] });
 
       await controller.uploadFile(req, res);
 
-      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.status).toHaveBeenCalledWith(422);
       expect(unlinkSpy).toHaveBeenCalledWith('/tmp/file.csv');
     });
 
@@ -1246,7 +1256,7 @@ describe('sample-file.controller', () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
-    it('returns 400 and cleans up the uploaded file when validation fails', async () => {
+    it('returns 422 and cleans up the uploaded file when validation fails', async () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'old.csv', storagePath: '/x/old.csv' };
@@ -1266,7 +1276,7 @@ describe('sample-file.controller', () => {
 
       await controller.replaceFile(req, res);
 
-      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.status).toHaveBeenCalledWith(422);
       expect(unlinkSpy).toHaveBeenCalledWith('/tmp/new.csv');
     });
 

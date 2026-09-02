@@ -148,7 +148,7 @@ describe('POST /api/organizations', () => {
     expect(res.body.success).toBe(true);
   });
 
-  it('returns 400 for missing required fields', async () => {
+  it('returns 422 for missing required fields', async () => {
     app.locals.db = createDbMock({
       ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
     });
@@ -157,7 +157,7 @@ describe('POST /api/organizations', () => {
       .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({});
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(422);
   });
 });
 
@@ -221,7 +221,7 @@ describe('PUT /api/organizations/:id', () => {
     expect(coll.findOneAndUpdate).toHaveBeenCalled();
   });
 
-  it('returns 400 when the merged payload is invalid', async () => {
+  it('returns 422 when the merged payload is invalid', async () => {
     const existing = { organizationId: 'org-1', officialName: 'USF', countryCode: 'BR' };
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(existing) });
     app.locals.db = createDbMock({
@@ -234,7 +234,7 @@ describe('PUT /api/organizations/:id', () => {
       .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ countryCode: 'BRA' });
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(422);
   });
 });
 

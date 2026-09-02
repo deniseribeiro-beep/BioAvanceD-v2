@@ -210,13 +210,13 @@ describe('policy.routes', () => {
       expect(res.status).toBe(503);
     });
 
-    it('returns 400 when validation fails', async () => {
+    it('returns 422 when validation fails', async () => {
       const { router } = loadRoute();
       const app = buildApp(router, {});
 
       const res = await request(app).post('/api/policies').send({});
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(422);
       expect(res.body.error).toBe('Dados inválidos');
     });
 

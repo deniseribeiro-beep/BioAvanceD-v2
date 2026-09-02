@@ -131,7 +131,7 @@ describe('POST /api/policies', () => {
       .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ name: 'Criotecnia', minTemp: -80, maxTemp: -60, description: 'Armazenamento criogênico' });
 
-    expect([200, 201, 400]).toContain(res.status);
+    expect([200, 201, 422]).toContain(res.status);
   });
 });
 

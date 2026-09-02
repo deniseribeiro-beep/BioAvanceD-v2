@@ -107,7 +107,7 @@ describe('analysis-type.controller.createAnalysisType', () => {
     expect(findOne).toHaveBeenCalledWith({ code: 'abc' });
   });
 
-  it('returns 400 when validation fails', async () => {
+  it('returns 422 when validation fails', async () => {
     const { collection, findOne } = buildDb();
     const req = { app: { locals: { db: collection } }, body: {} };
     const res = buildRes();
@@ -115,7 +115,7 @@ describe('analysis-type.controller.createAnalysisType', () => {
     await analysisTypeController.createAnalysisType(req, res);
 
     expect(findOne).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.status).toHaveBeenCalledWith(422);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'Dados inválidos',

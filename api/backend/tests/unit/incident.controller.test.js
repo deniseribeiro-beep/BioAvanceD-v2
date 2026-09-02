@@ -191,13 +191,13 @@ describe('incident.controller.getAlertRecipients', () => {
 });
 
 describe('incident.controller.createOrUpdateIncident', () => {
-  it('returns 400 with validation errors when the body is invalid', async () => {
+  it('returns 422 with validation errors when the body is invalid', async () => {
     const req = { body: { sensorKey: '', sensorName: '' } };
     const res = buildRes();
 
     await incidentController.createOrUpdateIncident(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.status).toHaveBeenCalledWith(422);
     const payload = res.json.mock.calls[0][0];
     expect(payload.success).toBe(false);
     expect(payload.error).toBe('Validação falhou');

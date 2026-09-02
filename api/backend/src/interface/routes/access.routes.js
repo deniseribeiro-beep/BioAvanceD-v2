@@ -80,7 +80,7 @@ router.post('/', authenticate, requirePermission('createUser'), async (req, res)
 
     const validation = AccessModel.validate(req.body);
     if (!validation.isValid) {
-      return res.status(400).json({
+      return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
         message: validation.errors.join(', ')

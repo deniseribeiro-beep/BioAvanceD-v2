@@ -273,7 +273,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // Valida dados antes de atualizar
     const validation = UserModel.validate(dataToValidate);
     if (!validation.isValid) {
-      return res.status(400).json({
+      return res.status(422).json({
         success: false,
         error: req.t('errors.invalidInput'),
         message: validation.errors.join(', ')

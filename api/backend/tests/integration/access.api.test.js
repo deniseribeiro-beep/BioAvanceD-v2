@@ -97,13 +97,13 @@ describe('POST /api/access', () => {
     expect(res.status).toBe(403);
   });
 
-  it('returns 400 for invalid payload (missing reportID)', async () => {
+  it('returns 422 for invalid payload (missing reportID)', async () => {
     app.locals.db = createDbMock({ ...rbacCollections });
     const res = await request(app)
       .post('/api/access')
       .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ reportType: 'SampleReport' });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(422);
   });
 
   it('creates access for admin', async () => {

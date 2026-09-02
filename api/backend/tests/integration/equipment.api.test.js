@@ -202,7 +202,7 @@ describe('POST /api/equipment', () => {
       .post('/api/equipment')
       .set('Authorization', `Bearer ${makeToken(3)}`)
       .send({ name: 'New Freezer', type: 'Storage', status: 'Active', location: 'Lab-1' });
-    expect([200, 201, 400]).toContain(res.status);
+    expect([200, 201, 422]).toContain(res.status);
   });
 });
 
@@ -246,7 +246,7 @@ describe('PUT /api/equipment/:id', () => {
       .put('/api/equipment/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ status: 'Maintenance' });
-    expect([200, 400]).toContain(res.status);
+    expect([200, 422]).toContain(res.status);
   });
 
   // #868: PUT is a partial update -- validating the merged (existing +
@@ -280,7 +280,7 @@ describe('PUT /api/equipment/:id', () => {
   // 400 before any write, and must never reach the quarantine service --
   // 400 rather than 422 to match this file's own POST and the 22 other
   // validate-then-reject sites in src/ (#884 carries the repo-wide question).
-  it('returns 400 for an invalid status and never invokes the quarantine service', async () => {
+  it('returns 422 for an invalid status and never invokes the quarantine service', async () => {
     const isQuarantineTriggerStatus = vi.fn().mockReturnValue(true);
     const quarantineByEquipmentStatus = vi.fn();
     app.locals.quarantineService = { isQuarantineTriggerStatus, quarantineByEquipmentStatus };
@@ -297,7 +297,7 @@ describe('PUT /api/equipment/:id', () => {
       .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ status: 'offline' });
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(422);
     expect(res.body.success).toBe(false);
     expect(res.body.message).toMatch(/status deve ser um de/);
     expect(updateOne).not.toHaveBeenCalled();
@@ -321,24 +321,24 @@ describe('GET /api/equipment db-unavailable guard', () => {
 });
 
 describe('POST /api/equipment validation and duplicate-ID paths', () => {
-  it('returns 400 when equipmentDescription is missing', async () => {
+  it('returns 422 when equipmentDescription is missing', async () => {
     app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, });
     const res = await request(app)
       .post('/api/equipment')
       .set('Authorization', `Bearer ${makeToken(3)}`)
       .send({ name: 'New EQ', type: 'Analytical' });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(422);
     expect(res.body.success).toBe(false);
     expect(res.body.message).toMatch(/equipmentDescription/);
   });
 
-  it('returns 400 when type is not one of the allowed EQUIPMENT_TYPES', async () => {
+  it('returns 422 when type is not one of the allowed EQUIPMENT_TYPES', async () => {
     app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, });
     const res = await request(app)
       .post('/api/equipment')
       .set('Authorization', `Bearer ${makeToken(3)}`)
       .send({ equipmentDescription: 'desc', type: 'NotARealType' });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(422);
     expect(res.body.message).toMatch(/type deve ser um de/);
   });
 

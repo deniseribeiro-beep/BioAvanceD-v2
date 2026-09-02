@@ -258,7 +258,7 @@ class SampleFileController {
         if (fs.existsSync(file.path)) {
           fs.unlinkSync(file.path);
         }
-        return res.status(400).json({
+        return res.status(422).json({
           success: false,
           error: req.t ? req.t('sampleFiles.validationError') : 'Erro de validação',
           details: validation.errors
@@ -850,7 +850,7 @@ class SampleFileController {
       });
       if (!validation.isValid) {
         cleanupUploadedFile();
-        return res.status(400).json({
+        return res.status(422).json({
           success: false,
           error: req.t ? req.t('sampleFiles.validationError') : 'Erro de validação',
           details: validation.errors

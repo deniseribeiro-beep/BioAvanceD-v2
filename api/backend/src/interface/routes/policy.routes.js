@@ -148,7 +148,7 @@ router.post('/', authenticate, requirePermission('viewTemperature'), async (req,
 
     const validation = PolicyModel.validate(req.body);
     if (!validation.isValid) {
-      return res.status(400).json({
+      return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
         message: validation.errors.join(', ')

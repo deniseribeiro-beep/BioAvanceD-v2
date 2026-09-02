@@ -229,7 +229,7 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpl
       if (fs.existsSync(file.path)) {
         fs.unlinkSync(file.path);
       }
-      return res.status(400).json({
+      return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
         message: validation.errors.join(', ')
@@ -450,7 +450,7 @@ router.post('/', authenticate, requirePermission('createResult'), enforceCommerc
 
     const validation = ResultModel.validate(resultData);
     if (!validation.isValid) {
-      return res.status(400).json({
+      return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
         message: validation.errors.join(', ')

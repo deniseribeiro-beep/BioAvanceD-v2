@@ -98,7 +98,7 @@ async function createOrUpdateIncident(req, res) {
     const validation = TemperatureIncidentModel.validate({ sensorKey, sensorName, openedAt: new Date(), currentTemperature, maxTemperature, minTemperature, samplesOutOfRange });
 
     if (!validation.isValid) {
-      return res.status(400).json({ success: false, error: 'Validação falhou', details: validation.errors });
+      return res.status(422).json({ success: false, error: 'Validação falhou', details: validation.errors });
     }
 
     const { db, TemperatureIncidentCollection } = await getCollections();

@@ -658,7 +658,7 @@ describe('POST /api/results', () => {
     expect(spy).toHaveBeenCalledWith(SAMPLE_OID, 'uso_comercial');
   });
 
-  it('returns 400 for invalid payload (missing fileType/resultFilePath)', async () => {
+  it('returns 422 for invalid payload (missing fileType/resultFilePath)', async () => {
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID }) });
     app.locals.db = createDbMock({ amostras: amostrasColl });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -668,7 +668,7 @@ describe('POST /api/results', () => {
       .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ specimenId: SAMPLE_OID });
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(422);
     expect(res.body.error).toBe('Dados inválidos');
   });
 

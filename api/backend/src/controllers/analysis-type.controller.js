@@ -51,7 +51,7 @@ const createAnalysisType = async (req, res) => {
 
     const validation = AnalysisTypeModel.validate(payload);
     if (!validation.isValid) {
-      return res.status(400).json({
+      return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
         message: validation.errors.join(', ')

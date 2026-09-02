@@ -199,7 +199,7 @@ router.post('/', authenticate, requirePermission('manageStorageTopology'), async
 
     const validation = EquipmentModel.validate(req.body);
     if (!validation.isValid) {
-      return res.status(400).json({
+      return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
         message: validation.errors.join(', ')
@@ -366,7 +366,7 @@ router.put('/:id', authenticate, requirePermission('manageStorageTopology'), asy
 
     if (introducedErrors.length > 0) {
       logger.warn(`Validação falhou ao atualizar equipamento ${req.params.id}: ${introducedErrors.join(', ')}`);
-      return res.status(400).json({
+      return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
         message: introducedErrors.join(', ')
