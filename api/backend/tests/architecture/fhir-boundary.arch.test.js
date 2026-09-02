@@ -8,6 +8,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
+const { stripComments } = require('./helpers/strip-comments');
+
 const FILES = [path.resolve(__dirname, '../../src')];
 
 const FORBIDDEN = ['patients_fhir', 'samples_fhir', 'consents_fhir', 'FromLegacy', 'FhirFirst', 'syncAllLegacyData', 'models/fhir', 'models/Observation', 'fhir-sync.service'];
@@ -29,7 +31,8 @@ test('does not contain legacy FHIR persistence references', () => {
   const hits = [];
   for (const root of FILES) {
     for (const file of walk(root)) {
-      const content = fs.readFileSync(file, 'utf8');
+      // #945: prose naming a retired FHIR path is not a reference to it.
+      const content = stripComments(fs.readFileSync(file, 'utf8'));
       for (const term of FORBIDDEN) {
         if (content.includes(term)) hits.push({ file, term });
       }

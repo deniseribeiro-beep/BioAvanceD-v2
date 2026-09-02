@@ -77,102 +77,11 @@ function walk(dir, out = []) {
 // penalises exactly the comment a reader most wants (one explaining *why* a
 // file reads a key).
 //
-// Comments are blanked rather than deleted so byte offsets and line structure
-// survive; nothing here depends on that today, but a future index-based
-// report would.
-//
-// The scanner has to know about strings and regex literals, not just comment
-// openers, because `'http://x'` and `/^https?:\/\//` both contain `//`.
-// Treating either as a comment would blank real code, and this guard's
-// dangerous failure direction is silently seeing *less*. `REGEX_ALLOWED_AFTER`
-// is the standard "can a `/` start a regex here" heuristic: at the start of
-// input, after an operator or opening bracket, or after a keyword that must be
-// followed by an expression. A `/` in any other position is division.
-const REGEX_ALLOWED_AFTER =
-  /(?:^|[(,=:[!&|?{};+\-*%~^<>]|\b(?:return|typeof|case|in|of|new|delete|void|do|else|yield|await))\s*$/;
-
-function stripComments(source) {
-  let out = '';
-  let i = 0;
-  const n = source.length;
-
-  while (i < n) {
-    const c = source[i];
-    const d = source[i + 1];
-
-    if (c === '/' && d === '/') {
-      while (i < n && source[i] !== '\n') {
-        out += ' ';
-        i += 1;
-      }
-      continue;
-    }
-
-    if (c === '/' && d === '*') {
-      out += '  ';
-      i += 2;
-      while (i < n && !(source[i] === '*' && source[i + 1] === '/')) {
-        out += source[i] === '\n' ? '\n' : ' ';
-        i += 1;
-      }
-      if (i < n) {
-        out += '  ';
-        i += 2;
-      }
-      continue;
-    }
-
-    if (c === '"' || c === "'" || c === '`') {
-      out += c;
-      i += 1;
-      while (i < n && source[i] !== c) {
-        if (source[i] === '\\') {
-          out += source[i];
-          i += 1;
-          if (i < n) {
-            out += source[i];
-            i += 1;
-          }
-          continue;
-        }
-        out += source[i];
-        i += 1;
-      }
-      if (i < n) {
-        out += source[i];
-        i += 1;
-      }
-      continue;
-    }
-
-    if (c === '/' && REGEX_ALLOWED_AFTER.test(out.slice(-16))) {
-      out += c;
-      i += 1;
-      let inClass = false;
-      while (i < n && source[i] !== '\n') {
-        const ch = source[i];
-        out += ch;
-        i += 1;
-        if (ch === '\\') {
-          if (i < n) {
-            out += source[i];
-            i += 1;
-          }
-          continue;
-        }
-        if (ch === '[') inClass = true;
-        else if (ch === ']') inClass = false;
-        else if (ch === '/' && !inClass) break;
-      }
-      continue;
-    }
-
-    out += c;
-    i += 1;
-  }
-
-  return out;
-}
+// Comment stripping now lives in ./helpers/strip-comments (#945). This file
+// was one of two independent copies of the same function; the other, in
+// request-body-boundary.arch.test.js, had silently diverged into a form that
+// did not understand regex literals. One shared implementation is the point.
+const { stripComments } = require('./helpers/strip-comments');
 
 const REQUIRE_CALL = /require\(\s*['"]([^'"]+)['"]\s*\)/g;
 

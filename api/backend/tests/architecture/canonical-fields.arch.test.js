@@ -8,6 +8,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
+const { stripComments } = require('./helpers/strip-comments');
+
 const BACKEND_ROOT = path.resolve(__dirname, '../../src');
 const FRONTEND_ROOT = path.resolve(__dirname, '../../../../frontend/src');
 
@@ -55,10 +57,12 @@ function walk(dir, out = []) {
   return out;
 }
 
+// #945: a comment naming a retired alias is documentation, not a use of it.
+// Prose is blanked before matching; identifiers and string literals still hit.
 function collectHits(root, terms) {
   const hits = [];
   for (const file of walk(root)) {
-    const content = fs.readFileSync(file, 'utf8');
+    const content = stripComments(fs.readFileSync(file, 'utf8'));
     for (const term of terms) {
       if (content.includes(term)) {
         hits.push({ file, term });

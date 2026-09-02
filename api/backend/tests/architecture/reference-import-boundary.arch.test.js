@@ -11,8 +11,13 @@ const path = require('node:path');
 const repoRoot = path.resolve(__dirname, '..', '..');
 const importDir = path.join(repoRoot, 'src', 'reference-data', 'reference-imports');
 
+const { stripComments } = require('./helpers/strip-comments');
+
+// #945: a comment naming `reference-imports` is not an import of it. Prose is
+// blanked before matching; string literals survive, so the quoted-token
+// scaffold assertions below are unaffected.
 function read(file) {
-  return fs.readFileSync(file, 'utf8');
+  return stripComments(fs.readFileSync(file, 'utf8'));
 }
 
 test('HPO importer is not imported by startup entrypoints', () => {

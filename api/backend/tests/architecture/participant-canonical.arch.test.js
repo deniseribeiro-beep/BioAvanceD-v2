@@ -8,6 +8,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
+const { stripComments } = require('./helpers/strip-comments');
+
 const FILES = [
   path.resolve(__dirname, '../../src/models/Patient.js'),
   path.resolve(__dirname, '../../src/services/patient.service.js'),
@@ -27,7 +29,8 @@ const FORBIDDEN = ['patientID', 'patientId', 'pseudoId', 'mongoPatientId', 'repr
 test('participant runtime stays canonical in active files', () => {
   const hits = [];
   for (const file of FILES) {
-    const content = fs.readFileSync(file, 'utf8');
+    // #945: prose naming a legacy participant alias is not a use of it.
+    const content = stripComments(fs.readFileSync(file, 'utf8'));
     for (const term of FORBIDDEN) {
       if (content.includes(term)) {
         hits.push({ file, term });

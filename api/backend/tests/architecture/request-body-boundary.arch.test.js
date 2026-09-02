@@ -67,50 +67,13 @@ function relative(file) {
   return path.relative(BACKEND_SRC, file).replace(/\\/g, '/');
 }
 
-// #882's stripper, in its minimal form: blank line and block comments so
-// prose cannot match, while preserving offsets so line numbers stay true.
-// Strings are skipped over rather than blanked, because a `//` inside a
-// URL literal is not a comment opener.
-function stripComments(source) {
-  let out = '';
-  let i = 0;
-  const n = source.length;
-  while (i < n) {
-    const c = source[i];
-    const d = source[i + 1];
-    if (c === '/' && d === '/') {
-      while (i < n && source[i] !== '\n') { out += ' '; i += 1; }
-      continue;
-    }
-    if (c === '/' && d === '*') {
-      out += '  ';
-      i += 2;
-      while (i < n && !(source[i] === '*' && source[i + 1] === '/')) {
-        out += source[i] === '\n' ? '\n' : ' ';
-        i += 1;
-      }
-      if (i < n) { out += '  '; i += 2; }
-      continue;
-    }
-    if (c === '"' || c === "'" || c === '`') {
-      out += c;
-      i += 1;
-      while (i < n && source[i] !== c) {
-        if (source[i] === '\\') {
-          out += source[i]; i += 1;
-          if (i < n) { out += source[i]; i += 1; }
-          continue;
-        }
-        out += source[i]; i += 1;
-      }
-      if (i < n) { out += source[i]; i += 1; }
-      continue;
-    }
-    out += c;
-    i += 1;
-  }
-  return out;
-}
+// #882's stripper, now shared (#945). This file used to carry its own
+// "minimal form" copy that did not understand regex literals — given
+// `/^https?:\/\//` it read the escaped slash plus the closing delimiter as a
+// `//` comment opener and blanked the rest of the line, hiding any real
+// violation that followed. The shared helper is the string- and regex-aware
+// implementation, so adopting it makes this guard strictly stronger.
+const { stripComments } = require('./helpers/strip-comments');
 
 function sources() {
   return walk(BACKEND_SRC).map((file) => ({

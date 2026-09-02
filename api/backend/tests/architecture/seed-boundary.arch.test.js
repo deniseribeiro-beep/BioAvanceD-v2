@@ -13,8 +13,14 @@ const backendRoot = path.join(repoRoot, 'src');
 const scriptsRoot = path.join(repoRoot, 'scripts');
 const essentialManifest = path.join(repoRoot, 'src', 'reference-data', 'essential', 'manifest.js');
 
+const { stripComments } = require('./helpers/strip-comments');
+
+// #945: these guards ask whether a file *imports* something, or *reaches the
+// network*. A comment naming either is neither, so prose is blanked before
+// matching. String literals survive, so the `https://` checks below still see
+// a real URL constant.
 function read(file) {
-  return fs.readFileSync(file, 'utf8');
+  return stripComments(fs.readFileSync(file, 'utf8'));
 }
 
 test('seed essential is not imported by startup entrypoints', () => {
