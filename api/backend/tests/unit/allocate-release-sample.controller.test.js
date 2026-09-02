@@ -200,14 +200,14 @@ describe('allocate-sample.controller', () => {
     });
   });
 
-  it('returns 400 for any other error message', async () => {
+  it('returns 500 for an unrecognised/infra-shaped error message (#987)', async () => {
     vi.spyOn(AllocateSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('generic failure'));
     const req = { app: { locals: { db: {} } }, body: {}, headers: {} };
     const res = buildRes();
 
     await controller(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'ALLOCATION_ERROR',
@@ -215,8 +215,23 @@ describe('allocate-sample.controller', () => {
     });
   });
 
-  it('falls back to the default Portuguese message when the thrown error has no usable message', async () => {
+  it('falls back to the default Portuguese message (and 500) when the thrown error has no usable message (#987)', async () => {
     vi.spyOn(AllocateSampleUseCase.prototype, 'execute').mockRejectedValue(new Error(''));
+    const req = { app: { locals: { db: {} } }, body: {}, headers: {} };
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'ALLOCATION_ERROR',
+      message: 'Erro ao alocar amostra'
+    });
+  });
+
+  it('returns 400 for a validation-shaped message ("obrigatórios") (#987)', async () => {
+    vi.spyOn(AllocateSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('specimenId, boxId e position são obrigatórios'));
     const req = { app: { locals: { db: {} } }, body: {}, headers: {} };
     const res = buildRes();
 
@@ -226,8 +241,28 @@ describe('allocate-sample.controller', () => {
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'ALLOCATION_ERROR',
-      message: 'Erro ao alocar amostra'
+      message: 'specimenId, boxId e position são obrigatórios'
     });
+  });
+
+  it('returns 400 for a validation-shaped message ("inválida" / "fora dos limites") (#987)', async () => {
+    vi.spyOn(AllocateSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('Posição inválida. Use o formato Letra+Número (ex: A1, B4)'));
+    const req = { app: { locals: { db: {} } }, body: {}, headers: {} };
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it('returns 400 for a location-blocked message ("está retirada de uso") (#987)', async () => {
+    vi.spyOn(AllocateSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('Caixa X está retirada de uso'));
+    const req = { app: { locals: { db: {} } }, body: {}, headers: {} };
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
   });
 });
 
@@ -385,14 +420,14 @@ describe('release-sample.controller', () => {
     });
   });
 
-  it('returns 400 for any other error message', async () => {
+  it('returns 500 for an unrecognised/infra-shaped error message (#987)', async () => {
     vi.spyOn(ReleaseSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('generic failure'));
     const req = { app: { locals: { db: {} } }, params: { sampleId: 's1' }, headers: {} };
     const res = buildRes();
 
     await controller(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'RELEASE_ERROR',
@@ -400,8 +435,23 @@ describe('release-sample.controller', () => {
     });
   });
 
-  it('falls back to the default Portuguese message when the thrown error has no usable message', async () => {
+  it('falls back to the default Portuguese message (and 500) when the thrown error has no usable message (#987)', async () => {
     vi.spyOn(ReleaseSampleUseCase.prototype, 'execute').mockRejectedValue(new Error(''));
+    const req = { app: { locals: { db: {} } }, params: { sampleId: 's1' }, headers: {} };
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'RELEASE_ERROR',
+      message: 'Erro ao liberar amostra'
+    });
+  });
+
+  it('returns 400 for a validation-shaped message ("obrigatório") (#987)', async () => {
+    vi.spyOn(ReleaseSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('specimenId é obrigatório'));
     const req = { app: { locals: { db: {} } }, params: { sampleId: 's1' }, headers: {} };
     const res = buildRes();
 
@@ -411,7 +461,17 @@ describe('release-sample.controller', () => {
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'RELEASE_ERROR',
-      message: 'Erro ao liberar amostra'
+      message: 'specimenId é obrigatório'
     });
+  });
+
+  it('returns 400 for a validation-shaped message ("não possui localização de armazenamento") (#987)', async () => {
+    vi.spyOn(ReleaseSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('Amostra não possui localização de armazenamento'));
+    const req = { app: { locals: { db: {} } }, params: { sampleId: 's1' }, headers: {} };
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
   });
 });

@@ -4,6 +4,16 @@ const MongoAuditRepository = require('../../infrastructure/persistence/mongo/Mon
 const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
 const logger = require('../../utils/logger');
 
+// Substrings of the client-input validation errors ReleaseSampleUseCase and
+// MongoStorageRepository.releaseSamplePosition throw. Anything not matching
+// one of these, or the 404/409 patterns below, is treated as an
+// unexpected/infra failure and mapped to 500 instead of masked as a 400
+// (#987, mirrors move-sample.controller.js).
+const VALIDATION_ERROR_PATTERNS = [
+  'obrigatório',
+  'não possui localização de armazenamento'
+];
+
 function createReleaseSampleController() {
   return async function releaseSampleController(req, res) {
     try {
@@ -43,7 +53,15 @@ function createReleaseSampleController() {
     } catch (error) {
       logger.error('[ReleaseSampleController] Erro ao liberar amostra:', error.message || error);
       const message = error?.message || 'Erro ao liberar amostra';
-      const statusCode = message.includes('STORAGE_COLLISION') ? 409 : message.includes('não encontrada') ? 404 : 400;
+
+      let statusCode = 500;
+      if (message.includes('não encontrada')) {
+        statusCode = 404;
+      } else if (message.includes('STORAGE_COLLISION')) {
+        statusCode = 409;
+      } else if (VALIDATION_ERROR_PATTERNS.some((pattern) => message.includes(pattern))) {
+        statusCode = 400;
+      }
 
       return res.status(statusCode).json({
         success: false,

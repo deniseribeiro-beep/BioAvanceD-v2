@@ -432,10 +432,18 @@ const ERROR_CODES = {
   // 409 - Conflito
   STORAGE_COLLISION: "Posição já está ocupada (colisão detectada)",
 
+  // ALLOCATION_ERROR, RELEASE_ERROR and MOVE_SAMPLE_ERROR are shared error
+  // codes: their HTTP status varies by cause -- 409 (STORAGE_COLLISION),
+  // 404 (não encontrada), 400 (validation-shaped message, matched against
+  // an explicit allowlist) or 500 (any other/unexpected failure, the
+  // default). See allocate-sample.controller.js, release-sample.controller.js
+  // and move-sample.controller.js.
+  ALLOCATION_ERROR: "Erro ao alocar amostra (409/404/400/500 conforme a causa)",
+  RELEASE_ERROR: "Erro ao liberar posição (409/404/400/500 conforme a causa)",
+  MOVE_SAMPLE_ERROR: "Erro ao mover amostra (409/404/400/500 conforme a causa)",
+
   // 500 - Erro interno
   INTERNAL_ERROR: "Erro interno do servidor",
-  ALLOCATION_ERROR: "Erro ao alocar amostra",
-  RELEASE_ERROR: "Erro ao liberar posição",
   QUERY_ERROR: "Erro ao buscar dados",
   STATS_ERROR: "Erro ao calcular estatísticas",
   INTEGRITY_CHECK_ERROR: "Erro ao verificar integridade"

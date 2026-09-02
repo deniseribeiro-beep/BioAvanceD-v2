@@ -4,6 +4,25 @@ const MongoAuditRepository = require('../../infrastructure/persistence/mongo/Mon
 const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
 const logger = require('../../utils/logger');
 
+// Substrings of the client-input validation errors AllocateSampleUseCase and
+// MongoStorageRepository.allocateSamplePosition throw. Anything not matching
+// one of these, or the 404/409/LOCATION_BLOCKED_PATTERNS below, is treated
+// as an unexpected/infra failure and mapped to 500 instead of masked as a
+// 400 (#987, mirrors move-sample.controller.js).
+const VALIDATION_ERROR_PATTERNS = [
+  'obrigatórios',
+  'inválida',
+  'fora dos limites',
+  'já está alocada em outra posição'
+];
+
+// Substrings of MongoStorageRepository.checkLocationBlocked's rejection
+// messages (#646 Wave 3, RF017 AC#7) -- a separate list from the
+// client-input patterns above since these are business/state rules
+// (destination box or an ancestor container unavailable), not malformed
+// input, even though both map to the same 400 status.
+const LOCATION_BLOCKED_PATTERNS = ['está retirada de uso', 'Localização indisponível'];
+
 function createAllocateSampleController() {
   return async function allocateSampleController(req, res) {
     try {
@@ -45,7 +64,17 @@ function createAllocateSampleController() {
     } catch (error) {
       logger.error('[AllocateSampleController] Erro ao alocar amostra:', error.message || error);
       const message = error?.message || 'Erro ao alocar amostra';
-      const statusCode = message.includes('STORAGE_COLLISION') ? 409 : message.includes('não encontrada') ? 404 : 400;
+
+      let statusCode = 500;
+      if (message.includes('não encontrada')) {
+        statusCode = 404;
+      } else if (message.includes('STORAGE_COLLISION')) {
+        statusCode = 409;
+      } else if (LOCATION_BLOCKED_PATTERNS.some((pattern) => message.includes(pattern))) {
+        statusCode = 400;
+      } else if (VALIDATION_ERROR_PATTERNS.some((pattern) => message.includes(pattern))) {
+        statusCode = 400;
+      }
 
       return res.status(statusCode).json({
         success: false,
