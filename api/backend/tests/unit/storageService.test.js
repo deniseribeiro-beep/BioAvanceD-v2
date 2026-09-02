@@ -228,6 +228,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
   let samplesUpdateOne;
   let storageAssignmentsFindOne;
   let movements;
+  let counters;
   let db;
   let service;
 
@@ -239,12 +240,16 @@ describe('StorageService.autoAssignSampleToBox', () => {
     // No open StorageAssignment by default (sample not currently allocated).
     storageAssignmentsFindOne = vi.fn().mockResolvedValue(null);
     movements = makeMovementsCollection();
+    // #988: appendImmutableAudit (now called inside the transaction) reads
+    // 'counters' via MongoAuditRepository.generateMovementID.
+    counters = makeCountersCollection();
 
     db = makeDb({
       collection: vi.fn((name) => {
         if (name === 'storageBoxes') return { findOne: boxesFindOne, updateOne: boxesUpdateOne };
         if (name === 'samples') return { findOne: samplesFindOne, updateOne: samplesUpdateOne };
         if (name === 'sample_movements') return movements;
+        if (name === 'counters') return counters;
         if (name === 'storageAssignments') return { findOne: storageAssignmentsFindOne };
         // #646 Wave 3 (RF017 AC#7): MongoStorageRepository#autoAssignSamplePosition
         // (called via storageRepository below) now checks checkLocationBlocked,
@@ -608,6 +613,133 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(rollbackBoxUpdate).toHaveBeenCalledTimes(1);
     expect(rollbackSampleUpdate).toHaveBeenCalledTimes(1);
     expect(closeMock).toHaveBeenCalled();
+  });
+
+  // #988 Part 1: same topology refusal MongoStorageRepository.withTransaction
+  // gives allocate/move/release, applied narrowly to this raw-session path.
+  describe('#988: standalone-deployment topology refusal', () => {
+    it('refuses with the descriptive RF006 item 7 error on a positively-standalone topology, before opening a session', async () => {
+      const boxId = new ObjectId();
+      const specimenId = new ObjectId();
+      const helloCommand = vi.fn().mockResolvedValue({ ismaster: true, maxBsonObjectSize: 16777216 });
+      db.client = { db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
+
+      const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('AUTO_ASSIGNMENT_ERROR');
+      expect(result.message).toMatch(/não é um replica set nem mongos/);
+      expect(result.message).toMatch(/RF006 item 7/);
+      // Refused before any box/sample lookup or session open.
+      expect(boxesFindOne).not.toHaveBeenCalled();
+      expect(samplesFindOne).not.toHaveBeenCalled();
+      expect(db.getMongo).not.toHaveBeenCalled();
+    });
+
+    it('does NOT refuse when the topology cannot be determined (hello throws) -- unknown proceeds, matching isKnownStandaloneDeployment\'s asymmetry', async () => {
+      const boxId = new ObjectId();
+      const specimenId = new ObjectId();
+      const helloCommand = vi.fn().mockRejectedValue(new Error('not authorized on admin to execute command'));
+      db.client = { db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
+
+      boxesFindOne.mockResolvedValue({
+        _id: boxId,
+        name: 'Box A',
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: {},
+        currentOccupancy: 0
+      });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+
+      const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+      expect(result.success).toBe(true);
+      expect(result.sampleLocation.position).toBe('A1');
+    });
+
+    it('does NOT refuse when the topology is a replica set (setName present)', async () => {
+      const boxId = new ObjectId();
+      const specimenId = new ObjectId();
+      const helloCommand = vi.fn().mockResolvedValue({ setName: 'rs0', ismaster: true });
+      db.client = { db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
+
+      boxesFindOne.mockResolvedValue({
+        _id: boxId,
+        name: 'Box A',
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: {},
+        currentOccupancy: 0
+      });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+
+      const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+      expect(result.success).toBe(true);
+      expect(result.sampleLocation.position).toBe('A1');
+    });
+  });
+
+  // #988 Part 2: the missing audit row.
+  describe('#988: audit row on auto-assignment', () => {
+    it('appends an immutable audit row inside the transaction, with the auto-assign eventType and matching before/after', async () => {
+      const boxId = new ObjectId();
+      const specimenId = new ObjectId();
+
+      const txSession = makeSession();
+      db.getMongo = vi.fn(() => ({ startSession: vi.fn(() => txSession) }));
+      service = new StorageService(db);
+
+      boxesFindOne.mockResolvedValue({
+        _id: boxId,
+        name: 'Box A',
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: {},
+        currentOccupancy: 0
+      });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+
+      const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+      expect(result.success).toBe(true);
+      expect(movements.insertOne).toHaveBeenCalledTimes(1);
+
+      const [auditRow, auditOptions] = movements.insertOne.mock.calls[0];
+      expect(auditRow.type).toBe('auto_allocate');
+      expect(auditRow.specimenId).toBe(specimenId.toString());
+      expect(auditRow.barcode).toBe('BC-9');
+      expect(auditRow.previousState).toEqual({ storageLocation: null });
+      expect(auditRow.newState).toEqual({
+        storageLocation: { boxId: boxId.toString(), position: 'A1' }
+      });
+      expect(auditRow.responsible).toBe('SYSTEM');
+
+      // Appended INSIDE the transaction: same session object every other
+      // write in this transaction used (not a bare/no-session write), and
+      // ordered before the session is ever ended.
+      expect(auditOptions).toEqual({ session: txSession });
+      expect(boxesUpdateOne.mock.calls[0][2]).toEqual({ session: txSession });
+      expect(movements.insertOne.mock.invocationCallOrder[0])
+        .toBeLessThan(txSession.endSession.mock.invocationCallOrder[0]);
+    });
+
+    it('does not append an audit row when the auto-assignment fails before the transaction (e.g. BOX_FULL)', async () => {
+      const boxId = new ObjectId();
+      const specimenId = new ObjectId();
+
+      boxesFindOne.mockResolvedValue({
+        _id: boxId,
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: { A1: new ObjectId() },
+        currentOccupancy: 1
+      });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, storageLocation: null });
+
+      const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('BOX_FULL');
+      expect(movements.insertOne).not.toHaveBeenCalled();
+    });
   });
 });
 

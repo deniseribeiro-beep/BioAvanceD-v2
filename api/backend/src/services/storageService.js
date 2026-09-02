@@ -6,6 +6,23 @@ const { getCollection } = require('../utils/collectionResolver');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
 const positionGrid = require('../utils/storagePositionGrid');
+// #988: same guard MongoStorageRepository.withTransaction applies to
+// allocate/move/release -- autoAssignSampleToBox is the fourth storage
+// endpoint that runs a Mongo transaction, and it was the only one still
+// opening a raw session with no topology attribution.
+const { isKnownStandaloneDeployment } = require('../utils/mongoTransaction');
+
+/**
+ * #988: identical wording to the error MongoStorageRepository.withTransaction
+ * throws for allocate/move/release, kept here (not imported) because
+ * autoAssignSampleToBox does not go through that repository method -- it
+ * opens its own raw session. See that method's own comment for the full
+ * context of why this check exists.
+ */
+const STANDALONE_DEPLOYMENT_TRANSACTION_ERROR =
+  'Transação Mongo indisponível: esta implantação não é um replica set nem mongos. ' +
+  'Alocação, movimentação e liberação de amostras exigem transação (RF006 item 7, F3-G10). ' +
+  'Configure o mongod com --replSet (ver compose.test.yml) ou aponte MONGO_URI para um replica set.';
 
 /**
  * Storage Service - Núcleo de Armazenamento Físico
@@ -62,12 +79,22 @@ class StorageService {
   async autoAssignSampleToBox(specimenId, boxId) {
     const sampleObjId = this._normalizeObjectId(specimenId);
     const boxObjId = this._normalizeObjectId(boxId);
-    const session = this.db.getMongo().startSession();
+    let session = null;
     let assignedPosition = null;
     let boxSnapshot = null;
     let sampleSnapshot = null;
 
     try {
+      // #988: same topology refusal MongoStorageRepository.withTransaction
+      // gives allocate/move/release, applied narrowly here since this method
+      // opens its own raw session rather than going through that repository
+      // method. Deliberately before startSession() below.
+      if (await isKnownStandaloneDeployment(this.db)) {
+        throw new Error(STANDALONE_DEPLOYMENT_TRANSACTION_ERROR);
+      }
+
+      session = this.db.getMongo().startSession();
+
       boxSnapshot = await this.storageRepository.findBoxById(boxObjId);
       if (!boxSnapshot) {
         return {
@@ -110,6 +137,31 @@ class StorageService {
       await session.withTransaction(async () => {
         assignedPosition = await this.storageRepository.autoAssignSamplePosition(
           { specimenId: sampleObjId, boxId: boxObjId },
+          session
+        );
+
+        // #988: the other three storage endpoints (allocate/move/release)
+        // each append an immutable audit row inside their transaction --
+        // autoAssignSampleToBox wrote none. Mirrors releaseSampleFromPosition's
+        // shape (context.actor/timestamp convention) below, appended in the
+        // same transaction so a committed relocation can never land without
+        // its custody row.
+        await this.auditRepository.appendImmutableAudit(
+          {
+            specimenId: sampleObjId.toString(),
+            barcode: sampleSnapshot?.barcode || null,
+            eventType: 'auto_allocate',
+            before: {
+              storageLocation: null
+            },
+            after: {
+              storageLocation: { boxId: String(boxObjId), position: assignedPosition }
+            },
+            context: {
+              actor: { userName: 'SYSTEM' }
+            },
+            timestamp: new Date()
+          },
           session
         );
       });
@@ -204,7 +256,9 @@ class StorageService {
         message: error.message || 'Erro ao realizar alocação inteligente'
       };
     } finally {
-      await session.endSession();
+      if (session) {
+        await session.endSession();
+      }
     }
   }
 
