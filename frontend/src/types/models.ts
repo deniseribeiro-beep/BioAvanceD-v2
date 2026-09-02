@@ -630,7 +630,8 @@ export interface Temperature {
   dataQualityScore?: number;
   errorCode?: string;
   errorMessage?: string;
-  sensorID: string;
+  sensorId: string; // Campo canônico -- ver Sensor acima (#940)
+  sensorID?: string; // Alias legado
   policyID: number; // Padronizado para Number (consistente com Policy)
   createdAt?: Date | string;
   updatedAt?: Date | string;
@@ -708,7 +709,8 @@ export interface Log {
 
 export interface Sensor {
   _id?: string; // MongoDB ID
-  sensorID: string;
+  sensorId: string; // Campo canônico -- api/backend/src/models/Sensor.js#create grava sensorId (lowercase-d), independente do spelling de entrada (#940)
+  sensorID?: string; // Alias legado -- api.ts ainda envia esta grafia em requests; não removido
   sensorType: string;
   sensorModel?: string;
   maintenanceStatus?: string;

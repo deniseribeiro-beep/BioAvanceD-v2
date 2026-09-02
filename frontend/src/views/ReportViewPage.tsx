@@ -357,14 +357,17 @@ export default function ReportViewPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {reportData.sensors.map((s: any) => (
-                        <tr key={s.sensorID}>
-                          <td>{s.sensorID}</td>
-                          <td>{s.sensorType}</td>
-                          <td>{getMaintenanceStatusLabel(s.maintenanceStatus)}</td>
-                          <td>{formatDate(s.lastCalibration)}</td>
-                        </tr>
-                      ))}
+                      {reportData.sensors.map((s: any, idx: number) => {
+                        const sensorId = s.sensorId || s.sensorID || s._id || 'N/A';
+                        return (
+                          <tr key={s._id || sensorId || idx}>
+                            <td>{sensorId}</td>
+                            <td>{s.sensorType}</td>
+                            <td>{getMaintenanceStatusLabel(s.maintenanceStatus)}</td>
+                            <td>{formatDate(s.lastCalibration)}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -390,7 +393,7 @@ export default function ReportViewPage() {
                           <td>{formatDate(r.timestamp)}</td>
                           <td>{r.temperatureValue} {r.temperatureUnit}</td>
                           <td>{r.readingStatus}</td>
-                          <td>{r.sensorID}</td>
+                          <td>{r.sensorId || r.sensorID || 'N/A'}</td>
                         </tr>
                       ))}
                     </tbody>
