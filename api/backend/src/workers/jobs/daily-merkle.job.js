@@ -94,8 +94,27 @@ async function anchorV2ForDate(db, date, result) {
     periodEnd: `${date}T23:59:59.999Z`,
     createdAt: new Date().toISOString(),
   }, db);
-  logger.info(`[daily-merkle] Tree head v2 gerado para ${date} com status=${treeHead.status}`);
+  logger.info(`[daily-merkle] Tree head v2 gerado para ${date} com anchorStatus=${treeHead.anchorStatus}`);
   return treeHead;
+}
+
+// #959: the ONLY caller of createTreeHead used to be scheduleNextRun's bare
+// setTimeout to 02:30 UTC, inside the worker process. Nothing could reach the
+// sealing path on demand -- not a test, not an operator, not an e2e spec -- and
+// runOnce() seals YESTERDAY, so even firing it reaches a date the current run
+// has no events for. This is the reachable entry point: it takes an ALREADY-OPEN
+// db and an explicit date, so an HTTP handler can call it without runOnce's
+// connectDB/closeConnection lifecycle tearing down the shared app connection,
+// and without runOnce's catch-all swallowing the error the caller needs to see.
+//
+// Returns null (rather than throwing) when the date has no valid Merkle result;
+// callers log their own message, which is why the two warns below still differ.
+async function anchorDate(db, date) {
+  const result = await integrityService.buildMerkleForDate(date, db, { persistMissing: true });
+  if (!isValidMerkleResult(result)) return null;
+
+  await auditRootService.saveDailyRoot({ date, root: result.root, treeSize: result.leaves.length, db });
+  return anchorV2ForDate(db, date, result);
 }
 
 function scheduleNextRun() {
@@ -114,4 +133,4 @@ if (require.main === module) {
   scheduleNextRun();
 }
 
-module.exports = { runOnce, scheduleNextRun };
+module.exports = { runOnce, scheduleNextRun, anchorDate };

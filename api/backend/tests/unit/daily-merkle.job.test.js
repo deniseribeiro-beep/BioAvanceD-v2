@@ -298,4 +298,48 @@ describe('daily-merkle.job', () => {
       setTimeoutSpy.mockRestore();
     });
   });
+
+  // #959: anchorDate is the reachable entry point. runOnce() cannot serve an HTTP
+  // caller for two reasons these cases pin: it computes YESTERDAY rather than
+  // taking a date, and its finally block calls closeConnection() -- which, called
+  // from a request handler, would tear down the connection the whole app shares.
+  describe('anchorDate (#959)', () => {
+    beforeEach(() => { resetAllMocks(); });
+
+    it('seals the SUPPLIED date, not yesterday', async () => {
+      const db = makeFakeDb();
+
+      await job.anchorDate(db, '2026-06-15');
+
+      // System time is 2026-07-02, so runOnce would have sealed 2026-07-01.
+      expect(integrityService.buildMerkleForDate).toHaveBeenCalledWith('2026-06-15', db, { persistMissing: true });
+      expect(auditRootService.saveDailyRoot).toHaveBeenCalledWith(
+        expect.objectContaining({ date: '2026-06-15' })
+      );
+      expect(auditV2Service.createTreeHead).toHaveBeenCalledWith(
+        expect.objectContaining({ logId: 'audit-2026-06-15' }),
+        db
+      );
+    });
+
+    it('uses the db it is handed and never opens or closes its own connection', async () => {
+      const db = makeFakeDb();
+
+      await job.anchorDate(db, '2026-06-15');
+
+      expect(mongo.connectDB).not.toHaveBeenCalled();
+      expect(mongo.closeConnection).not.toHaveBeenCalled();
+    });
+
+    it('returns null and persists nothing when the Merkle result is invalid', async () => {
+      integrityService.buildMerkleForDate.mockResolvedValueOnce({ root: null, leaves: null });
+      const db = makeFakeDb();
+
+      const result = await job.anchorDate(db, '2026-06-15');
+
+      expect(result).toBeNull();
+      expect(auditRootService.saveDailyRoot).not.toHaveBeenCalled();
+      expect(auditV2Service.createTreeHead).not.toHaveBeenCalled();
+    });
+  });
 });

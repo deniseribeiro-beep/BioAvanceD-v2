@@ -310,3 +310,81 @@ describe('GET /api/audit/dashboard/stats/:date', () => {
     expect(res.status).toBe(401);
   });
 });
+
+// #959: until this route existed the ONLY caller of createTreeHead was a bare
+// setTimeout to 02:30 UTC inside the worker process, so no test run of any
+// length could ever reach the sealing path -- and runOnce() seals YESTERDAY,
+// a date a fresh run has no events for. These cases go through the real
+// router, the real authenticate and the real requirePermission; only the job
+// module is spied, so what they prove is REACHABILITY, which is the thing
+// nothing tested.
+describe('POST /api/audit/anchor (#959)', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).post('/api/audit/anchor').send({ date: '2026-01-01' });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for a non-administrator: anchoring is manageSystem, not viewReports', async () => {
+    const coll = createCollectionMock();
+    app.locals.db = createDbMock({ auditLogs: coll, ...rbacCollections });
+
+    const res = await request(app)
+      .post('/api/audit/anchor')
+      .set('Authorization', `Bearer ${makeLowToken()}`)
+      .send({ date: '2026-01-01' });
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 503 when db unavailable', async () => {
+    app.locals.db = null;
+    const res = await request(app)
+      .post('/api/audit/anchor')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ date: '2026-01-01' });
+    expect(res.status).toBe(503);
+  });
+
+  it('rejects a malformed date rather than silently sealing yesterday', async () => {
+    const coll = createCollectionMock();
+    app.locals.db = createDbMock({ auditLogs: coll, ...rbacCollections });
+
+    const res = await request(app)
+      .post('/api/audit/anchor')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ date: '01/01/2026' });
+    expect(res.status).toBe(400);
+  });
+
+  it('anchors the SUPPLIED date and reports anchorStatus, not the signed constant status', async () => {
+    const job = require('../../src/workers/jobs/daily-merkle.job');
+    const anchorDate = vi.spyOn(job, 'anchorDate').mockResolvedValue({
+      _id: 'head-1', status: 'PENDING_TIMESTAMP', anchorStatus: 'ANCHORED', treeSize: 3,
+    });
+
+    const coll = createCollectionMock();
+    app.locals.db = createDbMock({ auditLogs: coll, ...rbacCollections });
+
+    const res = await request(app)
+      .post('/api/audit/anchor')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ date: '2026-07-01' });
+
+    expect(res.status).toBe(200);
+    expect(anchorDate).toHaveBeenCalledWith(expect.anything(), '2026-07-01');
+    expect(res.body.data.anchorStatus).toBe('ANCHORED');
+  });
+
+  it('returns 422 when the date has no anchorable audit events', async () => {
+    const job = require('../../src/workers/jobs/daily-merkle.job');
+    vi.spyOn(job, 'anchorDate').mockResolvedValue(null);
+
+    const coll = createCollectionMock();
+    app.locals.db = createDbMock({ auditLogs: coll, ...rbacCollections });
+
+    const res = await request(app)
+      .post('/api/audit/anchor')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ date: '2026-07-02' });
+    expect(res.status).toBe(422);
+  });
+});
