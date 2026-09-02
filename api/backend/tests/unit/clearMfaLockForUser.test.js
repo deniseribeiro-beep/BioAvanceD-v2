@@ -235,4 +235,11 @@ describe('scripts/clearMfaLockForUser', () => {
       restore();
     }
   });
+
+  it('is wired as an npm script pointing at this exact file (#933: unwired scripts never effectively run)', () => {
+    const pkg = require('../../package.json');
+
+    expect(pkg.scripts['mfa:clear-lock']).toBe('node src/scripts/clearMfaLockForUser.js');
+    expect(pkg.scripts['mfa:migrate-stale-locks']).toBe('node src/scripts/migrateClearStaleMfaLocks.js');
+  });
 });

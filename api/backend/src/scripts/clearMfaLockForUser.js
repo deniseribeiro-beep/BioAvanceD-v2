@@ -47,6 +47,12 @@
  * campos já estão no estado desejado.
  *
  * Uso: node backend/src/scripts/clearMfaLockForUser.js <id|_id|userID>
+ * ou, de dentro de api/backend: npm run mfa:clear-lock -- <id|_id|userID>
+ *
+ * Deliberadamente sem serviço docker-compose (#933): um break-glass que
+ * rodasse no boot destravaria em silêncio bloqueios legítimos de força
+ * bruta a cada subida da stack. Este script só roda por invocação manual,
+ * por alguém com acesso direto ao banco.
  */
 
 const { MongoClient } = require('mongodb');

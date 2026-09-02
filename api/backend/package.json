@@ -34,6 +34,8 @@
     "admin:create-first": "node src/scripts/createFirstAdmin.js",
     "seed:report-templates": "node src/scripts/seedReportTemplates.js",
     "user:create-admin": "npm run admin:create-first",
+    "mfa:clear-lock": "node src/scripts/clearMfaLockForUser.js",
+    "mfa:migrate-stale-locks": "node src/scripts/migrateClearStaleMfaLocks.js",
     "lab:test": "node scripts/lab-test-notifications.js",
     "iot:simulate": "node scripts/iot-simulator.js",
     "cleanup": "node ../scripts/cleanup-complete.js",

@@ -22,6 +22,13 @@
  * de novo é no-op (0 usuários encontrados, 0 atualizados).
  *
  * Uso: node backend/src/scripts/migrateClearStaleMfaLocks.js
+ * ou, de dentro de api/backend: npm run mfa:migrate-stale-locks
+ *
+ * Deliberadamente sem serviço docker-compose (#933): esta varredura é para
+ * rodar uma única vez, sob demanda, não a cada subida da stack -- um
+ * serviço de boot reaplicaria a mesma varredura desnecessariamente e
+ * ampliaria o escopo de "quando isso roda" além do que a issue original
+ * (#762) pedia.
  */
 
 const { MongoClient } = require('mongodb');
