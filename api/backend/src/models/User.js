@@ -64,6 +64,16 @@ class UserModel {
     if (data.failedLoginAttempts !== undefined && typeof data.failedLoginAttempts !== 'number') {
       errors.push('failedLoginAttempts deve ser número');
     }
+    // #952 / RF001 AC#2: the expiry that makes the lockout TEMPORARY.
+    // NOT in dict-02 v1.3.0 -- the MFA side has mfaLockedUntil (P1X-0201) and the
+    // password side stops at failedLoginAttempts (P1X-0206) with no expiry sibling.
+    // A dictionary amendment is filed; the field ships now because RF001 AC#2 is a
+    // Fase-1 requirement and "temporariamente" is unimplementable without it.
+    // Type-checked here on the roleValidFrom precedent, which is itself an
+    // undeclared RF-driven field (RF003 AC#3, commit 7a1de69f).
+    if (data.accountLockedUntil !== undefined && data.accountLockedUntil !== null && isNaN(new Date(data.accountLockedUntil))) {
+      errors.push('accountLockedUntil deve ser uma data válida');
+    }
 
     // Valida status - aceita tanto formato inglês quanto português
     const validStatuses = ['active', 'inactive', 'blocked', 'suspended', 'Ativo', 'Inativo', 'Bloqueado', 'Suspenso'];
@@ -122,6 +132,7 @@ class UserModel {
       lastPasswordChange: data.lastPasswordChange || new Date(),
       forceReset: data.forceReset || false,
       failedLoginAttempts: data.failedLoginAttempts || 0,
+      accountLockedUntil: data.accountLockedUntil ? new Date(data.accountLockedUntil) : null, // #952
       roleValidFrom: data.roleValidFrom ? new Date(data.roleValidFrom) : null,
       roleValidUntil: data.roleValidUntil ? new Date(data.roleValidUntil) : null,
       organizationIds: Array.isArray(data.organizationIds) ? data.organizationIds : []

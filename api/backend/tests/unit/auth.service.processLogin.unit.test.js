@@ -830,3 +830,88 @@ describe('#958: password changes revoke sessions', () => {
     );
   });
 });
+
+// #952 / RF001 AC#2, Fase 1: "Bloquear TEMPORARIAMENTE a conta apos o LIMITE
+// CONFIGURADO de tentativas malsucedidas." Three words decide the shape:
+// Bloquear (behaviour, not a settings screen), temporariamente (a duration --
+// so NOT the admin-clear-only shape mfaLocked has, which #933 documents as a
+// deadlock), and o limite configurado (from SecurityConfiguration, which
+// dict-02 P1X-0206 restates as "deve seguir SecurityConfiguration").
+describe('#952: password lockout (RF001 AC#2)', () => {
+  function dbWith(userOverrides, policy) {
+    const users = {
+      findOne: vi.fn().mockResolvedValue({ ...BASE_USER, ...userOverrides }),
+      updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: { toString: () => "s" } }),
+    };
+    const base = makeDb(users);
+    return {
+      users,
+      db: {
+        ...base,
+        collection: vi.fn((name) => (name === 'security_config'
+          ? { findOne: vi.fn().mockResolvedValue(policy || { _id: 'main' }) }
+          : base.collection(name))),
+      },
+    };
+  }
+
+  it('counts a wrong password instead of discarding it', async () => {
+    const { db, users } = dbWith({});
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+
+    await expect(authService.processLogin(db, { ...BASE_USER }, 'wrong', null, users, {}))
+      .rejects.toThrow('Credenciais inválidas');
+
+    expect(users.updateOne).toHaveBeenCalledWith(
+      { _id: BASE_USER._id },
+      expect.objectContaining({ $inc: { failedLoginAttempts: 1 } })
+    );
+  });
+
+  it('locks the account for the configured duration once the configured limit is reached', async () => {
+    const { db, users } = dbWith(
+      { failedLoginAttempts: 2 },
+      { _id: 'main', authentication: { maxLoginAttempts: 3, lockoutDurationMinutes: 15 } }
+    );
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+
+    await expect(authService.processLogin(db, { ...BASE_USER, failedLoginAttempts: 2 }, 'wrong', null, users, {}))
+      .rejects.toThrow('Credenciais inválidas');
+
+    const lockCall = users.updateOne.mock.calls.find(
+      (c) => c[1] && c[1].$set && c[1].$set.accountLockedUntil
+    );
+    expect(lockCall).toBeDefined();
+    expect(lockCall[1].$set.accountLockedUntil).toBeInstanceOf(Date);
+  });
+
+  it('refuses a locked account BEFORE bcrypt.compare, with the generic message', async () => {
+    const lockedUntil = new Date(Date.now() + 10 * 60 * 1000);
+    const { db, users } = dbWith({ accountLockedUntil: lockedUntil });
+    const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    await expect(
+      authService.processLogin(db, { ...BASE_USER, accountLockedUntil: lockedUntil }, 'correct', null, users, {})
+    ).rejects.toThrow('Credenciais inválidas');
+
+    // Placement is the point. After bcrypt it would deny only the eventual
+    // correct guess while every wrong one still burns a bcrypt round; before it,
+    // guessing actually stops. And the message stays generic so a locked account
+    // is not distinguishable from a wrong password -- the same account-enumeration
+    // concern auth.service already states for the mfaLocked gate.
+    expect(compare).not.toHaveBeenCalled();
+  });
+
+  it('lets the login through once the lock has EXPIRED -- temporariamente, not permanent', async () => {
+    const expired = new Date(Date.now() - 60 * 1000);
+    const { db, users } = dbWith({ accountLockedUntil: expired });
+    const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+
+    await expect(authService.processLogin(db, { ...BASE_USER, accountLockedUntil: expired }, 'wrong', null, users, {}))
+      .rejects.toThrow('Credenciais inválidas');
+
+    expect(compare).toHaveBeenCalled();
+  });
+});

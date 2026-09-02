@@ -395,7 +395,11 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       'password', 'status',
       'mfaEnabled', 'mfaSecret', 'mfaActivationDate',
       'anonId',
-      'passwordHistory', 'lastPasswordChange', 'forceReset', 'failedLoginAttempts',
+      // #952: 'failedLoginAttempts' was HERE and is deliberately gone. It is now
+      // load-bearing (RF001 AC#2), so leaving it client-writable would let any
+      // createUser holder clear a target's brute-force counter through a generic
+      // update -- exactly the hazard the comment below states for the MFA pair.
+      // accountLockedUntil is deliberately absent for the same reason.
       'roleValidFrom', 'roleValidUntil',
       'updatedAt'
     ];

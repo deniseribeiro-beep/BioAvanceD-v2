@@ -12,6 +12,39 @@ const passwordService = require('./password.service');
 const { grantRoleForAccessType, isAdministrator, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
 const notificationDispatchService = require('./notificationDispatch.service');
 
+// #952 / RF001 AC#2: "Bloquear temporariamente a conta apos o limite configurado
+// de tentativas malsucedidas." dict-02 P1X-0206 says the counter "deve seguir
+// SecurityConfiguration", and P1X-0281/0282 are both 1..1 Core -- so the
+// threshold and the duration are read, not hardcoded.
+//
+// authentication.* rather than the duplicate loginAttempts.* group: the
+// authentication group sits among the identity-policy keys (MFA, password
+// reset, password strength) and is the only one validateConfig range-checks,
+// while loginAttempts.* is the IP/tracker group -- its other two members are
+// trackIP and blockIPAfterAttempts. Neither dict-02 nor the code states this
+// outright; it is the reading both point at.
+//
+// Fails OPEN to getDefaultConfig()'s own 5 / 30, for the same reason #914 does:
+// an unreadable policy must not lock every account out.
+const DEFAULT_MAX_LOGIN_ATTEMPTS = 5;
+const DEFAULT_LOCKOUT_MINUTES = 30;
+
+async function resolveLockoutPolicy(db) {
+  try {
+    const config = await db.collection('security_config').findOne({ _id: 'main' });
+    const auth = (config && config.authentication) || {};
+    const maxAttempts = Number(auth.maxLoginAttempts);
+    const minutes = Number(auth.lockoutDurationMinutes);
+    return {
+      maxAttempts: Number.isFinite(maxAttempts) && maxAttempts > 0 ? maxAttempts : DEFAULT_MAX_LOGIN_ATTEMPTS,
+      lockoutMs: (Number.isFinite(minutes) && minutes > 0 ? minutes : DEFAULT_LOCKOUT_MINUTES) * 60 * 1000,
+    };
+  } catch (error) {
+    logger.warn('#952: política de bloqueio ilegível, usando 5/30:', error.message);
+    return { maxAttempts: DEFAULT_MAX_LOGIN_ATTEMPTS, lockoutMs: DEFAULT_LOCKOUT_MINUTES * 60 * 1000 };
+  }
+}
+
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL = '7d';
 
@@ -281,6 +314,26 @@ class AuthService {
         throw new Error('Credenciais inválidas');
       }
 
+      // #952: the lockout gate sits BEFORE bcrypt.compare, deliberately. After it,
+      // a lockout would deny only the eventual CORRECT guess while every wrong one
+      // still burns a bcrypt round -- protection against nothing. Before it,
+      // guessing actually stops.
+      //
+      // The message stays the generic one. A distinct "account locked" response is
+      // an account-enumeration oracle, which is exactly what the mfaLocked gate
+      // further down refuses to be ("quem nao sabe a senha nao deve conseguir
+      // distinguir uma conta bloqueada de qualquer outra"). Cost: a locked user
+      // with the right password gets no explanation. That is the trade RF001 AC#1
+      // and AC#2 have to share, and enumeration is the worse leak.
+      //
+      // TEMPORARIAMENTE: the lock is an expiry timestamp, not a boolean. It clears
+      // itself. mfaLocked is the boolean shape and #933 documents where that ends
+      // -- five bad codes over an account lifetime, no decay, permanent.
+      const lockedUntil = user.accountLockedUntil ? new Date(user.accountLockedUntil) : null;
+      if (lockedUntil && lockedUntil.getTime() > Date.now()) {
+        throw new Error('Credenciais inválidas');
+      }
+
       let passwordMatch = false;
       try {
         passwordMatch = await bcrypt.compare(password, user.password);
@@ -300,6 +353,23 @@ class AuthService {
           req: req,
           module: 'Autenticação'
         });
+        // #952: count it. This was the whole defect -- failedLoginAttempts was
+        // initialised, validated, reset and in the dictionary, and incremented by
+        // nothing, so there was no per-account brute-force protection at all.
+        // $inc rather than the MFA path's read-modify-write $set: same cost,
+        // race-free, and concurrent guesses are the case that matters here.
+        try {
+          const { maxAttempts, lockoutMs } = await resolveLockoutPolicy(db);
+          const attemptsAfterThis = Number(user.failedLoginAttempts || 0) + 1;
+          const update = { $inc: { failedLoginAttempts: 1 }, $set: { updatedAt: new Date() } };
+          if (attemptsAfterThis >= maxAttempts) {
+            update.$set.accountLockedUntil = new Date(Date.now() + lockoutMs);
+          }
+          await usersCollection.updateOne({ _id: user._id }, update);
+        } catch (counterError) {
+          logger.warn('#952: falha ao contabilizar tentativa inválida:', counterError.message);
+        }
+
         throw new Error('Credenciais inválidas');
       }
 
@@ -496,7 +566,9 @@ class AuthService {
       // Atualiza último login
       await usersCollection.updateOne(
         { _id: user._id },
-        { $set: { lastLogin: new Date() } }
+        // #952: a successful login clears the counter AND the lock. Folded into the
+        // existing lastLogin write rather than a second round-trip.
+        { $set: { lastLogin: new Date(), failedLoginAttempts: 0, accountLockedUntil: null } }
       );
 
       const tokenBundle = await this.issueSessionTokens(db, user, req);

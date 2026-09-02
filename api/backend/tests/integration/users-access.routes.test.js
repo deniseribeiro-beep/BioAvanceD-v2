@@ -752,7 +752,7 @@ describe('Users and Access routes', () => {
 
     const req = createRequest({
       params: { id: 'user-target-8' },
-      body: { name: 'Alvo Renomeado', injected: 'x', mfaLocked: false, userID: 999 },
+      body: { name: 'Alvo Renomeado', injected: 'x', mfaLocked: false, userID: 999, failedLoginAttempts: 0, accountLockedUntil: null },
     });
     req.app.locals.db = dbWithTarget;
     const res = createResponse();
@@ -765,6 +765,13 @@ describe('Users and Access routes', () => {
     expect(setPayload).not.toHaveProperty('injected');
     expect(setPayload).not.toHaveProperty('mfaLocked');
     expect(setPayload).not.toHaveProperty('userID');
+    // #952: failedLoginAttempts became load-bearing (RF001 AC#2), so it was
+    // removed from ALLOWED_USER_UPDATE_FIELDS -- leaving it there would let any
+    // createUser holder clear a target's brute-force counter, and its expiry,
+    // through a generic update. Same hazard the mfaLocked exclusion above exists
+    // for; that one had a test and this one did not.
+    expect(setPayload).not.toHaveProperty('failedLoginAttempts');
+    expect(setPayload).not.toHaveProperty('accountLockedUntil');
     expect(Object.keys(setPayload).sort()).toEqual(['name', 'updatedAt']);
   });
 
