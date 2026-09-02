@@ -11,6 +11,19 @@ WORKDIR /app
 # volumes over the three that are actually written to.
 RUN mkdir -p /etc/tsa/certs /etc/tsa/secrets /var/lib/tsa /run/secrets
 
+# #954: tsa-server.js:10 defaults TSA_CONFIG to /etc/tsa/openssl-ts.cnf and
+# :51 runs "openssl ts -reply -config <TSA_CONFIG>". This file has existed in
+# the repo since the TSA was written and was never copied into the image, so
+# EVERY stack -- dev, test and prod -- failed with
+#   Can't open "/etc/tsa/openssl-ts.cnf" for reading, No such file or directory
+# while /health kept returning 200 unconditionally (tsa-server.js:66-69).
+COPY openssl-ts.cnf /etc/tsa/openssl-ts.cnf
+# openssl-ts.cnf:5 declares "serial = /var/lib/tsa/serial" and nothing created
+# it. Seeded from the tracked infra/tsa/data/serial; under compose.prod.yml's
+# tsa_state volume Docker copies this into the empty volume on first use, and
+# entrypoint.sh guards the case where the volume already exists but is empty.
+COPY data/serial /var/lib/tsa/serial
+
 COPY tsa-server.js /app/tsa-server.js
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
