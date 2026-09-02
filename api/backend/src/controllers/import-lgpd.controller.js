@@ -462,6 +462,10 @@ class ImportLGPDController {
           total: results.total,
           success: results.success,
           errors: results.errors.length,
+          // #980: the blank-row count the service already computes
+          // (results.skipped) was never put on the response `data`, so the
+          // frontend's `summary.skipped > 0` gate could never fire.
+          skipped: results.skipped,
           // #970: the async job report already exposes this count
           // (duplicatesFound); the sync response discarded the same
           // results.duplicates the service already computed.
@@ -674,6 +678,8 @@ class ImportLGPDController {
           total: results.total,
           success: results.success,
           errors: results.errors.length,
+          // #980: same missing-count fix as importPatients above.
+          skipped: results.skipped,
           // #970: same missing-count fix as importPatients above.
           duplicatesFound: results.duplicates,
           errorsDetails: results.errors,
@@ -828,6 +834,8 @@ class ImportLGPDController {
           total: results.total,
           success: results.success,
           errors: results.errors.length,
+          // #980: same missing-count fix as importPatients above.
+          skipped: results.skipped,
           // #970: same missing-count fix as importPatients above.
           duplicatesFound: results.duplicates,
           errorsDetails: results.errors.map(err => ({

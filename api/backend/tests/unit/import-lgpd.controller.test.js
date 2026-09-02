@@ -316,7 +316,7 @@ describe('import-lgpd.controller', () => {
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
-      vi.spyOn(importLGPDService, 'importPatients').mockResolvedValue({ total: 3, success: 3, errors: [], duplicates: 1 });
+      vi.spyOn(importLGPDService, 'importPatients').mockResolvedValue({ total: 3, success: 3, errors: [], duplicates: 1, skipped: 2 });
       const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
 
       await controller.importPatients(req, res);
@@ -332,7 +332,12 @@ describe('import-lgpd.controller', () => {
       // it is the one place in this file that had to move for the new field.
       // #970: duplicatesFound passes through the service's results.duplicates
       // count, the same one the async job report already exposes.
-      expect(body.data).toEqual({ total: 3, success: 3, errors: 0, duplicatesFound: 1, errorsDetails: [], stagingBatchId: null });
+      // #980: skipped now ships on the response `data` too. The mock carries a
+      // NON-ZERO skipped on purpose: toEqual treats an explicit `undefined` and
+      // an absent key as equal, so asserting `skipped: undefined` here would
+      // pass just as happily with the controller hunk deleted -- which is the
+      // same unpinned-hunk defect #970's review found, one field over.
+      expect(body.data).toEqual({ total: 3, success: 3, errors: 0, skipped: 2, duplicatesFound: 1, errorsDetails: [], stagingBatchId: null });
     });
 
     it('happy path with partial errors returns 200 with partial message', async () => {
@@ -579,7 +584,8 @@ describe('import-lgpd.controller', () => {
         total: 2,
         success: 1,
         errors: [{ row: 2, errors: ['dup barcode'], data: { participantId: '12345678' } }],
-        duplicates: 1
+        duplicates: 1,
+        skipped: 3
       });
       const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
 
@@ -593,10 +599,14 @@ describe('import-lgpd.controller', () => {
       const body = res.json.mock.calls[0][0];
       // #970: duplicatesFound passes through the service's results.duplicates
       // count, the same one the async job report already exposes.
+      // #980: skipped now ships on the response `data` too, pinned with a
+      // non-zero value for the reason spelled out on the importPatients
+      // assertion above.
       expect(body.data).toEqual({
         total: 2,
         success: 1,
         errors: 1,
+        skipped: 3,
         duplicatesFound: 1,
         errorsDetails: [{ row: 2, errors: ['dup barcode'], participantId: '12345678' }],
         // #787 (RNF011 AC#4): the response now points at the quarantine
@@ -685,7 +695,12 @@ describe('import-lgpd.controller', () => {
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
       vi.spyOn(importLGPDService, 'importPatientsSmart').mockResolvedValue({
-        total: 4, success: 4, errors: []
+        // #970: `duplicates` was missing from this mock, so
+        // `duplicatesFound` evaluated to undefined, `res.json` dropped the
+        // key, and no assertion below looked at it -- the smart-import
+        // handler's #970 hunk was unpinned. Give it a duplicates count and
+        // assert it below so it is.
+        total: 4, success: 4, errors: [], duplicates: 2
       });
       vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
@@ -704,6 +719,7 @@ describe('import-lgpd.controller', () => {
       expect(body.data.summaryReportId).toBe('report-999');
       expect(body.data.total).toBe(4);
       expect(body.data.success).toBe(4);
+      expect(body.data.duplicatesFound).toBe(2);
 
       expect(auditLogger.log).toHaveBeenCalledTimes(2);
       // #798: as above -- the 7th `context` argument is the blank-row count.

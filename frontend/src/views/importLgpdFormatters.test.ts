@@ -56,12 +56,33 @@ describe('validateImportFile', () => {
   });
 });
 
+// #980/#970: these payloads used to be hand-written per test, and every one
+// of them simply omitted `skipped` -- which is exactly why a controller that
+// never sent `skipped` (#980) went unnoticed by this suite. `controllerData`
+// pins the full key set the three `res.status(200).json({ data: {...} })`
+// literals in import-lgpd.controller.js actually emit (verified by reading
+// that file, not the async job-report path in ResultsPage.tsx), so a fixture
+// can no longer silently drop a key the controller has always sent. Each
+// test still overrides only the fields it cares about.
+function controllerData(overrides: Record<string, unknown> = {}) {
+  return {
+    total: 0,
+    success: 0,
+    errors: 0,
+    skipped: 0,
+    duplicatesFound: 0,
+    errorsDetails: [] as unknown[],
+    stagingBatchId: null as string | null,
+    ...overrides,
+  };
+}
+
 describe('summarizeImportResult', () => {
   it('reports a clean import with no quarantine link', () => {
     const summary = summarizeImportResult({
       success: true,
       message: 'Importação concluída',
-      data: { total: 3, success: 3, errors: 0, errorsDetails: [], stagingBatchId: null },
+      data: controllerData({ total: 3, success: 3, errors: 0 }),
     });
 
     expect(summary).toMatchObject({
@@ -79,7 +100,7 @@ describe('summarizeImportResult', () => {
   it('links a partial import to the quarantine page for its batch', () => {
     const summary = summarizeImportResult({
       success: false,
-      data: {
+      data: controllerData({
         total: 5,
         success: 3,
         errors: 2,
@@ -88,7 +109,7 @@ describe('summarizeImportResult', () => {
           { row: 7, errors: ['sex inválido', 'consentTemplateId é obrigatório'] },
         ],
         stagingBatchId: '65f0a1b2c3d4e5f6a7b8c9d0',
-      },
+      }),
     });
 
     expect(summary.outcome).toBe('partial');
@@ -102,7 +123,7 @@ describe('summarizeImportResult', () => {
 
   it('percent-encodes a batch id rather than interpolating it raw', () => {
     const summary = summarizeImportResult({
-      data: { total: 1, success: 0, errors: 1, errorsDetails: [], stagingBatchId: 'a/b c' },
+      data: controllerData({ total: 1, success: 0, errors: 1, stagingBatchId: 'a/b c' }),
     });
     expect(summary.quarantineHref).toBe('/import/quarantine?batchId=a%2Fb%20c');
   });
@@ -113,13 +134,12 @@ describe('summarizeImportResult', () => {
   // import that did retain them.
   it('flags rejected rows that were never retained when there is no batch', () => {
     const summary = summarizeImportResult({
-      data: {
+      data: controllerData({
         total: 2,
         success: 1,
         errors: 1,
         errorsDetails: [{ row: 2, errors: ['email inválido'] }],
-        stagingBatchId: null,
-      },
+      }),
     });
 
     expect(summary.outcome).toBe('partial-unretained');
@@ -139,7 +159,7 @@ describe('summarizeImportResult', () => {
   describe('skipped', () => {
     it('reports a non-zero skipped count from the response', () => {
       const summary = summarizeImportResult({
-        data: { total: 9, success: 9, errors: 0, errorsDetails: [], skipped: 3, stagingBatchId: null },
+        data: controllerData({ total: 9, success: 9, errors: 0, skipped: 3 }),
       });
       expect(summary.skipped).toBe(3);
       // Not folded into total -- #786's total === success + errors holds.
@@ -148,16 +168,47 @@ describe('summarizeImportResult', () => {
 
     it('reports zero when the response says zero', () => {
       const summary = summarizeImportResult({
-        data: { total: 9, success: 9, errors: 0, errorsDetails: [], skipped: 0, stagingBatchId: null },
+        data: controllerData({ total: 9, success: 9, errors: 0, skipped: 0 }),
       });
       expect(summary.skipped).toBe(0);
     });
 
+    // Deliberately NOT built from controllerData -- the whole point of this
+    // case is a response that omits the key entirely (an older backend
+    // build), which controllerData's default would mask.
     it('defaults to zero for an older backend response with no skipped field', () => {
       const summary = summarizeImportResult({
         data: { total: 9, success: 9, errors: 0, errorsDetails: [], stagingBatchId: null },
       });
       expect(summary.skipped).toBe(0);
+    });
+  });
+
+  // #970: duplicatesFound has shipped on all three controller responses
+  // since 18e128d8, but nothing on the frontend read it -- the same "field
+  // ships, no reader" gap #980 has for `skipped`.
+  describe('duplicatesFound', () => {
+    it('reports a non-zero duplicates count from the response', () => {
+      const summary = summarizeImportResult({
+        data: controllerData({ total: 9, success: 9, errors: 0, duplicatesFound: 2 }),
+      });
+      expect(summary.duplicatesFound).toBe(2);
+    });
+
+    it('reports zero when the response says zero', () => {
+      const summary = summarizeImportResult({
+        data: controllerData({ total: 9, success: 9, errors: 0, duplicatesFound: 0 }),
+      });
+      expect(summary.duplicatesFound).toBe(0);
+    });
+
+    // Deliberately NOT built from controllerData -- same reasoning as the
+    // equivalent `skipped` case just above.
+    it('defaults to zero for an older backend response with no duplicatesFound field', () => {
+      const summary = summarizeImportResult({
+        data: { total: 9, success: 9, errors: 0, errorsDetails: [], stagingBatchId: null },
+      });
+      expect(summary.duplicatesFound).toBe(0);
     });
   });
 });

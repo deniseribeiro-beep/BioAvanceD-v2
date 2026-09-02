@@ -251,6 +251,16 @@ export default function ImportLGPDPage() {
             </p>
           )}
 
+          {summary.duplicatesFound > 0 && (
+            <p
+              data-testid="import-lgpd-duplicates"
+              style={{ margin: '0 0 12px', fontSize: 13, color: '#6b7280' }}
+            >
+              {summary.duplicatesFound} duplicata{summary.duplicatesFound === 1 ? '' : 's'} encontrada
+              {summary.duplicatesFound === 1 ? '' : 's'}
+            </p>
+          )}
+
           {summary.outcome === 'partial' && summary.quarantineHref && (
             <div style={{ marginBottom: 12 }}>
               <Button
