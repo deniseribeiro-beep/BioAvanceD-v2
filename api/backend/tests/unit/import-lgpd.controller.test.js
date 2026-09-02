@@ -700,7 +700,7 @@ describe('import-lgpd.controller', () => {
         // key, and no assertion below looked at it -- the smart-import
         // handler's #970 hunk was unpinned. Give it a duplicates count and
         // assert it below so it is.
-        total: 4, success: 4, errors: [], duplicates: 2
+        total: 4, success: 4, errors: [], duplicates: 2, skipped: 1
       });
       vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
@@ -720,11 +720,20 @@ describe('import-lgpd.controller', () => {
       expect(body.data.total).toBe(4);
       expect(body.data.success).toBe(4);
       expect(body.data.duplicatesFound).toBe(2);
+      // #980: pins the THIRD of the three response literals. The mock
+      // previously carried no `skipped`, so this hunk was revertible with the
+      // whole file green -- the same unpinned-hunk defect this test block was
+      // rewritten to fix for `duplicatesFound`, missed one field over.
+      expect(body.data.skipped).toBe(1);
 
       expect(auditLogger.log).toHaveBeenCalledTimes(2);
       // #798: as above -- the 7th `context` argument is the blank-row count.
+      // This asserted `skipped: undefined`, a shape importPatientsSmart can
+      // never produce: import-lgpd.service.js initialises `skipped: 0` and
+      // returns `results` verbatim. It pinned the MOCK's shape rather than the
+      // service's -- the #803/#797 mock-fidelity family.
       expect(auditLogger.logImport).toHaveBeenCalledWith(
-        req, 'Patient', 'success', 4, 4, 0, expect.objectContaining({ skipped: undefined })
+        req, 'Patient', 'success', 4, 4, 0, expect.objectContaining({ skipped: 1 })
       );
     });
 

@@ -245,8 +245,33 @@ describe('allocate-sample.controller', () => {
     });
   });
 
-  it('returns 400 for a validation-shaped message ("inválida" / "fora dos limites") (#987)', async () => {
+  // Title corrected: this case's message contains only "inválida". It was
+  // named for two patterns and exercised one, so deleting 'fora dos limites'
+  // from VALIDATION_ERROR_PATTERNS left the file green. The two cases below
+  // cover the remaining entries, so every member of both allowlists is now
+  // reachable from a test.
+  it('returns 400 for a validation-shaped message ("inválida") (#987)', async () => {
     vi.spyOn(AllocateSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('Posição inválida. Use o formato Letra+Número (ex: A1, B4)'));
+    const req = { app: { locals: { db: {} } }, body: {}, headers: {} };
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it('returns 400 for a validation-shaped message ("fora dos limites") (#987)', async () => {
+    vi.spyOn(AllocateSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('Posição A99 fora dos limites da caixa'));
+    const req = { app: { locals: { db: {} } }, body: {}, headers: {} };
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it('returns 400 for a validation-shaped message ("já está alocada em outra posição") (#987)', async () => {
+    vi.spyOn(AllocateSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('Amostra já está alocada em outra posição'));
     const req = { app: { locals: { db: {} } }, body: {}, headers: {} };
     const res = buildRes();
 

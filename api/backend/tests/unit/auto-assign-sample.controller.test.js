@@ -205,7 +205,10 @@ describe('auto-assign-sample.controller', () => {
     });
   });
 
-  it('falls back to 400 for an unrecognized error code', async () => {
+  // #987 applied to this fourth endpoint: an unrecognised error code is by
+  // definition not something the caller can fix by changing their input, so
+  // it is a 500. This test asserted 400 -- it pinned the defect.
+  it('falls back to 500 for an unrecognized error code', async () => {
     vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
       success: false,
       error: 'SOME_OTHER_ERROR',
@@ -218,7 +221,7 @@ describe('auto-assign-sample.controller', () => {
 
     await controller(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'SOME_OTHER_ERROR',
@@ -237,7 +240,8 @@ describe('auto-assign-sample.controller', () => {
 
     await controller(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(400);
+    // #987: 500, for the reason on the previous test.
+    expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'AUTO_ALLOCATION_ERROR',
