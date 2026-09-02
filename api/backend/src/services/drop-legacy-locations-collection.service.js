@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const env = require('../config/env');
 
 /**
  * #490 — retire the legacy `locations` collection itself, split off #460
@@ -14,7 +15,12 @@ async function dropLegacyLocationsCollection(db, { backupDir } = {}) {
   const locationsCollection = db.collection('locations');
   const documents = await locationsCollection.find({}).toArray();
 
-  const resolvedBackupDir = backupDir || path.join(__dirname, '../../backups');
+  // #893: consult env.BACKUP_DIR before the __dirname-relative fallback,
+  // mirroring backup.service.js#getBackupBaseDir -- a hardened production
+  // container runs with `read_only: true` and this root moved outside
+  // /app, so writing under __dirname here would fail EROFS even though
+  // every other writable root was already made env-configurable.
+  const resolvedBackupDir = backupDir || env.BACKUP_DIR || path.join(__dirname, '..', '..', 'backups');
   fs.mkdirSync(resolvedBackupDir, { recursive: true });
   const backupPath = path.join(
     resolvedBackupDir,
