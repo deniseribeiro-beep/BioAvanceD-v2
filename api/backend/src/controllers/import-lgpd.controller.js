@@ -462,6 +462,10 @@ class ImportLGPDController {
           total: results.total,
           success: results.success,
           errors: results.errors.length,
+          // #970: the async job report already exposes this count
+          // (duplicatesFound); the sync response discarded the same
+          // results.duplicates the service already computed.
+          duplicatesFound: results.duplicates,
           errorsDetails: results.errors.map(err => ({
             row: err.row,
             errors: Array.isArray(err.errors) ? err.errors : [err.errors]
@@ -670,6 +674,8 @@ class ImportLGPDController {
           total: results.total,
           success: results.success,
           errors: results.errors.length,
+          // #970: same missing-count fix as importPatients above.
+          duplicatesFound: results.duplicates,
           errorsDetails: results.errors,
           summaryReport,
           summaryReportId: String(persistedSummaryReport._id),
@@ -822,6 +828,8 @@ class ImportLGPDController {
           total: results.total,
           success: results.success,
           errors: results.errors.length,
+          // #970: same missing-count fix as importPatients above.
+          duplicatesFound: results.duplicates,
           errorsDetails: results.errors.map(err => ({
             row: err.row,
             errors: err.errors,

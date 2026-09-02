@@ -316,7 +316,7 @@ describe('import-lgpd.controller', () => {
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
-      vi.spyOn(importLGPDService, 'importPatients').mockResolvedValue({ total: 3, success: 3, errors: [] });
+      vi.spyOn(importLGPDService, 'importPatients').mockResolvedValue({ total: 3, success: 3, errors: [], duplicates: 1 });
       const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
 
       await controller.importPatients(req, res);
@@ -330,7 +330,9 @@ describe('import-lgpd.controller', () => {
       // always has -- null here because a clean import quarantines nothing
       // and therefore opens no batch. This assertion is a strict toEqual, so
       // it is the one place in this file that had to move for the new field.
-      expect(body.data).toEqual({ total: 3, success: 3, errors: 0, errorsDetails: [], stagingBatchId: null });
+      // #970: duplicatesFound passes through the service's results.duplicates
+      // count, the same one the async job report already exposes.
+      expect(body.data).toEqual({ total: 3, success: 3, errors: 0, duplicatesFound: 1, errorsDetails: [], stagingBatchId: null });
     });
 
     it('happy path with partial errors returns 200 with partial message', async () => {
@@ -576,7 +578,8 @@ describe('import-lgpd.controller', () => {
       vi.spyOn(importLGPDService, 'importSamples').mockResolvedValue({
         total: 2,
         success: 1,
-        errors: [{ row: 2, errors: ['dup barcode'], data: { participantId: '12345678' } }]
+        errors: [{ row: 2, errors: ['dup barcode'], data: { participantId: '12345678' } }],
+        duplicates: 1
       });
       const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
 
@@ -588,10 +591,13 @@ describe('import-lgpd.controller', () => {
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
       expect(res.status).toHaveBeenCalledWith(200);
       const body = res.json.mock.calls[0][0];
+      // #970: duplicatesFound passes through the service's results.duplicates
+      // count, the same one the async job report already exposes.
       expect(body.data).toEqual({
         total: 2,
         success: 1,
         errors: 1,
+        duplicatesFound: 1,
         errorsDetails: [{ row: 2, errors: ['dup barcode'], participantId: '12345678' }],
         // #787 (RNF011 AC#4): the response now points at the quarantine
         // batch holding the rejected rows. Null here because this test's
