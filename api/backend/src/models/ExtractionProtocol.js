@@ -10,8 +10,15 @@ class ExtractionProtocolModel {
     // em app.js. #899: o default do factory e randomUUID (uuid, conforme o
     // dict-02 para as entidades que ele cobre), mas ESTA entidade nao esta no
     // dict-02 e exige number aqui -- por isso app.js passa um generateId
-    // numerico so para ela. Qual das formas concorrentes (codigo MIABIS no
-    // campo `id` do seed, number, uuid) deve valer continua em aberto: #899.
+    // numerico so para ela. Qual das formas concorrentes deve
+    // valer foi RESOLVIDO em #902: o identificador de negocio canonico e o
+    // codigo MIABIS que o seed escreve em `id`. O manifest declara
+    // uniqueKeys: ['id'] e o seed o usa como filtro de upsert; create-db.js
+    // indexa so `id`; toda consulta CHAVEADA do backend resolve por `id`
+    // (import-lgpd.service.js:1376); e o dict-02 nao
+    // cobre esta entidade, entao nada se sobrepoe a convencao do proprio
+    // repositorio. O protocolID numerico e portanto artefato write-only do
+    // factory -- sua retirada e o escopo restante de #881.
     // Nao existe gerador sequencial: #776 removeu protocolIDGenerator,
     // que nenhum caminho de src/ chamava.
     if (data.protocolID !== undefined && data.protocolID !== null) {

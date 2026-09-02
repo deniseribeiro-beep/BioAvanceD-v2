@@ -252,8 +252,21 @@ app.use("/api/measurement-units", createMasterDataRouter({
 // #899: QualityDescription.js hard-requires a NUMBER for qualityID, and the
 // data dictionary does not cover this entity (unlike the uuid-typed entities
 // left on the factory default below). Which of the competing identifier
-// shapes this should ultimately use is an open question tracked in #899 --
-// Date.now() only restores the pre-fef5936e behavior, it does not answer it.
+// shapes this should use is SETTLED as of #902: the canonical business
+// identifier is the MIABIS code the seed writes on `id`. Evidence, all
+// re-verified 2026-09-02: src/reference-data/essential/manifest.js:12
+// declares uniqueKeys: ['id'] and the essential reference-data seed script
+// (api/backend/scripts/, upsertDocs) uses it verbatim as the upsert filter;
+// scripts/create-db.js indexes `id`
+// only; every KEYED backend lookup resolves on `id`
+// (import-lgpd.service.js:1376 findOne({ id }), plus master-data.routes.js:24's
+// additive branch from #881). dict-02 covers none of these four
+// entities (grepped -E -i: zero hits for the entity names; all four
+// protocolID hits are protocolId on Study/Protocol/Assay/ProcessingBatch),
+// so nothing outranks the repo's own unanimous convention.
+// The numeric idField below is therefore a write-only artifact of this
+// factory requiring one per mount; Date.now() restores the pre-fef5936e
+// behavior and is not a business key. Retiring it is #881's remaining scope.
 app.use("/api/quality-descriptions", createMasterDataRouter({
   collectionName: "qualityDescriptions",
   idField: "qualityID",
@@ -262,8 +275,21 @@ app.use("/api/quality-descriptions", createMasterDataRouter({
 }));
 // #899: SampleType.js hard-requires a NUMBER for sampleTypeID, and the data
 // dictionary does not cover this entity. Which of the competing identifier
-// shapes this should ultimately use is an open question tracked in #899 --
-// Date.now() only restores the pre-fef5936e behavior, it does not answer it.
+// shapes this should use is SETTLED as of #902: the canonical business
+// identifier is the MIABIS code the seed writes on `id`. Evidence, all
+// re-verified 2026-09-02: src/reference-data/essential/manifest.js:12
+// declares uniqueKeys: ['id'] and the essential reference-data seed script
+// (api/backend/scripts/, upsertDocs) uses it verbatim as the upsert filter;
+// scripts/create-db.js indexes `id`
+// only; every KEYED backend lookup resolves on `id`
+// (import-lgpd.service.js:1376 findOne({ id }), plus master-data.routes.js:24's
+// additive branch from #881). dict-02 covers none of these four
+// entities (grepped -E -i: zero hits for the entity names; all four
+// protocolID hits are protocolId on Study/Protocol/Assay/ProcessingBatch),
+// so nothing outranks the repo's own unanimous convention.
+// The numeric idField below is therefore a write-only artifact of this
+// factory requiring one per mount; Date.now() restores the pre-fef5936e
+// behavior and is not a business key. Retiring it is #881's remaining scope.
 app.use("/api/sample-types", createMasterDataRouter({
   collectionName: "sampleTypes",
   idField: "sampleTypeID",
@@ -272,8 +298,21 @@ app.use("/api/sample-types", createMasterDataRouter({
 }));
 // #899: SampleOrigin.js hard-requires a NUMBER for originID, and the data
 // dictionary does not cover this entity. Which of the competing identifier
-// shapes this should ultimately use is an open question tracked in #899 --
-// Date.now() only restores the pre-fef5936e behavior, it does not answer it.
+// shapes this should use is SETTLED as of #902: the canonical business
+// identifier is the MIABIS code the seed writes on `id`. Evidence, all
+// re-verified 2026-09-02: src/reference-data/essential/manifest.js:12
+// declares uniqueKeys: ['id'] and the essential reference-data seed script
+// (api/backend/scripts/, upsertDocs) uses it verbatim as the upsert filter;
+// scripts/create-db.js indexes `id`
+// only; every KEYED backend lookup resolves on `id`
+// (import-lgpd.service.js:1376 findOne({ id }), plus master-data.routes.js:24's
+// additive branch from #881). dict-02 covers none of these four
+// entities (grepped -E -i: zero hits for the entity names; all four
+// protocolID hits are protocolId on Study/Protocol/Assay/ProcessingBatch),
+// so nothing outranks the repo's own unanimous convention.
+// The numeric idField below is therefore a write-only artifact of this
+// factory requiring one per mount; Date.now() restores the pre-fef5936e
+// behavior and is not a business key. Retiring it is #881's remaining scope.
 app.use("/api/sample-origins", createMasterDataRouter({
   collectionName: "sampleOrigins",
   idField: "originID",
@@ -281,10 +320,22 @@ app.use("/api/sample-origins", createMasterDataRouter({
   generateId: () => Date.now()
 }));
 // #899: ExtractionProtocol.js hard-requires a NUMBER for protocolID, and the
-// data dictionary does not cover this entity. Which of the competing
-// identifier shapes this should ultimately use is an open question tracked
-// in #899 -- Date.now() only restores the pre-fef5936e behavior, it does not
-// answer it.
+// data dictionary does not cover this entity. Which of the competing identifier
+// shapes this should use is SETTLED as of #902: the canonical business
+// identifier is the MIABIS code the seed writes on `id`. Evidence, all
+// re-verified 2026-09-02: src/reference-data/essential/manifest.js:12
+// declares uniqueKeys: ['id'] and the essential reference-data seed script
+// (api/backend/scripts/, upsertDocs) uses it verbatim as the upsert filter;
+// scripts/create-db.js indexes `id`
+// only; every KEYED backend lookup resolves on `id`
+// (import-lgpd.service.js:1376 findOne({ id }), plus master-data.routes.js:24's
+// additive branch from #881). dict-02 covers none of these four
+// entities (grepped -E -i: zero hits for the entity names; all four
+// protocolID hits are protocolId on Study/Protocol/Assay/ProcessingBatch),
+// so nothing outranks the repo's own unanimous convention.
+// The numeric idField below is therefore a write-only artifact of this
+// factory requiring one per mount; Date.now() restores the pre-fef5936e
+// behavior and is not a business key. Retiring it is #881's remaining scope.
 app.use("/api/extraction-protocols", createMasterDataRouter({
   collectionName: "extractionProtocols",
   idField: "protocolID",
