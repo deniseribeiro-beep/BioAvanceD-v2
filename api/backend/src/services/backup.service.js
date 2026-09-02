@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const crypto = require('crypto');
 const { exec } = require('child_process');
 const { MongoClient, BSON } = require('mongodb');
@@ -129,7 +128,10 @@ async function encryptDirectoryFilesInPlace(dirPath) {
 // manifest.json itself is not copied; mongorestore only wants the dump
 // tree.
 async function prepareDecryptedRestoreCopy(backupPath, manifest) {
-  const scratchDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-restore-decrypt-'));
+  // #948: disk-backed, not os.tmpdir() -- see getRestoreScratchBaseDir.
+  const scratchBase = getRestoreScratchBaseDir();
+  ensureDirSync(scratchBase);
+  const scratchDir = await fs.promises.mkdtemp(path.join(scratchBase, 'bioavanced-restore-decrypt-'));
   await fs.promises.cp(backupPath, scratchDir, {
     recursive: true,
     filter: (src) => path.basename(src) !== CHECKSUM_MANIFEST_FILE
@@ -235,6 +237,29 @@ function getBackupBaseDir() {
   return env.BACKUP_DIR || path.join(__dirname, '..', '..', 'backups');
 }
 
+// #948: where `prepareDecryptedRestoreCopy` stages its decrypted copy of a
+// dump. Deliberately NOT `os.tmpdir()`, which is what it used to be.
+//
+// On compose.prod.yml all five app services declare a bare `tmpfs: - /tmp`.
+// A bare compose tmpfs is RAM-backed, and with no `size=` the kernel default
+// is half of host RAM -- so the old code copied an entire mongodump into
+// memory. The dump is uncompressed BSON (`mongodump --out`, no `--gzip`/
+// `--archive`) and retention is by count rather than size, so there is no
+// bound on it in the code and therefore no defensible `size=` to pick. The
+// scratch has to be on disk instead.
+//
+// It goes under the backup base dir because that is the one location already
+// guaranteed writable and large enough to hold a dump -- it is where the
+// dump being copied lives. Dot-prefixed, and skipped by getLatestBackupPath
+// below, so it can never be mistaken for a backup.
+//
+// This is not a rare manual path: prepareDecryptedRestoreCopy has two
+// callers, and the second is runControlledRestoreTest, which
+// scheduler.service.js runs on an ungated weekly cron (default `0 5 * * 0`).
+function getRestoreScratchBaseDir() {
+  return env.RESTORE_SCRATCH_DIR || path.join(getBackupBaseDir(), '.restore-scratch');
+}
+
 // #731 (RNF010 AC#5): the periodic restore test needs "the backup to
 // verify" without duplicating backup.routes.js's /list handler, which does
 // a richer job (it merges backupHistory per path for the UI). This is the
@@ -248,7 +273,11 @@ function getLatestBackupPath() {
   }
 
   const dirs = fs.readdirSync(baseDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    // #948: the restore scratch dir now lives under this directory, and it is
+    // strictly newer than the backup it was copied from -- so a birthtime sort
+    // would prefer it and a restore would read back a half-decrypted tree.
+    // Backup folders are date-shaped (formatDateFolder), never dot-prefixed.
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
     .map((entry) => {
       const fullPath = path.join(baseDir, entry.name);
       return { fullPath, birthtime: fs.statSync(fullPath).birthtime };
@@ -1152,6 +1181,7 @@ module.exports = {
   runBackup,
   cleanupOldBackups,
   getBackupBaseDir,
+  getRestoreScratchBaseDir,
   getLatestBackupPath,
   serializeBackupDocs,
   parseBackupDocs,

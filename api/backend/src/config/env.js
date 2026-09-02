@@ -106,6 +106,12 @@ module.exports = {
 
   // Backup / Monitoring
   BACKUP_DIR: process.env.BACKUP_DIR,
+  // #948: where a restore stages its decrypted copy of a dump. Defaults to
+  // `<BACKUP_DIR>/.restore-scratch`; set only to move that scratch off the
+  // backups volume. It must be DISK-backed and large enough for a whole
+  // dump -- pointing it at /tmp is the defect #948 was filed for, since
+  // compose.prod.yml mounts /tmp as an uncapped RAM tmpfs.
+  RESTORE_SCRATCH_DIR: process.env.RESTORE_SCRATCH_DIR,
   // #893: writable-storage roots, mirroring BACKUP_DIR's shape -- default
   // reproduces today's __dirname-relative uploads/storage paths exactly,
   // set only so prod can point them at a volume mounted outside /app.
