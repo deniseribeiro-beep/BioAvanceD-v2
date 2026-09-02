@@ -9,7 +9,14 @@ ENV NODE_ENV=production
 # #738: the backup runs inside this container, so mongodump/mongorestore
 # have to be here too -- otherwise a production deployment silently takes
 # the JSON fallback for every backup and restore. See Dockerfile.dev.
-RUN apk add --no-cache mongodb-tools
+# #948: openssl too. node:22-alpine ships NO openssl CLI -- verified with
+# `docker run --rm node:22-alpine sh -c "which openssl"` -> missing. 
+# audit-tsa.service.js:29 execFile()s `openssl ts -query`, and its caller
+# audit-v2.service.js:161-169 CATCHES the failure and records the event as
+# PENDING_TIMESTAMP with the error text -- so without this every audit event
+# in production would silently never be RFC3161-timestamped. Dockerfile.dev:8
+# already installs it; this stage was the only one that did not.
+RUN apk add --no-cache openssl mongodb-tools
 RUN addgroup -S app && adduser -S app -G app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
