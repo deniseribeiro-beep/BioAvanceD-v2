@@ -45,7 +45,6 @@
     "build": "vite build",
     "lint": "npm run typecheck:full",
     "typecheck": "npm run typecheck:full",
-    "typecheck:core": "tsc --noEmit -p tsconfig.typecheck-core.json",
     "typecheck:full": "tsc --noEmit",
     "preview": "vite preview",
     "test:unit": "vitest run",
