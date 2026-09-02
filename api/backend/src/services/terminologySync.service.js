@@ -12,21 +12,37 @@ const ORPHADATA_BASE_URL = process.env.ORPHADATA_BASE_URL || '';
 // writers upsert into `terminologies` keyed on the same `{ sistema,
 // codigo }` pair -- this file's own `upsertTerminology` (native db path,
 // reached via `syncFromOrphadata`) and
-// `terminologies.routes.js:164` (`bulkUpsertTerminologies`) -- so the pair
+// `terminologies.routes.js` (`bulkUpsertTerminologies`) -- so the pair
 // races with no database-level protection. This is the native-driver
 // equivalent, latched per collection name like `cid.service.js`'s
-// `ensureIndexes`.
+// `ensureIndexes`. BOTH writers call it; the original fix wired only the
+// first, which is the env-gated one, so the index was not built on the
+// default offline path at all.
 //
-// No `partialFilterExpression`/`sparse` here, unlike `sampleIndexes.js`'s
-// barcode index: both writers already guard `sistema`/`codigo` as
-// non-empty truthy strings before ever reaching an upsert --
-// `bulkUpsertTerminologies` filters records on
-// `item.codigo && item.sistema && item.descricao` before building the
-// bulk ops, and `upsertTerminology` below returns `{ skipped: true }` for
-// the same three fields before it writes. Neither writer can produce a
-// document with a null or missing `sistema`/`codigo`, so there is no
-// analogue of the explicit-null case that made `sparse` wrong for
-// `samples.barcode`.
+// A `partialFilterExpression` IS required, and the `_v1` index that shipped
+// without one was broken. The reasoning it replaced said "both writers
+// already guard `sistema`/`codigo` as non-empty truthy strings", which is
+// true of the two writers named above and false of the collection: there is
+// a THIRD writer nobody counted.
+//
+// `scripts/seed-essential-reference-data.js`'s `sprec-minimal` entry
+// (`npm run seed:essential`, manifest key `sprec-minimal`, business key
+// `['sistema','fonte','axis','code']`) upserts the four SPREC axis rows into
+// `terminologies` shaped `{ sistema:'SPREC', fonte, axis, code, label,
+// descricao }`. They carry `code`, never `codigo`. Under a plain unique
+// index Mongo reads the missing field as null, so all four share the key
+// `{ 'SPREC', null }` and collide with one another -- the exact
+// explicit-null analogue the old comment concluded did not exist.
+//
+// It failed silently in both orderings, which is why nothing caught it:
+// seed-then-index makes `createIndex` throw E11000, which the catch below
+// logs as a warning and then latches anyway, so the index never exists and
+// never retries; index-then-seed fails the seed run instead.
+//
+// `$type: 'string'` rather than `$exists: true` because a null or numeric
+// `codigo` would collide the same way. Both real writers emit strings and
+// screen falsy values, so nothing legitimate is excluded -- the two writers
+// the old comment reasoned about are still fully covered.
 const indexedTerminologyCollections = new Set();
 
 async function ensureTerminologyIndexes(collection, collectionName = 'terminologies') {
@@ -36,10 +52,14 @@ async function ensureTerminologyIndexes(collection, collectionName = 'terminolog
   try {
     await collection.createIndex(
       { sistema: 1, codigo: 1 },
-      { name: 'terminologies_sistema_codigo_unique_v1', unique: true }
+      {
+        name: 'terminologies_sistema_codigo_unique_v2',
+        unique: true,
+        partialFilterExpression: { sistema: { $type: 'string' }, codigo: { $type: 'string' } },
+      }
     );
   } catch (error) {
-    logger.warn(`Não foi possível criar índice terminologies_sistema_codigo_unique_v1 em ${collectionName}: ${error.message}`);
+    logger.warn(`Não foi possível criar índice terminologies_sistema_codigo_unique_v2 em ${collectionName}: ${error.message}`);
   }
 
   indexedTerminologyCollections.add(collectionName);

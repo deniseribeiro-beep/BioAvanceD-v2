@@ -1,6 +1,6 @@
 const express = require('express');
 const Terminology = require('../../models/Terminology');
-const { syncFromOrphadata, isExternalTerminologySyncEnabled } = require('../../services/terminologySync.service');
+const { syncFromOrphadata, isExternalTerminologySyncEnabled, ensureTerminologyIndexes } = require('../../services/terminologySync.service');
 const logger = require('../../utils/logger');
 
 const router = express.Router();
@@ -158,6 +158,15 @@ async function bulkUpsertTerminologies(collection, records = []) {
   if (validRecords.length === 0) {
     return { upserted: 0 };
   }
+
+  // #941: this is the second of the two racing writers the unique index was
+  // added for, and the one the original fix did not wire. `upsertTerminology`
+  // is reachable only via `syncFromOrphadata`, which returns early unless
+  // ALLOW_EXTERNAL_TERMINOLOGY_SYNC is set -- so in the default offline
+  // configuration this path was the only live writer AND the only one not
+  // building the index. Latched per collection name, so this costs one
+  // createIndex per process, not one per bulk write.
+  await ensureTerminologyIndexes(collection, 'terminologies');
 
   const operations = validRecords.map((item) => ({
     updateOne: {
