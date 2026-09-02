@@ -242,7 +242,7 @@ class SessionService {
   /**
    * Invalida uma sessão
    */
-  async invalidateSession(db, sessionID) {
+  async invalidateSession(db, sessionID, reason = null, revokedBy = null) {
     try {
       // Remove do cache
       this.sessions.delete(sessionID);
@@ -252,7 +252,7 @@ class SessionService {
         const sessionsCollection = db.collection('sessions');
         await sessionsCollection.updateOne(
           { sessionID },
-          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), updatedAt: new Date() } }
+          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy, updatedAt: new Date() } }
         );
       } catch (dbError) {
         logger.warn('Erro ao invalidar sessão no banco:', dbError.message);
@@ -266,7 +266,7 @@ class SessionService {
   /**
    * Invalida todas as sessões de um usuário
    */
-  async invalidateUserSessions(db, userID) {
+  async invalidateUserSessions(db, userID, reason = null, revokedBy = null) {
     try {
       // #963: coage como os irmãos (listUserSessions, revokeSessionById,
       // revokeAllOtherSessions) já fazem. O campo gravado é sempre string
@@ -288,7 +288,7 @@ class SessionService {
         const sessionsCollection = db.collection('sessions');
         await sessionsCollection.updateMany(
           { userID: ownerID, isActive: true },
-          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), updatedAt: new Date() } }
+          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy, updatedAt: new Date() } }
         );
       } catch (dbError) {
         logger.warn('Erro ao invalidar sessões do usuário no banco:', dbError.message);
@@ -326,7 +326,7 @@ class SessionService {
             ],
             isActive: true
           },
-          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), updatedAt: new Date() } }
+          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: 'expiration', revokedBy: 'system', updatedAt: new Date() } }
         );
       } catch (dbError) {
         logger.warn('Erro ao limpar sessões expiradas no banco:', dbError.message);
@@ -367,7 +367,7 @@ class SessionService {
     }));
   }
 
-  async revokeSessionById(db, userID, sessionID) {
+  async revokeSessionById(db, userID, sessionID, reason = null, revokedBy = null) {
     const sessionsCollection = db.collection('sessions');
 
     const result = await sessionsCollection.updateOne(
@@ -377,6 +377,8 @@ class SessionService {
           isActive: false,
           isRevoked: true,
           revokedAt: new Date(),
+          revocationReason: reason,
+          revokedBy,
           updatedAt: new Date()
         }
       }
@@ -408,6 +410,8 @@ class SessionService {
           isActive: false,
           isRevoked: true,
           revokedAt: new Date(),
+          revocationReason: 'user_request',
+          revokedBy: String(userID),
           updatedAt: new Date()
         }
       }

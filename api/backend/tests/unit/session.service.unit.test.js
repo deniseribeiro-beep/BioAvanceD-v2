@@ -446,6 +446,20 @@ describe('SessionService.cleanupExpiredSessions', () => {
     expect(sessionService.sessions.has('active')).toBe(true);
     expect(collection.updateMany).toHaveBeenCalled();
   });
+
+  it('#974: writes revocationReason "expiration" and revokedBy "system"', async () => {
+    const collection = makeCollection();
+    const db = makeDb(collection);
+
+    await sessionService.cleanupExpiredSessions(db);
+
+    expect(collection.updateMany).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        $set: expect.objectContaining({ revocationReason: 'expiration', revokedBy: 'system' })
+      })
+    );
+  });
 });
 
 describe('SessionService.listUserSessions', () => {
@@ -529,6 +543,18 @@ describe('SessionService.revokeSessionById', () => {
       expect.objectContaining({ $set: expect.objectContaining({ isActive: false, isRevoked: true }) })
     );
   });
+
+  it('#974: default-argument call still writes revocationReason and revokedBy as null', async () => {
+    const collection = makeCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
+    const db = makeDb(collection);
+
+    await sessionService.revokeSessionById(db, 'u1', 'sess-1');
+
+    expect(collection.updateOne).toHaveBeenCalledWith(
+      { userID: 'u1', sessionID: 'sess-1', isActive: true },
+      expect.objectContaining({ $set: expect.objectContaining({ revocationReason: null, revokedBy: null }) })
+    );
+  });
 });
 
 describe('SessionService.revokeAllOtherSessions', () => {
@@ -550,6 +576,20 @@ describe('SessionService.revokeAllOtherSessions', () => {
     expect(sessionService.sessions.has('s-current')).toBe(true);
     expect(sessionService.sessions.has('s-other')).toBe(false);
     expect(sessionService.sessions.has('s-otheruser')).toBe(true);
+  });
+
+  it('#974: writes revocationReason "user_request" and revokedBy as the acting user', async () => {
+    const collection = makeCollection();
+    const db = makeDb(collection);
+
+    await sessionService.revokeAllOtherSessions(db, 'u1', 'current-tok');
+
+    expect(collection.updateMany).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        $set: expect.objectContaining({ revocationReason: 'user_request', revokedBy: 'u1' })
+      })
+    );
   });
 });
 

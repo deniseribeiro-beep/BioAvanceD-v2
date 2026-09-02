@@ -19,6 +19,8 @@ class SessionModel {
       isActive: true,
       isRevoked: false,
       revokedAt: null,
+      revokedBy: null,
+      revocationReason: null,
       updatedAt: new Date()
     };
   }
