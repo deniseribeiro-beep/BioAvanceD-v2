@@ -184,6 +184,22 @@ describe('ImportLGPDService.importPatients', () => {
     expect(result.success).toBe(0);
     expect(result.errors[0].errors[0]).toMatch(/Paciente duplicado/);
     expect(patientsCollection.insertOne).not.toHaveBeenCalled();
+    // #969: the counter is incremented at :691 but was dropped from the return
+    // literal, so patient-worker read `undefined` and import-worker's
+    // `result.duplicates || 0` wrote a constant 0 for every async job.
+    expect(result.duplicates).toBe(1);
+  });
+
+  it('#969: returns `duplicates` as a real key even when nothing was rejected, so the worker cannot read undefined', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    // `toHaveProperty` rather than `toBe(0)`: the defect was an ABSENT key,
+    // and `expect(undefined).toBe(0)` and `expect(0).toBe(0)` are the only
+    // two things that distinguish it. A missing key must fail here.
+    expect(result).toHaveProperty('duplicates');
+    expect(result.duplicates).toBe(0);
   });
 
   it('imports a valid row end-to-end: generates an ID, sets PENDING_CONSENT, inserts, and enqueues a consent notification', async () => {

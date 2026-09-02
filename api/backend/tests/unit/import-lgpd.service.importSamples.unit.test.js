@@ -550,6 +550,20 @@ describe('ImportLGPDService.importSamples', () => {
     expect(result.success).toBe(0);
     expect(result.errors[0].errors).toEqual(['Já existe uma amostra com o código de barras BR-2026-001']);
     expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+    // #969: incremented at :1445, dropped from the return literal.
+    expect(result.duplicates).toBe(1);
+  });
+
+  it('#969: returns `duplicates` as a real key even when nothing was rejected, so the worker cannot read undefined', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    // `toHaveProperty` rather than `toBe(0)`: the defect was an ABSENT key,
+    // which is exactly what `|| 0` downstream made indistinguishable from a
+    // genuine zero.
+    expect(result).toHaveProperty('duplicates');
+    expect(result.duplicates).toBe(0);
   });
 
   it('propagates the underlying error (and never reaches the DB) when reading the file fails', async () => {

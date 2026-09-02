@@ -756,6 +756,10 @@ class ImportLGPDService {
         success: results.success,
         errors: results.errors,
         skipped: results.skipped,
+        // #969: `results.duplicates` é incrementado acima (linha ~691) mas
+        // faltava aqui, então patient-worker lia `undefined` e o
+        // `result.duplicates || 0` de import-worker gravava 0 constante.
+        duplicates: results.duplicates,
         stagingBatchId,
         // NÃO retorna IDs gerados (LGPD)
       };
@@ -1658,6 +1662,9 @@ class ImportLGPDService {
         success: results.success,
         errors: results.errors,
         skipped: results.skipped,
+        // #969: mesmo defeito de importPatients — incrementado (~1445) e
+        // descartado aqui, tornando duplicatesFound sempre 0 em sample-worker.
+        duplicates: results.duplicates,
         importedSampleIds: results.importedSampleIds,
         stagingBatchId
       };

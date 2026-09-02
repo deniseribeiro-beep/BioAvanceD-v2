@@ -111,6 +111,27 @@ describe('PatientWorker', () => {
       processingTime: expect.any(Number),
     });
   });
+
+  // #969: this file's other assertions all passed because the stubbed service
+  // returns a shape `importPatients` never emits. `toEqual` ignores keys whose
+  // value is `undefined`, so `duplicates: results.duplicates` reading a key
+  // that was not in the return literal was invisible here AND in the assertion
+  // above. Drive the worker over the REAL return shape instead.
+  it('#969: propagates `duplicates` from the service return (real shape, not the trimmed stub)', async () => {
+    importLGPDService.importPatients.mockResolvedValue({
+      total: 4,
+      success: 1,
+      errors: [{ row: 2 }, { row: 3 }, { row: 4 }],
+      skipped: 0,
+      duplicates: 2,
+      stagingBatchId: 'batch-969',
+    });
+
+    const result = await patientWorker.process(makeDb([]), 'job-969', tmpFile);
+
+    expect(result.duplicates).toBe(2);
+    expect(result).toHaveProperty('duplicates');
+  });
 });
 
 // ──────────────────────────────────────────────────────────
@@ -181,6 +202,24 @@ describe('SampleWorker', () => {
       errors: [],
       processingTime: expect.any(Number),
     });
+  });
+
+  // #969: same blindness as PatientWorker's — see the note there.
+  it('#969: propagates `duplicates` from the service return (real shape, not the trimmed stub)', async () => {
+    importLGPDService.importSamples.mockResolvedValue({
+      total: 3,
+      success: 1,
+      errors: [{ row: 2 }, { row: 3 }],
+      skipped: 0,
+      duplicates: 2,
+      importedSampleIds: ['s1'],
+      stagingBatchId: 'batch-969',
+    });
+
+    const result = await sampleWorker.process(makeDb([]), 'job-969', tmpFile);
+
+    expect(result.duplicates).toBe(2);
+    expect(result).toHaveProperty('duplicates');
   });
 });
 
