@@ -135,6 +135,62 @@ describe('SessionService.extractClientInfo', () => {
   });
 });
 
+// #914 / RF014 AC#1: `session.timeoutMinutes` is one of the 43 SecurityConfiguration
+// keys that nothing read. dict-02 P1X-0262 says Session.inactiveTimeout "deve derivar
+// de SecurityConfiguration" and calls it the EFECTIVE limit -- a materialised value,
+// which is why it is snapshotted onto the session at creation rather than read live
+// on every request. The snapshot choice is also what keeps RF014 AC#8 meaningful:
+// under a live read a tightened timeout would apply instantly and AC#8 would have
+// nothing left to revoke on this path.
+describe('#914: session.timeoutMinutes drives inactiveTimeout', () => {
+  beforeEach(() => { sessionService.sessions.clear(); });
+
+  function dbWith(securityConfig, collection) {
+    return {
+      collection: vi.fn((name) => (name === 'security_config'
+        ? { findOne: vi.fn().mockResolvedValue(securityConfig) }
+        : collection)),
+    };
+  }
+
+  it('snapshots the configured timeout onto the session, not the hardcoded 30 minutes', async () => {
+    const collection = makeCollection();
+    const db = dbWith({ _id: 'main', session: { timeoutMinutes: 45 } }, collection);
+
+    const session = await sessionService.createSession(db, 'user-1', 'a', 'r', null);
+
+    expect(session.inactiveTimeout).toBe(45 * 60 * 1000);
+  });
+
+  it('falls back to 30 minutes when the policy is unreadable, rather than locking everyone out', async () => {
+    const collection = makeCollection();
+    const db = {
+      collection: vi.fn((name) => (name === 'security_config'
+        ? { findOne: vi.fn().mockRejectedValue(new Error('config unavailable')) }
+        : collection)),
+    };
+
+    const session = await sessionService.createSession(db, 'user-1', 'a', 'r', null);
+
+    expect(session.inactiveTimeout).toBe(30 * 60 * 1000);
+  });
+
+  it('the maintenance sweep compares against each session\'s OWN inactiveTimeout, not a global literal', async () => {
+    const collection = makeCollection();
+    const db = makeDb(collection);
+
+    await sessionService.cleanupExpiredSessions(db);
+
+    const [filter] = collection.updateMany.mock.calls[0];
+    const inactivityClause = filter.$or.find((c) => c.$expr);
+    // Before #914 this clause was { lastActivity: { $lt: now - 30min } } -- a global
+    // 30-minute literal that ignored the per-session field entirely, so the sweep
+    // would evict a session whose configured timeout was 45 minutes.
+    expect(inactivityClause).toBeDefined();
+    expect(JSON.stringify(inactivityClause)).toContain('$inactiveTimeout');
+  });
+});
+
 describe('SessionService.createSession', () => {
   beforeEach(() => {
     sessionService.sessions.clear();

@@ -9,6 +9,40 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(String(token || '')).digest('hex');
 }
 
+// #914 / RF014 AC#1. session.timeoutMinutes was one of 43 SecurityConfiguration
+// keys that nothing read, so the admin UI wrote a policy and four hardcoded
+// 30-minute literals decided the actual behaviour.
+//
+// SNAPSHOT, not a live per-request read. dict-02 P1X-0262 defines
+// Session.inactiveTimeout as the EFFECTIVE limit and says it "deve derivar de
+// SecurityConfiguration" -- a materialised value. It is also what keeps RF014
+// AC#8 ("revogar sessões quando a alteração exigir") meaningful: under a live
+// read a tightened timeout would apply on the next request and AC#8 would have
+// nothing left to revoke on this path. Choosing live would have silently
+// deleted a Crítica requirement rather than implemented one.
+//
+// Reads the collection DIRECTLY rather than through securityService.getConfig,
+// which INSERTS a default document when none exists -- a write side effect has
+// no business firing inside a login.
+//
+// Fails OPEN to 30 minutes: an unreadable policy must not lock everyone out,
+// and 30 is both the previous literal and getDefaultConfig()'s own value, so
+// the fallback is the documented default rather than an invented one.
+const DEFAULT_INACTIVE_TIMEOUT_MS = 30 * 60 * 1000;
+
+async function resolveInactiveTimeoutMs(db) {
+  try {
+    const config = await db.collection('security_config').findOne({ _id: 'main' });
+    const minutes = Number(config && config.session && config.session.timeoutMinutes);
+    if (Number.isFinite(minutes) && minutes > 0) {
+      return minutes * 60 * 1000;
+    }
+  } catch (error) {
+    logger.warn('#914: política de sessão ilegível, usando 30 min:', error.message);
+  }
+  return DEFAULT_INACTIVE_TIMEOUT_MS;
+}
+
 /**
  * Service de Sessão
  * Gerencia sessões de usuário com controle de atividade
@@ -103,7 +137,7 @@ class SessionService {
         deviceInfo: clientInfo.deviceInfo,
         expiresAt,
         refreshExpiresAt,
-        inactiveTimeout: 30 * 60 * 1000 // 30 minutos
+        inactiveTimeout: await resolveInactiveTimeoutMs(db) // #914: from session.timeoutMinutes
       };
 
       const session = SessionModel.create(sessionData);
@@ -322,7 +356,23 @@ class SessionService {
           {
             $or: [
               { expiresAt: { $lt: now } },
-              { lastActivity: { $lt: new Date(now.getTime() - 30 * 60 * 1000) } }
+              // #914: compare against each session's OWN inactiveTimeout. This was a
+              // global 30-minute literal, so the maintenance sweep contradicted any
+              // configured timeout -- a 45-minute policy still had its sessions evicted
+              // at 30. $ifNull covers documents written before the field existed.
+              {
+                $expr: {
+                  $lt: [
+                    '$lastActivity',
+                    {
+                      $subtract: [
+                        now,
+                        { $ifNull: ['$inactiveTimeout', DEFAULT_INACTIVE_TIMEOUT_MS] }
+                      ]
+                    }
+                  ]
+                }
+              }
             ],
             isActive: true
           },
