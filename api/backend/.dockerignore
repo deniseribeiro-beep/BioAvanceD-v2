@@ -7,3 +7,8 @@ test
 *.md
 .git
 .gitignore
+
+# #947: runtime data roots. Dockerfile.prod's COPY . . otherwise bakes whatever a developer's local stack has written into the production image -- including api/backend/storage/samples/**, which holds one tracked personal PDF. Nothing in any image needs these: prod mounts named volumes at /data/{uploads,storage,backups} per 092c4f52, and compose.test.yml mounts uploads-test-data at /app/uploads.
+uploads
+storage
+backups
