@@ -75,6 +75,20 @@ services:
     cap_drop: ["ALL"]
     tmpfs:
       - /tmp:size=64m,mode=1777
+    # #955: read_only:true above is correct and stays, but entrypoint.sh writes
+    # to all three of these paths and none was writable, so "set -eu" aborted
+    # the script before it reached exec "$@" and the container never started --
+    # taking backend and frontend with it via depends_on: service_healthy.
+    # Named volumes rather than tmpfs because the CA key material generated
+    # here must SURVIVE a restart: regenerating it silently invalidates every
+    # timestamp the TSA has ever issued.
+    # /etc/tsa itself is deliberately NOT the mount point -- openssl-ts.cnf is
+    # baked into the image there (#954), and a volume over /etc/tsa would
+    # freeze the first build's copy of it forever.
+    volumes:
+      - tsa_certs:/etc/tsa/certs
+      - tsa_state:/var/lib/tsa
+      - tsa_secrets:/run/secrets
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8095/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
@@ -96,6 +110,11 @@ services:
     cap_drop: ["ALL"]
     tmpfs:
       - /tmp:size=64m,mode=1777
+    # #955: entrypoint.sh writes /run/secrets/witness_key.pem, which is on the
+    # read-only rootfs. Persisted for the same reason as the TSA's key -- a
+    # regenerated witness key invalidates every signature it has co-signed.
+    volumes:
+      - witness_secrets:/run/secrets
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8096/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
@@ -162,7 +181,12 @@ services:
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     init: true
-    command: npm run worker
+    # #955: was "npm run worker". package.json:10 aliases a plain
+    # "node ./src/workers/worker.js", so the npm layer buys nothing and costs a
+    # process that wants a writable $HOME/.npm -- "adduser -S app"
+    # (api/backend/Dockerfile.prod:20) puts /home/app on the read-only rootfs.
+    # direct form is also signal-transparent under "init: true" above.
+    command: ["node", "./src/workers/worker.js"]
     env_file:
       - .env.production.example
     environment:
@@ -197,7 +221,9 @@ services:
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     init: true
-    command: npm run neo4j:canonical:worker
+    # #955: same as the worker service above -- package.json:26 aliases
+    # "node src/workers/neo4jProjection.worker.js".
+    command: ["node", "src/workers/neo4jProjection.worker.js"]
     env_file:
       - .env.production.example
     environment:
@@ -231,6 +257,16 @@ services:
         condition: service_healthy
     read_only: true
     cap_drop: ["ALL"]
+    # #955: read_only:true with no tmpfs and no volumes -- nginx could not
+    # write its pid file or any proxy/client temp path, so the container could
+    # never start. frontend/Dockerfile.prod:30 chowns these to "app", which fixes
+    # ownership and not read-onlyness. nginx.conf overrides neither "pid" nor
+    # any *_temp_path, and it is a conf.d/ server block so it cannot: "pid" is
+    # a main-context directive. mode=1777 matches the /tmp idiom already used
+    # throughout this file; the image runs as USER app, not root.
+    tmpfs:
+      - /var/cache/nginx:size=32m,mode=1777
+      - /var/run:size=8m,mode=1777
     # #924: was `node -e "fetch(...)"`, copied from the backend's healthcheck.
     # The backend runs node:22-alpine; this service's runtime stage is
     # nginx:1.27-alpine, which ships no node binary -- verified by running the
@@ -258,3 +294,10 @@ volumes:
   uploads_data:
   storage_data:
   backups_data:
+  # #955: the TSA/witness key material and the TSA serial counter. These are
+  # not caches -- losing them invalidates previously issued timestamps and
+  # signatures, which is why they are named volumes and not tmpfs.
+  tsa_certs:
+  tsa_state:
+  tsa_secrets:
+  witness_secrets:
