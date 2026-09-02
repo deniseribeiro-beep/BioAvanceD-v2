@@ -1414,6 +1414,21 @@ class ImportLGPDService {
           // AC#2 e sobre specimenId, outro identificador com outro gerador.
           // O requisito que esta checagem serve e dict-02 ELM-0116
           // (Specimen.barcodeValue), coluna Unicidade = `Unico`.
+          // #936 item 2: esta checagem roda ANTES da geracao (~linha 1507), entao so
+          // cobre barcodes VINDOS DO CSV, nunca um gerado. Foi avaliado e MANTIDO de
+          // proposito (2026-09-02), nao e descuido:
+          //   1. desde #932 o retry de generateUniqueBarcode consulta a colecao
+          //      certa, entao uma colisao gerada ja e detectada e re-tentada ali;
+          //   2. desde #936 item 1 existe indice unico real samples_barcode_unique_v1
+          //      (utils/sampleIndexes.js, montado em utils/collectionResolver.js:46-48),
+          //      entao uma colisao que escape ao retry falha alto com E11000 em vez de
+          //      corromper em silencio -- que e a protecao esperada desta guarda;
+          //   3. mover a guarda para depois da geracao transformaria uma colisao
+          //      gerada em REJEICAO da linha em vez de nova tentativa: pior para o
+          //      operador, e ELM-0116 nao pede isso.
+          // O ganho restante seria simetria; o custo e mudar o comportamento do
+          // import. INFERENCIA da preferencia do repositorio por mudancas estreitas,
+          // NAO citacao -- nenhum doc fala de ordem de guarda. Barato de reverter.
           // Verifica duplicidade por barcode (se fornecido)
           if (sampleData.barcode) {
             const existingSample = await samplesCollection.findOne({ barcode: sampleData.barcode });
