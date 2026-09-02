@@ -7,7 +7,6 @@ const StoragePathSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "StorageBox",
       required: true,
-      unique: true,
     },
     rackId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -45,11 +44,6 @@ const StoragePathSchema = new mongoose.Schema(
     strict: true,
   }
 );
-
-// ==================== ÍNDICES ====================
-StoragePathSchema.index({ freezerId: 1, shelfId: 1, rackId: 1 });
-StoragePathSchema.index({ boxId: 1 }, { unique: true });
-StoragePathSchema.index({ path: 1 }, { unique: true });
 
 // ==================== PRÉ-SAVE ====================
 StoragePathSchema.pre("save", async function (next) {

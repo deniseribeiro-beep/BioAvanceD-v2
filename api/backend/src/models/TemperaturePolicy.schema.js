@@ -49,7 +49,4 @@ const TemperaturePolicySchema = new mongoose.Schema(
   }
 );
 
-TemperaturePolicySchema.index({ name: 1 }, { unique: true });
-TemperaturePolicySchema.index({ minTemp: 1, maxTemp: 1 });
-
 module.exports = mongoose.models.TemperaturePolicy || mongoose.model('TemperaturePolicy', TemperaturePolicySchema);

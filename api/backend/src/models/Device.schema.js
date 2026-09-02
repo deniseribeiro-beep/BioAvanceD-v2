@@ -5,11 +5,11 @@ const mongoose = require('mongoose');
 // to instruments/sensors that emit telemetry (freezers, sensors, etc).
 const DeviceSchema = new mongoose.Schema(
   {
-    deviceId: { type: String, required: true, trim: true, unique: true, index: true },
+    deviceId: { type: String, required: true, trim: true },
     deviceType: { type: String, required: true, trim: true },
     manufacturer: { type: String, trim: true, default: null },
     modelNumber: { type: String, trim: true, default: null },
-    serialNumber: { type: String, trim: true, default: null, index: true },
+    serialNumber: { type: String, trim: true, default: null },
     firmwareVersion: { type: String, trim: true, default: null },
     softwareVersion: { type: String, trim: true, default: null },
     qualificationStatus: { type: String, trim: true, default: 'qualified' },

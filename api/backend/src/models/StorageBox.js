@@ -5,8 +5,6 @@ const StorageBoxSchema = new mongoose.Schema(
     // Identificação
     boxID: {
       type: Number,
-      unique: true,
-      sparse: true,
     },
     name: {
       type: String,
@@ -97,7 +95,6 @@ const StorageBoxSchema = new mongoose.Schema(
 
 // ==================== ÍNDICES ====================
 StorageBoxSchema.index({ parent_id: 1, status: 1 });
-StorageBoxSchema.index({ boxID: 1 }, { unique: true, sparse: true });
 StorageBoxSchema.index({ name: 1 });
 StorageBoxSchema.index({ status: 1 });
 

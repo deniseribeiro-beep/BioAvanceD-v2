@@ -11,7 +11,7 @@ const TerminologySchema = new mongoose.Schema(
     sistema: { type: String, required: true, trim: true, index: true, enum: ['CID10', 'CID11', 'HPO', 'OMIM', 'ORPHA', 'BIOMARCADOR', 'OUTRO'] },
 
     // Descrição principal
-    descricao: { type: String, required: true, trim: true, index: 'text' },
+    descricao: { type: String, required: true, trim: true },
 
     // Metadados adicionais (rótulo, sinônimos, tradução, etc.)
     label: { type: String, trim: true },
@@ -39,11 +39,5 @@ const TerminologySchema = new mongoose.Schema(
     timestamps: true,
   }
 );
-
-// Índice composto para garantir unicidade por sistema + código
-TerminologySchema.index({ sistema: 1, codigo: 1 }, { unique: true });
-
-// Índice de texto para busca
-TerminologySchema.index({ descricao: 'text', label: 'text', sinonimos: 'text', aliases: 'text' });
 
 module.exports = mongoose.models.Terminology || mongoose.model('Terminology', TerminologySchema);
