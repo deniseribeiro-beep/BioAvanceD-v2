@@ -1,8 +1,10 @@
 # HANDOFF
 
-**Written 2026-09-02, during a 10-issue queue sitting.** Dennis asked for
-"the next 10 issues, Docker is on." **8 closed, 3 left open with a shipped
-slice, 12 commits pushed, 10 issues filed (8 here, 2 on the pack).**
+**Written 2026-09-02, second 10-issue queue sitting of the day.** Dennis
+asked for "the next 10 issues, Docker is on." **3 closed, 6 driven forward
+and left open, 6 issues filed here plus 1 on the pack, 5 commits pushed —
+and the Docker/e2e gate ran green for the first time on this branch's
+recent work.**
 
 **INTERIM — the session was not declared over by the user.** It may
 continue. Re-derive every count rather than trusting it.
@@ -11,140 +13,129 @@ continue. Re-derive every count rather than trusting it.
 
 ## Repo state
 
-- Branch `feature/docker-e2e-backend-integration`. `main` untouched, no PR.
-- Last substantive commit: `abaf40d9` (#946/#947).
-- No new dependencies. No new env vars.
-- **One behaviour change a reader should know about:** `npm --prefix
-  frontend run typecheck` now aliases `typecheck:full` instead of a
-  four-file subset (#946). It passes — but it is a genuinely wider gate
-  than it was, so a future red there is not necessarily a new regression.
+- Branch `feature/docker-e2e-backend-integration`, clean and matching
+  origin. `main` untouched, no PR.
+- Last substantive commit: `db552f74`.
+- **One new env var:** `RESTORE_SCRATCH_DIR`, declared in
+  `api/backend/src/config/env.js` and documented in
+  `.env.production.example`. Optional; defaults to
+  `<BACKUP_DIR>/.restore-scratch`.
+- No new dependencies.
 
-## Verification state
+## Verification state — all green
 
 | Gate | Result |
 |---|---|
-| backend `tests/unit tests/integration tests/compliance` | **re-running at rotation time — see below** |
-| `npm run test:architecture` | **110 / 110** [ran it] |
-| `npm --prefix frontend run typecheck:full` | **clean** [ran it] |
-| targeted per-issue vitest runs | green, named in each close comment |
-| **e2e / Docker** | **NOT RUN** |
+| backend `tests/unit tests/integration tests/compliance` | **455 files / 8284 tests, 0 failed** [ran it] |
+| `npm run test:architecture` | **116 / 116** [ran it] |
+| `npm --prefix frontend run typecheck:full` | clean [ran it] |
+| **e2e, live Docker stack, `--workers=1`** | **221 / 221 passed, 2.0m, 0 flaky** [ran it] |
 
-**The full backend suite result is not in this file on purpose.** An
-earlier full run came back **2 failed / 8281 passed**, both failures caused
-by this sitting's own #941 wiring; `b170b50b` fixed the cause and the
-targeted consumer set went green. The re-run was still in flight when this
-was written. **[not established] — confirm it before treating the native
-gate as green.** Command:
+The full backend suite was the previous sitting's open `[not established]`
+item. It is now closed: **8284 passed, zero failures.**
 
-```
-cd api/backend && npx vitest run tests/unit tests/integration tests/compliance > <logfile> 2>&1
-```
+## Docker state — STACK IS UP AND FULLY BOOTSTRAPPED
 
-**Redirect it to a file; do not pipe it to `tail`.** A backgrounded
-`... | tail -8` produced a 0-byte output file and stalled at ~18 CPU-seconds
-over 35 minutes, indistinguishable from a hang. Re-running with plain
-redirection worked immediately. [ran it, both ways] Recorded on pack #655.
+**Left running deliberately.** 12 core services healthy, **plus** the
+complete bootstrap: `admin-bootstrap-test` and all 17 chain services
+(`foundation-bootstrap-test` + 16 `reference-data-bootstrap-*`), every one
+`Exited (0)`. Volumes were **fresh** at the start of this run, so there is
+no fixture accumulation from prior sessions.
 
-## Docker state
+A next session can run e2e immediately without re-bootstrapping. If you
+tear it down, `docker compose -f compose.test.yml down` (no `-v`) keeps
+that state; `down --volumes` costs the whole bootstrap again.
 
-**No containers, no stack, no bioavanced images.** Base images present
-(`mongo:7`, `neo4j:5-community`, `redis:7-alpine`, `influxdb:2.7`); no
-application image built this sitting, nothing brought up, no bootstrap run.
+## What closed (3)
 
-So the e2e gate needs a full image build **and** the full bootstrap chain —
-`docker-workflow`'s bioavanced overlay carries the recipe (12 core services
-+ `admin-bootstrap-test` + the 17-service reference-data chain, `--workers=1`).
+`#945` (arch guards read comments as violations — one shared
+`stripComments`, and a second **false-negative** defect found in the
+divergent copy), `#951` (the last two `startSession` guards), `#949` (the
+report detail tables — see below, its premise was inverted).
 
-**Two things want that gate:**
-
-- **#948** — whether `node:22-alpine` ships an `openssl` CLI. One command:
-  `docker run --rm node:22-alpine sh -c 'which openssl || echo MISSING'`.
-  `Dockerfile.prod:12` installs only `mongodb-tools` while
-  `audit-tsa.service.js:29` shells out to `openssl`; `Dockerfile.dev:8`
-  installs it explicitly. **[not established]**
-- **#947** — the `.dockerignore` change is unverified against a real build.
-
-## What closed (8)
-
-`#902 #893 #940 #939 #936 #881` from the queue, plus `#946` and (partly)
-the work behind `#947` — both filed and worked in this sitting. Read each
-close comment for evidence; six carry `premise-corrected`.
-
-## Left open with a shipped slice (4) — the judgment a query cannot carry
+## Left open, driven forward — the judgment a query cannot carry
 
 Query the board (`gh issue list --state open`). What it will not tell you:
 
-- **#933 — direction 1 was already built and reachable by nobody.**
-  `clearMfaLockForUser.js` existed since `493962a0` with no npm script and
-  no compose service. Now wired (`mfa:clear-lock`). Open on directions 2/3.
-  Its body's "recovery requires direct database access" is now overstated.
-- **#941 — two indexes built, ten declarations deliberately left.** The
-  counts in the body are wrong (9 unique across *seven* files, 12 distinct
-  specs, 45 sites) and **the explicit-null trap applies to none of them**.
-  7 of 12 guard collections nothing writes; those should probably be
-  *deleted*, not built. Do not reach for `syncIndexes()` — it drops
-  indexes absent from the schema, and three collections would lose live
-  natively-built ones.
-- **#923 — the fork is still yours, but three things in its own prior
-  comment did not survive checking.** The RF006 conditional is re-scoped
-  rather than dropped; `/allocate/auto` has no audit row at all and bypasses
-  the refusal entirely; and **`sensor.service.js:243` is a third instance of
-  the defect, not the graceful-degradation precedent it was cited as**
-  (filed as #951). The real cost of the replica-set option is keyfile auth,
-  not `--replSet`.
-- **#914 — item 1 (the per-group sweep) is done.** 0 enforced / 30
-  shadow-enforced / 13 inert over 43 keys, and the body omits a real ninth
-  group (`lgpd`). "Inert" is the wrong frame for 30 of them — they are
-  redirects, not features to build. Suggested order: `session` first (it
-  has RNF021 AC#3 behind it), `enhancedSecurity` last (it is an override
-  layer).
+- **#949's premise was BACKWARDS and that is the sitting's most useful
+  finding.** It asked whether two "unreachable" surfaces should be deleted.
+  `recentReadings` had a live producer all along — `handleTemperature`
+  returns `temperatures`, persisted verbatim — so a `temperature` report
+  rendered stats and then an **empty** detail section. Same for
+  `recentLogs`/`logs`. #940's own commit called it "genuinely dead". Fixed,
+  not deleted. **Two prior sessions asserted "no producer" without checking
+  the handler's return.**
+- **#941 — the index the previous sitting shipped was broken, and that is
+  now proven against live Mongo.** The old plain-unique spec fails on the
+  real seeded data with `dup key: { sistema: "SPREC", codigo: null }`; the
+  new `partialFilterExpression` spec builds. The third writer (the
+  essential seed) was never counted. Ten declarations still remain — the
+  full BUILD/DELETE disposition table is in the issue.
+- **#952 + #761 are ONE decision, and it is Denise's.** dict-02 mandates a
+  lockout *duration* at `1..1 Core` **twice** (P1X-0282, P1X-0298), and the
+  `UserAccount` entity (P1X-0182–0208, complete) has **no field to store
+  when a lock started or ends**. So a *permanent* lock is buildable today
+  via `accountStatus='blocked'` (P1X-0193, already enforced at
+  `auth.service.js:307`); a *timed* one needs a new canonical element. The
+  dictionary contradicts itself and only its author can resolve it. Full
+  framing on #952.
+- **#649's premise was also wrong** — a full session-revocation mechanism
+  exists and is enforced at `middleware/auth.js:91`. The gap is that
+  `invalidateUserSessions` has **zero production callers**.
+- **#914 — `session.maxSessionDuration` is INERT, not shadow-enforced.**
+  There is no absolute session cap *at all*: `rotateSessionTokens` resets
+  both expiries on every refresh. That makes the `session` slice new
+  behaviour, not a wire-up. dict P1X-0262 mandates the wiring in words.
+- **#933 — only direction 2 is live**, and it relaxes a security guard on
+  the administrator role. Direction 1 shipped; direction 3 is #761.
+  Deliberately not built.
+- **#947/#948 are half-fixed and BLOCKED on #955**, not on themselves.
 
-## Filed this sitting (10)
+## Filed this sitting (7)
 
-Eight here — `#945 #946 #947 #948 #949 #950 #951 #952` — and two on the
-pack, `#654` and `#655`. `#946` is closed; the rest are open.
+Here: **#953 #954 #955 #956 #957 #958**. On the pack: **#656**.
 
-**Read #952 first.** `failedLoginAttempts` is incremented **nowhere**, so
-failed *password* logins are uncounted and there is no password brute-force
-lockout — the existing lockout guards TOTP entry, after the password already
-passed. **RF014 AC#2 mandates it explicitly** (*"Configurar tentativas,
-bloqueios e regras de senha"*), so it is an unmet requirement at that
-requirement's own priority, not optional hardening. [read it]
+**Read #955 first.** `compose.prod.yml` **cannot bring the stack up at
+all** — `read_only: true` on `tsa`/`witness` against entrypoints that
+`mkdir /run/secrets` under `set -eu`, with `backend` gated on both being
+healthy. Nothing has ever run this file. It blocks #947, #948 and #954.
 
-**#947 has a half only Denise can decide:** a named individual's CV PDF is
-**tracked** under `api/backend/storage/samples/`. The build context now
-excludes it; removing the file, or rewriting history, was deliberately not
-done.
+**#954 is verified in-container** [ran it]: `openssl-ts.cnf` is never
+copied into the TSA image, `openssl ts -reply` fails, `/health` returns
+200 anyway, and `audit_timestamp_tokens` is **0 docs after 1456 audit
+events**. Note its second comment **corrects the first** — the
+`PENDING_TIMESTAMP` mechanism I asserted is not what the data shows, and
+what triggers the sealing path at all is now the open question.
+
+**#957 is a consequence of my own fix** and wants Denise's confirmation.
 
 ## Conventions this sitting relied on / established
 
-- **A "confirmed, no change needed" resolution must be written into the
-  code that looks wrong**, not left in a tracker comment — otherwise the
-  next audit re-opens it. #936 is the worked example.
-- **Verify the premise before building on it — it paid on every one of six
-  research briefs.** Every issue whose premise was re-checked had something
-  materially wrong: #893's was fixed weeks earlier, #940's "probably dead"
-  block was live, #941's counts and null-trap were both wrong, #939's
-  "maybe delete it" was reachable by a Técnico uploading a CSV, #923's cited
-  precedent was a bug, #914 omitted a whole policy group.
-- **The two-hop consumer sweep is not optional and one hop is not it.**
-  Run one hop on #941 and the full native suite caught what it missed —
-  `pipeline.test.js` reaches the changed module only through
-  `graphProjection.service.js`.
-- **`git grep -- ':(top)api/backend/src'` cannot see `app.js` or
-  `server.js`** — they sit at `api/backend/` root, and `app.js` mounts every
-  router. Scope to `api/backend` for wiring questions. Filed as pack #654.
-- **An architecture guard here matches raw file text**, so a *comment*
-  naming a forbidden token fails it exactly as an import would
-  (`seed-boundary.arch.test.js:22`). Cost one red suite. Filed as #945; the
-  `stripComments` remedy already exists twice in that directory.
+- **Verify the premise. It paid on five of six issues**, and twice the
+  premise was the *opposite* of the filed claim (#949, #649). A prior
+  session's confident file-and-line trace is not evidence.
+- **A comment on another issue is a claim under the same rule as a filed
+  one.** I asserted a mechanism on #954 from reading code, checked it
+  against the database afterwards, and had to correct myself. Check the
+  data before writing the mechanism.
+- **Never chain a git mutation with a hook-gated command.** `git rm && npm
+  test && npx vitest <bare dir>` — the scope hook blocked the last part and
+  killed the `git rm`, and the commit message then claimed a deletion that
+  had not happened (`2552916e` → corrected by `db552f74`). This is
+  `fix-bugs`' #413 rule; it was in context and I broke it anyway.
+- **The two-hop consumer sweep paid again.** A delegated #951 fix ran its 4
+  scoped test files green; the sweep found **15**, and
+  `test:architecture` went 116→114 on a line-number-pinned exemption the
+  worker could not have seen.
+- **Research briefs may read the tracker.** I wrote "do not run any `gh`
+  command" into three research briefs and two agents returned whole
+  sections graded `[not established]` for want of a `gh issue view`. Pack
+  #656.
 
 ## Recommended next
 
 **None queued** — Dennis named no task beyond the 10.
 
-If the session continues, the two strongest are **the Docker/e2e gate**
-(nothing has exercised this sitting's twelve commits against a live stack,
-and #948's one-line `openssl` check rides along) and **#952**, which is the
-only open item with an explicit requirement behind it and a security
-consequence.
+If the session continues, the strongest are **#955** (it unblocks three
+other issues and means production has never started), and **#952/#761**,
+which need one answer from Denise before either can move.
