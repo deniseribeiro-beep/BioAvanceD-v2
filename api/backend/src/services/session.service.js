@@ -442,6 +442,51 @@ class SessionService {
     return true;
   }
 
+  // #649 / RF014 AC#8. Every other revoke helper here is scoped to ONE userID;
+  // a policy change is global, so this is a new function rather than a new
+  // argument on an existing one.
+  //
+  // Keeps the acting administrator's own session. revokeAllOtherSessions
+  // established the keep-mine shape, and an admin who tightens session policy
+  // and logs themselves out mid-configuration is a foreseeable self-lockout on
+  // the only role that can undo it.
+  async revokeAllSessionsForPolicyChange(db, exceptAccessToken, revokedBy) {
+    const sessionsCollection = db.collection('sessions');
+    const exceptHash = hashToken(exceptAccessToken);
+
+    const result = await sessionsCollection.updateMany(
+      {
+        isActive: true,
+        $and: [
+          { tokenHash: { $ne: exceptHash } },
+          { token: { $ne: exceptAccessToken } }
+        ]
+      },
+      {
+        $set: {
+          isActive: false,
+          isRevoked: true,
+          revokedAt: new Date(),
+          // 'admin_action' rather than a new 'policy_change': P1X-0267 is a
+          // CLOSED vocabulary in the owner's canonical dictionary, and a policy
+          // change is an administrator acting. Extending that enum is a
+          // dictionary amendment, not an implementation choice.
+          revocationReason: 'admin_action',
+          revokedBy: String(revokedBy || 'system'),
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    for (const [sid, session] of this.sessions.entries()) {
+      if (session.tokenHash !== exceptHash && session.token !== exceptAccessToken) {
+        this.sessions.delete(sid);
+      }
+    }
+
+    return (result && result.modifiedCount) || 0;
+  }
+
   // #958: reason/revokedBy are optional and default to what this helper
   // hardcoded before, so its two existing callers (auth.routes DELETE
   // /sessions/all-others and user-security.service, per #920) are unchanged

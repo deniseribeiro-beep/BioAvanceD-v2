@@ -1,5 +1,6 @@
 const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
+const sessionService = require('./session.service');
 
 /**
  * Service de Configurações de Segurança
@@ -10,6 +11,49 @@ const auditLogger = require('../utils/auditLogger');
 // rewritten on every save by definition. Before the flattening these lived under
 // a `metadata` object and were skipped by the typeof-object branch instead.
 const SERVER_OWNED_KEYS = ['configVersion', 'lastUpdatedAt', 'lastUpdatedBy'];
+
+// #649 / RF014 AC#8: "Revogar sessoes quando a alteracao exigir." The
+// requirement is deliberately conditional -- "quando a alteracao exigir" -- and
+// neither RF014 nor dict-02 enumerates which changes require it. So the list is
+// built from one testable principle rather than guessed:
+//
+//   revoke when a TIGHTENING invalidates a guarantee an already-issued session
+//   is currently relying on.
+//
+// That yields exactly one entry today, and the shortness is the finding, not an
+// oversight. session.timeoutMinutes is the only SecurityConfiguration key any
+// code path actually enforces (#914 wired it; the session snapshots it at
+// creation, so an existing session keeps the OLD, more generous limit until it
+// is revoked -- which is precisely the gap AC#8 names).
+//
+// Deliberately NOT included, each for a stated reason:
+//  - authentication.requireMFA / enhancedSecurity.requireMFAForAll: still inert
+//    (#914 stays open on them). Revoking on a false->true flip would log every
+//    user out and readmit them WITHOUT MFA -- disruption with zero security
+//    delta, recorded as a critical audit action that changed nothing.
+//  - loginAttempts.* / authentication.maxLoginAttempts: pre-authentication. A
+//    live session never re-enters that gate, so revoking changes nothing.
+//  - privacy.autoPurge and the lgpd group: retention switches, not session
+//    guarantees.
+//
+// NOT reusing getSeverityForChange's criticalPaths: its only job is choosing an
+// audit severity, it matches by loose substring, and it is wrong in both
+// directions here -- it includes maxLoginAttempts and privacy.autoPurge and
+// omits maxSessionDurationHours. Coupling session lifecycle to audit-log
+// severity would mean a future logging tweak starts or stops logging people out.
+const SESSION_INVALIDATING_PATHS = ['session.timeoutMinutes'];
+
+function requiresSessionRevocation(changes) {
+  return changes.some((change) => {
+    if (!SESSION_INVALIDATING_PATHS.includes(change.path)) return false;
+    const oldValue = Number(change.oldValue);
+    const newValue = Number(change.newValue);
+    // Direction matters and detectChanges hands it to us for free. Relaxing a
+    // limit never invalidates an already-issued token; only tightening does.
+    if (!Number.isFinite(oldValue) || !Number.isFinite(newValue)) return false;
+    return newValue < oldValue;
+  });
+}
 
 class SecurityService {
   /**
@@ -207,6 +251,22 @@ class SecurityService {
           req: req,
           module: 'Segurança'
         });
+      }
+
+      // #649: after the write and the audit rows, so a revocation failure cannot
+      // lose the policy change or its audit trail.
+      if (requiresSessionRevocation(changes)) {
+        try {
+          const actingToken = (req && req.headers && req.headers.authorization || '').replace('Bearer ', '');
+          const revoked = await sessionService.revokeAllSessionsForPolicyChange(
+            db,
+            actingToken,
+            req && req.user && req.user.userID || 'SYSTEM'
+          );
+          logger.info(`#649: política de sessão restringida, ${revoked} sessão(ões) revogada(s)`);
+        } catch (revokeError) {
+          logger.error('#649: falha ao revogar sessões após alteração de política:', revokeError.message);
+        }
       }
 
       return mergedConfig;

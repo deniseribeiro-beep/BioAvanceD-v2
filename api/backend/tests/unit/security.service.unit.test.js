@@ -571,3 +571,66 @@ describe('SecurityService.validatePermissions', () => {
     expect(() => securityService.validatePermissions({ '1': {} })).not.toThrow();
   });
 });
+
+// #649 / RF014 AC#8: "Revogar sessoes quando a alteracao exigir." The predicate is
+// tightening-only and, today, single-entry -- session.timeoutMinutes is the one
+// SecurityConfiguration key any code path enforces (#914). These three cases pin
+// the predicate itself, which is the part that will be wrong if anyone widens the
+// list without thinking about direction.
+describe('SecurityService.updateConfig session revocation (#649)', () => {
+  function makeDb() {
+    const sessions = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 4 }) };
+    const config = { updateOne: vi.fn().mockResolvedValue({}), insertOne: vi.fn().mockResolvedValue({}) };
+    return {
+      sessions,
+      config,
+      db: { collection: vi.fn((name) => (name === 'sessions' ? sessions : config)) },
+    };
+  }
+
+  const req = { user: { userID: 'admin-1' }, headers: { authorization: 'Bearer admin-token' } };
+
+  it('revokes when the session timeout is TIGHTENED', async () => {
+    const { db, sessions } = makeDb();
+
+    await securityService.updateConfig(
+      db,
+      { session: { timeoutMinutes: 15 } },
+      { session: { timeoutMinutes: 30 } },
+      req
+    );
+
+    expect(sessions.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ isActive: true }),
+      expect.objectContaining({
+        $set: expect.objectContaining({ isRevoked: true, revocationReason: 'admin_action', revokedBy: 'admin-1' }),
+      })
+    );
+  });
+
+  it('does NOT revoke when the timeout is LOOSENED -- relaxing a limit invalidates no issued token', async () => {
+    const { db, sessions } = makeDb();
+
+    await securityService.updateConfig(
+      db,
+      { session: { timeoutMinutes: 45 } },
+      { session: { timeoutMinutes: 30 } },
+      req
+    );
+
+    expect(sessions.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does NOT revoke on requireMFA, which is still inert -- it would readmit everyone WITHOUT MFA', async () => {
+    const { db, sessions } = makeDb();
+
+    await securityService.updateConfig(
+      db,
+      { authentication: { requireMFA: true } },
+      { authentication: { requireMFA: false } },
+      req
+    );
+
+    expect(sessions.updateMany).not.toHaveBeenCalled();
+  });
+});
