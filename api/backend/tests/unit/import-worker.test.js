@@ -343,6 +343,35 @@ describe('workers/import-worker', () => {
       expect(fakeWorkerInstances[0].queueName).toBe('import-queue');
       expect(fakeWorkerInstances[1].queueName).toBe('notification-queue');
     });
+
+    it('#971: defaults the import-queue Worker to concurrency 1, so two jobs cannot interleave a duplicate check with its insert', async () => {
+      process.env.NODE_ENV = 'test';
+      delete process.env.WORKER_CONCURRENCY;
+      const importWorker = freshImportWorkerModule();
+
+      await importWorker.initWorker();
+
+      // Every duplicate check on the import path is a non-atomic
+      // read-then-write (checkDuplicatePatient / findOne({barcode}) followed
+      // by insertOne). Within one job the loop awaits each insert, so rows in
+      // one file are safe; ACROSS jobs nothing serialises them, and
+      // participants have no unique index to catch the loser. Until one
+      // exists (#941), the default has to be 1.
+      expect(fakeWorkerInstances[0].opts.concurrency).toBe(1);
+    });
+
+    it('#971: still honours an explicit WORKER_CONCURRENCY override, so the safe default is not a hard cap', async () => {
+      process.env.NODE_ENV = 'test';
+      process.env.WORKER_CONCURRENCY = '4';
+      const importWorker = freshImportWorkerModule();
+
+      try {
+        await importWorker.initWorker();
+        expect(fakeWorkerInstances[0].opts.concurrency).toBe(4);
+      } finally {
+        delete process.env.WORKER_CONCURRENCY;
+      }
+    });
   });
 
   describe('closeWorker', () => {

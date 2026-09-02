@@ -345,7 +345,17 @@ async function initWorker() {
       },
       {
         connection,
-        concurrency: parseInt(process.env.WORKER_CONCURRENCY || '2', 10),
+        // #971: default 1, NOT 2. Every duplicate check on the import path is a
+        // non-atomic read-then-write -- checkDuplicatePatient/findOne({barcode})
+        // then insertOne, with no transaction and no findOneAndUpdate. Within one
+        // job the row loop awaits each insert, so a file cannot duplicate against
+        // itself (#942); ACROSS jobs nothing serialises them. Samples survive that
+        // on samples_barcode_unique_v1 (#936); participants have no unique index at
+        // all (#941), so the loser is a second Participant record for one person,
+        // silently, with both jobs reporting success.
+        // Raise this only once the participant identity key has a real unique index.
+        // Pinned by tests/unit/import-worker.test.js.
+        concurrency: parseInt(process.env.WORKER_CONCURRENCY || '1', 10),
         limiter: {
           max: 10,
           duration: 1000,
