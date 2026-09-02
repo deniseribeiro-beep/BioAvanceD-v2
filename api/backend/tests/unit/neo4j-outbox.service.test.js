@@ -38,7 +38,10 @@ describe('Neo4jOutboxService', () => {
     expect(updates[0][0]).toEqual({ eventId: 'evt-1' });
     expect(updates[0][1].$setOnInsert.status).toBe('PENDING');
     expect(updates[0][1].$setOnInsert.schemaVersion).toBe(1);
-    expect(indexes.length).toBe(0);
+    // #941: appendEvent now ensures the outbox indexes (including the
+    // eventId unique index) on its own write path, not only from the
+    // manual rebuild script.
+    expect(indexes.length).toBe(3);
   });
 
   it('reschedules abandoned processing events back to retrying', async () => {
@@ -101,6 +104,89 @@ describe('Neo4jOutboxService', () => {
     expect(indexes[0][1]).toMatchObject({ unique: true, name: 'graph_projection_outbox_eventId_unique' });
     expect(indexes[1][1]).toMatchObject({ name: 'graph_projection_outbox_status_aggregate_idx' });
     expect(indexes[2][1]).toMatchObject({ name: 'graph_projection_outbox_lease_idx' });
+  });
+
+  // #941: ensureIndexes (including the eventId unique index that makes
+  // outbox delivery idempotent) was only ever called from the manual
+  // scripts/neo4j-canonical-rebuild.js script. appendEvent must now build
+  // it on its own write path, latched once per process -- and, unlike
+  // sampleIndexes.js/cid.service.js, a build failure must still surface
+  // rather than be swallowed, because that is ensureIndexes's own existing
+  // posture (no internal try/catch) and the manual-script call must keep
+  // failing loudly too.
+  describe('#941 appendEvent index wiring', () => {
+    function makeCollection(createIndexImpl) {
+      const indexes = [];
+      const updates = [];
+      return {
+        indexes,
+        updates,
+        createIndex: async (...args) => {
+          if (createIndexImpl) return createIndexImpl(...args);
+          indexes.push(args);
+        },
+        updateOne: async (...args) => { updates.push(args); },
+      };
+    }
+
+    it('builds the eventId unique index (and the other two) via appendEvent, pinned by value', async () => {
+      const collection = makeCollection();
+      const db = { collection: () => collection };
+      const service = new Neo4jOutboxService({ collectionName: '941_wiring_value_pin' });
+
+      await service.appendEvent(db, { eventId: 'e1', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
+
+      expect(collection.indexes).toHaveLength(3);
+      expect(collection.indexes[0][0]).toEqual({ eventId: 1 });
+      expect(collection.indexes[0][1]).toEqual({ unique: true, name: 'graph_projection_outbox_eventId_unique' });
+      expect(collection.indexes[1][0]).toEqual({ status: 1, aggregateType: 1, aggregateId: 1, occurredAt: 1 });
+      expect(collection.indexes[1][1]).toEqual({ name: 'graph_projection_outbox_status_aggregate_idx' });
+      expect(collection.indexes[2][0]).toEqual({ leaseUntil: 1, status: 1, occurredAt: 1 });
+      expect(collection.indexes[2][1]).toEqual({ name: 'graph_projection_outbox_lease_idx' });
+    });
+
+    it('builds the indexes only once per process across multiple appendEvent calls and service instances', async () => {
+      const collection = makeCollection();
+      const db = { collection: () => collection };
+      const collectionName = '941_wiring_once_per_process';
+
+      const first = new Neo4jOutboxService({ collectionName });
+      const second = new Neo4jOutboxService({ collectionName });
+
+      await first.appendEvent(db, { eventId: 'e1', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
+      await first.appendEvent(db, { eventId: 'e2', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
+      await second.appendEvent(db, { eventId: 'e3', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
+
+      expect(collection.indexes).toHaveLength(3);
+      expect(collection.updates).toHaveLength(3);
+    });
+
+    it('does not rebuild indexes for one collection name when another collection name is appended to', async () => {
+      const collection = makeCollection();
+      const db = { collection: () => collection };
+
+      const serviceA = new Neo4jOutboxService({ collectionName: '941_wiring_name_a' });
+      const serviceB = new Neo4jOutboxService({ collectionName: '941_wiring_name_b' });
+
+      await serviceA.appendEvent(db, { eventId: 'e1', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
+      await serviceB.appendEvent(db, { eventId: 'e2', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
+
+      expect(collection.indexes).toHaveLength(6);
+    });
+
+    it('propagates (does not swallow) an index-build failure out of appendEvent, matching ensureIndexes\'s own throw posture', async () => {
+      const collection = makeCollection(async () => {
+        throw new Error('E11000 duplicate key error');
+      });
+      const db = { collection: () => collection };
+      const service = new Neo4jOutboxService({ collectionName: '941_wiring_throws' });
+
+      await expect(
+        service.appendEvent(db, { eventId: 'e1', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} })
+      ).rejects.toThrow('E11000 duplicate key error');
+
+      expect(collection.updates).toHaveLength(0);
+    });
   });
 
   it('leases the next batch of pending/retrying events and marks them processing', async () => {

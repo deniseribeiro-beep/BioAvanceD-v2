@@ -194,6 +194,66 @@ describe('terminologySync.service', () => {
     });
   });
 
+  describe('#941 ensureTerminologyIndexes', () => {
+    it('creates a unique index on { sistema: 1, codigo: 1 }, pinned by value', async () => {
+      const createIndex = vi.fn(async () => {});
+      const collection = { createIndex };
+
+      await svc.ensureTerminologyIndexes(collection, '941-value-pin');
+
+      expect(createIndex).toHaveBeenCalledTimes(1);
+      const [keys, options] = createIndex.mock.calls[0];
+      expect(keys).toEqual({ sistema: 1, codigo: 1 });
+      expect(options).toEqual({ name: 'terminologies_sistema_codigo_unique_v1', unique: true });
+    });
+
+    it('does not call createIndex again for the same collectionName (once per process, not per call)', async () => {
+      const createIndex = vi.fn(async () => {});
+      const collection = { createIndex };
+
+      await svc.ensureTerminologyIndexes(collection, '941-once-per-process');
+      await svc.ensureTerminologyIndexes(collection, '941-once-per-process');
+      await svc.ensureTerminologyIndexes(collection, '941-once-per-process');
+
+      expect(createIndex).toHaveBeenCalledTimes(1);
+    });
+
+    it('rebuilds for a different collectionName, since the latch is keyed by name', async () => {
+      const createIndex = vi.fn(async () => {});
+      const collection = { createIndex };
+
+      await svc.ensureTerminologyIndexes(collection, '941-name-a');
+      await svc.ensureTerminologyIndexes(collection, '941-name-b');
+
+      expect(createIndex).toHaveBeenCalledTimes(2);
+    });
+
+    // Precedent (cid.service.js / sampleIndexes.js): log rather than throw,
+    // so a failed index build cannot take down a terminology write.
+    it('logs and does not throw when the index cannot be built', async () => {
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const collection = {
+        createIndex: vi.fn(async () => {
+          throw new Error('E11000 duplicate key error collection: bio.terminologies index: terminologies_sistema_codigo_unique_v1');
+        }),
+      };
+
+      await expect(svc.ensureTerminologyIndexes(collection, '941-fails')).resolves.toBeUndefined();
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain('terminologies_sistema_codigo_unique_v1');
+      expect(warn.mock.calls[0][0]).toContain('E11000');
+    });
+
+    it('is a no-op for a falsy collection, missing createIndex, or empty collectionName', async () => {
+      const createIndex = vi.fn(async () => {});
+      await expect(svc.ensureTerminologyIndexes(null, '941-noop')).resolves.toBeUndefined();
+      await expect(svc.ensureTerminologyIndexes({}, '941-noop')).resolves.toBeUndefined();
+      await expect(svc.ensureTerminologyIndexes({ createIndex }, '')).resolves.toBeUndefined();
+      expect(createIndex).not.toHaveBeenCalled();
+    });
+  });
+
   describe('upsertTerminology', () => {
     it('skips when required fields are missing after normalization', async () => {
       const result = await svc.upsertTerminology({});
@@ -270,6 +330,44 @@ describe('terminologySync.service', () => {
       const orphanetCallArgs = orphanetUpdate.mock.calls[0];
       expect(orphanetCallArgs[0]).toEqual({ code: '558' });
       expect(result.skipped).toBe(false);
+    });
+
+    it('#941 ensures the terminologies unique index, by value, before writing on the db path', async () => {
+      const createIndex = vi.fn(async () => {});
+      const updateOne = vi.fn().mockResolvedValue({});
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'terminologies') return { createIndex, updateOne };
+          if (name === 'orphanet_diseases') return { updateOne: vi.fn().mockResolvedValue({}) };
+          throw new Error(`unexpected collection ${name}`);
+        }),
+      };
+
+      await svc.upsertTerminology({ codigo: 'X1', sistema: 'OUTRO', descricao: 'desc' }, db);
+
+      expect(createIndex).toHaveBeenCalledTimes(1);
+      const [keys, options] = createIndex.mock.calls[0];
+      expect(keys).toEqual({ sistema: 1, codigo: 1 });
+      expect(options).toEqual({ name: 'terminologies_sistema_codigo_unique_v1', unique: true });
+      expect(createIndex.mock.invocationCallOrder[0]).toBeLessThan(updateOne.mock.invocationCallOrder[0]);
+    });
+
+    it('#941 does not rebuild the terminologies index on a second db-path upsert in the same process', async () => {
+      const createIndex = vi.fn(async () => {});
+      const updateOne = vi.fn().mockResolvedValue({});
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'terminologies') return { createIndex, updateOne };
+          if (name === 'orphanet_diseases') return { updateOne: vi.fn().mockResolvedValue({}) };
+          throw new Error(`unexpected collection ${name}`);
+        }),
+      };
+
+      await svc.upsertTerminology({ codigo: 'X1', sistema: 'OUTRO', descricao: 'd1' }, db);
+      await svc.upsertTerminology({ codigo: 'X2', sistema: 'OUTRO', descricao: 'd2' }, db);
+
+      expect(createIndex).toHaveBeenCalledTimes(1);
+      expect(updateOne).toHaveBeenCalledTimes(2);
     });
   });
 

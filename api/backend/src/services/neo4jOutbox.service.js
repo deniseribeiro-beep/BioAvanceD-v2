@@ -4,6 +4,19 @@ const env = require('../config/env');
 
 const COLLECTION_NAME = 'graph_projection_outbox';
 
+// #941: `ensureIndexes` (including the `eventId` unique index that makes
+// outbox delivery idempotent) was previously only ever called from
+// `scripts/neo4j-canonical-rebuild.js:83` -- a manual script, not the
+// normal `appendEvent` write path, so on a regular boot or worker run the
+// unique index was never built. Latched per collection name here, the same
+// "once per process" shape `cid.service.js`'s `ensureIndexes` uses, so a
+// hot append path doesn't re-issue `createIndex` on every call. Failure
+// posture is unchanged from `ensureIndexes` itself: it still throws rather
+// than logs (no internal try/catch), so this wiring does not swallow an
+// index-build failure -- it just avoids retrying it after the first
+// attempt in this process.
+const ensuredOutboxIndexCollections = new Set();
+
 function stableValue(value) {
   if (Array.isArray(value)) {
     return value.map((item) => stableValue(item));
@@ -83,6 +96,12 @@ class Neo4jOutboxService {
 
   async appendEvent(db, event, options = {}) {
     const collection = this.getCollection(db);
+
+    if (!ensuredOutboxIndexCollections.has(this.collectionName)) {
+      ensuredOutboxIndexCollections.add(this.collectionName);
+      await this.ensureIndexes(db);
+    }
+
     const doc = this.buildEvent({
       ...event,
       projectionState: event.projectionState || options.projectionState || {},

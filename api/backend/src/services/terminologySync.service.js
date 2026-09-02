@@ -5,6 +5,46 @@ const logger = require('../utils/logger');
 const DEFAULT_TIMEOUT_MS = 15000;
 const ORPHADATA_BASE_URL = process.env.ORPHADATA_BASE_URL || '';
 
+// #941: `Terminology.js:44` declares `{ sistema: 1, codigo: 1 }, { unique:
+// true }`, but the mongoose connection opens with `autoIndex: false`
+// (connection.js:26) and nothing calls `syncIndexes()`/`createIndexes()`
+// anywhere, so that declaration never reaches Mongo. Two independent
+// writers upsert into `terminologies` keyed on the same `{ sistema,
+// codigo }` pair -- this file's own `upsertTerminology` (native db path,
+// reached via `syncFromOrphadata`) and
+// `terminologies.routes.js:164` (`bulkUpsertTerminologies`) -- so the pair
+// races with no database-level protection. This is the native-driver
+// equivalent, latched per collection name like `cid.service.js`'s
+// `ensureIndexes`.
+//
+// No `partialFilterExpression`/`sparse` here, unlike `sampleIndexes.js`'s
+// barcode index: both writers already guard `sistema`/`codigo` as
+// non-empty truthy strings before ever reaching an upsert --
+// `bulkUpsertTerminologies` filters records on
+// `item.codigo && item.sistema && item.descricao` before building the
+// bulk ops, and `upsertTerminology` below returns `{ skipped: true }` for
+// the same three fields before it writes. Neither writer can produce a
+// document with a null or missing `sistema`/`codigo`, so there is no
+// analogue of the explicit-null case that made `sparse` wrong for
+// `samples.barcode`.
+const indexedTerminologyCollections = new Set();
+
+async function ensureTerminologyIndexes(collection, collectionName = 'terminologies') {
+  if (!collection || typeof collection.createIndex !== 'function' || !collectionName) return;
+  if (indexedTerminologyCollections.has(collectionName)) return;
+
+  try {
+    await collection.createIndex(
+      { sistema: 1, codigo: 1 },
+      { name: 'terminologies_sistema_codigo_unique_v1', unique: true }
+    );
+  } catch (error) {
+    logger.warn(`Não foi possível criar índice terminologies_sistema_codigo_unique_v1 em ${collectionName}: ${error.message}`);
+  }
+
+  indexedTerminologyCollections.add(collectionName);
+}
+
 function isExternalTerminologySyncEnabled() {
   const raw = String(process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC || process.env.ALLOW_CLOUD_INTEGRATIONS || '').trim().toLowerCase();
   return raw === 'true' || raw === '1';
@@ -197,7 +237,9 @@ async function upsertTerminology(record, db = null) {
 
   let result;
   if (db && typeof db.collection === 'function') {
-    await db.collection('terminologies').updateOne(
+    const terminologiesCollection = db.collection('terminologies');
+    await ensureTerminologyIndexes(terminologiesCollection, 'terminologies');
+    await terminologiesCollection.updateOne(
       { sistema: payload.sistema, codigo: payload.codigo },
       { $set: payload },
       { upsert: true }
@@ -371,4 +413,5 @@ module.exports = {
   upsertTerminology,
   normalizeRecord,
   isExternalTerminologySyncEnabled,
+  ensureTerminologyIndexes,
 };
