@@ -1,12 +1,11 @@
 # HANDOFF
 
-**Written 2026-09-02, fourth 10-issue queue sitting of the day.** Dennis asked
-for "the next 10 issues, Docker is on." **All 10 resolved, 12 commits pushed,
-11 issues filed (9 here + 2 on the pack) — and `compose.prod.yml` came up
-clean from tracked files for the first time: 10/10 services, `backend` and
-`frontend` both healthy.**
+**Written 2026-09-02, fifth 10-issue queue sitting of the day.** Dennis asked
+for "the next ten issues, Docker is on." **All 10 addressed — 5 closed, 5
+shipped-in-part and left open with their remainders named — 11 commits pushed,
+9 issues filed here and 8 on the pack. The Docker gate ran and was green.**
 
-The session was not declared over by the user. Re-derive every count rather
+**The session was not declared over by the user.** Re-derive every count rather
 than trusting it.
 
 ---
@@ -15,127 +14,138 @@ than trusting it.
 
 - Branch `feature/docker-e2e-backend-integration`, clean and matching origin.
   `main` untouched, no PR.
-- Last substantive commit: `d972eac0` (#965's prod bring-up).
-- **New npm scripts:** `compose:prod:{config,up,down,logs,ps,seed-admin}`.
-  `compose:prod:down` deliberately omits `--volumes`, unlike `compose:down`.
-- **Deleted npm scripts:** 14 dead entries (#964), `test:arch` (#968),
-  `api/backend`'s `typecheck` and `frontend`'s `lint` (#960 — both were
-  aliases that re-ran their neighbour's command).
-- **New env keys:** `.env.production.example` went 29 → 57 keys (#965, #972).
-- No new dependencies.
+- Last substantive commit: `e6cb811a` (#933's guard tests).
+- **`.env.production` (gitignored, real secrets) was edited locally** — its
+  TSA/witness URLs were missing the `/tsa` and `/witness` suffixes, because it
+  was generated from the old template. Fixed on this machine only; anyone
+  else's copy still has the defect. The tracked template is fixed in
+  `67ac5405`.
+- **New npm scripts:** none. **New dependencies:** none.
+- **New env key:** `WORKER_CONCURRENCY=1` in both `.env.docker.example` and
+  `.env.production.example`.
 
 ## Docker state — nothing is running
 
-**Both stacks were torn down at session end. `docker ps -a` is empty, build
-cache is 0B.**
-
-- `compose.test.yml` — was inherited from the prior sitting, up 2 hours and
-  bootstrapped there. **Stopped WITHOUT `--volumes`**: the five
-  `bioavanced-test-*` named volumes survive, so the admin + 17-service
-  reference-data chain does **not** need re-running — `compose:test` up and
-  the bootstrap is already there. Its images are also kept.
-  It was stopped rather than left up because its `backend` image predates
-  this sitting's commits, so it was **running stale code** — notably without
-  #972's `USER_ANON_SALT` boot requirement, which means the running container
-  would not start under current code. Leaving it up was a trap, not a
-  convenience.
-- `bioavanced-prodverify` — the `compose.prod.yml` verification stack.
-  **Fully removed**, `down --volumes`, and its six built images deleted.
-  Ephemeral by design.
-- `.env.production` **is kept** at the repo root, gitignored, holding real
-  generated secrets. Its volumes are gone, but the file is what makes
-  `npm run compose:prod:up` work again without regenerating anything — and
-  regenerating is not currently possible from a tracked script (#978).
+- **`compose.test.yml` was brought up and torn down this sitting.** `docker ps
+  -a` is empty; build cache pruned to 0B (620MB reclaimed).
+- **The five `bioavanced-test-*` named volumes survive** (`down` without
+  `--volumes`), so the admin + 17-service reference-data bootstrap does **not**
+  need re-running. `compose:test` up and it is already there.
+- **The 24 test-stack images are kept and are CURRENT** — built from this
+  sitting's tree, unlike the prior sitting's, which predated its commits.
+- `bioavanced-prodverify` was not touched this sitting.
 
 ## Verification state
 
 | Gate | Result |
 |---|---|
-| `npm run test:architecture` | 120 / 120 (was 116; +4 from #967's new guard) |
+| **Full native suite** | **457 files, 8335 tests, 0 failures** |
+| `npm run test:architecture` | 120 / 120 |
 | `npm run lint` | 466 backend files, clean |
-| targeted consumer sweeps, per issue | all green — largest 532 across 19 files |
-| **`compose.prod.yml` bring-up** | **10/10 services, backend+frontend healthy** |
+| **`compose.test.yml` bring-up** | **10 services, all healthy, `RestartCount=0`** |
 
-**No full native suite and no e2e run this sitting.** The pre-handoff
-regression form is `npx vitest run tests/unit tests/integration
-tests/compliance --reporter=dot` from `api/backend`.
+**No e2e run this sitting** — the bring-up deliberately named 10 services to
+avoid auto-starting `playwright-runner`.
 
-## What closed (10 + 4 filed-and-closed)
+## What closed (5)
 
-`#942` `#948` `#960` `#963` `#964` `#965` `#884` `#941`(partial) `#956`(partial)
-`#967`(partial) — plus `#968` `#969` `#972` `#973`, filed and closed here.
+`#977` `#971` `#958` `#649` `#952`.
 
-Query the board for the rest (`gh issue list --state open`); what a query
-cannot carry is below.
+## What shipped in part, and what each still needs
+
+- **#959** — items 1, 3, 4 done and gate-verified. Open on **item 2**: no
+  signing key reaches any stack, which needs a key-generation one-shot writing
+  into a shared volume (adjacent to #962), not a wiring fix.
+- **#914** — `session.timeoutMinutes` wired. Open on **`authentication.requireMFA`**
+  (making it real means deciding what happens to a user who has not enrolled)
+  and the other 41 keys.
+- **#941** — dead declaration deleted, survivors marked inert. Open on
+  **BUILD**, whose prerequisites are #984 and whose shape is not what the issue
+  assumed (see its latest comment).
+- **#933** — the three MFA-recovery guards are now pinned. Open on
+  **direction 2**, which is a decision, laid out as A/B/C in its latest comment.
+- **#923** — the fork is unanswered; two defects wrong under *either* direction
+  split to #987/#988.
+
+Query the board for everything else (`gh issue list --state open`).
 
 ## The judgment a query cannot carry
 
-- **`compose.prod.yml` works now.** The last blocker was found only by
-  running it: `redis` had **no password** while `validateEnv.js:44` requires
-  one outside development — **fatal in `worker`** (`import-worker.js:39` →
-  `worker.js:44`, uncaught → crashloop) and **merely logged in `backend`**
-  (`queue.js:28` catches). Fixed with `--requirepass`. **The asymmetry is
-  unfixed and filed as #977** — it will do the same to the next validator.
-- **`docker compose up --wait` exited 0 with a service crashlooping.**
-  `--wait` only waits on services that declare a healthcheck. **Always read
-  `docker compose ps` after a bring-up; the exit code is not the gate.**
-- **`mount` with no args prints NOTHING in alpine** — an empty result reads
-  as "not mounted". Use `/proc/mounts` or `df`. Both are on pack #664.
-- **Three issue premises inverted, all `[ran it]`:**
-  - **#942 does not reproduce.** The import loops `await` each insert, so
-    intra-file duplicates *are* caught — correctness is a consequence of
-    loop ordering, not design. Recorded in the code at all three sites. The
-    real hole is cross-**job** (`WORKER_CONCURRENCY` defaults to 2, set
-    nowhere) → **#971**.
-  - **#960's premise was half wrong**, and worse: the backend was in the
-    *same* position, mirrored. CI ran **two** checks twice, not one.
-  - **#973 was my own issue from earlier this sitting.** I claimed 17 terms
-    were enforced by nothing; they are enforced in
-    `filter-keys.arch.test.js:162-180` as `RETIRED_FILTER_KEYS`.
-- **#884 was decided, not deferred**: 422 repo-wide for model-validation
-  failures, **status only**. Bodies deliberately untouched — 9 of 13 return
-  `message: <string>` where the 422 family returns `details: <array>`, and
-  changing that is a real contract break. Remainder → **#975**.
-- **#969 blocked #942 and nobody knew.** `duplicatesFound` had written a
-  constant `0` since #931 — both importers incremented `results.duplicates`
-  and omitted it from their return literal.
-- **#963 nearly shipped a silent no-op.** `invalidateUserSessions` was the
-  only one of five session helpers not coercing its id with `String()`;
-  passing an `ObjectId` matches nothing, throws nothing, returns 200.
+- **Two of #914's and #649's decisions are one decision.** #914 snapshots
+  `inactiveTimeout` onto the session rather than reading policy live —
+  **[read it]** dict-02 P1X-0262 calls it the *efetivo* limit — and that is
+  *why* #649 has work to do. Under a live read a tightened timeout applies on
+  the next request and RF014 AC#8 would be vacuous. Choosing live would have
+  silently deleted a Crítica requirement. Do not "simplify" one without the
+  other.
+- **#649's revocation list has one entry on purpose.** `session.timeoutMinutes`
+  is the only SecurityConfiguration key anything enforces. `requireMFA` is
+  excluded *because* it is inert — revoking on a `false→true` flip would log
+  everyone out and readmit them without MFA. **It joins the list when #914
+  finishes it, and not before.**
+- **#952 shipped an undeclared field.** `accountLockedUntil` is not in dict-02;
+  RF001 AC#2's *temporariamente* is unimplementable without it. **[ran it]** No
+  gate blocks that — the conformance arch test covers 18 entities and
+  structurally excludes `User.js`, and 14 undeclared keys already ship in
+  `UserModel.create`. Amendment request is **#985**.
+- **Three premises were run and inverted this sitting**, all `[ran it]`:
+  - **#977's own trace was wrong twice.** The swallow is in `server.js`, not
+    `queue.js` (whose catch rethrows), and the worker's throw is not uncaught —
+    it is an explicit `process.exit(1)`. And the split covers **three** Redis
+    checks, not one, so the worker dies on a Redis that is merely *down*. → #979.
+  - **A `create-db.js` IndexOptionsConflict I had already written a full issue
+    body about does not exist.** **[ran it]** `docker run --rm mongo:7`: both
+    indexes build. MongoDB permits several indexes over one key pattern when
+    the *names* differ; naming avoids the conflict rather than causing it. The
+    issue was rewritten around what survives → #983.
+  - **#933's premise that `resetMFA` is Administrador-only is false since
+    #632** — a role with `permissionIds: ['perm-resetMFA']` and
+    `hierarchyLevel: null` gets 200. Direction 2 is therefore wider than the
+    issue frames it.
+- **#923's body still carries a claim its own second comment retracted** (that
+  F3-G10 drops RF006 item 7's replica-set conditional — it does not). I fed the
+  uncorrected version into a research brief and had it refuted back. Read that
+  issue's comments before its body.
+- **The `--wait` exit code is still not the gate.** `worker-test` declares no
+  healthcheck, so it is invisible to `--wait` by construction. `docker compose
+  ps` plus `docker inspect --format {{.RestartCount}}` is what proved it up.
 
-## Filed this sitting (11)
+## Filed this sitting (17)
 
-Here: **#968 #969 #970 #971 #972 #973 #974 #975 #976 #977 #978**
-(#968/#969/#972/#973 already closed). On the pack: **#661 #662 #663 #664**.
+Here: **#979 #980 #981 #982 #983 #984 #985 #986 #987 #988**.
+On the pack: **#670 #671 #672 #673 #674 #675 #676 #677**.
 
-**Security-relevant, worth reading first: #972** (fixed) — `generateAnonId`
-fell back to a salt literal committed to this repo, making pseudonyms
-reversible. Now fails closed and is required at boot.
+**Worth reading first: #982** — `PUT /api/users/:id` lets an admin set another
+user's password, rewrite their `passwordHistory` and zero `failedLoginAttempts`
+in one request, revoking nothing, while the same file hard-deletes the MFA
+counters as "load-bearing".
 
 ## Conventions this sitting relied on / established
 
-- **Run the premise. It paid on three of ten, and all three were
-  inversions** — including one of my own issues, three hours old.
-- **`git checkout --` destroys an uncommitted fix you are probing.** The
-  can-it-fail probe (revert → confirm red → restore) has no safe-restore
-  idiom in the pack; `checkout` restores from HEAD, not from your edit.
-  **Commit first, then probe.** Pack #663.
-- **Deleting the last entry of a JSON block leaves a dangling comma.**
-  Follow every `sed`-based npm-script delete with `node -e "JSON.parse(...)"`.
-- **The two-hop consumer sweep paid repeatedly** — it is how the 8-model
-  index deletion got 23 files / 506 tests instead of the 7 the worker ran.
-- **Name test files explicitly and count what the runner reports.** Vitest
-  treats arguments as filters: 5 named, 3 ran, exit 0, silently.
-- **A research brief must say the agent MAY read the tracker.** 4 of 4
-  briefs wrote "do not run any gh command" and had to be corrected. Pack
-  #656 has the tally and the wording that works.
+- **Run the premise before writing the issue body, not after.** It paid three
+  times; the third cost a full rewrite because the order was reversed.
+- **Single-line anchors only in patch scripts.** `core.autocrlf=true` makes
+  every working copy CRLF, so a heredoc's multi-line needle can never match —
+  and the miss reads as a wrong-text error. Files in this repo are **mixed**
+  LF/CRLF, so detect the file's own EOL rather than hardcoding. Pack #670.
+- **Anchor greps that decide a verdict.** `FAIL` matches this repo's own
+  `AUDIT_TRAIL_WRITE_FAILURE` log lines; `'http://tsa'.includes('/tsa')` is
+  true. Both produced confident wrong answers acted on. Pack #677.
+- **Redirect any vitest run over ~3 files** — the auth suites are loud
+  regardless of how targeted the run is.
+- **Never chain a fix to its own verification with `&& … || echo`** — a failed
+  edit prints a confident claim about a check that never ran. Pack #675.
+- **A red reproduction can be red for the wrong reason.** One test here failed
+  on a missing `jwt.verify` stub, not its assertion; only the post-commit
+  can-it-fail probe established it. Pack #676.
+- **`COVERAGE_NOTES.md` owes an update in the same commit** — missed for three
+  iterations, and the stale entry was actively discouraging the exact work
+  #977 needed (`3a27d59d`).
 
 ## Recommended next
 
-**None queued** — Dennis named no task beyond the 10.
+**None queued** — Dennis named no task beyond the ten.
 
-If the session continues, the unworked issues this sitting filed are
-**#970 #971 #974 #975 #976 #977 #978**, and the cheapest with real value is
-**#977** (the validator asymmetry — one sentence at each of two call sites,
-plus deciding which posture is right) or **#971**'s direction 1
-(`WORKER_CONCURRENCY=1`, a one-line config with a throughput trade).
+Two decisions are waiting on him and block nothing else: **#933**'s A/B/C and
+**#923**'s fork. The cheapest unblocked work is **#959 item 2** (the signing
+key), which is what stops the audit chain being verifiable end-to-end.
