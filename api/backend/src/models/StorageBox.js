@@ -96,7 +96,11 @@ const StorageBoxSchema = new mongoose.Schema(
 // ==================== ÍNDICES ====================
 StorageBoxSchema.index({ parent_id: 1, status: 1 });
 StorageBoxSchema.index({ name: 1 });
-StorageBoxSchema.index({ status: 1 });
+// #941: `index({ status: 1 })` deleted here. Not merely unbuilt -- unused:
+// every storageBoxes query in the tree filters on _id or parent_id, and the
+// only whole-collection reads sort on { name, boxID, _id }. Nothing anywhere
+// filters or sorts these documents on `status`, so the declaration described
+// an index no query would have used even if it had been built.
 
 // ==================== VIRTUAL: capacity ====================
 StorageBoxSchema.virtual("capacityTotal").get(function () {

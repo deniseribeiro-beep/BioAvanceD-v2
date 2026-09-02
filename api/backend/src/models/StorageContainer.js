@@ -5,6 +5,13 @@ const StorageContainerSchema = new mongoose.Schema(
     // Identificação
     containerID: {
       type: Number,
+      // #941: INERT. mongoose connects with autoIndex:false
+      // (infrastructure/database/mongodb/connection.js) and nothing calls
+      // syncIndexes()/createIndexes(), so this declaration is never built on any
+      // stack. The constraint below is a real requirement with live writers -- it
+      // is not decorative -- but it is NOT enforced today. Do not read it as a
+      // guarantee. Building it means a native ensureIndexes helper on the
+      // utils/sampleIndexes.js precedent, wired into the write path.
       unique: true,
       sparse: true,
     },
@@ -93,7 +100,9 @@ const StorageContainerSchema = new mongoose.Schema(
 StorageContainerSchema.index({ containerType: 1, status: 1 });
 StorageContainerSchema.index({ parent_id: 1, containerType: 1 });
 StorageContainerSchema.index({ name: 1 });
-StorageContainerSchema.index({ containerID: 1 }, { sparse: true, unique: true });
+// #941: this line declared the SAME {containerID} unique+sparse spec already
+// declared field-level at the top of this schema. One of the two was pure
+// noise; the field-level one survives, marked there.
 
 // ==================== VALIDAÇÕES CUSTOMIZADAS ====================
 StorageContainerSchema.pre("save", async function (next) {

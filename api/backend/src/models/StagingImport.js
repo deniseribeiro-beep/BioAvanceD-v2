@@ -7,8 +7,17 @@ const stagingImportSchema = new Schema(
     jobId: {
       type: String,
       required: true,
+      // #941: the redundant `index: true` on this same field was deleted --
+      // `unique: true` already implies an index. Both were inert either way.
+      // #941: INERT. mongoose connects with autoIndex:false
+      // (infrastructure/database/mongodb/connection.js) and nothing calls
+      // syncIndexes()/createIndexes(), so this declaration is never built on any
+      // stack. Unlike the other inert declarations, the UNIQUE half here guards
+      // nothing worth guarding: jobId is a uuidv4 from staging-import.service.js,
+      // so collisions are not a real failure mode. What IS wanted is the LOOKUP
+      // index -- import-batch.controller and batch-validation-engine do five
+      // keyed reads on jobId, all collection scans today.
       unique: true,
-      index: true,
       trim: true,
     },
     fileName: {
