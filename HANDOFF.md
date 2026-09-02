@@ -24,19 +24,28 @@ than trusting it.
 - **New env keys:** `.env.production.example` went 29 → 57 keys (#965, #972).
 - No new dependencies.
 
-## Docker state — READ THIS BEFORE STARTING ANYTHING
+## Docker state — nothing is running
 
-**Two stacks were up when this was written. Both should be torn down; check.**
+**Both stacks were torn down at session end. `docker ps -a` is empty, build
+cache is 0B.**
 
-- `compose.test.yml` — 12 core services, healthy, **inherited from the prior
-  sitting and bootstrapped there** (admin + all 17 reference-data chain
-  services `Exited (0)` against these volumes). Its `backend` image predates
-  this sitting's commits, so **it is running old code** — notably without
-  #972's `USER_ANON_SALT` boot requirement.
-- `bioavanced-prodverify` — the `compose.prod.yml` verification stack this
-  sitting brought up. Ephemeral; tear down with volumes.
-- `.env.production` exists at the repo root, gitignored, holding real
-  generated secrets. It is **not** reproducible — see #978.
+- `compose.test.yml` — was inherited from the prior sitting, up 2 hours and
+  bootstrapped there. **Stopped WITHOUT `--volumes`**: the five
+  `bioavanced-test-*` named volumes survive, so the admin + 17-service
+  reference-data chain does **not** need re-running — `compose:test` up and
+  the bootstrap is already there. Its images are also kept.
+  It was stopped rather than left up because its `backend` image predates
+  this sitting's commits, so it was **running stale code** — notably without
+  #972's `USER_ANON_SALT` boot requirement, which means the running container
+  would not start under current code. Leaving it up was a trap, not a
+  convenience.
+- `bioavanced-prodverify` — the `compose.prod.yml` verification stack.
+  **Fully removed**, `down --volumes`, and its six built images deleted.
+  Ephemeral by design.
+- `.env.production` **is kept** at the repo root, gitignored, holding real
+  generated secrets. Its volumes are gone, but the file is what makes
+  `npm run compose:prod:up` work again without regenerating anything — and
+  regenerating is not currently possible from a tracked script (#978).
 
 ## Verification state
 
