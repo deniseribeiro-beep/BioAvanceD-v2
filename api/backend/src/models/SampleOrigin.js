@@ -5,27 +5,14 @@ class SampleOriginModel {
   static validate(data) {
     const errors = [];
 
-    // originID e opcional - quando ausente, o POST o preenche via o parametro
-    // generateId de createMasterDataRouter (master-data.routes.js), montado
-    // em app.js. #899: o default do factory e randomUUID (uuid, conforme o
-    // dict-02 para as entidades que ele cobre), mas ESTA entidade nao esta no
-    // dict-02 e exige number aqui -- por isso app.js passa um generateId
-    // numerico so para ela. Qual das formas concorrentes deve
-    // valer foi RESOLVIDO em #902: o identificador de negocio canonico e o
-    // codigo MIABIS que o seed escreve em `id`. O manifest declara
-    // uniqueKeys: ['id'] e o seed o usa como filtro de upsert; create-db.js
-    // indexa so `id`; toda consulta CHAVEADA do backend resolve por `id`
-    // (import-lgpd.service.js:1376); e o dict-02 nao
-    // cobre esta entidade, entao nada se sobrepoe a convencao do proprio
-    // repositorio. O originID numerico e portanto artefato write-only do
-    // factory -- sua retirada e o escopo restante de #881.
-    // Nao existe gerador sequencial: #776 removeu originIDGenerator,
-    // que nenhum caminho de src/ chamava.
-    if (data.originID !== undefined && data.originID !== null) {
-      if (typeof data.originID !== 'number') {
-        errors.push('originID deve ser um número');
-      }
-    }
+    // #881: originID retired. The canonical business identifier is the
+    // string MIABIS code the seed writes on `id`, settled by #902 -- the
+    // manifest declares uniqueKeys: ['id'] and the seed uses it verbatim as
+    // the upsert filter; create-db.js indexes only `id`; every KEYED
+    // backend lookup resolves on `id` (import-lgpd.service.js:1376). The
+    // router factory (app.js) now mounts this entity with idField: 'id'
+    // and no numeric generateId override, so create() below returns `id`
+    // instead of a numeric key.
 
     if (!data.description || typeof data.description !== 'string') {
       errors.push('description é obrigatório e deve ser string');
@@ -39,7 +26,7 @@ class SampleOriginModel {
 
   static create(data) {
     return {
-      originID: data.originID,
+      id: data.id,
       description: data.description,
       code: data.code || null, // Código MIABIS se aplicável
       createdAt: new Date(),

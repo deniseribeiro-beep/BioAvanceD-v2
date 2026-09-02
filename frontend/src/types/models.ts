@@ -362,7 +362,10 @@ export interface SampleWithMeasurementUnit {
 
 export interface SampleWithQualityDescription {
   _id?: string; // MongoDB ID
-  qualityID: number;
+  // #881: the canonical business identifier is the string MIABIS code the
+  // seed writes on `id` (settled by #902) -- the numeric qualityID this
+  // mount used to require is retired.
+  id: string;
   description: string;
   createdAt?: Date | string;
   updatedAt?: Date | string;

@@ -249,98 +249,65 @@ app.use("/api/measurement-units", createMasterDataRouter({
   idField: "unitID",
   model: require("./src/models/MeasurementUnit")
 }));
-// #899: QualityDescription.js hard-requires a NUMBER for qualityID, and the
-// data dictionary does not cover this entity (unlike the uuid-typed entities
-// left on the factory default below). Which of the competing identifier
-// shapes this should use is SETTLED as of #902: the canonical business
-// identifier is the MIABIS code the seed writes on `id`. Evidence, all
-// re-verified 2026-09-02: src/reference-data/essential/manifest.js:12
-// declares uniqueKeys: ['id'] and the essential reference-data seed script
-// (api/backend/scripts/, upsertDocs) uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id`
-// only; every KEYED backend lookup resolves on `id`
-// (import-lgpd.service.js:1376 findOne({ id }), plus master-data.routes.js:24's
-// additive branch from #881). dict-02 covers none of these four
-// entities (grepped -E -i: zero hits for the entity names; all four
-// protocolID hits are protocolId on Study/Protocol/Assay/ProcessingBatch),
-// so nothing outranks the repo's own unanimous convention.
-// The numeric idField below is therefore a write-only artifact of this
-// factory requiring one per mount; Date.now() restores the pre-fef5936e
-// behavior and is not a business key. Retiring it is #881's remaining scope.
+// #881: retired the numeric qualityID idField. The canonical business
+// identifier, settled by #902, is the string MIABIS code the seed writes
+// on `id` -- src/reference-data/essential/manifest.js:12 declares
+// uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
+// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
+// master-data.routes.js:24's additive $or branch). idField is now 'id',
+// and the numeric generateId override (Date.now()) is removed so the
+// factory's randomUUID() default no longer matters here either --
+// QualityDescription.js's create() now returns `id`, not a numeric key.
 app.use("/api/quality-descriptions", createMasterDataRouter({
   collectionName: "qualityDescriptions",
-  idField: "qualityID",
-  model: require("./src/models/QualityDescription"),
-  generateId: () => Date.now()
+  idField: "id",
+  model: require("./src/models/QualityDescription")
 }));
-// #899: SampleType.js hard-requires a NUMBER for sampleTypeID, and the data
-// dictionary does not cover this entity. Which of the competing identifier
-// shapes this should use is SETTLED as of #902: the canonical business
-// identifier is the MIABIS code the seed writes on `id`. Evidence, all
-// re-verified 2026-09-02: src/reference-data/essential/manifest.js:12
-// declares uniqueKeys: ['id'] and the essential reference-data seed script
-// (api/backend/scripts/, upsertDocs) uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id`
-// only; every KEYED backend lookup resolves on `id`
-// (import-lgpd.service.js:1376 findOne({ id }), plus master-data.routes.js:24's
-// additive branch from #881). dict-02 covers none of these four
-// entities (grepped -E -i: zero hits for the entity names; all four
-// protocolID hits are protocolId on Study/Protocol/Assay/ProcessingBatch),
-// so nothing outranks the repo's own unanimous convention.
-// The numeric idField below is therefore a write-only artifact of this
-// factory requiring one per mount; Date.now() restores the pre-fef5936e
-// behavior and is not a business key. Retiring it is #881's remaining scope.
+// #881: retired the numeric sampleTypeID idField. The canonical business
+// identifier, settled by #902, is the string MIABIS code the seed writes
+// on `id` -- src/reference-data/essential/manifest.js:12 declares
+// uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
+// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
+// master-data.routes.js:24's additive $or branch). idField is now 'id',
+// and the numeric generateId override (Date.now()) is removed so the
+// factory's randomUUID() default no longer matters here either --
+// SampleType.js's create() now returns `id`, not a numeric key.
 app.use("/api/sample-types", createMasterDataRouter({
   collectionName: "sampleTypes",
-  idField: "sampleTypeID",
-  model: require("./src/models/SampleType"),
-  generateId: () => Date.now()
+  idField: "id",
+  model: require("./src/models/SampleType")
 }));
-// #899: SampleOrigin.js hard-requires a NUMBER for originID, and the data
-// dictionary does not cover this entity. Which of the competing identifier
-// shapes this should use is SETTLED as of #902: the canonical business
-// identifier is the MIABIS code the seed writes on `id`. Evidence, all
-// re-verified 2026-09-02: src/reference-data/essential/manifest.js:12
-// declares uniqueKeys: ['id'] and the essential reference-data seed script
-// (api/backend/scripts/, upsertDocs) uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id`
-// only; every KEYED backend lookup resolves on `id`
-// (import-lgpd.service.js:1376 findOne({ id }), plus master-data.routes.js:24's
-// additive branch from #881). dict-02 covers none of these four
-// entities (grepped -E -i: zero hits for the entity names; all four
-// protocolID hits are protocolId on Study/Protocol/Assay/ProcessingBatch),
-// so nothing outranks the repo's own unanimous convention.
-// The numeric idField below is therefore a write-only artifact of this
-// factory requiring one per mount; Date.now() restores the pre-fef5936e
-// behavior and is not a business key. Retiring it is #881's remaining scope.
+// #881: retired the numeric originID idField. The canonical business
+// identifier, settled by #902, is the string MIABIS code the seed writes
+// on `id` -- src/reference-data/essential/manifest.js:12 declares
+// uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
+// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
+// master-data.routes.js:24's additive $or branch). idField is now 'id',
+// and the numeric generateId override (Date.now()) is removed so the
+// factory's randomUUID() default no longer matters here either --
+// SampleOrigin.js's create() now returns `id`, not a numeric key.
 app.use("/api/sample-origins", createMasterDataRouter({
   collectionName: "sampleOrigins",
-  idField: "originID",
-  model: require("./src/models/SampleOrigin"),
-  generateId: () => Date.now()
+  idField: "id",
+  model: require("./src/models/SampleOrigin")
 }));
-// #899: ExtractionProtocol.js hard-requires a NUMBER for protocolID, and the
-// data dictionary does not cover this entity. Which of the competing identifier
-// shapes this should use is SETTLED as of #902: the canonical business
-// identifier is the MIABIS code the seed writes on `id`. Evidence, all
-// re-verified 2026-09-02: src/reference-data/essential/manifest.js:12
-// declares uniqueKeys: ['id'] and the essential reference-data seed script
-// (api/backend/scripts/, upsertDocs) uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id`
-// only; every KEYED backend lookup resolves on `id`
-// (import-lgpd.service.js:1376 findOne({ id }), plus master-data.routes.js:24's
-// additive branch from #881). dict-02 covers none of these four
-// entities (grepped -E -i: zero hits for the entity names; all four
-// protocolID hits are protocolId on Study/Protocol/Assay/ProcessingBatch),
-// so nothing outranks the repo's own unanimous convention.
-// The numeric idField below is therefore a write-only artifact of this
-// factory requiring one per mount; Date.now() restores the pre-fef5936e
-// behavior and is not a business key. Retiring it is #881's remaining scope.
+// #881: retired the numeric protocolID idField. The canonical business
+// identifier, settled by #902, is the string MIABIS code the seed writes
+// on `id` -- src/reference-data/essential/manifest.js:12 declares
+// uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
+// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
+// master-data.routes.js:24's additive $or branch). idField is now 'id',
+// and the numeric generateId override (Date.now()) is removed so the
+// factory's randomUUID() default no longer matters here either --
+// ExtractionProtocol.js's create() now returns `id`, not a numeric key.
 app.use("/api/extraction-protocols", createMasterDataRouter({
   collectionName: "extractionProtocols",
-  idField: "protocolID",
-  model: require("./src/models/ExtractionProtocol"),
-  generateId: () => Date.now()
+  idField: "id",
+  model: require("./src/models/ExtractionProtocol")
 }));
 app.use("/api/studies", createMasterDataRouter({
   collectionName: "studies",

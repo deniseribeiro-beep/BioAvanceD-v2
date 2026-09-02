@@ -5,38 +5,35 @@ const QualityDescriptionModel = require('../../../src/models/QualityDescription'
 const SampleOriginModel = require('../../../src/models/SampleOrigin');
 const SampleTypeModel = require('../../../src/models/SampleType');
 
+// #881: these four models' numeric idField (protocolID/qualityID/originID/
+// sampleTypeID) is retired. The canonical business identifier, settled by
+// #902, is the string MIABIS code the seed writes on `id` -- there is no
+// per-model numeric-type validation branch anymore, so these cases are keyed
+// on `id` instead.
 const models = [
   {
     name: 'ExtractionProtocolModel',
     Model: ExtractionProtocolModel,
-    idField: 'protocolID',
-    idErrorMsg: 'protocolID deve ser um número',
     extraField: 'code',
   },
   {
     name: 'QualityDescriptionModel',
     Model: QualityDescriptionModel,
-    idField: 'qualityID',
-    idErrorMsg: 'qualityID deve ser um número',
     extraField: 'qualityLevel',
   },
   {
     name: 'SampleOriginModel',
     Model: SampleOriginModel,
-    idField: 'originID',
-    idErrorMsg: 'originID deve ser um número',
     extraField: 'code',
   },
   {
     name: 'SampleTypeModel',
     Model: SampleTypeModel,
-    idField: 'sampleTypeID',
-    idErrorMsg: 'sampleTypeID deve ser um número',
     extraField: 'code',
   },
 ];
 
-describe.each(models)('$name', ({ Model, idField, idErrorMsg, extraField }) => {
+describe.each(models)('$name', ({ Model, extraField }) => {
   describe('validate', () => {
     it('happy path: description only, no id -> isValid true, no errors', () => {
       const result = Model.validate({ description: 'A valid description' });
@@ -59,25 +56,11 @@ describe.each(models)('$name', ({ Model, idField, idErrorMsg, extraField }) => {
       expect(result.errors).toContain('description é obrigatório e deve ser string');
     });
 
-    it('id provided as a number -> isValid true, no id-related error', () => {
-      const result = Model.validate({ description: 'ok', [idField]: 5 });
+    it('id provided as a string -> isValid true, no id-related error', () => {
+      const result = Model.validate({ description: 'ok', id: 'PLASMA' });
 
       expect(result.isValid).toBe(true);
-      expect(result.errors).not.toContain(idErrorMsg);
-    });
-
-    it('id provided as a non-number (string) -> isValid false, includes id-type error', () => {
-      const result = Model.validate({ description: 'ok', [idField]: 'not-a-number' });
-
-      expect(result.isValid).toBe(false);
-      expect(result.errors).toContain(idErrorMsg);
-    });
-
-    it('id explicitly null -> treated as not provided, no id-related error', () => {
-      const result = Model.validate({ description: 'ok', [idField]: null });
-
-      expect(result.isValid).toBe(true);
-      expect(result.errors).not.toContain(idErrorMsg);
+      expect(result.errors).toEqual([]);
     });
   });
 
@@ -85,24 +68,30 @@ describe.each(models)('$name', ({ Model, idField, idErrorMsg, extraField }) => {
     it('full data including extra field -> echoes fields plus Date instances', () => {
       const input = {
         description: 'Full description',
-        [idField]: 7,
+        id: 'PLASMA',
         [extraField]: 'CODE-01',
       };
 
       const result = Model.create(input);
 
       expect(result.description).toBe('Full description');
-      expect(result[idField]).toBe(7);
+      expect(result.id).toBe('PLASMA');
       expect(result[extraField]).toBe('CODE-01');
       expect(result.createdAt).toBeInstanceOf(Date);
       expect(result.updatedAt).toBeInstanceOf(Date);
     });
 
     it('data without extra field -> extra field defaults to null (not undefined)', () => {
-      const result = Model.create({ description: 'No extra field', [idField]: 1 });
+      const result = Model.create({ description: 'No extra field', id: 'PLASMA' });
 
       expect(result[extraField]).toBeNull();
       expect(result[extraField]).not.toBeUndefined();
+    });
+
+    it('#881: a POST-supplied string id survives create() unchanged', () => {
+      const result = Model.create({ description: 'ok', id: 'PLASMA' });
+
+      expect(result.id).toBe('PLASMA');
     });
   });
 });

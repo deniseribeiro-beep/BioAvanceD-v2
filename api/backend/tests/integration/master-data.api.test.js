@@ -377,9 +377,11 @@ describe('GET /api/sample-types/:id (canonical string business key)', () => {
       .get('/api/sample-types/42')
       .set('Authorization', `Bearer ${makeToken(2)}`);
     expect(res2.status).toBe(200);
+    // #881: idField is now 'id' for this mount, so buildIdQuery's
+    // numeric-idField and string-idField branches both resolve on `id`.
     expect(coll.findOne).toHaveBeenCalledWith(
       expect.objectContaining({
-        $or: expect.arrayContaining([{ sampleTypeID: 42 }, { sampleTypeID: '42' }]),
+        $or: expect.arrayContaining([{ id: 42 }, { id: '42' }]),
       })
     );
   });
@@ -634,26 +636,22 @@ describe('unexpected-error (500) branches', () => {
   });
 });
 
-// ── #899: the factory's generated identifier must satisfy the entity's own model ──
-// The suite above covers the factory "via /api/measurement-units", and
-// MeasurementUnit is the ONE mounted model with no type check on its idField --
-// it only checks presence. So every branch of the factory was exercised against
-// the one entity that cannot observe what type the generated id has.
-//
-// Four of the fourteen mounts hard-require a NUMBER (SampleType.js:13,
-// SampleOrigin.js:13, ExtractionProtocol.js:13, QualityDescription.js:15).
-// master-data.routes.js:81 injects the generated id into the payload BEFORE
-// model.validate runs, so the generated type is the model's problem.
-describe('POST master-data: generated identifier satisfies the entity model (#899)', () => {
-  const NUMBER_TYPED_MOUNTS = [
-    { route: '/api/sample-types', collection: 'sampleTypes', idField: 'sampleTypeID' },
-    { route: '/api/sample-origins', collection: 'sampleOrigins', idField: 'originID' },
-    { route: '/api/extraction-protocols', collection: 'extractionProtocols', idField: 'protocolID' },
-    { route: '/api/quality-descriptions', collection: 'qualityDescriptions', idField: 'qualityID' },
+// ── #881: idField for these four mounts is now 'id', matching the string
+// MIABIS business key the seed writes (settled by #902). The numeric
+// idField and the #899 number-typed validate() branch these tests used to
+// exercise are retired along with it, so the mounts no longer require a
+// generateId override -- the factory's randomUUID() default satisfies the
+// (now type-agnostic) models directly.
+describe('POST master-data: generated identifier satisfies the entity model (#881 retirement of #899)', () => {
+  const STRING_ID_MOUNTS = [
+    { route: '/api/sample-types', collection: 'sampleTypes' },
+    { route: '/api/sample-origins', collection: 'sampleOrigins' },
+    { route: '/api/extraction-protocols', collection: 'extractionProtocols' },
+    { route: '/api/quality-descriptions', collection: 'qualityDescriptions' },
   ];
 
-  for (const { route, collection, idField } of NUMBER_TYPED_MOUNTS) {
-    it(`${route} accepts a POST that omits ${idField}`, async () => {
+  for (const { route, collection } of STRING_ID_MOUNTS) {
+    it(`${route} accepts a POST that omits id`, async () => {
       const coll = createCollectionMock({
         insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }),
       });
@@ -664,12 +662,34 @@ describe('POST master-data: generated identifier satisfies the entity model (#89
         .set('Authorization', `Bearer ${makeToken(4)}`)
         .send({ description: 'Reproduction payload' });
 
-      // Exact, not a tolerant set: the whole defect is that this answers 422
-      // "<idField> deve ser um número" because the factory generates a uuid
-      // string. A [200,201,422] assertion cannot see it -- that is precisely
-      // why the existing 'creates item for admin' test stayed green.
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
+    });
+  }
+
+  // #881 defect 1: master-data.routes.js:124's payload injects [idField]:
+  // req.body?.[idField] ?? generateId() into the payload BEFORE
+  // model.validate/create run, but model.create() previously returned a
+  // fixed field list that did not include `id` -- so a client-supplied
+  // `id` was thrown away before insertOne, and the stored document had no
+  // `id` at all. Now that create() returns `id`, a POST-supplied id must
+  // reach the driver's insertOne call unchanged.
+  for (const { route, collection } of STRING_ID_MOUNTS) {
+    it(`${route} POST with an explicit id: that id reaches insertOne unchanged`, async () => {
+      const coll = createCollectionMock({
+        insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }),
+      });
+      app.locals.db = createDbMock({ [collection]: coll, ...rbacCollectionsAdmin });
+
+      const res = await request(app)
+        .post(route)
+        .set('Authorization', `Bearer ${makeToken(4)}`)
+        .send({ id: 'PLASMA', description: 'Plasma' });
+
+      expect(res.status).toBe(201);
+      expect(coll.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'PLASMA' })
+      );
     });
   }
 });

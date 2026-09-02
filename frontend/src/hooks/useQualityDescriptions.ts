@@ -55,7 +55,7 @@ export function useQualityDescriptions() {
     }
   };
 
-  const updateQuality = async (id: number, data: Partial<SampleWithQualityDescription>) => {
+  const updateQuality = async (id: string, data: Partial<SampleWithQualityDescription>) => {
     try {
       const response = await qualityDescriptionService.update(id, data);
       await loadQualities();
@@ -65,7 +65,7 @@ export function useQualityDescriptions() {
     }
   };
 
-  const deleteQuality = async (id: number) => {
+  const deleteQuality = async (id: string) => {
     try {
       await qualityDescriptionService.delete(id);
       await loadQualities();

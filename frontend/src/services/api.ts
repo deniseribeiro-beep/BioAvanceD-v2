@@ -640,18 +640,22 @@ export const measurementUnitService = {
 };
 
 // ========== QUALITY DESCRIPTION SERVICES ==========
+// #881: idField is now the string MIABIS `id` (settled by #902), not the
+// numeric qualityID this mount used to require.
 export const qualityDescriptionService = {
   getAll: () => api.get<ApiEnvelope<SampleWithQualityDescription[]>>('/quality-descriptions'),
-  getById: (id: number) => api.get<SampleWithQualityDescription>(`/quality-descriptions/${id}`),
+  getById: (id: string) => api.get<SampleWithQualityDescription>(`/quality-descriptions/${id}`),
   create: (data: Partial<SampleWithQualityDescription>) => api.post<SampleWithQualityDescription>('/quality-descriptions', data),
-  update: (id: number, data: Partial<SampleWithQualityDescription>) => api.put<SampleWithQualityDescription>(`/quality-descriptions/${id}`, data),
-  delete: (id: number) => api.delete(`/quality-descriptions/${id}`),
+  update: (id: string, data: Partial<SampleWithQualityDescription>) => api.put<SampleWithQualityDescription>(`/quality-descriptions/${id}`, data),
+  delete: (id: string) => api.delete(`/quality-descriptions/${id}`),
 };
 
 // ========== SAMPLE TYPE SERVICES ==========
+// #881: idField is now the string MIABIS `id` (settled by #902), not the
+// numeric sampleTypeID this mount used to require.
 export const sampleTypeService = {
   getAll: () => api.get<ApiEnvelope<any[]>>('/sample-types'),
-  getById: (id: number) => api.get<any>(`/sample-types/${id}`),
+  getById: (id: string) => api.get<any>(`/sample-types/${id}`),
   create: (data: Partial<any>) => api.post<any>('/sample-types', data),
 };
 
@@ -662,16 +666,20 @@ export const analysisTypeService = {
 };
 
 // ========== SAMPLE ORIGIN SERVICES ==========
+// #881: idField is now the string MIABIS `id` (settled by #902), not the
+// numeric originID this mount used to require.
 export const sampleOriginService = {
   getAll: () => api.get<ApiEnvelope<any[]>>('/sample-origins'),
-  getById: (id: number) => api.get<any>(`/sample-origins/${id}`),
+  getById: (id: string) => api.get<any>(`/sample-origins/${id}`),
   create: (data: Partial<any>) => api.post<any>('/sample-origins', data),
 };
 
 // ========== EXTRACTION PROTOCOL SERVICES ==========
+// #881: idField is now the string MIABIS `id` (settled by #902), not the
+// numeric protocolID this mount used to require.
 export const extractionProtocolService = {
   getAll: () => api.get<ApiEnvelope<any[]>>('/extraction-protocols'),
-  getById: (id: number) => api.get<any>(`/extraction-protocols/${id}`),
+  getById: (id: string) => api.get<any>(`/extraction-protocols/${id}`),
   create: (data: Partial<any>) => api.post<any>('/extraction-protocols', data),
 };
 
