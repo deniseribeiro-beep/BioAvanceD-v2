@@ -20,6 +20,16 @@ RUN apk add --no-cache openssl mongodb-tools
 RUN addgroup -S app && adduser -S app -G app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# #947: the residual ~400K the shared .dockerignore has to keep in the context
+# because Dockerfile.dev's image genuinely needs it -- tests/architecture and
+# tests/compliance feed backend-unit-runner's current-state:ci. Nothing in
+# production reads any of it: the entrypoints are "node server.js" (below),
+# "node ./src/workers/worker.js" and "node src/workers/neo4jProjection.worker.js"
+# (compose.prod.yml). Docker layers are additive, so this is a whiteout rather
+# than a deletion -- the bytes stay in the layer stack. Acceptable here (no
+# privacy dimension), and exactly why the storage/.env half of #947 was fixed in
+# .dockerignore instead of with an rm.
+RUN rm -rf tests vitest.config.js
 RUN chown -R app:app /app
 # #893: pre-create the writable data roots and give them to the app user
 # BEFORE the volumes mount over them. Docker copies the image path's ownership
