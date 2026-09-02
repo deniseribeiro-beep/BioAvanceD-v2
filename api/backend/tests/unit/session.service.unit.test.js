@@ -383,6 +383,31 @@ describe('SessionService.invalidateUserSessions', () => {
       expect.objectContaining({ $set: expect.objectContaining({ isActive: false }) })
     );
   });
+
+  // #963: this was the ONLY one of the five session-write helpers that did
+  // not coerce its argument -- listUserSessions:340, revokeSessionById:366
+  // and revokeAllOtherSessions:391 all filter on String(userID). The stored
+  // field is always a string (Session.js:8 does String(data.userID), fed
+  // from auth.service.js's user._id.toString()), so being handed an ObjectId
+  // matched nothing, threw nothing, and let the caller return 200 -- a
+  // silent no-op, and exactly the shape a caller passing targetUser._id
+  // rather than targetUser._id.toString() would produce.
+  it('#963: coerces a non-string userID, so an ObjectId-like id is not a silent no-op', async () => {
+    const objectIdLike = { toString: () => 'u1' };
+    sessionService.sessions.set('s1', { sessionID: 's1', userID: 'u1' });
+    const collection = makeCollection();
+    const db = makeDb(collection);
+
+    await sessionService.invalidateUserSessions(db, objectIdLike);
+
+    expect(collection.updateMany).toHaveBeenCalledWith(
+      { userID: 'u1', isActive: true },
+      expect.objectContaining({ $set: expect.objectContaining({ isActive: false }) })
+    );
+    // The in-memory cache used a strict === against the raw argument, so it
+    // missed for the same reason the filter did.
+    expect(sessionService.sessions.has('s1')).toBe(false);
+  });
 });
 
 describe('SessionService.cleanupExpiredSessions', () => {

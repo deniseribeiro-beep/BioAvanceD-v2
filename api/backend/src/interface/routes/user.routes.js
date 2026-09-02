@@ -883,6 +883,20 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
       }
     );
 
+    // #963 (RF003 AC#5, "Revogar sessões"): o reset acima só afeta logins
+    // FUTUROS. Nada no caminho da requisição relê mfaEnabled -- o JWT ainda
+    // carrega mfaVerified:true, e a única releitura do banco em
+    // middleware/auth.js lê roleValidUntil e mais nada -- então sem isto a
+    // sessão que o reset pretendia matar sobrevive, renovável indefinidamente
+    // via rotateSessionTokens. Um admin reseta MFA justamente porque acredita
+    // que o segundo fator foi comprometido.
+    //
+    // targetUser._id.toString(), não req.params.id: buildUserFilterById
+    // aceita _id/id/userID em forma string E numérica, então o parâmetro da
+    // rota não é necessariamente igual ao userID gravado na sessão.
+    const sessionService = require('../../services/session.service');
+    await sessionService.invalidateUserSessions(db, targetUser._id.toString());
+
     return res.status(200).json({
       success: true,
       message: req.t('users.resetMFASuccess')

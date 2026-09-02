@@ -116,6 +116,7 @@ describe('Users and Access routes', () => {
   let accessCollection;
   let logsCollection;
   let organizationsCollection;
+  let sessionsCollection;
   let db;
 
   beforeEach(() => {
@@ -156,12 +157,28 @@ describe('Users and Access routes', () => {
       { userAccountId: '507f1f77bcf86cd799439012', accessType: 2 },
     ]);
 
+    // #963: named and memoized, deliberately. The fallback below returns a
+    // FRESH object per db.collection() call and has no updateMany, so a
+    // session revoke would (a) throw a TypeError that
+    // invalidateUserSessions' inner catch swallows into a logger.warn, and
+    // (b) leave nothing for a test to assert against even once updateMany
+    // existed. Both halves have to be fixed for a revoke to be provable here.
+    sessionsCollection = {
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+      findOne: vi.fn(),
+      insertOne: vi.fn(),
+      updateOne: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+      deleteOne: vi.fn(),
+    };
+
     db = {
       collection: vi.fn((name) => {
         if (name === 'users') return usersCollection;
         if (name === 'access') return accessCollection;
         if (name === 'logs') return logsCollection;
         if (name === 'organizations') return organizationsCollection;
+        if (name === 'sessions') return sessionsCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return {
           find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
@@ -298,6 +315,42 @@ describe('Users and Access routes', () => {
 
     expect(res.statusCode).toBe(200);
     expect(usersCollection.updateOne).toHaveBeenCalled();
+  });
+
+  // #963 (RF003 AC#5, "Revogar sessões"): an admin resets MFA precisely
+  // because they believe the second factor is compromised. Nothing on the
+  // request path re-reads mfaEnabled -- the JWT still carries
+  // mfaVerified:true and middleware/auth.js's only live-DB re-check reads
+  // roleValidUntil and nothing else -- so without this the session the reset
+  // was meant to kill survives, renewable indefinitely.
+  it('POST /api/users/:id/reset-mfa revoga as sessões do alvo (#963)', async () => {
+    const handler = getHandler(userRoutes, 'post', '/:id/reset-mfa');
+    usersCollection.findOne.mockResolvedValueOnce({
+      _id: 'user-target-1',
+      accessType: 2,
+      roleName: 'Técnico',
+      mfaEnabled: true,
+    });
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const req = createRequest({ params: { id: 'user-target-1' } });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    // Assert the FILTER's id value, not merely that updateMany ran. The
+    // sessions collection keys its owner as a string (`Session.js` coerces
+    // with String(data.userID), fed from auth.service.js's
+    // user._id.toString()), so revoking with a non-string id matches
+    // nothing, throws nothing and still returns 200 -- a silent no-op.
+    expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
+      { userID: 'user-target-1', isActive: true },
+      expect.objectContaining({
+        $set: expect.objectContaining({ isActive: false, isRevoked: true }),
+      })
+    );
   });
 
   // RF014 AC#4 (#648): admin-initiated -- flags the target user's account so

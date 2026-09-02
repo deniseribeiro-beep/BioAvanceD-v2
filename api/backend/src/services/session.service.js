@@ -268,9 +268,17 @@ class SessionService {
    */
   async invalidateUserSessions(db, userID) {
     try {
+      // #963: coage como os irmãos (listUserSessions, revokeSessionById,
+      // revokeAllOtherSessions) já fazem. O campo gravado é sempre string
+      // -- Session.js faz String(data.userID), alimentado pelo
+      // user._id.toString() de auth.service.js -- então receber um ObjectId
+      // aqui não casava nada, não lançava nada, e deixava o chamador
+      // devolver 200 sobre uma revogação que não aconteceu.
+      const ownerID = String(userID);
+
       // Remove do cache
       for (const [sessionID, session] of this.sessions.entries()) {
-        if (session.userID === userID) {
+        if (String(session.userID) === ownerID) {
           this.sessions.delete(sessionID);
         }
       }
@@ -279,7 +287,7 @@ class SessionService {
       try {
         const sessionsCollection = db.collection('sessions');
         await sessionsCollection.updateMany(
-          { userID, isActive: true },
+          { userID: ownerID, isActive: true },
           { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), updatedAt: new Date() } }
         );
       } catch (dbError) {
