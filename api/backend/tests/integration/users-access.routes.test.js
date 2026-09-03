@@ -1274,4 +1274,159 @@ describe('Users and Access routes', () => {
       expect(usersCollection.updateOne).toHaveBeenCalled();
     });
   });
+
+  // #1009: the promotion guard compared `requestedAccessType` against
+  // `targetUser.accessType` -- a field #427/#432 dropped from the User
+  // document. It is `undefined` on every real user, so the comparison
+  // degenerated to Boolean(requestedAccessType) and fired changeUserRole (a
+  // revoke + re-grant pair, attributed to the editing admin) on every edit
+  // that merely carried roleName back unchanged -- which NewUserPage does on
+  // every save, since it seeds its form with {...editingUser}.
+  //
+  // The target fixture below deliberately OMITS `accessType`, unlike every
+  // other block in this file. Supplying it is precisely what made the
+  // existing tests unable to see this: the mock hands the route the field
+  // whose absence IS the bug (same shape as #994's getMongo).
+  describe('#1009: changeUserRole fires only on a real level change', () => {
+    const CALLER_ID = '507f1f77bcf86cd799439011';
+
+    function seedTargetWithoutAccessType(id) {
+      // Lifted from #998's seedTarget so a thin document cannot fail
+      // UserModel.validate and answer 422 before reaching the role logic --
+      // minus the one field under test.
+      const targetUser = {
+        _id: id,
+        name: 'Alvo 1009',
+        email: 'alvo-1009@bioavanced.com.br',
+        username: 'alvo1009',
+        status: 'active',
+        roleName: 'Técnico',
+      };
+      usersCollection.findOne
+        .mockResolvedValueOnce(targetUser)
+        .mockResolvedValueOnce(targetUser);
+      usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+      return targetUser;
+    }
+
+    function assignmentsFor(targetId) {
+      return [
+        { assignmentId: 'assign-caller-1009', userAccountId: CALLER_ID, roleId: 'role-administrator', assignmentStatus: 'active', validUntil: null },
+        { assignmentId: 'assign-target-1009', userAccountId: targetId, roleId: 'role-technician', assignmentStatus: 'active', validUntil: null },
+      ];
+    }
+
+    function dbWithAssignments(assignmentDocs) {
+      const rbacCollections = buildRbacCollections([]);
+      const assignmentsMock = queryableAssignmentsMock(assignmentDocs);
+      return {
+        collection: vi.fn((name) => {
+          if (name === 'users') return usersCollection;
+          if (name === 'roles') return rbacCollections.roles;
+          if (name === 'permissions') return rbacCollections.permissions;
+          if (name === 'userRoleAssignments') return assignmentsMock;
+          return db.collection(name);
+        }),
+      };
+    }
+
+    it('#1009: an edit that carries the SAME roleName back does not revoke or re-grant the assignment', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      seedTargetWithoutAccessType('user-target-1009a');
+      const assignmentDocs = assignmentsFor('user-target-1009a');
+
+      const req = createRequest({
+        params: { id: 'user-target-1009a' },
+        body: { name: 'Renomeado', roleName: 'Técnico' },
+      });
+      req.app.locals.db = dbWithAssignments(assignmentDocs);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+      // No spurious revoke + grant pair: the same assignment, untouched.
+      expect(assignmentDocs).toHaveLength(2);
+      const targetAssignment = assignmentDocs.find((d) => d.userAccountId === 'user-target-1009a');
+      expect(targetAssignment.assignmentId).toBe('assign-target-1009');
+      expect(targetAssignment.assignmentStatus).toBe('active');
+      expect(targetAssignment.revokedBy).toBeUndefined();
+      expect(targetAssignment.revocationReason).toBeUndefined();
+      // NOTE: the natural extra assertion here -- that a plain rename routes
+      // to logUpdate rather than logPermissionChange -- cannot be written in
+      // this file. `auditLoggerMock` is never installed: the route requires
+      // auditLogger lazily inside the handler, and vi.mock does not intercept
+      // that here. A deliberately bogus mock path behaves identically, so the
+      // miss is silent. Filed separately.
+    });
+
+    it('#1009: an org-only edit on a target holding a role still re-scopes without revoking', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      const targetUser = {
+        _id: 'user-target-1009d',
+        name: 'Alvo 1009 Org',
+        email: 'alvo-1009d@bioavanced.com.br',
+        username: 'alvo1009d',
+        status: 'active',
+        organizationId: 'org-old',
+      };
+      usersCollection.findOne
+        .mockResolvedValueOnce(targetUser)
+        .mockResolvedValueOnce({ ...targetUser, organizationId: 'org-new' });
+      usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+      const assignmentDocs = assignmentsFor('user-target-1009d');
+      assignmentDocs[1].scopeType = 'organization';
+      assignmentDocs[1].scopeId = 'org-old';
+
+      const req = createRequest({
+        params: { id: 'user-target-1009d' },
+        body: { organizationId: 'org-new', roleName: 'Técnico' },
+      });
+      req.app.locals.db = dbWithAssignments(assignmentDocs);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+      // The issue body called this the trap: it feared tightening the guard
+      // would stop org re-scoping. It does not -- updateAssignmentScope runs
+      // unconditionally on any real organizationId change and never consulted
+      // the guard. Before the fix this case ALSO fired changeUserRole, so the
+      // scope landed on a brand-new assignment instead of the existing one.
+      expect(assignmentDocs).toHaveLength(2);
+      const targetAssignment = assignmentDocs.find((d) => d.userAccountId === 'user-target-1009d');
+      expect(targetAssignment.assignmentId).toBe('assign-target-1009');
+      expect(targetAssignment.assignmentStatus).toBe('active');
+      expect(targetAssignment.scopeId).toBe('org-new');
+    });
+
+    // Control: expected behaviour is IDENTICAL before and after the fix, so
+    // this must be green in the pre-fix run. A red one here would mean the
+    // fixture is wrong (a 422 from UserModel.validate, or a missing caller
+    // assignment tripping #998's floor) rather than the bug reproducing.
+    it('#1009 control: a real level change still revokes the old assignment and grants the new one', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      seedTargetWithoutAccessType('user-target-1009c');
+      const assignmentDocs = assignmentsFor('user-target-1009c');
+
+      const req = createRequest({
+        params: { id: 'user-target-1009c' },
+        body: { roleName: 'Coordenador' },
+      });
+      req.app.locals.db = dbWithAssignments(assignmentDocs);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+      const old = assignmentDocs.find((d) => d.assignmentId === 'assign-target-1009');
+      expect(old.assignmentStatus).toBe('revoked');
+      expect(old.revocationReason).toBe('role_changed');
+      const granted = assignmentDocs.filter(
+        (d) => d.userAccountId === 'user-target-1009c' && d.assignmentStatus === 'active'
+      );
+      expect(granted).toHaveLength(1);
+      expect(granted[0].roleId).toBe('role-coordinator');
+    });
+  });
 });

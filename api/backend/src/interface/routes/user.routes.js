@@ -386,9 +386,13 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // ordinary edits -- NewUserPage seeds its form with {...editingUser} and
     // carries roleName back on every save, including a plain rename.
     // Only an actual level CHANGE is gated.
+    // #1009: hoisted out of the block below. The promotion condition further
+    // down must compare against the SAME resolved level this floor uses --
+    // the two comparisons in this handler disagreed until now.
+    let targetLevel = null;
     if (requestedAccessType) {
       const { resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
-      const targetLevel = await resolveUserHierarchyLevel(db, targetUser._id.toString());
+      targetLevel = await resolveUserHierarchyLevel(db, targetUser._id.toString());
       const isRoleChange = Number(requestedAccessType) !== Number(targetLevel);
       if (isRoleChange) {
         const callerLevel = await resolveUserHierarchyLevel(db, req.user?.userID);
@@ -538,8 +542,23 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
 
     // Detecta mudanças críticas
     const changes = {};
-    if (requestedAccessType && requestedAccessType !== targetUser.accessType) {
-      changes.accessType = { from: targetUser.accessType, to: requestedAccessType };
+    // #1009: compared against the RESOLVED level, not targetUser.accessType.
+    // That field was dropped from the User document by #427/#432, so it is
+    // `undefined` on every real user and this condition degenerated to
+    // Boolean(requestedAccessType) -- firing changeUserRole, i.e. a revoke +
+    // re-grant pair attributed to the editing admin, on every edit that
+    // merely carried roleName back unchanged. NewUserPage does exactly that
+    // on every save (it seeds its form with {...editingUser}), so a plain
+    // rename wrote a spurious permission-change audit row reading
+    // `from: undefined`.
+    //
+    // targetLevel === null (a user with no active assignment) still counts as
+    // a change -- Number(null) is 0 and no valid level is 0 -- so the
+    // incidental repair of a missing assignment on the next edit survives.
+    // Org-only re-scoping is unaffected: it runs through
+    // updateAssignmentScope below, which never consulted this guard.
+    if (requestedAccessType && Number(requestedAccessType) !== Number(targetLevel)) {
+      changes.accessType = { from: targetLevel ?? null, to: Number(requestedAccessType) };
 
       // #421: enforcement reads UserRoleAssignment exclusively — a
       // changed accessType must revoke the old assignment and grant the
