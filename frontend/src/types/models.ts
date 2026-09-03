@@ -893,11 +893,18 @@ export interface ImportMetrics {
   totalRecords: number;
   successfulRecords: number;
   failedRecords: number;
-  // #925: both were declared required and neither is ever produced.
-  // skippedRecords is written by nothing and read by nothing; duplicatesFound
-  // was read by the report modal against a `?? 0` default that made "nobody
-  // counted" indistinguishable from "none found". Optional now, so a consumer
-  // has to decide what an absent value means instead of being handed a zero.
+  // #925: both were declared required and neither was produced at the time.
+  // duplicatesFound was read by the report modal against a `?? 0` default
+  // that made "nobody counted" indistinguishable from "none found". Optional
+  // now, so a consumer has to decide what an absent value means instead of
+  // being handed a zero.
+  //
+  // #991: skippedRecords is now written end to end -- import-worker.js puts
+  // it in the job-completion payload and import-async.service.js carries it
+  // into this metrics object -- and ResultsPage.tsx renders it (gated on
+  // `!== undefined`, same idiom as duplicatesFound). Still optional: pre-#991
+  // jobs never had it written, and an absent value must stay absent rather
+  // than render as a false zero.
   skippedRecords?: number;
   /**
    * #931: a labelled SUBSET of `failedRecords`, not a sibling of it. Every

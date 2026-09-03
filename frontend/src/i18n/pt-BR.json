@@ -1008,6 +1008,7 @@
       "duplicates": "Duplicados (dos quais)",
       "failures": "Falhas",
       "processingTime": "Tempo de Processamento",
+      "skipped": "Ignorados",
       "success": "Sucesso",
       "successLabel": "Sucesso",
       "total": "Total",

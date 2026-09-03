@@ -390,6 +390,20 @@ export default function ResultsPage() {
                       <span className="metric-value">{selectedJob.metrics.duplicatesFound}</span>
                     </div>
                   )}
+                  {/* #991: skippedRecords is written by import-worker.js and
+                      carried through import-async.service.js's report metrics,
+                      but nothing rendered it until now. Gated the same way as
+                      duplicatesFound above: older jobs never had this field
+                      written, and an absent count must stay absent rather than
+                      being shown as a false zero. */}
+                  {selectedJob.metrics.skippedRecords !== undefined && (
+                    <div className="metric-item">
+                      <label className="metric-label">
+                        {t('results.metrics.skipped', 'Ignorados')}
+                      </label>
+                      <span className="metric-value">{selectedJob.metrics.skippedRecords}</span>
+                    </div>
+                  )}
                   {selectedJob.metrics.processingTime && (
                     <div className="metric-item">
                       <label className="metric-label">{t('results.metrics.processingTime', 'Tempo de Processamento')}</label>
