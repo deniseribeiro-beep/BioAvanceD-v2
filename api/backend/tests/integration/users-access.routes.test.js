@@ -840,6 +840,115 @@ describe('Users and Access routes', () => {
     expect(Object.keys(setPayload).sort()).toEqual(['name', 'updatedAt']);
   });
 
+  // #982 (RF003 AC#5, "Revogar sessões"): PUT /api/users/:id hashes and $sets
+  // an inbound password, and until now revoked nothing. #958 fixed the four
+  // paths where the account OWNER changes their own password; this fifth one
+  // is an admin write and was outside its frame -- so an admin could replace a
+  // user's password while every session that user already held stayed live,
+  // authenticated with a password that no longer exists.
+  it('#982: PUT /api/users/:id com senha nova revoga as sessões do alvo', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-9',
+      name: 'Alvo Senha',
+      email: 'alvo-senha@bioavanced.com.br',
+      username: 'alvosenha',
+      status: 'active',
+      accessType: 2,
+      roleName: 'Técnico',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce(targetUser);
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-9', accessType: 2 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-9' },
+      body: { password: 'NovaSenh@2026' },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    // The password really was written -- otherwise a revoke assertion could
+    // pass on a request that changed nothing.
+    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect(setPayload.password).toEqual(expect.any(String));
+    expect(setPayload.password).not.toBe('NovaSenh@2026');
+    // Same filter-value discipline as the reset-mfa revoke above: sessions key
+    // their owner as a string, so revoking with a non-string id matches
+    // nothing, throws nothing and still returns 200.
+    expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
+      { userID: 'user-target-9', isActive: true },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          isActive: false,
+          isRevoked: true,
+          revocationReason: 'admin_action',
+          revokedBy: '507f1f77bcf86cd799439011',
+        }),
+      })
+    );
+  });
+
+  // #982: the mirror -- an update that carries no password must NOT revoke.
+  // Without this, "revoke on every PUT" would pass the test above while
+  // logging users out of every unrelated profile edit.
+  it('#982: PUT /api/users/:id sem senha não revoga sessão alguma', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-10',
+      name: 'Alvo Sem Senha',
+      email: 'alvo-sem-senha@bioavanced.com.br',
+      username: 'alvosemsenha',
+      status: 'active',
+      accessType: 2,
+      roleName: 'Técnico',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce({ ...targetUser, name: 'Renomeado' });
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-10', accessType: 2 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-10' },
+      body: { name: 'Renomeado' },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(sessionsCollection.updateMany).not.toHaveBeenCalled();
+  });
+
   it('GET /api/access deve listar acessos', async () => {
     const handler = getHandler(accessRoutes, 'get', '/');
     accessCollection.find.mockReturnValue({

@@ -318,6 +318,10 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     }
 
     // Remove senha se não for fornecida
+    // #982: capturado ANTES do delete abaixo -- depois dele não há como
+    // distinguir "senha não enviada" de "senha enviada", e é essa distinção
+    // que decide a revogação de sessões após o updateOne.
+    const passwordWasSet = Boolean(req.body.password);
     if (!req.body.password) {
       delete req.body.password;
     } else {
@@ -431,6 +435,22 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       });
     }
     
+    // #982 (RF003 AC#5, "Revogar sessões"): trocar a senha de um usuário por
+    // esta rota é uma escrita ADMINISTRATIVA -- #958 cobriu os quatro caminhos
+    // em que o próprio dono troca a senha, e este quinto ficou de fora. Sem
+    // isto, toda sessão que o alvo já tinha continua viva, autenticada por uma
+    // senha que não existe mais: middleware/auth.js só relê roleValidUntil, e
+    // rotateSessionTokens renova indefinidamente.
+    //
+    // targetUser._id.toString(), não req.params.id: buildUserFilterById aceita
+    // _id/id/userID em forma string E numérica, então o parâmetro da rota não é
+    // necessariamente igual ao userID gravado na sessão. Mesmo motivo do
+    // reset-mfa abaixo.
+    if (passwordWasSet) {
+      const sessionService = require('../../services/session.service');
+      await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID);
+    }
+
     // #615: organizationId used for RBAC scoping below — already normalized
     // above (lines 280-287). Falls back to the user's current org when not
     // provided on this request, so accessType/auditorRole changes below keep
