@@ -1,32 +1,55 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import bcrypt from 'bcryptjs';
+import { createRequire } from 'node:module';
 
-const serviceMocks = vi.hoisted(() => ({
-  getSecurityStatus: vi.fn().mockResolvedValue({ securityScore: 90, overallLevel: 'strong', alternativeMethodsCount: 1 }),
-  getMFAStatus: vi.fn().mockResolvedValue({ primaryEnabled: true, recoveryCodes: { remaining: 5 } }),
-  getPasswordStatus: vi.fn().mockResolvedValue({ strength: 'strong', strengthScore: 4 }),
-  getSessions: vi.fn().mockResolvedValue([
-    { id: 'session-1', deviceName: 'Desktop', browser: 'Chrome', os: 'Windows', lastAccess: new Date().toISOString(), isCurrent: true },
-  ]),
-  getActivities: vi.fn().mockResolvedValue([]),
-  updatePassword: vi.fn().mockResolvedValue(undefined),
-  generateRecoveryCodes: vi.fn().mockResolvedValue(['CODE-1', 'CODE-2']),
-  revokeSession: vi.fn().mockResolvedValue(undefined),
-  revokeAllSessions: vi.fn().mockResolvedValue(undefined),
-  requestPasswordReset: vi.fn().mockResolvedValue(undefined),
-}));
+const require2 = createRequire(import.meta.url);
 
-const auditLoggerMock = vi.hoisted(() => ({
-  init: vi.fn(),
-  log: vi.fn().mockResolvedValue(undefined),
-  extractRequestInfo: vi.fn(() => ({ ipAddress: '127.0.0.1', userAgent: 'test' })),
-}));
+// #1025 (split from #1017, identical root cause one file over): this file used
+// to declare vi.hoisted mocks for user-security.service and auditLogger and
+// register them with vi.mock at '../../../src/...'. That depth is one level too
+// far -- this file sits at api/backend/tests/integration, so '../../../src' is
+// `api/src`, which does not exist. Vite resolved both specifiers to null and
+// vitest neither errored nor warned, so BOTH mocks were inert and the real
+// modules ran. The `await import` of the controller survived only because
+// vitest retries a failed dynamic import as a root-relative URL -- a retry it
+// does NOT extend to vi.mock.
+//
+// The tell was measurable, not inferred: the suite printed four
+// AUDIT_TRAIL_WRITE_FAILURE blocks per run, which is the REAL auditLogger
+// writing against the mocked db. It prints none now.
+//
+// Second tell, and proof the service mock was inert too: the recovery-codes
+// test below asserts `toHaveLength(10)` while the deleted mock's
+// generateRecoveryCodes returned TWO codes. That assertion was written against
+// the real service and has been passing against it all along.
+//
+// Even at the correct depth vi.mock would not have been enough for auditLogger:
+// this controller requires it at module scope (:3) AND lazily inside a handler
+// (:119), and vitest's mock registry is not consulted by the require a handler
+// actually executes. Spying on the CJS module object covers both -- the
+// module-scope binding and the lazy require resolve to the same cached
+// module.exports, so mutating it is observed at call time either way. That is
+// the pattern auth.routes.test.js and users-access.routes.test.js already use.
+const auditLogger = require2('../../src/utils/auditLogger');
 
-vi.mock('../../../src/services/user-security.service', () => serviceMocks);
-vi.mock('../../../src/utils/auditLogger', () => auditLoggerMock);
+// Required, not imported, so the controller and the spy target share one module
+// instance. Mixing `await import` (vitest's module runner) with createRequire
+// (native CJS cache) yields two auditLogger objects and the spies miss
+// silently -- which is the failure this change exists to end.
+const userSecurityController = require2('../../src/controllers/user-security.controller');
 
-const userSecurityControllerModule = await import('../../../src/controllers/user-security.controller');
-const userSecurityController = userSecurityControllerModule.default || userSecurityControllerModule;
+// The service is deliberately NOT stubbed. The real one has been running behind
+// the inert mock since this file was written, so installing the mock now would
+// CHANGE what this suite tests rather than restore it -- the assertions below
+// are pinned to real-service output (see the recovery-codes note above).
+// auditLogger's writes are stubbed because the real ones are what emit the
+// AUDIT_TRAIL_WRITE_FAILURE noise against a mocked db.
+const auditSpies = {
+  init: vi.spyOn(auditLogger, 'init').mockImplementation(() => {}),
+  log: vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined),
+  extractRequestInfo: vi.spyOn(auditLogger, 'extractRequestInfo')
+    .mockReturnValue({ ipAddress: '127.0.0.1', userAgent: 'test' }),
+};
 
 function createResponse() {
   const response = {
@@ -278,5 +301,39 @@ describe('User security routes', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.payload.success).toBe(false);
+  });
+  afterEach(() => {
+    for (const spy of Object.values(auditSpies)) spy.mockClear();
+  });
+
+  // #1025: the assertion the corrected wiring makes possible, and the reason
+  // this file's mock repair is worth more than silence. Under the old inert
+  // vi.mock nothing could observe an audit write at all -- the real auditLogger
+  // ran and failed against the mocked db, emitting AUDIT_TRAIL_WRITE_FAILURE to
+  // stderr, which no assertion reads. RF014/RNF-audit make the password-change
+  // row a compliance artefact, so it is worth pinning that it is written and
+  // written as critical.
+  it('#1025: a successful password change writes a critical audit row through the spied auditLogger', async () => {
+    const req = createRequest({ body: { currentPassword: 'Senha@123', newPassword: 'NovaSenha@123' } });
+    req.app.locals.db = db;
+    usersCollection.findOne.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439011',
+      password: hashedPassword,
+    });
+    const res = createResponse();
+
+    await userSecurityController.updatePassword(req, res);
+
+    expect(res.statusCode).toBe(200);
+    // init() proves the spy target is the same module object the controller's
+    // module-scope require bound -- the identity this file previously got wrong.
+    expect(auditSpies.init).toHaveBeenCalledWith(db);
+    expect(auditSpies.log).toHaveBeenCalledTimes(1);
+    expect(auditSpies.log.mock.calls[0][0]).toMatchObject({
+      action: 'UPDATE',
+      resourceType: 'Password',
+      status: 'success',
+      severity: 'critical',
+    });
   });
 });
