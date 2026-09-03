@@ -429,13 +429,35 @@ class UserSecurityService {
       if (!user) {
         throw new Error('Usuário não encontrado');
       }
-      
+
+      // #995 (RF001 AC#2): the FIFTH site verifying a user-supplied password
+      // with its own bcrypt.compare. This one is a second, independent
+      // change-password implementation -- PUT /api/user-security/password,
+      // reached from UserSecurityPage -- and unlike auth.controller's it did not
+      // even zero failedLoginAttempts, so it neither counted up nor cleared.
+      //
+      // Required lazily, matching this file's own style for cross-service
+      // requires (sessionService below does the same); auth.service pulls in
+      // speakeasy/QRCode/jwt and there is no reason to load them at module load.
+      const authService = require('./auth.service');
+
+      // The gate runs before the compare, for the same reason as at the other
+      // four sites -- after it, a lock denies only the eventual correct guess
+      // while every wrong one still burns a bcrypt round. This route is
+      // authenticated and takes its subject from the caller's own userID, so the
+      // message stays this route's own rather than the generic one the two
+      // unauthenticated sites must use.
+      if (authService.isAccountLocked(user)) {
+        throw new Error('Senha atual incorreta');
+      }
+
       // Valida senha atual
       const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
       if (!isCurrentPasswordValid) {
+        await authService.recordFailedPasswordAttempt(db, usersCollection, user);
         throw new Error('Senha atual incorreta');
       }
-      
+
       // Valida complexidade da senha
       const PasswordValidator = require('../utils/passwordValidator');
       PasswordValidator.validateOrThrow(newPassword);
@@ -463,6 +485,10 @@ class UserSecurityService {
             password: newPasswordHash,
             passwordHistory: newPasswordHistory,
             passwordChangedAt: new Date(),
+            // #995: a successful change clears the counter AND the lock, the
+            // same pairing processLogin's success path uses. This site cleared
+            // neither, so it could only ever count up.
+            ...authService.clearedLockoutFields(),
             updatedAt: new Date()
           }
         }

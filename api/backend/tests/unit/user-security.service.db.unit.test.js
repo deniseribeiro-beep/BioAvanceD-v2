@@ -256,6 +256,80 @@ describe('UserSecurityService DB-backed methods', () => {
       const [, update] = users.updateOne.mock.calls[0];
       expect(update.$set.passwordHistory).toEqual([currentHash]);
       expect(await bcrypt.compare('NewPassw0rd!123', update.$set.password)).toBe(true);
+      // #995: this route is the fifth site verifying a user-supplied password.
+      // It wrote neither lockout field, so it could only ever count up. A
+      // successful change clears the counter AND the lock, the same pairing
+      // processLogin's success path uses -- the gate reads accountLockedUntil
+      // and never the counter, so clearing one alone leaves the user locked.
+      expect(update.$set.failedLoginAttempts).toBe(0);
+      expect(update.$set.accountLockedUntil).toBeNull();
+    });
+
+    // #995 (RF001 AC#2): "bloquear temporariamente a conta apos o limite
+    // configurado de tentativas malsucedidas" -- the account, not one route.
+    it('counts an incorrect current password toward the account lockout', async () => {
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({
+          _id: USER_ID,
+          password: await bcrypt.hash('correct-pass', 10),
+          failedLoginAttempts: 1
+        })
+      });
+      const db = buildDb({ users });
+
+      await expect(
+        userSecurityService.updatePassword(db, USER_ID, 'wrong-pass', 'NewPassw0rd!123')
+      ).rejects.toThrow('Senha atual incorreta');
+
+      expect(users.updateOne).toHaveBeenCalledWith(
+        { _id: USER_ID },
+        expect.objectContaining({ $inc: { failedLoginAttempts: 1 } })
+      );
+    });
+
+    // #995: the gate runs BEFORE the compare, as it does at the other four
+    // sites -- after it, a lock denies only the eventual correct guess while
+    // every wrong one still burns a bcrypt round.
+    it('refuses a locked account without verifying the current password', async () => {
+      const lockedUntil = new Date(Date.now() + 10 * 60 * 1000);
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({
+          _id: USER_ID,
+          password: await bcrypt.hash('correct-pass', 10),
+          accountLockedUntil: lockedUntil
+        })
+      });
+      const db = buildDb({ users });
+      const compareSpy = vi.spyOn(bcrypt, 'compare');
+
+      await expect(
+        userSecurityService.updatePassword(db, USER_ID, 'correct-pass', 'NewPassw0rd!123')
+      ).rejects.toThrow('Senha atual incorreta');
+
+      expect(compareSpy).not.toHaveBeenCalled();
+      expect(users.updateOne).not.toHaveBeenCalled();
+      compareSpy.mockRestore();
+    });
+
+    // #995: the negative half of the gate. Without it the pair above cannot
+    // distinguish a working expiry comparison from an unconditional refusal.
+    it('allows the change when a previous lock has already expired', async () => {
+      const expired = new Date(Date.now() - 60 * 1000);
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({
+          _id: USER_ID,
+          password: await bcrypt.hash('correct-pass', 10),
+          passwordHistory: [],
+          accountLockedUntil: expired
+        })
+      });
+      const db = buildDb({ users });
+
+      await userSecurityService.updatePassword(db, USER_ID, 'correct-pass', 'NewPassw0rd!123');
+
+      expect(users.updateOne).toHaveBeenCalledTimes(1);
+      const [, update] = users.updateOne.mock.calls[0];
+      expect(update.$set.accountLockedUntil).toBeNull();
     });
 
     it('throws when user not found', async () => {

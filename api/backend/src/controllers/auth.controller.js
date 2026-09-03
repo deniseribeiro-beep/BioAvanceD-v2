@@ -343,8 +343,38 @@ class AuthController {
         });
       }
 
+      // #995 (RF001 AC#2): this route verifies a body-supplied password with its
+      // own bcrypt.compare and, until now, counted nothing and consulted nothing
+      // -- so 3029dc83's per-account lockout did not apply here. RF001 AC#2 says
+      // to lock "a conta"; it does not say "on the login route". Same three
+      // helpers 490077f4 gave the two first-login endpoints, so the five sites
+      // cannot drift.
+      //
+      // The gate runs BEFORE the compare, as it does at the other four sites:
+      // after it, a lock denies only the eventual correct guess while every
+      // wrong one still burns a bcrypt round.
+      //
+      // Unlike the other four this route is AUTHENTICATED and takes its subject
+      // from req.user.userID, never from the body -- so a caller can only reach
+      // their own account and there is no enumeration oracle to protect. The
+      // refusal therefore reuses this route's own 'Senha atual incorreta' rather
+      // than the generic 'Credenciais inválidas' the unauthenticated sites must
+      // use: telling the caller nothing they do not already know, while keeping
+      // a locked account's two outcomes indistinguishable from each other.
+      if (authService.isAccountLocked(user)) {
+        return res.status(400).json({
+          success: false,
+          error: (req.t && req.t('auth.invalidCurrentPassword')) || 'Senha atual incorreta'
+        });
+      }
+
       const oldMatches = await bcrypt.compare(oldPassword, user.password);
       if (!oldMatches) {
+        // #995: count it. Without this, a caller holding a hijacked session
+        // could guess the victim's current password here indefinitely -- useful
+        // for testing that password's reuse elsewhere -- without ever moving
+        // failedLoginAttempts.
+        await authService.recordFailedPasswordAttempt(db, usersCollection, user);
         return res.status(400).json({
           success: false,
           error: (req.t && req.t('auth.invalidCurrentPassword')) || 'Senha atual incorreta'
@@ -366,7 +396,14 @@ class AuthController {
             passwordHistory: updatedHistory,
             lastPasswordChange: new Date(),
             forceReset: false,
-            failedLoginAttempts: 0,
+            // #995: this was the literal `failedLoginAttempts: 0` alone. The
+            // lockout gate (auth.service.js) reads accountLockedUntil and never
+            // the counter, so zeroing one and leaving the other in the future
+            // accomplished nothing for a locked user -- and left the document
+            // internally inconsistent: zero recorded failures, an active lock.
+            // clearedLockoutFields() is the same helper processLogin's own
+            // success path uses, so the clearing has one definition.
+            ...authService.clearedLockoutFields(),
             updatedAt: new Date()
           }
         }

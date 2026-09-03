@@ -666,6 +666,81 @@ describe('AuthController.changePassword', () => {
     });
   });
 
+  // #995 (RF001 AC#2): this route runs its own bcrypt.compare against a
+  // body-supplied oldPassword. It is the fourth such call site; 490077f4 (#986)
+  // covered the other three with auth.service's shared helpers and this one was
+  // not reachable from them, because the helpers were module-private.
+  it('counts a wrong old password toward the account lockout', async () => {
+    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [], failedLoginAttempts: 1 };
+    const usersCollection = createUsersCollection(user);
+    const db = { collection: vi.fn().mockReturnValue(usersCollection) };
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+    const req = createReq({
+      app: { locals: { db } },
+      user: { userID: '507f1f77bcf86cd799439011' },
+      body: { oldPassword: 'wrong', newPassword: 'NewStr0ng!' },
+    });
+    const res = createRes();
+
+    await authController.changePassword(req, res);
+
+    expect(usersCollection.updateOne).toHaveBeenCalledWith(
+      { _id: 'u1' },
+      expect.objectContaining({ $inc: { failedLoginAttempts: 1 } })
+    );
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  // #995: an account already locked must not get free bcrypt rounds here. The
+  // gate runs BEFORE the compare for the same reason it does in processLogin --
+  // after it, a lock denies only the eventual correct guess while every wrong
+  // one still burns a round.
+  it('refuses a locked account before verifying the old password', async () => {
+    const lockedUntil = new Date(Date.now() + 10 * 60 * 1000);
+    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [], accountLockedUntil: lockedUntil };
+    const usersCollection = createUsersCollection(user);
+    const db = { collection: vi.fn().mockReturnValue(usersCollection) };
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const req = createReq({
+      app: { locals: { db } },
+      user: { userID: '507f1f77bcf86cd799439011' },
+      body: { oldPassword: 'correct', newPassword: 'NewStr0ng!' },
+    });
+    const res = createRes();
+
+    await authController.changePassword(req, res);
+
+    expect(bcrypt.compare).not.toHaveBeenCalled();
+    expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  // #995: an EXPIRED lock must not refuse. isAccountLocked() compares against
+  // now, so this is the negative half of the gate above -- without it the test
+  // pair cannot tell a working gate from one that refuses unconditionally.
+  it('allows the change when a previous lock has already expired', async () => {
+    const expired = new Date(Date.now() - 60 * 1000);
+    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [], accountLockedUntil: expired };
+    const usersCollection = createUsersCollection(user);
+    const sessionsCollection = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 0 }) };
+    const db = { collection: vi.fn((name) => (name === 'sessions' ? sessionsCollection : usersCollection)) };
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    vi.spyOn(bcrypt, 'hash').mockResolvedValue('hashed-new');
+    vi.spyOn(passwordService, 'validateStrength').mockReturnValue(true);
+    vi.spyOn(passwordService, 'validateReuse').mockResolvedValue(true);
+    const req = createReq({
+      app: { locals: { db } },
+      user: { userID: '507f1f77bcf86cd799439011' },
+      body: { oldPassword: 'correct', newPassword: 'NewStr0ng!' },
+    });
+    const res = createRes();
+
+    await authController.changePassword(req, res);
+
+    expect(bcrypt.compare).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
   it('updates the password and returns 200 on success', async () => {
     const user = { _id: 'u1', password: 'hashed-old', passwordHistory: ['hashed-oldest'] };
     const usersCollection = createUsersCollection(user);
@@ -698,7 +773,13 @@ describe('AuthController.changePassword', () => {
           password: 'hashed-new',
           passwordHistory: ['hashed-old', 'hashed-oldest'],
           forceReset: false,
+          // #995: failedLoginAttempts: 0 was here alone. The lockout gate reads
+          // accountLockedUntil and never the counter, so zeroing one without
+          // nulling the other left the document internally inconsistent -- zero
+          // recorded failures, an active lock -- and the user still locked out.
+          // Both keys now come from auth.service's clearedLockoutFields().
           failedLoginAttempts: 0,
+          accountLockedUntil: null,
         }),
       }
     );

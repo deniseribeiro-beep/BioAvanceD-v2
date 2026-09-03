@@ -1223,3 +1223,18 @@ class AuthService {
 
 module.exports = new AuthService();
 
+// #995: the three #986 helpers, exported. They were module-private, which is
+// why the two AUTHENTICATED password-change routes could not reach them and
+// hand-rolled their own bcrypt.compare instead -- auth.controller's
+// changePassword (POST /api/auth/change-password) and user-security.service's
+// updatePassword (PUT /api/user-security/password). That is five call sites
+// verifying a user-supplied password, not the three #986 counted.
+//
+// Attached to the singleton rather than re-shaped into a named export object:
+// every consumer of this module does a plain `require(...)` and uses it as the
+// service instance, so replacing the export shape would touch ~30 files for no
+// behavioural gain. AuthService declares no method by any of these names.
+module.exports.isAccountLocked = isAccountLocked;
+module.exports.recordFailedPasswordAttempt = recordFailedPasswordAttempt;
+module.exports.clearedLockoutFields = clearedLockoutFields;
+
