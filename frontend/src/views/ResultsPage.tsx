@@ -383,7 +383,7 @@ export default function ResultsPage() {
                       success + failures + duplicates = total, which it is
                       deliberately not. */}
                   {selectedJob.metrics.duplicatesFound !== undefined && (
-                    <div className="metric-item">
+                    <div className="metric-item" data-testid="results-metric-duplicates">
                       <label className="metric-label">
                         {t('results.metrics.duplicates', 'Duplicados (dos quais)')}
                       </label>
@@ -397,7 +397,7 @@ export default function ResultsPage() {
                       written, and an absent count must stay absent rather than
                       being shown as a false zero. */}
                   {selectedJob.metrics.skippedRecords !== undefined && (
-                    <div className="metric-item">
+                    <div className="metric-item" data-testid="results-metric-skipped">
                       <label className="metric-label">
                         {t('results.metrics.skipped', 'Ignorados')}
                       </label>
