@@ -1080,7 +1080,15 @@ router.post('/:id/force-password-reset', authenticate, requirePermission('forceP
 });
 
 // Desativar MFA - apenas para administradores (permite desativar MFA de outros admins também)
-router.post('/:id/disable-mfa', authenticate, async (req, res) => {
+// #1010: gated with requirePermission like its two siblings. The in-handler
+// isAdministrator check below stays as defence in depth -- it is a real gate,
+// but it is invisible to the RBAC catalogue, so before this the operation
+// could neither be granted to another role nor denied to an Administrador,
+// and #630-style allowedActions audits saw nothing here.
+// The explicit 'UPDATE' is required, not decorative: METHOD_TO_ACTION derives
+// CREATE from POST (#631), so omitting it would 403 every administrator --
+// the trap #959 item 1 hit.
+router.post('/:id/disable-mfa', authenticate, requirePermission('disableMFA', 'UPDATE'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {

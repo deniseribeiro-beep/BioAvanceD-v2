@@ -84,12 +84,14 @@ function denyingRequirePermission() {
 
 describe('user.routes authorization gates (issue #921)', () => {
   describe('requirePermission argument pinning', () => {
-    // One entry per requirePermission-gated registration -- all 11 of them,
-    // confirmed against user.routes.js line-by-line before writing this
-    // table: :40, :124, :215, :526, :604, :632, :714, :757, :795, :851,
-    // :919. Each pins the exact permission code (and, for the three
+    // One entry per requirePermission-gated registration -- all 12 of them
+    // (#1010 added the 12th), confirmed against user.routes.js line-by-line.
+    // The per-case line numbers in the labels below have drifted since #921
+    // wrote them and are indicative, not authoritative -- re-derive with
+    // git grep rather than trusting them. Each pins the exact permission
+    // code (and, for the four
     // two-argument calls -- withdrawSample/UPDATE, resetMFA/UPDATE,
-    // forcePasswordReset/UPDATE -- the explicit action) the route hands
+    // forcePasswordReset/UPDATE, disableMFA/UPDATE -- the explicit action) the route hands
     // the gate factory.
     const CASES = [
       { label: 'POST /register (createUser) :40', method: 'post', path: '/register', expectedArgs: ['createUser'] },
@@ -110,6 +112,11 @@ describe('user.routes authorization gates (issue #921)', () => {
       { label: 'POST /register-sensor (viewTemperature) :795', method: 'post', path: '/register-sensor', expectedArgs: ['viewTemperature'] },
       { label: 'POST /:id/reset-mfa (resetMFA, UPDATE) :851', method: 'post', path: '/u1/reset-mfa', expectedArgs: ['resetMFA', 'UPDATE'] },
       { label: 'POST /:id/force-password-reset (forcePasswordReset, UPDATE) :919', method: 'post', path: '/u1/force-password-reset', expectedArgs: ['forcePasswordReset', 'UPDATE'] },
+      // #1010: disable-mfa had NO requirePermission gate at all -- only
+      // authenticate, with an in-handler isAdministrator check that is a real
+      // gate but is invisible to the RBAC catalogue, so the operation could
+      // be neither granted to another role nor denied to an Administrador.
+      { label: 'POST /:id/disable-mfa (disableMFA, UPDATE) :1083', method: 'post', path: '/u1/disable-mfa', expectedArgs: ['disableMFA', 'UPDATE'] },
     ];
 
     for (const { label, method, path, expectedArgs } of CASES) {

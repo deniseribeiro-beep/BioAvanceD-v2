@@ -48,7 +48,7 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
     },
   ],
 };
@@ -133,6 +133,10 @@ const PERMISSION_CATALOG = {
   // their next login requires setting a new password, mirroring resetMFA's
   // shape (same resourceType/action, same "act on another user" concern).
   forcePasswordReset: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Forçar redefinição de senha' },
+  // #1010: POST /users/:id/disable-mfa was gated by an in-handler
+  // isAdministrator check only, so it appeared in no permission audit.
+  // Same shape as resetMFA -- acts on another user's second factor.
+  disableMFA: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Desativar MFA' },
   manageTemperature: { resourceType: 'Temperature', allowedActions: ['UPDATE'], displayName: 'Gerenciar incidentes de temperatura' },
   manageOrganizations: { resourceType: 'Organization', allowedActions: ['CREATE', 'UPDATE', 'DELETE'], displayName: 'Gerenciar organizações' },
   viewAuditLogs: { resourceType: 'AuditLog', allowedActions: ['READ'], displayName: 'Visualizar trilhas de auditoria' },
