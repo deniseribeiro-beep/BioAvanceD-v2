@@ -7,9 +7,12 @@
  * Por que este script precisa existir: os dois caminhos que hoje limpam
  * mfaLocked ficam inacessíveis quando os usuários travados são
  * administradores.
- *   - POST /:id/reset-mfa (user.routes.js) recusa explicitamente quando o
- *     alvo é administrador (checagem isAdministrator logo após localizar o
- *     usuário-alvo).
+ *   - POST /:id/reset-mfa (user.routes.js) exige quem chame já estar
+ *     autenticado, com a permissão resetMFA. Desde #933 essa rota DESTRAVA
+ *     um alvo administrador (zera mfaLocked/mfaFailedAttempts preservando o
+ *     cadastro), em vez de recusar a operação inteira -- mas ela continua
+ *     inalcançável no caso que motivou este script, porque continua exigindo
+ *     um chamador autenticado.
  *   - POST /:id/disable-mfa (user.routes.js) exige que quem chama já esteja
  *     autenticado como administrador -- exatamente o que mfaLocked:true
  *     impede (auth.service.js, checagem `if (user.mfaLocked)` antes da

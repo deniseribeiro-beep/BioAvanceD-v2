@@ -977,12 +977,46 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
       });
     }
 
-    // Não permite resetar MFA de administrador
+    // #933: um alvo Administrador tem o CADASTRO do segundo fator preservado,
+    // mas o BLOQUEIO liberado -- antes disto a rota recusava a operação
+    // inteira (400, sem escrita nenhuma).
+    //
+    // A recusa em bloco era o último elo do impasse desta issue. As duas
+    // rotas de MFA são complementares por alvo: reset-mfa recusa
+    // administradores, disable-mfa (:1091) recusa NÃO-administradores. Então
+    // o único caminho in-app para um administrador bloqueado era disable-mfa,
+    // que só limpa mfaLocked ao custo de desligar o segundo fator
+    // (mfaEnabled:false). Nada na aplicação limpava mfaLocked mantendo o
+    // cadastro intacto -- para nenhum alvo.
+    //
+    // A metade sensível é o segredo (dict-02 P1X-0197, "Nunca retornar na API
+    // de consulta"), não os contadores de bloqueio (P1X-0199 mfaFailedAttempts
+    // / P1X-0200 mfaLocked). RF003 AC#5 pede "permitir redefinição CONTROLADA
+    // do MFA" (docs/docs-7-27-2026/extracted/requisitos-index.md:49) e a
+    // própria RF003 (:39) põe o ciclo de vida de MFA de contas de usuário sob
+    // o Administrador sem ressalva que exclua alvos administradores. Logo a
+    // recusa é estreitada ao segredo, não aplicada à operação toda.
     if (await isAdministrator(db, targetUser._id.toString())) {
-      return res.status(400).json({
-        success: false,
-        error: req.t('users.resetMFANotAllowed'),
-        message: req.t('users.resetMFANotAllowedMessage')
+      await usersCollection.updateOne(
+        userFilter,
+        {
+          $set: {
+            mfaFailedAttempts: 0,
+            mfaLocked: false,
+            updatedAt: new Date()
+          }
+        }
+      );
+
+      // Sem revogação de sessões aqui, deliberadamente. A revogação abaixo
+      // (#963) existe porque "um admin reseta MFA justamente porque acredita
+      // que o segundo fator foi comprometido" -- premissa que não vale para um
+      // desbloqueio: o alvo apenas errou o TOTP além do limite. Derrubar as
+      // sessões dele seria punir a recuperação.
+      return res.status(200).json({
+        success: true,
+        unlockedOnly: true,
+        message: req.t('users.resetMFAUnlockedSuccess')
       });
     }
 

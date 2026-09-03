@@ -9,9 +9,10 @@
  * (linha ~391), então usuários sem MFA habilitado também ficam presos por
  * um valor que nunca deveria ter sido lido.
  *
- * Campos pareados com a flag, confirmados em auth.service.js (linhas
- * 407-418, o mesmo incremento que dispara o lock) e em user.routes.js
- * (reset-mfa, linhas 892-905, que zera os dois juntos): mfaLocked e
+ * Campos pareados com a flag, confirmados em auth.service.js (o mesmo
+ * incremento que dispara o lock) e em user.routes.js (reset-mfa, que zera os
+ * dois juntos -- e que desde #933 zera SOMENTE esses dois quando o alvo é
+ * administrador, exatamente o par usado aqui): mfaLocked e
  * mfaFailedAttempts. Apenas esses dois são tocados aqui — mfaEnabled e
  * mfaSecret não são campos pareados com o lock e não são mexidos, para não
  * desabilitar/reabilitar MFA de ninguém.

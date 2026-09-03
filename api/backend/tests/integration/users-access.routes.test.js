@@ -330,15 +330,20 @@ describe('Users and Access routes', () => {
   // #933: these three guards had NO test. That is the finding, independent of
   // whether direction 2 (letting reset-mfa clear mfaLocked on an admin target)
   // is ever built: the refusals could have regressed at any point undetected,
-  // and a change to them should have to be deliberate. Pinning CURRENT
-  // behaviour here is deliberately NOT an endorsement of it -- #933 argues the
-  // admin-target refusal is too broad, since it blocks the unlock and the
-  // secret-reset together and only the second is sensitive.
-  it('#933: reset-mfa REFUSES an administrator target, writing nothing', async () => {
+  // and a change to them should have to be deliberate.
+  //
+  // Direction 2 IS now built. This assertion was originally "REFUSES an
+  // administrator target, writing nothing" (400, no $set), pinned as CURRENT
+  // behaviour with an explicit note that it was not an endorsement. It is
+  // un-weakened here rather than deleted: the deliberate change it was
+  // guarding has happened, so it now pins the narrowed refusal -- the secret
+  // is still protected, the lock is not.
+  it('#933: reset-mfa UNLOCKS an administrator target without touching the enrolment', async () => {
     const handler = getHandler(userRoutes, 'post', '/:id/reset-mfa');
     usersCollection.findOne.mockResolvedValueOnce({
       _id: '507f1f77bcf86cd799439011',
       accessType: 4, roleName: 'Administrador', mfaEnabled: true,
+      mfaSecret: 'SECRET-DO-NOT-CLEAR', mfaLocked: true, mfaFailedAttempts: 5,
     });
 
     const req = createRequest({ params: { id: '507f1f77bcf86cd799439011' } });
@@ -347,11 +352,17 @@ describe('Users and Access routes', () => {
 
     await handler(req, res);
 
-    expect(res.statusCode).toBe(400);
-    // The refusal returns BEFORE the $set, so the whole mutation is blocked --
-    // mfaLocked and mfaFailedAttempts included, which is #933 direction 2's
-    // entire point.
-    expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(usersCollection.updateOne).toHaveBeenCalledTimes(1);
+
+    // The two halves the old refusal blocked together: the lock clears, the
+    // enrolment does not move. Only the second was ever the sensitive one
+    // (dict-02 P1X-0197 for the secret, P1X-0199/P1X-0200 for the counters).
+    const $set = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect($set.mfaLocked).toBe(false);
+    expect($set.mfaFailedAttempts).toBe(0);
+    expect($set).not.toHaveProperty('mfaSecret');
+    expect($set).not.toHaveProperty('mfaEnabled');
   });
 
   it('#933: disable-mfa REFUSES a non-administrator caller', async () => {

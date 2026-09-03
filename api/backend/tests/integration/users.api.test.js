@@ -237,3 +237,141 @@ describe('resetMFA permission enforcement (#632)', () => {
     expect(usersCollection.updateOne).toHaveBeenCalled();
   });
 });
+
+// #933 direction 2: POST /:id/reset-mfa refused an administrator target
+// outright (400, no write), which is the one branch that leaves a locked
+// administrator with no non-destructive in-app remedy. `disable-mfa` does
+// clear the lock for an admin target, but only by switching the second
+// factor OFF (mfaEnabled:false) -- so nothing in the application could
+// clear mfaLocked while LEAVING the enrolment intact, for any target.
+//
+// RF003 AC#5 (docs/docs-7-27-2026/extracted/requisitos-index.md:49) asks for
+// "Revogar sessoes e permitir redefinicao CONTROLADA do MFA", and RF003's
+// own requirement line (:39) puts MFA lifecycle for user accounts under the
+// Administrador with no carve-out excluding administrator targets. The
+// sensitive half is the secret (dict-02 P1X-0197, "Nunca retornar na API de
+// consulta"), not the lock flags (P1X-0199/P1X-0200) -- so the refusal is
+// narrowed to the secret rather than applied to the whole operation.
+describe('reset-mfa on an administrator target unlocks without re-enrolling (#933)', () => {
+  const { PERMISSION_CATALOG } = require('../../src/services/rbac-catalog-seed.service');
+
+  function matchesQuery(doc, query = {}) {
+    return Object.entries(query).every(([key, cond]) => {
+      if (cond && typeof cond === 'object' && '$in' in cond) return cond.$in.includes(doc[key]);
+      return doc[key] === cond;
+    });
+  }
+  function queryableCollectionMock(docs) {
+    return createCollectionMock({
+      findOne: vi.fn(async (query = {}) => docs.find((d) => matchesQuery(d, query)) || null),
+      find: vi.fn((query = {}) => ({ toArray: vi.fn().mockResolvedValue(docs.filter((d) => matchesQuery(d, query))) })),
+    });
+  }
+
+  const permissionDocs = () => Object.entries(PERMISSION_CATALOG).map(([permissionCode, entry]) => ({
+    permissionId: `perm-${permissionCode}`,
+    permissionCode,
+    ...entry,
+  }));
+
+  // `assignments` decides which userAccountIds resolve to roleCode
+  // 'administrator' -- which is exactly what isAdministrator() reads, for the
+  // CALLER (permission) and for the TARGET (the refusal under test).
+  function buildCollections(assignments) {
+    return {
+      roles: queryableCollectionMock([
+        { roleId: 'role-administrator', roleCode: 'administrator', hierarchyLevel: 4, roleStatus: 'active', permissionIds: ['perm-resetMFA'] },
+        { roleId: 'role-tecnico', roleCode: 'tecnico', hierarchyLevel: 2, roleStatus: 'active', permissionIds: [] },
+      ]),
+      permissions: queryableCollectionMock(permissionDocs()),
+      userRoleAssignments: queryableCollectionMock(assignments.map((a) => ({
+        userAccountId: a.userAccountId,
+        roleId: a.roleId,
+        assignmentStatus: 'active',
+        validUntil: null,
+      }))),
+    };
+  }
+
+  function adminCallerToken() {
+    return jwt.sign(
+      { userID: 'qa-admin-caller', accessType: 4, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+  }
+
+  function setFrom(updateOneMock) {
+    return updateOneMock.mock.calls[0][1].$set;
+  }
+
+  beforeEach(() => {
+    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'session-1' } });
+    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-1' });
+    vi.spyOn(sessionService, 'invalidateUserSessions').mockResolvedValue({ revoked: 0 });
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('clears the lock flags on an administrator target and preserves mfaSecret/mfaEnabled', async () => {
+    const usersCollection = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({
+        _id: 'admin-target-1', roleName: 'Administrador',
+        mfaEnabled: true, mfaSecret: 'SECRET-DO-NOT-CLEAR', mfaLocked: true, mfaFailedAttempts: 5,
+      }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    });
+    app.locals.db = createDbMock({
+      users: usersCollection,
+      ...buildCollections([
+        { userAccountId: 'qa-admin-caller', roleId: 'role-administrator' },
+        { userAccountId: 'admin-target-1', roleId: 'role-administrator' },
+      ]),
+    });
+
+    const response = await request(app)
+      .post('/api/users/admin-target-1/reset-mfa')
+      .set('Authorization', `Bearer ${adminCallerToken()}`);
+
+    expect(response.status).toBe(200);
+    expect(usersCollection.updateOne).toHaveBeenCalledTimes(1);
+
+    const $set = setFrom(usersCollection.updateOne);
+    expect($set.mfaLocked).toBe(false);
+    expect($set.mfaFailedAttempts).toBe(0);
+    // The enrolment is deliberately untouched: this is an unlock, not a reset.
+    expect($set).not.toHaveProperty('mfaSecret');
+    expect($set).not.toHaveProperty('mfaEnabled');
+    expect($set).not.toHaveProperty('lastLogin');
+  });
+
+  // CONTROL: the non-administrator path is unchanged by this fix and must be
+  // green both before and after it. A red control here means the harness, not
+  // the bug (#695).
+  it('CONTROL: a non-administrator target still gets the full reset, secret nulled', async () => {
+    const usersCollection = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({
+        _id: 'tecnico-target-1', roleName: 'Tecnico',
+        mfaEnabled: true, mfaSecret: 'SECRET-SHOULD-BE-CLEARED', mfaLocked: true, mfaFailedAttempts: 5,
+      }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    });
+    app.locals.db = createDbMock({
+      users: usersCollection,
+      ...buildCollections([
+        { userAccountId: 'qa-admin-caller', roleId: 'role-administrator' },
+        { userAccountId: 'tecnico-target-1', roleId: 'role-tecnico' },
+      ]),
+    });
+
+    const response = await request(app)
+      .post('/api/users/tecnico-target-1/reset-mfa')
+      .set('Authorization', `Bearer ${adminCallerToken()}`);
+
+    expect(response.status).toBe(200);
+    const $set = setFrom(usersCollection.updateOne);
+    expect($set.mfaSecret).toBeNull();
+    expect($set.mfaEnabled).toBe(false);
+    expect($set.mfaLocked).toBe(false);
+    expect(sessionService.invalidateUserSessions).toHaveBeenCalled();
+  });
+});
