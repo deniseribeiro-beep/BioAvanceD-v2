@@ -28,13 +28,14 @@ vi.mock('../services/api', () => ({
   },
 }));
 
-// AnalysisUpload.jsx (unrelated to this subject) has no direct render
-// coverage anywhere in the repo and does not import React itself; under this
-// project's vitest config (no @vitejs/plugin-react in vitest.config.js,
-// unlike vite.config.js) .jsx files get the classic JSX runtime, so
-// rendering it throws `ReferenceError: React is not defined` and takes the
-// whole ResultsPage tree down with it. Stubbed out here -- it lives in the
-// import section, entirely separate from the report modal this file tests.
+// AnalysisUpload.jsx is unrelated to this subject -- it lives in the import
+// section, entirely separate from the report modal this file tests -- so it is
+// stubbed out as ordinary RTL isolation.
+// #1019: this stub was ALSO load-bearing until vitest.config.js gained
+// @vitejs/plugin-react; before that, rendering any .jsx threw
+// `ReferenceError: React is not defined` and took the whole tree down. That is
+// fixed at the config now (AnalysisUpload.test.tsx pins it), so the stub is
+// isolation only and can be dropped if this file ever wants the real component.
 vi.mock('../components/AnalysisUpload.jsx', () => ({
   default: () => null,
 }));
