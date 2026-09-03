@@ -656,6 +656,14 @@ describe('Users and Access routes', () => {
     const rbacCollections = buildRbacCollections([]);
     const assignmentDocs = [
       { assignmentId: 'assign-5', userAccountId: 'user-target-5', roleId: 'role-technician', scopeType: 'organization', scopeId: 'org-old', assignmentStatus: 'active', validUntil: null },
+      // #998: the CALLER's own assignment. This fixture never needed one --
+      // nothing on this route resolved the caller's level until the #998 floor
+      // landed, so an unassigned caller was indistinguishable from an
+      // administrator. It now fails closed, which is correct for a privilege
+      // gate and is why this line is a fixture completion rather than a
+      // loosening: createRequest's default caller is the accessType-4
+      // administrator, and this makes the mock say so.
+      { assignmentId: 'assign-5-caller', userAccountId: '507f1f77bcf86cd799439011', roleId: 'role-administrator', scopeType: 'global', scopeId: null, assignmentStatus: 'active', validUntil: null },
     ];
     const assignmentsMock = queryableAssignmentsMock(assignmentDocs);
     const dbWithTarget = {
@@ -1103,5 +1111,167 @@ describe('Users and Access routes', () => {
     expect(res.statusCode).toBe(201);
     expect(res.payload.success).toBe(true);
     expect(accessCollection.insertOne).toHaveBeenCalled();
+  });
+
+  // #998 (RF003, RNF008 AC#1): role assignment is Administrador-only.
+  //
+  // requirePermission('createUser') is the ONLY gate on the three routes that
+  // can grant a role, and rbac-catalog-seed grants 'createUser' to the seeded
+  // Coordenador as its first permission. Nothing in requirePermission, in the
+  // handlers, or in rbac-assignment.service checked the CALLER's level against
+  // the level being granted -- so every Coordenador in a default-seeded
+  // deployment could make anyone, including themselves, an Administrador.
+  //
+  // RF003 (requisitos-index.md:37-50) names Administrador as the actor for
+  // "gerenciar ... seus papéis" and AC#3 "Atribuir papel com vigência e escopo
+  // institucional". RNF008 AC#1 is deny-by-default and AC#4 says the frontend
+  // guard does not substitute for backend validation -- which is what
+  // App.tsx's requiredRole was doing alone.
+  //
+  // The gate follows this repo's own precedent: the in-handler
+  // isAdministrator(db, req.user.userID) check that POST /:id/disable-mfa
+  // already uses, rather than a new permission code.
+  describe('#998: only an Administrador may assign a role', () => {
+    function callerCoordenador() {
+      return { userID: '507f1f77bcf86cd799439013', accessType: 3, roleName: 'Coordenador' };
+    }
+
+    // Arrange block lifted from the #982 PUT test above rather than written
+    // fresh: a thinner targetUser fails UserModel.validate and the route
+    // answers 422 before it ever reaches the role logic, which reads as a
+    // reproduction while measuring nothing.
+    function seedTarget(id) {
+      const targetUser = {
+        _id: id,
+        name: 'Alvo 998',
+        email: 'alvo-998@bioavanced.com.br',
+        username: 'alvo998',
+        status: 'active',
+        accessType: 2,
+        roleName: 'Técnico',
+      };
+      usersCollection.findOne
+        .mockResolvedValueOnce(targetUser)
+        .mockResolvedValueOnce(targetUser);
+      usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+      return targetUser;
+    }
+
+    function dbWith(callers) {
+      const rbacCollections = buildRbacCollections(callers);
+      return {
+        collection: vi.fn((name) => {
+          if (name === 'users') return usersCollection;
+          if (rbacCollections[name]) return rbacCollections[name];
+          return db.collection(name);
+        }),
+      };
+    }
+
+    it('refuses a Coordenador promoting a target to Administrador through PUT /:id', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      seedTarget('user-target-998');
+
+      const req = createRequest({
+        params: { id: 'user-target-998' },
+        body: { roleName: 'Administrador' },
+        user: callerCoordenador(),
+      });
+      req.app.locals.db = dbWith([
+        { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
+        { userAccountId: 'user-target-998', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(403);
+      // The role must not have been granted, not merely the response changed.
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('refuses a Coordenador creating an Administrador through POST /register', async () => {
+      const handler = getHandler(userRoutes, 'post', '/register');
+
+      const req = createRequest({
+        body: { name: 'Novo', email: 'novo@b.c', username: 'novo', password: 'Str0ng!Pass', roleName: 'Administrador' },
+        user: callerCoordenador(),
+      });
+      req.app.locals.db = dbWith([{ userAccountId: '507f1f77bcf86cd799439013', accessType: 3 }]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(403);
+      expect(authServiceMock.registerUser).not.toHaveBeenCalled();
+    });
+
+    // The negative halves. Without these the pair above cannot distinguish a
+    // working caller check from a gate that refuses every role assignment, or
+    // from one that refuses every PUT.
+    it('still allows an Administrador to promote a target to Administrador', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      seedTarget('user-target-998b');
+
+      const req = createRequest({
+        params: { id: 'user-target-998b' },
+        body: { roleName: 'Administrador' },
+      });
+      req.app.locals.db = dbWith([
+        { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+        { userAccountId: 'user-target-998b', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+    });
+
+    // What separates the floor that shipped from an Administrador-only gate.
+    // RF003 points at Administrador-only, which is #998 direction 2 and a
+    // larger change; the floor closes the escalation without deciding whether
+    // Coordenador should hold createUser at all. If direction 2 later lands,
+    // this test is the one that must flip.
+    it('still allows a Coordenador to assign a level at or below their own', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      seedTarget('user-target-998d');
+
+      const req = createRequest({
+        params: { id: 'user-target-998d' },
+        body: { roleName: 'Coordenador' },
+        user: callerCoordenador(),
+      });
+      req.app.locals.db = dbWith([
+        { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
+        { userAccountId: 'user-target-998d', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('still allows a Coordenador to edit a user without touching their role', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      seedTarget('user-target-998c');
+
+      const req = createRequest({
+        params: { id: 'user-target-998c' },
+        body: { name: 'Alvo Renomeado' },
+        user: callerCoordenador(),
+      });
+      req.app.locals.db = dbWith([
+        { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
+        { userAccountId: 'user-target-998c', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(usersCollection.updateOne).toHaveBeenCalled();
+    });
   });
 });
