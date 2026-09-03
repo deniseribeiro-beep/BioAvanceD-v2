@@ -915,3 +915,110 @@ describe('#952: password lockout (RF001 AC#2)', () => {
     expect(compare).toHaveBeenCalled();
   });
 });
+
+// #986 item 1 (RF001 AC#2): 3029dc83 instrumented processLogin, which is
+// POST /api/auth/login. Two OTHER routes -- registered unauthenticated --
+// accept a username and password and verify it with their own bcrypt.compare:
+// setupMFAFirstLogin and enableMFAFirstLogin. Neither counted an attempt and
+// neither consulted accountLockedUntil, so the per-account lockout had two
+// bypasses. Both are additionally reachable against arbitrary, fully-enrolled
+// accounts, which is what makes them more than an uncounted-guessing gap:
+// setupMFAFirstLogin was a password ORACLE (two distinguishable messages), and
+// enableMFAFirstLogin had no enrollment guard at all, so a correct password
+// plus a valid TOTP issued real session tokens through an unauthenticated
+// endpoint -- a complete alternate login path the lockout could not reach.
+describe('#986: the two unauthenticated first-login endpoints respect the account lockout', () => {
+  const ENROLLED = { ...BASE_USER, lastLogin: new Date('2020-01-01'), mfaEnabled: true, mfaSecret: 'SECRET' };
+
+  it('setupMFAFirstLogin refuses an enrolled account BEFORE bcrypt.compare -- closes the oracle', async () => {
+    const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+    const db = makeDb(createMatchingCollection([{ ...ENROLLED }]));
+
+    await expect(authService.setupMFAFirstLogin(db, { username: 'user1', password: 'wrong' }))
+      .rejects.toThrow('já configurado');
+
+    // The whole point: a wrong password and a correct one must now be
+    // indistinguishable on an enrolled account. Asserting the compare never
+    // ran is what proves that, rather than asserting one of the messages.
+    expect(compare).not.toHaveBeenCalled();
+  });
+
+  it('enableMFAFirstLogin refuses an enrolled account BEFORE bcrypt.compare -- closes the second login path', async () => {
+    const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const verify = vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
+    const db = makeDb(createMatchingCollection([{ ...ENROLLED }]));
+
+    await expect(authService.enableMFAFirstLogin(db, { username: 'user1', password: 'pw' }, '123456', {}))
+      .rejects.toThrow('já configurado');
+
+    expect(compare).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it('setupMFAFirstLogin counts a wrong password against a not-yet-enrolled account', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+    const db = makeDb(createMatchingCollection([{ ...BASE_USER }]));
+
+    await expect(authService.setupMFAFirstLogin(db, { username: 'user1', password: 'wrong' }))
+      .rejects.toThrow('Credenciais inválidas');
+
+    expect(db._collectionApi.updateOne).toHaveBeenCalledWith(
+      { _id: BASE_USER._id },
+      expect.objectContaining({ $inc: { failedLoginAttempts: 1 } })
+    );
+  });
+
+  it('enableMFAFirstLogin counts a wrong password against a not-yet-enrolled account', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+    const db = makeDb(createMatchingCollection([{ ...BASE_USER, mfaSecret: 'SECRET' }]));
+
+    await expect(authService.enableMFAFirstLogin(db, { username: 'user1', password: 'wrong' }, '123456', {}))
+      .rejects.toThrow('Credenciais inválidas');
+
+    expect(db._collectionApi.updateOne).toHaveBeenCalledWith(
+      { _id: BASE_USER._id },
+      expect.objectContaining({ $inc: { failedLoginAttempts: 1 } })
+    );
+  });
+
+  it('both endpoints refuse a locked account BEFORE bcrypt.compare, with the generic message', async () => {
+    const lockedUntil = new Date(Date.now() + 15 * 60 * 1000);
+    const locked = { ...BASE_USER, accountLockedUntil: lockedUntil, mfaSecret: 'SECRET' };
+
+    const compareA = vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    await expect(
+      authService.setupMFAFirstLogin(makeDb(createMatchingCollection([{ ...locked }])), { username: 'user1', password: 'pw' })
+    ).rejects.toThrow('Credenciais inválidas');
+    expect(compareA).not.toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+    const compareB = vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    await expect(
+      authService.enableMFAFirstLogin(makeDb(createMatchingCollection([{ ...locked }])), { username: 'user1', password: 'pw' }, '123456', {})
+    ).rejects.toThrow('Credenciais inválidas');
+    expect(compareB).not.toHaveBeenCalled();
+  });
+
+  // The mirror of the counting half. enableMFAFirstLogin issues real session
+  // tokens, so it is a completed login and must clear the counter and the lock
+  // exactly as processLogin's own success path does -- otherwise it counts up
+  // and never down, and a user who enrolls through it stays locked.
+  it('enableMFAFirstLogin clears failedLoginAttempts AND accountLockedUntil on success', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
+    const db = makeDb(createMatchingCollection([{ ...BASE_USER, mfaSecret: 'SECRET' }]));
+
+    const result = await authService.enableMFAFirstLogin(db, { username: 'user1', password: 'pw' }, '123456', {});
+
+    expect(result.success).toBe(true);
+    const activation = db._collectionApi.updateOne.mock.calls.find(
+      (call) => call[1]?.$set && 'mfaEnabled' in call[1].$set
+    );
+    expect(activation).toBeTruthy();
+    expect(activation[1].$set).toEqual(expect.objectContaining({
+      mfaEnabled: true,
+      failedLoginAttempts: 0,
+      accountLockedUntil: null,
+    }));
+  });
+});

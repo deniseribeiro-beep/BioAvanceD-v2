@@ -45,6 +45,59 @@ async function resolveLockoutPolicy(db) {
   }
 }
 
+// #986 (RF001 AC#2): processLogin is not the only path that verifies a
+// user-supplied password. setupMFAFirstLogin and enableMFAFirstLogin -- both
+// registered UNAUTHENTICATED -- run their own bcrypt.compare, and until now
+// neither counted an attempt nor consulted the lock, so the per-account
+// lockout 3029dc83 added had two bypasses. RF001 AC#2 says "bloquear
+// temporariamente a conta após o limite configurado de tentativas
+// malsucedidas"; it does not say "on one route".
+//
+// These three exist so the three call sites cannot drift, which is the defect
+// #952 was about in the first place -- doing it by copy-paste is how the
+// counting ends up in one place and the clearing in another.
+
+/**
+ * #986: the lockout gate, as a pure predicate. Deliberately returns a boolean
+ * rather than throwing, so each call site keeps ownership of its message --
+ * and every one of them must use the SAME generic 'Credenciais inválidas'.
+ * A distinct "account locked" response is an account-enumeration oracle.
+ */
+function isAccountLocked(user) {
+  const lockedUntil = user && user.accountLockedUntil ? new Date(user.accountLockedUntil) : null;
+  return Boolean(lockedUntil && lockedUntil.getTime() > Date.now());
+}
+
+/**
+ * #986: the count-and-lock block, lifted verbatim from processLogin.
+ * Never throws -- every failure is downgraded to a warn, exactly as before,
+ * so it cannot change any caller's control flow. The caller still throws its
+ * own 'Credenciais inválidas' afterwards.
+ */
+async function recordFailedPasswordAttempt(db, usersCollection, user) {
+  try {
+    const { maxAttempts, lockoutMs } = await resolveLockoutPolicy(db);
+    const attemptsAfterThis = Number(user.failedLoginAttempts || 0) + 1;
+    const update = { $inc: { failedLoginAttempts: 1 }, $set: { updatedAt: new Date() } };
+    if (attemptsAfterThis >= maxAttempts) {
+      update.$set.accountLockedUntil = new Date(Date.now() + lockoutMs);
+    }
+    await usersCollection.updateOne({ _id: user._id }, update);
+  } catch (counterError) {
+    logger.warn('#952: falha ao contabilizar tentativa inválida:', counterError.message);
+  }
+}
+
+/**
+ * #986: the success side. A helper that only counts UP leaves the clearing to
+ * hand-written literals at each site, which is how they drift apart -- and one
+ * already had: enableMFAFirstLogin issued real session tokens while clearing
+ * neither field.
+ */
+function clearedLockoutFields() {
+  return { failedLoginAttempts: 0, accountLockedUntil: null };
+}
+
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL = '7d';
 
@@ -329,8 +382,9 @@ class AuthService {
       // TEMPORARIAMENTE: the lock is an expiry timestamp, not a boolean. It clears
       // itself. mfaLocked is the boolean shape and #933 documents where that ends
       // -- five bad codes over an account lifetime, no decay, permanent.
-      const lockedUntil = user.accountLockedUntil ? new Date(user.accountLockedUntil) : null;
-      if (lockedUntil && lockedUntil.getTime() > Date.now()) {
+      // #986: extracted to isAccountLocked() so the two first-login endpoints
+      // apply the identical gate. Behaviour here is unchanged.
+      if (isAccountLocked(user)) {
         throw new Error('Credenciais inválidas');
       }
 
@@ -358,17 +412,9 @@ class AuthService {
         // nothing, so there was no per-account brute-force protection at all.
         // $inc rather than the MFA path's read-modify-write $set: same cost,
         // race-free, and concurrent guesses are the case that matters here.
-        try {
-          const { maxAttempts, lockoutMs } = await resolveLockoutPolicy(db);
-          const attemptsAfterThis = Number(user.failedLoginAttempts || 0) + 1;
-          const update = { $inc: { failedLoginAttempts: 1 }, $set: { updatedAt: new Date() } };
-          if (attemptsAfterThis >= maxAttempts) {
-            update.$set.accountLockedUntil = new Date(Date.now() + lockoutMs);
-          }
-          await usersCollection.updateOne({ _id: user._id }, update);
-        } catch (counterError) {
-          logger.warn('#952: falha ao contabilizar tentativa inválida:', counterError.message);
-        }
+        // #986: extracted to recordFailedPasswordAttempt() so the two
+        // first-login endpoints count identically. Behaviour here is unchanged.
+        await recordFailedPasswordAttempt(db, usersCollection, user);
 
         throw new Error('Credenciais inválidas');
       }
@@ -568,7 +614,9 @@ class AuthService {
         { _id: user._id },
         // #952: a successful login clears the counter AND the lock. Folded into the
         // existing lastLogin write rather than a second round-trip.
-        { $set: { lastLogin: new Date(), failedLoginAttempts: 0, accountLockedUntil: null } }
+        // #986: the literal became clearedLockoutFields() so the clearing has
+        // one definition. Same three keys, same values.
+        { $set: { lastLogin: new Date(), ...clearedLockoutFields() } }
       );
 
       const tokenBundle = await this.issueSessionTokens(db, user, req);
@@ -635,21 +683,42 @@ class AuthService {
         throw new Error('Credenciais inválidas');
       }
 
-      // Verifica senha
-      const passwordMatch = await bcrypt.compare(password, user.password);
-      if (!passwordMatch) {
-        throw new Error('Credenciais inválidas');
-      }
-
-      // Verifica se é primeiro login e MFA não está configurado
+      // #986: this guard used to sit AFTER bcrypt.compare, which made this
+      // endpoint a password oracle against any fully-enrolled account: a wrong
+      // password answered 'Credenciais inválidas' and a correct one answered
+      // 'MFA já configurado…', both returned verbatim in the 400 body by
+      // auth.controller.js. The QR side effect was correctly blocked; the
+      // password check was not. Moving it above the compare makes the two
+      // outcomes indistinguishable, which is the whole point.
+      //
+      // The condition itself is unchanged, and the mfaEnabled term is
+      // load-bearing: setupMFAFirstLogin writes mfaSecret WITHOUT setting
+      // lastLogin, so a legitimate enrolment arrives back here with a secret
+      // present and lastLogin still null. A guard keyed on !isFirstLogin
+      // alone, or on mfaSecret alone, would break that live flow.
       const isFirstLogin = user.lastLogin === null || user.lastLogin === undefined;
-      const mfaNotConfigured = !user.mfaEnabled || !user.mfaSecret;
-
-      // Permite gerar QR code se for primeiro login OU se MFA não estiver configurado
-      // (mesmo que não seja tecnicamente o primeiro login, se MFA não está configurado, permite configurar)
       if (!isFirstLogin && user.mfaEnabled && user.mfaSecret) {
         throw new Error('MFA já configurado para este usuário. Use o endpoint de login normal.');
       }
+
+      // #986: the same lockout gate processLogin applies, before the compare
+      // for the same reason -- after it, a lock denies only the eventual
+      // correct guess while every wrong one still burns a bcrypt round.
+      if (isAccountLocked(user)) {
+        throw new Error('Credenciais inválidas');
+      }
+
+      // Verifica senha
+      const passwordMatch = await bcrypt.compare(password, user.password);
+      if (!passwordMatch) {
+        // #986: count it, exactly as processLogin does. Without this an
+        // attacker who knows a username could guess passwords here forever
+        // without ever incrementing failedLoginAttempts.
+        await recordFailedPasswordAttempt(db, usersCollection, user);
+        throw new Error('Credenciais inválidas');
+      }
+
+      const mfaNotConfigured = !user.mfaEnabled || !user.mfaSecret;
 
       // Gera secret
       const secret = speakeasy.generateSecret({
@@ -734,9 +803,28 @@ class AuthService {
         throw new Error('Credenciais inválidas');
       }
 
+      // #986: this endpoint had NO enrollment guard at all -- only the
+      // `!user.mfaSecret` check below, which an already-enrolled user passes.
+      // So a correct password plus a valid current TOTP reached updateOne and
+      // issueSessionTokens: a complete alternate authentication path through
+      // an UNAUTHENTICATED endpoint, bypassing the lockout by construction
+      // rather than merely failing to count. Same mfaEnabled-bearing form as
+      // setupMFAFirstLogin, for the same reason -- an enrolment in progress
+      // has mfaSecret set and lastLogin still null, and must still get here.
+      const isFirstLogin = user.lastLogin === null || user.lastLogin === undefined;
+      if (!isFirstLogin && user.mfaEnabled && user.mfaSecret) {
+        throw new Error('MFA já configurado para este usuário. Use o endpoint de login normal.');
+      }
+
+      // #986: same gate, same placement, same generic message as the other two.
+      if (isAccountLocked(user)) {
+        throw new Error('Credenciais inválidas');
+      }
+
       // Verifica senha
       const passwordMatch = await bcrypt.compare(password, user.password);
       if (!passwordMatch) {
+        await recordFailedPasswordAttempt(db, usersCollection, user);
         throw new Error('Credenciais inválidas');
       }
 
@@ -763,6 +851,11 @@ class AuthService {
             mfaEnabled: true,
             mfaActivationDate: new Date(),
             lastLogin: new Date(),
+            // #986: this is a token-issuing success -- a completed login -- so
+            // it must clear the counter AND the lock, exactly as processLogin's
+            // own success path does. Without it the path counts up and never
+            // down, and a user who enrols through here stays locked.
+            ...clearedLockoutFields(),
             updatedAt: new Date()
           }
         }
