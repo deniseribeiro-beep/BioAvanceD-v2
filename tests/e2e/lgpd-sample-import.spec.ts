@@ -247,6 +247,48 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     expect(body.data.stagingBatchId).toBeNull();
   });
 
+  // #997: the sync import path's blank-row count had NO test anywhere.
+  // #980 shipped `data.skipped` on this response and #991 shipped the
+  // notice that renders it, both uncovered; ImportLGPDPage.test.tsx asserts
+  // the tile three times but against a hand-written mock, so nothing proved
+  // the server actually emits the key that mock claims.
+  //
+  // The fixture is a COMMA-ONLY row, not an appended '' -- deliberately.
+  // csvBuffer joins with '\n', so ONE appended '' is only a trailing
+  // newline, which produces no parser row and is correctly not counted;
+  // TWO would work today but only via newline arithmetic that any future
+  // change to csvBuffer would silently break. Seven empty cells matching
+  // CSV_HEADER's seven columns fail readCSV's `hasData` check directly,
+  // which is the mechanism actually under test.
+  //
+  // Placed as its own test rather than folded into one above: errorsDetails
+  // row numbers are indices into the already-filtered array, so a blank row
+  // in the middle of a file shifts them relative to the physical CSV. That
+  // is a real product inconsistency (#1023), and keeping it out of
+  // the other tests keeps it from silently changing their expectations.
+  test('#997: a blank row is reported as data.skipped, outside total/success/errors', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const response = await importSamples(request, admin.token, [
+      `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
+      ','.repeat(6),
+    ]);
+
+    expect(response.status()).toBe(200);
+    const body = await response.json();
+
+    expect(body.data.skipped).toBe(1);
+    // The load-bearing half: `skipped` is OUTSIDE total/success/errors, so
+    // the one real row is still the only row that counted. This fails in
+    // both directions -- if blank rows ever start counting as data, and if
+    // the count stops flowing to the response.
+    expect(body.data).toMatchObject({ total: 1, success: 1, errors: 0 });
+    expect(body.data.errorsDetails).toEqual([]);
+    // A blank row is not a rejection, so it must not open a quarantine batch.
+    expect(body.data.stagingBatchId).toBeNull();
+  });
+
   // #794 slice 1 (RNF011 AC#4, second half): "sem correção silenciosa".
   //
   // #787 made rejected rows survive; it gave nobody a way to look at them.
