@@ -32,10 +32,23 @@ const require2 = createRequire(import.meta.url);
 // the pattern auth.routes.test.js and users-access.routes.test.js already use.
 const auditLogger = require2('../../src/utils/auditLogger');
 
-// Required, not imported, so the controller and the spy target share one module
-// instance. Mixing `await import` (vitest's module runner) with createRequire
-// (native CJS cache) yields two auditLogger objects and the spies miss
-// silently -- which is the failure this change exists to end.
+// Required, not imported, for symmetry with the spy target above and with the
+// two sibling files that use this pattern.
+//
+// NOT because `await import` here would break the spies -- that is asserted by
+// #1017's comment in users-access.routes.test.js and it does NOT reproduce for
+// this controller. [ran it] swapping this line back to
+// `(await import('../../src/controllers/user-security.controller')).default`
+// leaves all 11 tests green, including the spy-identity one below: vitest's
+// module runner and the native CJS cache resolve this specifier to the same
+// instance, so the controller's internal require('../utils/auditLogger') still
+// hits the object spied above either way.
+//
+// Recorded rather than repeated, because the claim is load-bearing elsewhere
+// and a future reader should not inherit it unmeasured. What the spies DO
+// depend on is being attached to the module object at all: [ran it] replacing
+// the vi.spyOn calls above with detached vi.fn()s turns exactly the test below
+// red and brings the AUDIT_TRAIL_WRITE_FAILURE noise back.
 const userSecurityController = require2('../../src/controllers/user-security.controller');
 
 // The service is deliberately NOT stubbed. The real one has been running behind
