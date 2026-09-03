@@ -235,6 +235,8 @@ describe('StorageService.autoAssignSampleToBox', () => {
   let samplesFindOne;
   let samplesUpdateOne;
   let storageAssignmentsFindOne;
+  let storageAssignmentsInsertOne;
+  let storageAssignmentsUpdateOne;
   let movements;
   let counters;
   let db;
@@ -247,6 +249,12 @@ describe('StorageService.autoAssignSampleToBox', () => {
     samplesUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
     // No open StorageAssignment by default (sample not currently allocated).
     storageAssignmentsFindOne = vi.fn().mockResolvedValue(null);
+    // #1003: autoAssignSamplePosition/rollbackAutoAssignedPosition now open/
+    // close a StorageAssignment row (insertOne/updateOne respectively) --
+    // without these spies the existing cases below would go red on "insertOne
+    // is not a function" rather than on anything this block actually tests.
+    storageAssignmentsInsertOne = vi.fn().mockResolvedValue({ insertedId: 'stub' });
+    storageAssignmentsUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
     movements = makeMovementsCollection();
     // #988: appendImmutableAudit (now called inside the transaction) reads
     // 'counters' via MongoAuditRepository.generateMovementID.
@@ -258,7 +266,13 @@ describe('StorageService.autoAssignSampleToBox', () => {
         if (name === 'samples') return { findOne: samplesFindOne, updateOne: samplesUpdateOne };
         if (name === 'sample_movements') return movements;
         if (name === 'counters') return counters;
-        if (name === 'storageAssignments') return { findOne: storageAssignmentsFindOne };
+        if (name === 'storageAssignments') {
+          return {
+            findOne: storageAssignmentsFindOne,
+            insertOne: storageAssignmentsInsertOne,
+            updateOne: storageAssignmentsUpdateOne
+          };
+        }
         // #646 Wave 3 (RF017 AC#7): MongoStorageRepository#autoAssignSamplePosition
         // (called via storageRepository below) now checks checkLocationBlocked,
         // which queries these two -- no StoragePath/blocked ancestor by default,

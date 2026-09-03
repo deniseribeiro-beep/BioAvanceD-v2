@@ -567,6 +567,16 @@ class MongoStorageRepository {
       throw new Error('Falha ao atualizar a amostra após alocação automática');
     }
 
+    // #1003: the other three storage-placement writers (allocateSamplePosition,
+    // moveSamplePosition, releaseSamplePosition) each open/close a
+    // StorageAssignment row -- auto-assign never did, so findSampleById never
+    // resolved a storageAssignment for an auto-assigned specimen and
+    // releaseSamplePosition/moveSamplePosition both refused to act on it.
+    await this.openStorageAssignment(
+      { specimenId: input.specimenId, boxId: boxObjId, positionCode: lockedPosition },
+      session
+    );
+
     return lockedPosition;
   }
 
@@ -618,6 +628,15 @@ class MongoStorageRepository {
         }
       },
       { session }
+    );
+
+    // #1003: compensates the openStorageAssignment hunk A added to
+    // autoAssignSamplePosition above -- without this, a rollback (e.g. the
+    // Neo4j-sync-failed path in storageService.js) would leave an OPEN
+    // StorageAssignment for a specimen that is no longer allocated.
+    await this.closeStorageAssignment(
+      { specimenId: input.specimenId, boxId: boxObjId, positionCode: input.position },
+      session
     );
   }
 

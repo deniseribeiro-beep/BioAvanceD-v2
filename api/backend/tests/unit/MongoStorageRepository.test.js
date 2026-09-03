@@ -808,6 +808,39 @@ describe('MongoStorageRepository', () => {
         'Falha ao atualizar'
       );
     });
+
+    // #1003: auto-assign is the only one of the four storage-placement
+    // writers that never opened a StorageAssignment row -- direct analogue
+    // of allocateSamplePosition's own "#402" case above.
+    it('opens a StorageAssignment for the newly auto-assigned position (#1003)', async () => {
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: specimenId, storageLocation: null }),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(boxDoc),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const storageAssignmentsInsertOne = vi.fn().mockResolvedValueOnce({ insertedId: 'x' });
+      const storageAssignments = makeCollection({ insertOne: storageAssignmentsInsertOne });
+      const db = makeDb({ samples, storageBoxes, storageAssignments });
+      const repo = new MongoStorageRepository(db);
+
+      const position = await repo.autoAssignSamplePosition({ specimenId, boxId }, {});
+
+      expect(position).toBe('A2');
+      expect(storageAssignmentsInsertOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          specimenId: String(specimenId),
+          boxId: String(boxId),
+          positionCode: 'A2',
+          placedAt: expect.any(Date),
+          removedAt: null,
+          occupancyStatus: 'ocupada'
+        }),
+        { session: {} }
+      );
+    });
   });
 
   describe('rollbackAutoAssignedPosition', () => {
@@ -827,6 +860,34 @@ describe('MongoStorageRepository', () => {
 
       const sampleUnsetCall = samples.updateOne.mock.calls[0];
       expect(sampleUnsetCall[1].$unset.storageLocation).toBe('');
+    });
+
+    // #1003: compensates the openStorageAssignment hunk added to
+    // autoAssignSamplePosition -- a rollback must close the StorageAssignment
+    // it opened, or the specimen would be left with an OPEN placement-history
+    // record for a position it no longer occupies.
+    it('closes the StorageAssignment for the rolled-back position (#1003)', async () => {
+      const specimenId = new ObjectId();
+      const boxId = new ObjectId();
+      const samples = makeCollection({ updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 }) });
+      const storageBoxes = makeCollection({ updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 }) });
+      const storageAssignmentsUpdateOne = vi.fn().mockResolvedValueOnce({ matchedCount: 1 });
+      const storageAssignments = makeCollection({ updateOne: storageAssignmentsUpdateOne });
+      const db = makeDb({ samples, storageBoxes, storageAssignments });
+      const repo = new MongoStorageRepository(db);
+
+      await repo.rollbackAutoAssignedPosition({ specimenId, boxId, position: 'A2' }, {});
+
+      expect(storageAssignmentsUpdateOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          specimenId: String(specimenId),
+          boxId: String(boxId),
+          positionCode: 'A2',
+          removedAt: null
+        }),
+        expect.objectContaining({ $set: expect.objectContaining({ removedAt: expect.any(Date), occupancyStatus: 'livre' }) }),
+        { session: {} }
+      );
     });
   });
 
