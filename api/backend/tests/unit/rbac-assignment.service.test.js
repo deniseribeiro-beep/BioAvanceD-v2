@@ -157,8 +157,8 @@ describe('rbac-assignment.service (#421)', () => {
 
     const result = await backfillUserRoleAssignments(db);
 
-    expect(result).toHaveLength(2);
-    expect(result.map((a) => a.roleId).sort()).toEqual(['role-coord', 'role-tech'].sort());
+    expect(result.granted).toHaveLength(2);
+    expect(result.granted.map((a) => a.roleId).sort()).toEqual(['role-coord', 'role-tech'].sort());
   });
 
   it('backfillUserRoleAssignments rodado duas vezes não duplica assignments (idempotente)', async () => {
@@ -178,8 +178,51 @@ describe('rbac-assignment.service (#421)', () => {
 
     const result = await backfillUserRoleAssignments(db);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].roleId).toBeTruthy();
+    expect(result.granted).toHaveLength(1);
+    expect(result.granted[0].roleId).toBeTruthy();
+  });
+
+  // #916/#922-adjacent: post-#427 write paths stopped stamping accessType
+  // onto the User document, so a user who somehow ends up without a
+  // UserRoleAssignment (and never had accessType to begin with) can no
+  // longer be repaired by guessing a role -- roleName isn't on the document
+  // either (same change), and every other resolver either defaults to a
+  // role that was never granted or is circular (reads the assignment it
+  // would be creating). The fix is to surface these users instead of
+  // silently skipping them.
+  it('backfillUserRoleAssignments marca como skipped (orphan) usuário sem accessType e sem assignment ativa', async () => {
+    const users = [{ _id: { toString: () => 'u1' }, accessType: undefined }];
+    const db = buildDb({ users, roles, assignments: [] });
+
+    const result = await backfillUserRoleAssignments(db);
+
+    expect(result.granted).toHaveLength(0);
+    expect(result.skipped).toEqual([{ userAccountId: 'u1', reason: 'orphan-no-access-type-no-assignment' }]);
+  });
+
+  it('backfillUserRoleAssignments marca como skipped (benigno) usuário sem accessType mas com assignment ativa', async () => {
+    const users = [{ _id: { toString: () => 'u1' }, accessType: undefined }];
+    const assignments = [{ assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', assignmentStatus: 'active', validUntil: null }];
+    const db = buildDb({ users, roles, assignments });
+
+    const result = await backfillUserRoleAssignments(db);
+
+    expect(result.granted).toHaveLength(0);
+    expect(result.skipped).toEqual([{ userAccountId: 'u1', reason: 'no-access-type-already-assigned' }]);
+  });
+
+  it('backfillUserRoleAssignments mistura usuário com accessType (granted) e órfão sem accessType (skipped)', async () => {
+    const users = [
+      { _id: { toString: () => 'u1' }, accessType: 3 },
+      { _id: { toString: () => 'u2' }, accessType: undefined },
+    ];
+    const db = buildDb({ users, roles, assignments: [] });
+
+    const result = await backfillUserRoleAssignments(db);
+
+    expect(result.granted).toHaveLength(1);
+    expect(result.granted[0].userAccountId).toBe('u1');
+    expect(result.skipped).toEqual([{ userAccountId: 'u2', reason: 'orphan-no-access-type-no-assignment' }]);
   });
 
   it('userHasPermission retorna false quando o usuário não tem nenhuma assignment ativa', async () => {
@@ -442,7 +485,7 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
 
     const result = await backfillUserRoleAssignments(db);
 
-    const byUser = Object.fromEntries(result.map((a) => [a.userAccountId, a]));
+    const byUser = Object.fromEntries(result.granted.map((a) => [a.userAccountId, a]));
     expect(byUser.u1.scopeId).toBe('org-1');
     expect(byUser.u2.scopeId).toBe('org-2');
   });

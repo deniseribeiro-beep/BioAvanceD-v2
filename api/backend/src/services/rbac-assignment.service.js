@@ -205,21 +205,42 @@ async function backfillUserRoleAssignments(db) {
   const users = db.collection('users');
   const userDocs = await users.find({}).toArray();
 
-  const results = [];
+  const granted = [];
+  const skipped = [];
   for (const user of userDocs) {
-    if (!user.accessType) continue;
+    const userAccountId = user._id.toString();
+    if (!user.accessType) {
+      // Can't guess a role for a user with no accessType: roleName was
+      // dropped from the User document in the same #427 change that
+      // dropped accessType, so there's no display hint to fall back to
+      // either. `authService.getAccessTypeForRole` defaults unknown input
+      // to Técnico, which would invent a grant, and
+      // `resolveUserHierarchyLevel` is circular here -- it reads the very
+      // assignment this function would be creating. So instead of
+      // silently skipping (the old behaviour), record why: benign if the
+      // user already has an active assignment from some other path,
+      // otherwise an orphan that needs manual attention.
+      const activeAssignments = await getActiveAssignments(db, userAccountId);
+      skipped.push({
+        userAccountId,
+        reason: activeAssignments.length
+          ? 'no-access-type-already-assigned'
+          : 'orphan-no-access-type-no-assignment',
+      });
+      continue;
+    }
     const organizationId = user.organizationId
       || (Array.isArray(user.organizationIds) ? user.organizationIds[0] : null)
       || null;
     const assignment = await grantRoleForAccessType(db, {
-      userAccountId: user._id.toString(),
+      userAccountId,
       accessType: user.accessType,
       grantedBy: 'system-backfill',
       organizationId,
     });
-    results.push(assignment);
+    granted.push(assignment);
   }
-  return results;
+  return { granted, skipped };
 }
 
 /**

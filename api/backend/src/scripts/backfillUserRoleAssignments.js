@@ -19,8 +19,21 @@ const { backfillUserRoleAssignments } = require('../services/rbac-assignment.ser
 
 async function run() {
   const db = await connectDB();
-  const assignments = await backfillUserRoleAssignments(db);
-  console.log(`UserRoleAssignment backfill: ${assignments.length} assignment(s) ensured`);
+  const { granted, skipped } = await backfillUserRoleAssignments(db);
+  console.log(`UserRoleAssignment backfill: ${granted.length} assignment(s) ensured, ${skipped.length} user(s) skipped`);
+
+  // Surfaced separately because these are the users the fix exists for: no
+  // accessType and no active assignment, so this script has no recoverable
+  // way to derive a role for them (see rbac-assignment.service.js). They
+  // need manual attention -- guessing a role here would be worse than
+  // leaving them unassigned.
+  const orphans = skipped.filter((entry) => entry.reason === 'orphan-no-access-type-no-assignment');
+  if (orphans.length) {
+    console.log(`  ${orphans.length} orphan(s) with no accessType and no assignment -- needs manual review:`);
+    for (const orphan of orphans) {
+      console.log(`    - ${orphan.userAccountId}`);
+    }
+  }
 }
 
 if (require.main === module) {
