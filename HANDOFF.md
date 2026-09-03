@@ -32,7 +32,9 @@ trusting it.
   sitting, not re-verified here** — no bootstrap service was started; the
   gate needed only the 12 core services.
 - **Test-stack images are CURRENT** — rebuilt this sitting from this tree.
-  **Build cache was NOT pruned.**
+  The 33 images and 5 named volumes were deliberately kept.
+- **Build cache pruned to 0B at session end** (`docker builder prune -af`,
+  1.047GB reclaimed).
 - **The images predate `490077f4`.** Anything verifying #986 against a live
   stack must rebuild `backend-app-test` first.
 
