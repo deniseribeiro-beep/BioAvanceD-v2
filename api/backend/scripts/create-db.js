@@ -101,15 +101,49 @@ async function createDatabase() {
     logger.info('Iniciando criacao/verificacao do banco canonico...');
     const db = await connectNewDB();
 
+    // #1027: cada createIndex tem o seu proprio catch. Antes, um unico
+    // indice em conflito derrubava o script inteiro pelo catch externo,
+    // e como `users` e COLLECTIONS[0] e `email` e o seu primeiro indice,
+    // isso acontecia na PRIMEIRA chamada em qualquer banco onde o
+    // bootstrap de administrador ja tinha rodado -- ou seja, em todo
+    // stack utilizavel. [ran it] mongo:7, com createFirstAdmin.js:45-46
+    // aplicado antes: IndexKeySpecsConflict (86), exit 1, e NENHUMA das
+    // 18 colecoes criada.
+    //
+    // A causa e que :107 chama createIndex com UM argumento, entao as 46
+    // declaracoes deste arquivo sao todas SEM NOME -- e um indice sem nome
+    // colide com qualquer outro dono que tambem nao nomeie o seu e declare
+    // opcoes diferentes. `users.{email,username}` e o unico par nessas
+    // condicoes hoje (os outros donos nomeiam os seus), mas o catch por
+    // indice vale para a classe, nao so para esse par.
+    //
+    // Falhar um indice nao e fatal: o outro dono ja construiu uma versao
+    // MAIS restritiva (unique). O que era inaceitavel era uma colecao
+    // impedir as outras dezessete. Mesmo formato dos onze helpers
+    // ensureIndexes escritos a mao deste repo, que registram e seguem.
+    let indexesBuilt = 0;
+    const indexFailures = [];
+
     for (const collectionConfig of COLLECTIONS) {
       const collection = db.collection(collectionConfig.name);
       for (const index of collectionConfig.indexes) {
-        await collection.createIndex(index);
+        try {
+          await collection.createIndex(index);
+          indexesBuilt += 1;
+        } catch (indexError) {
+          indexFailures.push(`${collectionConfig.name} ${JSON.stringify(index)}: ${indexError.message}`);
+          logger.warn(`Indice nao criado em ${collectionConfig.name} ${JSON.stringify(index)}: ${indexError.message}`);
+        }
       }
       logger.info(`Colecao canonica verificada: ${collectionConfig.name} - ${collectionConfig.description}`);
     }
 
-    logger.info(`Banco canonico verificado com sucesso. Colecoes: ${COLLECTIONS.length}`);
+    logger.info(`Banco canonico verificado. Colecoes: ${COLLECTIONS.length}, indices criados: ${indexesBuilt}, ignorados: ${indexFailures.length}`);
+    if (indexFailures.length > 0) {
+      // Resumo no fim: os warns individuais ficam soterrados por 18 linhas
+      // de "Colecao canonica verificada" e o operador nao os ve.
+      logger.warn(`Indices ignorados (${indexFailures.length}): ${indexFailures.join(" | ")}`);
+    }
     await closeConnection();
     process.exit(0);
   } catch (error) {
