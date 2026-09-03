@@ -551,7 +551,12 @@ router.patch('/freezer/:freezerId/room', authenticate, requirePermission('manage
     });
   } catch (error) {
     logger.error('[Storage] Erro ao atribuir room ao freezer:', error.message || error);
-    return res.status(400).json({
+    // #1022: was 400, the only failure path in this router not using 5xx --
+    // it told the caller "you sent something wrong" and "the server broke" in
+    // one body. This routes only genuine unhandled exceptions: the expected
+    // failures (FREEZER_NOT_FOUND, NOT_A_FREEZER, ROOM_NOT_FOUND) are all
+    // handled above. Same class #892 fixed for checkBoxIntegrity here.
+    return res.status(500).json({
       success: false,
       error: 'INTERNAL_ERROR',
       message: error.message

@@ -226,6 +226,29 @@ describe('PATCH /api/storage/freezer/:freezerId/room', () => {
     expect(res.body.error).toBe('FREEZER_NOT_FOUND');
   });
 
+  // #1022: the catch-all was the ONLY failure path in this router that did
+  // not use 5xx -- it answered 400 with error INTERNAL_ERROR, which tells a
+  // caller "you sent something wrong" and "the server broke" in the same
+  // body. The route's own expected failures (FREEZER_NOT_FOUND 404,
+  // NOT_A_FREEZER 400, ROOM_NOT_FOUND 404) are all handled above the catch,
+  // so nothing legitimate reaches it -- only a genuine unhandled exception.
+  // Same class #892 already fixed in this router for checkBoxIntegrity.
+  it('#1022: an unhandled exception answers 500, not 400', async () => {
+    const storageColl = createCollectionMock({
+      findOne: vi.fn().mockRejectedValue(new Error('driver exploded')),
+    });
+    app.locals.db = dbWithRbac({ storageContainers: storageColl }, 4);
+
+    const res = await request(app)
+      .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ roomId: ROOM_ID.toString() });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('INTERNAL_ERROR');
+    expect(res.body.success).toBe(false);
+  });
+
   it('rejects a non-FREEZER container with 400', async () => {
     const storageColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_SHELF) });
     app.locals.db = dbWithRbac({ storageContainers: storageColl }, 4);
