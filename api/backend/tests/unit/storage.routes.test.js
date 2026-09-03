@@ -658,7 +658,7 @@ describe('storage.routes', () => {
     // or 409), success:false, with an errors array -- an orphaned position
     // reference plus a currentOccupancy/actualOccupancy mismatch. #892 left
     // this arm exactly as it was: an inconsistent box is a real 400, and
-    // STORAGE_API_EXAMPLES.js's example 8B documents it as one.
+    // STORAGE_API_EXAMPLES.js's example 10B documents it as one.
     it('answers 400 with success:false and an errors array for an orphaned/miscounted box', async () => {
       const { router } = loadRoute();
       const storageBoxes = createMatchingCollection([

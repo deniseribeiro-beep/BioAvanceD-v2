@@ -84,7 +84,7 @@
 {
   "success": true,
   "data": {
-    "sampleId": "507f1f77bcf86cd799439011",
+    "specimenId": "507f1f77bcf86cd799439011",
     "boxId": "507f1f77bcf86cd799439012",
     "position": "A1"
   },
@@ -102,7 +102,135 @@
 }
 
 // ============================================================================
-// 3. VERIFICAR LOCALIZAÇÃO DE UMA AMOSTRA
+// 3. ALOCAR AMOSTRA AUTOMATICAMENTE (PRÓXIMA POSIÇÃO VAZIA)
+// ============================================================================
+
+// POST /api/storage/allocate/auto
+// Aloca a amostra na primeira posição vazia (leitura row-major, ex: A1, A2...)
+// da caixa informada, em vez de o chamador escolher a posição.
+// Fonte: storage.routes.js:165-207, auto-assign-sample.controller.js,
+// storageService.js:79-280 (StorageService.autoAssignSampleToBox).
+
+/**
+ * Request Body:
+ */
+{
+  "sampleId": "507f1f77bcf86cd799439011",
+  "boxId": "507f1f77bcf86cd799439012"
+}
+
+/**
+ * Response 201 (Sucesso):
+ *
+ * NOTA sobre a chave da resposta: o campo é "specimenId", não "sampleId",
+ * mesmo o corpo da requisição usando "sampleId"
+ * (storageService.js:254-258 monta sampleLocation com "specimenId").
+ * Isto NÃO é uma particularidade deste endpoint: o mesmo já acontece em
+ * POST /allocate (AllocateSampleUseCase.js:106-110) e em
+ * DELETE /release/:sampleId (ReleaseSampleUseCase.js:63-64) -- os três
+ * devolvem "specimenId" em produção, de forma consistente. Os blocos
+ * "2. ALOCAR AMOSTRA" acima e "7. LIBERAR AMOSTRA" abaixo mostravam
+ * "sampleId" e foram corrigidos junto com esta issue (#1016): quem
+ * escrevesse um cliente a partir deles leria a chave errada.
+ */
+{
+  "success": true,
+  "data": {
+    "specimenId": "507f1f77bcf86cd799439011",
+    "boxId": "507f1f77bcf86cd799439012",
+    "position": "A1"
+  },
+  "message": "Amostra alocada automaticamente na Posição A1",
+  "graphPersisted": true
+}
+
+/**
+ * Response 400 (Entrada inválida):
+ */
+{
+  "success": false,
+  "error": "INVALID_INPUT",
+  "message": "sampleId e boxId são obrigatórios"
+}
+
+/**
+ * Response 404 (Amostra ou caixa inexistente):
+ */
+{
+  "success": false,
+  "error": "SAMPLE_NOT_FOUND",
+  "message": "Amostra 507f1f77bcf86cd799439011 não encontrada"
+}
+
+/**
+ * Response 409 (Já alocada / caixa cheia):
+ */
+{
+  "success": false,
+  "error": "ALREADY_ALLOCATED",
+  "message": "Amostra já está alocada em 507f.../A1"
+}
+{
+  "success": false,
+  "error": "BOX_FULL",
+  "message": "Nenhuma posição disponível nesta box"
+}
+
+// ============================================================================
+// 4. MOVER AMOSTRA ENTRE POSIÇÕES
+// ============================================================================
+
+// POST /api/storage/move
+// Move uma amostra já alocada de uma posição para outra (transação Mongo +
+// evento de auditoria imutável). Fonte: storage.routes.js:209-222,
+// move-sample.controller.js, MoveSampleUseCase.js.
+
+/**
+ * Request Body:
+ */
+{
+  "sampleId": "507f1f77bcf86cd799439011",
+  "targetBoxId": "507f1f77bcf86cd799439012",
+  "targetPosition": "A1",
+  "reason": "Reorganização de layout",
+  "notes": "Movido durante inventário"
+}
+
+/**
+ * Response 200 (Sucesso):
+ * (MoveSampleUseCase.js:156-167 -- data é o retorno cru do caso de uso, não
+ * um sampleLocation; note também "specimenId" aqui, não "sampleId".)
+ */
+{
+  "success": true,
+  "data": {
+    "movementID": 42,
+    "specimenId": "507f1f77bcf86cd799439011",
+    "from": { "boxId": "507f1f77bcf86cd799439012", "position": "A1" },
+    "to": { "boxId": "507f1f77bcf86cd799439013", "position": "B2" },
+    "movedAt": "2026-02-12T10:00:00.000Z",
+    "lineageSynced": true,
+    "lineageValidated": true,
+    "lineagePersisted": true,
+    "lineageEventId": "..."
+  },
+  "message": "Amostra movida com sucesso"
+}
+
+/**
+ * Response 404/409/400/500 -- código de erro único (MOVE_SAMPLE_ERROR) com
+ * status derivado da mensagem lançada pelo use case. Ver o comentário de
+ * MOVE_SAMPLE_ERROR na tabela ERROR_CODES abaixo e
+ * move-sample.controller.js:74-101.
+ */
+{
+  "success": false,
+  "error": "MOVE_SAMPLE_ERROR",
+  "message": "Amostra não encontrada"
+}
+
+// ============================================================================
+// 5. VERIFICAR LOCALIZAÇÃO DE UMA AMOSTRA
 // ============================================================================
 
 // GET /api/storage/sample/:sampleId
@@ -116,12 +244,15 @@
 {
   "success": true,
   "data": {
-    "sampleId": "507f1f77bcf86cd799439011",
+    "specimenId": "507f1f77bcf86cd799439011",
     "barcode": "BA123456789",
     "box": {
       "boxId": "507f1f77bcf86cd799439012",
+      "boxName": "Box A1-01",
       "position": "A1"
     },
+    "locationID": "LOC-0001",
+    "readable": "Ultra-Freezer 01 / Prateleira 1 / Rack A / Box A1-01 / A1",
     "path": "Ultra-Freezer 01/Prateleira 1/Rack A/Box A1-01",
     "fullHierarchy": {
       "freezerId": "507f1f77bcf86cd799439000",
@@ -133,7 +264,7 @@
 }
 
 // ============================================================================
-// 4. LISTAR POSIÇÕES DISPONÍVEIS EM UMA CAIXA
+// 6. LISTAR POSIÇÕES DISPONÍVEIS EM UMA CAIXA
 // ============================================================================
 
 // GET /api/storage/box/:boxId/available
@@ -167,7 +298,7 @@
 }
 
 // ============================================================================
-// 5. LIBERAR AMOSTRA DE UMA POSIÇÃO
+// 7. LIBERAR AMOSTRA DE UMA POSIÇÃO
 // ============================================================================
 
 // DELETE /api/storage/release/:sampleId
@@ -181,7 +312,7 @@
 {
   "success": true,
   "data": {
-    "sampleId": "507f1f77bcf86cd799439011",
+    "specimenId": "507f1f77bcf86cd799439011",
     "boxId": "507f1f77bcf86cd799439012",
     "position": "A1"
   },
@@ -189,7 +320,7 @@
 }
 
 // ============================================================================
-// 6. OBTER ÁRVORE HIERÁRQUICA DO FREEZER
+// 8. OBTER ÁRVORE HIERÁRQUICA DO FREEZER
 // ============================================================================
 
 // GET /api/storage/freezer/:freezerId/tree
@@ -276,7 +407,7 @@
 }
 
 // ============================================================================
-// 7. ESTATÍSTICAS DE OCUPAÇÃO
+// 9. ESTATÍSTICAS DE OCUPAÇÃO
 // ============================================================================
 
 // GET /api/storage/freezer/:freezerId/stats
@@ -317,7 +448,7 @@
 }
 
 // ============================================================================
-// 8. VERIFICAÇÃO DE INTEGRIDADE (AUDITORIA)
+// 10. VERIFICAÇÃO DE INTEGRIDADE (AUDITORIA)
 // ============================================================================
 
 // GET /api/storage/box/:boxId/integrity
@@ -365,6 +496,128 @@
       "actualOccupancy": 4
     }
   }
+}
+
+// ============================================================================
+// 11. LISTAR FREEZERS OPERACIONAIS
+// ============================================================================
+
+// GET /api/storage/freezers
+// Lista todos os freezers com status OPERATIONAL.
+// Fonte: storage.routes.js:79-99, storage-query.controller.js:14-33,
+// ListOperationalFreezersUseCase.js.
+
+/**
+ * GET /api/storage/freezers
+ *
+ * Response 200:
+ */
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "507f1f77bcf86cd799439000",
+      "containerID": 1,
+      "name": "Ultra-Freezer 01",
+      "temperature": -80,
+      "temperatureUnit": "CELSIUS",
+      "status": "OPERATIONAL"
+    }
+  ]
+}
+
+// ============================================================================
+// 12. BUSCAR AMOSTRAS ALOCÁVEIS
+// ============================================================================
+
+// GET /api/storage/samples/search?q=termo
+// Busca amostras ainda não alocadas (sem storageLocation.boxId), com
+// currentStatus em Available/Registered/pending, enriquecidas com o status
+// de consentimento do paciente.
+// Fonte: storage.routes.js:101-130, storage-query.controller.js:35-55,
+// SearchAllocatableSamplesUseCase.js.
+
+/**
+ * GET /api/storage/samples/search?q=BR-2025-001
+ *
+ * Response 200:
+ */
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "507f1f77bcf86cd799439011",
+      "barcode": "BR-2025-001",
+      "patientID": "10732282",
+      "sampleType": "Sangue",
+      "currentStatus": "Available",
+      "consentValid": true,
+      "consentMessage": "Consentimento ativo",
+      "canAllocate": true
+    }
+  ]
+}
+
+// ============================================================================
+// 13. ATRIBUIR ROOM A UM FREEZER
+// ============================================================================
+
+// PATCH /api/storage/freezer/:freezerId/room
+// Atribui (ou remove, com roomId null) a Room de um container do tipo
+// FREEZER. Fonte: storage.routes.js:466-560 (handler inline, não passa por
+// um controller dedicado).
+
+/**
+ * Request Body:
+ */
+{
+  "roomId": "507f1f77bcf86cd799439012"
+}
+
+/**
+ * Response 200 (Sucesso):
+ */
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439000",
+    "roomId": "507f1f77bcf86cd799439012"
+  }
+}
+
+/**
+ * Response 404 (storage.routes.js:505-507, :523-526):
+ */
+{
+  "success": false,
+  "error": "FREEZER_NOT_FOUND"
+}
+{
+  "success": false,
+  "error": "ROOM_NOT_FOUND"
+}
+
+/**
+ * Response 400 (container não é FREEZER -- storage.routes.js:508-514):
+ */
+{
+  "success": false,
+  "error": "NOT_A_FREEZER",
+  "message": "roomId só pode ser atribuído a containers do tipo FREEZER"
+}
+
+/**
+ * Response 400 (falha inesperada -- storage.routes.js:552-559).
+ * NOTA: ao contrário dos outros endpoints deste arquivo, o catch desta rota
+ * devolve status 400 (não 500) com error "INTERNAL_ERROR" para QUALQUER
+ * exceção não tratada, incluindo falhas de infraestrutura. Documentado como
+ * está no código, não como deveria ser -- ver issue de acompanhamento
+ * sugerida no fechamento desta issue (#1016).
+ */
+{
+  "success": false,
+  "error": "INTERNAL_ERROR",
+  "message": "..."
 }
 
 // ============================================================================
@@ -422,15 +675,36 @@ const ERROR_CODES = {
   INVALID_POSITION_FORMAT: "Formato de posição inválido (ex: A1, B4)",
   POSITION_OUT_OF_BOUNDS_ROW: "Linha fora do intervalo (máximo até Z)",
   POSITION_OUT_OF_BOUNDS_COL: "Coluna fora do intervalo",
-  NO_STORAGE_LOCATION: "Amostra sem localização de armazenamento",
+  NOT_A_FREEZER: "Container não é do tipo FREEZER (PATCH /freezer/:freezerId/room, storage.routes.js:508-514)",
+
+  // NO_STORAGE_LOCATION is INTERNAL-ONLY and unreachable through any route.
+  // It is emitted solely by StorageService.releaseSampleFromPosition
+  // (storageService.js:289-364, the code itself at :315), a method with no
+  // production caller -- confirmed via `git grep -n releaseSampleFromPosition`
+  // across the tracked tree, which turns up only its own definition and its
+  // unit tests (tests/unit/storageService.test.js). DELETE
+  // /release/:sampleId, the route this method's name suggests it backs,
+  // actually routes through ReleaseSampleUseCase and surfaces RELEASE_ERROR
+  // (see below) instead. Kept in this table rather than deleted, because the
+  // dead method still exists and a future direct caller of the service would
+  // still see this code.
+  NO_STORAGE_LOCATION: "Amostra sem localização de armazenamento -- dead code path (ver nota acima); DELETE /release/:sampleId devolve RELEASE_ERROR, nunca este código",
 
   // 404 - Não encontrado
   SAMPLE_NOT_FOUND: "Amostra não encontrada",
   BOX_NOT_FOUND: "StorageBox não encontrada",
   FREEZER_NOT_FOUND: "Freezer não encontrado",
+  ROOM_NOT_FOUND: "Room não encontrada (PATCH /freezer/:freezerId/room, storage.routes.js:523-526)",
 
   // 409 - Conflito
   STORAGE_COLLISION: "Posição já está ocupada (colisão detectada)",
+
+  // ALREADY_ALLOCATED and BOX_FULL are sentinels specific to
+  // POST /allocate/auto, returned by StorageService.autoAssignSampleToBox
+  // (storageService.js:120-126 and :128-135 respectively) and mapped to 409
+  // by auto-assign-sample.controller.js:41-45.
+  ALREADY_ALLOCATED: "Amostra já está alocada em outra posição (POST /allocate/auto)",
+  BOX_FULL: "Nenhuma posição disponível nesta box (POST /allocate/auto)",
 
   // ALLOCATION_ERROR, RELEASE_ERROR and MOVE_SAMPLE_ERROR are shared error
   // codes: their HTTP status varies by cause -- 409 (STORAGE_COLLISION),
@@ -442,11 +716,45 @@ const ERROR_CODES = {
   RELEASE_ERROR: "Erro ao liberar posição (409/404/400/500 conforme a causa)",
   MOVE_SAMPLE_ERROR: "Erro ao mover amostra (409/404/400/500 conforme a causa)",
 
+  // AUTO_ASSIGNMENT_ERROR and AUTO_ALLOCATION_ERROR are TWO DIFFERENT CODES
+  // from two different layers of POST /allocate/auto -- NOT two spellings of
+  // the same condition. They are not interchangeable, and this file does not
+  // unify them (that would be an API change, out of scope here); it only
+  // documents which layer each comes from and when a caller actually sees it.
+  //
+  // AUTO_ASSIGNMENT_ERROR -- storageService.js:273. The generic fallback
+  // inside StorageService.autoAssignSampleToBox's own catch block, used when
+  // the failure is none of BOX_NOT_FOUND/SAMPLE_NOT_FOUND/ALREADY_ALLOCATED/
+  // BOX_FULL. This is the value a caller actually receives as `error` when
+  // the service reports failure and auto-assign-sample.controller.js's
+  // `!result.success` branch (:28-52) runs -- mapped to 500 there.
+  //
+  // AUTO_ALLOCATION_ERROR -- auto-assign-sample.controller.js, two sites,
+  // only one reachable in production:
+  //   :49 `result.error || 'AUTO_ALLOCATION_ERROR'` is UNREACHABLE: the real
+  //       service always populates result.error on every failure path
+  //       (including the AUTO_ASSIGNMENT_ERROR fallback above), so this
+  //       default never fires against production code.
+  //   :64 the catch around a THROWN (not returned) error -- e.g. the
+  //       storageService call itself rejects before returning. This is the
+  //       one callers actually see AUTO_ALLOCATION_ERROR from, mapped to 500.
+  AUTO_ASSIGNMENT_ERROR: "Falha inesperada dentro do StorageService durante a alocação automática (500)",
+  AUTO_ALLOCATION_ERROR: "Exceção lançada antes/fora do StorageService, capturada pelo controller (500) -- só o site :64 é alcançável",
+
   // 500 - Erro interno
   INTERNAL_ERROR: "Erro interno do servidor",
   QUERY_ERROR: "Erro ao buscar dados",
   STATS_ERROR: "Erro ao calcular estatísticas",
-  INTEGRITY_CHECK_ERROR: "Erro ao verificar integridade"
+  INTEGRITY_CHECK_ERROR: "Erro ao verificar integridade",
+
+  // 503 - Serviço indisponível
+  // Emitido pelos quatro controllers de mutação de storage (allocate,
+  // allocate/auto, move, release) quando req.app.locals.db está
+  // ausente/falsy, verificado ANTES de qualquer outra validação de entrada.
+  // Fontes: allocate-sample.controller.js:31-36,
+  // auto-assign-sample.controller.js:8-14, move-sample.controller.js:34-40,
+  // release-sample.controller.js:21-27.
+  DATABASE_UNAVAILABLE: "Banco de dados não disponível"
 };
 
 module.exports = {
