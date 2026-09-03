@@ -33,7 +33,9 @@ rather than trusting it.
   gate only needed the 12 core services.
 - **The test-stack images are CURRENT** — rebuilt this sitting from this
   tree, including `tsa-test` and `witness-test`, whose source changed.
-- Build cache **not** pruned this sitting.
+- **Build cache pruned to 0B** at session end (`docker builder prune -af`,
+  1.047GB reclaimed). The 24 test images and the 5 named volumes were
+  deliberately kept, so the next gate needs no rebuild and no re-bootstrap.
 
 ## Verification
 
