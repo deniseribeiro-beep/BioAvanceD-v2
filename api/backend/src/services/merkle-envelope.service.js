@@ -55,11 +55,6 @@ class MerkleEnvelopeService {
       return readFile(file, 'utf8').then((content) => String(content || '').trim());
     }
 
-    const fallbackPem = String(env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM || '').trim();
-    if (fallbackPem && env.NODE_ENV === 'test') {
-      return Promise.resolve(fallbackPem);
-    }
-
     throw new Error('Audit signing key must be provided via AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE');
   }
 

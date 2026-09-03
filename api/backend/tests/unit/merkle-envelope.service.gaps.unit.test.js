@@ -10,25 +10,33 @@ const { canonicalStringify, stableSort } = require('../../src/services/merkle-en
 
 describe('merkle-envelope.service gaps', () => {
   let originalKeyId;
-  let originalPrivatePem;
   let originalPrivateFile;
   let originalPublicKeysJson;
   let originalNodeEnv;
+  let tmpKeyFiles;
+
+  function writeTempKeyFile(pem) {
+    const filePath = path.join(os.tmpdir(), `merkle-envelope-gaps-test-${Date.now()}-${Math.random()}.pem`);
+    fs.writeFileSync(filePath, pem, 'utf8');
+    tmpKeyFiles.push(filePath);
+    return filePath;
+  }
 
   beforeEach(() => {
     originalKeyId = env.AUDIT_MERKLE_SIGN_KEY_ID;
-    originalPrivatePem = env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM;
     originalPrivateFile = env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE;
     originalPublicKeysJson = env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON;
     originalNodeEnv = env.NODE_ENV;
+    tmpKeyFiles = [];
   });
 
   afterEach(() => {
     env.AUDIT_MERKLE_SIGN_KEY_ID = originalKeyId;
-    env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM = originalPrivatePem;
     env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = originalPrivateFile;
     env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = originalPublicKeysJson;
     env.NODE_ENV = originalNodeEnv;
+    tmpKeyFiles.forEach((filePath) => fs.rmSync(filePath, { force: true }));
+    tmpKeyFiles = [];
   });
 
   describe('stableSort / canonicalStringify', () => {
@@ -45,34 +53,17 @@ describe('merkle-envelope.service gaps', () => {
   });
 
   describe('getPrivateKeyPem', () => {
-    it('reads the private key from a file when configured', async () => {
+    it('reads the private key from a file when configured, trimming surrounding whitespace', async () => {
       const pair = crypto.generateKeyPairSync('ed25519');
       const pem = pair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
-      const filePath = path.join(os.tmpdir(), `merkle-key-${Date.now()}.pem`);
-      fs.writeFileSync(filePath, `\n${pem}\n`);
-      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = filePath;
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = writeTempKeyFile(`\n${pem}\n`);
 
-      try {
-        const result = await merkleEnvelopeService.getPrivateKeyPem();
-        expect(result).toBe(pem.trim());
-      } finally {
-        fs.unlinkSync(filePath);
-      }
+      const result = await merkleEnvelopeService.getPrivateKeyPem();
+      expect(result).toBe(pem.trim());
     });
 
-    it('throws when no file is configured and no test-env fallback PEM is set', async () => {
+    it('throws when no file is configured', async () => {
       env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = '';
-      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM = '';
-
-      expect(() => merkleEnvelopeService.getPrivateKeyPem()).toThrow(
-        'Audit signing key must be provided via AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE'
-      );
-    });
-
-    it('throws when a fallback PEM is set but NODE_ENV is not test', async () => {
-      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = '';
-      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM = 'some-pem';
-      env.NODE_ENV = 'production';
 
       expect(() => merkleEnvelopeService.getPrivateKeyPem()).toThrow(
         'Audit signing key must be provided via AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE'
@@ -99,8 +90,9 @@ describe('merkle-envelope.service gaps', () => {
 
   describe('signEnvelope', () => {
     it('throws when the active key id is not configured', async () => {
-      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM = 'irrelevant';
-      env.NODE_ENV = 'test';
+      const pair = crypto.generateKeyPairSync('ed25519');
+      const pem = pair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = writeTempKeyFile(pem);
       env.AUDIT_MERKLE_SIGN_KEY_ID = '';
 
       const envelope = merkleEnvelopeService.buildCanonicalEnvelope({
@@ -136,8 +128,7 @@ describe('merkle-envelope.service gaps', () => {
       const privatePem = pair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
       const publicPem = pair.publicKey.export({ format: 'pem', type: 'spki' }).toString();
       env.AUDIT_MERKLE_SIGN_KEY_ID = 'test-key';
-      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM = privatePem;
-      env.NODE_ENV = 'test';
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = writeTempKeyFile(privatePem);
       env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = JSON.stringify({ 'test-key': publicPem });
 
       const envelope = merkleEnvelopeService.buildCanonicalEnvelope({
