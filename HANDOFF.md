@@ -1,145 +1,114 @@
 # HANDOFF
 
-**Written 2026-09-03, tenth queue sitting. The requested 10-issue queue is
-discharged; no end signal from Dennis, so this is not a sign-off.** Dennis asked for "the next 10 issues to resolve, Docker is on."
-**10 closed, 2 escalated.** 12 commits pushed.
-7 issues filed here, 5 on the pack.
+**Written 2026-09-03, eleventh queue sitting. INTERIM — no end signal
+from Dennis.** He asked for "the next 10 issues, Docker is on." **6 closed,
+1 partially shipped, 12 issues filed.** 7 commits pushed.
 
-**The Docker gate RAN GREEN: 12 passed (11.9s), none skipped**, covering both
-new e2e specs plus the 10 pre-existing tests in those two files. Re-derive
-every count below rather than trusting it.
+**The Docker gate RAN GREEN: 22 passed (20.8s), none skipped.** Native gates
+green too. Re-derive every count below rather than trusting it.
 
 ---
 
 ## Repo state
 
-- Branch `feature/docker-e2e-backend-integration`, pushed. `main`
-  untouched, no PR.
-- Last substantive commit: `8b8e93f4` (#1017).
-- **New npm scripts / dependencies / env keys: none.** `@vitejs/plugin-react`
-  was already a devDependency; #1019 only wired it into a second config.
-- New test files: `frontend/src/components/AnalysisUpload.test.tsx` — the
-  repo's **first** test to *render* a `.jsx` component.
+- Branch `feature/docker-e2e-backend-integration`, pushed, tree clean and
+  matching origin. `main` untouched, no PR.
+- Last substantive commit: the `#1023` import-row-number fix.
+- **No new npm scripts, dependencies or env keys.**
+- New test file: `api/backend/tests/integration/storage-allocation.api.test.js`
+  — the first integration coverage of any storage mutation route.
 
 ## Docker state
 
-- **Stack was empty at sitting start** and is **DOWN again now** — brought
-  up with `--build` (this sitting changed backend source), gated, then
-  `docker compose down --remove-orphans`. No containers left running.
+- **Stack is DOWN.** Brought up from `compose.test.yml` with `--build`
+  (backend source changed), gated, then `down --remove-orphans`. Zero
+  containers.
 - **Both bootstraps ran and exited 0** against the current volumes:
-  `admin-bootstrap-test` and `foundation-bootstrap-test`. The LGPD spec's
-  MIABIS ids are the real seeded ones, so skipping the foundation seed is
-  the highest-probability false red on a first gate — it was not skipped.
-- **`docker compose up -d --wait` exit-code traps, both hit and both
-  harmless:** it exits **1** on a one-shot service that succeeded
-  (`admin-bootstrap-test` showed `Exited (0)`), and it exits **0** while
-  ignoring services with no healthcheck. Read `compose ps` states, never
-  the exit code.
+  `admin-bootstrap-test` and `foundation-bootstrap-test`.
+- **Service names are NOT what they look like.** `[ran it]` The backend is
+  `backend-app-test`, the frontend `frontend-app-test` — a guessed
+  `backend-test` fails with `no such service` **after** the whole build
+  finishes, and the background wrapper still reports exit 0. Take names from
+  `docker compose -f compose.test.yml config --services`.
 - Cleanup: `docker builder prune -af` reclaimed **1.047GB**. Images back to
-  the pre-existing **33 / 4.683GB**; **56 local volumes / 1.537GB** (7 more
-  than last sitting, all compose-managed and near-empty). The
-  `bioavanced-test-*` named volumes are **kept** — dropping them, and any
-  machine-wide `prune -a`, still needs Dennis's consent.
+  the pre-existing **33 / 4.683GB**. **Local volumes are now 65 / 1.852GB,
+  up from 56 / 1.537GB** — compose-managed, near-empty, left alone. The five
+  `bioavanced-test-*` named volumes are **kept**; dropping them, or any
+  machine-wide prune, still needs Dennis's consent.
 
-## What closed (10)
+## What closed (6)
 
-`#1019` `#974` `#1010` `#1012` `#1016` `#1017` `#1024` `#997` `#1015` `#1022`.
-
-## The two the gate closed
-
-- **#997** — `tests/e2e/lgpd-sample-import.spec.ts:269`, commit `7c49132d`.
-  Proves a real HTTP import response carries `data.skipped`.
-- **#1015** — `tests/e2e/sample-storage-lifecycle.spec.ts:209`, commit
-  `1d24f7a8`. `POST /api/storage/allocate/auto` was the last of the four
-  storage mutations with no real-backend coverage.
-
-**[ran it] `npm run test:e2e:docker -- <those two specs> --workers=1
---reporter=list` → 12 passed (11.9s), none skipped.**
-
-## Escalated, not worked (2)
-
-**#988 / #990 are blocked on #1026**, which this sitting filed and which is
-the more important issue of the three. The deferral ladder was walked —
-code, env files, compose files, canonical requirements, milestones.
+`#933` `#1018` `#1025` `#1023` `#1031`, plus `#1006` **partially** (3 of its
+4 writable sites; it stays OPEN for auto-assign, which is blocked on #1026).
 
 ## The judgment a query cannot carry
 
-- **[ran it] `enforceAppendOnlyCollection` was one-shot per PROCESS**, keyed
-  by collection *name*, so `sample_movements` append-only enforcement was
-  order-dependent and absent from the second call onward — and
-  `appendImmutableAudit` builds a fresh view every invocation, so every
-  audit append after the first ran unguarded. Fixed (`041ee8b3`, WeakSet on
-  object identity). **The reason no test saw it: every case in that describe
-  passes a distinct `collectionName`**, so each got a fresh wrap.
-- **[ran it] Every `vi.mock` specifier in `users-access.routes.test.js`
-  resolved to `null`.** The file is at `api/backend/tests/integration/`, so
-  `../../../src` is `api/src`, which does not exist. **Both** mocks were
-  inert — including `auth.service`, which #1017's body asserted was working.
-  Vitest retries a failed dynamic `import` root-relative (which is why the
-  `await import`s worked) and does **not** extend that retry to `vi.mock`.
-  A mock's presence is never evidence it is installed.
-- **[ran it] The remedy for a lazily-required CJS module is to spy on the
-  module object loaded through the same `require` as the SUT** — never
-  `vi.mock`, which does not intercept a lazy in-handler require even at the
-  correct path. `auth.routes.test.js` in the same directory is the working
-  precedent. **The cheap proof the spies landed is that the
-  `AUDIT_TRAIL_WRITE_FAILURE` stderr block disappears from the run.**
-- **[read it] `consent.service.js:952` hardcodes `specimenId: null`**, and
-  `neo4jCanonicalProjection.service.js:79` falls back to `event.aggregateId`
-  — so `GOVERNED_BY` lands on a phantom `Sample` node keyed by the *consent*
-  id. Nothing writes `Sample.consentStatus` either, so
-  `validateBeforePersistence` denies **every real specimen**. `.env.production`
-  runs `fail-closed`. **#1026**, and it violates RNF012 AC#1 (Alta), which
-  requires participant→specimen→location lineage to be recoverable.
-- **[read it] `LINEAGE_MODE` is effectively boolean** — all seven read sites
-  compare `=== 'fail-closed'`, so any typo means fail-open. It is fail-open
-  in code, in `.env.docker`, and in `compose.test.yml` (unset); fail-closed
-  only in production.
-- **[ran it] The `isEmptyRow` backstops were unreachable in all three
-  importers**, by one argument repeated three times — and on the Excel side
-  it is *gate two* that closes it, not gate one. The docs half of the
-  dead-code protocol came back **empty**; the consumer half did **not** (nine
-  tests), so the default did not authorise the deletion on its own.
+- **`[ran it]` `#986` item 1 already shipped in `490077f4`, and its fix
+  traded a password oracle for a cheaper enumeration one.** The enrolment
+  guard now runs *before* `bcrypt.compare`, so `POST
+  /auth/two-factor/qr-first-login` returns `'MFA já configurado…'` for an
+  enrolled account with **any** password — unauthenticated account-existence
+  and enrolment disclosure. `processLogin`'s own comment in the same file
+  says *"enumeration is the worse leak."* Filed as **#1032**; #986 now tracks
+  item 2 only.
+- **`[ran it]` `create-db.js` almost certainly aborts on its FIRST
+  collection.** `createFirstAdmin.js` builds `users.email`/`username`
+  unnamed+unique; `create-db.js` builds the same keys unnamed with no
+  options. Measured on `mongo:7`: `IndexKeySpecsConflict` **(86)**. `users`
+  is `COLLECTIONS[0]` and the loop has no per-index catch. **If it holds,
+  #983's field drift has never been reachable** — so #1027 sequences before
+  #983. `[not established]` end-to-end via `npm run create-db`; that needs a
+  seeded DB.
+- **`[read it]` A naive #1023 fix would have been a data-integrity
+  regression.** `quarantineRejectedSampleRows` derived the array index back
+  out of the displayed row number (`rows[row - 2]`). Changing only the three
+  `rowNumber` lines would have attached the wrong row — or `null` — to every
+  quarantined record in a file with an earlier blank row. Fixed by carrying
+  the index separately; **no fallback**, because `row - 2` on a physical line
+  computes a wrong index silently.
+- **`[ran it]` `#941`'s body is four corrections stale.** Nine `Schema.index`
+  sites survive, **two** unique (not nine over ten files); `StorageBox`'s
+  `sparse` hazard no longer exists; and building `sensorMetadata.macAddress`
+  would be a **regression**, since the upsert keys on `sensorId` and nothing
+  reads macAddress. `Model.createIndexes()` avoids the drop objection the
+  whole thread is organised around — nobody had said so.
+- **`[ran it]` `#956`'s audit half already shipped in `e0b175a1`**, and its
+  frontend has a `TEMPERATURE_READING_DISABLED = true` kill switch, so the
+  success branch is unreachable and a backend fix alone is invisible.
 
 ## Conventions this sitting relied on / established
 
-- **A claim from another agent's report is not firsthand.** One reached a
-  second agent's brief as established fact and was refuted by that worker.
-  The `verify-each-precedent` clause is what caught it — twice. Pack **#712**.
-- **A leaf worker cannot run `gh`**, so a brief must transcribe the
-  load-bearing issue comments rather than saying "read the issue". Pack **#711**.
-- **Derive the consumer set from the changed FUNCTION, not the module** — a
-  module-level two-hop sweep on `session.service` returns ~65 test files,
-  most of which only stub auth middleware.
-- **When the changed file is the test runner's own config, the consumer set
-  is the whole suite** and the sanctioned explicit-breadth run is the
-  targeted one. Pack **#709**.
+- **`| head` on a completeness-oriented read is the sitting's most expensive
+  habit.** Three instances; one produced a materially stale agent brief that
+  sent a research agent to re-investigate shipped work. Pack **#717**.
+- **`[ran it]` A bare `git checkout --` during a can-it-fail probe destroyed
+  a delegated worker's UNCOMMITTED fix** — pack #663's exact trap, in a
+  sitting that had followed it correctly twice hours earlier. A delegated fix
+  arrives already-written, so the probe lands *before* the commit by
+  construction. Pack **#719**, with a hook proposal.
+- **`docker compose ps` after `--wait`, never the exit code** — and note the
+  background wrapper's exit code is not compose's either.
+- **The two-hop consumer sweep paid again**: the #1023 worker's scoped run
+  was green while `import-lgpd.persistImportOptions.unit.test.js` was red,
+  found only by sweeping importers of the changed module.
 
 ## Filed this sitting
 
-Here: **#1020 #1021 #1023 #1025 #1026** open; **#1022** and **#1024** were
+Here: **#1027 #1028 #1029 #1030 #1032 #1033 #1034 #1035** open; **#1031**
 filed and closed in the same sitting.
-On the pack: **#709 #710 #711 #712 #713**. Comments on pack #579, #657.
+On the pack: **#717 #718 #719**.
 
-**Worth reading first: #1026** (consent projection keys `GOVERNED_BY` onto a
-phantom node — production-shaped, blocks #988), then **#1021** (a `PUT` that
-merely *omits* `mfaEnabled` disables an admin's MFA; the inline comment says
-that is deliberate).
+**Worth reading first: #1032** (unauthenticated enumeration oracle,
+security), then **#1027** (the abort that gates #983), then **#1030**
+(decision record — my #933 change widened what one admin may do to another,
+and wants Dennis's confirm-or-reverse).
 
 Query the board for everything else: `gh issue list --state open`.
 
 ## Recommended next
 
-**None queued by Dennis.** The one thing genuinely waiting on him is
-**#1026's direction** — it blocks #988/#990 and is the highest-value open
-item this sitting produced.
-
-The cheapest unblocked work on the board is **#1025** — apply #1017's spy
-remedy to `user-security.routes.test.js`. Its controller requires
-auditLogger at BOTH module scope and lazily, so correcting the path alone
-changes that suite's behaviour; that is why it was split rather than done
-as a drive-by.
-
-**#1025 is the one issue this sitting filed and did not discharge** — not
-blocked, not the owner's call, simply not reached. Recorded plainly rather
-than dressed as a disposition.
+**None queued by Dennis.** The queue he named still has unworked members:
+**#983** (blocked on #1027), **#986** item 2 (a missing IP-attempt store,
+`0..1 Condicional` so deferring is spec-compliant), **#989** (key *delivery*
+is his call; the swallow is not), **#941** and **#956** (both now have a
+decided direction on-thread and are the cheapest unblocked work).
