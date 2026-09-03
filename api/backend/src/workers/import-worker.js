@@ -205,12 +205,23 @@ async function initWorker() {
             unprocessedFormats: result.unprocessedFormats || 0,
             fhirResources: result.fhirResources || [],
             processingTime: result.processingTime || 0,
-            skippedRecords: result.skipped || 0,
+            // #1007: spread condicional, nao `|| 0`. ResultsPage.tsx gateia
+            // os tiles "Ignorados"/"Duplicados" em `!== undefined` justamente
+            // para que um job NAO CONTADO omita o tile em vez de afirmar zero
+            // (#925). O `|| 0` garantia definedness, entao o gate nunca podia
+            // disparar: result-worker.js e temperature-worker.js nao retornam
+            // nenhum dos dois campos em nenhum ramo, e `results` e o unico
+            // dataType que ResultsPage consegue exibir -- logo todo job
+            // exibivel mostrava "Ignorados: 0" como afirmacao sobre um numero
+            // que ninguem mediu. patient-worker/sample-worker sempre retornam
+            // ambos (import-lgpd.service inicializa os dois em 0), entao o
+            // zero MEDIDO da importacao LGPD continua aparecendo.
+            ...(result.skipped !== undefined ? { skippedRecords: result.skipped } : {}),
             // #931: quantas das `errorCount` rejeicoes foram por duplicidade.
             // Subconjunto de errorCount, nao um balde a mais -- os tres sites
             // de deteccao em import-lgpd.service empurram para `errors` e
             // fazem `continue`, entao a linha ja esta contada la.
-            duplicatesFound: result.duplicates || 0,
+            ...(result.duplicates !== undefined ? { duplicatesFound: result.duplicates } : {}),
             completedAt: new Date(),
           });
 

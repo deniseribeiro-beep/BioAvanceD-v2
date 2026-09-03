@@ -625,9 +625,13 @@ describe('workers/import-worker', () => {
       expect(completeWrite.skippedRecords).toBe(3);
     });
 
-    // #931: an older or partial result carrying neither field must not write
-    // `undefined` onto the job document.
-    it('#931: on success, the completion payload defaults processingTime and skippedRecords to 0 when the result lacks them', async () => {
+    // #931/#1007: an older or partial result carrying neither field must not
+    // write `undefined` onto the job document -- and, since #1007, must not
+    // write a fabricated `0` either. processingTime keeps its `|| 0` default
+    // (ResultsPage guards that one on truthiness, not on definedness); the two
+    // COUNTED fields are omitted instead, so ResultsPage's `!== undefined`
+    // gate can do the job #925 wrote it for.
+    it('#931/#1007: on success, the completion payload defaults processingTime to 0 but OMITS skippedRecords/duplicatesFound when the result lacks them', async () => {
       const processor = await getProcessor();
       fakePatientWorker.process.mockResolvedValue({
         total: 10,
@@ -655,8 +659,8 @@ describe('workers/import-worker', () => {
 
       const completeWrite = updateOneMock.mock.calls[1][1].$set;
       expect(completeWrite.processingTime).toBe(0);
-      expect(completeWrite.skippedRecords).toBe(0);
-      expect(completeWrite.duplicatesFound).toBe(0);
+      expect('skippedRecords' in completeWrite).toBe(false);
+      expect('duplicatesFound' in completeWrite).toBe(false);
     });
 
     // #931: duplicatesFound is the third field, and the one that needed a
@@ -708,6 +712,94 @@ describe('workers/import-worker', () => {
       expect(
         completeWrite.successCount + completeWrite.errorCount + completeWrite.duplicatesFound
       ).toBeGreaterThan(completeWrite.totalRecords);
+    });
+
+    // #1007: ResultsPage gates the "Ignorados"/"Duplicados" tiles on
+    // `!== undefined` precisely so an UNCOUNTED job omits the tile instead of
+    // claiming zero (#925). `|| 0` here guaranteed definedness, so the gate
+    // could never fire and every `results` job -- the only kind ResultsPage
+    // can display -- was shown "Ignorados: 0" as an affirmative claim about a
+    // number nothing measured. result-worker.js and temperature-worker.js
+    // return neither field in any branch; patient-worker/sample-worker always
+    // do (import-lgpd.service initialises both to 0), so the LGPD tiles keep
+    // showing a real, measured zero.
+    it('#1007: a worker result that counted neither field omits skippedRecords and duplicatesFound entirely', async () => {
+      const processor = await getProcessor();
+      // The literal shape ResultWorker.process returns -- no `skipped`, no
+      // `duplicates`, in any of its .zip/.raw/.csv branches.
+      fakeResultWorker.process.mockResolvedValue({
+        total: 10,
+        success: 8,
+        errors: [],
+        unprocessedFormats: 0,
+        processingTime: 4.2,
+        fhirResourcesCreated: 2,
+        fhirResourcesUpdated: 0,
+        fhirResources: [],
+      });
+
+      const updateOneMock = vi.fn().mockResolvedValue({ acknowledged: true });
+      fakeDb.collection.mockReturnValue({ updateOne: updateOneMock });
+
+      const job = {
+        id: 'j7g',
+        name: 'import',
+        data: {
+          jobID: 'j7g',
+          userID: 'u7g',
+          dataType: 'results',
+          filePath: '/tmp/r.csv',
+          fileName: 'r.csv',
+          options: {},
+        },
+      };
+
+      await processor(job);
+
+      const completeWrite = updateOneMock.mock.calls[1][1].$set;
+      // Absent, not zero -- `in` rather than a value assertion, because a
+      // literal 0 is exactly what this issue is about.
+      expect('skippedRecords' in completeWrite).toBe(false);
+      expect('duplicatesFound' in completeWrite).toBe(false);
+      // The rest of the completion payload is unaffected.
+      expect(completeWrite.status).toBe('completed');
+      expect(completeWrite.totalRecords).toBe(10);
+      expect(completeWrite.successCount).toBe(8);
+    });
+
+    // #1007 control: a worker that DID count keeps writing both fields,
+    // including a genuine zero. Expected behaviour is identical before and
+    // after the fix, so this must be green in the pre-fix run -- it is what
+    // separates a real reproduction from a setup-shaped red.
+    it('#1007 control: a worker result that counted both fields still writes them, zero included', async () => {
+      const processor = await getProcessor();
+      fakePatientWorker.process.mockResolvedValue(
+        makeWorkerResult({ skipped: 0, duplicates: 0, processingTime: 1.5 })
+      );
+
+      const updateOneMock = vi.fn().mockResolvedValue({ acknowledged: true });
+      fakeDb.collection.mockReturnValue({ updateOne: updateOneMock });
+
+      const job = {
+        id: 'j7h',
+        name: 'import',
+        data: {
+          jobID: 'j7h',
+          userID: 'u7h',
+          dataType: 'patients',
+          filePath: '/tmp/p.csv',
+          fileName: 'p.csv',
+          options: {},
+        },
+      };
+
+      await processor(job);
+
+      const completeWrite = updateOneMock.mock.calls[1][1].$set;
+      expect('skippedRecords' in completeWrite).toBe(true);
+      expect('duplicatesFound' in completeWrite).toBe(true);
+      expect(completeWrite.skippedRecords).toBe(0);
+      expect(completeWrite.duplicatesFound).toBe(0);
     });
 
     // #890: a result-import run that finishes normally but writes nothing

@@ -185,8 +185,10 @@ describe('ImportLGPDService.importPatients', () => {
     expect(result.errors[0].errors[0]).toMatch(/Paciente duplicado/);
     expect(patientsCollection.insertOne).not.toHaveBeenCalled();
     // #969: the counter is incremented at :691 but was dropped from the return
-    // literal, so patient-worker read `undefined` and import-worker's
-    // `result.duplicates || 0` wrote a constant 0 for every async job.
+    // literal, so patient-worker read `undefined`. Still load-bearing after
+    // #1007: import-worker now OMITS the field when the result lacks it, so an
+    // absent key here would hide the LGPD "Duplicados" tile rather than
+    // writing a constant 0.
     expect(result.duplicates).toBe(1);
   });
 

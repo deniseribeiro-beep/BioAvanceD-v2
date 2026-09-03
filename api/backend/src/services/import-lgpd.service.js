@@ -823,8 +823,10 @@ class ImportLGPDService {
         errors: results.errors,
         skipped: results.skipped,
         // #969: `results.duplicates` é incrementado acima (linha ~691) mas
-        // faltava aqui, então patient-worker lia `undefined` e o
-        // `result.duplicates || 0` de import-worker gravava 0 constante.
+        // faltava aqui, então patient-worker lia `undefined`. Continua
+        // obrigatório depois de #1007: import-worker agora OMITE o campo
+        // quando o resultado não o traz, então uma ausência aqui apagaria
+        // o tile "Duplicados" da importação LGPD em vez de gravar 0.
         duplicates: results.duplicates,
         stagingBatchId,
         // NÃO retorna IDs gerados (LGPD)
