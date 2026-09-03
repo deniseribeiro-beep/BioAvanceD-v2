@@ -28,48 +28,53 @@ function queryableAssignmentsMock(docs) {
   });
 }
 
-const authServiceMock = vi.hoisted(() => ({
-  registerUser: vi.fn(async (_db, body) => ({
-    _id: 'user-registered',
-    ...body,
-  })),
-  getRoleName: vi.fn((accessType) => {
-    const map = {
-      1: 'Usuário Externo',
-      2: 'Técnico',
-      3: 'Coordenador',
-      4: 'Administrador',
-    };
-    return map[accessType] || 'Técnico';
-  }),
-  getAccessTypeForRole: vi.fn((roleName) => {
-    const map = {
-      'Usuário Externo': 1,
-      'Técnico': 2,
-      'Coordenador': 3,
-      'Administrador': 4,
-    };
-    return map[roleName] || 2;
-  }),
-}));
+// #1017: this file used to declare vi.hoisted mocks for auth.service and
+// auditLogger and register them with vi.mock at '../../../src/...'. That depth
+// is one level too far -- this file sits at api/backend/tests/integration, so
+// '../../../src' is `api/src`, which does not exist (`ls api/` is just
+// `backend/`), and the require2 calls above already use the correct depth for
+// their own targets. Vite resolved every one of those specifiers to null and
+// vitest neither errored nor warned, so the mock registry was keyed on a path
+// nothing matched and BOTH mocks were inert -- the real modules ran. The
+// `await import` calls survived only because vitest retries a failed dynamic
+// import as a root-relative URL, a retry it does NOT extend to vi.mock.
+//
+// Even at the correct depth vi.mock would not fix auditLogger: user.routes.js
+// requires it lazily INSIDE its handlers (POST /register, PUT /:id, DELETE
+// /:id), and vitest's mock registry is not consulted by the require the route
+// actually executes. Hoisting that require was considered and rejected -- it is
+// this repo's house style, at ~127 in-handler sites against 11 module-scope,
+// and it is not cycle-driven.
+//
+// What works, and what auth.routes.test.js in this same directory already does:
+// load through the SAME createRequire as the SUT and spy on the CJS module
+// object. A lazy require returns the cached module.exports, so mutating it is
+// observed at call time -- laziness is an advantage here, not the obstacle.
+const auditLogger = require2('../../src/utils/auditLogger');
+const authService = require2('../../src/services/auth.service');
 
-const auditLoggerMock = vi.hoisted(() => ({
-  init: vi.fn(),
-  log: vi.fn().mockResolvedValue(undefined),
-  logCreate: vi.fn().mockResolvedValue(undefined),
-  logUpdate: vi.fn().mockResolvedValue(undefined),
-  logDelete: vi.fn().mockResolvedValue(undefined),
-  logPermissionChange: vi.fn().mockResolvedValue(undefined),
-}));
+// Required (not imported) so the routers and the spy targets share one module
+// instance. Mixing `await import` (vitest module runner) with createRequire
+// (native CJS cache) would give two auditLogger objects and the spies would
+// silently miss again -- which is the failure this whole change is about.
+const userRoutes = require2('../../src/interface/routes/user.routes.js');
+const accessRoutes = require2('../../src/interface/routes/access.routes.js');
 
-vi.mock('../../../src/services/auth.service', () => authServiceMock);
-vi.mock('../../../src/utils/auditLogger', () => auditLoggerMock);
-
-const userRoutesModule = await import('../../../src/interface/routes/user.routes');
-const accessRoutesModule = await import('../../../src/interface/routes/access.routes');
-
-const userRoutes = userRoutesModule.default || userRoutesModule;
-const accessRoutes = accessRoutesModule.default || accessRoutesModule;
+// Installed once, cleared per test below. auditLogger writes are stubbed out
+// (the real ones emit AUDIT_TRAIL_WRITE_FAILURE against the mocked db, which
+// is the stderr noise this suite has been printing on every run).
+// authService.registerUser is spied WITHOUT an implementation: the real one
+// has been running all along behind the inert mock, so replacing it now would
+// change this suite's behaviour rather than restore it.
+const auditSpies = {
+  init: vi.spyOn(auditLogger, 'init').mockImplementation(() => {}),
+  log: vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined),
+  logCreate: vi.spyOn(auditLogger, 'logCreate').mockResolvedValue(undefined),
+  logUpdate: vi.spyOn(auditLogger, 'logUpdate').mockResolvedValue(undefined),
+  logDelete: vi.spyOn(auditLogger, 'logDelete').mockResolvedValue(undefined),
+  logPermissionChange: vi.spyOn(auditLogger, 'logPermissionChange').mockResolvedValue(undefined),
+};
+const registerUserSpy = vi.spyOn(authService, 'registerUser');
 
 function getHandler(router, method, path) {
   const layer = router.stack.find((entry) => entry.route?.path === path && entry.route.methods?.[method]);
@@ -120,6 +125,11 @@ describe('Users and Access routes', () => {
   let db;
 
   beforeEach(() => {
+    // #1017: cleared rather than re-spied, so the spy identity stays stable
+    // across tests and repeated vi.spyOn calls cannot stack wrappers.
+    Object.values(auditSpies).forEach((spy) => spy.mockClear());
+    registerUserSpy.mockClear();
+
     usersCollection = {
       find: vi.fn(),
       findOne: vi.fn(),
@@ -1203,7 +1213,10 @@ describe('Users and Access routes', () => {
       await handler(req, res);
 
       expect(res.statusCode).toBe(403);
-      expect(authServiceMock.registerUser).not.toHaveBeenCalled();
+      // #1017: was `authServiceMock.registerUser`, which passed vacuously --
+      // that mock was never installed, so the assertion held no matter what
+      // the route did. Now a real spy on the module the route actually calls.
+      expect(registerUserSpy).not.toHaveBeenCalled();
     });
 
     // The negative halves. Without these the pair above cannot distinguish a
@@ -1352,12 +1365,12 @@ describe('Users and Access routes', () => {
       expect(targetAssignment.assignmentStatus).toBe('active');
       expect(targetAssignment.revokedBy).toBeUndefined();
       expect(targetAssignment.revocationReason).toBeUndefined();
-      // NOTE: the natural extra assertion here -- that a plain rename routes
-      // to logUpdate rather than logPermissionChange -- cannot be written in
-      // this file. `auditLoggerMock` is never installed: the route requires
-      // auditLogger lazily inside the handler, and vi.mock does not intercept
-      // that here. A deliberately bogus mock path behaves identically, so the
-      // miss is silent. Filed separately.
+      // #1017: this is the assertion the NOTE here used to say could not be
+      // written. It can now -- the spy is on the CJS module object the lazily
+      // required auditLogger resolves to. A plain rename is an UPDATE, not a
+      // permission change, and nothing else in this suite distinguishes them.
+      expect(auditSpies.logPermissionChange).not.toHaveBeenCalled();
+      expect(auditSpies.logUpdate).toHaveBeenCalled();
     });
 
     it('#1009: an org-only edit on a target holding a role still re-scopes without revoking', async () => {
@@ -1427,6 +1440,19 @@ describe('Users and Access routes', () => {
       );
       expect(granted).toHaveLength(1);
       expect(granted[0].roleId).toBe('role-coordinator');
+
+      // #1017 / #1009: `changes` is observable ONLY through logPermissionChange,
+      // so this is the half of dca21428 that shipped unpinned. That fix changed
+      // the comparison from the raw `targetUser.accessType` to the RESOLVED
+      // level, and this target is seeded deliberately WITHOUT an accessType
+      // field -- so pre-fix the row read { from: undefined, to: 3 } and post-fix
+      // it reads { from: 2, to: 3 }, resolved from the role-technician
+      // assignment. Nothing in this suite could tell those apart until now.
+      expect(auditSpies.logPermissionChange).toHaveBeenCalledWith(
+        expect.anything(),
+        'user-target-1009c',
+        expect.objectContaining({ accessType: { from: 2, to: 3 } })
+      );
     });
   });
 });
