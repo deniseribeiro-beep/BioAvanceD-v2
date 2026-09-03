@@ -100,6 +100,50 @@ describe('ImportLGPDService.readCSV', () => {
     expect(rows.skippedCount).toBe(0);
   });
 
+  // #1012: pins the behaviour the removed comment wrongly credited to
+  // `skipEmptyLines`/`skipLinesWithError` (neither is a real csv-parser
+  // option) -- bare blank physical lines, not comma-only rows, still get
+  // counted correctly because they reach the handler's own `hasData` check.
+  it('#1012: counts bare trailing blank lines (LF) via hasData, not a parser option', async () => {
+    const filePath = writeTmpFile(
+      'bare-blank-lines-lf.csv',
+      'patientName,birthDate\nJoão Silva,25/12/1990\n\n\n'
+    );
+
+    const rows = await importLgpdService.readCSV(filePath);
+
+    expect(rows).toEqual([{ patientName: 'João Silva', birthDate: '25/12/1990' }]);
+    expect(rows.skippedCount).toBe(2);
+  });
+
+  // #1012: CRLF twin of the case above.
+  it('#1012: counts bare trailing blank lines (CRLF) via hasData, not a parser option', async () => {
+    const filePath = writeTmpFile(
+      'bare-blank-lines-crlf.csv',
+      'patientName,birthDate\r\nJoão Silva,25/12/1990\r\n\r\n\r\n'
+    );
+
+    const rows = await importLgpdService.readCSV(filePath);
+
+    expect(rows).toEqual([{ patientName: 'João Silva', birthDate: '25/12/1990' }]);
+    expect(rows.skippedCount).toBe(2);
+  });
+
+  // #1012: control -- a single, normal trailing newline is not itself a
+  // blank line and must not be counted. This is what separates a real
+  // result from a broken fixture in the two cases above.
+  it('#1012: does not count a single ordinary trailing newline as a blank line', async () => {
+    const filePath = writeTmpFile(
+      'single-trailing-newline.csv',
+      'patientName,birthDate\nJoão Silva,25/12/1990\n'
+    );
+
+    const rows = await importLgpdService.readCSV(filePath);
+
+    expect(rows).toEqual([{ patientName: 'João Silva', birthDate: '25/12/1990' }]);
+    expect(rows.skippedCount).toBe(0);
+  });
+
   it('rejects a CSV with a header but no data rows', async () => {
     const filePath = writeTmpFile('header-only.csv', 'patientName,birthDate\n');
 

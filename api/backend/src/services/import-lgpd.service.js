@@ -221,13 +221,24 @@ class ImportLGPDService {
       }
       
       const rows = [];
-      // #1001: rejected-by-hasData count only -- rows that reach this
-      // handler but carry no non-whitespace value in any column. `skipEmptyLines:
-      // true` below already discards fully-blank physical lines before they
-      // ever reach 'data', so those are not counted here; there is no hook
-      // into csv-parser's own line-skipping to count them without
-      // re-parsing the raw file ourselves; see the readers test file and
-      // service report for the explicit statement of this choice.
+      // #1012: `skipEmptyLines`/`skipLinesWithError` abaixo NAO sao opcoes do
+      // csv-parser 3.2.0 -- o `defaults` do pacote instalado
+      // (node_modules/csv-parser/index.js) so reconhece escape, headers,
+      // mapHeaders, mapValues, newline, quote, raw, separator, skipComments,
+      // skipLines, maxRowBytes, strict, outputByteOffset; o construtor faz
+      // `Object.assign({}, defaults, opts)`, entao as duas chaves abaixo sao
+      // absorvidas e ficam inertes. Elas continuam no objeto de opcoes como
+      // declaracao de intencao, nao como filtro que funciona hoje -- se um
+      // upgrade futuro do csv-parser passar a reconhecer alguma delas, o
+      // comportamento muda silenciosamente, entao removê-las agora seria
+      // comportamento-neutro mas perderia esse aviso.
+      //
+      // Uma linha fisica em branco chega normalmente ao parser: `parseLine`
+      // produz uma lista de celulas vazia, `writeRow` emite `{}`, e esse `{}`
+      // e o que o handler 'data' abaixo recebe -- e' o proprio check
+      // `hasData` do handler que rejeita e conta essa linha, nao o parser.
+      // Ou seja: a contagem abaixo sempre esteve correta; o que estava errado
+      // era este comentario atribuir o descarte a `skipEmptyLines`.
       let skippedByHasData = 0;
       fs.createReadStream(filePath)
         .pipe(csv({
