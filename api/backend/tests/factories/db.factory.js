@@ -54,6 +54,49 @@ function createCollectionMock(overrides = {}) {
   };
 }
 
+// #1000: a real MongoClient reaching a transactional call site (six of them,
+// per issue #1000) is derived from `db.client || db.s?.client` and needs
+// BOTH capabilities below -- never just one:
+//   - `startSession()` -- `withMongoTransaction`/`MongoStorageRepository`
+//     open the session through this.
+//   - `db('admin').command({ hello: 1 })` -- `probeTopology`
+//     (isTransactionCapable/isKnownStandaloneDeployment, src/utils/mongoTransaction.js)
+//     reaches this before a session is even opened, to decide whether the
+//     deployment is replica-set/mongos-capable.
+// 646a2c5d is the regression this mirrors: three tests once replaced
+// `db.client` wholesale with `{ db }` (dropping startSession) and broke,
+// because a real MongoClient always has both. A mock with startSession alone
+// reproduces the same defect from the other side -- it would make
+// probeTopology return 'unknown' rather than exercising the topology probe
+// at all. So both are always present here, unconditionally: every
+// createDbMock() consumer gets a client capable of a transaction, by
+// default landing on a replica-set-shaped `hello` response (transactional,
+// not standalone) so a happy-path transactional call site just works without
+// per-test wiring. A test asserting standalone-refusal behaviour overrides
+// `db.client` itself, same as it always could.
+function createMongoClientMock() {
+  const v = globalThis.vi;
+  if (!v) {
+    throw new Error('Vitest global "vi" is not available in db factory context');
+  }
+
+  const session = {
+    withTransaction: v.fn(async (handler) => handler()),
+    endSession: v.fn().mockResolvedValue(undefined),
+  };
+
+  const adminDb = {
+    command: v.fn().mockResolvedValue({ setName: 'mockReplicaSet' }),
+  };
+
+  const client = {
+    startSession: v.fn(() => session),
+    db: v.fn((name) => (name === 'admin' ? adminDb : undefined)),
+  };
+
+  return { client, session };
+}
+
 function createDbMock(collections = {}) {
   const normalize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const normalizedMap = {};
@@ -70,7 +113,20 @@ function createDbMock(collections = {}) {
     observations: 'observations',
   };
 
+  const { client, session } = createMongoClientMock();
+
   return {
+    // NOTE on `session` below: a real driver `Db` has NO `session` property.
+    // It is a test-ergonomics handle so a consumer can assert on the session
+    // without digging through `client.startSession.mock.results`. Keep it that
+    // way -- **[ran it]** `git grep -n -I "db\.session" -- api/backend/src`
+    // returns zero, and product code derives its client from
+    // `db.client || db.s?.client` (mongoTransaction.js:7,:75;
+    // MongoStorageRepository.js:26), never from this. If a product path ever
+    // starts reading `db.session`, delete this property rather than making it
+    // real: a mock supplying a member the driver lacks is exactly the #994
+    // defect, where `makeDb()` fabricated `getMongo` and 41 green tests
+    // certified a dead endpoint.
     collection: (name) => {
       const n = normalize(name);
       if (normalizedMap[n]) return normalizedMap[n];
@@ -81,6 +137,8 @@ function createDbMock(collections = {}) {
       if (foundKey) return normalizedMap[foundKey];
       return createCollectionMock();
     },
+    client,
+    session,
   };
 }
 

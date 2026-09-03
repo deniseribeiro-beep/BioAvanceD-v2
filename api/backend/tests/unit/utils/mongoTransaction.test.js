@@ -12,7 +12,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { isTransactionCapable, isKnownStandaloneDeployment } = require('../../../src/utils/mongoTransaction');
+const { isTransactionCapable, isKnownStandaloneDeployment, withMongoTransaction } = require('../../../src/utils/mongoTransaction');
+const { createDbMock } = require('../../factories/db.factory');
 
 function createDb(commandImpl) {
   const command = vi.fn(commandImpl);
@@ -85,5 +86,43 @@ describe('isKnownStandaloneDeployment (#923)', () => {
     const db = { client: { startSession: () => ({}) } };
     await expect(isKnownStandaloneDeployment(db)).resolves.toBe(false);
     await expect(isTransactionCapable(db)).resolves.toBe(false);
+  });
+});
+
+// #1000: the shared test db factory (tests/factories/db.factory.js) grew a
+// client capable of representing a Mongo transaction so integration tests
+// can cover the six call sites that previously died at "Cliente Mongo não
+// suporta transação" for lack of a db.client at all. This proves the
+// factory's mock actually satisfies the real contract above -- both halves
+// of it, per the 646a2c5d regression this constraint mirrors (a client with
+// only one of startSession/db is not enough) -- rather than merely looking
+// plausible.
+describe('createDbMock client (#1000)', () => {
+  it('is transaction-capable and not flagged standalone out of the box', async () => {
+    const db = createDbMock({});
+
+    await expect(isTransactionCapable(db)).resolves.toBe(true);
+    await expect(isKnownStandaloneDeployment(db)).resolves.toBe(false);
+    expect(db.client.db).toHaveBeenCalledWith('admin');
+  });
+
+  it('runs withMongoTransaction end to end through client.startSession/session.withTransaction/endSession', async () => {
+    const db = createDbMock({});
+
+    const result = await withMongoTransaction(db, async (session) => {
+      expect(session).toBe(db.session);
+      return 'handler-result';
+    });
+
+    expect(result).toBe('handler-result');
+    expect(db.client.startSession).toHaveBeenCalledTimes(1);
+    expect(db.session.withTransaction).toHaveBeenCalledTimes(1);
+    expect(db.session.endSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes the same session instance client.startSession() returns as db.session', () => {
+    const db = createDbMock({});
+
+    expect(db.client.startSession()).toBe(db.session);
   });
 });
