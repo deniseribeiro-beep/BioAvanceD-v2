@@ -561,7 +561,14 @@ class SessionService {
       refreshExpiresAt: new Date(now.getTime() + REFRESH_TOKEN_TTL_MS),
       isActive: true,
       isRevoked: false,
-      revokedAt: null
+      revokedAt: null,
+      // #974: 4d6807c8 added revocationReason/revokedBy but did not extend
+      // this reset, so a rotated session kept a stale reason beside
+      // isRevoked: false. Unreachable via the only caller --
+      // getSessionByRefreshToken filters isRevoked: { $ne: true } -- so this
+      // is closing the gap fail-closed, not fixing live behaviour.
+      revocationReason: null,
+      revokedBy: null
     };
 
     await sessionsCollection.updateOne({ sessionID }, { $set: update });

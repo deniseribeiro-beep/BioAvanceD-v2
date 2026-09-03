@@ -765,6 +765,23 @@ describe('SessionService.rotateSessionTokens', () => {
     expect(cached.tokenHash).toBe(sessionService.getTokenHash('new-access'));
   });
 
+  it('#974: clears the whole revocation record, not just isRevoked/revokedAt', async () => {
+    const collection = makeCollection();
+    const db = makeDb(collection);
+
+    await sessionService.rotateSessionTokens(db, 'sess-1', 'acc', 'ref');
+
+    const [, update] = collection.updateOne.mock.calls[0];
+    // The reset was partial: isActive/isRevoked/revokedAt were reset and the
+    // two fields 4d6807c8 added were not, so a rotated session could carry a
+    // stale reason alongside isRevoked: false. Unreachable today --
+    // getSessionByRefreshToken filters isRevoked: { $ne: true } -- but the
+    // guard is the only thing holding it, and nothing pinned that.
+    expect(update.$set.revokedAt).toBeNull();
+    expect(update.$set.revocationReason).toBeNull();
+    expect(update.$set.revokedBy).toBeNull();
+  });
+
   it('creates cache entry when session was not previously cached', async () => {
     const collection = makeCollection();
     const db = makeDb(collection);
