@@ -949,6 +949,117 @@ describe('Users and Access routes', () => {
     expect(sessionsCollection.updateMany).not.toHaveBeenCalled();
   });
 
+  // #993: mfaSecret/mfaActivationDate sat on ALLOWED_USER_UPDATE_FIELDS, and
+  // the admin branch above keeps whatever the caller sent when mfaEnabled is
+  // explicitly true. So one PUT could set a target's password AND replace
+  // their TOTP secret with one the caller generated -- a silent account
+  // takeover, and the victim's next login fails against a secret they no
+  // longer hold. The route only ever legitimately writes these two fields as
+  // a server-set null (the disable-MFA clear); it must never carry a
+  // caller-supplied value.
+  it('#993: PUT /api/users/:id nunca aceita mfaSecret do chamador, mesmo com mfaEnabled=true em alvo admin', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-11',
+      name: 'Alvo Admin',
+      email: 'alvo-admin@bioavanced.com.br',
+      username: 'alvoadmin',
+      status: 'active',
+      accessType: 4,
+      roleName: 'Administrador',
+      mfaEnabled: true,
+      mfaSecret: 'SEGREDO-LEGITIMO-DO-ALVO',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce(targetUser);
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-11', accessType: 4 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-11' },
+      body: {
+        mfaEnabled: true,
+        mfaSecret: 'SEGREDO-DO-ATACANTE',
+        mfaActivationDate: '2026-01-01T00:00:00.000Z',
+      },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+    // Assert the VALUE is absent, not merely that it differs -- writing the
+    // attacker's string would be the takeover, and writing any other
+    // caller-derived value would be the same defect wearing a new shape.
+    expect(setPayload).not.toHaveProperty('mfaSecret');
+    expect(setPayload).not.toHaveProperty('mfaActivationDate');
+    expect(JSON.stringify(setPayload)).not.toContain('SEGREDO-DO-ATACANTE');
+  });
+
+  // #993: the clear must survive the fix above. Disabling MFA on an admin
+  // target is the ONE legitimate write to these two fields on this route, and
+  // it is server-set -- so a blanket removal from the allowlist would have
+  // left a stale secret behind an mfaEnabled:false flag.
+  it('#993: PUT /api/users/:id ainda zera mfaSecret/mfaActivationDate ao desabilitar MFA de um admin', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-12',
+      name: 'Alvo Admin 2',
+      email: 'alvo-admin2@bioavanced.com.br',
+      username: 'alvoadmin2',
+      status: 'active',
+      accessType: 4,
+      roleName: 'Administrador',
+      mfaEnabled: true,
+      mfaSecret: 'SEGREDO-A-SER-LIMPO',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce(targetUser);
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-12', accessType: 4 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-12' },
+      body: { mfaEnabled: false, mfaSecret: 'SEGREDO-DO-ATACANTE' },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect(setPayload.mfaEnabled).toBe(false);
+    expect(setPayload.mfaSecret).toBeNull();
+    expect(setPayload.mfaActivationDate).toBeNull();
+  });
+
   it('GET /api/access deve listar acessos', async () => {
     const handler = getHandler(accessRoutes, 'get', '/');
     accessCollection.find.mockReturnValue({

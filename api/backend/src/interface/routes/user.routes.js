@@ -344,6 +344,24 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     }
     const isBecomingAdmin = requestedAccessType === 4 || req.body.roleName === 'Administrador';
 
+    // #993: mfaSecret e mfaActivationDate NUNCA são graváveis pelo chamador.
+    // Removidos do body ANTES de qualquer branch abaixo -- a única escrita
+    // legítima destes dois campos nesta rota é o CLEAR (null) do branch de
+    // admin logo abaixo, que é server-set. Sem este delete, um PUT com
+    // mfaEnabled:true contra um alvo Administrador mantinha o valor enviado
+    // pelo chamador e gravava o segredo TOTP dele no alvo: junto com
+    // 'password', que também está no allowlist, isso é tomada de conta
+    // silenciosa, e o dono legítimo falha no próximo login contra um segredo
+    // que não possui mais. Mesmo raciocínio -- e mesma forma -- da exclusão
+    // de mfaFailedAttempts/mfaLocked abaixo e da de failedLoginAttempts
+    // (#952): estado de MFA e de bloqueio não passa por update genérico.
+    //
+    // Os dois campos permanecem em ALLOWED_USER_UPDATE_FIELDS de propósito:
+    // é por ali que o null do clear chega ao $set. Depois deste delete, o
+    // único valor que eles podem carregar é o que esta rota mesma escreveu.
+    delete req.body.mfaSecret;
+    delete req.body.mfaActivationDate;
+
     // Para Administrador, MFA é opcional e pode ser setado manualmente
     if (isAdmin || isBecomingAdmin) {
       // Se mfaEnabled foi fornecido explicitamente, mantém (admin pode setar MFA manualmente)
