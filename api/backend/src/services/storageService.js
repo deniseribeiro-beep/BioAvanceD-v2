@@ -134,10 +134,6 @@ class StorageService {
         };
       }
 
-      const positionMatch = nextPosition.match(/^([A-Z])(\d+)$/);
-      const rowLetter = positionMatch?.[1] || 'A';
-      const column = Number(positionMatch?.[2] || 1);
-
       // #994: was `session = this.db.getMongo().startSession()` plus a raw
       // `session.withTransaction(...)`. `getMongo()` is a MONGOSH method --
       // the native driver's Db has no such thing, so this endpoint threw
@@ -179,8 +175,19 @@ class StorageService {
         );
       });
 
+      // #1004: rowLetter/column must be derived from assignedPosition (the
+      // transaction-committed position from the in-transaction re-scan), not
+      // from nextPosition (the pre-transaction scan). The two can diverge
+      // when a concurrent request claims the pre-scanned slot -- that is the
+      // designed retry behaviour of session.withTransaction -- and decomposing
+      // the stale nextPosition here previously fed the Neo4j MERGE below a
+      // self-contradicting coordinate/row/column (e.g. coordinate 'A2' with
+      // row 'A', column 1 derived from a different slot).
       const canPersistGraph = this.neo4jDriver && typeof this.neo4jDriver.session === 'function';
       if (canPersistGraph && assignedPosition) {
+        const positionMatch = assignedPosition.match(/^([A-Z])(\d+)$/);
+        const rowLetter = positionMatch?.[1] || 'A';
+        const column = Number(positionMatch?.[2] || 1);
         const neo4jSession = this.neo4jDriver.session({ database: env.NEO4J_DATABASE || 'neo4j' });
 
         try {

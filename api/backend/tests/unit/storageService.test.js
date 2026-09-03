@@ -581,6 +581,53 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(closeMock).toHaveBeenCalled();
   });
 
+  it('#1004: Neo4j MERGE row/column stay consistent with coordinate when the transaction-committed position diverges from the pre-scan', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+    const runMock = vi.fn().mockResolvedValue({});
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const neo4jSessionMock = vi.fn(() => ({ run: runMock, close: closeMock }));
+    const neo4jDriver = { session: neo4jSessionMock };
+
+    service = new StorageService(db, neo4jDriver);
+
+    // Pre-transaction scan sees only A1 occupied -> would pick A2.
+    boxesFindOne.mockResolvedValueOnce({
+      _id: boxId,
+      name: 'Box A',
+      dimension: { rows: 1, cols: 3 },
+      occupancyGrid: { A1: new ObjectId() },
+      currentOccupancy: 1
+    });
+    // In-transaction re-scan finds A2 has since been taken by a concurrent
+    // write -> the actually committed position is A3.
+    boxesFindOne.mockResolvedValueOnce({
+      _id: boxId,
+      name: 'Box A',
+      dimension: { rows: 1, cols: 3 },
+      occupancyGrid: { A1: new ObjectId(), A2: new ObjectId() },
+      currentOccupancy: 2
+    });
+    samplesFindOne.mockResolvedValue({
+      _id: specimenId,
+      barcode: 'BC-9',
+      storageLocation: null
+    });
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+    expect(result.success).toBe(true);
+    expect(result.sampleLocation.position).toBe('A3');
+
+    const mergeParams = runMock.mock.calls[0][1];
+    // The MERGE must describe a single, self-consistent position: rowLetter
+    // and column must match coordinate, not the stale pre-transaction scan
+    // (which would have decomposed to row 'A', column 2).
+    expect(mergeParams.coordinate).toBe('A3');
+    expect(mergeParams.rowLetter).toBe('A');
+    expect(mergeParams.column).toBe(3);
+  });
+
   it('rolls back the Mongo allocation when the Neo4j sync fails, and surfaces the Neo4j error', async () => {
     const boxId = new ObjectId();
     const specimenId = new ObjectId();
