@@ -456,14 +456,16 @@ describe('AuthService.setupMFAFirstLogin', () => {
     ).rejects.toThrow('Credenciais inválidas');
   });
 
-  it('throws when MFA already configured and not first login', async () => {
+  // #1032: still refuses, but with the GENERIC message -- the refusal must not
+  // be distinguishable from a wrong password by an unauthenticated caller.
+  it('refuses when MFA already configured and not first login, indistinguishably', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     const db = makeDb(
       createMatchingCollection([{ ...BASE_USER, mfaEnabled: true, mfaSecret: 'SECRET' }])
     );
     await expect(
       authService.setupMFAFirstLogin(db, { username: 'user1', password: 'pw' })
-    ).rejects.toThrow('já configurado');
+    ).rejects.toThrow('Credenciais inválidas');
   });
 
   it('generates a QR code and secret on success', async () => {
@@ -935,7 +937,7 @@ describe('#986: the two unauthenticated first-login endpoints respect the accoun
     const db = makeDb(createMatchingCollection([{ ...ENROLLED }]));
 
     await expect(authService.setupMFAFirstLogin(db, { username: 'user1', password: 'wrong' }))
-      .rejects.toThrow('já configurado');
+      .rejects.toThrow('Credenciais inválidas');
 
     // The whole point: a wrong password and a correct one must now be
     // indistinguishable on an enrolled account. Asserting the compare never
@@ -949,7 +951,7 @@ describe('#986: the two unauthenticated first-login endpoints respect the accoun
     const db = makeDb(createMatchingCollection([{ ...ENROLLED }]));
 
     await expect(authService.enableMFAFirstLogin(db, { username: 'user1', password: 'pw' }, '123456', {}))
-      .rejects.toThrow('já configurado');
+      .rejects.toThrow('Credenciais inválidas');
 
     expect(compare).not.toHaveBeenCalled();
     expect(verify).not.toHaveBeenCalled();
@@ -1020,5 +1022,82 @@ describe('#986: the two unauthenticated first-login endpoints respect the accoun
       failedLoginAttempts: 0,
       accountLockedUntil: null,
     }));
+  });
+});
+
+// #1032: 490077f4 (#986 item 1) moved the enrolment guard ABOVE bcrypt.compare.
+// That closed a password oracle and opened a cheaper enumeration one: the
+// distinct 'MFA já configurado…' message was reachable by an UNAUTHENTICATED
+// caller supplying ANY arbitrary password, so a single request per username
+// disclosed both account existence and MFA-enrolment state. processLogin's own
+// comment in this same service already states the governing principle --
+// "enumeration is the worse leak" -- so the message collapses into the generic
+// one; the guard ORDER is deliberately unchanged, and the #986 block above
+// still pins it via expect(compare).not.toHaveBeenCalled().
+//
+// What that costs was measured before it was removed, not assumed: the string
+// was never rendered. auth.controller.js:472-476 returns a 400 carrying BOTH
+// an `error` field -- always truthy, via a `|| 'Erro ao configurar MFA'`
+// fallback -- and `message`, and frontend/src/views/MFASetupPage.tsx:68-71
+// reads `data.error || data.message || ...`, so `message` was unreachable in
+// the UI on this path. Nothing in frontend/src matched the literal.
+describe('#1032: the first-login MFA endpoints disclose no enrolment state to an unauthenticated caller', () => {
+  const ENROLLED = { ...BASE_USER, lastLogin: new Date('2020-01-01'), mfaEnabled: true, mfaSecret: 'SECRET' };
+
+  const messageOf = async (promise) => {
+    try {
+      await promise;
+      return null;
+    } catch (error) {
+      return error.message;
+    }
+  };
+
+  it('setupMFAFirstLogin answers an enrolled account exactly as it answers an unknown username', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+
+    // Control: unchanged by this fix, so it must be green BEFORE it too --
+    // a red here would mean the fixture is wrong, not that the leak exists.
+    const unknown = await messageOf(
+      authService.setupMFAFirstLogin(makeDb(createMatchingCollection([])), { username: 'nobody', password: 'anything' })
+    );
+    expect(unknown).toBe('Credenciais inválidas');
+
+    const enrolled = await messageOf(
+      authService.setupMFAFirstLogin(makeDb(createMatchingCollection([{ ...ENROLLED }])), { username: 'user1', password: 'anything' })
+    );
+
+    expect(enrolled).toBe(unknown);
+  });
+
+  it('enableMFAFirstLogin answers an enrolled account exactly as it answers an unknown username', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+    vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(false);
+
+    const unknown = await messageOf(
+      authService.enableMFAFirstLogin(makeDb(createMatchingCollection([])), { username: 'nobody', password: 'anything' }, '123456', {})
+    );
+    expect(unknown).toBe('Credenciais inválidas');
+
+    const enrolled = await messageOf(
+      authService.enableMFAFirstLogin(makeDb(createMatchingCollection([{ ...ENROLLED }])), { username: 'user1', password: 'anything' }, '123456', {})
+    );
+
+    expect(enrolled).toBe(unknown);
+  });
+
+  it('neither endpoint emits a message naming the enrolment state', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+    vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(false);
+
+    const setup = await messageOf(
+      authService.setupMFAFirstLogin(makeDb(createMatchingCollection([{ ...ENROLLED }])), { username: 'user1', password: 'anything' })
+    );
+    const enable = await messageOf(
+      authService.enableMFAFirstLogin(makeDb(createMatchingCollection([{ ...ENROLLED }])), { username: 'user1', password: 'anything' }, '123456', {})
+    );
+
+    expect(setup).not.toMatch(/configurado/i);
+    expect(enable).not.toMatch(/configurado/i);
   });
 });

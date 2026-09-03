@@ -698,7 +698,15 @@ class AuthService {
       // alone, or on mfaSecret alone, would break that live flow.
       const isFirstLogin = user.lastLogin === null || user.lastLogin === undefined;
       if (!isFirstLogin && user.mfaEnabled && user.mfaSecret) {
-        throw new Error('MFA já configurado para este usuário. Use o endpoint de login normal.');
+        // #1032: the generic message, NOT a distinct one. The guard order
+        // above is deliberate (#986) and unchanged; what changes here is
+        // that reaching this branch no longer TELLS the caller it was
+        // reached. Because the guard sits above bcrypt.compare, a distinct
+        // message was returned to an UNAUTHENTICATED caller supplying any
+        // arbitrary password -- one request per username disclosing both
+        // account existence and MFA-enrolment state. processLogin below
+        // states the principle this follows: enumeration is the worse leak.
+        throw new Error('Credenciais inválidas');
       }
 
       // #986: the same lockout gate processLogin applies, before the compare
@@ -813,7 +821,15 @@ class AuthService {
       // has mfaSecret set and lastLogin still null, and must still get here.
       const isFirstLogin = user.lastLogin === null || user.lastLogin === undefined;
       if (!isFirstLogin && user.mfaEnabled && user.mfaSecret) {
-        throw new Error('MFA já configurado para este usuário. Use o endpoint de login normal.');
+        // #1032: the generic message, NOT a distinct one. The guard order
+        // above is deliberate (#986) and unchanged; what changes here is
+        // that reaching this branch no longer TELLS the caller it was
+        // reached. Because the guard sits above bcrypt.compare, a distinct
+        // message was returned to an UNAUTHENTICATED caller supplying any
+        // arbitrary password -- one request per username disclosing both
+        // account existence and MFA-enrolment state. processLogin below
+        // states the principle this follows: enumeration is the worse leak.
+        throw new Error('Credenciais inválidas');
       }
 
       // #986: same gate, same placement, same generic message as the other two.
