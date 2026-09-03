@@ -2,7 +2,8 @@
 
 **Written 2026-09-03, twelfth queue sitting. INTERIM — no end signal from
 Dennis.** He asked for "the next 10 issues, Docker is on." **4 closed, 6 still
-open with verified research posted on each, 11 issues filed.** 4 commits pushed.
+open with verified research posted on each, 11 issues filed.** 6 substantive
+commits pushed, plus HANDOFF rotations.
 
 **Read #1037 first. It is an unauthenticated privilege escalation and it is
 reproduced, not inferred.**
@@ -46,6 +47,15 @@ reproduced, not inferred.**
   **Direction 4's floor (never honour a caller-supplied privilege level on an
   unauthenticated route) is not a design question; whether the route should
   exist at all is Denise's.**
+  **`0447cff3` ships that floor**: the public route now 403s a caller-supplied
+  `accessType`/`roleName`, failing closed rather than downgrading silently.
+  `[ran it]` the guard is route-level and `authController.register` is bound at
+  exactly ONE route, so the authenticated twin is untouched; `[ran it]`
+  `git grep "auth/register"` finds no caller anywhere outside its own test —
+  every e2e spec posts to `/api/users/register` with an admin token — so this
+  carries no Docker-gate risk. **#1037 stays OPEN** for the rest: whether the
+  route should be authenticated, deleted, or public at all, and the fact that
+  it writes no audit row.
 - **`[ran it]` #1027's abort is now measured end to end, and my own fix made
   #983 REACHABLE for the first time.** Before: `IndexKeySpecsConflict`, exit 1,
   **0 of 18 collections created** on any stack with an administrator. After:
@@ -117,8 +127,9 @@ Of the six queue members still open, **every one now turns on a decision
 rather than on missing information**, which is why they are open rather than
 worked:
 
-- **#1037** — direction is partly Denise's (should the route exist), but the
-  no-caller-supplied-privilege floor is not.
+- **#1037** — the escalation floor SHIPPED (`0447cff3`); what is left is the
+  product decision (authenticate / delete / keep public) plus the missing audit
+  row. Not blocking anything else.
 - **#983** — blocked on "should `create-db.js` exist at all"; it is
   simultaneously dead as code (zero callers) and load-bearing as documentation
   (`app.js` ×4 and four MIABIS models cite it).
