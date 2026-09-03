@@ -144,6 +144,33 @@ describe('ImportLGPDService.readCSV', () => {
     expect(rows.skippedCount).toBe(0);
   });
 
+  // Every blank-row fixture above puts the blank row at the END of the
+  // file, which is exactly the case where reporting "post-filter array
+  // index + 2" instead of the true physical source line is invisible: the
+  // blank row is discarded, but there is no later row for the missing index
+  // to shift. A blank row in the MIDDLE shifts every later row's physical
+  // line by one relative to its position in the filtered `rows` array --
+  // `sourceLines` is the reader's report of the true physical line for each
+  // row it keeps, and must reflect that shift.
+  it('reports the physical source line per row (not the post-filter array index) when a blank row sits in the middle', async () => {
+    const filePath = writeTmpFile(
+      'mid-blank-row.csv',
+      'patientName,birthDate\nJoão Silva,25/12/1990\n,\nMaria Souza,01/01/2000\n'
+    );
+
+    const rows = await importLgpdService.readCSV(filePath);
+
+    expect(rows).toEqual([
+      { patientName: 'João Silva', birthDate: '25/12/1990' },
+      { patientName: 'Maria Souza', birthDate: '01/01/2000' },
+    ]);
+    // Physical lines: 1=header, 2=João, 3=blank (discarded), 4=Maria.
+    // array-index+2 would wrongly report [2, 3] for the second row.
+    expect(rows.sourceLines).toEqual([2, 4]);
+    // Non-enumerable, same rationale as skippedCount above.
+    expect(Object.keys(rows)).not.toContain('sourceLines');
+  });
+
   it('rejects a CSV with a header but no data rows', async () => {
     const filePath = writeTmpFile('header-only.csv', 'patientName,birthDate\n');
 
@@ -307,6 +334,32 @@ describe('ImportLGPDService.readExcel', () => {
     const rows = await importLgpdService.readExcel(filePath, 'patients');
 
     expect(rows.skippedCount).toBe(0);
+  });
+
+  // xlsx twin of the CSV mid-file blank-row case above: every existing
+  // blank-row fixture puts the blank row at the END, where the bug is
+  // invisible. `sourceLines` must report the true Excel row number per kept
+  // row, not header-index + 1 over the post-filter `dataRows` array.
+  it('reports the physical Excel row number per row (not the post-filter array index) when a blank row sits in the middle', async () => {
+    const filePath = await writeTmpWorkbook('mid-blank-row.xlsx', [
+      { sheetName: 'Pacientes', rows: [
+        ['patientName', 'birthDate'],
+        ['João Silva', '25/12/1990'],
+        [null, null],
+        ['Maria Souza', '01/01/2000'],
+      ] },
+    ]);
+
+    const rows = await importLgpdService.readExcel(filePath, 'patients');
+
+    expect(rows).toEqual([
+      { patientName: 'João Silva', birthDate: '25/12/1990' },
+      { patientName: 'Maria Souza', birthDate: '01/01/2000' },
+    ]);
+    // Excel rows: 1=header, 2=João, 3=blank (discarded), 4=Maria.
+    // header-index+1 over dataRows would wrongly report [2, 3] for row 2.
+    expect(rows.sourceLines).toEqual([2, 4]);
+    expect(Object.keys(rows)).not.toContain('sourceLines');
   });
 
   it('falls back to the first sheet when every sheet is named "Instruções" (patients)', async () => {

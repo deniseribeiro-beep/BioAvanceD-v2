@@ -240,6 +240,20 @@ class ImportLGPDService {
       // Ou seja: a contagem abaixo sempre esteve correta; o que estava errado
       // era este comentario atribuir o descarte a `skipEmptyLines`.
       let skippedByHasData = 0;
+      // #1023: a linha FISICA no arquivo que o operador enviou. Comeca em 1
+      // (o header) e e' incrementada para TODA linha que chega ao handler,
+      // antes do teste `hasData` -- exatamente como
+      // reference-imports/parseJsonLines.js ja faz do outro lado do repo.
+      // Sem isto o numero reportado era o indice na lista JA FILTRADA mais um
+      // header, que so' coincide com a linha fisica quando nao ha linha em
+      // branco antes dela.
+      //
+      // Limitacao conhecida, nao uma regressao: um registro CSV com uma quebra
+      // de linha dentro de campo entre aspas ocupa varias linhas fisicas e
+      // produz um unico evento 'data', entao o contador desliza nesse caso. O
+      // `i + 2` anterior errava igualmente ali.
+      let physicalLine = 1;
+      const sourceLines = [];
       fs.createReadStream(filePath)
         .pipe(csv({
           separator,
@@ -247,10 +261,12 @@ class ImportLGPDService {
           skipLinesWithError: false
         }))
         .on('data', (row) => {
+          physicalLine += 1;
           // Filtra linhas vazias
           const hasData = Object.values(row).some(val => val && String(val).trim());
           if (hasData) {
             rows.push(row);
+            sourceLines.push(physicalLine);
           } else {
             skippedByHasData += 1;
           }
@@ -264,6 +280,13 @@ class ImportLGPDService {
           // importers read it explicitly via `rows.skippedCount`.
           Object.defineProperty(rows, 'skippedCount', {
             value: skippedByHasData,
+            enumerable: false,
+          });
+          // #1023: index-aligned com `rows`. Nao-enumeravel pela mesma razao
+          // que `skippedCount` (#1001): os testes dos readers comparam o array
+          // com `toEqual`.
+          Object.defineProperty(rows, 'sourceLines', {
+            value: sourceLines,
             enumerable: false,
           });
           resolve(rows);
@@ -349,7 +372,12 @@ class ImportLGPDService {
 
       // Lê todas as linhas primeiro
       const allRows = [];
-      worksheet.eachRow({ includeEmpty: true }, (row) => {
+      // #1023: o numero da linha na planilha ja' vinha e estava sendo
+      // descartado -- ExcelJS passa o rowNumber como SEGUNDO argumento do
+      // callback. E' o numero que o operador ve' aberto no Excel.
+      const allRowNumbers = [];
+      worksheet.eachRow({ includeEmpty: true }, (row, sheetRowNumber) => {
+        allRowNumbers.push(sheetRowNumber);
         const values = [];
         for (let cellIndex = 1; cellIndex <= row.cellCount; cellIndex += 1) {
           const cell = row.getCell(cellIndex);
@@ -411,6 +439,10 @@ class ImportLGPDService {
 
       // Converte linhas seguintes para objetos usando os headers limpos
       const dataRows = [];
+      // #1023: index-aligned com `dataRows` -- a linha da planilha de cada
+      // linha efetivamente mantida. Mesma finalidade que o sourceLines do
+      // readCSV.
+      const sourceLines = [];
       // #1001: counts rows dropped by either filter below, without
       // double-counting a row rejected by the first (the `continue` means a
       // row can only ever hit one of the two `skippedRows += 1` sites).
@@ -439,6 +471,7 @@ class ImportLGPDService {
         // Só adiciona se tiver pelo menos um campo preenchido
         if (Object.values(rowObj).some(v => v !== null && v !== '')) {
           dataRows.push(rowObj);
+          sourceLines.push(allRowNumbers[i]);
         } else {
           skippedRows += 1;
         }
@@ -452,6 +485,11 @@ class ImportLGPDService {
       // array's `toEqual` shape used by the existing readers tests intact.
       Object.defineProperty(dataRows, 'skippedCount', {
         value: skippedRows,
+        enumerable: false,
+      });
+      // #1023: mesmo par que o readCSV attacha, mesma razao nao-enumeravel.
+      Object.defineProperty(dataRows, 'sourceLines', {
+        value: sourceLines,
         enumerable: false,
       });
 
@@ -565,7 +603,11 @@ class ImportLGPDService {
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const rowNumber = i + 2; // +2 porque linha 1 é header e arrays começam em 0
+        // #1023: a linha FISICA no arquivo, vinda do reader via `sourceLines`
+        // (index-aligned com `rows`). O fallback `i + 2` cobre chamadores que
+        // mockam readFile com um array simples -- nesse caso a propriedade
+        // nao-enumeravel nao existe e o comportamento antigo vale.
+        const rowNumber = rows.sourceLines?.[i] ?? (i + 2);
 
         try {
           // #1012: o guard isEmptyRow que existia aqui era inalcancavel --
@@ -586,7 +628,7 @@ class ImportLGPDService {
           delete patientData.participantId;
                     if (!patientData.email || !PatientModel.isValidEmail(patientData.email)) {
                       const receivedValue = row.email || 'não informado';
-                      results.errors.push({
+                      results.errors.push({ index: i,
                         row: rowNumber,
                         errors: [`Linha ${rowNumber}: Email (email) é obrigatório e deve ser válido. Valor recebido: "${receivedValue}"`],
                         data: this.sanitizeRowForError(row)
@@ -595,7 +637,7 @@ class ImportLGPDService {
                     }
 
                     if (!patientData.consentTemplateId) {
-                      results.errors.push({
+                      results.errors.push({ index: i,
                         row: rowNumber,
                         errors: [`Linha ${rowNumber}: Template de consentimento (consentTemplateId) é obrigatório para importação em lote`],
                         data: this.sanitizeRowForError(row)
@@ -605,7 +647,7 @@ class ImportLGPDService {
 
                     const { ObjectId } = require('mongodb');
                     if (!ObjectId.isValid(patientData.consentTemplateId)) {
-                      results.errors.push({
+                      results.errors.push({ index: i,
                         row: rowNumber,
                         errors: [`Linha ${rowNumber}: consentTemplateId inválido`],
                         data: this.sanitizeRowForError(row)
@@ -616,7 +658,7 @@ class ImportLGPDService {
                     const consentTemplatesCollection = await getCollection(db, 'consentTemplates');
                     const consentTemplateExists = await consentTemplatesCollection.findOne({ _id: new ObjectId(patientData.consentTemplateId) });
                     if (!consentTemplateExists) {
-                      results.errors.push({
+                      results.errors.push({ index: i,
                         row: rowNumber,
                         errors: [`Linha ${rowNumber}: Template de consentimento não encontrado para consentTemplateId informado`],
                         data: this.sanitizeRowForError(row)
@@ -652,7 +694,7 @@ class ImportLGPDService {
 
           // Valida dados básicos antes da validação do modelo
           if (!patientData.patientName || (typeof patientData.patientName === 'string' && patientData.patientName.trim().length === 0)) {
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: [`Linha ${rowNumber}: Nome do paciente (patientName) é obrigatório e não pode estar vazio`],
               data: this.sanitizeRowForError(row)
@@ -662,7 +704,7 @@ class ImportLGPDService {
           
           if (!patientData.birthDate || !(patientData.birthDate instanceof Date) || isNaN(patientData.birthDate.getTime())) {
             const receivedValue = row.birthDate || 'não informado';
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: [`Linha ${rowNumber}: Data de nascimento (birthDate) é obrigatória e deve ser uma data válida no formato DD/MM/YYYY ou YYYY-MM-DD. Valor recebido: "${receivedValue}"`],
               data: this.sanitizeRowForError(row)
@@ -672,7 +714,7 @@ class ImportLGPDService {
           
           if (!patientData.sex || !['M', 'F', 'O'].includes(patientData.sex)) {
             const receivedValue = row.sex || 'não informado';
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: [`Linha ${rowNumber}: Sexo (sex) é obrigatório e deve ser M (Masculino), F (Feminino) ou O (Outro). Valor recebido: "${receivedValue}"`],
               data: this.sanitizeRowForError(row)
@@ -709,7 +751,7 @@ class ImportLGPDService {
           if (!validation.isValid) {
             // Adiciona número da linha em cada erro para melhor rastreabilidade
             const detailedErrors = validation.errors.map(err => `Linha ${rowNumber}: ${err}`);
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: detailedErrors,
               data: this.sanitizeRowForError(row) // Remove dados sensíveis do erro
@@ -725,7 +767,7 @@ class ImportLGPDService {
 
           // Valida unidade clínica se fornecida
           if (patientData.clinicalUnit && !PatientModel.validateUnit(patientData.clinicalUnit)) {
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: ['Unidade clínica inválida'],
               data: this.sanitizeRowForError(row)
@@ -756,7 +798,7 @@ class ImportLGPDService {
           if (duplicate) {
             // patientData.birthDate is guaranteed a valid Date here (row 529's guard `continue`s otherwise)
             const birthDateStr = patientData.birthDate.toLocaleDateString('pt-BR');
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: [`Paciente duplicado: já existe um paciente com o nome "${patientData.patientName}" e data de nascimento "${birthDateStr}" cadastrado no sistema`],
               data: this.sanitizeRowForError(row)
@@ -798,7 +840,7 @@ class ImportLGPDService {
           
         } catch (error) {
           logger.error(`Erro ao processar linha ${rowNumber}:`, error);
-          results.errors.push({
+          results.errors.push({ index: i,
             row: rowNumber,
             errors: [error.message || 'Erro desconhecido ao processar linha'],
             data: this.sanitizeRowForError(row)
@@ -1190,9 +1232,23 @@ class ImportLGPDService {
 
       const stagedRecords = rejected.map((rejection) => ({
         batchId,
-        // rowNumber is the spreadsheet row (header is 1, data starts at 2),
-        // the same numbering results.errors already uses. rows[] is
-        // zero-based over the data rows, hence the -2.
+        // #1023: rowNumber e' a linha FISICA do arquivo -- o que o operador
+        // ve' ao abrir a planilha -- e nao mais o indice do array filtrado
+        // mais um header. Os dois divergem em uma unidade por linha em branco
+        // anterior a esta.
+        //
+        // Por isso a linha de origem e' resolvida por `rejection.index` (o
+        // indice no array `rows`, carregado separadamente em cada entrada de
+        // results.errors) e NAO derivando-o de volta de `rowNumber - 2`. A
+        // derivacao era correta so' enquanto os dois numeros coincidiam; com a
+        // linha fisica ela aponta para a linha errada, ou para fora do array,
+        // e o `|| null` transformava isso num registro em quarentena
+        // impossivel de corrigir -- silenciosamente, que e' pior do que o bug
+        // de numeracao que #1023 comecou por corrigir.
+        //
+        // Deliberadamente sem fallback para `rowNumber - 2`: aplicado a uma
+        // linha fisica ele calcula um indice ERRADO em silencio, o que e' pior
+        // do que o undefined que um chamador sem `index` produziria.
         rowNumber: rejection.row,
         status: 'ERROR',
         errors: rejection.errors || [],
@@ -1200,7 +1256,7 @@ class ImportLGPDService {
         // The original row as read from the file. Without it a quarantined
         // record can be reviewed but not corrected and re-submitted, which
         // is the whole reason to quarantine rather than log.
-        row: rows[rejection.row - 2] || null,
+        row: rows[rejection.index] ?? null,
         normalized: rejection.data || null,
         createdAt: now,
         updatedAt: now,
@@ -1331,7 +1387,11 @@ class ImportLGPDService {
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const rowNumber = i + 2; // +2 porque linha 1 é header e arrays começam em 0
+        // #1023: a linha FISICA no arquivo, vinda do reader via `sourceLines`
+        // (index-aligned com `rows`). O fallback `i + 2` cobre chamadores que
+        // mockam readFile com um array simples -- nesse caso a propriedade
+        // nao-enumeravel nao existe e o comportamento antigo vale.
+        const rowNumber = rows.sourceLines?.[i] ?? (i + 2);
         let sampleData = null;
 
         // #1012: o guard isEmptyRow que existia aqui era inalcancavel -- pela
@@ -1380,7 +1440,7 @@ class ImportLGPDService {
           sampleData.patientName = sampleData.patientName || matchedPatient?.patient?.patientName || null;
 
           if (!sampleData.participantId) {
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: ['Nao foi possivel resolver a identidade do paciente para a amostra'],
               data: { participantId: null }
@@ -1391,7 +1451,7 @@ class ImportLGPDService {
           // Valida formato do ID (8 dígitos)
           const participantIdStr = String(sampleData.participantId).trim();
           if (participantIdStr.length !== 8 || !/^\d{8}$/.test(participantIdStr)) {
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: [`ID de paciente inválido: deve ter exatamente 8 dígitos numéricos`],
               data: { participantId: participantIdStr }
@@ -1409,7 +1469,7 @@ class ImportLGPDService {
           const currentDrugName = String(pharmacology.medicationName || '').trim();
 
           if (currentAtcCode && !/^[A-Z]\d{2}[A-Z]{0,2}\d{0,2}$/.test(currentAtcCode)) {
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: [`atcCode inválido: ${currentAtcCode}`],
               data: { participantId: participantIdStr }
@@ -1434,7 +1494,7 @@ class ImportLGPDService {
           // Valida dados da amostra
           const validation = SampleModel.validate(sampleData);
           if (!validation.isValid) {
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: validation.errors,
               data: { participantId: participantIdStr } // Apenas ID, sem dados sensíveis
@@ -1452,7 +1512,7 @@ class ImportLGPDService {
             const sampleTypesCollection = db.collection('sampleTypes');
             const validSampleType = await sampleTypesCollection.findOne({ id: sampleData.sampleType });
             if (!validSampleType) {
-              results.errors.push({
+              results.errors.push({ index: i,
                 row: rowNumber,
                 errors: [`Tipo de amostra "${sampleData.sampleType}" não encontrado no banco de dados. Use um valor cadastrado.`],
                 data: { participantId: participantIdStr }
@@ -1465,7 +1525,7 @@ class ImportLGPDService {
             const sampleOriginsCollection = db.collection('sampleOrigins');
             const validOrigin = await sampleOriginsCollection.findOne({ id: sampleData.sampleOrigin });
             if (!validOrigin) {
-              results.errors.push({
+              results.errors.push({ index: i,
                 row: rowNumber,
                 errors: [`Origem "${sampleData.sampleOrigin}" não encontrada no banco de dados. Use um valor cadastrado.`],
                 data: { participantId: participantIdStr }
@@ -1478,7 +1538,7 @@ class ImportLGPDService {
             const extractionProtocolsCollection = db.collection('extractionProtocols');
             const validProtocol = await extractionProtocolsCollection.findOne({ id: sampleData.extractionProtocol });
             if (!validProtocol) {
-              results.errors.push({
+              results.errors.push({ index: i,
                 row: rowNumber,
                 errors: [`Protocolo de extração "${sampleData.extractionProtocol}" não encontrado no banco de dados. Use um valor cadastrado.`],
                 data: { participantId: participantIdStr }
@@ -1515,7 +1575,7 @@ class ImportLGPDService {
           if (sampleData.barcode) {
             const existingSample = await samplesCollection.findOne({ barcode: sampleData.barcode });
             if (existingSample) {
-              results.errors.push({
+              results.errors.push({ index: i,
                 row: rowNumber,
                 errors: [`Já existe uma amostra com o código de barras ${sampleData.barcode}`],
                 data: { participantId: participantIdStr, barcode: sampleData.barcode }
@@ -1559,7 +1619,7 @@ class ImportLGPDService {
               candidateLocation = { boxId: nextSlot.boxId, position: nextSlot.position };
               logger.debug(`Localização automática atribuída: caixa ${nextSlot.boxId} posição ${nextSlot.position} para linha ${rowNumber}`);
             } else {
-              results.errors.push({
+              results.errors.push({ index: i,
                 row: rowNumber,
                 errors: ['Não há mais localizações de armazenamento disponíveis para incremento automático'],
                 data: { participantId: participantIdStr }
@@ -1589,7 +1649,7 @@ class ImportLGPDService {
               ? await this.resolveStorageHierarchyForBox(db, placementBox)
               : {};
             if (!placementFreezer || !(await this.isPlacementReady(db, placementFreezer))) {
-              results.errors.push({
+              results.errors.push({ index: i,
                 row: rowNumber,
                 errors: ['Localização física sem equipamento pronto ou sensor operacional associado.'],
                 data: { participantId: participantIdStr }
@@ -1709,7 +1769,7 @@ class ImportLGPDService {
           results.success++;
           
         } catch (error) {
-          results.errors.push({
+          results.errors.push({ index: i,
             row: rowNumber,
             errors: [error.message],
             data: { participantId: sampleData?.participantId || null }
@@ -2239,7 +2299,8 @@ class ImportLGPDService {
 
     for (let i = 0; i < rows.length; i += 1) {
       const rawRow = rows[i];
-      const rowNumber = i + 2;
+      // #1023: idem os outros dois importadores.
+      const rowNumber = rows.sourceLines?.[i] ?? (i + 2);
 
       // #1012: o guard isEmptyRow que existia aqui era inalcancavel -- pela
       // mesma razao dos outros dois loops (readCSV/readExcel ja descartam a
@@ -2267,49 +2328,49 @@ class ImportLGPDService {
         }
 
         if (!patientData.patientName) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Nome do paciente é obrigatório`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Nome do paciente é obrigatório`] });
           continue;
         }
 
         if (!patientData.email || !PatientModel.isValidEmail(patientData.email)) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Email inválido`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Email inválido`] });
           continue;
         }
 
         if (patientData.cpf && !this.isValidCpf(patientData.cpf)) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: CPF inválido`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: CPF inválido`] });
           continue;
         }
 
         if (!patientData.birthDate || !(patientData.birthDate instanceof Date) || Number.isNaN(patientData.birthDate.getTime())) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Data de nascimento inválida`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Data de nascimento inválida`] });
           continue;
         }
 
         if (this.isFutureDate(patientData.birthDate)) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Data de nascimento futura não é permitida`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Data de nascimento futura não é permitida`] });
           continue;
         }
 
         if (!patientData.consentTemplateId || !ObjectId.isValid(patientData.consentTemplateId)) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: consentTemplateId inválido ou ausente`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: consentTemplateId inválido ou ausente`] });
           continue;
         }
 
         const consentTemplatesCollection = await getCollection(db, 'consentTemplates');
         const consentTemplateExists = await consentTemplatesCollection.findOne({ _id: new ObjectId(patientData.consentTemplateId) });
         if (!consentTemplateExists) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Template de consentimento não encontrado`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Template de consentimento não encontrado`] });
           continue;
         }
 
         if (patientData.isDeceased) {
           if (!patientData.representativeName || !patientData.representativeEmail) {
-            results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Para paciente falecido, responsável (nome e email) é obrigatório`] });
+            results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Para paciente falecido, responsável (nome e email) é obrigatório`] });
             continue;
           }
           if (!PatientModel.isValidEmail(patientData.representativeEmail)) {
-            results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Email do responsável inválido`] });
+            results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Email do responsável inválido`] });
             continue;
           }
         }
@@ -2319,7 +2380,7 @@ class ImportLGPDService {
         // duplicatas dentro do mesmo arquivo; não há conjunto em memória.
         const duplicate = await patientService.checkDuplicatePatient(db, patientData);
         if (duplicate) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Paciente duplicado detectado`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Paciente duplicado detectado`] });
           // #931: mesma chave que importPatients (nome + data de nascimento) --
           // ambos chamam patientService.checkDuplicatePatient.
           results.duplicates += 1;
@@ -2356,7 +2417,7 @@ class ImportLGPDService {
 
         const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
         if (!validation.isValid) {
-          results.errors.push({ row: rowNumber, errors: validation.errors.map((error) => `Linha ${rowNumber}: ${error}`) });
+          results.errors.push({ index: i, row: rowNumber, errors: validation.errors.map((error) => `Linha ${rowNumber}: ${error}`) });
           continue;
         }
 
@@ -2393,7 +2454,7 @@ class ImportLGPDService {
         results.success += 1;
       } catch (error) {
         logger.error(`Erro ao processar linha ${rowNumber} (smart import):`, error);
-        results.errors.push({ row: rowNumber, errors: [error.message || 'Erro desconhecido ao processar linha'] });
+        results.errors.push({ index: i, row: rowNumber, errors: [error.message || 'Erro desconhecido ao processar linha'] });
       }
     }
 

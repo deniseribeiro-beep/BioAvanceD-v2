@@ -48,10 +48,22 @@ function createDb() {
   };
 }
 
+// #1023: `index` is the array index into `rows`, and it is now REQUIRED on
+// every results.errors entry that quarantine has to resolve back to a source
+// row. It used to be derived as `row - 2`, which was only ever correct while
+// `row` was the filtered-array index plus a header. `row` is now the PHYSICAL
+// line in the uploaded file, so the two numbers diverge by one per blank row
+// preceding this one -- which is the whole defect #1023 fixed. `row: 4` with
+// `index: 2` is exactly that case: the third data row, sitting on physical
+// line 4 because a blank line precedes it.
+//
+// No fallback is offered in the service on purpose: `row - 2` applied to a
+// physical line number computes a WRONG index silently, which is worse than
+// the undefined this fixture would otherwise produce.
 const results = {
   total: 3,
   success: 2,
-  errors: [{ row: 4, errors: ['participantId inexistente'], data: { participantId: '00000042' } }],
+  errors: [{ row: 4, index: 2, errors: ['participantId inexistente'], data: { participantId: '00000042' } }],
 };
 
 const rows = [{ a: 1 }, { a: 2 }, { specimenId: 'S-3', participantId: '00000042' }];
@@ -125,6 +137,35 @@ describe('#794: quarantined batches record the import options they were produced
     });
 
     expect(db.inserted.batches[0].importOptions.groupFields).toEqual({ studyId: 'ST-1' });
+  });
+
+  // #1023: the pin for the half that had none. The fixture above is NOT a
+  // regression test for it -- with row:4 / index:2 the old `rows[row - 2]`
+  // arithmetic resolves to rows[2] as well, so both the old and new code pass
+  // it. This case makes the two disagree: two blank lines precede the row, so
+  // the physical line is 5 while the array index is still 2. Under the old
+  // arithmetic rows[5 - 2] is rows[3], which does not exist in a 3-element
+  // array -- the quarantined record would silently carry `row: null` and be
+  // uncorrectable, which is the RNF011 AC#4 guarantee quarantine exists for.
+  it('resolves the quarantined source row by array index, not by re-deriving it from the physical line', async () => {
+    const shiftedResults = {
+      total: 3,
+      success: 2,
+      errors: [{ row: 5, index: 2, errors: ['participantId inexistente'], data: { participantId: '00000042' } }],
+    };
+
+    await importLGPDService.quarantineRejectedSampleRows(db, {
+      fileName: 'a.csv',
+      rows,
+      results: shiftedResults,
+      importOptions: { startBoxId: 'box-1', autoIncrement: true, groupFields: {} },
+    });
+
+    expect(db.inserted.records).toHaveLength(1);
+    expect(db.inserted.records[0]).toMatchObject({
+      rowNumber: 5,
+      row: { specimenId: 'S-3', participantId: '00000042' },
+    });
   });
 
   it('still returns the batch id and stages the rejected rows unchanged', async () => {

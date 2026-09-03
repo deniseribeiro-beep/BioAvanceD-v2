@@ -133,6 +133,20 @@ const upload = multer({
  * Implementa importação de pacientes e amostras via CSV/Excel
  * com total conformidade com anonimização LGPD
  */
+// #1023: `results.errors` entries now carry an internal `index` (the array
+// index into the reader's filtered rows) alongside the operator-facing `row`
+// (the physical line in the uploaded file). The index exists so
+// quarantineRejectedSampleRows can find the source row WITHOUT deriving it
+// back from the displayed line number -- deriving it is what a mid-file blank
+// row used to desync. It is a service-internal detail and must not reach the
+// wire: the two `errorsDetails` sites below pass `results.errors` verbatim,
+// while the other two already .map() to picked fields, so without this the
+// four import endpoints would answer with two different shapes -- the exact
+// class #840 is a decision record about.
+function stripInternalErrorFields(errors) {
+  return (Array.isArray(errors) ? errors : []).map(({ index, ...rest }) => rest);
+}
+
 class ImportLGPDController {
   async persistSmartImportSummary(db, payload) {
     const reportsCollection = db.collection('importSummaryReports');
@@ -631,7 +645,7 @@ class ImportLGPDController {
         userName: req.user?.name || req.user?.username || null,
         totalSucesso: results.success,
         totalFalhas: results.errors.length,
-        errorsDetails: (Array.isArray(results.errors) ? results.errors : []).slice(0, 200)
+        errorsDetails: stripInternalErrorFields(results.errors).slice(0, 200)
       });
 
       if (req.user) {
@@ -682,7 +696,7 @@ class ImportLGPDController {
           skipped: results.skipped,
           // #970: same missing-count fix as importPatients above.
           duplicatesFound: results.duplicates,
-          errorsDetails: results.errors,
+          errorsDetails: stripInternalErrorFields(results.errors),
           summaryReport,
           summaryReportId: String(persistedSummaryReport._id),
           // #814 (RNF011 AC#4): same stagingBatchId field as importPatients
