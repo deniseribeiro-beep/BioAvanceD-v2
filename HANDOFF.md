@@ -1,171 +1,124 @@
 # HANDOFF
 
-**Written 2026-09-03, ninth queue sitting. Dennis asked for "5-10 issues,
-Docker is on", then ended the sitting early on session limits.** Three
-issues closed outright, two advanced and left open. 5 commits pushed. 6
-issues filed here, 2 on the pack.
+**Written 2026-09-03, tenth queue sitting. INTERIM — the session is still
+running.** Dennis asked for "the next 10 issues to resolve, Docker is on."
+7 closed, 2 written-and-gate-blocked, 2 escalated. 10 commits pushed.
+7 issues filed here, 5 on the pack.
 
-**The Docker gate did NOT run.** No stack was ever brought up this sitting.
-
-Re-derive every count rather than trusting it.
+**The Docker gate is IN FLIGHT as this is written** — `compose.test.yml`
+bringing up with `--build`. Its result is not in this file. Re-derive
+everything rather than trusting these counts.
 
 ---
 
 ## Repo state
 
-- Branch `feature/docker-e2e-backend-integration`, clean and matching
-  origin. `main` untouched, no PR.
-- Last substantive commit: `cbfb74f5` (#1012 item 2).
-- **New npm scripts / dependencies / env keys: none.**
-- New test files: `frontend/src/views/ResultsPage.test.tsx` — the repo's
-  **second** page-render RTL test, after `ImportLGPDPage.test.tsx`.
+- Branch `feature/docker-e2e-backend-integration`, pushed. `main`
+  untouched, no PR.
+- Last substantive commit: `8b8e93f4` (#1017).
+- **New npm scripts / dependencies / env keys: none.** `@vitejs/plugin-react`
+  was already a devDependency; #1019 only wired it into a second config.
+- New test files: `frontend/src/components/AnalysisUpload.test.tsx` — the
+  repo's **first** test to *render* a `.jsx` component.
 
-## Docker state — nothing ran, nothing is running
+## Docker state
 
-- **No stack was started at any point.** `docker ps -a` empty at the start
-  of the sitting and at the end; `docker compose ls -a` empty.
-- **The end-of-loop Docker gate is outstanding**, and so is any e2e run.
-- Cleanup was requested and performed: `docker image prune -f` and
-  `docker builder prune -f` both reclaimed **0B** — the previous sitting
-  had already pruned. Remaining is all pre-existing and deliberately kept:
-  **33 images / 4.683GB**, **49 local volumes / 1.536GB**, build cache 0B.
-  A machine-wide `prune -a`, and removal of the `bioavanced-test-*` named
-  volumes, still need Dennis's consent — the volumes hold the inherited
-  bootstrap state.
-- Bootstrap state: **present, inherited, not re-verified** — nothing was
-  started against it.
+- **Stack was empty at sitting start** (`docker ps -a` and `docker compose
+  ls -a` both empty) and is being brought up now, with `--build`, because
+  this sitting changed backend source.
+- **Bootstrap: NOT YET RUN against these volumes** at the time of writing.
+  `admin-bootstrap-test` and `foundation-bootstrap-test` are both required
+  before the two gated specs will pass — the LGPD spec's MIABIS ids are
+  deliberately the real seeded ones.
+- The `bioavanced-test-*` named volumes carry inherited state from earlier
+  sittings; **not** dropped, since removing them needs Dennis's consent.
 
-## Verification actually performed
+## What closed (7)
 
-**Targeted native runs only. No full backend or frontend suite ran this
-sitting, and `npm run test:architecture` did not run either.** Both are
-outstanding before a PR, alongside the Docker gate.
+`#1019` `#974` `#1010` `#1012` `#1016` `#1017` `#1024`.
 
-| Slice | Run |
-|---|---|
-| #1007 | 11 backend files / 418 tests, 3 frontend files / 31 tests |
-| #1003 | 10 files / 285 tests |
-| #1009 | 7 files / 200 tests |
-| #997 slice 2 | 4 frontend files / 34 tests |
-| #1012 item 2 | 6 files / 267 tests |
+## Written, merged, and waiting on the gate (2)
 
-Every consumer set was derived by two-hop grep from the changed symbol,
-not from the files the fix touched.
+- **#997** — the sync half. `tests/e2e/lgpd-sample-import.spec.ts`, one new
+  test at `:269`. Commit `7c49132d`, `Refs` not `Fixes`.
+- **#1015** — `POST /api/storage/allocate/auto` real-backend coverage.
+  `tests/e2e/sample-storage-lifecycle.spec.ts`. Commit `1d24f7a8`.
 
-## What closed (3)
+Both are static-verified only (`playwright test --list`, `tsc --noEmit`).
+Close them when the gate runs green; leave open otherwise.
 
-`#1007` `#1003` `#1009`.
+## Escalated, not worked (2)
 
-## What advanced and stayed open (2)
-
-- **#997** — slice 2 (async RTL) shipped in `ce1fe705`. Remaining: the
-  sync half, an assertion that a real HTTP import response carries
-  `data.skipped`. **Docker-gated.** Its home is
-  `tests/e2e/lgpd-sample-import.spec.ts`, which is `APIRequestContext`-only
-  — so this needs Playwright-as-HTTP-client, **not** a browser spec. The
-  issue's own suggested one-line fixture change would produce a misleading
-  green; see the comment.
-- **#1012** — item 2 refuted and the record corrected in `cbfb74f5`. Item 1
-  (delete the three dead `isEmptyRow` backstops) is open and is a real
-  judgment about defence-in-depth in Denise's importer.
-
-Query the board for everything else (`gh issue list --state open`).
+**#988 / #990 are blocked on #1026**, which this sitting filed and which is
+the more important issue of the three. The deferral ladder was walked —
+code, env files, compose files, canonical requirements, milestones.
 
 ## The judgment a query cannot carry
 
-- **[ran it] `csv-parser` 3.2.0 has no `skipEmptyLines` option, and never
-  did.** Its `defaults` object doesn't list it and `grep -rn` over the
-  package returns nothing; the constructor does `Object.assign({},
-  defaults, opts)`, so it and `skipLinesWithError` are silently absorbed.
-  **Three shipped artefacts assert otherwise** — #1001's close comment,
-  `734a21c8`'s message, and (until `cbfb74f5`) the comment in `readCSV`.
-  The general lesson: *"we configured the parser to do X"* is unfalsifiable
-  without reading the dependency's own `defaults`.
-- **[ran it] `auditLoggerMock` in `users-access.routes.test.js` never
-  intercepts, and vitest does not warn.** `user.routes.js` requires
-  auditLogger **lazily inside the handler** (`:98`, `:614`) rather than at
-  module scope like `authService` (`:3`). Pointing the mock at a
-  deliberately nonexistent module produces an **identical run** — same
-  pass/fail counts, no error. So a mis-pathed mock and an unintercepted one
-  are indistinguishable. This cost #1009 an assertion it should have been
-  able to make. **#1017.**
-- **[read it] #1009's stated "trap" does not exist.** It feared tightening
-  the guard would stop org-only re-scoping, citing #615's test at
-  `users-access.routes.test.js:640` — but that test sends a genuine
-  2 → 3 level change. The org-only case has its own test (`:698`) and its
-  own path (`updateAssignmentScope`, `user.routes.js:581`), which never
-  consulted the guard. `rbac-assignment.service.js:320-329` says outright
-  it is "deliberately not built on changeUserRole".
-- **[read it] #1003's fix needed TWO hunks, not the one its body proposes.**
-  Hunk A alone ships a #990 twin — a rollback would leave an open
-  assignment. Unlike #990 the compensation is mechanically available:
-  `storageAssignments` has no append-only guard, while
-  `sampleMovementLedger` blocks `updateOne`/`deleteOne`. Hunk B is
-  knowingly throwaway; #988 part 3 deletes `rollbackAutoAssignedPosition`.
-- **[ran it] `storageService.releaseSampleFromPosition` has no production
-  caller**, so `NO_STORAGE_LOCATION` is a documented error code no route
-  can emit. **#1016.**
-- **[read it] `backfillUserRoleAssignments`' `if (!user.accessType)
-  continue` is NOT simply broken by #427** — pre-#427 users still carry the
-  field in Mongo and are repaired correctly. The defect is that it is blind
-  to the only *modern* orphan path, and skips silently. Framing it the
-  obvious way would get it closed as a non-issue. **#1018.**
-- **[ran it] This repo has MIXED line endings within single directories.**
-  `import-worker.js` is CRLF while `import-worker.test.js` beside it is
-  pure LF, with `core.autocrlf=true`. A multi-line exact-match edit must
-  detect the EOL **per file** (`s.includes('\r\n')` in Node) — both
-  "assume CRLF" and "assume LF" miss, silently, matching 0 times. And
-  `od`/`hexdump` on a **pipeline** lies: MSYS `sed` strips the CR before
-  you see it. Pack **#704**.
-
-## Filed this sitting
-
-Here: **#1014 #1015 #1016 #1017 #1018 #1019**.
-On the pack: **#704** (line endings), **#705** (session limits / agent spend).
-Comments added to **#988**, **#997**, **#1012**, and pack **#589**.
-
-**Worth reading first: #1014** (after #1007, the Results page's Ignorados
-and Duplicados tiles can now never render for any job it can display — a
-product decision, not a bug), then **#1017** (the inert audit mock, because
-it silently defeats assertions).
+- **[ran it] `enforceAppendOnlyCollection` was one-shot per PROCESS**, keyed
+  by collection *name*, so `sample_movements` append-only enforcement was
+  order-dependent and absent from the second call onward — and
+  `appendImmutableAudit` builds a fresh view every invocation, so every
+  audit append after the first ran unguarded. Fixed (`041ee8b3`, WeakSet on
+  object identity). **The reason no test saw it: every case in that describe
+  passes a distinct `collectionName`**, so each got a fresh wrap.
+- **[ran it] Every `vi.mock` specifier in `users-access.routes.test.js`
+  resolved to `null`.** The file is at `api/backend/tests/integration/`, so
+  `../../../src` is `api/src`, which does not exist. **Both** mocks were
+  inert — including `auth.service`, which #1017's body asserted was working.
+  Vitest retries a failed dynamic `import` root-relative (which is why the
+  `await import`s worked) and does **not** extend that retry to `vi.mock`.
+  A mock's presence is never evidence it is installed.
+- **[ran it] The remedy for a lazily-required CJS module is to spy on the
+  module object loaded through the same `require` as the SUT** — never
+  `vi.mock`, which does not intercept a lazy in-handler require even at the
+  correct path. `auth.routes.test.js` in the same directory is the working
+  precedent. **The cheap proof the spies landed is that the
+  `AUDIT_TRAIL_WRITE_FAILURE` stderr block disappears from the run.**
+- **[read it] `consent.service.js:952` hardcodes `specimenId: null`**, and
+  `neo4jCanonicalProjection.service.js:79` falls back to `event.aggregateId`
+  — so `GOVERNED_BY` lands on a phantom `Sample` node keyed by the *consent*
+  id. Nothing writes `Sample.consentStatus` either, so
+  `validateBeforePersistence` denies **every real specimen**. `.env.production`
+  runs `fail-closed`. **#1026**, and it violates RNF012 AC#1 (Alta), which
+  requires participant→specimen→location lineage to be recoverable.
+- **[read it] `LINEAGE_MODE` is effectively boolean** — all seven read sites
+  compare `=== 'fail-closed'`, so any typo means fail-open. It is fail-open
+  in code, in `.env.docker`, and in `compose.test.yml` (unset); fail-closed
+  only in production.
+- **[ran it] The `isEmptyRow` backstops were unreachable in all three
+  importers**, by one argument repeated three times — and on the Excel side
+  it is *gate two* that closes it, not gate one. The docs half of the
+  dead-code protocol came back **empty**; the consumer half did **not** (nine
+  tests), so the default did not authorise the deletion on its own.
 
 ## Conventions this sitting relied on / established
 
-- **Detect line endings per file, in Node, before any multi-line
-  exact-match edit.** See the judgment section; this cost one wasted edit
-  cycle plus a misleading `od` result.
-- **Brief every worker to verify the precedent and report if it differs.**
-  Three of six research agents contradicted a premise in the issue they
-  were briefed on, and all three were right. This is the single
-  highest-value clause in a brief.
-- **The can-it-fail probe reverts every site and the count must be
-  N-shaped** — held for all five slices, and each was re-run by the
-  orchestrator rather than trusted from the worker's report.
-- **A control case whose behaviour is identical before and after the fix
-  must be GREEN pre-fix.** Used on every slice; it is what separates a real
-  reproduction from a setup-shaped red, and it caught nothing this
-  sitting — which is the point.
-- **RBAC and permission-gate issues stay on the orchestrator's track.**
-  `agent-delegation`'s triage excludes security-relevant work from write
-  briefs; #1009 and #1010 both qualify.
-- **Write `HANDOFF.md` and any long issue body with the `Write` tool**, not
-  a heredoc — the harness truncates a Bash call over ~8,100 assembled
-  bytes, and single quotes cost 5 bytes each.
+- **A claim from another agent's report is not firsthand.** One reached a
+  second agent's brief as established fact and was refuted by that worker.
+  The `verify-each-precedent` clause is what caught it — twice. Pack **#712**.
+- **A leaf worker cannot run `gh`**, so a brief must transcribe the
+  load-bearing issue comments rather than saying "read the issue". Pack **#711**.
+- **Derive the consumer set from the changed FUNCTION, not the module** — a
+  module-level two-hop sweep on `session.service` returns ~65 test files,
+  most of which only stub auth middleware.
+- **When the changed file is the test runner's own config, the consumer set
+  is the whole suite** and the sanctioned explicit-breadth run is the
+  targeted one. Pack **#709**.
+
+## Filed this sitting
+
+Here: **#1020 #1021 #1022 #1023 #1024(closed) #1025 #1026**.
+On the pack: **#709 #710 #711 #712 #713**. Comments on pack #579, #657.
+
+**Worth reading first: #1026** (consent projection keys `GOVERNED_BY` onto a
+phantom node — production-shaped, blocks #988), then **#1021** (a `PUT` that
+merely *omits* `mfaEnabled` disables an admin's MFA; the inline comment says
+that is deliberate).
+
+Query the board for everything else: `gh issue list --state open`.
 
 ## Recommended next
 
-**None queued** — Dennis ended the sitting on session limits and named no
-follow-on task.
-
-The cheapest high-value work is **#1010** (the `disable-mfa` route has no
-`requirePermission` gate; fully scoped, and note the trap — a
-`PERMISSION_CATALOG` entry alone produces no `Permission` document and
-would 403 everyone, so the code must also land in the `Administrador`
-permissions array). **#974** looks closeable: its body premise is dead —
-`Session.js` has both `revokedBy` and `revocationReason` at HEAD and an
-admin revoke is not byte-identical to an expiry — but re-verify before
-closing, and note the residual that `user-security.service.js:559` still
-omits `updatedAt`.
-
-**Before any PR:** the full native suites, `npm run test:architecture`, and
-the Docker gate — none of which ran this sitting.
+**None queued by Dennis.** The session's own next steps are: finish the
+Docker gate, close #997/#1015 on green, and put #1026's direction to him.
