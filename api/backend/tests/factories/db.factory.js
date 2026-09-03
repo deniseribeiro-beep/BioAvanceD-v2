@@ -1,5 +1,27 @@
 const { randomUUID } = require('crypto');
 
+// #1034: the omission mirror of #994. #994 was a mock FABRICATING a method
+// the real driver lacks (`getMongo`) and certifying a dead endpoint with 41
+// green tests. This is the same defect from the other side: a collection
+// mock that OMITTED `findOneAndUpdate` (the counter-backed movement-ID
+// allocator every audit/ledger write goes through --
+// MongoAuditRepository.generateMovementID, SampleMovement.generateMovementID,
+// barcodeGenerator's counter path) and a cursor missing `next()` (the
+// movement ledger's hash-chain read, sampleMovementLedger's
+// appendMovementWithHashChain, and the mqtt-ingestion-audit/scheduler
+// services' own `.find().sort().limit(1).next()` reads). Both omissions
+// surface as a TypeError, caught by the use case's own catch block,
+// rethrown, and mapped by the controller to a plausible HTTP 500 -- so a
+// test asserting `expect(res.status).toBe(500)` for a legitimate
+// infrastructure-failure case can pass against a fixture that never reached
+// the code under test at all. Both are carried below by default, overridable
+// per test the same way every other default here is:
+//   - `findOneAndUpdate` resolves `{ seq: 1 }` -- the only field the counter
+//     path reads.
+//   - the cursor's `next()` resolves the first document of its current
+//     contents, or `null` when empty -- the honest analogue of a real driver
+//     cursor, so a test that pre-loads `find()` with documents gets a
+//     sensible default without also having to override `next` by hand.
 function createCollectionMock(overrides = {}) {
   const v = globalThis.vi;
   if (!v) {
@@ -38,6 +60,7 @@ function createCollectionMock(overrides = {}) {
         return createCursor(projected);
       }),
       toArray: v.fn().mockResolvedValue(current),
+      next: v.fn().mockImplementation(() => Promise.resolve(current.length ? current[0] : null)),
     };
   };
 
@@ -46,6 +69,7 @@ function createCollectionMock(overrides = {}) {
     insertOne: v.fn().mockResolvedValue({ insertedId: randomUUID() }),
     updateOne: v.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     findOne: v.fn().mockResolvedValue(null),
+    findOneAndUpdate: v.fn().mockResolvedValue({ seq: 1 }),
     find: v.fn().mockImplementation(() => createCursor([])),
     countDocuments: v.fn().mockResolvedValue(0),
     createIndex: v.fn().mockResolvedValue(null),
