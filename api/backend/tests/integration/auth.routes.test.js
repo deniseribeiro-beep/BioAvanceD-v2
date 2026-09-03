@@ -135,6 +135,51 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(res.status).toBe(201);
       expect(res.body.created).toBe('new@example.com');
     });
+
+    // #1037: this route is UNAUTHENTICATED (no `authenticate`, unlike every
+    // neighbour) and auth.controller.js hands `req.body` to registerUser
+    // verbatim, which honours `userData.accessType || 2`. accessType 4 maps to
+    // 'administrator' in ROLE_CODE_BY_ACCESS_TYPE, and resolveScopeForRole
+    // short-circuits hierarchyLevel 4 to a GLOBAL scope without validating an
+    // organizationId -- so the grant cannot fail. The same request also takes
+    // the branch that sets mfaEnabled:false/mfaSecret:null by default.
+    //
+    // The sibling POST /api/users/register carries #998's hierarchy floor,
+    // whose own comment describes this exact escalation one level down. Both
+    // routes reach the same service; the floor lived in only one of them.
+    //
+    // Fail CLOSED rather than silently downgrading: a caller who genuinely
+    // needs to choose a privilege level has an authenticated route for it,
+    // and a silent downgrade would leave the caller believing it succeeded.
+    it('#1037: refuses a caller-supplied accessType, without reaching the controller', async () => {
+      const spy = vi.spyOn(authController, 'register').mockImplementation(async (req, res) => {
+        res.status(201).json({ success: true, created: req.body.email });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
+
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({ email: 'attacker@example.com', password: 'x', accessType: 4 });
+
+      expect(res.status).toBe(403);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('#1037: refuses a caller-supplied roleName too -- getAccessTypeForRole maps it to the same privilege', async () => {
+      const spy = vi.spyOn(authController, 'register').mockImplementation(async (req, res) => {
+        res.status(201).json({ success: true, created: req.body.email });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
+
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({ email: 'attacker2@example.com', password: 'x', roleName: 'Administrador' });
+
+      expect(res.status).toBe(403);
+      expect(spy).not.toHaveBeenCalled();
+    });
   });
 
   describe('POST /change-password', () => {

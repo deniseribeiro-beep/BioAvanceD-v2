@@ -64,7 +64,46 @@ router.post('/login', async (req, res, next) => {
 });
 
 // RF003 - Cadastro de usuário (pode ser público ou protegido dependendo da regra)
-router.post('/register', authController.register.bind(authController));
+//
+// #1037: esta rota NÃO tem `authenticate` -- diferente de todas as suas
+// vizinhas -- e auth.controller.js entrega `req.body` inteiro a
+// registerUser, que respeita `userData.accessType || 2`. accessType 4 mapeia
+// para 'administrator' em ROLE_CODE_BY_ACCESS_TYPE, e resolveScopeForRole
+// atalha hierarchyLevel 4 para escopo GLOBAL sem validar organizationId --
+// ou seja, a concessão não pode falhar. O mesmo pedido ainda cai no ramo que
+// zera mfaEnabled/mfaSecret por padrão. Resultado medido: um POST anônimo
+// devolvia 201 e gravava uma atribuição de administrador global, ativa, com
+// MFA desligado.
+//
+// A rota irmã POST /api/users/register carrega o piso de hierarquia do #998,
+// cujo próprio comentário descreve exatamente esta escalada um nível abaixo.
+// As duas chegam ao MESMO serviço; o piso vivia só numa delas. Este guard é
+// o piso equivalente para a rota pública, e é a única parte do #1037 que não
+// depende de uma decisão de produto: se esta rota deve existir, ser
+// autenticada ou ser removida continua em aberto lá.
+//
+// Falha FECHADA em vez de rebaixar em silêncio. Um rebaixamento silencioso
+// deixaria o chamador acreditando que escolheu o nível que pediu, e quem
+// legitimamente precisa escolher um nível tem a rota autenticada para isso.
+// Um pedido sem accessType/roleName segue inalterado e recebe o padrão 2.
+function rejectCallerSuppliedPrivilege(req, res, next) {
+  const body = req.body || {};
+  const supplied = ['accessType', 'roleName'].filter((k) => body[k] !== undefined && body[k] !== null);
+  if (supplied.length === 0) {
+    return next();
+  }
+
+  logger.warn(
+    `#1037: registro público recusado -- nível de acesso fornecido pelo chamador: ${supplied.join(", ")}`
+  );
+  return res.status(403).json({
+    success: false,
+    error: (req.t && req.t("errors.forbidden")) || "Acesso negado",
+    message: "Este endpoint não aceita accessType nem roleName. Use a rota autenticada de criação de usuários para definir o nível de acesso."
+  });
+}
+
+router.post('/register', rejectCallerSuppliedPrivilege, authController.register.bind(authController));
 
 // Troca de senha autenticada
 router.post('/change-password', authenticate, authController.changePassword.bind(authController));
