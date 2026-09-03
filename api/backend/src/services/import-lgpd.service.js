@@ -505,7 +505,7 @@ class ImportLGPDService {
       total: 0,
       success: 0,
       errors: [],
-      skipped: 0, // #798: linhas em branco ignoradas (isEmptyRow), fora de total
+      skipped: 0, // #798: linhas em branco ignoradas, fora de total (#1012: quem as detecta e conta e readCSV/readExcel, nao este loop)
       // #931: SUBCONJUNTO ROTULADO de `errors`, nao um balde separado. Uma
       // linha duplicada ja entra em `errors` e faz `continue`; este contador
       // apenas diz quantos desses erros foram duplicidade. Somar
@@ -518,9 +518,11 @@ class ImportLGPDService {
     try {
       const rows = await this.readFile(file.path, file.originalname, 'patients');
       // #1001: readCSV/readExcel already drop blank rows before this array
-      // exists (hasData / isEmpty+all-null-values checks) -- so this loop's
-      // own isEmptyRow guard below can never fire, and results.skipped would
-      // stay 0 forever without seeding it from what the reader discarded.
+      // exists (hasData / isEmpty+all-null-values checks), so results.skipped
+      // would stay 0 forever without seeding it from what the reader
+      // discarded. #1012: the per-row isEmptyRow backstop that used to sit in
+      // the loop below was unreachable for exactly this reason and is gone --
+      // the readers are now the only place a blank row is detected or counted.
       results.skipped = rows.skippedCount || 0;
       const patientsCollection = await getCollection(db, 'patients');
 
@@ -566,16 +568,11 @@ class ImportLGPDService {
         const rowNumber = i + 2; // +2 porque linha 1 é header e arrays começam em 0
 
         try {
-          // Ignora linhas vazias (#790: as duas verificacoes daqui viraram
-          // isEmptyRow, agora compartilhada pelos tres loops)
-          if (this.isEmptyRow(row)) {
-            // #798: conta a linha ignorada separadamente de total/success/errors,
-            // para que o operador saiba que o arquivo tinha mais linhas do que as
-            // que contaram, sem alterar o significado de nenhum campo existente.
-            results.skipped++;
-            continue;
-          }
-
+          // #1012: o guard isEmptyRow que existia aqui era inalcancavel --
+          // readCSV/readExcel ja descartam qualquer linha em branco antes
+          // deste array existir (ver readFile acima), entao nenhuma `row`
+          // aqui pode satisfazer isEmptyRow. Removido; results.skipped
+          // continua vindo de rows.skippedCount, seedado acima.
           results.total++;
 
           // Parse dos dados do CSV/Excel
@@ -1285,7 +1282,7 @@ class ImportLGPDService {
       total: 0,
       success: 0,
       errors: [],
-      skipped: 0, // #798: linhas em branco ignoradas (isEmptyRow), fora de total
+      skipped: 0, // #798: linhas em branco ignoradas, fora de total (#1012: quem as detecta e conta e readCSV/readExcel, nao este loop)
       duplicates: 0, // #931: subconjunto rotulado de `errors` (ver importPatients)
       importedSampleIds: []
     };
@@ -1293,8 +1290,8 @@ class ImportLGPDService {
     try {
       const rows = await this.readFile(file.path, file.originalname, 'samples');
       // #1001: same seeding as importPatients -- readCSV/readExcel already
-      // drop blank rows before this array exists, so this.isEmptyRow below
-      // can never fire against a row from `rows`.
+      // drop blank rows before this array exists. #1012: the unreachable
+      // per-row backstop below is gone for that same reason.
       results.skipped = rows.skippedCount || 0;
       const samplesCollection = await getCollection(db, 'samples');
       const patientsCollection = await getCollection(db, 'patients');
@@ -1337,17 +1334,10 @@ class ImportLGPDService {
         const rowNumber = i + 2; // +2 porque linha 1 é header e arrays começam em 0
         let sampleData = null;
 
-        // #790: uma linha em branco nao e uma linha. Sem este guard ela
-        // seguia para parseSampleRow, falhava a resolucao de identidade e
-        // era reportada como "Nao foi possivel resolver a identidade do
-        // paciente para a amostra" -- e, depois do #787, ainda era colocada
-        // em quarentena como se fosse um problema real de dados. Fica antes
-        // do results.total++ para casar com importPatients.
-        if (this.isEmptyRow(row)) {
-          // #798: conta a linha ignorada separadamente de total/success/errors.
-          results.skipped++;
-          continue;
-        }
+        // #1012: o guard isEmptyRow que existia aqui era inalcancavel -- pela
+        // mesma razao do loop de importPatients (readCSV/readExcel ja
+        // descartam a linha em branco antes deste array existir). Removido;
+        // results.skipped continua vindo de rows.skippedCount, seedado acima.
 
         // #786: counted here, at the top of the loop body, rather than at the
         // bottom. Every rejected row leaves via a `continue`, so a
@@ -1852,28 +1842,6 @@ class ImportLGPDService {
     return null;
   }
 
-  /**
-   * Linha vazia? (#790)
-   *
-   * Uma planilha exportada do Excel costuma trazer uma ultima linha em
-   * branco -- ou uma linha so com formatacao -- que nao representa dado
-   * nenhum. As duas verificacoes vinham de importPatients e agora valem
-   * para os tres loops de importacao: estrutura vazia, e todos os campos
-   * vazios/whitespace.
-   *
-   * Chame SEMPRE antes de results.total++, para que uma linha em branco
-   * nao conte como linha: ela nao e sucesso nem erro, e a invariante
-   * `total === success + errors` do #786 continua valendo.
-   */
-  isEmptyRow(row) {
-    if (!row || typeof row !== 'object' || Object.keys(row).length === 0) {
-      return true;
-    }
-
-    return !Object.values(row).some(
-      (value) => value !== null && value !== undefined && String(value).trim() !== ''
-    );
-  }
 
   /**
    * Parse linha CSV/Excel para Patient
@@ -2258,7 +2226,7 @@ class ImportLGPDService {
       total: 0,
       success: 0,
       errors: [],
-      skipped: 0, // #798: linhas em branco ignoradas (isEmptyRow), fora de total
+      skipped: 0, // #798: linhas em branco ignoradas, fora de total (#1012: quem as detecta e conta e readCSV/readExcel, nao este loop)
       duplicates: 0 // #931: subconjunto rotulado de `errors` (ver importPatients)
     };
 
@@ -2273,13 +2241,10 @@ class ImportLGPDService {
       const rawRow = rows[i];
       const rowNumber = i + 2;
 
-      // #790: mesmo guard dos outros dois loops, antes de contar a linha.
-      if (this.isEmptyRow(rawRow)) {
-        // #798: conta a linha ignorada separadamente de total/success/errors.
-        results.skipped += 1;
-        continue;
-      }
-
+      // #1012: o guard isEmptyRow que existia aqui era inalcancavel -- pela
+      // mesma razao dos outros dois loops (readCSV/readExcel ja descartam a
+      // linha em branco antes deste array existir). Removido; results.skipped
+      // continua vindo de rows.skippedCount, seedado acima.
       results.total += 1;
 
       try {

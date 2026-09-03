@@ -383,7 +383,7 @@ class AuditLogger {
       total,
       success,
       errors,
-      // #798: blank rows are skipped by isEmptyRow and deliberately stay out
+      // #798: blank rows are skipped and deliberately stay out
       // of `total`, so without this the audit record cannot distinguish a
       // clean 9-row file from a 12-row file whose last three rows were blank
       // -- which is the one case where an operator most needs to notice.

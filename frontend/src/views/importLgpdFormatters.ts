@@ -65,7 +65,7 @@ export type ImportSummary = {
   imported: number;
   rejected: number;
   /**
-   * Blank rows the backend guarded out (`isEmptyRow`) before counting
+   * Blank rows the backend guarded out (readCSV/readExcel, #1012) before counting
    * anything toward `total`/`success`/`errors` -- deliberately outside the
    * `total === success + errors` invariant (#786), so it is surfaced as its
    * own figure rather than folded in (#798 item 3).

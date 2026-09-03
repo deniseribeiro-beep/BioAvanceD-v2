@@ -365,8 +365,16 @@ describe('ImportLGPDService.importPatients', () => {
     expect(result.errors[0].errors[0]).toMatch(/db exploded/);
   });
 
-  it('skips a row that parses to no data at all (all fields blank) without counting it', async () => {
-    vi.spyOn(service, 'readFile').mockResolvedValue([{}, VALID_ROW]);
+  // #1012: readCSV/readExcel drop a blank row before this array ever exists
+  // (see the #1001 seeding test below), so a real reader can never hand
+  // importPatients a `{}` row -- feeding one directly, as this test used to,
+  // exercised a per-row isEmptyRow backstop that production input can't
+  // reach. Seeded via rows.skippedCount instead, the same way the reader
+  // reports it.
+  it('skips a row that parses to no data at all without counting it (#1012)', async () => {
+    const rows = [VALID_ROW];
+    Object.defineProperty(rows, 'skippedCount', { value: 1, enumerable: false });
+    vi.spyOn(service, 'readFile').mockResolvedValue(rows);
     const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
 
     expect(result.total).toBe(1);
@@ -378,7 +386,11 @@ describe('ImportLGPDService.importPatients', () => {
   // rows) is indistinguishable from a clean file that legitimately had
   // formatting artifacts. `skipped` is additive: it must not change what
   // total/success/errors already mean.
-  it('reports a skipped count matching the number of blank rows, leaving total/success/errors identical to the same file without them (#798)', async () => {
+  // #1012: the three blank/whitespace-only rows this test used to append to
+  // the mocked `readFile` result can't reach importPatients from a real
+  // reader -- readCSV/readExcel already drop them before the array exists.
+  // Seeded via rows.skippedCount on the same two real rows instead.
+  it('reports a skipped count matching the number of blank rows, leaving total/success/errors identical to the same file without them (#798, #1012)', async () => {
     const rowWithBadEmail = { ...VALID_ROW, email: 'not-an-email' };
 
     // Baseline: the same two real rows (one success, one error), no blanks.
@@ -397,15 +409,11 @@ describe('ImportLGPDService.importPatients', () => {
     vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
     vi.spyOn(patientService, 'checkDuplicatePatient').mockResolvedValue(null);
 
-    // Same file, plus three blank/whitespace-only trailing rows a spreadsheet
-    // export commonly appends.
-    vi.spyOn(service, 'readFile').mockResolvedValue([
-      VALID_ROW,
-      rowWithBadEmail,
-      {},
-      { patientName: '', email: '   ' },
-      { patientName: null, sex: undefined },
-    ]);
+    // Same file; the reader reports three blank/whitespace-only trailing rows
+    // it discarded (a spreadsheet export commonly appends them).
+    const rowsWithBlanks = [VALID_ROW, rowWithBadEmail];
+    Object.defineProperty(rowsWithBlanks, 'skippedCount', { value: 3, enumerable: false });
+    vi.spyOn(service, 'readFile').mockResolvedValue(rowsWithBlanks);
     const withBlanks = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
 
     expect(withBlanks.skipped).toBe(3);

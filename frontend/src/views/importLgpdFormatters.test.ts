@@ -152,7 +152,7 @@ describe('summarizeImportResult', () => {
     expect(summarizeImportResult({}).outcome).toBe('unknown');
   });
 
-  // #798 item 3: blank rows the backend guards out with isEmptyRow are
+  // #798 item 3: blank rows the backend guards out in readCSV/readExcel are
   // counted separately from total/success/errors (#786 keeps that sum
   // exact), so the UI needs its own figure to tell "9 of 9, clean" apart
   // from "9 of 9, but 3 rows never made it into the count at all".

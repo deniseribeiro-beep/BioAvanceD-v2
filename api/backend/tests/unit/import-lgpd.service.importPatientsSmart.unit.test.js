@@ -247,12 +247,15 @@ describe('ImportLGPDService.importPatientsSmart', () => {
     expect(result.errors[0].errors[0]).toMatch(/Email inválido/);
   });
 
-  // #790: importPatientsSmart had no empty-row guard either -- importPatients
-  // guarded twice, the other two loops not at all. The shared isEmptyRow()
-  // now runs before results.total += 1 in all three, so a trailing blank row
-  // is not counted, not errored, and does not reach the mapping/parse path.
-  it('skips a trailing blank row without counting or rejecting it (#790)', async () => {
-    vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid(), {}]);
+  // #1012: readCSV/readExcel drop a trailing blank row before this array
+  // ever reaches importPatientsSmart (see the #1001 seeding test below), so
+  // feeding a `{}` row directly -- as this test used to -- exercised a
+  // per-row isEmptyRow backstop that no real reader output can reach.
+  // Seeded via rows.skippedCount instead.
+  it('skips a trailing blank row without counting or rejecting it (#790, #1012)', async () => {
+    const rows = [rowFromValid()];
+    Object.defineProperty(rows, 'skippedCount', { value: 1, enumerable: false });
+    vi.spyOn(service, 'readFile').mockResolvedValue(rows);
 
     const result = await service.importPatientsSmart(db, { path: '/x.csv', originalname: 'x.csv' }, { mapping: MAPPING });
 
@@ -261,8 +264,12 @@ describe('ImportLGPDService.importPatientsSmart', () => {
     expect(result.total).toBe(1);
   });
 
-  it('skips a whitespace-only row, not just a structurally empty one (#790)', async () => {
-    vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid(), { Nome: '   ', Email: '', cpf: null }]);
+  // #1012: same reasoning as above -- readExcel's whitespace-only-row filter
+  // drops this row before importPatientsSmart ever sees it.
+  it('skips a whitespace-only row, not just a structurally empty one (#790, #1012)', async () => {
+    const rows = [rowFromValid()];
+    Object.defineProperty(rows, 'skippedCount', { value: 1, enumerable: false });
+    vi.spyOn(service, 'readFile').mockResolvedValue(rows);
 
     const result = await service.importPatientsSmart(db, { path: '/x.csv', originalname: 'x.csv' }, { mapping: MAPPING });
 
@@ -274,7 +281,11 @@ describe('ImportLGPDService.importPatientsSmart', () => {
   // clean file that happened to have trailing formatting artifacts. It must
   // be purely additive -- total/success/errors have to come out identical to
   // the same file without the blank rows.
-  it('reports a skipped count matching the number of blank rows, leaving total/success/errors identical to the same file without them (#798)', async () => {
+  // #1012: the three blank rows this test used to append to the mocked
+  // `readFile` result can't reach importPatientsSmart from a real reader --
+  // readCSV/readExcel already drop them before the array exists. Seeded via
+  // rows.skippedCount on the same two real rows instead.
+  it('reports a skipped count matching the number of blank rows, leaving total/success/errors identical to the same file without them (#798, #1012)', async () => {
     const invalidRow = rowFromValid({ Email: 'not-an-email' });
 
     vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid(), invalidRow]);
@@ -290,13 +301,9 @@ describe('ImportLGPDService.importPatientsSmart', () => {
     vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
     vi.spyOn(patientService, 'checkDuplicatePatient').mockResolvedValue(null);
 
-    vi.spyOn(service, 'readFile').mockResolvedValue([
-      rowFromValid(),
-      invalidRow,
-      {},
-      { Nome: '   ', Email: '', cpf: null },
-      { Nome: null, Sexo: undefined },
-    ]);
+    const rowsWithBlanks = [rowFromValid(), invalidRow];
+    Object.defineProperty(rowsWithBlanks, 'skippedCount', { value: 3, enumerable: false });
+    vi.spyOn(service, 'readFile').mockResolvedValue(rowsWithBlanks);
     const withBlanks = await service.importPatientsSmart(db, { path: '/x.csv', originalname: 'x.csv' }, { mapping: MAPPING });
 
     expect(withBlanks.skipped).toBe(3);

@@ -3,7 +3,7 @@
  * (`jobID`, `dataType`, `fhirResourcesCreated`, `fhirResourcesUpdated`,
  * `processingTime`), so a caller passing a new context key has **no effect
  * at all** until that key is read here by name. The three LGPD import
- * controllers now pass `{ skipped }` -- the count of blank rows `isEmptyRow`
+ * controllers now pass `{ skipped }` -- the count of blank rows the CSV/XLSX
  * drops, which deliberately stay out of `total` -- and these tests pin that
  * it actually reaches the stored payload rather than being silently
  * discarded on the way in.

@@ -325,8 +325,15 @@ describe('ImportLGPDService.importSamples', () => {
   // guard sits BEFORE results.total++ (matching importPatients), so a blank
   // row is not a row at all -- it is not counted, not errored, and #786's
   // `total === success + errors` invariant still holds.
-  it('skips a trailing blank row instead of rejecting it as an identity failure (#790)', async () => {
-    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW, {}]);
+  // #1012: readCSV/readExcel drop a trailing blank row before this array ever
+  // reaches importSamples (see the #1001 seeding test below), so feeding a
+  // `{}` row directly -- as this test used to -- exercised a per-row
+  // isEmptyRow backstop that no real reader output can reach. Seeded via
+  // rows.skippedCount instead.
+  it('skips a trailing blank row instead of rejecting it as an identity failure (#790, #1012)', async () => {
+    const rows = [VALID_ROW];
+    Object.defineProperty(rows, 'skippedCount', { value: 1, enumerable: false });
+    vi.spyOn(service, 'readFile').mockResolvedValue(rows);
 
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
 
@@ -336,11 +343,13 @@ describe('ImportLGPDService.importSamples', () => {
     expect(result.total).toBe(result.success + result.errors.length);
   });
 
-  it('skips a whitespace-only row, not just a structurally empty one (#790)', async () => {
-    vi.spyOn(service, 'readFile').mockResolvedValue([
-      VALID_ROW,
-      { sampleType: '', sampleOrigin: '   ', participantId: '\t', quantity: null, quality: undefined },
-    ]);
+  // #1012: same reasoning as above -- readExcel's whitespace-only-row filter
+  // (gate 2, `Object.values(rowObj).some(v => v !== null && v !== '')`) drops
+  // this row before importSamples ever sees it.
+  it('skips a whitespace-only row, not just a structurally empty one (#790, #1012)', async () => {
+    const rows = [VALID_ROW];
+    Object.defineProperty(rows, 'skippedCount', { value: 1, enumerable: false });
+    vi.spyOn(service, 'readFile').mockResolvedValue(rows);
 
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
 
@@ -353,7 +362,11 @@ describe('ImportLGPDService.importSamples', () => {
   // clean file that happened to have trailing formatting artifacts. It must
   // be purely additive -- total/success/errors have to come out identical to
   // the same file without the blank rows.
-  it('reports a skipped count matching the number of blank rows, leaving total/success/errors identical to the same file without them (#798)', async () => {
+  // #1012: the two blank rows this test used to append to the mocked
+  // `readFile` result can't reach importSamples from a real reader --
+  // readCSV/readExcel already drop them before the array exists. Seeded via
+  // rows.skippedCount on the same two real rows instead.
+  it('reports a skipped count matching the number of blank rows, leaving total/success/errors identical to the same file without them (#798, #1012)', async () => {
     const badRow = { ...VALID_ROW, treatmentStatus: 'TREATED', atcCode: 'NOT-A-CODE' };
 
     vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW, badRow]);
@@ -368,12 +381,9 @@ describe('ImportLGPDService.importSamples', () => {
       score: 90,
     });
 
-    vi.spyOn(service, 'readFile').mockResolvedValue([
-      VALID_ROW,
-      badRow,
-      {},
-      { sampleType: '', sampleOrigin: '   ', participantId: '\t' },
-    ]);
+    const rowsWithBlanks = [VALID_ROW, badRow];
+    Object.defineProperty(rowsWithBlanks, 'skippedCount', { value: 2, enumerable: false });
+    vi.spyOn(service, 'readFile').mockResolvedValue(rowsWithBlanks);
     const withBlanks = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
 
     expect(withBlanks.skipped).toBe(2);
@@ -408,8 +418,13 @@ describe('ImportLGPDService.importSamples', () => {
   // that should not land there dressed as a real data problem -- the guard
   // runs before the row can be rejected, so an otherwise-clean file still
   // reports no quarantine batch.
-  it('does not quarantine a blank row, so an otherwise-clean file opens no staging batch (#790, #787)', async () => {
-    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW, {}]);
+  // #1012: same reasoning as the two guard tests above -- a real reader
+  // drops the blank row before importSamples sees it, so it is seeded via
+  // rows.skippedCount rather than fed in directly.
+  it('does not quarantine a blank row, so an otherwise-clean file opens no staging batch (#790, #787, #1012)', async () => {
+    const rows = [VALID_ROW];
+    Object.defineProperty(rows, 'skippedCount', { value: 1, enumerable: false });
+    vi.spyOn(service, 'readFile').mockResolvedValue(rows);
 
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
 
