@@ -613,6 +613,12 @@ services:
     # #828: same volume as backend-app-test -- this is the reading half.
     volumes:
       - uploads-test-data:/app/uploads
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/worker-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
     depends_on:
       # #959: worker-test runs daily-merkle.job, which reaches the TSA and the
       # witness. It depended on neither, so on a cold bring-up the job could
@@ -636,6 +642,12 @@ services:
     environment:
       <<: *test-env
     command: ["npm", "run", "neo4j:canonical:worker"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/neo4j-projection-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
     depends_on:
       backend-app-test:
         condition: service_healthy

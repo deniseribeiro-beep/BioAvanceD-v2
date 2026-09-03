@@ -88,6 +88,12 @@ services:
       - ./artifacts:/workspace/artifacts
     env_file:
       - .env.docker
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/worker-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
     depends_on:
       mongodb:
         condition: service_healthy
@@ -455,6 +461,12 @@ services:
       - ./artifacts:/workspace/artifacts
     env_file:
       - .env.docker
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/neo4j-projection-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
     depends_on:
       mongodb:
         condition: service_healthy

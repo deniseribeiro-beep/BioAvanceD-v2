@@ -5,9 +5,17 @@
 
 require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '.env') });
 
+const fs = require('fs');
 const { initWorker } = require('./import-worker');
 const { testConnection } = require('../config/queue');
 const logger = require('../utils/logger');
+
+// #992: heartbeat file probed by the container healthcheck (mtime-based).
+// Not a new env var -- a module-level constant, per #992's decision to avoid
+// tripping the env-declaration architecture test. /tmp is the one path
+// writable in every compose variant this runs under (prod is read_only with
+// a /tmp tmpfs; dev/test have no read_only at all).
+const HEARTBEAT_PATH = '/tmp/worker-heartbeat';
 
 // Register background jobs
 try {
@@ -39,7 +47,7 @@ async function startWorker() {
 
     // Testa conexão Redis diretamente (sem precisar da fila)
     logger.info('[INFO] Testando conexão Redis...');
-    const { testRedisConnection } = require('../config/redis');
+    const { testRedisConnection, getRedisInstance } = require('../config/redis');
     const redisTest = await testRedisConnection();
     
     if (!redisTest) {
@@ -53,8 +61,33 @@ async function startWorker() {
 
     // Inicializa worker (que também inicializa a fila)
     await initWorker();
-    
+
     logger.info('[INFO] 🚀 Worker de importação iniciado com sucesso');
+
+    // #992: touch the heartbeat file only after asserting the Redis
+    // connection is actually alive, so a zombie event loop can't keep the
+    // healthcheck green. .unref() so this timer never keeps the process
+    // (or vitest, which loads this module fresh at module scope) alive.
+    //
+    // A bare PING on the shared singleton, NOT testRedisConnection(): that
+    // helper logs '[INFO] Teste de conexão Redis: SUCESSO' on every success
+    // (one line per 15s per worker container, forever) and, on its failure
+    // path, builds a multi-line diagnostic by parsing REDIS_URL -- which
+    // would turn a Redis outage into a log flood at the same cadence. PING
+    // is the whole assertion the heartbeat needs; getRedisInstance() is the
+    // same memoized client testRedisConnection uses, so this opens no new
+    // connection.
+    const heartbeatInterval = setInterval(async () => {
+      try {
+        const pong = await getRedisInstance().ping();
+        if (pong === 'PONG') {
+          fs.writeFileSync(HEARTBEAT_PATH, String(Date.now()));
+        }
+      } catch (heartbeatError) {
+        logger.warn('[WARN] Falha ao gravar heartbeat do worker:', heartbeatError.message || heartbeatError);
+      }
+    }, 15000);
+    heartbeatInterval.unref();
   } catch (error) {
     logger.error('[ERROR] Erro ao iniciar worker:', error.message);
     if (error.stack) {
