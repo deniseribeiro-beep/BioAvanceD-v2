@@ -1158,6 +1158,29 @@ router.post('/:id/force-password-reset', authenticate, requirePermission('forceP
       }
     );
 
+    // #1033: linha de auditoria EXPLÍCITA. A linha genérica do
+    // audit.middleware não serve aqui: ela deriva a ação do PATH, e este path
+    // não contém 'mfa'/'reset-mfa'/nenhum outro caso especial de
+    // normalizeHttpMethodToAction -- então cai no fallback por verbo HTTP
+    // (POST -> 'CREATE'), o que é enganoso para uma escrita em conta
+    // existente. Chamada direta (mesmo formato que /register usa acima),
+    // não via writeMfaResetAudit: esta não é uma operação de MFA -- o
+    // helper fixa action:'MFA' e este é um único ponto de chamada, então
+    // não há par cuja divergência silenciosa a extração evitaria.
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'UPDATE',
+      resourceType: 'User',
+      resourceId: targetUser._id.toString(),
+      status: 'success',
+      severity: 'info',
+      message: 'Redefinição de senha forçada no próximo login',
+      payload: { operation: 'forcePasswordReset', fieldsSet: ['forceReset'] },
+      req,
+      module: 'Usuários'
+    });
+
     return res.status(200).json({
       success: true,
       message: req.t('users.forcePasswordResetSuccess')
@@ -1241,6 +1264,23 @@ router.post('/:id/disable-mfa', authenticate, requirePermission('disableMFA', 'U
         }
       }
     );
+
+    // #1033: linha de auditoria EXPLÍCITA, par de writeMfaResetAudit. A linha
+    // genérica do audit.middleware classifica este path como 'MFA' pelo
+    // mesmo casamento de substring que usa para /reset-mfa ('/mfa' está
+    // contido em ambos) -- então sem isto esta rota fica indistinguível de
+    // qualquer um dos dois ramos de reset-mfa na trilha, apesar de ser uma
+    // terceira operação com forma própria: desliga mfaEnabled mas
+    // deliberadamente MANTÉM o mfaSecret (comentário acima), diferente dos
+    // dois ramos de reset-mfa. `operation: 'disable'` é o discriminador --
+    // não o papel do alvo, que não fica registrado em outro lugar da linha.
+    await writeMfaResetAudit(db, req, targetUser, {
+      operation: 'disable',
+      enrolmentPreserved: true,
+      fieldsCleared: ['mfaEnabled', 'mfaFailedAttempts', 'mfaLocked'],
+      sessionsRevoked: false,
+      message: 'MFA desativado (cadastro do segundo fator preservado para reativação)'
+    });
 
     return res.status(200).json({
       success: true,

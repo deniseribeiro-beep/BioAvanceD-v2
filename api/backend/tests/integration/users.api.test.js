@@ -508,3 +508,122 @@ describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () =
     expect($set).not.toHaveProperty('mfaSecret');
   });
 });
+
+// #1033: disable-mfa and force-password-reset both write consequential
+// changes to another user's account and, before this fix, relied entirely on
+// audit.middleware's generic row -- {method, path, statusCode, duration,
+// query}, no response body. audit.middleware classifies by PATH substring
+// ('/mfa' -> 'MFA'), so disable-mfa landed in the SAME bucket as reset-mfa's
+// two branches despite being a third, materially different operation (it
+// deliberately KEEPS mfaSecret). force-password-reset contains no special
+// substring, so it fell through to the bare HTTP-verb mapping (POST ->
+// 'CREATE'), which is misleading for a write against an existing account.
+describe('disable-mfa and force-password-reset write their own distinguishable audit rows (#1033)', () => {
+  const { PERMISSION_CATALOG } = require('../../src/services/rbac-catalog-seed.service');
+
+  function matchesQuery(doc, query = {}) {
+    return Object.entries(query).every(([key, cond]) => {
+      if (cond && typeof cond === 'object' && '$in' in cond) return cond.$in.includes(doc[key]);
+      return doc[key] === cond;
+    });
+  }
+  function queryableCollectionMock(docs) {
+    return createCollectionMock({
+      findOne: vi.fn(async (query = {}) => docs.find((d) => matchesQuery(d, query)) || null),
+      find: vi.fn((query = {}) => ({ toArray: vi.fn().mockResolvedValue(docs.filter((d) => matchesQuery(d, query))) })),
+    });
+  }
+  const permissionDocs = () => Object.entries(PERMISSION_CATALOG).map(([permissionCode, entry]) => ({
+    permissionId: `perm-${permissionCode}`,
+    permissionCode,
+    ...entry,
+  }));
+  function buildCollections(assignments) {
+    return {
+      roles: queryableCollectionMock([
+        {
+          roleId: 'role-administrator', roleCode: 'administrator', hierarchyLevel: 4, roleStatus: 'active',
+          permissionIds: ['perm-disableMFA', 'perm-forcePasswordReset'],
+        },
+        { roleId: 'role-tecnico', roleCode: 'tecnico', hierarchyLevel: 2, roleStatus: 'active', permissionIds: [] },
+      ]),
+      permissions: queryableCollectionMock(permissionDocs()),
+      userRoleAssignments: queryableCollectionMock(assignments.map((a) => ({
+        userAccountId: a.userAccountId,
+        roleId: a.roleId,
+        assignmentStatus: 'active',
+        validUntil: null,
+      }))),
+    };
+  }
+  function adminCallerToken() {
+    return jwt.sign(
+      { userID: 'qa-admin-caller', accessType: 4, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+  }
+  function auditRowsFor(resourceId) {
+    return auditLogger.log.mock.calls
+      .map((call) => call[0])
+      .filter((row) => row && row.resourceType === 'User' && row.resourceId === resourceId);
+  }
+
+  beforeEach(() => {
+    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'session-1' } });
+    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-1' });
+    vi.spyOn(sessionService, 'invalidateUserSessions').mockResolvedValue({ revoked: 0 });
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  function givenTarget(id, roleId, doc) {
+    const usersCollection = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: id, ...doc }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    });
+    app.locals.db = createDbMock({
+      users: usersCollection,
+      ...buildCollections([
+        { userAccountId: 'qa-admin-caller', roleId: 'role-administrator' },
+        { userAccountId: id, roleId },
+      ]),
+    });
+    return usersCollection;
+  }
+
+  it('disable-mfa writes a row naming the disable and the preserved enrolment, distinct from reset-mfa', async () => {
+    givenTarget('admin-target-1', 'role-administrator', {
+      roleName: 'Administrador', mfaEnabled: true, mfaSecret: 'S', mfaLocked: true, mfaFailedAttempts: 5,
+    });
+
+    const response = await request(app)
+      .post('/api/users/admin-target-1/disable-mfa')
+      .set('Authorization', `Bearer ${adminCallerToken()}`);
+
+    expect(response.status).toBe(200);
+    const rows = auditRowsFor('admin-target-1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].payload).toMatchObject({ operation: 'disable', enrolmentPreserved: true });
+    // Must not collide with either reset-mfa branch's operation value.
+    expect(rows[0].payload.operation).not.toBe('unlock');
+    expect(rows[0].payload.operation).not.toBe('reset');
+  });
+
+  it('force-password-reset writes its own row naming the forceReset flag, and it is not action MFA', async () => {
+    givenTarget('tecnico-target-1', 'role-tecnico', {
+      roleName: 'Tecnico', mfaEnabled: false,
+    });
+
+    const response = await request(app)
+      .post('/api/users/tecnico-target-1/force-password-reset')
+      .set('Authorization', `Bearer ${adminCallerToken()}`);
+
+    expect(response.status).toBe(200);
+    const rows = auditRowsFor('tecnico-target-1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].action).not.toBe('MFA');
+    expect(rows[0].payload).toMatchObject({ fieldsSet: expect.arrayContaining(['forceReset']) });
+  });
+});
