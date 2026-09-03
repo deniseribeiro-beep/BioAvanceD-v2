@@ -2,7 +2,7 @@
 
 **Written 2026-09-03, twelfth queue sitting. INTERIM — no end signal from
 Dennis.** He asked for "the next 10 issues, Docker is on." **4 closed, 6 still
-open with verified research posted on each, 9 issues filed.** 4 commits pushed.
+open with verified research posted on each, 11 issues filed.** 4 commits pushed.
 
 **Read #1037 first. It is an unauthenticated privilege escalation and it is
 reproduced, not inferred.**
@@ -100,7 +100,7 @@ reproduced, not inferred.**
 
 ## Filed this sitting
 
-Here: **#1036 #1037 #1038 #1039 #1040 #1041**.
+Here: **#1036 #1037 #1038 #1039 #1040 #1041 #1042 #1043**.
 On the pack: **#726 #727 #728 #729 #730**, plus a recurrence comment on #687.
 
 Verified research posted as comments on **#1028 #941 #1029 #956 #983** —
