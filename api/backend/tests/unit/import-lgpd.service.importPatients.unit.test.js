@@ -421,6 +421,23 @@ describe('ImportLGPDService.importPatients', () => {
     expect(result.skipped).toBe(0);
   });
 
+  // #1001: readCSV/readExcel now drop blank rows before this array ever
+  // reaches importPatients, so this loop's own isEmptyRow guard can never
+  // fire against a real file -- results.skipped must be seeded from what the
+  // reader reports on `rows.skippedCount` (attached the same way readCSV/
+  // readExcel do it for real, non-enumerably) rather than starting at 0.
+  it('#1001: seeds results.skipped from the reader-reported skippedCount on the rows array readFile returns', async () => {
+    const rows = [VALID_ROW];
+    Object.defineProperty(rows, 'skippedCount', { value: 4, enumerable: false });
+    vi.spyOn(service, 'readFile').mockResolvedValue(rows);
+
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.skipped).toBe(4);
+    expect(result.total).toBe(1);
+    expect(result.success).toBe(1);
+  });
+
   it('warns but still imports when a patientID column is present in the file (it is ignored)', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, patientID: '99999999' }]);
     const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });

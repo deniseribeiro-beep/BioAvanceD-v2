@@ -389,6 +389,21 @@ describe('ImportLGPDService.importSamples', () => {
     expect(result.skipped).toBe(0);
   });
 
+  // #1001: same seeding as importPatients -- readCSV/readExcel now drop
+  // blank rows before this array reaches importSamples, so results.skipped
+  // must come from the reader's `rows.skippedCount`, not start at 0.
+  it('#1001: seeds results.skipped from the reader-reported skippedCount on the rows array readFile returns', async () => {
+    const rows = [VALID_ROW];
+    Object.defineProperty(rows, 'skippedCount', { value: 3, enumerable: false });
+    vi.spyOn(service, 'readFile').mockResolvedValue(rows);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.skipped).toBe(3);
+    expect(result.total).toBe(1);
+    expect(result.success).toBe(1);
+  });
+
   // #787 staged rejected rows into quarantine. A blank row is exactly the junk
   // that should not land there dressed as a real data problem -- the guard
   // runs before the row can be rejected, so an otherwise-clean file still

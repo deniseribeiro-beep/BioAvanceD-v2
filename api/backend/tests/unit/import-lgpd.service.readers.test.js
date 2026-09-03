@@ -72,6 +72,34 @@ describe('ImportLGPDService.readCSV', () => {
     expect(rows).toEqual([{ patientName: 'João Silva', birthDate: '25/12/1990' }]);
   });
 
+  // #1001: readCSV drops blank rows silently before this array is even
+  // returned, so a caller (importPatients/importSamples/importPatientsSmart)
+  // that only counts inside its own row loop can never see them. The reader
+  // itself now reports what it discarded via a non-enumerable `skippedCount`
+  // on the returned array -- non-enumerable so it doesn't disturb the
+  // `toEqual` shape the tests above assert.
+  it('#1001: reports the number of hasData-rejected rows via a non-enumerable skippedCount', async () => {
+    const filePath = writeTmpFile(
+      'skipped-count.csv',
+      'patientName,birthDate\nJoão Silva,25/12/1990\n,\n,\n'
+    );
+
+    const rows = await importLgpdService.readCSV(filePath);
+
+    expect(rows).toEqual([{ patientName: 'João Silva', birthDate: '25/12/1990' }]);
+    expect(rows.skippedCount).toBe(2);
+    // Non-enumerable: does not show up in a plain deep-equality/ownKeys walk.
+    expect(Object.keys(rows)).not.toContain('skippedCount');
+  });
+
+  it('#1001: reports skippedCount 0 when there are no blank rows to discard', async () => {
+    const filePath = writeTmpFile('no-blanks.csv', 'patientName,birthDate\nJoão Silva,25/12/1990\n');
+
+    const rows = await importLgpdService.readCSV(filePath);
+
+    expect(rows.skippedCount).toBe(0);
+  });
+
   it('rejects a CSV with a header but no data rows', async () => {
     const filePath = writeTmpFile('header-only.csv', 'patientName,birthDate\n');
 
@@ -200,6 +228,41 @@ describe('ImportLGPDService.readExcel', () => {
     const rows = await importLgpdService.readExcel(filePath, 'patients');
 
     expect(rows).toEqual([{ patientName: 'João Silva', birthDate: '25/12/1990' }]);
+  });
+
+  // #1001: mirrors readCSV's skippedCount above, but for readExcel's two
+  // discard sites (:391-392 raw-cell isEmpty, :404-407 all-values-null after
+  // header mapping). Two blank rows here are both raw-empty, so they are
+  // caught by the first check -- the "no double-count" guarantee is that the
+  // count is exactly 2 (rows), not 4 (rows x two checks).
+  it('#1001: reports the number of blank rows discarded via a non-enumerable skippedCount, without double-counting', async () => {
+    const filePath = await writeTmpWorkbook('skipped-count.xlsx', [
+      { sheetName: 'Pacientes', rows: [
+        ['patientName', 'birthDate'],
+        [null, null],
+        ['João Silva', '25/12/1990'],
+        [null, null],
+      ] },
+    ]);
+
+    const rows = await importLgpdService.readExcel(filePath, 'patients');
+
+    expect(rows).toEqual([{ patientName: 'João Silva', birthDate: '25/12/1990' }]);
+    expect(rows.skippedCount).toBe(2);
+    expect(Object.keys(rows)).not.toContain('skippedCount');
+  });
+
+  it('#1001: reports skippedCount 0 when there are no blank rows to discard', async () => {
+    const filePath = await writeTmpWorkbook('no-blanks.xlsx', [
+      { sheetName: 'Pacientes', rows: [
+        ['patientName', 'birthDate'],
+        ['João Silva', '25/12/1990'],
+      ] },
+    ]);
+
+    const rows = await importLgpdService.readExcel(filePath, 'patients');
+
+    expect(rows.skippedCount).toBe(0);
   });
 
   it('falls back to the first sheet when every sheet is named "Instruções" (patients)', async () => {

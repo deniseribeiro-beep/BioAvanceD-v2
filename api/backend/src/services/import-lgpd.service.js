@@ -221,6 +221,14 @@ class ImportLGPDService {
       }
       
       const rows = [];
+      // #1001: rejected-by-hasData count only -- rows that reach this
+      // handler but carry no non-whitespace value in any column. `skipEmptyLines:
+      // true` below already discards fully-blank physical lines before they
+      // ever reach 'data', so those are not counted here; there is no hook
+      // into csv-parser's own line-skipping to count them without
+      // re-parsing the raw file ourselves; see the readers test file and
+      // service report for the explicit statement of this choice.
+      let skippedByHasData = 0;
       fs.createReadStream(filePath)
         .pipe(csv({
           separator,
@@ -232,12 +240,21 @@ class ImportLGPDService {
           const hasData = Object.values(row).some(val => val && String(val).trim());
           if (hasData) {
             rows.push(row);
+          } else {
+            skippedByHasData += 1;
           }
         })
         .on('end', () => {
           if (rows.length === 0) {
             return reject(new Error('Arquivo CSV está vazio ou não contém dados válidos'));
           }
+          // #1001: non-enumerable so the array's own `toEqual` shape (used by
+          // the existing readers tests) is unaffected -- readFile/the
+          // importers read it explicitly via `rows.skippedCount`.
+          Object.defineProperty(rows, 'skippedCount', {
+            value: skippedByHasData,
+            enumerable: false,
+          });
           resolve(rows);
         })
         .on('error', (error) => {
@@ -383,13 +400,20 @@ class ImportLGPDService {
 
       // Converte linhas seguintes para objetos usando os headers limpos
       const dataRows = [];
+      // #1001: counts rows dropped by either filter below, without
+      // double-counting a row rejected by the first (the `continue` means a
+      // row can only ever hit one of the two `skippedRows += 1` sites).
+      let skippedRows = 0;
       for (let i = headerRowIndex + 1; i < allRows.length; i++) {
         const row = allRows[i];
         if (!Array.isArray(row)) continue;
 
         // Verifica se a linha está vazia (todos os valores são null/empty)
         const isEmpty = row.every(cell => !cell || String(cell).trim() === '');
-        if (isEmpty) continue;
+        if (isEmpty) {
+          skippedRows += 1;
+          continue;
+        }
 
         // Cria objeto usando headers limpos
         const rowObj = {};
@@ -404,12 +428,21 @@ class ImportLGPDService {
         // Só adiciona se tiver pelo menos um campo preenchido
         if (Object.values(rowObj).some(v => v !== null && v !== '')) {
           dataRows.push(rowObj);
+        } else {
+          skippedRows += 1;
         }
       }
 
       if (dataRows.length === 0) {
         throw new Error('Nenhum dado válido encontrado na planilha. Certifique-se de que há dados além dos cabeçalhos.');
       }
+
+      // #1001: non-enumerable, same rationale as readCSV above -- keeps the
+      // array's `toEqual` shape used by the existing readers tests intact.
+      Object.defineProperty(dataRows, 'skippedCount', {
+        value: skippedRows,
+        enumerable: false,
+      });
 
       return dataRows;
     } catch (error) {
@@ -426,7 +459,22 @@ class ImportLGPDService {
    */
   async readFile(filePath, originalName, dataType = 'patients') {
     const ext = path.extname(originalName).toLowerCase();
-    
+
+    // #1001: both branches resolve to the same array object readCSV/readExcel
+    // return, so the non-enumerable `skippedCount` either of them attaches
+    // (blank rows discarded before this array is built) rides along
+    // unchanged -- callers read it as `rows.skippedCount`.
+    //
+    // WARNING for anyone adding a caller: the property is on the array
+    // INSTANCE, so it does not survive any transform that builds a new array.
+    // `rows.filter(...)`, `rows.map(...)`, `[...rows]` and `rows.slice()` all
+    // return a plain Array and `skippedCount` becomes undefined, which the
+    // importers' `|| 0` then reads as "nothing was skipped" -- silently, with
+    // no error. Read `skippedCount` off the value readFile returned, before
+    // any such transform. It is attached this way rather than returned as
+    // `{ rows, skipped }` because the existing readers tests assert the return
+    // value with `toEqual([...])` on the array itself; changing the shape means
+    // changing them and every caller.
     if (ext === '.csv' || ext === '.txt') {
       return await this.readCSV(filePath);
     } else if (ext === '.xlsx') {
@@ -458,6 +506,11 @@ class ImportLGPDService {
 
     try {
       const rows = await this.readFile(file.path, file.originalname, 'patients');
+      // #1001: readCSV/readExcel already drop blank rows before this array
+      // exists (hasData / isEmpty+all-null-values checks) -- so this loop's
+      // own isEmptyRow guard below can never fire, and results.skipped would
+      // stay 0 forever without seeding it from what the reader discarded.
+      results.skipped = rows.skippedCount || 0;
       const patientsCollection = await getCollection(db, 'patients');
 
       // Verifica se o arquivo está vazio
@@ -1226,6 +1279,10 @@ class ImportLGPDService {
 
     try {
       const rows = await this.readFile(file.path, file.originalname, 'samples');
+      // #1001: same seeding as importPatients -- readCSV/readExcel already
+      // drop blank rows before this array exists, so this.isEmptyRow below
+      // can never fire against a row from `rows`.
+      results.skipped = rows.skippedCount || 0;
       const samplesCollection = await getCollection(db, 'samples');
       const patientsCollection = await getCollection(db, 'patients');
       const validator = new SampleGraphValidator(db);
@@ -2193,6 +2250,9 @@ class ImportLGPDService {
     };
 
     const rows = await this.readFile(file.path, file.originalname, 'patients');
+    // #1001: same seeding as importPatients/importSamples -- readCSV/readExcel
+    // already drop blank rows before this array exists.
+    results.skipped = rows.skippedCount || 0;
     const patientsCollection = await getCollection(db, 'patients');
     const { ObjectId } = require('mongodb');
 

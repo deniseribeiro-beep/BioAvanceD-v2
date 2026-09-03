@@ -312,6 +312,22 @@ describe('ImportLGPDService.importPatientsSmart', () => {
     expect(result.skipped).toBe(0);
   });
 
+  // #1001: same seeding as importPatients/importSamples -- readCSV/readExcel
+  // now drop blank rows before this array reaches importPatientsSmart, so
+  // results.skipped must come from the reader's `rows.skippedCount`, not
+  // start at 0.
+  it('#1001: seeds results.skipped from the reader-reported skippedCount on the rows array readFile returns', async () => {
+    const rows = [rowFromValid()];
+    Object.defineProperty(rows, 'skippedCount', { value: 5, enumerable: false });
+    vi.spyOn(service, 'readFile').mockResolvedValue(rows);
+
+    const result = await service.importPatientsSmart(db, { path: '/x.csv', originalname: 'x.csv' }, { mapping: MAPPING });
+
+    expect(result.skipped).toBe(5);
+    expect(result.total).toBe(1);
+    expect(result.success).toBe(1);
+  });
+
   it('records a per-row error when cpf is present and invalid', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid({ cpf: '00000000000' })]);
     const result = await service.importPatientsSmart(
