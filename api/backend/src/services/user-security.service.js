@@ -580,7 +580,12 @@ class UserSecurityService {
             isRevoked: true,
             revokedAt: new Date(),
             revocationReason: 'user_request',
-            revokedBy: String(userID)
+            revokedBy: String(userID),
+            // #974: every other session-revoke write in the tree sets this
+            // (session.service.js :217 :295 :331 :385 :438 :482 :523); this
+            // one did not, so a revocation through this route was invisible
+            // to any "when was this session document last touched" query.
+            updatedAt: new Date()
           }
         }
       );

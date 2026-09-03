@@ -393,6 +393,11 @@ describe('UserSecurityService DB-backed methods', () => {
           revokedBy: String(USER_ID)
         })
       );
+      // #974: objectContaining above cannot catch an ABSENT key, and this was
+      // the one session-revoke write in the tree that omitted updatedAt --
+      // the other seven (session.service.js :217 :295 :331 :385 :438 :482 :523)
+      // all set it. Asserted explicitly so the omission cannot come back.
+      expect(update.$set.updatedAt).toBeInstanceOf(Date);
     });
 
     it('adds an _id clause to the query when sessionId is a valid ObjectId', async () => {
