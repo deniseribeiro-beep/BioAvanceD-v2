@@ -626,4 +626,36 @@ describe('disable-mfa and force-password-reset write their own distinguishable a
     expect(rows[0].action).not.toBe('MFA');
     expect(rows[0].payload).toMatchObject({ fieldsSet: expect.arrayContaining(['forceReset']) });
   });
+
+  // #1033 follow-up: severity must track whether the account is left with an
+  // ACTIVE second factor, not whether the enrolment SECRET survives. Those two
+  // coincided across reset-mfa's original pair -- unlock kept both, reset
+  // destroyed both -- which is why the helper could derive one from the other.
+  // disable-mfa is the case where they come apart.
+  //
+  // [ran it] auth.service.js:507 gates the entire MFA challenge on
+  // `if (user.mfaEnabled)`, and disable-mfa sets mfaEnabled:false. So the
+  // account is left SINGLE-FACTOR, exactly as reset-mfa's destructive branch
+  // leaves it -- the preserved secret is inert until someone re-enables the
+  // flag. Grading it 'info' put "an admin turned off a peer admin's second
+  // factor" in the same severity bucket as clearing two counters, in a field
+  // LogsPage.tsx offers to operators as a filter.
+  it('grades disable-mfa critical: it leaves the account single-factor, as reset does', async () => {
+    givenTarget('admin-target-2', 'role-administrator', {
+      roleName: 'Administrador', mfaEnabled: true, mfaSecret: 'S', mfaLocked: true, mfaFailedAttempts: 5,
+    });
+
+    const response = await request(app)
+      .post('/api/users/admin-target-2/disable-mfa')
+      .set('Authorization', `Bearer ${adminCallerToken()}`);
+
+    expect(response.status).toBe(200);
+    const rows = auditRowsFor('admin-target-2');
+    expect(rows).toHaveLength(1);
+    // Control: unchanged by this fix, so it must be green BEFORE it too.
+    expect(rows[0].payload.operation).toBe('disable');
+    // The fix itself:
+    expect(rows[0].severity).toBe('critical');
+    expect(rows[0].payload).toMatchObject({ secondFactorActive: false, enrolmentPreserved: true });
+  });
 });

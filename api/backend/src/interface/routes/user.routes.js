@@ -28,7 +28,7 @@ const { buildUserFilterById } = require('../../utils/userFilter');
 //
 // Uma função única e não dois blocos copiados: o par SÓ tem valor se os dois
 // lados usarem o mesmo formato, e duas cópias divergem em silêncio.
-async function writeMfaResetAudit(db, req, targetUser, { operation, enrolmentPreserved, fieldsCleared, sessionsRevoked, message }) {
+async function writeMfaResetAudit(db, req, targetUser, { operation, enrolmentPreserved, secondFactorActive, fieldsCleared, sessionsRevoked, message }) {
   const auditLogger = require('../../utils/auditLogger');
   auditLogger.init(db);
   await auditLogger.log({
@@ -36,10 +36,18 @@ async function writeMfaResetAudit(db, req, targetUser, { operation, enrolmentPre
     resourceType: 'User',
     resourceId: targetUser._id.toString(),
     status: 'success',
-    // Uma redefinição destrói um fator de autenticação; um desbloqueio não.
-    severity: enrolmentPreserved ? 'info' : 'critical',
+    // #1033: a severidade acompanha se a conta CONTINUA com um segundo fator
+    // ATIVO -- não se o segredo do cadastro sobreviveu. Nos dois ramos
+    // originais de reset-mfa as duas coisas coincidiam (o desbloqueio
+    // preserva ambos, a redefinição destrói ambos), então derivar uma da
+    // outra funcionava. disable-mfa é onde elas se separam: mantém o
+    // mfaSecret e ainda assim zera mfaEnabled, e [ran it] auth.service.js:507
+    // condiciona TODO o desafio de MFA a `if (user.mfaEnabled)` -- ou seja, a
+    // conta fica com um único fator, exatamente como após uma redefinição.
+    // O segredo preservado é inerte até alguém religar a flag.
+    severity: secondFactorActive ? 'info' : 'critical',
     message,
-    payload: { operation, enrolmentPreserved, fieldsCleared, sessionsRevoked },
+    payload: { operation, enrolmentPreserved, secondFactorActive, fieldsCleared, sessionsRevoked },
     req,
     module: 'Usuários'
   });
@@ -1057,6 +1065,7 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
       await writeMfaResetAudit(db, req, targetUser, {
         operation: 'unlock',
         enrolmentPreserved: true,
+        secondFactorActive: true,
         fieldsCleared: ['mfaFailedAttempts', 'mfaLocked'],
         sessionsRevoked: false,
         message: 'MFA desbloqueado (cadastro do segundo fator preservado)'
@@ -1104,6 +1113,7 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
     await writeMfaResetAudit(db, req, targetUser, {
       operation: 'reset',
       enrolmentPreserved: false,
+      secondFactorActive: false,
       fieldsCleared: ['mfaEnabled', 'mfaSecret', 'mfaActivationDate', 'mfaFailedAttempts', 'mfaLocked', 'lastLogin'],
       sessionsRevoked: true,
       message: 'MFA redefinido (cadastro do segundo fator removido, sessões revogadas)'
@@ -1277,6 +1287,7 @@ router.post('/:id/disable-mfa', authenticate, requirePermission('disableMFA', 'U
     await writeMfaResetAudit(db, req, targetUser, {
       operation: 'disable',
       enrolmentPreserved: true,
+      secondFactorActive: false,
       fieldsCleared: ['mfaEnabled', 'mfaFailedAttempts', 'mfaLocked'],
       sessionsRevoked: false,
       message: 'MFA desativado (cadastro do segundo fator preservado para reativação)'
