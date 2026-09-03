@@ -2,7 +2,7 @@
 
 **Written 2026-09-03, tenth queue sitting. The requested 10-issue queue is
 discharged; no end signal from Dennis, so this is not a sign-off.** Dennis asked for "the next 10 issues to resolve, Docker is on."
-**9 closed, 2 escalated.** 11 commits pushed.
+**10 closed, 2 escalated.** 12 commits pushed.
 7 issues filed here, 5 on the pack.
 
 **The Docker gate RAN GREEN: 12 passed (11.9s), none skipped**, covering both
@@ -41,9 +41,9 @@ every count below rather than trusting it.
   `bioavanced-test-*` named volumes are **kept** — dropping them, and any
   machine-wide `prune -a`, still needs Dennis's consent.
 
-## What closed (9)
+## What closed (10)
 
-`#1019` `#974` `#1010` `#1012` `#1016` `#1017` `#1024` `#997` `#1015`.
+`#1019` `#974` `#1010` `#1012` `#1016` `#1017` `#1024` `#997` `#1015` `#1022`.
 
 ## The two the gate closed
 
@@ -117,7 +117,8 @@ code, env files, compose files, canonical requirements, milestones.
 
 ## Filed this sitting
 
-Here: **#1020 #1021 #1022 #1023 #1024(closed) #1025 #1026**.
+Here: **#1020 #1021 #1023 #1025 #1026** open; **#1022** and **#1024** were
+filed and closed in the same sitting.
 On the pack: **#709 #710 #711 #712 #713**. Comments on pack #579, #657.
 
 **Worth reading first: #1026** (consent projection keys `GOVERNED_BY` onto a
@@ -133,9 +134,12 @@ Query the board for everything else: `gh issue list --state open`.
 **#1026's direction** — it blocks #988/#990 and is the highest-value open
 item this sitting produced.
 
-The cheapest unblocked work on the board is **#1022** (a one-line 400→500
-in `storage.routes.js`'s `PATCH /freezer/:freezerId/room` catch-all, with
-#892 as the precedent for the same class in the same router) and **#1025**
-(apply #1017's spy remedy to `user-security.routes.test.js` — note its
-controller requires auditLogger at BOTH module scope and lazily, so
-correcting the path alone changes that suite's behaviour).
+The cheapest unblocked work on the board is **#1025** — apply #1017's spy
+remedy to `user-security.routes.test.js`. Its controller requires
+auditLogger at BOTH module scope and lazily, so correcting the path alone
+changes that suite's behaviour; that is why it was split rather than done
+as a drive-by.
+
+**#1025 is the one issue this sitting filed and did not discharge** — not
+blocked, not the owner's call, simply not reached. Recorded plainly rather
+than dressed as a disposition.
