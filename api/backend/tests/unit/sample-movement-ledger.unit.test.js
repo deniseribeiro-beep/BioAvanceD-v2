@@ -74,6 +74,41 @@ describe('enforceAppendOnlyCollection', () => {
     expect(enforceAppendOnlyCollection(undefined)).toBeUndefined();
   });
 
+  // #1024: every OTHER case in this describe passes a distinct
+  // collectionName ('sample_movements_test_a', '_b', '_c', ...), so each one
+  // gets a fresh wrap and the suite is green. That is why this defect was
+  // invisible: PROTECTED_COLLECTIONS was keyed by the collection NAME, so the
+  // first call in a process claimed the key and every later call -- with any
+  // object, however unguarded -- hit an early return and was handed back
+  // untouched. Two objects sharing a name is the real production shape:
+  // MongoAuditRepository.appendImmutableAudit builds a FRESH isolated view on
+  // every invocation and asks for it to be guarded on the next line, while
+  // collectionResolver guards the real driver Collection under the same name.
+  it('#1024: guards EVERY object, not just the first one seen for a given collection name', async () => {
+    const first = makeMockCollection('sample_movements');
+    const second = makeMockCollection('sample_movements');
+
+    enforceAppendOnlyCollection(first, 'sample_movements_shared_key');
+    enforceAppendOnlyCollection(second, 'sample_movements_shared_key');
+
+    await expect(first.updateOne({})).rejects.toThrow('POLICY_APPEND_ONLY');
+    // The one that was failing: the second object came back completely
+    // unwrapped, so a real updateOne/deleteOne ran against the ledger.
+    await expect(second.updateOne({})).rejects.toThrow('POLICY_APPEND_ONLY');
+    await expect(second.deleteOne({})).rejects.toThrow('POLICY_APPEND_ONLY');
+  });
+
+  it('#1024: re-guarding the SAME object is idempotent and does not double-wrap', async () => {
+    const coll = makeMockCollection('sample_movements');
+
+    enforceAppendOnlyCollection(coll, 'sample_movements_idempotent');
+    const afterFirst = coll.updateOne;
+    enforceAppendOnlyCollection(coll, 'sample_movements_idempotent');
+
+    expect(coll.updateOne).toBe(afterFirst);
+    await expect(coll.updateOne({})).rejects.toThrow('POLICY_APPEND_ONLY');
+  });
+
   it('overrides updateOne to throw POLICY_APPEND_ONLY', async () => {
     const coll = makeMockCollection();
     enforceAppendOnlyCollection(coll, 'sample_movements_test_a');

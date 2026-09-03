@@ -1,6 +1,14 @@
 const crypto = require('crypto');
 
-const PROTECTED_COLLECTIONS = new Set();
+// #1024: keyed by OBJECT IDENTITY, not by collection name. As a name-keyed
+// Set this was one-shot per process: the first call claimed the key and every
+// later call -- with any object, however unguarded -- hit the early return and
+// was handed back untouched. MongoAuditRepository.appendImmutableAudit builds
+// a fresh isolated view on EVERY invocation, so from its second call onward
+// nothing was guarded, and whichever of the two callers ran first decided
+// whether the real driver Collection was ever wrapped at all.
+// A WeakSet also lets entries be collected with the objects they describe.
+const PROTECTED_COLLECTIONS = new WeakSet();
 
 const MUTATING_METHODS = [
   'updateOne',
@@ -81,8 +89,9 @@ function enforceAppendOnlyCollection(collection, collectionName = 'sample_moveme
     return collection;
   }
 
-  const uniqueKey = `${collectionName}:${collection.collectionName || 'unknown'}`;
-  if (PROTECTED_COLLECTIONS.has(uniqueKey)) {
+  // Idempotent per object: re-guarding the same collection is a no-op, which
+  // is what the name key used to provide by accident.
+  if (PROTECTED_COLLECTIONS.has(collection)) {
     return collection;
   }
 
@@ -106,7 +115,7 @@ function enforceAppendOnlyCollection(collection, collectionName = 'sample_moveme
     };
   }
 
-  PROTECTED_COLLECTIONS.add(uniqueKey);
+  PROTECTED_COLLECTIONS.add(collection);
   return collection;
 }
 
