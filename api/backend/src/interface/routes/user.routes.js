@@ -13,6 +13,38 @@ const { ObjectId } = require('mongodb');
 // manutenção em src/scripts/ usem exatamente esta regra em vez de uma cópia.
 const { buildUserFilterById } = require('../../utils/userFilter');
 
+// #1031: POST /:id/reset-mfa faz duas coisas materialmente diferentes desde
+// f24b853e (#933) -- uma redefinição completa, que destrói o segundo fator e
+// revoga todas as sessões, e um desbloqueio, que zera dois contadores -- e
+// ambas respondem 200 no MESMO path.
+//
+// A linha genérica do audit.middleware não consegue separá-las: ela deriva a
+// ação do PATH ('/reset-mfa' -> 'MFA') e seu payload é apenas
+// {method, path, statusCode, duration, query}, sem corpo de resposta. Logo as
+// duas linhas ficam idênticas a menos do id do alvo -- e o id não ajuda, já que
+// a trilha também não registra qual papel o alvo tinha no momento. Antes de
+// #933 o ramo de administrador respondia 400, então o status separava as duas;
+// fazer a operação ter sucesso foi o que as colapsou.
+//
+// Uma função única e não dois blocos copiados: o par SÓ tem valor se os dois
+// lados usarem o mesmo formato, e duas cópias divergem em silêncio.
+async function writeMfaResetAudit(db, req, targetUser, { operation, enrolmentPreserved, fieldsCleared, sessionsRevoked, message }) {
+  const auditLogger = require('../../utils/auditLogger');
+  auditLogger.init(db);
+  await auditLogger.log({
+    action: 'MFA',
+    resourceType: 'User',
+    resourceId: targetUser._id.toString(),
+    status: 'success',
+    // Uma redefinição destrói um fator de autenticação; um desbloqueio não.
+    severity: enrolmentPreserved ? 'info' : 'critical',
+    message,
+    payload: { operation, enrolmentPreserved, fieldsCleared, sessionsRevoked },
+    req,
+    module: 'Usuários'
+  });
+}
+
 // RF003 - Cadastro de usuário
 router.post('/register',
   authenticate,
@@ -1013,6 +1045,23 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
       // que o segundo fator foi comprometido" -- premissa que não vale para um
       // desbloqueio: o alvo apenas errou o TOTP além do limite. Derrubar as
       // sessões dele seria punir a recuperação.
+
+      // #1031: linha de auditoria EXPLÍCITA. A linha genérica do
+      // audit.middleware não serve aqui: ela deriva a ação do PATH
+      // (`/reset-mfa` -> 'MFA') e seu payload é apenas
+      // {method, path, statusCode, duration, query} -- sem corpo de resposta.
+      // Como este path agora faz duas coisas materialmente diferentes e ambas
+      // respondem 200, as duas linhas genéricas ficam idênticas a menos do id
+      // do alvo. Uma destrói um segundo fator e derruba todas as sessões; a
+      // outra zera dois contadores. A trilha precisa distinguir as duas.
+      await writeMfaResetAudit(db, req, targetUser, {
+        operation: 'unlock',
+        enrolmentPreserved: true,
+        fieldsCleared: ['mfaFailedAttempts', 'mfaLocked'],
+        sessionsRevoked: false,
+        message: 'MFA desbloqueado (cadastro do segundo fator preservado)'
+      });
+
       return res.status(200).json({
         success: true,
         unlockedOnly: true,
@@ -1049,6 +1098,16 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
     // rota não é necessariamente igual ao userID gravado na sessão.
     const sessionService = require('../../services/session.service');
     await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID);
+
+    // #1031: par explícito da linha do desbloqueio acima. Sem as duas, a
+    // trilha registra as duas operações de forma indistinguível.
+    await writeMfaResetAudit(db, req, targetUser, {
+      operation: 'reset',
+      enrolmentPreserved: false,
+      fieldsCleared: ['mfaEnabled', 'mfaSecret', 'mfaActivationDate', 'mfaFailedAttempts', 'mfaLocked', 'lastLogin'],
+      sessionsRevoked: true,
+      message: 'MFA redefinido (cadastro do segundo fator removido, sessões revogadas)'
+    });
 
     return res.status(200).json({
       success: true,

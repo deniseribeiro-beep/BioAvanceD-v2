@@ -11,6 +11,13 @@ const { createCollectionMock, createDbMock } = require('../factories/db.factory'
 const { buildUser, buildUserRegistrationPayload } = require('../factories/user.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 
+// #1031: user.routes.js requires auditLogger LAZILY inside its handlers, so a
+// spy on the shared CJS module object is observed at call time -- the pattern
+// #1017/#1025 established for this directory. vi.mock would not work here even
+// at the correct depth: vitest's mock registry is not consulted by the require
+// a handler actually executes.
+const auditLogger = require('../../src/utils/auditLogger');
+
 function createCoordinatorToken() {
   return jwt.sign(
     {
@@ -373,5 +380,131 @@ describe('reset-mfa on an administrator target unlocks without re-enrolling (#93
     expect($set.mfaEnabled).toBe(false);
     expect($set.mfaLocked).toBe(false);
     expect(sessionService.invalidateUserSessions).toHaveBeenCalled();
+  });
+});
+
+
+// #1031: reset-mfa writes no explicit audit row, so the only record of it is
+// the generic middleware row -- and that row is derived from the PATH, with a
+// payload of {method, path, statusCode, duration, query} and no response body.
+// Since f24b853e (#933) this one path does two materially different things:
+// a full reset that destroys a second factor and revokes every session, and an
+// unlock that clears two counters. Both answer 200 on the same path, so the
+// two rows are identical apart from the target id. Before #933 the admin
+// branch answered 400, so status code alone separated them; making the
+// operation succeed is what collapsed them.
+describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () => {
+  const { PERMISSION_CATALOG } = require('../../src/services/rbac-catalog-seed.service');
+
+  function matchesQuery(doc, query = {}) {
+    return Object.entries(query).every(([key, cond]) => {
+      if (cond && typeof cond === 'object' && '$in' in cond) return cond.$in.includes(doc[key]);
+      return doc[key] === cond;
+    });
+  }
+  function queryableCollectionMock(docs) {
+    return createCollectionMock({
+      findOne: vi.fn(async (query = {}) => docs.find((d) => matchesQuery(d, query)) || null),
+      find: vi.fn((query = {}) => ({ toArray: vi.fn().mockResolvedValue(docs.filter((d) => matchesQuery(d, query))) })),
+    });
+  }
+  function buildCollections(assignments) {
+    return {
+      roles: queryableCollectionMock([
+        { roleId: 'role-administrator', roleCode: 'administrator', hierarchyLevel: 4, roleStatus: 'active', permissionIds: ['perm-resetMFA'] },
+        { roleId: 'role-tecnico', roleCode: 'tecnico', hierarchyLevel: 2, roleStatus: 'active', permissionIds: [] },
+      ]),
+      permissions: queryableCollectionMock(Object.entries(PERMISSION_CATALOG).map(([permissionCode, entry]) => ({
+        permissionId: `perm-${permissionCode}`, permissionCode, ...entry,
+      }))),
+      userRoleAssignments: queryableCollectionMock(assignments.map((a) => ({
+        userAccountId: a.userAccountId, roleId: a.roleId, assignmentStatus: 'active', validUntil: null,
+      }))),
+    };
+  }
+  function adminCallerToken() {
+    return jwt.sign(
+      { userID: 'qa-admin-caller', accessType: 4, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+  }
+  function auditRowsFor(resourceId) {
+    return auditLogger.log.mock.calls
+      .map((call) => call[0])
+      .filter((row) => row && row.resourceType === 'User' && row.resourceId === resourceId);
+  }
+
+  let logSpy;
+
+  beforeEach(() => {
+    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'session-1' } });
+    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-1' });
+    vi.spyOn(sessionService, 'invalidateUserSessions').mockResolvedValue({ revoked: 0 });
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  function givenTarget(id, roleId, doc) {
+    const usersCollection = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: id, ...doc }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    });
+    app.locals.db = createDbMock({
+      users: usersCollection,
+      ...buildCollections([
+        { userAccountId: 'qa-admin-caller', roleId: 'role-administrator' },
+        { userAccountId: id, roleId },
+      ]),
+    });
+    return usersCollection;
+  }
+
+  it('the UNLOCK branch writes a row naming the unlock and the preserved enrolment', async () => {
+    givenTarget('admin-target-1', 'role-administrator', {
+      roleName: 'Administrador', mfaEnabled: true, mfaSecret: 'S', mfaLocked: true, mfaFailedAttempts: 5,
+    });
+
+    const response = await request(app)
+      .post('/api/users/admin-target-1/reset-mfa')
+      .set('Authorization', `Bearer ${adminCallerToken()}`);
+
+    expect(response.status).toBe(200);
+    const rows = auditRowsFor('admin-target-1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].payload).toMatchObject({ operation: 'unlock', enrolmentPreserved: true });
+  });
+
+  it('the FULL RESET branch writes a row naming the reset and the removed enrolment', async () => {
+    givenTarget('tecnico-target-1', 'role-tecnico', {
+      roleName: 'Tecnico', mfaEnabled: true, mfaSecret: 'S', mfaLocked: true, mfaFailedAttempts: 5,
+    });
+
+    const response = await request(app)
+      .post('/api/users/tecnico-target-1/reset-mfa')
+      .set('Authorization', `Bearer ${adminCallerToken()}`);
+
+    expect(response.status).toBe(200);
+    const rows = auditRowsFor('tecnico-target-1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].payload).toMatchObject({ operation: 'reset', enrolmentPreserved: false });
+  });
+
+  // CONTROL: unchanged by this fix, must be GREEN before and after (#695).
+  // If this is red the harness is wrong, not the product.
+  it('CONTROL: the unlock branch still leaves mfaSecret and mfaEnabled untouched', async () => {
+    const usersCollection = givenTarget('admin-target-2', 'role-administrator', {
+      roleName: 'Administrador', mfaEnabled: true, mfaSecret: 'S', mfaLocked: true, mfaFailedAttempts: 5,
+    });
+
+    const response = await request(app)
+      .post('/api/users/admin-target-2/reset-mfa')
+      .set('Authorization', `Bearer ${adminCallerToken()}`);
+
+    expect(response.status).toBe(200);
+    const $set = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect($set.mfaLocked).toBe(false);
+    expect($set).not.toHaveProperty('mfaSecret');
   });
 });
