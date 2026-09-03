@@ -1,12 +1,15 @@
 # HANDOFF
 
-**Written 2026-09-03, sixth 10-issue queue sitting.** Dennis asked for "the
-next ten issues, Docker is on." **All 10 addressed — 5 closed, 5 open with
-their remainders named. 8 commits pushed. 6 issues filed here and 2 on the
-pack. The Docker gate ran and was green; the stack is down.**
+**Written 2026-09-03, seventh 10-issue queue sitting. Dennis asked for "the
+next ten issues, Docker is on."** All 10 addressed — **5 closed, 5 open with
+their remainders named**. 7 commits pushed. 6 issues filed here, 6 on the
+pack. **The Docker gate ran and was green (12/12 healthy); the stack is
+down.**
 
-**The session was not declared over by the user.** Re-derive every count
-rather than trusting it.
+**This is an INTERIM rotation — the session was not declared over.** Dennis
+gave one further instruction mid-sitting (a pack review of prose/token cost,
+filed as pack#684) and may give more. Re-derive every count rather than
+trusting it.
 
 ---
 
@@ -14,138 +17,141 @@ rather than trusting it.
 
 - Branch `feature/docker-e2e-backend-integration`, clean and matching origin.
   `main` untouched, no PR.
-- Last substantive commit: `4df10c3b` (fixes for defects found in this
-  sitting's own commits — see below).
+- Last substantive commit: `490077f4` (#986's lockout fix).
 - **New npm scripts:** none. **New dependencies:** none. **New env keys:**
-  none. One env key was *removed*: the dead `TSA_URL` from
-  `compose.test.yml`.
-- `.env.docker.example` gained an explanatory block on
-  `AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM` — no value changed.
+  none — one was *removed* (`AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM`, from
+  `config/env.js` and `.env.docker.example`).
+- New frontend i18n key `results.metrics.skipped` in all three catalogs.
 
 ## Docker state — nothing is running
 
-- `compose.test.yml` was brought up **with `--build`** and torn down this
-  sitting. `docker ps -a` is empty.
+- `compose.test.yml` brought up **with `--build`** and torn down.
+  `docker ps -a` is empty.
 - **The five `bioavanced-test-*` named volumes survive** (`down` without
-  `--volumes`), so the admin + reference-data bootstrap does **not** need
-  re-running. Bootstrap state: **present, inherited from a prior sitting and
-  not re-verified this one** — no bootstrap service was started, because the
-  gate only needed the 12 core services.
-- **The test-stack images are CURRENT** — rebuilt this sitting from this
-  tree, including `tsa-test` and `witness-test`, whose source changed.
-- **Build cache pruned to 0B** at session end (`docker builder prune -af`,
-  1.047GB reclaimed). The 24 test images and the 5 named volumes were
-  deliberately kept, so the next gate needs no rebuild and no re-bootstrap.
+  `--volumes`). Bootstrap state: **present, inherited from an earlier
+  sitting, not re-verified here** — no bootstrap service was started; the
+  gate needed only the 12 core services.
+- **Test-stack images are CURRENT** — rebuilt this sitting from this tree.
+  **Build cache was NOT pruned.**
+- **The images predate `490077f4`.** Anything verifying #986 against a live
+  stack must rebuild `backend-app-test` first.
 
 ## Verification
 
 | Gate | Result |
 |---|---|
-| **Full native backend** (`tests/unit` + `integration` + `compliance`) | **457 files, 8352 tests, 0 failures** |
-| **Frontend** (7 `src/` dirs) | **28 files, 241 tests, 0 failures** |
+| `compose.test.yml` bring-up | **12 services, 12/12 `(healthy)`** |
 | `npm run test:architecture` | 120 / 120 |
-| **`compose.test.yml` bring-up** | **12 services, all running, `RestartCount` 0 on every one** |
+| Targeted native suites | every touched file plus its two-hop consumer sweep, all green |
 
-No e2e run — the bring-up named 12 services deliberately, so
-`playwright-runner` never auto-started.
+**No full native suite and no e2e run this sitting.** Both are outstanding
+before a PR.
 
 ## What closed (5)
 
-`#987` `#984` `#980` `#970` `#981`.
+`#982` `#991` `#992` `#993` `#994`.
 
 ## What is open, and what each still needs
 
-- **#988** — parts 1 and 2 shipped. Part 3 (the rollback's second
-  transaction) is open **and moot until #994**, because the endpoint never
-  executes.
-- **#974** — the document half is done across **8** write sites, not the 5
-  the issue lists. Open on the audit-row half only.
-- **#986** — open and **escalated**: `enableMFAFirstLogin` is not an oracle,
-  it is a second unauthenticated login path. The proposed fix is necessary
-  but not sufficient.
-- **#982** — open, `premise-corrected`. Its central section was stale;
-  direction 1 is now essentially the whole issue.
-- **#979** — open, genuinely the owner's call (ladder walked, see below).
-  Its healthcheck half is split to **#992** and is fixable independently.
+- **#994 is closed but spawned #1000** — `db.factory`'s `createDbMock` has no
+  `client`/`startSession`, so `tests/integration/` still cannot cover a Mongo
+  transaction at any of six call sites.
+- **#989** — the `_PEM` branch is deleted. Open on the half that matters: **no
+  key file reaches any stack.** The generator still writes `_PEM` +
+  `NODE_ENV=development`; `.env.docker.example` points `_FILE` at
+  `/run/secrets/merkle_signing_key.pem`, which **nothing creates**.
+- **#986** — item 1 shipped. Open on item 2 (`blockIPAfterAttempts`), a
+  missing mechanism, `0..1 Condicional`, spec-compliant to defer.
+- **#974** — open on the audit-row half only. Its comment now carries the full
+  scoping; read it before writing code.
+- **#988** part 3 and **#990** — open, and **they are one decision, not two.**
+- **#979** unchanged, still the owner's call.
 
 Query the board for everything else (`gh issue list --state open`).
 
 ## The judgment a query cannot carry
 
-- **#994 is the most consequential thing filed this sitting.**
-  `storageService` calls `this.db.getMongo()`, a **mongosh** method the
-  native driver `Db` does not have. **[ran it]** `typeof db.getMongo` is
-  `undefined` on a real `MongoClient.db()`. So `POST
-  /api/storage/allocate/auto` throws a `TypeError` on every stack, #988's
-  premise ("a raw `MongoServerError` code 20") is wrong, and `e47219c6`'s
-  audit row is unreachable in production. 41 green tests coexist with it
-  because `storageService.test.js`'s `makeDb()` **fabricates the method**.
-- **#993: `createUser` is a Coordenador permission in the seed**, not
-  admin-only — **[read it]** `rbac-catalog-seed.service.js:46`, and `rbac.js`
-  has no admin bypass. That route's allowlist still carries `password` **and**
-  `mfaSecret`, so one `PUT` is an account takeover. Wider than #632's
-  `resetMFA` finding, which needed a role that does not exist in the seed.
-- **#979's docs are genuinely silent, and that was established rather than
-  assumed.** 78 doc files enumerated, ~20 Portuguese concept-terms searched,
-  3 milestones read. RNF003/004/014/015/019 constrain but do not decide.
-  **Do not re-run this search** — and note `docs/planning/bioavanced-v3/` has
-  the richest material and is excluded by its own README.
-- **Two of this sitting's own commits shipped defects, caught by a post-hoc
-  adversarial review, fixed in `4df10c3b`.** #987's status fix reached three
-  of four storage controllers; the `skipped` can-it-fail probe covered one of
-  three literals, so the same unpinned-hunk defect shipped in the third. **A
-  probe on one of N parallel sites certifies nothing about the other N−1** —
-  pack #682.
-- **`$` in a compose healthcheck is interpolated by Compose at parse time
-  against the HOST env, not by the container shell.** **[ran it]** A single
-  `$` rendered to the literal `8095` and the change accomplished nothing;
-  `$$` defers it. Verified on the running container — its
-  `Config.Healthcheck.Test` holds `${TSA_PORT:-8095}`, unexpanded.
-- **`sed` and `grep` on this machine do not see `\r`.** **[ran it]** `grep -c
-  $'\r'` returns **0** on a file `file(1)` and `cat -A` both confirm is CRLF.
-  So the recorded "detect the file's own EOL" rule has no working detection
-  recipe via those tools — use `file`/`cat -A`, or just use the `Edit` tool,
-  which is EOL-safe. Pack #681.
-- **`worker-test` and `neo4j-projection-worker-test` show no `(healthy)` in
-  `docker compose ps`** — they declare no healthcheck, in any of the four
-  compose files. Confirmed live this sitting. That is #992, and it is why
-  `--wait` exits 0 on a dead worker.
+- **#994's endpoint had never worked, since 2026-02-18. [ran it]**
+  `git log -S getMongo --follow` puts `this.db.getMongo()` in the file's
+  *first* commit, whose `package.json` already declared `mongodb ^6.3.0`.
+  Not a driver migration — there was no migration.
+- **[ran it] On the live stack, `typeof db.getMongo` is `undefined` and
+  `db.client` is an object**, and `autoAssignSampleToBox` now reaches
+  `BOX_NOT_FOUND` instead of throwing. That probe is the close criterion, and
+  it is cheap to repeat: `docker compose exec -T backend-app-test node -e`.
+- **The mock fabricating `getMongo` was FOUR sites, not one. [ran it]**
+  Removing the obvious one (the shared `makeDb` default) changed nothing —
+  41/41 still green. The load-bearing one was a block-local override; two more
+  were tests replacing `db.client` wholesale; the fourth was found only by
+  grepping the changed literal and was passing while never being consulted.
+  **A green suite after removing one fabrication certifies nothing about the
+  others.**
+- **#993's exploit was narrower AND wider than its body. [read it]**
+  `mfaSecret` was already deleted for non-admin targets, so it needed an
+  admin target plus `mfaEnabled: true` — but `isBecomingAdmin` is satisfied by
+  `roleName: 'Administrador'` in the *same* request, so the precondition was
+  self-serviceable. That promotion path is **#998** and is the sharper issue.
+- **The fix for #993 is a `delete` from `req.body`, NOT an allowlist removal**,
+  and the issue's own suggestion would have shipped a defect: the route's only
+  legitimate write to those fields is a server-set `null` (the disable-MFA
+  clear), which reaches the `$set` *through* the allowlist.
+- **#986's guard must carry the `mfaEnabled` term. [read it]**
+  `setupMFAFirstLogin` writes `mfaSecret` without setting `lastLogin`, so a
+  guard on `!isFirstLogin` alone breaks two unit tests and **five e2e call
+  sites**.
+- **The three storage siblings all run Neo4j BEFORE Mongo and compensate in
+  the opposite direction. [read it]** *The fallible external system goes
+  first, the transactional one goes last.* `autoAssignSampleToBox` is the only
+  one that inverted it, and that inversion is the entire reason #988 part 3
+  and #990 exist. **Reordering deletes both.** The obstacle: the raw inline
+  `MERGE` has no event id to compensate, and the position is known only after
+  the Mongo scan.
+- **#974's step 2 is worth re-scoping before doing. [ran it]** The audit row
+  is *less* durable than the session document — `retentionSweep` hard-deletes
+  from `logs` and `sessions` is in no policy and has no TTL. What the row adds
+  is reachability and tamper-evidence, not durability, so an audit-UI read
+  path over `sessions` is a real alternative. That inversion is **#996**.
+- **[ran it] `compose.dev.yml` and `compose.test.yml` contain no `restart:`
+  key at all** — file-wide, not merely on the workers.
+- **[ran it] `compose.dev.yml` only parses layered** (`-f compose.yml -f
+  compose.dev.yml`); `compose.prod.yml` fails on *interpolation* alone. An
+  `error while interpolating` proves the YAML parsed — don't read either as a
+  change having broken something.
 
-## Filed this sitting (8)
+## Filed this sitting
 
-Here: **#989 #990 #991 #992 #993 #994**. On the pack: **#681 #682**.
+Here: **#995 #996 #997 #998 #999 #1000**.
+On the pack: **#683 #684 #685 #686 #687 #688**, plus recurrence comments on
+pack #639 and #657.
 
-**Worth reading first: #994**, then **#993**.
+**Worth reading first: #998** (a Coordenador can promote anyone to
+Administrador), then **#684** (Dennis's own ask: a prose/token review of the
+pack).
 
-**None of the six here was worked** — that was a choice, not a blocker, and
-it is recorded as such on each. **#991** (render `metrics.skippedRecords`)
-and the `mfaSecret` half of **#993** are the two cheap ones.
+**None of the six filed here was worked** — a choice, recorded on each.
 
 ## Conventions this sitting relied on / established
 
-- **Probe every site a change touched, not one representative.** Cost two
-  defects here, one caught only by review.
-- **A leaf worker's "this is now pinned" is a claim, not a result.** One
-  reported an assertion pinned that pinned nothing (`toEqual` treats an
-  explicit `undefined` and an absent key as equal). Briefs asking for a pin
-  should ask for the failing count too — pack #682.
-- **The two-hop consumer sweep paid again.** It surfaced
-  `auth.routes.test.js`'s exact-arity `toHaveBeenCalledWith(anything(),
-  's1')`, which the named file set left green and unexamined.
-- **Run the premise before writing the issue body.** #981's headline claim
-  was refuted this way, and the real defect underneath (#989) is larger.
-- **Redirect any vitest run over ~3 files** — and note `grep FAIL` matches
-  this repo's own `AUDIT_TRAIL_WRITE_FAILURE` log lines. Anchor on
-  `^ *Tests ` instead.
-- **The full-suite hook's sanctioned pre-handoff form** is
-  `npx vitest run tests/unit tests/integration tests/compliance
-  --reporter=dot`; the bare `npm run test:ci` is blocked.
+- **Grep the changed literal across the tree, not just the failing tests.**
+  It is what found #994's fourth mock fabrication, which no test run could.
+- **A `delete` from the request body and a removal from an allowlist are not
+  interchangeable** when the route itself writes the field.
+- **Two agents were killed mid-task by a session rate limit**; one left five
+  modified files with no report. `git status --porcelain` on any failed-agent
+  notification, before anything else — pack#685.
+- **Use a heredoc (`--body-file -`) for every `gh issue` body.** An unescaped
+  backtick inside `--comment "..."` runs as command substitution and silently
+  deletes the phrase — it happened once here, on a published comment. pack#688.
+- **A multi-line `sed`/`python` pattern cannot match this machine's CRLF
+  files** while single-line ones do — pack#687. Use the Edit tool.
+- **Anchor grep patterns on `^ +Tests +[0-9]`** — an unanchored `FAIL` matches
+  this repo's own `AUDIT_TRAIL_WRITE_FAILURE` log lines. Recurred here despite
+  being in the previous handoff; pack#683 is about *where* that rule lives.
 
 ## Recommended next
 
-**None queued** — Dennis named no task beyond the ten.
+**None queued** — Dennis named no task beyond the ten and the pack review.
 
-The cheapest high-value work is **#994**, because it is the one finding that
-makes an already-shipped fix inert, and because fixing `makeDb()` alongside it
-closes a whole class of blind spot. **#993**'s `mfaSecret` half is three lines
-and is security-relevant.
+The cheapest high-value work is **#998** (three lines for a role floor, and it
+is a live escalation path), then **#999**'s `mfaEnabled` half. **#989**'s
+remaining half and **#959** item 2 are one piece of work, not two.
