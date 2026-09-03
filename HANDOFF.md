@@ -1,13 +1,13 @@
 # HANDOFF
 
-**Written 2026-09-03, tenth queue sitting. INTERIM — the session is still
-running.** Dennis asked for "the next 10 issues to resolve, Docker is on."
-7 closed, 2 written-and-gate-blocked, 2 escalated. 10 commits pushed.
+**Written 2026-09-03, tenth queue sitting. The requested 10-issue queue is
+discharged; no end signal from Dennis, so this is not a sign-off.** Dennis asked for "the next 10 issues to resolve, Docker is on."
+**9 closed, 2 escalated.** 11 commits pushed.
 7 issues filed here, 5 on the pack.
 
-**The Docker gate is IN FLIGHT as this is written** — `compose.test.yml`
-bringing up with `--build`. Its result is not in this file. Re-derive
-everything rather than trusting these counts.
+**The Docker gate RAN GREEN: 12 passed (11.9s), none skipped**, covering both
+new e2e specs plus the 10 pre-existing tests in those two files. Re-derive
+every count below rather than trusting it.
 
 ---
 
@@ -23,29 +23,38 @@ everything rather than trusting these counts.
 
 ## Docker state
 
-- **Stack was empty at sitting start** (`docker ps -a` and `docker compose
-  ls -a` both empty) and is being brought up now, with `--build`, because
-  this sitting changed backend source.
-- **Bootstrap: NOT YET RUN against these volumes** at the time of writing.
-  `admin-bootstrap-test` and `foundation-bootstrap-test` are both required
-  before the two gated specs will pass — the LGPD spec's MIABIS ids are
-  deliberately the real seeded ones.
-- The `bioavanced-test-*` named volumes carry inherited state from earlier
-  sittings; **not** dropped, since removing them needs Dennis's consent.
+- **Stack was empty at sitting start** and is **DOWN again now** — brought
+  up with `--build` (this sitting changed backend source), gated, then
+  `docker compose down --remove-orphans`. No containers left running.
+- **Both bootstraps ran and exited 0** against the current volumes:
+  `admin-bootstrap-test` and `foundation-bootstrap-test`. The LGPD spec's
+  MIABIS ids are the real seeded ones, so skipping the foundation seed is
+  the highest-probability false red on a first gate — it was not skipped.
+- **`docker compose up -d --wait` exit-code traps, both hit and both
+  harmless:** it exits **1** on a one-shot service that succeeded
+  (`admin-bootstrap-test` showed `Exited (0)`), and it exits **0** while
+  ignoring services with no healthcheck. Read `compose ps` states, never
+  the exit code.
+- Cleanup: `docker builder prune -af` reclaimed **1.047GB**. Images back to
+  the pre-existing **33 / 4.683GB**; **56 local volumes / 1.537GB** (7 more
+  than last sitting, all compose-managed and near-empty). The
+  `bioavanced-test-*` named volumes are **kept** — dropping them, and any
+  machine-wide `prune -a`, still needs Dennis's consent.
 
-## What closed (7)
+## What closed (9)
 
-`#1019` `#974` `#1010` `#1012` `#1016` `#1017` `#1024`.
+`#1019` `#974` `#1010` `#1012` `#1016` `#1017` `#1024` `#997` `#1015`.
 
-## Written, merged, and waiting on the gate (2)
+## The two the gate closed
 
-- **#997** — the sync half. `tests/e2e/lgpd-sample-import.spec.ts`, one new
-  test at `:269`. Commit `7c49132d`, `Refs` not `Fixes`.
-- **#1015** — `POST /api/storage/allocate/auto` real-backend coverage.
-  `tests/e2e/sample-storage-lifecycle.spec.ts`. Commit `1d24f7a8`.
+- **#997** — `tests/e2e/lgpd-sample-import.spec.ts:269`, commit `7c49132d`.
+  Proves a real HTTP import response carries `data.skipped`.
+- **#1015** — `tests/e2e/sample-storage-lifecycle.spec.ts:209`, commit
+  `1d24f7a8`. `POST /api/storage/allocate/auto` was the last of the four
+  storage mutations with no real-backend coverage.
 
-Both are static-verified only (`playwright test --list`, `tsc --noEmit`).
-Close them when the gate runs green; leave open otherwise.
+**[ran it] `npm run test:e2e:docker -- <those two specs> --workers=1
+--reporter=list` → 12 passed (11.9s), none skipped.**
 
 ## Escalated, not worked (2)
 
@@ -120,5 +129,13 @@ Query the board for everything else: `gh issue list --state open`.
 
 ## Recommended next
 
-**None queued by Dennis.** The session's own next steps are: finish the
-Docker gate, close #997/#1015 on green, and put #1026's direction to him.
+**None queued by Dennis.** The one thing genuinely waiting on him is
+**#1026's direction** — it blocks #988/#990 and is the highest-value open
+item this sitting produced.
+
+The cheapest unblocked work on the board is **#1022** (a one-line 400→500
+in `storage.routes.js`'s `PATCH /freezer/:freezerId/room` catch-all, with
+#892 as the precedent for the same class in the same router) and **#1025**
+(apply #1017's spy remedy to `user-security.routes.test.js` — note its
+controller requires auditLogger at BOTH module scope and lazily, so
+correcting the path alone changes that suite's behaviour).
