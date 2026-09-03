@@ -2,11 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { ObjectId } = require('mongodb');
 const StorageService = require('../../src/services/storageService');
 
+// #994: this used to fabricate `getMongo: vi.fn()`, a mongosh method the
+// native driver's Db does NOT have -- `typeof db.getMongo` is `undefined` on a
+// real `MongoClient.db()`. storageService called it, so 41 green tests
+// coexisted with an endpoint that threw a TypeError on every real deployment:
+// the mock supplied the very method whose absence was the bug.
+//
+// The shape below is the one `server.js` actually builds -- `connectDB()`
+// returns `client.db(mongoDb)`, whose transaction entry point is `db.client`
+// (a MongoClient), never `db.getMongo()`. Do not add `getMongo` back.
 function makeDb(overrides = {}) {
   return {
     // no listCollections -> getCollection() falls back to canonical name directly
     collection: vi.fn(),
-    getMongo: vi.fn(),
     ...overrides
   };
 }
@@ -259,7 +267,16 @@ describe('StorageService.autoAssignSampleToBox', () => {
         if (name === 'storageContainers') return { findOne: vi.fn().mockResolvedValue(null) };
         throw new Error(`unexpected collection: ${name}`);
       }),
-      getMongo: vi.fn(() => ({ startSession: vi.fn(() => makeSession()) }))
+      // #994: this was `getMongo: vi.fn(() => ({ startSession: ... }))`, and it
+      // is the single line that let 41 green tests coexist with an endpoint
+      // that threw on every real deployment. `getMongo` is a MONGOSH method;
+      // the native driver's Db does not have it, so the mock supplied the very
+      // method whose absence was the bug.
+      //
+      // `client` is what a real `MongoClient.db()` exposes, and it is what
+      // `utils/mongoTransaction.js` and `MongoStorageRepository.withTransaction`
+      // both derive the session from (`db?.client || db?.s?.client`).
+      client: { startSession: vi.fn(() => makeSession()) }
     });
     service = new StorageService(db);
   });
@@ -577,12 +594,20 @@ describe('StorageService.autoAssignSampleToBox', () => {
     // Second startSession() call (rollback) needs its own session object.
     const rollbackSession = makeSession();
     let sessionCallCount = 0;
-    db.getMongo = vi.fn(() => ({
+    // #994: was `db.getMongo = vi.fn(() => ({ startSession: ... }))`. This
+    // site passed even with the fabrication left in place -- the block's
+    // default `db.client.startSession` already returned a fresh session per
+    // call, so the test went green while this override was never consulted
+    // and the two-session distinction it exists to express was silently
+    // inert. Repointed at the real entry point so the second startSession
+    // (the rollback's own transaction) is observable again.
+    db.client = {
+      ...db.client,
       startSession: vi.fn(() => {
         sessionCallCount += 1;
         return sessionCallCount === 1 ? makeSession() : rollbackSession;
       })
-    }));
+    };
     // Route updateOne calls made during rollback to dedicated spies while keeping
     // the original allocation-phase updateOne behavior for the first calls.
     boxesUpdateOne.mockImplementation((...args) => {
@@ -622,7 +647,11 @@ describe('StorageService.autoAssignSampleToBox', () => {
       const boxId = new ObjectId();
       const specimenId = new ObjectId();
       const helloCommand = vi.fn().mockResolvedValue({ ismaster: true, maxBsonObjectSize: 16777216 });
-      db.client = { db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
+      // #994: SPREAD, do not replace. A real MongoClient carries both db() and
+      // startSession(); the transaction path now derives its session from
+      // db.client.startSession, so clobbering the whole client here would
+      // remove the very thing under test and fail for the wrong reason.
+      db.client = { ...db.client, db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
 
       const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
@@ -633,14 +662,22 @@ describe('StorageService.autoAssignSampleToBox', () => {
       // Refused before any box/sample lookup or session open.
       expect(boxesFindOne).not.toHaveBeenCalled();
       expect(samplesFindOne).not.toHaveBeenCalled();
-      expect(db.getMongo).not.toHaveBeenCalled();
+      // #994: was expect(db.getMongo).not.toHaveBeenCalled(). getMongo no
+      // longer exists on the mock or in the product, so that assertion could
+      // only ever pass. This asserts the same intent against the real entry
+      // point: no session was opened before the refusal.
+      expect(db.client.startSession).not.toHaveBeenCalled();
     });
 
     it('does NOT refuse when the topology cannot be determined (hello throws) -- unknown proceeds, matching isKnownStandaloneDeployment\'s asymmetry', async () => {
       const boxId = new ObjectId();
       const specimenId = new ObjectId();
       const helloCommand = vi.fn().mockRejectedValue(new Error('not authorized on admin to execute command'));
-      db.client = { db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
+      // #994: SPREAD, do not replace. A real MongoClient carries both db() and
+      // startSession(); the transaction path now derives its session from
+      // db.client.startSession, so clobbering the whole client here would
+      // remove the very thing under test and fail for the wrong reason.
+      db.client = { ...db.client, db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
 
       boxesFindOne.mockResolvedValue({
         _id: boxId,
@@ -661,7 +698,11 @@ describe('StorageService.autoAssignSampleToBox', () => {
       const boxId = new ObjectId();
       const specimenId = new ObjectId();
       const helloCommand = vi.fn().mockResolvedValue({ setName: 'rs0', ismaster: true });
-      db.client = { db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
+      // #994: SPREAD, do not replace. A real MongoClient carries both db() and
+      // startSession(); the transaction path now derives its session from
+      // db.client.startSession, so clobbering the whole client here would
+      // remove the very thing under test and fail for the wrong reason.
+      db.client = { ...db.client, db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
 
       boxesFindOne.mockResolvedValue({
         _id: boxId,
@@ -686,7 +727,12 @@ describe('StorageService.autoAssignSampleToBox', () => {
       const specimenId = new ObjectId();
 
       const txSession = makeSession();
-      db.getMongo = vi.fn(() => ({ startSession: vi.fn(() => txSession) }));
+      // #994: was `db.getMongo = vi.fn(() => ({ startSession: ... }))`. The
+      // transaction now comes from `db.client.startSession`, which is what a
+      // real MongoClient exposes. storageRepository.withTransaction still ends
+      // the session in its own finally, so the ordering assertion below (audit
+      // write BEFORE endSession) still measures the same thing.
+      db.client = { ...db.client, startSession: vi.fn(() => txSession) };
       service = new StorageService(db);
 
       boxesFindOne.mockResolvedValue({

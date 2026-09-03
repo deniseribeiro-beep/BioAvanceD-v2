@@ -79,7 +79,6 @@ class StorageService {
   async autoAssignSampleToBox(specimenId, boxId) {
     const sampleObjId = this._normalizeObjectId(specimenId);
     const boxObjId = this._normalizeObjectId(boxId);
-    let session = null;
     let assignedPosition = null;
     let boxSnapshot = null;
     let sampleSnapshot = null;
@@ -89,11 +88,16 @@ class StorageService {
       // gives allocate/move/release, applied narrowly here since this method
       // opens its own raw session rather than going through that repository
       // method. Deliberately before startSession() below.
+      // #994: this pre-check is now redundant with the identical refusal
+      // inside storageRepository.withTransaction below, and is kept
+      // DELIBERATELY. The repository's copy runs at the transaction, which is
+      // after the two reads below -- so without this a standalone deployment
+      // would answer BOX_NOT_FOUND/SAMPLE_NOT_FOUND before it ever reported
+      // the topology problem. Removing it would silently regress e47219c6's
+      // ordering, which is the only part of #988 part 1 that survived.
       if (await isKnownStandaloneDeployment(this.db)) {
         throw new Error(STANDALONE_DEPLOYMENT_TRANSACTION_ERROR);
       }
-
-      session = this.db.getMongo().startSession();
 
       boxSnapshot = await this.storageRepository.findBoxById(boxObjId);
       if (!boxSnapshot) {
@@ -134,7 +138,16 @@ class StorageService {
       const rowLetter = positionMatch?.[1] || 'A';
       const column = Number(positionMatch?.[2] || 1);
 
-      await session.withTransaction(async () => {
+      // #994: was `session = this.db.getMongo().startSession()` plus a raw
+      // `session.withTransaction(...)`. `getMongo()` is a MONGOSH method --
+      // the native driver's Db has no such thing, so this endpoint threw
+      // `TypeError: this.db.getMongo is not a function` on every real
+      // deployment, before it opened a session and before any write. Routing
+      // through the repository's own withTransaction is what the three
+      // sibling use-cases (allocate/move/release) already do, and it brings
+      // the correct client derivation, the topology refusal and session
+      // lifecycle with it instead of hand-rolling a fourth copy.
+      await this.storageRepository.withTransaction(async (session) => {
         assignedPosition = await this.storageRepository.autoAssignSamplePosition(
           { specimenId: sampleObjId, boxId: boxObjId },
           session
@@ -210,17 +223,15 @@ class StorageService {
             }
           );
         } catch (neo4jError) {
-          const rollbackSession = this.db.getMongo().startSession();
-          try {
-            await rollbackSession.withTransaction(async () => {
-              await this.storageRepository.rollbackAutoAssignedPosition(
-                { specimenId: sampleObjId, boxId: boxObjId, position: assignedPosition },
-                rollbackSession
-              );
-            });
-          } finally {
-            await rollbackSession.endSession();
-          }
+          // #994: the second `getMongo()` call site. Same fix, same reason --
+          // this compensation path was equally dead, which is why #988 part 3
+          // (what compensates the compensation) could not even be observed.
+          await this.storageRepository.withTransaction(async (rollbackSession) => {
+            await this.storageRepository.rollbackAutoAssignedPosition(
+              { specimenId: sampleObjId, boxId: boxObjId, position: assignedPosition },
+              rollbackSession
+            );
+          });
 
           throw neo4jError;
         } finally {
@@ -255,11 +266,10 @@ class StorageService {
                 : 'AUTO_ASSIGNMENT_ERROR',
         message: error.message || 'Erro ao realizar alocação inteligente'
       };
-    } finally {
-      if (session) {
-        await session.endSession();
-      }
     }
+    // #994: the `finally { session.endSession() }` that stood here is gone
+    // with the raw session -- storageRepository.withTransaction owns the
+    // session lifecycle and ends it in its own finally.
   }
 
   /**
