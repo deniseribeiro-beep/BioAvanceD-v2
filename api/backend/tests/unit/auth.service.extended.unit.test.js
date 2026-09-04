@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { buildRbacCollections } = require('../factories/rbac.factory');
+const { buildRbacCollections, buildMutableRbacCollections } = require('../factories/rbac.factory');
 
 const authService = require('../../src/services/auth.service');
 
@@ -101,6 +101,65 @@ describe('AuthService.registerUser', () => {
     ).rejects.toThrow();
 
     expect(insertOne).not.toHaveBeenCalled();
+  });
+
+  // #1028: #435 closed the accessType trigger above and left the WINDOW open.
+  // Two throw sites inside grantRoleForAccessType are still reachable after
+  // insertOne, and this is the one an UNAUTHENTICATED caller can reach:
+  // auth.routes.js registers POST /api/auth/register with no `authenticate`,
+  // and #1037's rejectCallerSuppliedPrivilege filters only accessType and
+  // roleName -- organizationId passes through untouched, and User.js only
+  // trims it. So a bogus organizationId inserts the user, then throws in
+  // validateOrganizationId, leaving an orphan able to authenticate with every
+  // permission check returning false and nothing explaining why.
+  //
+  // The fixture reaches it because buildRbacCollections() seeds no
+  // `organizations` collection, so makeDb falls through to usersCollection,
+  // whose findOne resolves null.
+  it('rejects an unknown organizationId before inserting the user (#1028)', async () => {
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: { toString: () => 'new-user-id' } });
+    const db = makeDb({ insertOne });
+
+    await expect(
+      authService.registerUser(db, { ...VALID_USER, organizationId: 'org-inexistente' })
+    ).rejects.toThrow(/organizationId/);
+
+    expect(insertOne).not.toHaveBeenCalled();
+  });
+
+  // #1028: the OTHER remaining throw site -- an unseeded RBAC catalogue.
+  // buildMutableRbacCollections() seeds `roles: []`, and its own docstring
+  // names registerUser as an intended consumer; the fixture existed and the
+  // test did not.
+  it('rejects an unseeded RBAC catalogue before inserting the user (#1028)', async () => {
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: { toString: () => 'new-user-id' } });
+    const emptyRbac = buildMutableRbacCollections();
+    const usersCollection = {
+      findOne: vi.fn().mockResolvedValue(null),
+      insertOne,
+      updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+      find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+    };
+    const db = { collection: vi.fn((name) => emptyRbac[name] || usersCollection) };
+
+    await expect(
+      authService.registerUser(db, { ...VALID_USER })
+    ).rejects.toThrow(/Role não encontrado/);
+
+    expect(insertOne).not.toHaveBeenCalled();
+  });
+
+  // CONTROL: the happy path must stay green before AND after the fix (#695).
+  // If this reds, the new pre-write guard is rejecting a VALID registration,
+  // which is the one way this change could break user creation outright.
+  it('CONTROL: still creates a user with no organizationId at all', async () => {
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: { toString: () => 'new-user-id' } });
+    const db = makeDb({ insertOne });
+
+    const result = await authService.registerUser(db, VALID_USER);
+
+    expect(result.anonId).toBeTruthy();
+    expect(insertOne).toHaveBeenCalled();
   });
 });
 

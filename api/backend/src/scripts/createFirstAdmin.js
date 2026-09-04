@@ -84,13 +84,23 @@ async function createFirstAdmin(options = {}) {
       bootstrapSource: 'admin:create-first',
     };
 
+    // #1028: hoisted ABOVE the insert. It used to sit between insertOne and
+    // grantRoleForAccessType, so a seed failure orphaned the admin -- and
+    // this script's own idempotence guard above returns
+    // `skipped/users_exist` once any user exists, so `admin:create-first`
+    // would then refuse to run FOREVER, on a stack whose only user cannot
+    // authorize anything. Stuck-forever, not merely lower-risk than
+    // registerUser's window.
+    //
+    // Safe to hoist: seedRolesAndPermissions takes only `db` and nothing
+    // derived from the insert -- userId and anonId are both computed and used
+    // after it. This is the same pre-write-guard shape registerUser now uses.
+    await seedRolesAndPermissions(db);
+
     const result = await users.insertOne(adminUser);
     const userId = result.insertedId.toString();
     const anonId = generateAnonId(userId);
 
-    // #421: bootstrap runs on an empty DB, so the RBAC catalog (#420) may
-    // not be seeded yet — ensure it before granting the assignment.
-    await seedRolesAndPermissions(db);
     await grantRoleForAccessType(db, {
       userAccountId: userId,
       accessType: ADMIN_ACCESS_TYPE,

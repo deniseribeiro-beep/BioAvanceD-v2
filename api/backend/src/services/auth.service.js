@@ -9,7 +9,7 @@ const LogModel = require('../models/Log');
 const logger = require('../utils/logger');
 const sessionService = require('./session.service');
 const passwordService = require('./password.service');
-const { grantRoleForAccessType, isAdministrator, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
+const { grantRoleForAccessType, assertGrantPreconditions, isAdministrator, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
 const notificationDispatchService = require('./notificationDispatch.service');
 
 // #952 / RF001 AC#2: "Bloquear temporariamente a conta apos o limite configurado
@@ -252,11 +252,34 @@ class AuthService {
         // Se mfaEnabled foi setado como true, mantém (será configurado no primeiro login se necessário)
       }
 
+      // #1028: widens #435's pre-write guard to the OTHER two throw sites
+      // reachable from grantRoleForAccessType below. #435 closed the
+      // accessType trigger; an unseeded RBAC catalogue and an unknown
+      // organizationId were still reachable AFTER the insert, and the
+      // organizationId one is reachable by an UNAUTHENTICATED caller --
+      // auth.routes.js registers POST /register with no `authenticate`, and
+      // #1037's rejectCallerSuppliedPrivilege inspects only accessType and
+      // roleName, so a bogus organizationId passes straight through.
+      //
+      // Fail-fast, not atomic: only compose.test.yml runs a replica set, so a
+      // transaction here would break user creation on dev and prod while the
+      // gate stayed green (#923).
+      await assertGrantPreconditions(db, {
+        accessType: resolvedAccessType,
+        organizationId: user.organizationId ?? null,
+      });
+
       const result = await usersCollection.insertOne(user);
 
-      // #421: grants the UserRoleAssignment matching accessType atomically
-      // with user creation — no dual-write window where a user exists
-      // without a corresponding assignment.
+      // #421/#1028: grants the UserRoleAssignment matching accessType. This
+      // is NOT atomic with the insert above and never was -- the previous
+      // wording here claimed it was, which is exactly the kind of comment a
+      // later change gets made in reliance on. There is no transaction and no
+      // rollback; what closes the window is the pre-write guard above, which
+      // rejects every trigger this grant can throw on BEFORE the insert runs.
+      // Note the anonId updateOne below is a third unsessioned write, so a
+      // method-wide compensating delete would be wrong here even if one were
+      // added.
       await grantRoleForAccessType(db, {
         userAccountId: result.insertedId.toString(),
         accessType: resolvedAccessType,

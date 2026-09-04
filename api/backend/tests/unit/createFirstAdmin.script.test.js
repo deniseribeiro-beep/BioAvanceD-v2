@@ -36,6 +36,37 @@ function createMockDb(usersCount = 0) {
   };
 }
 
+// #1028: a db whose `roles` collection rejects every write, so
+// seedRolesAndPermissions fails. Used to pin that the seed now runs BEFORE
+// insertOne -- see the ordering test at the bottom of this file.
+function createMockDbWithFailingSeed() {
+  const parts = createMockDb(0);
+  // `then` must stay undefined: `getCollection` awaits the collection object,
+  // and a Proxy that answers every property with a function makes it look
+  // THENABLE -- await then calls it as (resolve, reject), it returns a
+  // rejected promise instead of calling reject, and the await never settles.
+  // That is a 5000ms timeout, not a rejection, and it cost a debug cycle here.
+  const failing = new Proxy({}, {
+    get: (_target, prop) => (
+      typeof prop === 'symbol' || prop === 'then'
+        ? undefined
+        : vi.fn().mockRejectedValue(new Error('roles collection indisponível'))
+    ),
+  });
+  return {
+    ...parts,
+    db: {
+      collection: vi.fn((name) => {
+        if (name === 'users') return parts.users;
+        if (name === 'systemBootstrap') return parts.systemBootstrap;
+        if (name === 'roles') return failing;
+        if (parts.rbacCollections[name]) return parts.rbacCollections[name];
+        throw new Error(`Unexpected collection ${name}`);
+      }),
+    },
+  };
+}
+
 const validEnv = {
   BOOTSTRAP_ADMIN_NAME: 'Primeiro Admin',
   BOOTSTRAP_ADMIN_EMAIL: 'Admin.Seguro@BioAvanceD.test',
@@ -148,6 +179,24 @@ describe('createFirstAdmin', () => {
     await expect(createFirstAdmin({ db, env, logger: { info: vi.fn() } })).rejects.toThrow();
     expect(db.collection).not.toHaveBeenCalled();
     expect(users.countDocuments).not.toHaveBeenCalled();
+  });
+
+  // #1028: the seed used to sit BETWEEN insertOne and grantRoleForAccessType,
+  // so a seed failure orphaned the admin -- and the idempotence guard above
+  // then returns `skipped/users_exist` forever, on a stack whose only user
+  // cannot authorize anything. Stuck-forever, not lower-risk.
+  //
+  // The seed needs nothing from the insert (it takes only `db`), which is what
+  // makes hoisting it safe. This pins the ordering: a failing seed must leave
+  // NO user behind.
+  it('#1028: a failing RBAC seed leaves no orphaned admin -- the seed runs before insertOne', async () => {
+    const { users, db } = createMockDbWithFailingSeed();
+
+    await expect(
+      createFirstAdmin({ db, env: validEnv, logger: { info: vi.fn() } })
+    ).rejects.toThrow(/roles collection indispon/);
+
+    expect(users.insertOne).not.toHaveBeenCalled();
   });
 });
 

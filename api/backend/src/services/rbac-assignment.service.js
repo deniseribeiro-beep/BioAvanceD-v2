@@ -148,6 +148,48 @@ async function resolveScopeForRole(db, roleDoc, organizationId) {
 }
 
 /**
+ * #1028: the pre-write half of grantRoleForAccessType's own guards, callable
+ * BEFORE a caller's insertOne.
+ *
+ * registerUser inserts the User document and THEN grants the assignment, with
+ * no transaction and no rollback, so a throw from grantRoleForAccessType
+ * leaves a User able to authenticate with every permission check returning
+ * false and nothing explaining why. #435 closed the accessType trigger by
+ * checking it before the write; this closes the other two the same way --
+ * the unseeded RBAC catalogue and an unknown organizationId.
+ *
+ * Deliberately fail-fast rather than atomic. A Mongo transaction is not
+ * available: only compose.test.yml runs a replica set, so wrapping the pair
+ * in withMongoTransaction would break user creation on dev and prod while the
+ * test gate stayed green. A compensating delete would work but is best-effort
+ * and needs the users collection threaded down here.
+ *
+ * Reuses resolveScopeForRole rather than re-implementing the rule, so this
+ * cannot drift from the grant it is guarding -- including the Administrador
+ * (hierarchyLevel 4) bypass, which is scoped `global` and therefore must NOT
+ * have its organizationId validated.
+ *
+ * Returns the roleDoc it looked up, so a caller that wants it need not repeat
+ * the query.
+ */
+async function assertGrantPreconditions(db, { accessType, organizationId = null }) {
+  const roleCode = ROLE_CODE_BY_ACCESS_TYPE[Number(accessType)];
+  if (!roleCode) {
+    throw new Error(`accessType sem roleCode correspondente: ${accessType}`);
+  }
+
+  const roles = await getCollection(db, 'roles');
+  const roleDoc = await roles.findOne({ roleCode });
+  if (!roleDoc) {
+    throw new Error(`Role não encontrado para roleCode: ${roleCode} (catálogo RBAC não semeado?)`);
+  }
+
+  await resolveScopeForRole(db, roleDoc, organizationId);
+
+  return roleDoc;
+}
+
+/**
  * Grants the legacy role matching `accessType` to `userAccountId`, upserting
  * by (userAccountId, roleId) so calling this more than once for the same
  * user/role is a no-op — required for the backfill script to be idempotent
@@ -459,6 +501,7 @@ module.exports = {
   resolveRoleDisplayName,
   findUserAccountIdsByRoleCodes,
   grantRoleForAccessType,
+  assertGrantPreconditions,
   changeUserRole,
   backfillUserRoleAssignments,
   grantAdditionalRole,
