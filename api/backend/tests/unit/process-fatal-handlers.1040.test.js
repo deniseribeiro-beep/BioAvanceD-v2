@@ -26,6 +26,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const GUARD_KEY = '__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__';
 
+// #1047: separate idempotence guard for the SIGINT/SIGTERM registrations in
+// server.js and src/workers/worker.js, mirroring the #1040 guard above.
+// Deliberately NOT one shared flag -- server.js and worker.js run in
+// different production containers and never share a process, but a vitest
+// run that requires both into the SAME process must not have whichever
+// module loads second silently skip registering its own shutdown handler
+// because the other module's flag was already set.
+const SIGNAL_GUARD_KEY_SERVER = '__BIOAVANCE_1047_SERVER_SIGNAL_HANDLERS_INSTALLED__';
+const SIGNAL_GUARD_KEY_WORKER = '__BIOAVANCE_1047_WORKER_SIGNAL_HANDLERS_INSTALLED__';
+
 const serverPath = require.resolve('../../server');
 const neo4jWorkerPath = require.resolve('../../src/workers/neo4jProjection.worker');
 const importWorkerPath = require.resolve('../../src/workers/import-worker');
@@ -274,6 +284,70 @@ describe('#1040 process-level fatal-error handlers (observability-only, still te
         }
       });
     });
+
+    // #1047 CONTROL: expected result is the SAME before and after the fix --
+    // a single require already registers exactly one SIGTERM listener, and
+    // that listener already drives gracefulShutdown through to
+    // process.exit(0). If this one is red, the test setup is wrong, not the
+    // bug reproduced.
+    it('#1047 CONTROL: a single require registers exactly one SIGTERM listener, which still drives graceful shutdown to process.exit(0)', async () => {
+      await withCleanGuard(async () => {
+        delete process[SIGNAL_GUARD_KEY_SERVER];
+        const beforeSIGTERM = process.listeners('SIGTERM').slice();
+
+        delete require.cache[serverPath];
+        require(serverPath);
+
+        const sigtermListeners = addedListeners('SIGTERM', beforeSIGTERM);
+        expect(sigtermListeners.length).toBe(1);
+
+        const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined);
+
+        sigtermListeners[0]();
+        // gracefulShutdown is async and unawaited by the listener; drain the
+        // microtask queue plus a macrotask so its try/catch settles.
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(exitSpy).toHaveBeenCalledWith(0);
+
+        for (const listener of sigtermListeners) {
+          process.removeListener('SIGTERM', listener);
+        }
+        delete process[SIGNAL_GUARD_KEY_SERVER];
+      });
+    });
+
+    // #1047 PIN: requiring server.js twice, with a require.cache delete in
+    // between, must result in exactly one SIGINT and one SIGTERM listener
+    // attributable to it -- not two. Reproduces the listener-accumulation
+    // test-hygiene defect this file's own require.cache-injection convention
+    // triggers when run repeatedly (see the file banner comment).
+    it('#1047: SIGINT/SIGTERM registration is idempotent across repeated requires -- exactly one listener each, not two', async () => {
+      await withCleanGuard(async () => {
+        delete process[SIGNAL_GUARD_KEY_SERVER];
+        const beforeSIGINT = process.listeners('SIGINT').slice();
+        const beforeSIGTERM = process.listeners('SIGTERM').slice();
+
+        delete require.cache[serverPath];
+        require(serverPath);
+        delete require.cache[serverPath];
+        require(serverPath);
+
+        const sigintListeners = addedListeners('SIGINT', beforeSIGINT);
+        const sigtermListeners = addedListeners('SIGTERM', beforeSIGTERM);
+        expect(sigintListeners.length).toBe(1);
+        expect(sigtermListeners.length).toBe(1);
+
+        for (const listener of sigintListeners) {
+          process.removeListener('SIGINT', listener);
+        }
+        for (const listener of sigtermListeners) {
+          process.removeListener('SIGTERM', listener);
+        }
+        delete process[SIGNAL_GUARD_KEY_SERVER];
+      });
+    });
   });
 
   describe('src/workers/worker.js', () => {
@@ -374,6 +448,64 @@ describe('#1040 process-level fatal-error handlers (observability-only, still te
         for (const listener of addedListeners('SIGTERM', beforeSIGTERM)) {
           process.removeListener('SIGTERM', listener);
         }
+      });
+    });
+
+    // #1047 CONTROL: expected result is the SAME before and after the fix --
+    // a single load already registers exactly one SIGTERM listener, and that
+    // listener already calls closeWorker() then process.exit(0). If this one
+    // is red, the test setup is wrong, not the bug reproduced.
+    it('#1047 CONTROL: a single load registers exactly one SIGTERM listener, which still calls closeWorker() then process.exit(0)', async () => {
+      await withCleanGuard(async () => {
+        delete process[SIGNAL_GUARD_KEY_WORKER];
+        const beforeSIGTERM = process.listeners('SIGTERM').slice();
+
+        await loadWorker();
+
+        const sigtermListeners = addedListeners('SIGTERM', beforeSIGTERM);
+        expect(sigtermListeners.length).toBe(1);
+
+        const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined);
+        const importWorkerStub = require(importWorkerPath);
+
+        await sigtermListeners[0]();
+
+        expect(importWorkerStub.closeWorker).toHaveBeenCalled();
+        expect(exitSpy).toHaveBeenCalledWith(0);
+
+        for (const listener of sigtermListeners) {
+          process.removeListener('SIGTERM', listener);
+        }
+        delete process[SIGNAL_GUARD_KEY_WORKER];
+      });
+    });
+
+    // #1047 PIN: requiring worker.js twice, with a require.cache delete in
+    // between, must result in exactly one SIGINT and one SIGTERM listener
+    // attributable to it -- not two. Same listener-accumulation defect as
+    // server.js's pin above, reproduced here via loadWorker()'s own
+    // require.cache-delete-then-require pattern.
+    it('#1047: SIGINT/SIGTERM registration is idempotent across repeated loads -- exactly one listener each, not two', async () => {
+      await withCleanGuard(async () => {
+        delete process[SIGNAL_GUARD_KEY_WORKER];
+        const beforeSIGINT = process.listeners('SIGINT').slice();
+        const beforeSIGTERM = process.listeners('SIGTERM').slice();
+
+        await loadWorker();
+        await loadWorker();
+
+        const sigintListeners = addedListeners('SIGINT', beforeSIGINT);
+        const sigtermListeners = addedListeners('SIGTERM', beforeSIGTERM);
+        expect(sigintListeners.length).toBe(1);
+        expect(sigtermListeners.length).toBe(1);
+
+        for (const listener of sigintListeners) {
+          process.removeListener('SIGINT', listener);
+        }
+        for (const listener of sigtermListeners) {
+          process.removeListener('SIGTERM', listener);
+        }
+        delete process[SIGNAL_GUARD_KEY_WORKER];
       });
     });
   });

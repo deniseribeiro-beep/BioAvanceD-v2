@@ -303,12 +303,25 @@ async function gracefulShutdown(signal) {
   }
 }
 
-process.on('SIGINT', () => {
-  void gracefulShutdown('SIGINT');
-});
+// #1047: guarded on `process`, not on this module, for the same reason as
+// the #1040 pair above -- this file is deleted from require.cache and
+// re-required repeatedly within a single vitest process (see
+// tests/unit/process-fatal-handlers.1040.test.js), and without a guard each
+// reload adds another SIGINT/SIGTERM listener on the one real `process`
+// object underneath every reload. Production never sees the duplication
+// this guards against (server.js and src/workers/worker.js run in separate
+// containers and never share a process) -- this is a test-hygiene guard,
+// not a production double-registration fix.
+if (!process.__BIOAVANCE_1047_SERVER_SIGNAL_HANDLERS_INSTALLED__) {
+  process.__BIOAVANCE_1047_SERVER_SIGNAL_HANDLERS_INSTALLED__ = true;
 
-process.on('SIGTERM', () => {
-  void gracefulShutdown('SIGTERM');
-});
+  process.on('SIGINT', () => {
+    void gracefulShutdown('SIGINT');
+  });
+
+  process.on('SIGTERM', () => {
+    void gracefulShutdown('SIGTERM');
+  });
+}
 
 module.exports = { app, startServer };

@@ -135,18 +135,32 @@ async function startWorker() {
 // Inicializa worker
 startWorker();
 
-// Trata encerramento gracioso
-process.on('SIGTERM', async () => {
-  logger.info('[INFO] SIGTERM recebido, encerrando worker...');
-  const { closeWorker } = require('./import-worker');
-  await closeWorker();
-  process.exit(0);
-});
+// #1047: guarded on `process`, not on this module, for the same reason as
+// the #1040 pair above -- this file is deleted from require.cache and
+// re-required repeatedly within a single vitest process (see
+// tests/unit/process-fatal-handlers.1040.test.js and
+// tests/unit/worker.entrypoint.test.js), and without a guard each reload
+// adds another SIGINT/SIGTERM listener on the one real `process` object
+// underneath every reload. Production never sees the duplication this
+// guards against (server.js and this file run in separate containers and
+// never share a process) -- this is a test-hygiene guard, not a production
+// double-registration fix.
+if (!process.__BIOAVANCE_1047_WORKER_SIGNAL_HANDLERS_INSTALLED__) {
+  process.__BIOAVANCE_1047_WORKER_SIGNAL_HANDLERS_INSTALLED__ = true;
 
-process.on('SIGINT', async () => {
-  logger.info('[INFO] SIGINT recebido, encerrando worker...');
-  const { closeWorker } = require('./import-worker');
-  await closeWorker();
-  process.exit(0);
-});
+  // Trata encerramento gracioso
+  process.on('SIGTERM', async () => {
+    logger.info('[INFO] SIGTERM recebido, encerrando worker...');
+    const { closeWorker } = require('./import-worker');
+    await closeWorker();
+    process.exit(0);
+  });
+
+  process.on('SIGINT', async () => {
+    logger.info('[INFO] SIGINT recebido, encerrando worker...');
+    const { closeWorker } = require('./import-worker');
+    await closeWorker();
+    process.exit(0);
+  });
+}
 
