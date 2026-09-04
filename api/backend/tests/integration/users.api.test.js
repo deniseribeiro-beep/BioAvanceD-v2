@@ -474,6 +474,14 @@ describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () =
     const rows = auditRowsFor('admin-target-1');
     expect(rows).toHaveLength(1);
     expect(rows[0].payload).toMatchObject({ operation: 'unlock', enrolmentPreserved: true });
+    // #1042: pins the `secondFactorActive: true` at the unlock call site.
+    // It was behaviour-preserving when #1033 introduced it -- unlock graded
+    // 'info' before and after -- so NOTHING was pinning it. Deleting that one
+    // property (plausible in a refactor: it reads as redundant beside
+    // `enrolmentPreserved: true`) silently regraded every MFA unlock as
+    // 'critical'. This assertion is what goes red if it disappears.
+    expect(rows[0].severity).toBe('info');
+    expect(rows[0].payload).toMatchObject({ secondFactorActive: true });
   });
 
   it('the FULL RESET branch writes a row naming the reset and the removed enrolment', async () => {
@@ -489,6 +497,13 @@ describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () =
     const rows = auditRowsFor('tecnico-target-1');
     expect(rows).toHaveLength(1);
     expect(rows[0].payload).toMatchObject({ operation: 'reset', enrolmentPreserved: false });
+    // #1042: same gap as the unlock pin above -- reset graded 'critical'
+    // before and after #1033, so its flag was unpinned too. Note this one
+    // would NOT catch a deletion (undefined and false both yield 'critical');
+    // it pins the intent, and the type guard in writeMfaResetAudit is what
+    // catches the omission.
+    expect(rows[0].severity).toBe('critical');
+    expect(rows[0].payload).toMatchObject({ secondFactorActive: false });
   });
 
   // CONTROL: unchanged by this fix, must be GREEN before and after (#695).
@@ -657,5 +672,48 @@ describe('disable-mfa and force-password-reset write their own distinguishable a
     // The fix itself:
     expect(rows[0].severity).toBe('critical');
     expect(rows[0].payload).toMatchObject({ secondFactorActive: false, enrolmentPreserved: true });
+  });
+
+  // #1042: the two pins above catch a DELETED flag at an existing call site.
+  // They cannot catch a NEW call site that never passes it -- that is a
+  // different failure class and it is what this guard is for. The guard runs
+  // before auditLogger is even required, so no db/req fixture is needed.
+  describe('#1042: writeMfaResetAudit refuses a non-boolean secondFactorActive', () => {
+    const { writeMfaResetAudit } = require('../../src/interface/routes/user.routes');
+
+    const basePayload = {
+      operation: 'unlock',
+      enrolmentPreserved: true,
+      fieldsCleared: ['mfaFailedAttempts', 'mfaLocked'],
+      sessionsRevoked: false,
+      message: 'irrelevante para o guard'
+    };
+
+    it('throws when the flag is OMITTED, rather than grading the row critical', async () => {
+      await expect(
+        writeMfaResetAudit({}, {}, { _id: 'guard-target' }, { ...basePayload })
+      ).rejects.toThrow(/secondFactorActive/);
+    });
+
+    it('throws when the flag is present but not a boolean', async () => {
+      await expect(
+        writeMfaResetAudit({}, {}, { _id: 'guard-target' }, { ...basePayload, secondFactorActive: 'true' })
+      ).rejects.toThrow(/secondFactorActive/);
+    });
+
+    it('CONTROL: passes the guard for both boolean values, so the guard is about the TYPE and not the value', async () => {
+      // Reaching past the guard means auditLogger.log is attempted with these
+      // empty fixtures, which is expected to fail for its OWN reasons. What is
+      // being asserted is only that the failure is no longer the guard's.
+      for (const secondFactorActive of [true, false]) {
+        let thrown = null;
+        try {
+          await writeMfaResetAudit({}, {}, { _id: 'guard-target' }, { ...basePayload, secondFactorActive });
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown?.message ?? '').not.toMatch(/secondFactorActive/);
+      }
+    });
   });
 });

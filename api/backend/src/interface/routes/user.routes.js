@@ -29,6 +29,28 @@ const { buildUserFilterById } = require('../../utils/userFilter');
 // Uma função única e não dois blocos copiados: o par SÓ tem valor se os dois
 // lados usarem o mesmo formato, e duas cópias divergem em silêncio.
 async function writeMfaResetAudit(db, req, targetUser, { operation, enrolmentPreserved, secondFactorActive, fieldsCleared, sessionsRevoked, message }) {
+  // #1042: `undefined` e falsy, entao OMITIR a flag nao falha -- a operacao
+  // inteira e regravada como 'critical' em silencio. Dois dos tres call sites
+  // sao behaviour-preserving por construcao (unlock e reset produzem a mesma
+  // severidade antes e depois de #1033), entao nada os prendia: apagar
+  // `secondFactorActive: true` do ramo unlock -- plausivel num refactor, ja
+  // que parece redundante ao lado de `enrolmentPreserved: true` -- passava a
+  // gravar todo desbloqueio de MFA como 'critical', ao lado de destruicao
+  // real de segundo fator, num campo que LogsPage.tsx oferece como filtro.
+  //
+  // Falha alto em vez de regravar errado. O guard so e alcancavel por uma
+  // EDICAO de codigo (os tres call sites passam literais booleanos), que e
+  // exatamente quando se quer saber -- e recusar a escrita seria pior: perder
+  // a linha de auditoria de uma operacao de seguranca e um dano maior que
+  // grava-la com a severidade errada.
+  if (typeof secondFactorActive !== 'boolean') {
+    throw new Error(
+      'writeMfaResetAudit: secondFactorActive e obrigatorio e deve ser boolean '
+      + `(recebido: ${typeof secondFactorActive}). Sem ele a severidade cai `
+      + 'silenciosamente para "critical" -- ver #1042.'
+    );
+  }
+
   const auditLogger = require('../../utils/auditLogger');
   auditLogger.init(db);
   await auditLogger.log({
@@ -1308,4 +1330,10 @@ router.post('/:id/disable-mfa', authenticate, requirePermission('disableMFA', 'U
 });
 
 module.exports = router;
+// #1042: exposto para teste. `module.exports` E o router, entao isto apenas
+// pendura uma propriedade nele -- `app.js:412` continua recebendo o router e
+// `app.use` ignora propriedades extras. O guard de tipo acima so e alcancavel
+// chamando a funcao diretamente, ja que todos os call sites internos passam
+// literais.
+module.exports.writeMfaResetAudit = writeMfaResetAudit;
 
