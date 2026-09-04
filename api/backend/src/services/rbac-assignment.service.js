@@ -71,6 +71,27 @@ async function isAdministrator(db, userAccountId) {
   return roleCodes.includes('administrator');
 }
 
+/**
+ * #1056: who may read the RNF009 audit trail (the `logs` collection).
+ *
+ * This lived only inside logs.routes.js's requireAuditReader middleware,
+ * while reports.routes.js reached the same collection through
+ * handleAccessLogs behind `viewReports` alone -- which is UsuarioExterno's
+ * entire permission set. Two routers, one collection, opposite answers.
+ * Hoisted here so there is one definition and the two cannot drift: the
+ * middleware keeps its own HTTP shaping, reports.routes.js applies it by
+ * `handlerKey` inside buildPreviewData.
+ *
+ * Deliberately the same admission rule the middleware already had (#426,
+ * #429) -- administrator, or a real `auditor` roleCode -- not a widened or
+ * narrowed one. Broadening it is a separate decision and does not belong in
+ * a fix whose whole point is that the two surfaces should agree.
+ */
+async function isAuditReader(db, userAccountId) {
+  const roleCodes = await getActiveRoleCodes(db, userAccountId);
+  return roleCodes.includes('administrator') || roleCodes.includes('auditor');
+}
+
 const ROLE_CODE_DISPLAY_NAME = {
   external_user: 'Usuário Externo',
   technician: 'Técnico',
@@ -498,6 +519,7 @@ module.exports = {
   userHasPermission,
   getActiveRoleCodes,
   isAdministrator,
+  isAuditReader,
   resolveRoleDisplayName,
   findUserAccountIdsByRoleCodes,
   grantRoleForAccessType,

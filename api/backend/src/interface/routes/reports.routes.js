@@ -11,7 +11,7 @@ const { SPECIMEN_TYPE_IDS, SAMPLE_ORIGIN_IDS } = require('../../config/constants
 const logger = require('../../utils/logger');
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
-const { resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
+const { resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, isAuditReader } = require('../../services/rbac-assignment.service');
 
 function normalizeReport(report) {
   return {
@@ -328,6 +328,27 @@ const SCOPED_HANDLER_KEYS = new Set([
   'extracellularNetwork',
 ]);
 
+// #1056 (RNF009): report types whose handler reads the `logs` audit trail.
+// Every route in this file is gated uniformly on `viewReports`, which is
+// UsuarioExterno's ENTIRE permission set (rbac-catalog-seed.service.js) --
+// so before this gate the lowest role in the system could export the raw
+// audit trail through GET /:type/export, while logs.routes.js, the router
+// purpose-built for that collection, admits only administrators and holders
+// of the `auditor` roleCode.
+//
+// Keyed by `handlerKey` rather than by the `:type` path parameter, for the
+// same reason SCOPED_HANDLER_KEYS above is: BOTH the `audit` and
+// `access_logs` template codes resolve to the single `accessLogs` handler,
+// so a code-keyed table would have to enumerate both and could drift as
+// codes are added. Checking inside buildPreviewData covers /:type/preview,
+// /:type/export, /:type/export/pdf and POST /generate in one place -- all
+// four already translate a thrown `statusCode === 403` into a 403 response.
+//
+// This is the GATE only. It bounds WHO may call these types, not WHAT the
+// export contains: handleAccessLogs still returns raw documents with no
+// anonymization and no column allow-list (#1050, #1058).
+const AUDIT_READER_HANDLER_KEYS = new Set(['accessLogs']);
+
 function unknownTypeResult(rawType) {
   return {
     total: 0,
@@ -364,6 +385,16 @@ async function buildPreviewData(db, rawType, filters = {}) {
   const handler = REPORT_HANDLERS[handlerKey];
   if (!handler) {
     return unknownTypeResult(rawType);
+  }
+
+  // #1056: before any handler runs, and before the organization-scope
+  // resolution below -- an audit-trail type is refused on role alone, so the
+  // refusal cannot depend on whether the caller happens to have a usable
+  // organization scope.
+  if (AUDIT_READER_HANDLER_KEYS.has(handlerKey) && !(await isAuditReader(db, filters.userAccountId))) {
+    const auditError = new Error('Apenas perfis Admin ou Auditor podem acessar trilhas de auditoria.');
+    auditError.statusCode = 403;
+    throw auditError;
   }
 
   if (SCOPED_HANDLER_KEYS.has(handlerKey)) {

@@ -7,6 +7,7 @@ const {
   backfillUserRoleAssignments,
   userHasPermission,
   getActiveRoleCodes,
+  isAuditReader,
   isAdministrator,
   findUserAccountIdsByRoleCodes,
   grantAdditionalRole,
@@ -267,6 +268,44 @@ describe('rbac-assignment.service readers (#426)', () => {
     expect(await isAdministrator(db, 'nobody')).toBe(false);
   });
 
+  // #1056: the admin-or-auditor predicate that decides who may read the
+  // RNF009 audit trail. It lived inline in logs.routes.js's requireAuditReader
+  // middleware while reports.routes.js reached the same `logs` collection
+  // behind `viewReports` alone -- UsuarioExterno's entire permission set. It is
+  // exported now so both surfaces call ONE definition and cannot drift apart
+  // again; these cases pin the admission rule itself, independent of either
+  // router's HTTP shaping.
+  it('isAuditReader admite administrador', async () => {
+    const db = buildDbWithRbac([{ userAccountId: 'admin-1', accessType: 4 }]);
+
+    expect(await isAuditReader(db, 'admin-1')).toBe(true);
+  });
+
+  it('isAuditReader admite um portador do roleCode auditor que nao e administrador', async () => {
+    const db = buildDbWithRbac([{ userAccountId: 'coord-1', accessType: 3, roleCodes: ['auditor'] }]);
+
+    expect(await isAuditReader(db, 'coord-1')).toBe(true);
+    // ...and the auditor grant is additive, not a promotion.
+    expect(await isAdministrator(db, 'coord-1')).toBe(false);
+  });
+
+  it('isAuditReader recusa tecnico, coordenador e usuario externo sem grant de auditor', async () => {
+    const db = buildDbWithRbac([
+      { userAccountId: 'ext-1', accessType: 1 },
+      { userAccountId: 'tech-1', accessType: 2 },
+      { userAccountId: 'coord-1', accessType: 3 },
+    ]);
+
+    expect(await isAuditReader(db, 'ext-1')).toBe(false);
+    expect(await isAuditReader(db, 'tech-1')).toBe(false);
+    expect(await isAuditReader(db, 'coord-1')).toBe(false);
+  });
+
+  it('isAuditReader recusa um usuario sem assignment ativa', async () => {
+    const db = buildDbWithRbac([]);
+
+    expect(await isAuditReader(db, 'nobody')).toBe(false);
+  });
   it('findUserAccountIdsByRoleCodes retorna userAccountIds com assignment ativa em qualquer dos roleCodes', async () => {
     const db = buildDbWithRbac([
       { userAccountId: 'admin-1', accessType: 4 },

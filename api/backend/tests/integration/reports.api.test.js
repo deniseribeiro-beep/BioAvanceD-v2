@@ -90,7 +90,14 @@ function buildDb(seedReports = []) {
   // already uses.
   const rbacCollections = {
     userRoleAssignments: [{ userAccountId: 'user-1', roleId: 'role-admin', assignmentStatus: 'active', validUntil: null, scopeType: 'global', scopeId: null }],
-    roles: [{ roleId: 'role-admin', hierarchyLevel: 4 }],
+    roles: [{ roleId: 'role-admin', roleCode: 'administrator', roleStatus: 'active', hierarchyLevel: 4 }],
+    // ^ #1056: roleCode/roleStatus added. This fixture only ever carried
+    // hierarchyLevel, which satisfies resolveUserOrganizationScope's
+    // level-4 'global' bypass but NOT isAdministrator, which reads
+    // roleCode. So the default caller here was an Administrador to the
+    // org resolver and a nobody to every roleCode-based check -- which is
+    // how these tests could assert an audit-trail export succeeding.
+    // The real seeded Administrador row carries both.
   };
 
   const db = {
@@ -137,7 +144,14 @@ function buildDb(seedReports = []) {
 // tests (none about org-scope) keep their prior unfiltered behavior.
 const DEFAULT_RBAC_COLLECTIONS = {
   userRoleAssignments: [{ userAccountId: 'user-1', roleId: 'role-admin', assignmentStatus: 'active', validUntil: null, scopeType: 'global', scopeId: null }],
-  roles: [{ roleId: 'role-admin', hierarchyLevel: 4 }],
+  roles: [{ roleId: 'role-admin', roleCode: 'administrator', roleStatus: 'active', hierarchyLevel: 4 }],
+    // ^ #1056: roleCode/roleStatus added. This fixture only ever carried
+    // hierarchyLevel, which satisfies resolveUserOrganizationScope's
+    // level-4 'global' bypass but NOT isAdministrator, which reads
+    // roleCode. So the default caller here was an Administrador to the
+    // org resolver and a nobody to every roleCode-based check -- which is
+    // how these tests could assert an audit-trail export succeeding.
+    // The real seeded Administrador row carries both.
 };
 
 function buildCollectionDb(collections = {}) {
@@ -739,6 +753,166 @@ describe('Reports API integration', () => {
       expect(headers).not.toContain('consentTokenCreatedAt');
       expect(headers).toContain('participantId');
       expect(response.text.split('\n')).toHaveLength(2);
+    });
+  });
+
+  // #1056: the `logs` collection is the RNF009 audit trail, and TWO routers
+  // read it. logs.routes.js gates every read behind requireAuditReader
+  // (administrator or the `auditor` roleCode). reports.routes.js reached the
+  // same collection through handleAccessLogs behind nothing but
+  // `viewReports` -- which is UsuarioExterno's ENTIRE permission set
+  // (rbac-catalog-seed.service.js), so the lowest role in the system could
+  // export the raw audit trail while the router purpose-built for that data
+  // admits only admins and auditors.
+  //
+  // The gate lives in buildPreviewData keyed by `handlerKey`, not by the
+  // `:type` path parameter, for the same reason SCOPED_HANDLER_KEYS does:
+  // BOTH the `audit` and `access_logs` template codes map to the single
+  // `accessLogs` handler, so a code-keyed table would have to list both and
+  // could drift. Keying on handlerKey makes that impossible by construction,
+  // and covers /preview, /export, /export/pdf and /generate in one place.
+  describe('#1056: relatórios de trilha de auditoria exigem Admin ou Auditor', () => {
+    function appWithDb(db) {
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.use((req, _res, next) => {
+        req.app.locals.db = db;
+        next();
+      });
+      const reportsRouter = require(modulePaths.controller);
+      testApp.use('/api/reports', reportsRouter);
+      return testApp;
+    }
+
+    // Every caller here already holds `viewReports` -- this file's
+    // requirePermission stub passes unconditionally. The variable under test
+    // is the RBAC roleCode alone, which is the whole point: `viewReports` is
+    // exactly what UsuarioExterno has and it must no longer be sufficient.
+    // The assignment is organization-scoped for everyone (hierarchyLevel 4
+    // still resolves to 'global' on its own) so that no case here can 403 on
+    // requireOrganizationScope's org-less path instead of on the audit gate.
+    // Getting this wrong is what made the first draft's non-audit CONTROL red
+    // before the fix, which would have hidden a setup failure as a real one.
+    function rbacFor(roleCode, hierarchyLevel = null) {
+      return {
+        userRoleAssignments: [{ userAccountId: 'user-1', roleId: `role-${roleCode}`, assignmentStatus: 'active', validUntil: null, scopeType: 'organization', scopeId: 'org-1' }],
+        roles: [{ roleId: `role-${roleCode}`, roleCode, roleStatus: 'active', hierarchyLevel }],
+      };
+    }
+
+    // buildCollectionDb's generic collection has no insertOne, so
+    // POST /generate would 500 on persistence rather than reaching its
+    // assertion -- a red for the wrong reason. This makes the pre-fix run
+    // return a real 201, so that case discriminates the gate and nothing else.
+    function withReportInsert(db) {
+      const inner = db.collection.bind(db);
+      return {
+        collection(name) {
+          if (name === 'reports') {
+            return { ...inner(name), insertOne: async () => ({ insertedId: 'r-1' }) };
+          }
+          return inner(name);
+        },
+      };
+    }
+
+    const AUDIT_ROWS = [{ logId: 'L-1', userName: 'alice', action: 'LOGIN', ipSource: '10.0.0.9', auditHash: 'deadbeef' }];
+
+    it('CONTROL: um administrador continua exportando access_logs', async () => {
+      const { db } = buildCollectionDb({ ...rbacFor('administrator', 4), logs: AUDIT_ROWS });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/access_logs/export');
+
+      expect(response.status).toBe(200);
+      expect(response.text).toContain('alice');
+    });
+
+    it('CONTROL: um auditor continua exportando access_logs', async () => {
+      const { db } = buildCollectionDb({ ...rbacFor('auditor'), logs: AUDIT_ROWS });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/access_logs/export');
+
+      expect(response.status).toBe(200);
+      expect(response.text).toContain('alice');
+    });
+
+    it('CONTROL: um usuário externo continua exportando um relatório NÃO-auditoria', async () => {
+      const { db } = buildCollectionDb({
+        ...rbacFor('external_user', 1),
+        equipment: [{ id: '1', name: 'Freezer A' }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/equipment/export');
+
+      expect(response.status).toBe(200);
+      expect(response.text).toContain('Freezer A');
+    });
+
+    it('usuário externo recebe 403 em GET /access_logs/export e nenhuma linha da trilha', async () => {
+      const { db } = buildCollectionDb({ ...rbacFor('external_user', 1), logs: AUDIT_ROWS });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/access_logs/export');
+
+      expect(response.status).toBe(403);
+      expect(response.text).not.toContain('alice');
+      expect(response.text).not.toContain('deadbeef');
+    });
+
+    // `audit` is the SECOND template code mapping onto the same accessLogs
+    // handler -- gating by handlerKey is what makes this case free.
+    it('usuário externo recebe 403 no código `audit`, não apenas em `access_logs`', async () => {
+      const { db } = buildCollectionDb({ ...rbacFor('external_user', 1), logs: AUDIT_ROWS });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/audit/export');
+
+      expect(response.status).toBe(403);
+      expect(response.text).not.toContain('alice');
+    });
+
+    it('técnico recebe 403 no preview da trilha de auditoria', async () => {
+      const { db } = buildCollectionDb({ ...rbacFor('technician', 2), logs: AUDIT_ROWS });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/access_logs/preview').send({ filters: {} });
+
+      expect(response.status).toBe(403);
+      expect(JSON.stringify(response.body)).not.toContain('alice');
+    });
+
+    // The PDF route returns previewData verbatim as JSON with no CSV layer,
+    // so it is the leakiest of the three and must be gated too.
+    it('coordenador recebe 403 no export/pdf da trilha de auditoria', async () => {
+      const { db } = buildCollectionDb({ ...rbacFor('coordinator', 3), logs: AUDIT_ROWS });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/audit/export/pdf');
+
+      expect(response.status).toBe(403);
+      expect(JSON.stringify(response.body)).not.toContain('alice');
+    });
+
+    it('CONTROL: POST /generate de um relatório NÃO-auditoria continua sendo persistido', async () => {
+      const { db } = buildCollectionDb({ ...rbacFor('external_user', 1), equipment: [{ id: '1', name: 'Freezer A' }] });
+      const testApp = appWithDb(withReportInsert(db));
+
+      const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'equipment' });
+
+      expect(response.status).toBe(201);
+    });
+
+    it('POST /generate não persiste a trilha de auditoria para um usuário externo', async () => {
+      const { db } = buildCollectionDb({ ...rbacFor('external_user', 1), logs: AUDIT_ROWS });
+      const testApp = appWithDb(withReportInsert(db));
+
+      const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'audit' });
+
+      expect(response.status).toBe(403);
+      expect(JSON.stringify(response.body)).not.toContain('alice');
     });
   });
 });

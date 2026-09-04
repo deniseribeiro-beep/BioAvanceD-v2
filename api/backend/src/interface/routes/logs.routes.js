@@ -4,7 +4,7 @@ const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const logService = require('../../services/log.service');
 const logger = require('../../utils/logger');
-const { isAdministrator, getActiveRoleCodes } = require('../../services/rbac-assignment.service');
+const { isAuditReader } = require('../../services/rbac-assignment.service');
 
 async function requireAuditReader(req, res, next) {
   try {
@@ -12,16 +12,14 @@ async function requireAuditReader(req, res, next) {
     if (!db) {
       return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
     }
-    const isAdmin = await isAdministrator(db, req.user?.userID);
-    if (isAdmin) return next();
 
-    // #429: a real `auditor` roleCode now exists in the RBAC catalog --
-    // the unauthenticated-source `roleName`/`role` substring fallback
-    // (#426) is retired.
-    const roleCodes = await getActiveRoleCodes(db, req.user?.userID);
-    const isAuditor = roleCodes.includes('auditor');
-
-    if (!isAuditor) {
+    // #429: a real `auditor` roleCode exists in the RBAC catalog -- the
+    // unauthenticated-source `roleName`/`role` substring fallback (#426) is
+    // retired. #1056 hoisted the admin-or-auditor predicate itself into
+    // rbac-assignment.service so reports.routes.js applies the SAME rule to
+    // the accessLogs report types; this middleware keeps only the HTTP
+    // shaping. Change the admission rule there, not here.
+    if (!(await isAuditReader(db, req.user?.userID))) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',

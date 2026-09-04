@@ -37,7 +37,14 @@ function setCachedModule(modulePath, exportsObject) {
 // org-less behavior specifically.
 const DEFAULT_RBAC_COLLECTIONS = {
   userRoleAssignments: [{ userAccountId: 'user-1', roleId: 'role-admin', assignmentStatus: 'active', validUntil: null, scopeType: 'global', scopeId: null }],
-  roles: [{ roleId: 'role-admin', hierarchyLevel: 4 }],
+  roles: [{ roleId: 'role-admin', roleCode: 'administrator', roleStatus: 'active', hierarchyLevel: 4 }],
+    // ^ #1056: roleCode/roleStatus added. This fixture only ever carried
+    // hierarchyLevel, which satisfies resolveUserOrganizationScope's
+    // level-4 'global' bypass but NOT isAdministrator, which reads
+    // roleCode. So the default caller here was an Administrador to the
+    // org resolver and a nobody to every roleCode-based check -- which is
+    // how these tests could assert an audit-trail export succeeding.
+    // The real seeded Administrador row carries both.
 };
 
 function buildCollectionDb(collections = {}) {
@@ -1274,7 +1281,12 @@ describe('reports.routes.js gaps', () => {
       const { db } = buildCollectionDb(ORG_SCOPED_RBAC);
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'audit' });
+      // #1056: `withdrawal_history` rather than `audit`. Both are absent from
+      // SCOPED_HANDLER_KEYS, which is the property this case actually needs --
+      // but the accessLogs handler is now admin-or-auditor only and this caller
+      // is a plain Coordenador. Swapping the type keeps the fixture honest
+      // instead of granting it a role it was never meant to have.
+      const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'withdrawal_history' });
 
       expect(response.status).toBe(201);
       expect(response.body.organizationIds).toEqual(['org-1']);
@@ -1284,7 +1296,8 @@ describe('reports.routes.js gaps', () => {
       const { db } = buildCollectionDb(MULTI_ORG_SCOPED_RBAC);
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'audit' });
+      // #1056: same swap, same reason as the case above.
+      const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'withdrawal_history' });
 
       expect(response.status).toBe(201);
       expect(response.body.organizationIds.sort()).toEqual(['org-1', 'org-2']);
