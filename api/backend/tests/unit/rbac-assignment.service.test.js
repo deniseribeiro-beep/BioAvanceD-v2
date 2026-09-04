@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { grantRoleForAccessType, changeUserRole, backfillUserRoleAssignments, userHasPermission, getActiveRoleCodes, isAuditReader, isAdministrator, findUserAccountIdsByRoleCodes, grantAdditionalRole, revokeAdditionalRole, updateAssignmentScope, resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, resolveOrganizationIdForCreate } = require('../../src/services/rbac-assignment.service');
+const { grantRoleForAccessType, changeUserRole, backfillUserRoleAssignments, userHasPermission, getActiveRoleCodes, isAuditReader, isAdministrator, findUserAccountIdsByRoleCodes, grantAdditionalRole, revokeAdditionalRole, updateAssignmentScope, resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, resolveOrganizationIdForCreate, assertOrganizationFieldNotReparented } = require('../../src/services/rbac-assignment.service');
 const { createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 
@@ -646,5 +646,46 @@ describe('#1071: resolveOrganizationIdForCreate', () => {
   it('throws 403 for an unassigned scope', () => {
     expect(() => resolveOrganizationIdForCreate({ scope: 'unassigned', organizationIds: [] }, 'org-b'))
       .toThrow(/Sem organiza/);
+  });
+});
+
+// #1053: the update-side twin. A create CHOOSES an organization; an update
+// MOVES a record between them, so the rule is narrower -- an organization-
+// scoped caller may re-send the value the record already has, and nothing
+// else.
+describe('#1053: assertOrganizationFieldNotReparented', () => {
+  const scoped = { scope: 'organization', organizationIds: ['org-a'] };
+
+  it('allows an absent value (the field is not being touched)', () => {
+    expect(() => assertOrganizationFieldNotReparented(scoped, 'org-a', undefined)).not.toThrow();
+  });
+
+  it('allows re-sending the value the record already has', () => {
+    expect(() => assertOrganizationFieldNotReparented(scoped, 'org-a', 'org-a')).not.toThrow();
+  });
+
+  it('refuses a move to another organization with 403', () => {
+    expect(() => assertOrganizationFieldNotReparented(scoped, 'org-a', 'org-b')).toThrow(/outra organiza/);
+    try {
+      assertOrganizationFieldNotReparented(scoped, 'org-a', 'org-b');
+    } catch (error) {
+      expect(error.statusCode).toBe(403);
+    }
+  });
+
+  it('refuses clearing the field to null', () => {
+    expect(() => assertOrganizationFieldNotReparented(scoped, 'org-a', null)).toThrow(/outra organiza/);
+  });
+
+  it('leaves a global (Administrador) caller unconstrained', () => {
+    expect(() => assertOrganizationFieldNotReparented({ scope: 'global', organizationIds: [] }, 'org-a', 'org-b')).not.toThrow();
+  });
+
+  it('compares as strings, so a numeric id matching the record is allowed', () => {
+    expect(() => assertOrganizationFieldNotReparented(scoped, 7, '7')).not.toThrow();
+  });
+
+  it('names the field in the message, so it can be reused for collectionSite', () => {
+    expect(() => assertOrganizationFieldNotReparented(scoped, 'a', 'b', 'collectionSite')).toThrow(/collectionSite/);
   });
 });

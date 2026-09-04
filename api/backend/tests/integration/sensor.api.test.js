@@ -533,3 +533,84 @@ describe('#1071: a CREATE stamps organizationId from the caller resolved scope',
     expect(sensorService.createSensor).not.toHaveBeenCalled();
   });
 });
+
+// #1053 slice A: the sensor half of the org-scope re-stamping class.
+//
+// #1029 gave the sensor PUT a fetch-404-first SOURCE check -- is this sensor
+// currently mine? It says nothing about the DESTINATION, and
+// ALLOWED_SENSOR_UPDATE_FIELDS contains 'organizationId', the very field
+// sensor.service.js scopes on. So an in-scope caller could push their own
+// sensor into another organization and out of their own reach, with the
+// source check passing cleanly on the way through.
+//
+// assertOrganizationIdResolves is not that check: it asserts the target
+// Organization EXISTS, so naming a real organization you do not belong to
+// passed it. Same distinction #1071's commit had to make on the create side.
+describe('#1053: a sensor PUT cannot re-parent the sensor to another organization', () => {
+  const IN_SCOPE = { ...FAKE_SENSOR, organizationId: 'test-org-default' };
+
+  beforeEach(() => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-tecnico-2', accessType: 2 }])
+    });
+  });
+
+  it('refuses a PUT that moves an in-scope sensor to another organization', async () => {
+    vi.spyOn(sensorService, 'getSensor').mockResolvedValue(IN_SCOPE);
+    vi.spyOn(sensorService, 'updateSensor').mockResolvedValue(IN_SCOPE);
+
+    const res = await request(app)
+      .put('/api/sensors/S-001')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ organizationId: 'other-org' });
+
+    expect(res.status).toBe(403);
+    expect(sensorService.updateSensor).not.toHaveBeenCalled();
+  });
+
+  // CONTROL: green before and after. The ordinary update path is untouched.
+  it('CONTROL: an update that does not name organizationId still succeeds', async () => {
+    vi.spyOn(sensorService, 'getSensor').mockResolvedValue(IN_SCOPE);
+    vi.spyOn(sensorService, 'updateSensor').mockResolvedValue({ ...IN_SCOPE, maintenanceStatus: 'ok' });
+
+    const res = await request(app)
+      .put('/api/sensors/S-001')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ maintenanceStatus: 'ok' });
+
+    expect(res.status).toBe(200);
+    expect(sensorService.updateSensor).toHaveBeenCalled();
+  });
+
+  // CONTROL: re-sending the sensor's OWN organizationId is a no-op, not a
+  // move, and must not be refused -- the operator UI spreads the fetched
+  // record, so this is the shape a normal edit actually sends.
+  it('CONTROL: re-sending the sensor own organizationId is allowed', async () => {
+    vi.spyOn(sensorService, 'getSensor').mockResolvedValue(IN_SCOPE);
+    vi.spyOn(sensorService, 'updateSensor').mockResolvedValue(IN_SCOPE);
+
+    const res = await request(app)
+      .put('/api/sensors/S-001')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ organizationId: 'test-org-default', maintenanceStatus: 'ok' });
+
+    expect(res.status).toBe(200);
+    expect(sensorService.updateSensor).toHaveBeenCalled();
+  });
+
+  it('CONTROL: an Administrador may still move a sensor between organizations', async () => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-move', accessType: 4 }])
+    });
+    vi.spyOn(sensorService, 'getSensor').mockResolvedValue(IN_SCOPE);
+    vi.spyOn(sensorService, 'updateSensor').mockResolvedValue({ ...IN_SCOPE, organizationId: 'other-org' });
+
+    const res = await request(app)
+      .put('/api/sensors/S-001')
+      .set('Authorization', `Bearer ${jwt.sign({ userID: 'qa-admin-move', accessType: 4, roleName: 'Administrador', name: 'QA', mfaVerified: true }, process.env.JWT_SECRET, { expiresIn: '1h' })}`)
+      .send({ organizationId: 'other-org' });
+
+    expect(res.status).toBe(200);
+    expect(sensorService.updateSensor).toHaveBeenCalled();
+  });
+});

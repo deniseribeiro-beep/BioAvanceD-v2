@@ -1,7 +1,7 @@
 const sensorService = require('../services/sensor.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
-const { isRecordInOrganizationScope, resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
+const { isRecordInOrganizationScope, resolveOrganizationIdForCreate, assertOrganizationFieldNotReparented } = require('../services/rbac-assignment.service');
 
 /**
  * Controller de Sensores
@@ -285,6 +285,14 @@ class SensorController {
         });
       }
 
+      // #1053: the source check above proves the sensor is CURRENTLY the
+      // caller's. It says nothing about the destination, and
+      // ALLOWED_SENSOR_UPDATE_FIELDS contains 'organizationId' -- the field
+      // this module scopes on -- so an in-scope caller could push their own
+      // sensor into another organization and out of their own reach.
+      // assertOrganizationIdResolves only checks the target org EXISTS.
+      assertOrganizationFieldNotReparented(req.organizationScope, existing.organizationId, req.body?.organizationId);
+
       const result = await sensorService.updateSensor(db, req.params.id, req.body);
 
       if (!result) {
@@ -316,6 +324,17 @@ class SensorController {
       });
     } catch (error) {
       logger.error('Erro ao atualizar sensor:', error.message);
+      // #1053: a refused re-parent throws statusCode:403. Mapped explicitly
+      // rather than by widening this branch to honour any error.statusCode,
+      // which would also turn sensor.service.js's 422 validation errors into
+      // 422s here -- a behaviour change outside this issue.
+      if (error.statusCode === 403) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: error.message
+        });
+      }
       // #634: organizationId lookup failures throw statusCode:404.
       if (error.statusCode === 404) {
         return res.status(404).json({

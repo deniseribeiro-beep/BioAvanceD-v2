@@ -589,7 +589,47 @@ function resolveOrganizationIdForCreate(organizationScope, requestedOrganization
   throw error;
 }
 
+/**
+ * #1053: the UPDATE-side twin of resolveOrganizationIdForCreate.
+ *
+ * #1029 made a sensor update check that the target is in the caller's scope
+ * — the SOURCE. It does not check the DESTINATION, and the module's own
+ * update allowlist contains the very field it scopes on, so an in-scope
+ * caller could set it to another organization and push their own record out
+ * of their reach. #1071's helper does not reach this: it is wired into
+ * create paths only, because on a create there is no prior owner to compare
+ * against.
+ *
+ * The rule is deliberately narrower than the create side. A create CHOOSES
+ * an organization; an update MOVES a record between them, which is a
+ * different act:
+ *
+ *   global        Administrador. May move a record — unconstrained, matching
+ *                 the create side and #637's treatment of a global scope.
+ *   organization  the incoming value must be absent, or equal to what the
+ *                 record already has. Anything else is a push-out and is
+ *                 refused with 403 rather than silently dropped, because a
+ *                 caller who asked to move a record should be told they may
+ *                 not, not told it worked.
+ *
+ * Silently stripping the field was the alternative and is worse: it makes a
+ * refused move indistinguishable from a successful no-op in the response.
+ */
+function assertOrganizationFieldNotReparented(organizationScope, existingValue, requestedValue, fieldName = 'organizationId') {
+  if (requestedValue === undefined) return;
+  if (!organizationScope || organizationScope.scope === 'global') return;
+
+  const current = existingValue === undefined || existingValue === null ? null : String(existingValue);
+  const requested = requestedValue === null || requestedValue === '' ? null : String(requestedValue);
+  if (current === requested) return;
+
+  const error = new Error(`Não é permitido alterar ${fieldName} para outra organização`);
+  error.statusCode = 403;
+  throw error;
+}
+
 module.exports = {
+  assertOrganizationFieldNotReparented,
   resolveOrganizationIdForCreate,
   ROLE_CODE_BY_ACCESS_TYPE,
   getActiveAssignments,
