@@ -6,22 +6,24 @@ const logger = require('../src/utils/logger');
 const COLLECTIONS = [
   {
     name: 'users',
-    indexes: [{ email: 1 }, { username: 1 }, { accessType: 1 }, { status: 1 }],
+    indexes: [{ status: 1 }],
     description: 'Usuarios do sistema',
   },
   {
     name: CANONICAL_COLLECTIONS.patients,
-    indexes: [{ participantId: 1 }, { patientNameNormalized: 1, birthDateKey: 1 }, { createdAt: 1 }],
+    indexes: [{ participantId: 1 }, { createdAt: 1 }],
     description: 'Pacientes canonicos',
   },
   {
     name: CANONICAL_COLLECTIONS.samples,
-    indexes: [{ specimenId: 1 }, { participantId: 1 }, { barcode: 1 }, { locationID: 1 }, { createdAt: 1 }],
+    indexes: [{ specimenId: 1 }, { participantId: 1 }, { locationID: 1 }, { createdAt: 1 }],
     description: 'Amostras canonicas',
   },
   {
+    // #983: {templateId:1} renamed to {consentTemplateId:1} -- PatientConsent.js
+    // writes consentTemplateId; nothing writes templateId. Correction, not a typo.
     name: CANONICAL_COLLECTIONS.consents,
-    indexes: [{ participantId: 1, status: 1 }, { templateId: 1 }, { createdAt: 1 }],
+    indexes: [{ participantId: 1, status: 1 }, { consentTemplateId: 1 }, { createdAt: 1 }],
     description: 'Consentimentos de pacientes',
   },
   {
@@ -30,49 +32,22 @@ const COLLECTIONS = [
     description: 'Templates de TCLE',
   },
   {
-    name: CANONICAL_COLLECTIONS.sampleMovements,
-    indexes: [{ specimenId: 1, timestamp: -1 }, { barcode: 1, timestamp: -1 }, { movementID: 1 }],
-    description: 'Ledger de movimentacoes de amostras',
-  },
-  {
-    name: CANONICAL_COLLECTIONS.biomarkerObservations,
-    indexes: [{ participantId: 1, biomarkerType: 1, collectedAt: -1 }, { idempotencyKey: 1 }],
-    description: 'Observacoes de biomarcadores',
-  },
-  {
-    name: CANONICAL_COLLECTIONS.cids,
-    indexes: [{ code: 1 }, { codigo: 1 }, { descricao: 1 }],
-    description: 'CID/terminologias clinicas',
-  },
-  {
-    name: CANONICAL_COLLECTIONS.clinicalUnits,
-    indexes: [{ unitID: 1 }, { name: 1 }, { active: 1 }],
-    description: 'Unidades clinicas',
-  },
-  {
-    name: CANONICAL_COLLECTIONS.diseaseDictionary,
-    indexes: [{ orpha_code: 1 }, { disease_category: 1 }, { active: 1 }],
-    description: 'Regras essenciais de doencas',
-  },
-  {
     name: CANONICAL_COLLECTIONS.medicationDictionary,
-    indexes: [{ atc_code: 1 }, { name: 1 }, { disease_categories: 1 }],
+    indexes: [{ name: 1 }],
     description: 'Dicionario essencial de medicamentos',
   },
   {
+    // #983: {accessType:1} renamed to {roleCode:1} -- nothing persists
+    // accessType on a role; rbac-catalog-seed.service.js upserts on
+    // {roleCode}. Correction, not a typo.
     name: 'roles',
-    indexes: [{ accessType: 1 }],
+    indexes: [{ roleCode: 1 }],
     description: 'Roles e permissoes',
   },
   {
     name: 'terminologies',
     indexes: [{ sistema: 1, code: 1 }, { label: 1 }],
     description: 'Terminologias SPREC/HPO minimas',
-  },
-  {
-    name: 'referenceSeedRuns',
-    indexes: [{ key: 1 }, { version: 1 }, { executedAt: -1 }, { checksum: 1 }],
-    description: 'Execucoes do seed essencial de referencia',
   },
   {
     name: 'sampleTypes',
@@ -95,6 +70,26 @@ const COLLECTIONS = [
     description: 'MIABIS quality descriptions',
   },
 ];
+
+// #983: six entries removed entirely -- every declaration in each duplicated
+// a key already built elsewhere in NAMED, option-bearing form, or named a
+// field no document ever carries. db.collection(name) is lazy, so an entry
+// with an empty indexes array would only log a line; removing the entry is
+// equivalent and shorter. Owners, for the next reader:
+//   - sample_movements: src/utils/sampleMovementLedger.js (ensureSampleMovementIndexes)
+//   - biomarker_observations: src/services/biomarker-observation.service.js (ensureIndexes)
+//   - cids: src/services/cid.service.js (ensureIndexes)
+//   - clinical_units: retired collection; migrateClinicalUnitOrganizations.js is the
+//     only remaining reader, and unitID never existed on ClinicalUnit.js
+//   - disease_dictionary: src/scripts/seedDiseaseValidationRules.js
+//   - referenceSeedRuns: nothing in the tree writes to this collection; run
+//     records now live on FoundationDataRun (src/models/FoundationDataRun.js)
+// Two more entries survive but with keys dropped in favor of an outside owner:
+//   - users: {email:1}/{username:1} dropped -- src/scripts/createFirstAdmin.js:45-46
+//     builds both, unique:true. {accessType:1} dropped -- no longer persisted
+//     on a user; the level is resolved per request from the role assignment.
+//   - samples: {barcode:1} dropped -- src/utils/sampleIndexes.js builds
+//     samples_barcode_unique_v1, unique with a partial filter.
 
 async function createDatabase() {
   try {
