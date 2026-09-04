@@ -43,7 +43,16 @@ Re-derive every count below rather than trusting it.
   runs). It was deferred because the native regression was still in flight and
   `docker-workflow` forbids two workloads against the machine at once.
 - **Nothing left running.** No containers started this sitting; no images
-  built.
+  built. The `bioavanced-test-*` images and named volumes are the inherited
+  persistent set — kept, and `bioavanced-test-backend-unit-runner` is what the
+  owed Docker gate needs, so that gate costs no rebuild.
+- **`api/backend/coverage/` (33MB, gitignored) is STILL KEPT, and its stated
+  purpose is still undischarged.** The previous note kept it so
+  `COVERAGE_NOTES.md`'s stale buckets could be re-derived from
+  `coverage/coverage-summary.json` (`lines.pct` per file) without re-paying
+  the ~700s coverage run. **That re-derivation did not happen this sitting
+  either.** Delete it once it does. Note the numbers in it now predate this
+  sitting's nine commits, so it is a floor rather than a current reading.
 
 ## The ten: 7 closed, 3 open
 
