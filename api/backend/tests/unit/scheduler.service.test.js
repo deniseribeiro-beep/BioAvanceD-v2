@@ -89,6 +89,27 @@ describe('scheduler.service - checkStaleTemperatureReadings', () => {
     expect(inserted.status).toBe('active');
   });
 
+  // #1062: an alert with no organizationId can never be org-scoped, and this
+  // is the SECOND writer -- the one #1062's body does not name. Its
+  // provenance differs from checkPolicyAndAlert's: this loop iterates full
+  // sensor documents, so the organization comes from the sensor itself, an
+  // admin-created record rather than per-request input.
+  it('stamps the sensor organizationId onto both alert types', async () => {
+    const db = makeDb({ sensors: [{ sensorId: 'S1', organizationId: 'org-a' }], lastReadingBySensor: {} });
+
+    await scheduler.checkStaleTemperatureReadings(db);
+
+    expect(db.__collections.alerts.insertOne.mock.calls[0][0].organizationId).toBe('org-a');
+  });
+
+  it('stamps organizationId null when the sensor carries none (no backfill)', async () => {
+    const db = makeDb({ sensors: [{ sensorId: 'S1' }], lastReadingBySensor: {} });
+
+    await scheduler.checkStaleTemperatureReadings(db);
+
+    expect(db.__collections.alerts.insertOne.mock.calls[0][0]).toHaveProperty('organizationId', null);
+  });
+
   it('does not duplicate a missing_reading alert if one is already active', async () => {
     const db = makeDb({
       sensors: [{ sensorId: 'S1' }],

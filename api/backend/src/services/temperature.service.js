@@ -97,6 +97,14 @@ class TemperatureService {
         const alertsCollection = db.collection('alerts');
         const alertInsert = await alertsCollection.insertOne({
           sensorId: temperature.sensorId || temperature.sensorID,
+          // #1062: an alert carried no organizationId at all, so
+          // GET /alerts could not be scoped by adding middleware -- the
+          // filter would have matched nothing. Stamped from the reading,
+          // whose own organizationId is server-resolved as of #1071 rather
+          // than taken from the request body. Same treatment #634/#635/#636
+          // gave Sensor, Equipment and Temperature: stamp new rows, null on
+          // anything that predates it, no backfill.
+          organizationId: temperature.organizationId || null,
           policyId: policyId,
           temperatureValue: temperature.temperatureValue,
           threshold: {
@@ -231,15 +239,29 @@ class TemperatureService {
     }
   }
 
-  async getActiveAlerts(db) {
+  async getActiveAlerts(db, filters = {}) {
     try {
       if (!db) {
         // Se o banco não está disponível, retorna array vazio
         return [];
       }
       const alertsCollection = db.collection('alerts');
+      // #1062: this was the one read in temperature.routes.js without
+      // requireOrganizationScope, and it served every organization's active
+      // alerts -- sensorId, the breaching value and the configured
+      // thresholds -- to every viewTemperature holder.
+      // Fail CLOSED on a missing scope. The sibling getTemperatureHistory
+      // guards its own filter with `if (filters.organizationScope)`, which
+      // degrades OPEN -- drop the middleware from that route and it silently
+      // serves every organization again. #1062's body names that as the
+      // module's real weakness, so this one refuses instead of widening.
+      if (!filters.organizationScope) {
+        logger.error('getActiveAlerts chamado sem organizationScope; recusando (fail-closed)');
+        return [];
+      }
+      const query = applyOrganizationScopeFilter({ status: 'active' }, filters.organizationScope, 'organizationId');
       const alerts = await alertsCollection
-        .find({ status: 'active' })
+        .find(query)
         .sort({ timestamp: -1 })
         .toArray();
 

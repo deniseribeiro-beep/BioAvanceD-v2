@@ -121,7 +121,9 @@ class TemperatureController {
         });
       }
 
-      const alerts = await temperatureService.getActiveAlerts(db);
+      // #1062: pass the caller's resolved scope, the same way getHistory,
+      // getAll, getControl and getById already do.
+      const alerts = await temperatureService.getActiveAlerts(db, { organizationScope: req.organizationScope });
 
       return res.status(200).json({
         success: true,

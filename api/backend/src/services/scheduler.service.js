@@ -76,6 +76,11 @@ async function checkStaleTemperatureReadings(db) {
     if (!lastReading) {
       const created = await ensureActiveAlert(alertsCollection, {
         sensorId,
+        // #1062: the second alert writer. This one iterates full sensor
+        // documents, so the organization comes from the sensor itself --
+        // an admin-created record rather than per-request input, which is
+        // the more trustworthy of the two provenances.
+        organizationId: sensor.organizationId || null,
         type: 'missing_reading',
         message: 'Nenhuma leitura registrada para o sensor',
         severity: 'critical',
@@ -96,6 +101,7 @@ async function checkStaleTemperatureReadings(db) {
     if (isStale) {
       const created = await ensureActiveAlert(alertsCollection, {
         sensorId,
+        organizationId: sensor.organizationId || null,
         type: 'stale_reading',
         message: `Última leitura há mais de ${staleMinutes} minutos`,
         severity: 'warning',

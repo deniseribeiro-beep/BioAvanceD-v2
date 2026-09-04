@@ -61,6 +61,10 @@ router.get('/history',
 router.get('/alerts',
   authenticate,
   requirePermission('viewTemperature'),
+  // #1062: the only read in this file that lacked it. The middleware alone
+  // was never the fix -- the alert document had no organizationId to filter
+  // on, so the schema half had to land with it.
+  requireOrganizationScope,
   temperatureController.getAlerts.bind(temperatureController)
 );
 

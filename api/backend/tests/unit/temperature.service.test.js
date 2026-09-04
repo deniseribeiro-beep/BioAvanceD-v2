@@ -413,11 +413,30 @@ describe('temperatureService.getActiveAlerts', () => {
     const find = vi.fn().mockReturnValue({ sort });
     const db = makeDb({ alerts: { find } });
 
-    const result = await temperatureService.getActiveAlerts(db);
+    // #1062: getActiveAlerts now takes the caller's resolved scope and
+    // filters on it. Called without one it fails CLOSED and returns []
+    // without querying, which is pinned separately below -- so this case
+    // supplies a scope and asserts the scoped query.
+    const result = await temperatureService.getActiveAlerts(db, {
+      organizationScope: { scope: 'organization', organizationIds: ['org-a'] },
+    });
 
-    expect(find).toHaveBeenCalledWith({ status: 'active' });
+    expect(find).toHaveBeenCalledWith({ status: 'active', organizationId: { $in: ['org-a'] } });
     expect(sort).toHaveBeenCalledWith({ timestamp: -1 });
     expect(result).toEqual(docs);
+  });
+
+  // #1062: fail-closed. A missing scope means requireOrganizationScope is
+  // not on the route; returning [] is the refusal, and it must not fall
+  // through to an unfiltered query the way this module's sibling read does.
+  it('returns [] without querying when no organizationScope is supplied (fail-closed)', async () => {
+    const find = vi.fn();
+    const db = { collection: vi.fn().mockReturnValue({ find }) };
+
+    const result = await temperatureService.getActiveAlerts(db);
+
+    expect(result).toEqual([]);
+    expect(find).not.toHaveBeenCalled();
   });
 
   it('swallows a thrown error from .find and returns []', async () => {

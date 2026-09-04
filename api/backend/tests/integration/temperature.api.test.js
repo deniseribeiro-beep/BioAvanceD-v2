@@ -254,3 +254,116 @@ describe('POST /api/temperature/reading stamps organizationId from the caller sc
     delete process.env.TELEMETRY_INGEST_SECRET;
   });
 });
+
+// #1062: GET /api/temperature/alerts was the one read in this file without
+// requireOrganizationScope, and adding the middleware alone would NOT have
+// fixed it -- the alert document carried no organizationId at all, so the
+// filter would have matched nothing and returned an empty list to every
+// non-Administrador caller forever. The stamp has to land at write time
+// first, which is what makes this a schema change rather than a middleware
+// line.
+//
+// Same treatment #634/#635/#636 gave Sensor, Equipment and Temperature:
+// stamp on new rows, no backfill.
+describe('#1062: GET /api/temperature/alerts is organization-scoped', () => {
+  const temperatureService = require('../../src/services/temperature.service');
+
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  function givenAlerts(alerts, callerOrganizationId, accessType = 2) {
+    const captured = {};
+    app.locals.db = createDbMock({
+      alerts: createCollectionMock({
+        find: vi.fn((query = {}) => {
+          captured.query = query;
+          return {
+            sort: () => ({ toArray: async () => alerts.filter((a) => {
+              const scoped = query.organizationId;
+              if (!scoped) return true;
+              return (scoped.$in || []).includes(a.organizationId);
+            }) }),
+          };
+        }),
+      }),
+      ...buildRbacCollections([{ userAccountId: 'qa-tecnico-1', accessType, organizationId: callerOrganizationId }])
+    });
+    return captured;
+  }
+
+  it('does not return another organization alerts', async () => {
+    givenAlerts([
+      { sensorId: 'SEN-A', status: 'active', organizationId: 'org-a' },
+      { sensorId: 'SEN-B', status: 'active', organizationId: 'org-b' },
+    ], 'org-a');
+
+    const res = await request(app)
+      .get('/api/temperature/alerts')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    const body = JSON.stringify(res.body);
+    expect(body).toContain('SEN-A');
+    expect(body).not.toContain('SEN-B');
+  });
+
+  it('passes the caller organization scope into the alerts query', async () => {
+    const captured = givenAlerts([{ sensorId: 'SEN-A', status: 'active', organizationId: 'org-a' }], 'org-a');
+
+    await request(app)
+      .get('/api/temperature/alerts')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(captured.query).toMatchObject({ status: 'active' });
+    expect(captured.query.organizationId).toEqual({ $in: ['org-a'] });
+  });
+
+  // CONTROL: an Administrador resolves to scope 'global' and is left
+  // unfiltered, the same bypass every other org-scoped read here gives.
+  it('CONTROL: an Administrador still sees every organization alerts', async () => {
+    givenAlerts([
+      { sensorId: 'SEN-A', status: 'active', organizationId: 'org-a' },
+      { sensorId: 'SEN-B', status: 'active', organizationId: 'org-b' },
+    ], null, 4);
+
+    const res = await request(app)
+      .get('/api/temperature/alerts')
+      .set('Authorization', `Bearer ${jwt.sign({ userID: 'qa-tecnico-1', accessType: 4, roleName: 'Administrador', name: 'QA', mfaVerified: true }, process.env.JWT_SECRET, { expiresIn: '1h' })}`);
+
+    expect(res.status).toBe(200);
+    const body = JSON.stringify(res.body);
+    expect(body).toContain('SEN-A');
+    expect(body).toContain('SEN-B');
+  });
+
+  // CONTROL: unchanged -- 401 without a token, green before and after.
+  it('CONTROL: still 401 without a token', async () => {
+    const res = await request(app).get('/api/temperature/alerts');
+    expect(res.status).toBe(401);
+  });
+});
+
+// #1062: the write half. An alert with no organizationId can never be
+// scoped, so both writers must stamp one.
+describe('#1062: an alert is stamped with the organization at write time', () => {
+  const temperatureService = require('../../src/services/temperature.service');
+
+  it('checkPolicyAndAlert stamps the reading organization onto the alert', async () => {
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert-1' });
+    const db = createDbMock({
+      policies: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ policyId: 'P-1', minThreshold: -80, maxThreshold: -60 }) }),
+      alerts: createCollectionMock({ insertOne }),
+      temperature: createCollectionMock(),
+    });
+
+    await temperatureService.checkPolicyAndAlert(db, {
+      sensorId: 'SEN-1',
+      policyId: 'P-1',
+      temperatureValue: 20,
+      organizationId: 'org-a',
+    });
+
+    expect(insertOne).toHaveBeenCalled();
+    expect(insertOne.mock.calls[0][0].organizationId).toBe('org-a');
+  });
+});
