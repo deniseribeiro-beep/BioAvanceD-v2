@@ -5,8 +5,7 @@ so treat the session as CONTINUING.** Dennis asked for "the next 10 issues,
 Docker is on." **7 of the 10 are closed.** The sitting also filed **14
 issues** and closed 2 of those, so the backlog grew rather than shrank.
 
-**Two gates are OWED and NOT yet run at the time of writing** — see "Gates"
-below. Do not read this note as a ship-ready state.
+**BOTH GATES HAVE NOW RUN AND BOTH ARE GREEN** — see "Gates" below.
 
 Re-derive every count below rather than trusting it.
 
@@ -28,31 +27,31 @@ Re-derive every count below rather than trusting it.
   `generate-env-docker-secrets.sh` runs.
 - No new npm scripts, no new dependencies.
 
-## Gates — one in flight, one NOT RUN
+## Gates — both RUN, both GREEN
 
-- **Native regression: a first pass ran GREEN-after-fix and a second is IN
-  FLIGHT at the time of writing.** `[ran it]` pass 1: **462 files / 8537
-  tests / 12 failed**, all in `sensor.controller.test.js`, fixed in
-  `8d110918`; that file is now 35/35. Pass 2 covers the three commits since.
-  **Its result is not in this note — read the run, don't assume.** Duration
-  ~600s, past the Bash tool's ceiling, so background it and grep your own
-  redirect.
-- **Docker gate: NOT RUN.** The command is
+- **Native regression — GREEN.** `[ran it]` the sanctioned three-directory
+  form: **462 files / 8544 tests / 0 failures, exit 0, 596s.** A first pass
+  earlier in the sitting found 12 failures, all in
+  `sensor.controller.test.js`, fixed in `8d110918`; this is the clean re-run
+  covering every commit since. Duration is past the Bash tool's 600s ceiling,
+  so background it and grep your own redirect.
+  - The test count moved **8466 -> 8544** against the previous sitting. The
+    78 are almost entirely this sitting's own reproductions.
+  - **The `ship-integration-branch` overlay's stale "expect 2 compliance
+    failures" claim did NOT fire**, consistent with the correction that
+    overlay already carries.
+- **Docker gate — GREEN.** `[ran it]` the exact command CI's
+  `current-state-validation` runs:
   `docker compose --env-file .env.test.example -f compose.test.yml run --rm
-  --no-deps backend-unit-runner` (exactly what CI's `current-state-validation`
-  runs). It was deferred because the native regression was still in flight and
-  `docker-workflow` forbids two workloads against the machine at once.
-- **Nothing left running.** No containers started this sitting; no images
-  built. The `bioavanced-test-*` images and named volumes are the inherited
-  persistent set — kept, and `bioavanced-test-backend-unit-runner` is what the
-  owed Docker gate needs, so that gate costs no rebuild.
-- **`api/backend/coverage/` (33MB, gitignored) is STILL KEPT, and its stated
-  purpose is still undischarged.** The previous note kept it so
-  `COVERAGE_NOTES.md`'s stale buckets could be re-derived from
-  `coverage/coverage-summary.json` (`lines.pct` per file) without re-paying
-  the ~700s coverage run. **That re-derivation did not happen this sitting
-  either.** Delete it once it does. Note the numbers in it now predate this
-  sitting's nine commits, so it is a floor rather than a current reading.
+  --no-deps backend-unit-runner` -> **exit 0, 122 tests, 108 pass, 0 fail,
+  14 skipped**, and all four chained steps ran to completion: architecture,
+  essential reference-data validation, dictionary catalog **929/929
+  (v1.3.0)**, and compliance-evidence generation.
+  - That four-step chain completing is the property #1059 restored — before
+    it, `current-state:ci` short-circuited at the first suite and the three
+    downstream steps silently never ran. It still holds.
+- **Nothing left running.** `--rm` cleaned up; `docker ps -a` is empty and the
+  tree is clean. Build cache 610.5MB, unchanged — no image was built.
 
 ## The ten: 7 closed, 3 open
 
