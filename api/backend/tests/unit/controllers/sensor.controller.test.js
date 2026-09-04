@@ -48,6 +48,14 @@ describe('sensor.controller', () => {
     createSensorMock = vi.spyOn(sensorService, 'createSensor');
     listSensorsMock = vi.spyOn(sensorService, 'listSensors');
     getSensorMock = vi.spyOn(sensorService, 'getSensor');
+    // #1029: update, delete and collectReading now FETCH the sensor before
+    // acting, so they can 404 a missing one and 403 a foreign-org one before
+    // any mutation. Every case below that is not about that fetch needs the
+    // sensor to exist; without this default they all 404. Cases that ARE about
+    // a missing sensor override it with null, which is now a more faithful
+    // arrangement than before -- the 404 comes from the fetch rather than from
+    // the mutator returning null.
+    getSensorMock.mockResolvedValue({ _id: 's1', sensorId: 's1', organizationId: 'test-org-default' });
     collectReadingMock = vi.spyOn(sensorService, 'collectReading');
     updateSensorMock = vi.spyOn(sensorService, 'updateSensor');
     deleteSensorMock = vi.spyOn(sensorService, 'deleteSensor');
@@ -441,6 +449,7 @@ describe('sensor.controller', () => {
     });
 
     it('returns 404 when the sensor does not exist', async () => {
+      getSensorMock.mockResolvedValue(null);
       updateSensorMock.mockResolvedValue(null);
       const req = createRequest({ params: { id: 's1' }, body: { name: 'x' } });
       const res = createResponse();
@@ -520,6 +529,7 @@ describe('sensor.controller', () => {
     });
 
     it('returns 404 when the sensor does not exist', async () => {
+      getSensorMock.mockResolvedValue(null);
       deleteSensorMock.mockResolvedValue(null);
       const req = createRequest({ params: { id: 's1' } });
       const res = createResponse();
