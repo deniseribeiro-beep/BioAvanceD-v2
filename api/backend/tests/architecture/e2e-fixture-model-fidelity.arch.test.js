@@ -31,7 +31,7 @@
 // with no failing test anywhere, because nothing else runs it through the
 // model.
 
-const { test } = require('node:test');
+const { test: nodeTest } = require('node:test');
 const assert = require('node:assert/strict');
 
 const fs = require('fs');
@@ -61,6 +61,39 @@ const FIXTURE = path.resolve(
   __dirname,
   '../../../../tests/e2e/helpers/seedParticipant.ts'
 );
+
+// #1059: this file is the only one under tests/architecture/ that reads a
+// file OUTSIDE api/backend -- it climbs four directories to the repo root to
+// reach tests/e2e/. That works natively and CANNOT work inside
+// backend-unit-runner, whose image is built with `context: ./api/backend`
+// (compose.test.yml) and WORKDIR /app, so the repo-root tests/e2e/ tree is
+// not in the image at all and `__dirname/../../../..` clamps at `/`.
+//
+// That is CI's own gate -- `current-state-validation` runs exactly
+// `docker compose ... run --rm --no-deps backend-unit-runner`, whose command
+// is `current-state:ci`, which starts with this suite. So all 13 tests here
+// failed ENOENT in that container while passing 122/122 natively, and
+// because `current-state:ci` chains with `&&`, the seed/dictionary/
+// compliance steps after it never ran either. Latent since f8443983
+// (2026-08-28); invisible because CI fires only on `main`, which is frozen.
+//
+// Skipping is the right answer rather than a workaround: an e2e-FIXTURE
+// fidelity guard has nothing to assert in an image that contains no e2e
+// fixtures. It stays a real guard everywhere the tree it guards exists.
+// Widening the image's build context to the repo root was the alternative
+// and costs far more than it buys.
+const FIXTURE_PRESENT = fs.existsSync(FIXTURE);
+const SKIP_REASON =
+  '#1059: repo-root tests/e2e/ is not reachable from here (expected inside ' +
+  'backend-unit-runner, whose image contains only api/backend). This guard ' +
+  'runs natively and in any context where the e2e tree is present.';
+
+// Wrapping the imported `test` rather than annotating 13 call sites keeps
+// the skip in one place, so a test added later inherits it automatically
+// instead of silently reintroducing the failure.
+const test = FIXTURE_PRESENT
+  ? nodeTest
+  : (name, fn) => nodeTest(name, { skip: SKIP_REASON }, fn);
 
 // Balanced-brace capture from the opening `{` of the insertOne argument.
 // A regex cannot do this: the literal contains a template string and nested
