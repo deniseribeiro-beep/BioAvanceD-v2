@@ -50,8 +50,14 @@ Re-derive every count below rather than trusting it.
     catalog **929/929 (v1.3.0)**, compliance evidence generated. So the
     branch's own work has a green Docker signal; only the pre-existing
     arch test is red.
-- **Nothing left running.** No containers (`--rm`), tree clean. Images and
-  named volumes are the usual persistent set — not cleaned, deliberately.
+- **Nothing left running.** No containers (`--rm`), tree clean. Build cache
+  pruned (`-af`, 610.5MB). Images and named volumes are the usual persistent
+  set — kept deliberately; the rebuilt `bioavanced-test-backend-unit-runner`
+  image is what #1059 needs, so re-running that gate costs no rebuild.
+- **`api/backend/coverage/` (33MB, gitignored) is KEPT on purpose.** It holds
+  this sitting's full reconcile, so `COVERAGE_NOTES.md`'s stale buckets can be
+  re-derived from `coverage/coverage-summary.json` (`lines.pct` per file)
+  **without paying the 703s run again**. Delete it once that is done.
 
 ## Closed (7)
 
