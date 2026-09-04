@@ -624,11 +624,17 @@ describe('Reports API integration', () => {
       });
     });
 
-    it('export CSV: gera linhas reais quando há dados em uma das coleções conhecidas', async () => {
+    // #1061: this asserted `lines[0] === 'id,name'` -- the header derived
+    // from Object.keys(rows[0]) -- against a two-field fixture carrying
+    // neither of Equipment's canonical identifiers. It was a genuine pin
+    // of the defect, so it is un-weakened rather than deleted: the header
+    // is now the declared EXPORT_CATALOG.equipment column list, and the
+    // fixture uses real Equipment fields so the row means something.
+    it('export CSV: gera linhas reais com as colunas declaradas para o handlerKey', async () => {
       const { db } = buildCollectionDb({
         equipment: [
-          { id: '1', name: 'Freezer A' },
-          { id: '2', name: 'Freezer B' },
+          { equipmentID: 'EQ-1', equipmentDescription: 'Freezer -80', name: 'Freezer A', status: 'active' },
+          { equipmentID: 'EQ-2', equipmentDescription: 'Freezer -20', name: 'Freezer B', status: 'maintenance' },
         ],
       });
       const testApp = appWithDb(db);
@@ -637,9 +643,9 @@ describe('Reports API integration', () => {
 
       expect(response.status).toBe(200);
       const lines = response.text.split('\n');
-      expect(lines[0]).toBe('id,name');
+      expect(lines[0]).toBe('equipmentID,equipmentDescription,name,model,serialNumber,type,status,purchaseDate,createdAt');
       expect(lines).toHaveLength(3);
-      expect(lines[1]).toBe('"1","Freezer A"');
+      expect(lines[1]).toBe('"EQ-1","Freezer -80","Freezer A","","","","active","",""');
     });
   });
 
@@ -913,6 +919,216 @@ describe('Reports API integration', () => {
 
       expect(response.status).toBe(403);
       expect(JSON.stringify(response.body)).not.toContain('alice');
+    });
+  });
+
+  // #1058 / #1061 / #1050 piece 2. One change, three issues, and they cannot
+  // be separated: #1058 alone (adding the missing row keys) would make three
+  // currently-empty exports start emitting RAW Mongo documents, including
+  // sample_movements' ipAddress/userAgent/hash. So the column allow-list has
+  // to land in the same commit that makes those exports produce anything.
+  //
+  // RNF007 AC#4 (Crítica) is the mandate: "Logs, relatórios e exportações
+  // omitem ou pseudonimizam identificadores diretos por padrão" -- deny by
+  // default. RF008 AC#6 ("sem depender de uma lista fixa") is why the catalog
+  // keys on handlerKey (12 handler functions) rather than on the template
+  // code (14 rows, two colliding onto one handler): a new ReportTemplate
+  // pointing at an existing handler inherits its columns with no code change.
+  // The guard that makes EXPORT_CATALOG's deny-by-default safe. A
+  // handlerKey with no catalog entry exports nothing, which is the right
+  // posture for a leak but is exactly #1058's own symptom -- a silently
+  // empty export -- if someone adds a handler and forgets the entry. This
+  // walks every SYSTEM_REPORT_TEMPLATES code, seeds one document in the
+  // collection its handler reads, and asserts the export is not the
+  // no-data fallback. It fails for a missing entry, a wrong rowKey, and a
+  // renamed handler return key -- the three ways #1058 happened.
+  describe('#1058: every seeded report type exports rows when its collection has data', () => {
+    const SEEDS = {
+      samples_by_patient: { patients: [{ participantId: 'P-1', status: 'active' }] },
+      patients: { patients: [{ participantId: 'P-1', status: 'active' }] },
+      samples: { samples: [{ specimenId: 'S-1', sampleType: 'blood' }] },
+      sample_analysis: { samples: [{ specimenId: 'S-1', barcode: 'B-1' }], results: [{ specimenId: 'S-1', resultID: 'R-1' }] },
+      temperature: { temperature: [{ logId: 'T-1', sensorId: 'SEN-1', temperatureValue: -80 }] },
+      temperature_control: { temperature: [{ logId: 'T-1', sensorId: 'SEN-1', temperatureValue: -80 }] },
+      sensors: { sensors: [{ sensorId: 'SEN-1', sensorType: 'temperature' }] },
+      equipment: { equipment: [{ equipmentID: 'EQ-1', name: 'Freezer A' }] },
+      results: { results: [{ resultID: 'R-1', specimenId: 'S-1' }] },
+      audit: { logs: [{ logId: 'L-1', action: 'LOGIN', timestamp: '2026-01-01' }] },
+      access_logs: { logs: [{ logId: 'L-1', action: 'LOGIN', timestamp: '2026-01-01' }] },
+      withdrawal_history: { sample_movements: [{ movementId: 'M-1', specimenId: 'S-1', type: 'withdrawal' }] },
+      tissue_origin_history: { samples: [{ specimenId: 'S-1', sampleType: 'tissue' }] },
+      extracellular_network: { samples: [{ specimenId: 'S-1', sampleType: 'plasma' }] },
+    };
+
+    function appWithDb(db) {
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.use((req, _res, next) => {
+        req.app.locals.db = db;
+        next();
+      });
+      const reportsRouter = require(modulePaths.controller);
+      testApp.use('/api/reports', reportsRouter);
+      return testApp;
+    }
+
+    it('covers every code SYSTEM_REPORT_TEMPLATES seeds', () => {
+      const seeded = SYSTEM_REPORT_TEMPLATES.map((entry) => entry.code).sort();
+      expect(Object.keys(SEEDS).sort()).toEqual(seeded);
+    });
+
+    it.each(Object.entries(SEEDS))('%s exports rows rather than the no-data fallback', async (code, collections) => {
+      const { db } = buildCollectionDb(collections);
+      const response = await request(appWithDb(db)).get(`/api/reports/${code}/export`);
+
+      expect(response.status).toBe(200);
+      const lines = response.text.split('\n');
+      expect(lines[0]).not.toBe('total,message');
+      expect(lines.length).toBeGreaterThan(1);
+    });
+  });
+
+  describe('#1058/#1061/#1050: CSV export is declared per handlerKey', () => {
+    function appWithDb(db) {
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.use((req, _res, next) => {
+        req.app.locals.db = db;
+        next();
+      });
+      const reportsRouter = require(modulePaths.controller);
+      testApp.use('/api/reports', reportsRouter);
+      return testApp;
+    }
+
+    it('#1058: sample_analysis exports real rows instead of "Sem dados"', async () => {
+      const { db } = buildCollectionDb({
+        samples: [{ specimenId: 'S-1', barcode: 'B-1', sampleType: 'blood', participantId: 'P-1' }],
+        results: [{ specimenId: 'S-1', resultID: 'R-1' }],
+      });
+      const response = await request(appWithDb(db)).get('/api/reports/sample_analysis/export');
+
+      expect(response.status).toBe(200);
+      const lines = response.text.split('\n');
+      expect(lines[0]).not.toBe('total,message');
+      expect(lines).toHaveLength(2);
+      expect(response.text).toContain('S-1');
+    });
+
+    it('#1058: temperature exports real rows instead of "Sem dados"', async () => {
+      const { db } = buildCollectionDb({
+        temperature: [{ logId: 'T-1', sensorId: 'SEN-1', temperatureValue: -80, temperatureUnit: 'C' }],
+      });
+      const response = await request(appWithDb(db)).get('/api/reports/temperature/export');
+
+      expect(response.status).toBe(200);
+      expect(response.text.split('\n')[0]).not.toBe('total,message');
+      expect(response.text).toContain('SEN-1');
+    });
+
+    it('#1058: withdrawal_history exports real rows instead of "Sem dados"', async () => {
+      const { db } = buildCollectionDb({
+        sample_movements: [{ movementId: 'M-1', specimenId: 'S-1', type: 'withdrawal', quantity: 2 }],
+      });
+      const response = await request(appWithDb(db)).get('/api/reports/withdrawal_history/export');
+
+      expect(response.status).toBe(200);
+      expect(response.text.split('\n')[0]).not.toBe('total,message');
+      expect(response.text).toContain('M-1');
+    });
+
+    // The sequencing hazard, pinned. sample_movements is the custody ledger:
+    // operator identity, operator network identifiers and the ledger's own
+    // integrity hashes all live on the same document as the movement.
+    it('#1050: the withdrawal export omits operator identity, network identifiers and ledger hashes', async () => {
+      const { db } = buildCollectionDb({
+        sample_movements: [{
+          movementId: 'M-1',
+          specimenId: 'S-1',
+          type: 'withdrawal',
+          quantity: 2,
+          userId: 'user-9',
+          userName: 'Alice Operator',
+          userRole: 'Tecnico',
+          responsible: 'Alice Operator',
+          ipAddress: '203.0.113.7',
+          userAgent: 'Mozilla/5.0 leaky-agent',
+          hash: 'deadbeefcafe',
+          previousHash: 'feedfacebeef',
+        }],
+      });
+      const response = await request(appWithDb(db)).get('/api/reports/withdrawal_history/export');
+
+      expect(response.status).toBe(200);
+      // CONTROL: the row is genuinely present -- otherwise the negatives below
+      // pass vacuously against the empty-data fallback, which is exactly the
+      // state this issue is fixing.
+      expect(response.text).toContain('M-1');
+
+      for (const leaked of ['Alice Operator', '203.0.113.7', 'leaky-agent', 'deadbeefcafe', 'feedfacebeef', 'user-9']) {
+        expect(response.text).not.toContain(leaked);
+      }
+      const header = response.text.split('\n')[0];
+      for (const column of ['ipAddress', 'userAgent', 'hash', 'previousHash', 'userName', 'userId', 'responsible']) {
+        expect(header).not.toContain(column);
+      }
+    });
+
+    it('#1061: a column absent from the FIRST row is still exported for later rows', async () => {
+      const { db } = buildCollectionDb({
+        samples: [
+          { specimenId: 'S-1' },
+          { specimenId: 'S-2', sampleType: 'plasma', barcode: 'B-2' },
+        ],
+      });
+      const response = await request(appWithDb(db)).get('/api/reports/samples/export');
+
+      expect(response.status).toBe(200);
+      const [header, , secondRow] = response.text.split('\n');
+      expect(header).toContain('sampleType');
+      expect(secondRow).toContain('plasma');
+      expect(secondRow).toContain('B-2');
+    });
+
+    // CONTROLS: unchanged by this fix, green before and after. A red here is
+    // the fixture, not the bug (#695).
+    it('CONTROL: an empty collection still yields the no-data fallback', async () => {
+      const { db } = buildCollectionDb({ equipment: [] });
+      const response = await request(appWithDb(db)).get('/api/reports/equipment/export');
+
+      expect(response.status).toBe(200);
+      expect(response.text.split('\n')[0]).toBe('total,message');
+    });
+
+    it('CONTROL: the patients export still omits consentToken', async () => {
+      const { db } = buildCollectionDb({
+        patients: [{ participantId: 'P-1', consentToken: 'TOKEN-SHOULD-NOT-LEAK', status: 'active' }],
+      });
+      const response = await request(appWithDb(db)).get('/api/reports/patients/export');
+
+      expect(response.status).toBe(200);
+      expect(response.text).toContain('P-1');
+      expect(response.text).not.toContain('TOKEN-SHOULD-NOT-LEAK');
+      // Exact column match, not a substring: consentTokenExpiresAt is
+      // deliberately KEPT (#1045 keeps it for the directory badge and the
+      // resend UI), and it CONTAINS the string 'consentToken'.
+      const patientHeader = response.text.split('\n')[0].split(',');
+      expect(patientHeader).not.toContain('consentToken');
+      expect(patientHeader).not.toContain('consentTokenCreatedAt');
+    });
+
+    // NOT a control -- this one only holds after the catalog lands, and
+    // it is the assertion that stops 'strip the whole consent block'
+    // masquerading as a fix. #1045 kept consentTokenExpiresAt on purpose.
+    it('#1050: the declared patient columns KEEP consentTokenExpiresAt', async () => {
+      const { db } = buildCollectionDb({
+        patients: [{ participantId: 'P-1', consentTokenExpiresAt: '2026-12-31', status: 'active' }],
+      });
+      const response = await request(appWithDb(db)).get('/api/reports/patients/export');
+
+      expect(response.status).toBe(200);
+      expect(response.text.split('\n')[0].split(',')).toContain('consentTokenExpiresAt');
+      expect(response.text).toContain('2026-12-31');
     });
   });
 });

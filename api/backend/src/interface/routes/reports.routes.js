@@ -345,8 +345,10 @@ const SCOPED_HANDLER_KEYS = new Set([
 // four already translate a thrown `statusCode === 403` into a 403 response.
 //
 // This is the GATE only. It bounds WHO may call these types, not WHAT the
-// export contains: handleAccessLogs still returns raw documents with no
-// anonymization and no column allow-list (#1050, #1058).
+// export contains. As of #1058/#1061/#1050 the CSV export IS bounded, by
+// EXPORT_CATALOG below -- but the preview, the PDF branch and the Report
+// document POST /generate persists are all still the raw handler output,
+// so this sentence still holds for three of the four surfaces.
 const AUDIT_READER_HANDLER_KEYS = new Set(['accessLogs']);
 
 function unknownTypeResult(rawType) {
@@ -905,23 +907,145 @@ const FILTER_CATALOG = {
   accessLogs: DATE_RANGE_FILTERS,
 };
 
-function toCsvRows(previewData) {
-  const collectionCandidates = [
-    previewData?.patients,
-    previewData?.samples,
-    previewData?.temperatureLogs,
-    previewData?.sensors,
-    previewData?.equipment,
-    previewData?.results,
-    previewData?.logs,
-  ];
+// #1058/#1061/#1050 piece 2: `toCsvRows` used to pick its rows by sniffing a
+// fixed list of key NAMES off the preview object, and its columns from
+// `Object.keys(rows[0])`. Both are replaced by one declaration per
+// handlerKey, for three separate defects that turned out to be one change:
+//
+//   #1058  the sniff list contained `temperatureLogs`, a key no handler has
+//          ever returned, and omitted `analysis`, `temperatures` and
+//          `withdrawals`, which three handlers DO return. Four report types
+//          exported `0,"Sem dados para exportação"` while their preview
+//          showed rows -- an artefact asserting something false.
+//   #1061  the header came from the FIRST document only, so any field absent
+//          from row 0 was dropped from EVERY row. Nine of the ten row shapes
+//          are raw Mongo documents, where field presence genuinely varies.
+//   #1050  there was no allow-list at all, so whatever reached a handler
+//          reached the file.
+//
+// They are one commit because fixing #1058 alone makes the export strictly
+// WIDER: `withdrawals` are sample_movements custody-ledger documents
+// carrying userName, ipAddress, userAgent and the ledger's own hash chain,
+// and today they are masked only by the sniff bug.
+//
+// RNF007 AC#4 (requisitos-index.md, Prioridade Crítica) is the mandate --
+// "Logs, relatórios e exportações omitem ou pseudonimizam identificadores
+// diretos POR PADRÃO" -- so the catalog is an allow-list, deny by default,
+// and a handlerKey with no entry exports nothing rather than everything.
+//
+// Keyed on `handlerKey` (12 handler functions), never on the template
+// `code` (14 rows, two of which collide onto one handler), because RF008
+// AC#6 requires "a criação de novos modelos de relatório sem depender de
+// uma lista fixa": a new ReportTemplate pointing at an existing handler
+// inherits that handler's columns with no code change. Same reasoning
+// `899bb8b9` used for #1056's gate, and the same keying `FILTER_CATALOG`
+// above uses for filters.
+//
+// A missing entry is caught at test time rather than at runtime --
+// reports.api.test.js asserts every REPORT_HANDLERS key has one -- which is
+// what makes deny-by-default safe here instead of silently reintroducing
+// #1058 for the next handler someone adds.
 
-  const rows = collectionCandidates.find((entry) => Array.isArray(entry)) || [];
+// sample, tissueOriginHistory and extracellularNetwork return the same
+// Sample shape from the same collection. Excluded deliberately:
+// `clinicalData` and `pharmacologyData` (Mixed, special-category health
+// data), and the integrity-seal internals `merkleRoot` /
+// `sealedRcsAssessmentId` / `sealedSpecimenPreanalyticsId`.
+const SAMPLE_EXPORT_COLUMNS = [
+  'specimenId', 'participantId', 'sampleType', 'sampleOrigin', 'barcode',
+  'specimenStatus', 'registeredAt', 'receivedAt', 'withdrawnAt',
+  'collectionSite', 'locationId', 'matrixType', 'quantity', 'unit',
+  'currentQuantity', 'initialQuantity', 'linkedProject', 'studyId',
+  'collectionId', 'consentStatus', 'governanceStatus', 'rcsScore',
+  'finalGrade', 'scoreBasedGrade', 'quarantineReason', 'createdAt',
+];
+
+// Deliberately identical to logs.routes.js#buildCsv's own 9-column
+// allow-list. That route is this repo's dedicated audit-trail export and is
+// gated on the same admin-or-auditor population #1056 gave this handler, so
+// exporting a NARROWER set here would close no exposure -- the same rows
+// leave through the other route -- it would only create an unrecorded
+// divergence between two exports of one collection.
+//
+// Note this means real userName and ipSource DO leave through both, which
+// dict-04's P-033 row names as an anti-pattern outright ("nomes reais em
+// exportações de log") and dict-02 P1X-0328 `actorAnonId` exists to
+// replace. That is a real finding against BOTH surfaces and is filed
+// separately rather than half-fixed here.
+const AUDIT_LOG_EXPORT_COLUMNS = [
+  'timestamp', 'userName', 'action', 'entity', 'result', 'severity',
+  'module', 'ipSource', 'message',
+];
+
+const EXPORT_CATALOG = {
+  // Patient rows: participantId is the canonical pseudonymous identifier
+  // (RNF007 AC#1). Excluded: the representative block (name/email/phone/
+  // identity document -- dict-02:790 "Nunca retornar em listagens gerais",
+  // and a CSV export is a listing), `recordNumber` (canonically
+  // recordNumberCiphertext), `email`/`phone`, the free-form clinical blobs
+  // `anamneseGeral`/`dadosEspecificos`, and the consent token pair #1045
+  // already strips upstream.
+  samplesByPatient: {
+    rowKey: 'patients',
+    columns: ['participantId', 'status', 'clinicalUnit', 'unitAcronym', 'clinicalUnitId', 'consentTemplateId', 'consentAcceptedAt', 'sampleCount', 'samplesLimited'],
+  },
+  patient: {
+    rowKey: 'patients',
+    columns: ['participantId', 'status', 'sex', 'isDeceased', 'clinicalUnit', 'unitAcronym', 'clinicalUnitId', 'consentTemplateId', 'consentAcceptedAt', 'consentTokenExpiresAt', 'studyId', 'createdAt'],
+  },
+  sample: { rowKey: 'samples', columns: SAMPLE_EXPORT_COLUMNS },
+  tissueOriginHistory: { rowKey: 'samples', columns: SAMPLE_EXPORT_COLUMNS },
+  extracellularNetwork: { rowKey: 'samples', columns: SAMPLE_EXPORT_COLUMNS },
+  // The one handler that already projects. Its seven fields ARE the
+  // allow-list; restated here so the catalog is the single place to read.
+  sampleAnalysis: {
+    rowKey: 'analysis',
+    columns: ['sampleID', 'barcode', 'sampleType', 'patientID', 'status', 'resultCount', 'hasResults'],
+  },
+  // Excluded: `operatorId` -- who took a reading is operator identity, and
+  // nothing in a temperature report needs it.
+  temperature: {
+    rowKey: 'temperatures',
+    columns: ['logId', 'timestamp', 'sensorId', 'sensorName', 'sensorType', 'locationId', 'locationName', 'facility', 'zone', 'temperatureValue', 'temperatureUnit', 'minThreshold', 'maxThreshold', 'targetTemperature', 'readingStatus', 'sensorStatus', 'batteryLevel', 'signalQuality', 'errorCode', 'dataQualityScore'],
+  },
+  // Excluded: `macAddress` -- a device network identifier, and the sensor
+  // is already identified by sensorId.
+  sensor: {
+    rowKey: 'sensors',
+    columns: ['sensorId', 'sensorType', 'sensorModel', 'maintenanceStatus', 'lastCalibration', 'nextCalibration', 'calibrationCertificate', 'locationId', 'policyId', 'createdAt'],
+  },
+  equipment: {
+    rowKey: 'equipment',
+    columns: ['equipmentID', 'equipmentDescription', 'name', 'model', 'serialNumber', 'type', 'status', 'purchaseDate', 'createdAt'],
+  },
+  // Excluded: `resultFilePath` and `filePath` (server filesystem paths --
+  // infrastructure disclosure, and useless to a report reader), and
+  // `responsibleResearcher` (a real person's name).
+  result: {
+    rowKey: 'results',
+    columns: ['resultID', 'specimenId', 'fileType', 'analysisType', 'method', 'description', 'equipmentID', 'equipmentName', 'fileSize', 'uploadedAt', 'createdAt'],
+  },
+  // The custody ledger, and the reason this whole change is one commit.
+  // Excluded: `userId`/`userName`/`userRole`/`responsible` (operator
+  // identity), `ipAddress`/`userAgent` (operator network identifiers),
+  // `hash`/`previousHash` (the ledger's own integrity chain -- publishing
+  // it weakens the tamper-evidence it exists to provide), and
+  // `observations` (free text, unbounded).
+  withdrawalHistory: {
+    rowKey: 'withdrawals',
+    columns: ['movementId', 'specimenId', 'barcode', 'type', 'quantity', 'unit', 'destination', 'purpose', 'linkedProject', 'condition', 'previousQuantity', 'newQuantity', 'previousState', 'newState', 'createdAt'],
+  },
+  accessLogs: { rowKey: 'logs', columns: AUDIT_LOG_EXPORT_COLUMNS },
+};
+
+function toCsvRows(previewData, handlerKey) {
+  const entry = EXPORT_CATALOG[handlerKey];
+  const rows = entry && Array.isArray(previewData?.[entry.rowKey]) ? previewData[entry.rowKey] : [];
   if (!rows.length) {
     return 'total,message\n0,"Sem dados para exportação"';
   }
 
-  const headers = Object.keys(rows[0]);
+  const headers = entry.columns;
   const escape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
 
   const csvRows = rows.map((row) => headers.map((header) => escape(row?.[header])).join(','));
@@ -1134,7 +1258,16 @@ router.get('/:type/export', authenticate, requirePermission('viewReports'), asyn
     }
 
     const previewData = await buildPreviewData(db, req.params.type, { ...(req.query || {}), userAccountId: req.user?.userID || req.user?._id });
-    const csv = toCsvRows(previewData);
+    // #1058: the export needs the handlerKey the template resolves to,
+    // the same second lookup GET /:type/filters already does for
+    // FILTER_CATALOG -- buildPreviewData resolves it internally and
+    // throws it away, and returning it would change the preview
+    // response shape that ReportViewPage and ~20 tests depend on.
+    const exportCode = toTemplateCode(req.params.type);
+    const exportTemplate = exportCode
+      ? await db.collection('reportTemplates').findOne({ code: exportCode, templateStatus: 'active' })
+      : null;
+    const csv = toCsvRows(previewData, exportTemplate?.handlerKey);
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename=report_${Date.now()}.csv`);
