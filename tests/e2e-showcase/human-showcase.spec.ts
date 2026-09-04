@@ -1,4 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
+import { MongoClient, Db, ObjectId } from 'mongodb';
+import { randomBytes } from 'crypto';
 import { realLogin } from '../e2e/helpers/realAuth';
 import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocation, closeSeedDb, type SeededStorageBox } from '../e2e/helpers/seedParticipant';
 
@@ -448,6 +450,285 @@ test.describe('Human-paced e2e showcase reel — Wave 4 (#743)', () => {
       }
       if (seededStorageBox) {
         await cleanupStorageBoxLocation(seededStorageBox).catch(() => {});
+      }
+    }
+  });
+});
+
+// Wave 5 reel: the two surfaces that did not exist when the Wave 4 reel was
+// recorded. Both are new UI over already-proven API:
+//
+//  - RF010's bulk consent-token page (`/patients/:id/consent?token=`, #809).
+//    Until it was built, the URL every bulk invitation emails pointed at the
+//    JWT page behind ProtectedRoute -- a participant with no account hit a
+//    login wall. Proven real-backend by consent-token-page.spec.ts, whose
+//    selectors and seeding shape this segment reuses verbatim.
+//  - RNF011 AC#4 / RF029 AC#6's LGPD import surface (`/import/lgpd`, #808)
+//    and its quarantine review screen (`/import/quarantine`, #794 item 2).
+//    The requirement is "invalid imports are staged or quarantined, without
+//    silent correction"; this is the first reel where a human can watch a
+//    rejected row survive its own import.
+//
+// The import API half is proven by lgpd-sample-import.spec.ts (#759/#787),
+// which is where the MIABIS ids and the mixed-file CSV shape below come from
+// -- the page is a thin surface over that already-green path. The page itself
+// had only mocked component coverage (ImportLGPDPage.test.tsx), so this
+// segment is the first time it is driven against a real backend at all.
+//
+// Not demoed here, deliberately: ResultsPage's import-job filter (#889) is
+// new since Wave 4 too, but its UI half is a known full-suite red on this
+// stack -- a reel is the wrong place to find out which way it goes.
+test.describe('Human-paced e2e showcase reel — Wave 5', () => {
+  const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
+  const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
+
+  const TERM_TITLE = 'TCLE — Biobanco BioAvanceD (demonstração)';
+  const TERM_VERSION = '2026.09';
+  const TERM_CONTENT =
+    'Este Termo de Consentimento Livre e Esclarecido descreve a guarda das suas amostras ' +
+    'biológicas no biobanco, as finalidades de pesquisa autorizadas e o seu direito de ' +
+    'revogar este consentimento a qualquer momento, sem prejuízo ao seu atendimento.';
+
+  let client: MongoClient | null = null;
+  let db: Db;
+
+  test.beforeAll(async () => {
+    client = new MongoClient(mongoUri);
+    await client.connect();
+    db = client.db(mongoDbName);
+  });
+
+  test.afterAll(async () => {
+    if (client) {
+      await client.close();
+      client = null;
+    }
+    await closeSeedDb();
+  });
+
+  test('RF010 a participant with no account opens the emailed invitation and consents', async ({ page }) => {
+    // getActiveTemplate() takes the newest `active: true` template
+    // (consent.service.js:636, sort createdAt -1), so this is seeded inside
+    // the test rather than in beforeAll -- the Wave 4 block's
+    // createRealParticipant() seeds one of its own on every call.
+    await db.collection('consent_templates').insertOne({
+      title: TERM_TITLE,
+      content: TERM_CONTENT,
+      version: TERM_VERSION,
+      active: true,
+      permissions: [
+        { key: 'showcase-w5-research', label: 'Uso das amostras em pesquisa', required: true },
+        { key: 'showcase-w5-recontact', label: 'Novo contato para estudos futuros', required: false },
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const participantId = `W5${String(Date.now()).slice(-9)}`;
+    const consentToken = randomBytes(32).toString('hex');
+    await db.collection('patients').insertOne({
+      participantId,
+      status: 'PENDING_CONSENT',
+      consentToken,
+      consentTokenCreatedAt: new Date(),
+      consentTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+
+    try {
+      // 1. The failure mode first, same shape as the Wave 2 reel's rejected
+      //    login: a link whose id never got interpolated (#805 emailed a lot
+      //    of these) reports an incomplete link. It does NOT bounce to
+      //    /login -- that auth wall is what #809 removed, and its absence is
+      //    the point of this segment.
+      await page.goto(`/patients/undefined/consent?token=${'a'.repeat(64)}`);
+      await expect(page.getByTestId('consent-token-error')).toContainText(/incompleto/i, {
+        timeout: 15_000,
+      });
+      await expect(page).not.toHaveURL(/\/login/);
+      await beat(page, LARGE);
+
+      // 2. The real emailed link. No session, no login screen -- the
+      //    participant is not a user of the system.
+      await page.goto(`/patients/${participantId}/consent?token=${consentToken}`);
+      await expect(page.getByTestId('consent-token-title')).toContainText(TERM_TITLE, {
+        timeout: 15_000,
+      });
+      await beat(page, LARGE);
+
+      // 3. The term itself, carrying its own version -- a long beat, this is
+      //    the part a human watching the recording is meant to read.
+      await expect(page.getByTestId('consent-token-content')).toContainText(TERM_CONTENT);
+      await expect(page.getByText(`Versão ${TERM_VERSION}`)).toBeVisible();
+      await beat(page, LARGE);
+
+      await expect(page.getByTestId('consent-token-permissions')).toContainText(
+        'Uso das amostras em pesquisa'
+      );
+      await expect(page.getByTestId('consent-token-permissions')).toContainText(
+        'Novo contato para estudos futuros'
+      );
+      await beat(page, LARGE);
+
+      // 4. Consent given.
+      await page.getByTestId('consent-token-accept').click();
+      await expect(page.getByTestId('consent-token-success')).toBeVisible();
+      await beat(page, LARGE);
+
+      // Off camera: the banner is not the requirement, the persisted
+      // transition is. Same assertion set as consent-token-page.spec.ts.
+      const stored = await db.collection('patients').findOne({ participantId });
+      expect(stored?.status).toBe('ACTIVE');
+      expect(stored?.consentAcceptedAt).toBeTruthy();
+      expect(stored?.consentToken).toBeNull();
+    } finally {
+      await db.collection('patients').deleteMany({ participantId }).catch(() => {});
+      await db.collection('consent_templates').deleteMany({ title: TERM_TITLE }).catch(() => {});
+    }
+  });
+
+  test('RNF011 AC#4 an operator imports a spreadsheet and the rejected row is quarantined, not dropped', async ({ page, request }) => {
+    const testUser = process.env.TEST_USER || 'admin';
+    const testPass = process.env.TEST_PASS || 'Admin@123';
+
+    const createdParticipantIds: string[] = [];
+    let batchId: string | null = null;
+
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+
+    try {
+      // 1. Real admin login -- RF003 is fully demoed in the Wave 2 reel, this
+      //    is only enough to reach an authenticated session.
+      await page.goto('/login');
+      await expect(page.getByTestId('login-page')).toBeVisible();
+      await beat(page, MEDIUM);
+      await page.getByTestId('login-username-input').fill(testUser);
+      await beat(page, SMALL);
+      await page.getByTestId('login-password-input').fill(testPass);
+      await beat(page, SMALL);
+      await page.getByTestId('login-submit-button').click();
+      await page.waitForURL('**/system-management');
+      await expect(page.getByTestId('system-management-page')).toBeVisible();
+      await beat(page, LARGE);
+
+      // Off camera: three real participants for the spreadsheet to reference,
+      // so the uploaded file is a plausible one rather than a file every row
+      // of which would fail for the same reason.
+      const admin = await realLogin(request);
+      for (let i = 0; i < 3; i += 1) {
+        const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+        createdParticipantIds.push(participant.participantId);
+      }
+      const [firstId, secondId, badId] = createdParticipantIds;
+
+      // The MIABIS ids are the real seeded ones (foundation-bootstrap-test);
+      // the third row's sampleType is not, which is what gets it rejected.
+      // Same mixed-file shape as lgpd-sample-import.spec.ts's #787 block.
+      const csv = [
+        'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject',
+        `${firstId},PLASMA,VENOUS_BLOOD,TUBE_EDTA,5,GOOD,Coorte Wave 5 (showcase)`,
+        `${secondId},PLASMA,VENOUS_BLOOD,TUBE_EDTA,3,GOOD,Coorte Wave 5 (showcase)`,
+        `${badId},TIPO_QUE_NAO_EXISTE,VENOUS_BLOOD,TUBE_EDTA,5,GOOD,Coorte Wave 5 (showcase)`,
+      ].join('\n');
+
+      // 2. The LGPD import surface (#808) -- the only importer that
+      //    quarantines its rejected rows.
+      await page.goto('/import/lgpd');
+      await expect(page.getByRole('heading', { name: 'Importação LGPD' })).toBeVisible();
+      await beat(page, LARGE);
+
+      await page.getByTestId('import-lgpd-type').selectOption('samples');
+      await beat(page, SMALL);
+      await page.getByTestId('import-lgpd-file').setInputFiles({
+        name: 'amostras-coorte-wave5.csv',
+        mimeType: 'text/csv',
+        buffer: Buffer.from(csv, 'utf8'),
+      });
+      await beat(page, MEDIUM);
+
+      await page.getByTestId('import-lgpd-submit').click();
+
+      // 3. The partial outcome, stated as counts rather than a verdict: two
+      //    rows landed, one did not, and nothing was corrected for you.
+      await expect(page.getByTestId('import-lgpd-counts')).toHaveText(
+        '2 de 3 importadas · 1 rejeitadas',
+        { timeout: 30_000 }
+      );
+      await beat(page, MEDIUM);
+
+      await expect(page.getByTestId('import-lgpd-rejected-rows')).toContainText(badId);
+      await beat(page, LARGE);
+
+      // 4. The link that closes RNF011 AC#4's loop: the rejected row is
+      //    somewhere, and the operator can go there.
+      await expect(page.getByTestId('import-lgpd-quarantine-link')).toBeVisible();
+      await beat(page, MEDIUM);
+      await page.getByTestId('import-lgpd-quarantine-link').click();
+
+      await expect(page).toHaveURL(/\/import\/quarantine\?batchId=/);
+      batchId = new URL(page.url()).searchParams.get('batchId');
+      await expect(page.getByRole('heading', { name: 'Quarentena de importação' })).toBeVisible();
+      await beat(page, LARGE);
+
+      // 5. The batch, with the uploaded file retained beside it (#792/#806)
+      //    -- "retido" is the difference between a reviewable rejection and
+      //    a silently dropped row.
+      await expect(
+        page.getByRole('cell', { name: 'amostras-coorte-wave5.csv' })
+      ).toBeVisible({ timeout: 15_000 });
+      // Scoped to this run's own row: the quarantine listing is cumulative,
+      // and the mongodb-test-data volume carries earlier sessions' batches.
+      await expect(
+        page.getByRole('row', { name: /amostras-coorte-wave5/ })
+      ).toContainText('retido');
+      await beat(page, MEDIUM);
+
+      // The batchId query param auto-opens the row detail -- no extra click.
+      // It renders below the fold at this viewport, though, and toBeVisible()
+      // does not scroll: without this the reel asserts a payoff the viewer
+      // never sees.
+      const rejectedRows = page.getByRole('heading', { name: /Linhas rejeitadas/ });
+      await expect(rejectedRows).toBeVisible();
+      await rejectedRows.scrollIntoViewIfNeeded();
+      await beat(page, MEDIUM);
+      await expect(page.getByText(/Linha 4/)).toBeVisible({ timeout: 15_000 });
+      await beat(page, LARGE);
+    } finally {
+      // Same restore-what-the-reel-changed discipline as Waves 3 and 4: the
+      // mongodb-test-data volume is persistent, so demo rows would otherwise
+      // accumulate in the quarantine listing across every future session.
+      if (client) {
+        if (createdParticipantIds.length) {
+          await db
+            .collection('samples')
+            .deleteMany({ participantId: { $in: createdParticipantIds } })
+            .catch(() => {});
+          await db
+            .collection('patients')
+            .deleteMany({ participantId: { $in: createdParticipantIds } })
+            .catch(() => {});
+          await db
+            .collection('participantIdentities')
+            .deleteMany({ participantId: { $in: createdParticipantIds } })
+            .catch(() => {});
+        }
+        if (batchId) {
+          await db
+            .collection('import_staging_records')
+            .deleteMany({ batchId: new ObjectId(batchId) })
+            .catch(() => {});
+          await db
+            .collection('import_batches')
+            .deleteOne({ _id: new ObjectId(batchId) })
+            .catch(() => {});
+        }
       }
     }
   });
