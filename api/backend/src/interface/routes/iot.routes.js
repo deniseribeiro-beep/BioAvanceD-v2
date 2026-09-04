@@ -2,8 +2,24 @@ const express = require('express');
 const router = express.Router();
 const iotController = require('../../controllers/iot.controller');
 const { testSupportRoutesEnabled, requireTestSupportSecret } = require('../../utils/testSupportGate');
+const { requireMachineIngestSecret } = require('../../utils/machineIngestGate');
 
-router.post('/telemetry', iotController.ingestTelemetry);
+// #1063: this was the SECOND unauthenticated machine-ingest route in the repo.
+// #1054 fixed POST /api/temperature/system/reading and described it as "the only
+// route in the file with no middleware at all" -- true of that file, false of the
+// system, and this one was the other half.
+//
+// What makes it pointed rather than merely missed: the fail-closed shared-secret
+// pattern it needed was already applied a few lines below, to the *test-support*
+// routes in this same router. The diagnostic endpoints were better protected than
+// the one that writes production telemetry into InfluxDB and fires excursion
+// alerts off it.
+//
+// Same gate as #1054's, and deliberately not testSupportGate's: that one requires
+// NODE_ENV !== 'production' by design and so refuses to register in production,
+// which is exactly what a telemetry ingest path cannot do. See
+// utils/machineIngestGate.js. Fails closed when TELEMETRY_INGEST_SECRET is unset.
+router.post('/telemetry', requireMachineIngestSecret, iotController.ingestTelemetry);
 
 // Test-support only: TelemetryMonitor's cron defaults to a 5-minute
 // interval (TELEMETRY_MONITOR_CRON), too slow for e2e assertions to wait

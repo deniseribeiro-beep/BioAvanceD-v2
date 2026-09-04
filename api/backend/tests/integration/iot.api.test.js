@@ -238,6 +238,13 @@ describe('IoT API integration', () => {
     delete require.cache[modulePaths.routes];
     iotRouter = require(modulePaths.routes);
 
+    // #1063: POST /telemetry now requires a machine credential, the same
+    // fail-closed gate #1054 put on /api/temperature/system/reading. The two
+    // deep-ingest cases below are about what the controller DOES with an
+    // accepted reading, so they are given a valid secret; the gate itself is
+    // exercised by its own describe at the end of this file.
+    process.env.TELEMETRY_INGEST_SECRET = 'iot-test-secret';
+
     app = express();
     app.use(express.json());
     app.use('/api/iot', iotRouter);
@@ -251,7 +258,9 @@ describe('IoT API integration', () => {
   });
 
   it('POST /api/iot/telemetry aceita telemetria e registra incidente quando fora da faixa', async () => {
-    const response = await request(app).post('/api/iot/telemetry').send({
+    const response = await request(app).post('/api/iot/telemetry')
+      .set('x-telemetry-ingest-secret', 'iot-test-secret')
+      .send({
       sensorId: 'sensor-1',
       temperature: 12.5,
       timestamp: '2026-04-10T10:00:00.000Z',
@@ -312,7 +321,9 @@ describe('IoT API integration', () => {
     };
     mockDb.environmentalExcursionsCollection.findOne.mockResolvedValue(existingExcursion);
 
-    const response = await request(app).post('/api/iot/telemetry').send({
+    const response = await request(app).post('/api/iot/telemetry')
+      .set('x-telemetry-ingest-secret', 'iot-test-secret')
+      .send({
       sensorId: 'sensor-1',
       temperature: 9,
       timestamp: '2026-04-10T10:05:00.000Z',
@@ -375,6 +386,64 @@ describe('IoT API integration', () => {
         .post('/api/iot/telemetry-monitor/find-critical-freezers')
         .set('x-test-support-secret', 'anything');
       expect(findCriticalResponse.status).toBe(403);
+    });
+  });
+
+  // #1063: `POST /api/iot/telemetry` was the SECOND unauthenticated machine-ingest
+  // route -- #1054 named its own as "the only route in the file with no middleware",
+  // which was true of that file and false of the repo. What makes this one pointed is
+  // that the fail-closed shared-secret pattern it needed was already applied 25 lines
+  // below it, to the test-support routes in this same router.
+  describe('POST /api/iot/telemetry requires a machine credential (#1063)', () => {
+    it('refuses an anonymous reading when no ingest secret is configured', async () => {
+      delete process.env.TELEMETRY_INGEST_SECRET;
+
+      const response = await request(app).post('/api/iot/telemetry')
+        .send({ sensorId: 'sensor-1', temperature: 12.5 });
+
+      expect(response.status).toBe(403);
+      expect(saveTelemetryPoint).not.toHaveBeenCalled();
+    });
+
+    it('refuses a reading carrying no secret header when one IS configured', async () => {
+      process.env.TELEMETRY_INGEST_SECRET = 'iot-test-secret';
+
+      const response = await request(app).post('/api/iot/telemetry')
+        .send({ sensorId: 'sensor-1', temperature: 12.5 });
+
+      expect(response.status).toBe(403);
+      expect(saveTelemetryPoint).not.toHaveBeenCalled();
+    });
+
+    it('refuses a reading carrying the wrong secret', async () => {
+      process.env.TELEMETRY_INGEST_SECRET = 'iot-test-secret';
+
+      const response = await request(app).post('/api/iot/telemetry')
+        .set('x-telemetry-ingest-secret', 'wrong')
+        .send({ sensorId: 'sensor-1', temperature: 12.5 });
+
+      expect(response.status).toBe(403);
+      expect(saveTelemetryPoint).not.toHaveBeenCalled();
+    });
+
+    it('CONTROL: accepts a reading carrying the configured secret', async () => {
+      process.env.TELEMETRY_INGEST_SECRET = 'iot-test-secret';
+
+      const response = await request(app).post('/api/iot/telemetry')
+        .set('x-telemetry-ingest-secret', 'iot-test-secret')
+        .send({ sensorId: 'sensor-1', temperature: 5 });
+
+      expect(response.status).toBe(200);
+    });
+
+    it('CONTROL: a validation failure is still a 400, not swallowed by the gate', async () => {
+      process.env.TELEMETRY_INGEST_SECRET = 'iot-test-secret';
+
+      const response = await request(app).post('/api/iot/telemetry')
+        .set('x-telemetry-ingest-secret', 'iot-test-secret')
+        .send({ temperature: 5 });
+
+      expect(response.status).toBe(400);
     });
   });
 });
