@@ -1,12 +1,15 @@
 # HANDOFF
 
-**Written 2026-09-03, twelfth queue sitting. INTERIM — no end signal from
-Dennis.** He asked for "the next 10 issues, Docker is on." **4 closed, 6 still
-open with verified research posted on each, 11 issues filed.** 6 substantive
-commits pushed, plus HANDOFF rotations.
+**Written 2026-09-03, showcase-video sitting. INTERIM — no end signal from
+Dennis.** He scoped this round explicitly: *"instead of resolving issues, see
+what we can do of a human showcase e2e video with what we have thus far…
+Next session we go back to the issues."* So **nothing was resolved by design**,
+and the two product issues filed here are deliberately left open for that
+next session.
 
-**Read #1037 first. It is an unauthenticated privilege escalation and it is
-reproduced, not inferred.**
+**The previous sitting's note is superseded. Its substance still stands —
+re-read `git show aad16dab:HANDOFF.md` for the #1037/#983/#1029/#956/#941/
+#1028 research, none of which this sitting touched.**
 
 ---
 
@@ -14,128 +17,109 @@ reproduced, not inferred.**
 
 - Branch `feature/docker-e2e-backend-integration`, pushed, tree clean and
   matching origin. `main` untouched, no PR.
-- Last substantive commit: the `#1034` db.factory commit.
-- **No new npm scripts, dependencies or env keys.** No new test files; two
-  existing ones gained cases.
-- Re-derive every count below rather than trusting it.
+- One substantive commit: `1f2a5b00`, the Wave 5 showcase reel.
+- **No product source touched.** No new npm scripts, dependencies or env
+  keys. One test file changed (`tests/e2e-showcase/human-showcase.spec.ts`,
+  `+281 / -0`, append-only) plus one binary added under `docs/`.
 
 ## Docker state
 
-- **Nothing left running.** No stack was brought up this sitting.
-- The only container used was a **throwaway `docker run --rm mongo:7`** to
-  reproduce #1027 end to end, stopped and auto-removed. `[ran it]` no
-  `bioav-*` containers remain.
-- **The full Docker gate has NOT run against this sitting's four commits.**
-  All four are natively verified; none of them touches compose, e2e fixtures
-  or anything gate-shaped, so no proof is deferred — but the gate is still
-  owed before shipping.
+- **Nothing left running.** `docker compose -f compose.test.yml down` ran at
+  session end; `docker ps` is empty.
+- The stack was brought up from scratch this sitting: the 12-service core
+  recipe with `--build`, then `admin-bootstrap-test`, `foundation-bootstrap-test`
+  and all 16 `reference-data-bootstrap-*` services — every one `Exited (0)`.
+  The `mongodb-test-data` volume was **kept** (it carries the reel's own
+  quarantine history, and dropping it costs a full reseed).
+- Build cache pruned (`docker builder prune -af`, 1.048GB → 0B). Images kept.
+- **The full e2e gate did NOT run** — only the 5-test showcase config. No
+  product code changed, so nothing new is owed to the gate beyond what the
+  previous sitting already owed.
 
-## What closed (4)
+## What shipped
 
-`#1032` `#1033` `#1027` `#1034`.
+**`docs/e2e-showcase-2026-09-03.mp4`** — 46s, the two new Wave 5 segments
+concatenated. `[ran it]` the whole reel is 5/5 green against the live stack
+(Waves 2–5, `--workers=1`, 2.7 min).
+
+- **Segment 1, RF010 (#809):** a participant with no account opens the
+  emailed TCLE link, reads the term and its permissions, accepts. Opens on a
+  legacy `#805` link with an uninterpolated id reporting *"link incompleto"*
+  rather than an auth wall — that absence is the point.
+- **Segment 2, RNF011 AC#4 / RF029 AC#6 (#808, #794):** an operator uploads a
+  3-row CSV, gets *"2 de 3 importadas · 1 rejeitadas"*, and follows the
+  rejected row into quarantine to its retained batch and preserved fields.
 
 ## The judgment a query cannot carry
 
-- **`[ran it]` #1037 is real and reproduced end to end.** An unauthenticated
-  `POST /api/auth/register` with `accessType: 4` returns 201 and inserts
-  `{roleId:'role-administrator', scopeType:'global', assignmentStatus:'active'}`,
-  with `mfaEnabled:false, mfaSecret:null` on the user. The #998 hierarchy
-  floor — whose own comment describes this exact attack — sits on
-  `user.routes.js`, and `auth.routes.js:67` reaches the same service with no
-  `authenticate`, no permission gate and no floor. The frontend calls
-  `/users/register`, not this route; it appears to have no legitimate caller.
-  **Direction 4's floor (never honour a caller-supplied privilege level on an
-  unauthenticated route) is not a design question; whether the route should
-  exist at all is Denise's.**
-  **`0447cff3` ships that floor**: the public route now 403s a caller-supplied
-  `accessType`/`roleName`, failing closed rather than downgrading silently.
-  `[ran it]` the guard is route-level and `authController.register` is bound at
-  exactly ONE route, so the authenticated twin is untouched; `[ran it]`
-  `git grep "auth/register"` finds no caller anywhere outside its own test —
-  every e2e spec posts to `/api/users/register` with an admin token — so this
-  carries no Docker-gate risk. **#1037 stays OPEN** for the rest: whether the
-  route should be authenticated, deleted, or public at all, and the fact that
-  it writes no audit row.
-- **`[ran it]` #1027's abort is now measured end to end, and my own fix made
-  #983 REACHABLE for the first time.** Before: `IndexKeySpecsConflict`, exit 1,
-  **0 of 18 collections created** on any stack with an administrator. After:
-  exit 0, 18 collections, 44 of 46 indexes. So #983's drifted indexes now
-  actually get built by anyone running `npm run create-db` — its priority went
-  up, not down.
-- **`[ran it]` #941's recommended call cannot run today, for two separate
-  reasons**, both filed: `SensorMetadata` declares `sensorId`/`macAddress`
-  twice so `schema.indexes()` emits 4 specs with 2 duplicated auto-names
-  (#1039), and mongoose's index-build errors escape `try/catch` via
-  `model.emit('error')` and would crash the process on Node 22 (#1040). Its
-  load-bearing claim — `createIndexes()` does not drop — **holds**, verified
-  against mongoose 9.2.1's actual source.
-- **`[read it]` #1028's direction 1 is refuted, not merely costly.**
-  `withMongoTransaction` has no topology guard (that is a separate opt-in
-  export it never calls), and only `compose.test.yml` is a replica set — so
-  adopting it breaks user creation on dev and prod **while the gate stays
-  green**. A fourth direction (widen #435's pre-write guard) dominates.
-- **`[ran it]` #1029 is ~4x its stated size**: `requireOrganizationScope`
-  only gates org-less callers and attaches a scope; none of the five ungated
-  handlers consumes it, so middleware alone ships a false sense of security.
-  Plus `organizationId` is on the update allowlist, letting a correctly-scoped
-  caller re-stamp a sensor into another org — which no direction listed there
-  closes.
-- **`[read it]` #956's direction 2 is a two-file change whose empty path
-  re-creates the exact "realizada com sucesso: N/A°C" alert the issue is named
-  for**, because `useSensors.ts:59` unwraps with `||` and the page has no
-  absence branch. Its un-weakening set is **one** hard pin, not two.
-- **`[ran it]` The two import drifts INVERT between the two importers**
-  (#1041): #1035's *".xlsx is unaffected"* and #1023's blank-row framing are
-  both true of `import-lgpd.service.js` and **false** of
-  `batch-validation-engine.service.js`.
+- **`[ran it]` #1044 is reproduced, not inferred, and it is the reason the
+  reel never shows `/patients`.** A participant who accepts through the
+  segment-1 page is badged **"Expirado"** in the operator's directory, with
+  *"Coletar Assinatura"* still offered. Flipping only `status` on one
+  participant and re-rendering: `Pendente` → `Expirado`. Chain: accept writes
+  `status: 'ACTIVE'`; the list API returns raw `status` and no
+  `consentStatus`; `PatientsPage.tsx:67-73`'s `normalizeConsentStatus` has no
+  `ACTIVE` branch and falls through to `EXPIRED`. It is the **only** badge
+  state that path can produce.
+- **`[ran it]` #1045 is security-relevant and was filed mid-session.**
+  `GET /api/patients` and `/search` return each participant's live
+  `consentToken` — the sole credential for the *public*
+  `POST /api/e-consent/consent-tokens/accept` — and both list routes carry
+  `authenticate + requireOrganizationScope` with **no permission gate**
+  (`patient.routes.js:12,18`). Any org user at any access level can therefore
+  consent on any pending participant's behalf, via an unauthenticated call
+  that cannot name them. Composes with #823 and #832 but is distinct: those
+  are about guessing a credential, this is about handing it out.
+- **`[ran it]` `toBeVisible()` does not scroll, so a showcase segment can
+  assert a payoff the video never shows.** Segment 2's rejected-row detail
+  was green on the first run and entirely below the fold; found by extracting
+  a frame, not by any test signal. The recording viewport is **800x450**, not
+  the 1280x720 `Desktop Chrome` emulates. Filed as pack #744.
+- **`[read it]` `e2e-showcase-video`'s own overlay is three reels stale** —
+  it says "built twice", lists two committed mp4s where five exist, and names
+  a branch convention retired in #552. Its two live fixture-gap warnings
+  (BioAvanceD-v2#598, #724) are still correct and still worth reading before
+  picking showcase flows. Filed as pack #745.
+- **#889 (ResultsPage import-job filter) is new since Wave 4 and was
+  deliberately not demoed** — its UI half is a known full-suite red on this
+  stack. A reel is the wrong place to discover which way that goes.
 
 ## Conventions this sitting relied on / established
 
-- **A leaf-worker brief must not name `git stash`.** `fix-bugs` mandates it
-  for the can-it-fail probe; the leaf-worker guard refuses every git mutation.
-  Composing the two produces an instruction the worker cannot run. Pack #726.
-  Ask for a hand-edited revert/restore instead.
-- **`[ran it]` The sanctioned whole-suite regression now exceeds the Bash
-  600s ceiling** (615s) and gets auto-backgrounded — and the harness's own
-  capture held **only the summary**, no failure detail. The independent
-  redirect is what saved the run. Pack #730. Always redirect and read your own
-  file.
-- **`[ran it]` The full backend suite is 458 files / 8427 tests**, and
-  `auth-rate-limiter.test.js` consumes 79% of its 5000ms timeout on an idle
-  machine — so it reds the suite and greens when investigated alone (#1038).
-  Expect exactly that one failure and do not attribute it to your change.
-- **Verify an agent's claim before filing on it (#712).** Two of this
-  sitting's returns were partly wrong in the safe-sounding direction; both
-  were caught by re-deriving before filing.
+- **The showcase spec is append-only.** Each wave is a new `test.describe`
+  whose header comment names its RFs *and* what it deliberately does not demo
+  and why. `1f2a5b00` is `+281 / -0`. Keep that shape.
+- **One mp4 per sitting, holding only that sitting's new wave** — not a
+  re-render of the whole reel. Confirmed against `ffprobe` on the 08-25 file.
+- **A fixture value that reaches the screen is copy, not a test id.** A
+  seeded consent template following the usual `${Date.now()}` uniqueness idiom
+  rendered as *"Versão showcase-w5-1788484183443"* in the reel's most-read
+  shot; re-keyed the cleanup to the title so the version could be readable.
+- **`local-env/<project>.md` is relative to the SKILL's directory, not
+  `.claude/skills/`.** Reading it at the pack root returns a clean
+  `No such file or directory` — a confident zero indistinguishable from a
+  project that has no overlay. That miss is what cost this sitting the two
+  fixture-gap warnings above. Pack #745.
+- **Manual test-stack Playwright env** (unchanged, re-confirmed):
+  `PLAYWRIGHT_BASE_URL=http://localhost:5173`,
+  `PLAYWRIGHT_API_BASE_URL=http://localhost:3000`, `PLAYWRIGHT_SKIP_WEBSERVER=1`,
+  `TEST_USER=admin`, `TEST_PASS=Admin@123`,
+  `E2E_MONGO_URI='mongodb://localhost:27017?directConnection=true'`,
+  `E2E_MONGO_DB=bioavanced_test`, `TEST_SUPPORT_SECRET=e2e-test-support-secret`.
 
 ## Filed this sitting
 
-Here: **#1036 #1037 #1038 #1039 #1040 #1041 #1042 #1043**.
-On the pack: **#726 #727 #728 #729 #730**, plus a recurrence comment on #687.
-
-Verified research posted as comments on **#1028 #941 #1029 #956 #983** —
-each corrects its own issue's body or newest comment. **Read the comment
-before scoping any of them; several bodies are wrong in both directions.**
+Here: **#1044 #1045** — both **OPEN and unworked, by Dennis's explicit scope
+for this round**, not because either is blocked. #1045 is security-relevant
+and is the one to pick up first.
+On the pack: **#744 #745**.
 
 Query the board for everything else: `gh issue list --state open`.
 
 ## Recommended next
 
-**None queued by Dennis** — he named no successor to the ten.
-
-Of the six queue members still open, **every one now turns on a decision
-rather than on missing information**, which is why they are open rather than
-worked:
-
-- **#1037** — the escalation floor SHIPPED (`0447cff3`); what is left is the
-  product decision (authenticate / delete / keep public) plus the missing audit
-  row. Not blocking anything else.
-- **#983** — blocked on "should `create-db.js` exist at all"; it is
-  simultaneously dead as code (zero callers) and load-bearing as documentation
-  (`app.js` ×4 and four MIABIS models cite it).
-- **#1029** — wants a `divide-and-conquer` split, sketched on-thread.
-- **#956** — blocked on whether the manual-reading button stays.
-- **#941** — sequenced behind #1039, which is a two-line subtractive fix.
-- **#1028** — direction 4 is unblocked and shippable now.
-- **#1035** — disposition (fix vs close-with-a-template-rule) is a judgment
-  call; #1041 carries the half that is unconditionally wrong.
+**Dennis said: back to the issues.** He named no specific successor. #1045
+is this sitting's own highest-severity filing; the six queue members from the
+previous sitting (#1037, #983, #1029, #956, #941, #1028) are all still open
+and all still turn on a decision rather than on missing information — read
+that note's own section for which decision each one needs.
