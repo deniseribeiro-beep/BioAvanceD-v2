@@ -220,6 +220,15 @@ class BatchValidationEngine {
     await workbook.xlsx.readFile(filePath);
 
     const rows = [];
+    // #1041: both index-aligned with `rows`, same pairing convention as
+    // import-lgpd.service.js's readCSV/readExcel `sourceLines` (#1023).
+    // `sourceLines` stays NUMERIC -- it becomes import_staging_records
+    // .rowNumber, which getQuarantineBatch sorts with `.sort({rowNumber: 1})`,
+    // so a `<sheet>!<row>` string would silently order lexically. This reader
+    // flattens every worksheet into one array, so the sheet name is carried
+    // beside the number rather than folded into it.
+    const sourceLines = [];
+    const sourceSheets = [];
 
     for (const worksheet of workbook.worksheets) {
       const headerRow = worksheet.getRow(1);
@@ -256,9 +265,23 @@ class BatchValidationEngine {
 
         if (Object.keys(mapped).length > 0) {
           rows.push(mapped);
+          sourceLines.push(rowNumber);
+          sourceSheets.push(worksheet.name);
         }
       }
     }
+
+    // #1041: non-enumerable so the array's own `toEqual` shape (used by the
+    // existing readers tests) is unaffected -- same rationale as #1023's
+    // sourceLines in import-lgpd.service.js.
+    Object.defineProperty(rows, 'sourceLines', {
+      value: sourceLines,
+      enumerable: false,
+    });
+    Object.defineProperty(rows, 'sourceSheets', {
+      value: sourceSheets,
+      enumerable: false,
+    });
 
     return rows;
   }
@@ -940,6 +963,10 @@ class BatchValidationEngine {
         rejected.map((rejection) => ({
           batchId,
           rowNumber: rejection.rowNumber,
+          // #1041: additive and .xlsx-only. rowNumber stays numeric so the
+          // `.sort({rowNumber: 1})` in getQuarantineBatch keeps ordering
+          // numerically.
+          sheet: rejection.sheet ?? null,
           status: 'ERROR',
           errors: rejection.errors || [],
           validationErrors: rejection.errors || [],
@@ -1073,7 +1100,16 @@ class BatchValidationEngine {
 
       for (let offset = 0; offset < chunk.length; offset += 1) {
         const rawRow = chunk[offset];
-        const rowNumber = start + offset + rowBaseNumber;
+        // #1041: readXlsxRows carries the TRUE sheet row on
+        // `rows.sourceLines`, index-aligned with `rows`, and the worksheet it
+        // came from on `rows.sourceSheets`. Prefer them when present; the
+        // CSV/JSON readers attach neither, so this falls back to the original
+        // arithmetic for them, unchanged. `rowNumber` stays a number -- see
+        // the reader's comment for why the sheet is not folded into it.
+        const absoluteIndex = start + offset;
+        const sourceLine = rows.sourceLines ? rows.sourceLines[absoluteIndex] : undefined;
+        const sourceSheet = rows.sourceSheets ? rows.sourceSheets[absoluteIndex] : undefined;
+        const rowNumber = sourceLine !== undefined ? sourceLine : absoluteIndex + rowBaseNumber;
 
         const rowResult = dataType === 'samples'
           ? await this.persistSample(db, rawRow, rowNumber)
@@ -1092,6 +1128,7 @@ class BatchValidationEngine {
         if (rowResult.warnings?.length) {
           result.warnings.push({
             row: rowNumber,
+            ...(sourceSheet !== undefined ? { sheet: sourceSheet } : {}),
             classification: rowResult.classification,
             warnings: rowResult.warnings,
           });
@@ -1100,6 +1137,9 @@ class BatchValidationEngine {
         if (rowResult.errors?.length) {
           const errorEntry = {
             row: rowNumber,
+            // #1041: only present for .xlsx, where one flat array spans every
+            // worksheet and the number alone names no unique cell.
+            ...(sourceSheet !== undefined ? { sheet: sourceSheet } : {}),
             classification: rowResult.classification,
             errors: rowResult.errors,
           };
@@ -1109,6 +1149,7 @@ class BatchValidationEngine {
           // can actually correct and resubmit.
           rejectedRows.push({
             rowNumber,
+            ...(sourceSheet !== undefined ? { sheet: sourceSheet } : {}),
             row: rawRow,
             errors: rowResult.errors,
             classification: rowResult.classification,

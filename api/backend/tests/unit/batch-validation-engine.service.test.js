@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const ExcelJS = require('exceljs');
 const { ObjectId } = require('mongodb');
 
 const batchValidationEngine = require('../../src/services/batch-validation-engine.service');
@@ -560,6 +561,43 @@ describe('batch-validation-engine.service processBatchImport', () => {
     await batchValidationEngine.processBatchImport({}, 'job-5', { updateProgress });
 
     expect(updateProgress).toHaveBeenCalledWith(100);
+  });
+
+  // #1041: readXlsxRows carries the true sheet row on `rows.sourceLines`;
+  // processBatchImport must prefer it over the plain array-position
+  // arithmetic (start + offset + rowBaseNumber), which drifts as soon as a
+  // blank sheet row doesn't occupy an array slot. Without the fix this row's
+  // reported number would be 3 (array position: the surviving invalid row is
+  // at array index 1, +2 base = 3), which names no row in the sheet -- the
+  // blank row occupies sheet row 3, so the invalid row is actually sheet row 4.
+  it('reports the true sheet row number for an XLSX import with an interior blank row (#1041)', async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-import-xlsx-'));
+    const filePath = path.join(tmpDir, 'patients.xlsx');
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Pacientes');
+    worksheet.addRow(['patientName', 'birthDate', 'sex', 'email', 'consentTemplateId']);
+    worksheet.addRow(['Ana Silva', '1990-05-01', 'F', 'ana@example.com', 'template-1']);
+    worksheet.addRow([null, null, null, null, null]);
+    worksheet.addRow(['Sem Dados', null, null, null, null]);
+    await workbook.xlsx.writeFile(filePath);
+
+    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
+      jobId: 'job-1041',
+      fileName: 'patients.xlsx',
+      rawData: { storagePath: filePath },
+    });
+    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    vi.spyOn(patientService, 'createPatient').mockResolvedValue({ _id: 'new-patient-id' });
+
+    const result = await batchValidationEngine.processBatchImport({}, 'job-1041');
+
+    expect(result.totalRows).toBe(2);
+    expect(result.errors).toHaveLength(1);
+    // Sheet row 4, not the array-ordinal 3 the pre-#1041 arithmetic gave.
+    // Numeric, because this same value becomes
+    // import_staging_records.rowNumber, which getQuarantineBatch sorts.
+    expect(result.errors[0].row).toBe(4);
+    expect(result.errors[0].sheet).toBe('Pacientes');
   });
 
   it('processes a samples JSON file end to end with a fully-valid, warning-free row', async () => {

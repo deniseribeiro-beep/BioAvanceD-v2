@@ -132,12 +132,17 @@ function App() {
                   <Route path="/reports/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportViewPage /></ProtectedRoute>} />
                   <Route path="/quality-descriptions" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionPage /></ProtectedRoute>} />
                   {/* #808: the LGPD import's own surface. `/import` posts to the
-                      *async* importer, which discards rejected rows (#813); this
-                      posts to the LGPD importer, the only one that quarantines
-                      them (RNF011 AC#4 / RF029 AC#6). Same roles as /import and
-                      /import/quarantine -- the backend gates the two import
-                      routes on createPatient/createSample respectively, which
-                      these three roles hold. */}
+                      *async* importer; #813 landed, so that importer now
+                      quarantines its rejected rows too, into
+                      import_staging_records with type ASYNC_BATCH_IMPORT. This
+                      posts to the LGPD importer, whose batches are the ones
+                      ImportQuarantinePage actually lists -- that page calls
+                      /import-lgpd/batches, which filters to LGPD quarantine
+                      types, so async batches are quarantined but not yet
+                      listable (#950). (RNF011 AC#4 / RF029 AC#6.) Same roles as
+                      /import and /import/quarantine -- the backend gates the two
+                      import routes on createPatient/createSample respectively,
+                      which these three roles hold. */}
                   <Route
                     path="/import/lgpd"
                     element={

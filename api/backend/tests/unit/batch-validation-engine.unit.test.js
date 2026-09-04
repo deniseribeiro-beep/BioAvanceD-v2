@@ -744,6 +744,65 @@ describe('BatchValidationEngine file readers', () => {
     expect(rows).toEqual([{ a: '1' }]);
   });
 
+  // #1041: the reader's loop variable is the true sheet row number, but it
+  // used to be discarded one line after being computed -- the consumer
+  // reconstructed a row number from pure array arithmetic instead, which
+  // drifts as soon as a blank row occupies a sheet row without occupying an
+  // array slot. Pinning that the surviving row after the blank one reports
+  // its true sheet row (4: header=1, kept row=2, blank=3, kept row=4), not
+  // the shifted ordinal (3) that array-position arithmetic would produce.
+  it('readXlsxRows carries the true sheet row number on sourceLines, unshifted by an interior blank row (#1041)', async () => {
+    const filePath = await writeXlsxFile([
+      { name: 'Sheet1', rows: [['a', 'b'], ['1', 'x'], [null, null], ['3', 'z']] },
+    ]);
+
+    const rows = await engine.readXlsxRows(filePath);
+
+    expect(rows).toEqual([{ a: '1', b: 'x' }, { a: '3', b: 'z' }]);
+    // The surviving rows are sheet rows 2 and 4. The pre-#1041 arithmetic
+    // reported them as 2 and 3, shifted down by the blank row at 3.
+    expect(rows.sourceLines).toEqual([2, 4]);
+    expect(rows.sourceSheets).toEqual(['Sheet1', 'Sheet1']);
+  });
+
+  // #1041: readXlsxRows flattens every worksheet into one array, so a bare
+  // row number on the second sheet's rows would correspond to no gutter in
+  // any sheet. sourceLines must disambiguate which sheet each entry's row
+  // number belongs to.
+  it('readXlsxRows disambiguates the source sheet in sourceLines for a multi-worksheet workbook (#1041)', async () => {
+    const filePath = await writeXlsxFile([
+      { name: 'Sheet1', rows: [['a'], ['1'], ['2']] },
+      { name: 'Sheet2', rows: [['a'], ['9']] },
+    ]);
+
+    const rows = await engine.readXlsxRows(filePath);
+
+    expect(rows).toEqual([{ a: '1' }, { a: '2' }, { a: '9' }]);
+    // Sheet2's only data row is sheet row 2, NOT array position 4. The
+    // number alone is therefore ambiguous across sheets, which is why the
+    // sheet name is carried beside it rather than folded into it -- see the
+    // reader's comment: rowNumber must stay numeric for
+    // getQuarantineBatch's `.sort({ rowNumber: 1 })`.
+    expect(rows.sourceLines).toEqual([2, 3, 2]);
+    expect(rows.sourceSheets).toEqual(['Sheet1', 'Sheet1', 'Sheet2']);
+  });
+
+  // #1041: sourceLines is attached non-enumerable specifically so it cannot
+  // affect `toEqual`'s own-enumerable-key comparison. Re-asserting the
+  // pre-existing assertion at the test above (interior blank row within a
+  // single sheet) stays green is the direct proof of that for this reader.
+  it('readXlsxRows keeps the plain toEqual row shape intact despite the added sourceLines property (#1041)', async () => {
+    const filePath = await writeXlsxFile([
+      { name: 'Sheet1', rows: [['a', 'b'], [null, null], ['1', '']] },
+    ]);
+
+    const rows = await engine.readXlsxRows(filePath);
+    expect(rows).toEqual([{ a: '1' }]);
+    expect(Object.keys(rows)).toEqual(['0']);
+    expect(Object.prototype.propertyIsEnumerable.call(rows, 'sourceLines')).toBe(false);
+    expect(Object.prototype.propertyIsEnumerable.call(rows, 'sourceSheets')).toBe(false);
+  });
+
   it('readRowsFromFile dispatches by extension to XLSX parsing', async () => {
     const filePath = await writeXlsxFile([{ name: 'Sheet1', rows: [['a'], ['1']] }]);
     const rows = await engine.readRowsFromFile(filePath, 'rows.xlsx');
