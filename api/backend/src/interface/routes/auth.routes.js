@@ -3,6 +3,7 @@ const router = express.Router();
 const authController = require('../../controllers/auth.controller');
 const authService = require('../../services/auth.service');
 const { authenticate } = require('../../infrastructure/middleware/auth');
+const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
 const auditLogger = require('../../utils/auditLogger');
 const jwt = require('jsonwebtoken');
@@ -103,7 +104,40 @@ function rejectCallerSuppliedPrivilege(req, res, next) {
   });
 }
 
-router.post('/register', rejectCallerSuppliedPrivilege, authController.register.bind(authController));
+// #1037: this route was UNAUTHENTICATED. rejectCallerSuppliedPrivilege above
+// closed the escalation half -- an anonymous caller could no longer ASK for
+// accessType 4 -- but an anonymous caller could still create a default-level
+// account, with a caller-supplied organizationId, attributed to `system` and
+// with no audit row naming an actor, because there was no actor to name.
+//
+// The specification settles this; it is not a taste call:
+//   - RF003 ("Gestão de usuários") has `Ator primário: Administrador` and
+//     owns the whole account lifecycle. RF001 (authentication) creates
+//     SESSIONS, not accounts -- its acceptance criteria have no
+//     account-creation clause at all. This route lives on the RF001 surface
+//     while performing an RF003 action.
+//   - RF003 AC#6 requires auditing account creation.
+//   - RF012 AC#1 and RNF009 AC#2 (Crítica) both make the ACTOR a mandatory
+//     element of every audit event. An anonymous creation cannot supply one.
+//   - No requirement anywhere in docs-7-27-2026 or the 7-31 amendment asks
+//     for unauthenticated self-registration, and UserAccount carries no
+//     pending-approval state, no self-registered flag and no activation step
+//     that such a flow would need. UserRoleAssignment.grantedBy is 1..1 Core.
+//
+// Gated to match the authenticated twin (POST /api/users/register), which is
+// what the frontend actually calls. rejectCallerSuppliedPrivilege STAYS: the
+// twin is where a caller who legitimately needs to choose a level does so,
+// under #998's hierarchy floor. That makes this route a strictly weaker
+// duplicate of the twin, which is an argument for deleting it outright --
+// tracked separately rather than done here, because whether an out-of-repo
+// consumer posts to it cannot be answered from inside this repo.
+router.post(
+  '/register',
+  authenticate,
+  requirePermission('createUser'),
+  rejectCallerSuppliedPrivilege,
+  authController.register.bind(authController)
+);
 
 // Troca de senha autenticada
 router.post('/change-password', authenticate, authController.changePassword.bind(authController));

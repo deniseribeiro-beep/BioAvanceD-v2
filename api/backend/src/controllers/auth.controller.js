@@ -48,7 +48,36 @@ class AuthController {
         });
       }
 
-      const user = await authService.registerUser(db, req.body);
+      // #1037: attribute the grant. registerUser's third parameter defaults
+      // to the string 'system', which is what UserRoleAssignment.grantedBy
+      // carried for every account created through this route while it was
+      // unauthenticated. The route now requires authenticate +
+      // requirePermission('createUser'), so there is always a real actor.
+      const user = await authService.registerUser(db, req.body, req.user?.userID);
+
+      // #1037: RF003 AC#6 requires auditing account creation, and RF012 AC#1
+      // / RNF009 AC#2 (Crítica) both make the actor a mandatory element of
+      // the event. This route previously wrote no audit row at all. Mirrors
+      // the block in user.routes.js's sibling register handler.
+      //
+      // Audit failure must not fail a successful creation -- auditLogger.log
+      // swallows its own errors, and this try/catch is belt-and-braces so a
+      // logging fault cannot turn a 201 into a 400 via the outer catch.
+      try {
+        auditLogger.init(db);
+        await auditLogger.log({
+          action: 'CREATE',
+          resourceType: 'User',
+          resourceId: user._id?.toString() || user.id,
+          status: 'success',
+          severity: 'info',
+          message: 'Usuário registrado com sucesso',
+          req: req,
+          module: 'Usuários'
+        });
+      } catch (auditError) {
+        logger.error('Falha ao auditar criação de usuário:', auditError.message);
+      }
 
       return res.status(201).json({
         success: true,

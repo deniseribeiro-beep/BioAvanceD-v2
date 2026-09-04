@@ -120,7 +120,18 @@ describe('auth.routes.js (integration, real router mounted)', () => {
   });
 
   describe('POST /register', () => {
-    it('delegates to authController.register (bound at router load time)', async () => {
+    // #1037: this used to assert 201 for an ANONYMOUS request -- it pinned
+    // the escalation as correct behaviour. The route now carries
+    // `authenticate`, so an unauthenticated caller cannot reach the
+    // controller at all.
+    //
+    // RF003 makes the Administrador the primary actor for the whole account
+    // lifecycle and RF001 (authentication) has no account-creation clause;
+    // no requirement anywhere in the canonical corpus asks for unauthenticated
+    // self-registration. RF003 AC#6 additionally requires auditing creation,
+    // and RF012 AC#1 / RNF009 AC#2 (Crítica) both make the actor a mandatory
+    // element of the audit event -- which an anonymous creation cannot supply.
+    it('#1037: refuses an ANONYMOUS register outright, without reaching the controller', async () => {
       const spy = vi.spyOn(authController, 'register').mockImplementation(async (req, res) => {
         res.status(201).json({ success: true, created: req.body.email });
       });
@@ -131,9 +142,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
         .post('/api/auth/register')
         .send({ email: 'new@example.com', password: 'x' });
 
-      expect(spy).toHaveBeenCalledTimes(1);
-      expect(res.status).toBe(201);
-      expect(res.body.created).toBe('new@example.com');
+      expect(res.status).toBe(401);
+      expect(spy).not.toHaveBeenCalled();
     });
 
     // #1037: this route is UNAUTHENTICATED (no `authenticate`, unlike every
@@ -162,7 +172,11 @@ describe('auth.routes.js (integration, real router mounted)', () => {
         .post('/api/auth/register')
         .send({ email: 'attacker@example.com', password: 'x', accessType: 4 });
 
-      expect(res.status).toBe(403);
+      // 401, not 403: `authenticate` now runs BEFORE
+      // rejectCallerSuppliedPrivilege, so an anonymous caller is refused for
+      // being anonymous before the privilege guard is reached. The guard is
+      // still load-bearing for an AUTHENTICATED caller -- pinned below.
+      expect(res.status).toBe(401);
       expect(spy).not.toHaveBeenCalled();
     });
 
@@ -177,8 +191,86 @@ describe('auth.routes.js (integration, real router mounted)', () => {
         .post('/api/auth/register')
         .send({ email: 'attacker2@example.com', password: 'x', roleName: 'Administrador' });
 
-      expect(res.status).toBe(403);
+      // 401 for the same reason as the sibling above.
+      expect(res.status).toBe(401);
       expect(spy).not.toHaveBeenCalled();
+    });
+
+    // #1037 (second half): the escalation reported in that issue was closed
+    // in two steps. rejectCallerSuppliedPrivilege stopped an anonymous caller
+    // CHOOSING a privilege level; these pin the rest -- that an anonymous
+    // caller cannot create an account at any level, and that the route is now
+    // gated on the same permission as its authenticated twin
+    // (POST /api/users/register).
+    describe('#1037: authenticated callers', () => {
+      // `authenticate` verifies the JWT and then calls sessionService --
+      // same two spies the /change-password authenticated test installs.
+      // Without them a validly-signed token still 401s on the session check,
+      // which looks like the route rejecting the caller.
+      beforeEach(() => {
+        vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+        vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      });
+
+      function rbacDb(users) {
+        const { buildRbacCollections } = require('../factories/rbac.factory');
+        const collections = buildRbacCollections(users);
+        return { collection: vi.fn((name) => collections[name] || { findOne: vi.fn(async () => null), find: vi.fn(() => ({ toArray: vi.fn(async () => []) })) }) };
+      }
+
+      it('refuses an authenticated caller who lacks createUser, without reaching the controller', async () => {
+        const spy = vi.spyOn(authController, 'register').mockImplementation(async (req, res) => {
+          res.status(201).json({ success: true, created: req.body.email });
+        });
+        const userID = makeUserId();
+        // accessType 2 (Tecnico) does not carry createUser in the RBAC
+        // catalog -- 3 (Coordenador) and 4 (Administrador) do.
+        const app = buildApp(loadAuthRoutes(), rbacDb([{ userAccountId: userID, accessType: 2 }]));
+
+        const res = await request(app)
+          .post('/api/auth/register')
+          .set('Authorization', `Bearer ${signAccessToken({ userID, accessType: 2 })}`)
+          .send({ email: 'nope@example.com', password: 'x' });
+
+        expect(res.status).toBe(403);
+        expect(spy).not.toHaveBeenCalled();
+      });
+
+      it('still refuses a caller-supplied accessType even from a createUser holder -- the twin route is where a level is chosen', async () => {
+        const spy = vi.spyOn(authController, 'register').mockImplementation(async (req, res) => {
+          res.status(201).json({ success: true, created: req.body.email });
+        });
+        const userID = makeUserId();
+        const app = buildApp(loadAuthRoutes(), rbacDb([{ userAccountId: userID, accessType: 4 }]));
+
+        const res = await request(app)
+          .post('/api/auth/register')
+          .set('Authorization', `Bearer ${signAccessToken({ userID, accessType: 4 })}`)
+          .send({ email: 'esc@example.com', password: 'x', accessType: 4 });
+
+        expect(res.status).toBe(403);
+        expect(spy).not.toHaveBeenCalled();
+      });
+
+      // CONTROL: the route still WORKS for the caller it is meant for. Without
+      // this, every assertion above would be satisfied by a route that refuses
+      // everyone.
+      it('CONTROL: reaches the controller for a createUser holder sending no privilege fields', async () => {
+        const spy = vi.spyOn(authController, 'register').mockImplementation(async (req, res) => {
+          res.status(201).json({ success: true, created: req.body.email });
+        });
+        const userID = makeUserId();
+        const app = buildApp(loadAuthRoutes(), rbacDb([{ userAccountId: userID, accessType: 4 }]));
+
+        const res = await request(app)
+          .post('/api/auth/register')
+          .set('Authorization', `Bearer ${signAccessToken({ userID, accessType: 4 })}`)
+          .send({ email: 'ok@example.com', password: 'x' });
+
+        expect(res.status).toBe(201);
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(res.body.created).toBe('ok@example.com');
+      });
     });
   });
 

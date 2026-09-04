@@ -106,12 +106,19 @@ describe('AuthService.registerUser', () => {
   // #1028: #435 closed the accessType trigger above and left the WINDOW open.
   // Two throw sites inside grantRoleForAccessType are still reachable after
   // insertOne, and this is the one an UNAUTHENTICATED caller can reach:
-  // auth.routes.js registers POST /api/auth/register with no `authenticate`,
-  // and #1037's rejectCallerSuppliedPrivilege filters only accessType and
+  // #1037's rejectCallerSuppliedPrivilege filters only accessType and
   // roleName -- organizationId passes through untouched, and User.js only
   // trims it. So a bogus organizationId inserts the user, then throws in
   // validateOrganizationId, leaving an orphan able to authenticate with every
   // permission check returning false and nothing explaining why.
+  //
+  // NOTE, updated when #1037 was resolved: this comment used to say the
+  // orphan window was reachable ANONYMOUSLY, because auth.routes.js
+  // registered POST /api/auth/register with no `authenticate`. That is no
+  // longer true -- the route now carries authenticate +
+  // requirePermission('createUser'). The window itself is unchanged and this
+  // test still pins it; only its reachability narrowed, from any anonymous
+  // caller to a holder of createUser.
   //
   // The fixture reaches it because buildRbacCollections() seeds no
   // `organizations` collection, so makeDb falls through to usersCollection,
