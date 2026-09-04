@@ -106,10 +106,11 @@ describe('user.routes authorization gates (issue #921)', () => {
       // The first of the three two-argument requirePermission calls in this file.
       { label: 'POST /record-withdrawal (withdrawSample, UPDATE) :714', method: 'post', path: '/record-withdrawal', expectedArgs: ['withdrawSample', 'UPDATE'] },
       { label: 'POST /generate-report (viewReports) :757', method: 'post', path: '/generate-report', expectedArgs: ['viewReports'] },
-      // :795 -- note this is a Temperature code (viewTemperature) on a User
-      // router, pinned as-is; whether it is the *right* code is #888's
-      // question, not this slice's.
-      { label: 'POST /register-sensor (viewTemperature) :795', method: 'post', path: '/register-sensor', expectedArgs: ['viewTemperature'] },
+      // #1073 answered the question this comment deferred: the code WAS
+      // wrong. Registering a sensor is a device-lifecycle CREATE and was
+      // gated on 'viewTemperature', a read permission -- the same defect
+      // the sensor router's own five writes carried. Now 'manageSensor'.
+      { label: 'POST /register-sensor (manageSensor) :795', method: 'post', path: '/register-sensor', expectedArgs: ['manageSensor'] },
       { label: 'POST /:id/reset-mfa (resetMFA, UPDATE) :851', method: 'post', path: '/u1/reset-mfa', expectedArgs: ['resetMFA', 'UPDATE'] },
       { label: 'POST /:id/force-password-reset (forcePasswordReset, UPDATE) :919', method: 'post', path: '/u1/force-password-reset', expectedArgs: ['forcePasswordReset', 'UPDATE'] },
       // #1010: disable-mfa had NO requirePermission gate at all -- only

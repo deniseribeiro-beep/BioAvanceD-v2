@@ -991,7 +991,10 @@ router.post('/generate-report', authenticate, requirePermission('viewReports'), 
   }
 });
 
-router.post('/register-sensor', authenticate, requirePermission('viewTemperature'), async (req, res) => {
+// #1073: registering a sensor is a device-lifecycle CREATE, and it was
+// gated on 'viewTemperature' -- the same read permission the sensor router's
+// own writes carried. Moved to 'manageSensor' with them.
+router.post('/register-sensor', authenticate, requirePermission('manageSensor'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {

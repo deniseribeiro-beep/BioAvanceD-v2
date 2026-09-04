@@ -16,10 +16,18 @@ const { requirePermission, requireOrganizationScope } = require('../../infrastru
 // question is the same for sensor, equipment and temperature and is filed
 // rather than answered one module at a time.
 //
+// #1073: the two GETs keep 'viewTemperature'; the five writes moved to
+// 'manageSensor' (lifecycle) and 'recordTemperature' (reading ingestion).
+// Both are seeded to exactly the roles that already held viewTemperature, so
+// no caller gains or loses a capability today -- what changes is that
+// deleting a sensor is no longer the same permission as looking at a
+// temperature. Whether Tecnico should keep manageSensor is now a catalogue
+// edit rather than a code change, and it is Denise's call.
+//
 // RF009 - Gerenciamento de Sensores
 router.post('/',
   authenticate,
-  requirePermission('viewTemperature'),
+  requirePermission('manageSensor'),
   requireOrganizationScope,
   sensorController.create.bind(sensorController)
 );
@@ -42,7 +50,7 @@ router.get('/:id',
 
 router.post('/:id/reading',
   authenticate,
-  requirePermission('viewTemperature'),
+  requirePermission('recordTemperature'),
   requireOrganizationScope,
   sensorController.collectReading.bind(sensorController)
 );
@@ -50,7 +58,7 @@ router.post('/:id/reading',
 // Alias para collect-reading
 router.post('/:id/collect-reading',
   authenticate,
-  requirePermission('viewTemperature'),
+  requirePermission('recordTemperature'),
   requireOrganizationScope,
   sensorController.collectReading.bind(sensorController)
 );
@@ -58,7 +66,7 @@ router.post('/:id/collect-reading',
 // Atualizar sensor
 router.put('/:id',
   authenticate,
-  requirePermission('viewTemperature'),
+  requirePermission('manageSensor'),
   requireOrganizationScope,
   sensorController.update.bind(sensorController)
 );
@@ -66,7 +74,7 @@ router.put('/:id',
 // Deletar sensor
 router.delete('/:id',
   authenticate,
-  requirePermission('viewTemperature'),
+  requirePermission('manageSensor'),
   requireOrganizationScope,
   sensorController.delete.bind(sensorController)
 );

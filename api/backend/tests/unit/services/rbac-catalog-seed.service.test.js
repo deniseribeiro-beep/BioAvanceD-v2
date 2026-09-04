@@ -163,6 +163,12 @@ describe('rbac-catalog-seed.service', () => {
       ['uploadSampleFiles', ['CREATE']],
       ['deleteSampleFiles', ['DELETE']],
       ['manageTemperature', ['UPDATE']],
+      // #1073: the two codes that took the sensor/temperature WRITE routes
+      // off 'viewTemperature'. manageTemperature is pinned ['UPDATE'] right
+      // above, which is exactly why it could not absorb them -- CREATE and
+      // DELETE would have 403'd for every caller.
+      ['manageSensor', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
+      ['recordTemperature', ['CREATE']],
       ['manageOrganizations', ['CREATE', 'UPDATE', 'DELETE']],
       ['createResult', ['CREATE']],
       ['editResult', ['UPDATE']],

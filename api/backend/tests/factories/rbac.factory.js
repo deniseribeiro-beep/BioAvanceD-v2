@@ -42,7 +42,7 @@ function allPermissionDocs() {
   }));
 }
 
-function allRoleDocs() {
+function allRoleDocs(extraRoles = []) {
   const permissionIdByCode = Object.fromEntries(
     Object.keys(PERMISSION_CATALOG).map((code) => [code, `perm-${code}`])
   );
@@ -64,7 +64,19 @@ function allRoleDocs() {
     roleStatus: 'active',
     permissionIds: role.permissions.map((code) => permissionIdByCode[code]),
   }));
-  return [...legacyDocs, ...additionalDocs];
+  // #1073: a role assembled by the test itself, for pinning that two
+  // permission codes are genuinely SEPARABLE. Every seeded role grants the
+  // codes it needs together, so a fixture built only from the seeds cannot
+  // express "holds viewTemperature but not manageSensor" -- which is
+  // precisely the property a permission split is supposed to create.
+  const extraDocs = extraRoles.map((role) => ({
+    roleId: `role-${role.roleCode}`,
+    roleCode: role.roleCode,
+    hierarchyLevel: role.hierarchyLevel ?? null,
+    roleStatus: 'active',
+    permissionIds: role.permissions.map((code) => permissionIdByCode[code]),
+  }));
+  return [...legacyDocs, ...additionalDocs, ...extraDocs];
 }
 
 const ROLE_ID_BY_ACCESS_TYPE = Object.fromEntries(
@@ -88,8 +100,13 @@ const ROLE_ID_BY_ACCESS_TYPE = Object.fromEntries(
  * requireOrganizationScope — callers testing org-scope enforcement itself
  * pass `organizationId` per user to control which organization each one
  * belongs to.
+ *
+ * #1073: `extraRoles` — `[{ roleCode, hierarchyLevel, permissions: [code] }]`
+ * — appends roles the seeds do not contain, grantable through the same
+ * `roleCodes` field. Needed to pin that two permission codes are separable
+ * when every seeded role happens to grant both.
  */
-function buildRbacCollections(users = []) {
+function buildRbacCollections(users = [], extraRoles = []) {
   const assignments = users.flatMap(({ userAccountId, accessType, roleCodes = [], organizationId }) => {
     const docs = [];
     if (accessType != null) {
@@ -109,13 +126,24 @@ function buildRbacCollections(users = []) {
         roleId: `role-${roleCode}`,
         assignmentStatus: 'active',
         validUntil: null,
+        // #429 leaves an additive assignment scope-less on purpose: it rides
+        // alongside a primary accessType assignment that carries the scope.
+        // #1073: when the caller has NO accessType, that primary assignment
+        // does not exist, so a scope-less additive role resolves as org-less
+        // and requireOrganizationScope 403s before requirePermission is ever
+        // consulted -- which silently turns a permission test into a scope
+        // test. Only stamped when the call site asks for it, so the two
+        // pre-existing scope-less `auditor` fixtures are untouched.
+        ...(accessType == null && organizationId != null
+          ? { scopeType: 'organization', scopeId: String(organizationId) }
+          : {}),
       });
     }
     return docs;
   });
 
   return {
-    roles: queryableCollectionMock(allRoleDocs()),
+    roles: queryableCollectionMock(allRoleDocs(extraRoles)),
     permissions: queryableCollectionMock(allPermissionDocs()),
     userRoleAssignments: queryableCollectionMock(assignments),
   };

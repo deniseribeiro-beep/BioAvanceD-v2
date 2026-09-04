@@ -7,6 +7,11 @@ const { requireMachineIngestSecret } = require('../../utils/machineIngestGate');
 
 // RF009 - Registro de Temperatura, por um usuário autenticado.
 //
+// #1073: this write was gated on 'viewTemperature', a read permission. It
+// now gates on 'recordTemperature'; the file's five GETs keep
+// viewTemperature. GET /alerts is separately cross-tenant -- see #1062,
+// which needs a schema change rather than a middleware line.
+//
 // #1054: the comment that stood here said "Sistema pode registrar
 // automaticamente (sem autenticação)" -- describing the route BELOW, not this
 // one, which has always required a session. The two comments had drifted apart
@@ -14,7 +19,7 @@ const { requireMachineIngestSecret } = require('../../utils/machineIngestGate');
 // current intent. Both are rewritten to say what the code does.
 router.post('/reading',
   authenticate,
-  requirePermission('viewTemperature'),
+  requirePermission('recordTemperature'),
   temperatureController.createReading.bind(temperatureController)
 );
 

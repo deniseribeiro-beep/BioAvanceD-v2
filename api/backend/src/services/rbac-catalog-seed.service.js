@@ -38,17 +38,17 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 2,
       roleName: 'Tecnico',
-      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'uploadFiles', 'viewReports', 'manageStorageAllocation'],
+      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'uploadFiles', 'viewReports', 'manageStorageAllocation'],
     },
     {
       accessType: 3,
       roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
     },
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
     },
   ],
 };
@@ -138,6 +138,27 @@ const PERMISSION_CATALOG = {
   // Same shape as resetMFA -- acts on another user's second factor.
   disableMFA: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Desativar MFA' },
   manageTemperature: { resourceType: 'Temperature', allowedActions: ['UPDATE'], displayName: 'Gerenciar incidentes de temperatura' },
+  // #1073: every sensor and temperature WRITE route was gated on
+  // 'viewTemperature' -- a read permission whose allowedActions had been
+  // widened to the full CRUD set so the writes would pass. So "may look at
+  // cold-chain data" and "may delete a sensor" were one capability, and no
+  // catalogue edit could separate them.
+  //
+  // manageTemperature is NOT the answer despite the name: it is
+  // ['UPDATE'] only and displayName-scoped to incidents, so swapping the
+  // writes onto it would 403 every CREATE and DELETE -- the trap #929
+  // records verbatim for manageStorageTopology. Two codes rather than one,
+  // on #888's reasoning, because the routers have two genuinely different
+  // concerns: the device's LIFECYCLE, and the ingestion of a READING.
+  //
+  // resourceType 'Device' is the dictionary's own entity for a sensor
+  // (dict-02 ELM-0305..0309; ELM-0306 deviceType enumerates "sensor"
+  // explicitly). Permission codes themselves are "Vocabulário interno
+  // BioAvanceD" per P1X-0221, so the code name is ours to choose.
+  //
+  // allowedActions is derived from METHOD_TO_ACTION (rbac.js), not taste.
+  manageSensor: { resourceType: 'Device', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar sensores' },
+  recordTemperature: { resourceType: 'Temperature', allowedActions: ['CREATE'], displayName: 'Registrar leitura de temperatura' },
   manageOrganizations: { resourceType: 'Organization', allowedActions: ['CREATE', 'UPDATE', 'DELETE'], displayName: 'Gerenciar organizações' },
   viewAuditLogs: { resourceType: 'AuditLog', allowedActions: ['READ'], displayName: 'Visualizar trilhas de auditoria' },
   createResult: { resourceType: 'Result', allowedActions: ['CREATE'], displayName: 'Criar arquivo de análise' },

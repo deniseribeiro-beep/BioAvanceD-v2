@@ -326,3 +326,117 @@ describe('sensor write routes are organization-scoped (#1029)', () => {
     expect(getSensor).not.toHaveBeenCalled();
   });
 });
+
+// #1073: every sensor WRITE route was gated on requirePermission('view
+// Temperature') -- a read permission -- so the capability to delete a sensor
+// was indistinguishable from the capability to look at cold-chain data.
+// The writes now gate on 'manageSensor' (device lifecycle) and
+// 'recordTemperature' (reading ingestion) instead.
+//
+// The grants are deliberately unchanged: manageSensor and recordTemperature
+// are seeded to exactly the three roles that already held viewTemperature, so
+// no caller gains or loses anything today. What changes is that the two are
+// now SEPARABLE -- revoking sensor lifecycle from Tecnico is a catalogue edit
+// rather than a code change. These cases pin that separability, which is the
+// whole content of the fix and is not observable through any seeded role.
+describe('#1073: sensor writes are gated on a write permission, not viewTemperature', () => {
+  const VIEW_ONLY_USER = 'qa-view-only-temp';
+
+  function viewOnlyToken() {
+    return jwt.sign(
+      { userID: VIEW_ONLY_USER, accessType: 2, roleName: 'Técnico', name: 'QA View Only', mfaVerified: true },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+  }
+
+  beforeEach(() => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections(
+        [{ userAccountId: VIEW_ONLY_USER, roleCodes: ['temperature_viewer'], organizationId: 'test-org-default' }],
+        [{ roleCode: 'temperature_viewer', hierarchyLevel: 2, permissions: ['viewTemperature'] }]
+      )
+    });
+  });
+
+  // CONTROL: unchanged by the fix and green in both directions. A red here
+  // means the fixture is wrong, not that the gate moved (#695).
+  it('CONTROL: a viewTemperature-only caller can still LIST sensors', async () => {
+    vi.spyOn(sensorService, 'listSensors').mockResolvedValue([FAKE_SENSOR]);
+
+    const res = await request(app)
+      .get('/api/sensors')
+      .set('Authorization', `Bearer ${viewOnlyToken()}`);
+
+    expect(res.status).toBe(200);
+  });
+
+  it('refuses DELETE /api/sensors/:id to a viewTemperature-only caller', async () => {
+    vi.spyOn(sensorService, 'getSensor').mockResolvedValue(FAKE_SENSOR);
+    vi.spyOn(sensorService, 'deleteSensor').mockResolvedValue({ deleted: true });
+
+    const res = await request(app)
+      .delete('/api/sensors/S-001')
+      .set('Authorization', `Bearer ${viewOnlyToken()}`);
+
+    expect(res.status).toBe(403);
+    expect(sensorService.deleteSensor).not.toHaveBeenCalled();
+  });
+
+  it('refuses POST /api/sensors to a viewTemperature-only caller', async () => {
+    vi.spyOn(sensorService, 'createSensor').mockResolvedValue(FAKE_SENSOR);
+
+    const res = await request(app)
+      .post('/api/sensors')
+      .set('Authorization', `Bearer ${viewOnlyToken()}`)
+      .send({ sensorId: 'S-002', type: 'temperature' });
+
+    expect(res.status).toBe(403);
+    expect(sensorService.createSensor).not.toHaveBeenCalled();
+  });
+
+  it('refuses PUT /api/sensors/:id to a viewTemperature-only caller', async () => {
+    vi.spyOn(sensorService, 'getSensor').mockResolvedValue(FAKE_SENSOR);
+    vi.spyOn(sensorService, 'updateSensor').mockResolvedValue(FAKE_SENSOR);
+
+    const res = await request(app)
+      .put('/api/sensors/S-001')
+      .set('Authorization', `Bearer ${viewOnlyToken()}`)
+      .send({ status: 'offline' });
+
+    expect(res.status).toBe(403);
+    expect(sensorService.updateSensor).not.toHaveBeenCalled();
+  });
+
+  it('refuses POST /api/sensors/:id/collect-reading to a viewTemperature-only caller', async () => {
+    vi.spyOn(sensorService, 'getSensor').mockResolvedValue(FAKE_SENSOR);
+    vi.spyOn(sensorService, 'collectReading').mockResolvedValue({ sensorId: 'S-001', value: 4.5 });
+
+    const res = await request(app)
+      .post('/api/sensors/S-001/collect-reading')
+      .set('Authorization', `Bearer ${viewOnlyToken()}`)
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(sensorService.collectReading).not.toHaveBeenCalled();
+  });
+
+  // The seeded population is unchanged, so a Tecnico keeps every write it
+  // had. This is the case that would go red if the fix had been shipped as
+  // a bare swap onto manageTemperature, whose allowedActions is ['UPDATE']
+  // -- CREATE and DELETE would 403 for everyone (#929 records the same trap
+  // for manageStorageTopology).
+  it('CONTROL: a Tecnico still deletes a sensor after the split', async () => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-tecnico-2', accessType: 2 }])
+    });
+    vi.spyOn(sensorService, 'getSensor').mockResolvedValue(FAKE_SENSOR);
+    vi.spyOn(sensorService, 'deleteSensor').mockResolvedValue({ deleted: true });
+
+    const res = await request(app)
+      .delete('/api/sensors/S-001')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+  });
+});
