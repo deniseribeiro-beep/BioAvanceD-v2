@@ -1101,20 +1101,28 @@ describe('Users and Access routes', () => {
     expect(JSON.stringify(setPayload)).not.toContain('SEGREDO-DO-ATACANTE');
   });
 
-  // #993: the clear must survive the fix above. Disabling MFA on an admin
-  // target is the ONE legitimate write to these two fields on this route, and
-  // it is server-set -- so a blanket removal from the allowlist would have
-  // left a stale secret behind an mfaEnabled:false flag.
-  it('#993: PUT /api/users/:id ainda zera mfaSecret/mfaActivationDate ao desabilitar MFA de um admin', async () => {
+  // #993: the clear must survive, and #1021 moved WHICH write it is. When
+  // this was written, disabling MFA on an already-admin target was the one
+  // legitimate server-set write to these fields on this route. #1021 took
+  // that away -- disabling now belongs to POST /:id/disable-mfa, which
+  // preserves the secret -- so the surviving legitimate write is the
+  // PROMOTION: a target being raised to Administrador does not keep an
+  // enrolment made under its old role.
+  //
+  // Repointed rather than deleted, because the property #993 exists for is
+  // unchanged: the clear is server-set, the caller's own mfaSecret must never
+  // reach $set, and a blanket removal from ALLOWED_USER_UPDATE_FIELDS would
+  // still leave a stale secret behind an mfaEnabled:false flag.
+  it('#993/#1021: a PROMOCAO a Administrador zera mfaSecret/mfaActivationDate, e nunca grava o do chamador', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
       _id: 'user-target-12',
-      name: 'Alvo Admin 2',
+      name: 'Alvo A Promover',
       email: 'alvo-admin2@bioavanced.com.br',
       username: 'alvoadmin2',
       status: 'active',
-      accessType: 4,
-      roleName: 'Administrador',
+      accessType: 3,
+      roleName: 'Coordenador',
       mfaEnabled: true,
       mfaSecret: 'SEGREDO-A-SER-LIMPO',
     };
@@ -1125,7 +1133,7 @@ describe('Users and Access routes', () => {
 
     const rbacCollections = buildRbacCollections([
       { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-      { userAccountId: 'user-target-12', accessType: 4 },
+      { userAccountId: 'user-target-12', accessType: 3 },
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
@@ -1137,7 +1145,7 @@ describe('Users and Access routes', () => {
 
     const req = createRequest({
       params: { id: 'user-target-12' },
-      body: { mfaEnabled: false, mfaSecret: 'SEGREDO-DO-ATACANTE' },
+      body: { accessType: 4, mfaEnabled: true, mfaSecret: 'SEGREDO-DO-ATACANTE' },
     });
     req.app.locals.db = dbWithTarget;
     const res = createResponse();
@@ -1149,6 +1157,122 @@ describe('Users and Access routes', () => {
     expect(setPayload.mfaEnabled).toBe(false);
     expect(setPayload.mfaSecret).toBeNull();
     expect(setPayload.mfaActivationDate).toBeNull();
+    // #993's own point: the caller's value must not survive anywhere in the
+    // write, not merely differ from it.
+    expect(JSON.stringify(setPayload)).not.toContain('SEGREDO-DO-ATACANTE');
+  });
+
+  // #1021: a PUT that merely OMITS mfaEnabled destroyed an Administrador's
+  // second factor. The guard was `undefined || false`, so ANY partial-body
+  // PUT against an admin target -- a `{name:'x'}` rename from a script --
+  // set mfaEnabled:false and nulled the secret and activation date.
+  //
+  // Reachability, which is what made it worse than latent: `createUser` gates
+  // this route and is granted to Coordenador as well as Administrador, and
+  // the #998/#1009 hierarchy floor is wrapped in `if (requestedAccessType)`
+  // so it fires only when the body carries accessType/roleName. A Coordenador
+  // sending `{name:'x'}` at an admin skipped the floor entirely.
+  //
+  // Direction from #999's closing comment: delete mfaEnabled from the body up
+  // front (the #993 shape), and narrow the clear branch's trigger from
+  // `undefined || false` to the actual promotion. Disabling MFA now goes
+  // through POST /:id/disable-mfa, which is permissioned, preserves the
+  // secret for re-activation, and writes its own audit row -- and which the
+  // operator UI already calls from a dedicated button.
+  it('#1021: um PUT que OMITE mfaEnabled nao toca no MFA de um alvo Administrador', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-1021',
+      name: 'Alvo Admin 1021',
+      email: 'alvo1021@bioavanced.com.br',
+      username: 'alvo1021',
+      status: 'active',
+      accessType: 4,
+      roleName: 'Administrador',
+      mfaEnabled: true,
+      mfaSecret: 'SEGREDO-QUE-DEVE-SOBREVIVER',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce(targetUser);
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-1021', accessType: 4 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-1021' },
+      body: { name: 'Nome Novo' },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect(setPayload).not.toHaveProperty('mfaEnabled');
+    expect(setPayload).not.toHaveProperty('mfaSecret');
+    expect(setPayload).not.toHaveProperty('mfaActivationDate');
+    // CONTROL within the case: the rename it actually asked for still happens,
+    // so this is not passing because the whole update was refused.
+    expect(setPayload.name).toBe('Nome Novo');
+  });
+
+  // #1021: an explicit `false` is no longer a disable either. The route stops
+  // being an MFA-disable path entirely; POST /:id/disable-mfa is the one.
+  it('#1021: um mfaEnabled:false explicito tambem nao desabilita mais por esta rota', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-1021b',
+      name: 'Alvo Admin 1021b',
+      email: 'alvo1021b@bioavanced.com.br',
+      username: 'alvo1021b',
+      status: 'active',
+      accessType: 4,
+      roleName: 'Administrador',
+      mfaEnabled: true,
+      mfaSecret: 'SEGREDO-QUE-DEVE-SOBREVIVER',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce(targetUser);
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-1021b', accessType: 4 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-1021b' },
+      body: { mfaEnabled: false },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect(setPayload).not.toHaveProperty('mfaEnabled');
+    expect(setPayload).not.toHaveProperty('mfaSecret');
   });
 
   it('GET /api/access deve listar acessos', async () => {

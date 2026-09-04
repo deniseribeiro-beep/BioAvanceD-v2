@@ -490,21 +490,34 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     delete req.body.mfaSecret;
     delete req.body.mfaActivationDate;
 
-    // Para Administrador, MFA é opcional e pode ser setado manualmente
-    if (isAdmin || isBecomingAdmin) {
-      // Se mfaEnabled foi fornecido explicitamente, mantém (admin pode setar MFA manualmente)
-      if (req.body.mfaEnabled === undefined || req.body.mfaEnabled === false) {
-        // Se não foi fornecido ou é false, desabilita
-        req.body.mfaEnabled = false;
-        req.body.mfaSecret = null;
-        req.body.mfaActivationDate = null;
-      }
-      // Se mfaEnabled é true, mantém (será configurado no próximo login se necessário)
-    } else {
-      // Para não-admin, remove campos MFA (não podem ser editados manualmente)
-      delete req.body.mfaEnabled;
-      delete req.body.mfaSecret;
-      delete req.body.mfaActivationDate;
+    // #1021: mfaEnabled agora também sai do body ANTES de qualquer branch.
+    // O guard aqui era `undefined || false`, então QUALQUER PUT parcial
+    // contra um alvo Administrador -- um `{name:'x'}` vindo de um script --
+    // gravava mfaEnabled:false e zerava segredo e data de ativação, sem que
+    // nada na resposta ou na trilha dissesse que o segundo fator tinha sido
+    // destruído. Não era um caso latente: `createUser` é concedido também ao
+    // Coordenador, e o piso de hierarquia de #998/#1009 está dentro de
+    // `if (requestedAccessType)`, ou seja, só dispara quando o body carrega
+    // accessType/roleName -- um `{name:'x'}` passava direto por ele.
+    //
+    // Forma decidida em #999: apagar o campo do body (a forma de #993) e
+    // estreitar o gatilho do clear para a PROMOÇÃO de fato. Desabilitar MFA
+    // passa a ter um caminho só -- POST /:id/disable-mfa -- que exige
+    // requirePermission('disableMFA'), verifica isAdministrator do chamador,
+    // PRESERVA o mfaSecret para reativação e escreve a própria linha de
+    // auditoria. A UI já chama exatamente esse endpoint num botão dedicado
+    // (SystemManagementPage.tsx), então nada no produto perde capacidade.
+    delete req.body.mfaEnabled;
+
+    // Promoção a Administrador: a matrícula anterior não vale para o novo
+    // papel, então é zerada aqui. Server-set -- é por isso que os três campos
+    // continuam em ALLOWED_USER_UPDATE_FIELDS. Note que o gatilho é
+    // isBecomingAdmin sozinho: um alvo que JÁ é admin não está sendo
+    // promovido, e um PUT nele não é uma decisão sobre o MFA dele.
+    if (isBecomingAdmin) {
+      req.body.mfaEnabled = false;
+      req.body.mfaSecret = null;
+      req.body.mfaActivationDate = null;
     }
     
     // Sempre remove campos de controle MFA (não podem ser editados manualmente)
