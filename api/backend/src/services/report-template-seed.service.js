@@ -62,6 +62,22 @@ function buildSystemTemplateDocs() {
  * Coordenador's later edit to a seeded row's name/description (or a
  * Coordenador retiring a system template via `templateStatus`) survives a
  * re-run of this seed.
+ *
+ * Two things established when this shipped, recorded here rather than only
+ * on the issue, because this function is where a later reader needs them:
+ *
+ * - Reconciling `isSystemDefined` cannot hijack an operator-authored
+ *   template. `reportTemplates.routes.js`'s POST 409s on a `code` that
+ *   already exists and hardcodes `isSystemDefined: false`, and this seed
+ *   runs at boot before any operator request can land -- so a row this
+ *   function reconciles is always one it inserted itself.
+ * - `handlerOptions` is compared with JSON.stringify, which is key-order
+ *   sensitive. Both rows carrying one today are single-key
+ *   (`{ mode: 'report' }` / `{ mode: 'control' }`), so it cannot churn. A
+ *   future multi-key `handlerOptions` whose key order differs between the
+ *   seed and what the driver returns would write on every boot -- harmless
+ *   but pointless, and the reason to switch to a deep compare is a second
+ *   key, not a bug report.
  */
 async function upsertByCode(collection, doc) {
   const filter = { code: doc.code };
