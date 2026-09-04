@@ -2,8 +2,8 @@ const mongoose = require('mongoose');
 
 const SensorMetadataSchema = new mongoose.Schema(
   {
-    sensorId: { type: String, required: true, trim: true, index: true },
-    macAddress: { type: String, required: true, trim: true, index: true },
+    sensorId: { type: String, required: true, trim: true },
+    macAddress: { type: String, required: true, trim: true },
     equipment: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Equipment',
