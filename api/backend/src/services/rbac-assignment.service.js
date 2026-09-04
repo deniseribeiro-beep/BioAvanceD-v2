@@ -511,7 +511,86 @@ function isRecordInOrganizationScope(record, scopeResult, fieldName) {
   return Boolean(value) && scopeResult.organizationIds.includes(value);
 }
 
+/**
+ * #1071 (RF008 AC#7): decides which organizationId a CREATE stamps.
+ *
+ * `requireOrganizationScope` resolves the caller's scope and refuses an
+ * org-less caller. It does not decide what a new record belongs to, and
+ * nothing validated a client-supplied organizationId against the caller's
+ * scope -- `assertOrganizationIdResolves` only asserts the Organization
+ * EXISTS, so naming a real organization you do not belong to passed it and
+ * created a record already outside your own reach.
+ *
+ * The rule, by scope:
+ *
+ *   global        Administrador. Unconstrained -- the body's value stands,
+ *                 or null. An administrator legitimately provisions for any
+ *                 organization, and this is the same treatment #637 already
+ *                 ships for Report.organizationIds (reports.routes.js maps
+ *                 a global scope to [] rather than refusing).
+ *   organization  exactly one id -- stamp it, ignore the body entirely.
+ *                 The body is caller-controlled and the scope is not.
+ *   organization  several ids -- the body must name one of them. Refusing
+ *                 to guess is the only safe option, and picking [0] would
+ *                 silently mis-file the record.
+ *
+ * The multi-id branch is currently UNREACHABLE through any route or script
+ * in this repo: every writer of a UserRoleAssignment scope funnels through a
+ * single scalar (registerUser, createFirstAdmin, user.routes.js's
+ * changeUserRole + grantAdditionalRole pair, and both backfills), and
+ * updateAssignmentScope converges every active org assignment onto one
+ * value. It is implemented rather than thrown away because
+ * resolveUserOrganizationScope's contract returns a list, and the branch
+ * that guesses is the one that would be wrong.
+ *
+ * Callers with NO resolved scope (the machine-ingest route, which has no
+ * user) must not call this -- see temperature.controller.
+ */
+function resolveOrganizationIdForCreate(organizationScope, requestedOrganizationId) {
+  const requested = requestedOrganizationId === undefined || requestedOrganizationId === ''
+    ? null
+    : requestedOrganizationId;
+
+  if (!organizationScope) {
+    // Fail CLOSED. A missing scope means requireOrganizationScope is not on
+    // the route, and falling back to the body here would silently restore
+    // the exact trust this function exists to remove. The one create with
+    // no caller scope -- POST /temperature/system/reading, machine ingest --
+    // does not call this at all; its controller branches first.
+    const error = new Error('Escopo organizacional não resolvido para esta criação');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  if (organizationScope.scope === 'global') {
+    return requested;
+  }
+
+  const ids = organizationScope.organizationIds || [];
+  if (ids.length === 1) {
+    return ids[0];
+  }
+
+  if (ids.length > 1) {
+    if (requested !== null && ids.includes(String(requested))) {
+      return String(requested);
+    }
+    const error = new Error(
+      'Informe organizationId: a sua conta pertence a mais de uma organização.'
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  // 'none'/'unassigned' -- requireOrganizationScope refuses these upstream,
+  // so reaching here means the middleware is missing from the route.
+  const error = new Error('Sem organização atribuída');
+  error.statusCode = 403;
+  throw error;
+}
+
 module.exports = {
+  resolveOrganizationIdForCreate,
   ROLE_CODE_BY_ACCESS_TYPE,
   getActiveAssignments,
   getActiveRoles,

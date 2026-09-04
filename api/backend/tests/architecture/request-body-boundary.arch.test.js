@@ -181,11 +181,13 @@ const UPDATE_SPREAD_EXEMPT = new Map([
   // not cause. Two entries because the write happens twice, once inside a
   // transaction and once in the non-transactional fallback.
   // Both moved down one line by #951, which added an `isTransactionCapable`
-  // require at the top of the file. The code and the reasoning are unchanged;
-  // only the line numbers moved, which is the "update the entry" case the
-  // companion test below names -- not the "delete the exemption" one.
-  ['interface/routes/equipment.routes.js:388:updateData', 'validated (#868)'],
-  ['interface/routes/equipment.routes.js:417:updateData', 'validated (#868)'],
+  // require at the top of the file, and down a further six by #1071, which
+  // added requireOrganizationScope to the POST plus its comment. The code and
+  // the reasoning are unchanged both times; only the line numbers moved,
+  // which is the "update the entry" case the companion test below names --
+  // not the "delete the exemption" one.
+  ['interface/routes/equipment.routes.js:394:updateData', 'validated (#868)'],
+  ['interface/routes/equipment.routes.js:423:updateData', 'validated (#868)'],
 ]);
 
 test('#839: no NEW update document is built by spreading a request body', () => {

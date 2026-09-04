@@ -1,23 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const {
-  grantRoleForAccessType,
-  changeUserRole,
-  backfillUserRoleAssignments,
-  userHasPermission,
-  getActiveRoleCodes,
-  isAuditReader,
-  isAdministrator,
-  findUserAccountIdsByRoleCodes,
-  grantAdditionalRole,
-  revokeAdditionalRole,
-  updateAssignmentScope,
-  resolveUserOrganizationScope,
-  isOrganizationScopeUsable,
-  applyOrganizationScopeFilter,
-  isRecordInOrganizationScope,
-} = require('../../src/services/rbac-assignment.service');
+const { grantRoleForAccessType, changeUserRole, backfillUserRoleAssignments, userHasPermission, getActiveRoleCodes, isAuditReader, isAdministrator, findUserAccountIdsByRoleCodes, grantAdditionalRole, revokeAdditionalRole, updateAssignmentScope, resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, resolveOrganizationIdForCreate } = require('../../src/services/rbac-assignment.service');
 const { createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 
@@ -606,5 +590,61 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
         });
       });
     });
+  });
+});
+
+// #1071: resolveOrganizationIdForCreate decides which organizationId a CREATE
+// stamps. The multi-organization branch is unreachable through every route
+// and script in this repo -- each writer of a UserRoleAssignment scope
+// funnels through a single scalar -- so these are the ONLY tests that reach
+// it, and they exist because the branch that guesses is the one that would be
+// wrong.
+describe('#1071: resolveOrganizationIdForCreate', () => {
+  it('stamps the single scoped organization and ignores the body', () => {
+    const scope = { scope: 'organization', organizationIds: ['org-a'] };
+    expect(resolveOrganizationIdForCreate(scope, 'org-b')).toBe('org-a');
+  });
+
+  it('stamps the single scoped organization when the body omits it', () => {
+    const scope = { scope: 'organization', organizationIds: ['org-a'] };
+    expect(resolveOrganizationIdForCreate(scope, undefined)).toBe('org-a');
+  });
+
+  it('leaves a global (Administrador) caller unconstrained', () => {
+    const scope = { scope: 'global', organizationIds: [] };
+    expect(resolveOrganizationIdForCreate(scope, 'org-b')).toBe('org-b');
+    expect(resolveOrganizationIdForCreate(scope, undefined)).toBeNull();
+  });
+
+  it('accepts a body value that names one of several scoped organizations', () => {
+    const scope = { scope: 'organization', organizationIds: ['org-a', 'org-b'] };
+    expect(resolveOrganizationIdForCreate(scope, 'org-b')).toBe('org-b');
+  });
+
+  it('refuses to guess when several organizations are in scope and the body names none', () => {
+    const scope = { scope: 'organization', organizationIds: ['org-a', 'org-b'] };
+    expect(() => resolveOrganizationIdForCreate(scope, undefined)).toThrow(/mais de uma organiza/);
+  });
+
+  it('refuses a body value outside a multi-organization scope', () => {
+    const scope = { scope: 'organization', organizationIds: ['org-a', 'org-b'] };
+    expect(() => resolveOrganizationIdForCreate(scope, 'org-z')).toThrow(/mais de uma organiza/);
+  });
+
+  // Fail CLOSED: a missing scope means requireOrganizationScope is not on the
+  // route. Falling back to the body there would restore exactly the trust
+  // this function removes.
+  it('throws 403 when no scope was resolved at all', () => {
+    expect(() => resolveOrganizationIdForCreate(undefined, 'org-b')).toThrow(/Escopo organizacional/);
+    try {
+      resolveOrganizationIdForCreate(undefined, 'org-b');
+    } catch (error) {
+      expect(error.statusCode).toBe(403);
+    }
+  });
+
+  it('throws 403 for an unassigned scope', () => {
+    expect(() => resolveOrganizationIdForCreate({ scope: 'unassigned', organizationIds: [] }, 'org-b'))
+      .toThrow(/Sem organiza/);
   });
 });

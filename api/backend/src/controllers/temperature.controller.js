@@ -2,6 +2,7 @@ const temperatureService = require('../services/temperature.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+const { resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
 
 /**
  * Controller de Temperatura
@@ -21,7 +22,15 @@ class TemperatureController {
         });
       }
 
-      const temperature = await temperatureService.createTemperatureReading(db, req.body);
+      // #1071: stamp the organization from the caller's resolved scope.
+      // req.organizationScope is undefined on POST /system/reading, the
+      // machine-ingest sibling, which has no user session and therefore no
+      // scope to derive from -- that route keeps the body's value and needs
+      // its own answer (recorded on #1071, not decided here).
+      const temperatureData = req.organizationScope
+        ? { ...req.body, organizationId: resolveOrganizationIdForCreate(req.organizationScope, req.body?.organizationId) }
+        : req.body;
+      const temperature = await temperatureService.createTemperatureReading(db, temperatureData);
 
       // Registra log (anonimizado via auditLogger)
       if (req.user) {

@@ -6,7 +6,7 @@ const logger = require('../../utils/logger');
 const EquipmentModel = require('../../models/Equipment');
 const { generateUniqueEquipmentID } = require('../../utils/equipmentIDGenerator');
 const defaultQuarantineService = require('../../services/equipment-sensor-quarantine.service');
-const { applyOrganizationScopeFilter, isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
+const { applyOrganizationScopeFilter, isRecordInOrganizationScope, resolveOrganizationIdForCreate } = require('../../services/rbac-assignment.service');
 const { isTransactionCapable } = require('../../utils/mongoTransaction');
 
 function createEquipmentValidationError(message, statusCode = 422) {
@@ -193,7 +193,10 @@ router.get('/:id', authenticate, requireOrganizationScope, async (req, res) => {
   }
 });
 
-router.post('/', authenticate, requirePermission('manageStorageTopology'), async (req, res) => {
+// #1071: requireOrganizationScope added -- this create had no scope
+// middleware at all, so there was nothing to stamp from and an org-less
+// caller was never refused.
+router.post('/', authenticate, requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -206,10 +209,13 @@ router.post('/', authenticate, requirePermission('manageStorageTopology'), async
       });
     }
 
-    await assertOrganizationIdResolves(db, req.body.organizationId);
+    // #1071: the organization comes from the caller's resolved scope, not
+    // the body. assertOrganizationIdResolves only checks the org EXISTS.
+    const organizationId = resolveOrganizationIdForCreate(req.organizationScope, req.body?.organizationId);
+    await assertOrganizationIdResolves(db, organizationId);
 
     // Prepara os dados, convertendo purchaseDate se necessário
-    const equipmentData = { ...req.body };
+    const equipmentData = { ...req.body, organizationId };
     if (equipmentData.purchaseDate) {
       equipmentData.purchaseDate = new Date(equipmentData.purchaseDate);
     }

@@ -20,6 +20,9 @@ const { requireMachineIngestSecret } = require('../../utils/machineIngestGate');
 router.post('/reading',
   authenticate,
   requirePermission('recordTemperature'),
+  // #1071: added -- this create had no scope middleware, so the organization
+  // a reading was filed under came straight from the request body.
+  requireOrganizationScope,
   temperatureController.createReading.bind(temperatureController)
 );
 

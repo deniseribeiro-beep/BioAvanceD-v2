@@ -85,12 +85,19 @@ describe('sensor.controller', () => {
     it('creates a sensor and logs audit when req.user is present', async () => {
       const sensor = { _id: { toString: () => 'sensor-1' }, sensorId: 'S-1' };
       createSensorMock.mockResolvedValue(sensor);
-      const req = createRequest({ user: { id: 'u1' }, body: { name: 'Fridge' } });
+      const req = createRequest({ user: { id: 'u1' }, body: { name: 'Fridge' }, organizationScope: { scope: 'organization', organizationIds: ['org-1'] } });
       const res = createResponse();
 
       await sensorController.create(req, res);
 
-      expect(createSensorMock).toHaveBeenCalledWith(req.app.locals.db, req.body);
+      // #1071: the controller stamps organizationId from the caller's
+      // resolved scope before calling the service, so the service no longer
+      // receives req.body unchanged. Asserting the stamped value is the
+      // point -- passing req.body through was the defect.
+      expect(createSensorMock).toHaveBeenCalledWith(
+        req.app.locals.db,
+        { ...req.body, organizationId: 'org-1' }
+      );
       expect(auditLoggerInitMock).toHaveBeenCalledWith(req.app.locals.db);
       expect(auditLoggerLogMock).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'CREATE', resourceType: 'Sensor', resourceId: 'sensor-1' })
@@ -106,7 +113,7 @@ describe('sensor.controller', () => {
     it('skips audit logging when req.user is absent', async () => {
       const sensor = { _id: { toString: () => 'sensor-2' }, sensorID: 'S-2' };
       createSensorMock.mockResolvedValue(sensor);
-      const req = createRequest({ body: { name: 'Freezer' } });
+      const req = createRequest({ body: { name: 'Freezer' }, organizationScope: { scope: 'organization', organizationIds: ['org-1'] } });
       const res = createResponse();
 
       await sensorController.create(req, res);
@@ -118,7 +125,7 @@ describe('sensor.controller', () => {
     it('falls back to sensorID in the audit message when sensorId is absent', async () => {
       const sensor = { _id: { toString: () => 'sensor-3' }, sensorID: 'S-3' };
       createSensorMock.mockResolvedValue(sensor);
-      const req = createRequest({ user: { id: 'u1' }, body: { name: 'Freezer' } });
+      const req = createRequest({ user: { id: 'u1' }, body: { name: 'Freezer' }, organizationScope: { scope: 'organization', organizationIds: ['org-1'] } });
       const res = createResponse();
 
       await sensorController.create(req, res);
@@ -130,7 +137,7 @@ describe('sensor.controller', () => {
 
     it('returns 400 when creation throws', async () => {
       createSensorMock.mockRejectedValue(new Error('boom'));
-      const req = createRequest({ body: {} });
+      const req = createRequest({ body: {}, organizationScope: { scope: 'organization', organizationIds: ['org-1'] } });
       const res = createResponse();
 
       await sensorController.create(req, res);
@@ -151,7 +158,7 @@ describe('sensor.controller', () => {
       const notFound = new Error('organizationId org-x não encontrado');
       notFound.statusCode = 404;
       createSensorMock.mockRejectedValue(notFound);
-      const req = createRequest({ body: { organizationId: 'org-x' } });
+      const req = createRequest({ body: { organizationId: 'org-x' }, organizationScope: { scope: 'global', organizationIds: [] } });
       const res = createResponse();
 
       await sensorController.create(req, res);

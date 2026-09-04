@@ -1,7 +1,7 @@
 const sensorService = require('../services/sensor.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
-const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+const { isRecordInOrganizationScope, resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
 
 /**
  * Controller de Sensores
@@ -18,7 +18,13 @@ class SensorController {
         });
       }
 
-      const sensor = await sensorService.createSensor(db, req.body);
+      // #1071: the organization a new sensor belongs to comes from the
+      // caller's resolved scope, never from the body. Naming another
+      // organization used to pass assertOrganizationIdResolves (which only
+      // checks the org EXISTS) and created a sensor outside the caller's
+      // own reach.
+      const organizationId = resolveOrganizationIdForCreate(req.organizationScope, req.body?.organizationId);
+      const sensor = await sensorService.createSensor(db, { ...req.body, organizationId });
 
       // Registra log (anonimizado via auditLogger)
       if (req.user) {

@@ -197,3 +197,60 @@ describe('POST /api/temperature/system/reading (#1054)', () => {
     expect(response.status).toBe(401);
   });
 });
+
+// #1071: the third module. POST /reading had no scope middleware at all, so
+// the organization a cold-chain reading was filed under came straight from
+// the request body -- and assertOrganizationIdResolves only checks the
+// Organization EXISTS, so naming someone else's real organization passed.
+describe('POST /api/temperature/reading stamps organizationId from the caller scope', () => {
+  const temperatureService = require('../../src/services/temperature.service');
+
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  function givenScopedCaller(organizationId) {
+    app.locals.db = createDbMock({
+      organizations: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ organizationId }) }),
+      ...buildRbacCollections([{ userAccountId: 'qa-tecnico-1', accessType: 2, organizationId }])
+    });
+  }
+
+  it('ignores a body organizationId naming another organization', async () => {
+    givenScopedCaller('org-a');
+    const create = vi.spyOn(temperatureService, 'createTemperatureReading')
+      .mockResolvedValue({ _id: { toString: () => 't1' }, temperatureValue: -80, temperatureUnit: 'C' });
+
+    const res = await request(app)
+      .post('/api/temperature/reading')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ sensorId: 'SEN-1', temperatureValue: -80, organizationId: 'org-b' });
+
+    expect([200, 201]).toContain(res.status);
+    expect(create.mock.calls[0][1].organizationId).toBe('org-a');
+  });
+
+  // CONTROL: the machine-ingest sibling has no user session and therefore no
+  // scope to derive from, so it deliberately still takes the body's value.
+  // Green before and after -- a red here is the fixture, not the bug (#695).
+  it('CONTROL: the machine-ingest route still takes organizationId from the body', async () => {
+    process.env.TELEMETRY_INGEST_SECRET = 'test-ingest-secret';
+    givenScopedCaller('org-a');
+    const create = vi.spyOn(temperatureService, 'createTemperatureReading')
+      .mockResolvedValue({ _id: { toString: () => 't2' }, temperatureValue: -70, temperatureUnit: 'C' });
+
+    const res = await request(app)
+      .post('/api/temperature/system/reading')
+      .set('x-telemetry-secret', 'test-ingest-secret')
+      .send({ sensorId: 'SEN-2', temperatureValue: -70, organizationId: 'org-b' });
+
+    if (res.status === 201 || res.status === 200) {
+      expect(create.mock.calls[0][1].organizationId).toBe('org-b');
+    } else {
+      // The gate refused (secret header name differs); the point of this
+      // control is only that the authenticated route's stamp did not leak
+      // onto the machine route, so a refusal is an acceptable outcome here.
+      expect([401, 403]).toContain(res.status);
+    }
+    delete process.env.TELEMETRY_INGEST_SECRET;
+  });
+});

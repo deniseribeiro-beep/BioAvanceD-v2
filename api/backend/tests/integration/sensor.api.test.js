@@ -440,3 +440,96 @@ describe('#1073: sensor writes are gated on a write permission, not viewTemperat
     expect(res.status).toBe(200);
   });
 });
+
+// #1071: requireOrganizationScope RESOLVES the caller's scope and refuses an
+// org-less caller. It does not decide which organization a CREATE stamps --
+// and nothing validated a client-supplied organizationId against the
+// caller's scope, so a caller could create a record already belonging to
+// another organization, out of their own reach the moment it landed.
+//
+// assertOrganizationIdResolves is not that check: it only asserts the
+// Organization EXISTS. Naming a real org you do not belong to passed it.
+//
+// The creates now stamp from the resolved scope and ignore the body's value.
+// Administrador resolves to scope 'global' with an empty organizationIds and
+// is deliberately left unconstrained -- that is the same shape #637 already
+// ships for Report.organizationIds in reports.routes.js.
+describe('#1071: a CREATE stamps organizationId from the caller resolved scope', () => {
+  const ORG_A = 'org-a';
+  const ORG_B = 'org-b';
+
+  function tokenFor(userAccountId, accessType) {
+    return jwt.sign(
+      { userID: userAccountId, accessType, roleName: 'Técnico', name: 'QA', mfaVerified: true },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+  }
+
+  it('ignores a body organizationId naming another organization', async () => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-org-a', accessType: 2, organizationId: ORG_A }])
+    });
+    const createSensor = vi.spyOn(sensorService, 'createSensor').mockResolvedValue({ ...FAKE_SENSOR, _id: { toString: () => 'new-id' } });
+
+    const res = await request(app)
+      .post('/api/sensors')
+      .set('Authorization', `Bearer ${tokenFor('qa-org-a', 2)}`)
+      .send({ sensorId: 'S-9', type: 'temperature', organizationId: ORG_B });
+
+    expect([200, 201]).toContain(res.status);
+    expect(createSensor).toHaveBeenCalled();
+    expect(createSensor.mock.calls[0][1].organizationId).toBe(ORG_A);
+  });
+
+  it('stamps the caller organization when the body omits it entirely', async () => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-org-a', accessType: 2, organizationId: ORG_A }])
+    });
+    const createSensor = vi.spyOn(sensorService, 'createSensor').mockResolvedValue({ ...FAKE_SENSOR, _id: { toString: () => 'new-id' } });
+
+    const res = await request(app)
+      .post('/api/sensors')
+      .set('Authorization', `Bearer ${tokenFor('qa-org-a', 2)}`)
+      .send({ sensorId: 'S-9', type: 'temperature' });
+
+    expect([200, 201]).toContain(res.status);
+    expect(createSensor.mock.calls[0][1].organizationId).toBe(ORG_A);
+  });
+
+  // Administrador resolves to scope 'global'. Unconstrained on purpose: an
+  // administrator legitimately provisions a sensor for any organization, and
+  // the #637 precedent treats global the same way.
+  it('CONTROL: an Administrador may still name any organization', async () => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-admin', accessType: 4 }])
+    });
+    const createSensor = vi.spyOn(sensorService, 'createSensor').mockResolvedValue({ ...FAKE_SENSOR, _id: { toString: () => 'new-id' } });
+
+    const res = await request(app)
+      .post('/api/sensors')
+      .set('Authorization', `Bearer ${jwt.sign({ userID: 'qa-admin', accessType: 4, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true }, process.env.JWT_SECRET, { expiresIn: '1h' })}`)
+      .send({ sensorId: 'S-9', type: 'temperature', organizationId: ORG_B });
+
+    expect([200, 201]).toContain(res.status);
+    expect(createSensor.mock.calls[0][1].organizationId).toBe(ORG_B);
+  });
+
+  // CONTROL: unchanged by this fix -- an org-less caller was already refused
+  // by requireOrganizationScope before any of this runs. Red here means the
+  // fixture, not the bug (#695).
+  it('CONTROL: an org-less caller is still refused before the stamp', async () => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-orgless', accessType: 2, organizationId: '' }])
+    });
+    vi.spyOn(sensorService, 'createSensor').mockResolvedValue(FAKE_SENSOR);
+
+    const res = await request(app)
+      .post('/api/sensors')
+      .set('Authorization', `Bearer ${tokenFor('qa-orgless', 2)}`)
+      .send({ sensorId: 'S-9', type: 'temperature', organizationId: ORG_B });
+
+    expect(res.status).toBe(403);
+    expect(sensorService.createSensor).not.toHaveBeenCalled();
+  });
+});
