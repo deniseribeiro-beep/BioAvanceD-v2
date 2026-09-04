@@ -676,6 +676,37 @@ describe('BatchValidationEngine file readers', () => {
     expect(engine.detectCsvSeparator(filePath)).toBe(';');
   });
 
+  // #1041: an interior blank line arrives from csv-parser as `{}`, which the
+  // old `typeof row === 'object'` guard kept. It then occupied an array slot,
+  // was counted in totalRows, classified INVALID, and persisted as a durable
+  // quarantine record whose `row` was an empty object -- an operator-visible
+  // rejected row for a line that carries no data at all.
+  //
+  // The order here is the one #1041 insists on: line tracking FIRST, filter
+  // SECOND. Filtering alone would introduce the blank-row drift this reader
+  // did not previously have, because `index + 2` stayed aligned precisely
+  // BECAUSE the `{}` occupied a slot. Same shape as import-lgpd.service.js's
+  // #1023 reader, which increments its counter on every data event and pushes
+  // to sourceLines only for the rows it keeps.
+  it('readCsvRows drops an interior blank line instead of quarantining it as an empty row (#1041)', async () => {
+    const filePath = writeTmpFile('rows.csv', 'a,b\n1,x\n\n3,z\n');
+
+    const rows = await engine.readCsvRows(filePath);
+
+    expect(rows).toEqual([{ a: '1', b: 'x' }, { a: '3', b: 'z' }]);
+  });
+
+  it('readCsvRows reports the true physical line for rows after an interior blank line (#1041)', async () => {
+    const filePath = writeTmpFile('rows.csv', 'a,b\n1,x\n\n3,z\n');
+
+    const rows = await engine.readCsvRows(filePath);
+
+    // Header is physical line 1, so the two data rows are lines 2 and 4.
+    // Dropping the blank without tracking would report them as 2 and 3.
+    expect(rows.sourceLines).toEqual([2, 4]);
+    expect(Object.prototype.propertyIsEnumerable.call(rows, 'sourceLines')).toBe(false);
+  });
+
   it('readCsvRows parses rows using the detected separator', async () => {
     const filePath = writeTmpFile('data.csv', 'a;b\n1;2\n3;4\n');
     const rows = await engine.readCsvRows(filePath);

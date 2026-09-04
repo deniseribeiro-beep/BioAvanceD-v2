@@ -201,16 +201,49 @@ class BatchValidationEngine {
   async readCsvRows(filePath) {
     return new Promise((resolve, reject) => {
       const rows = [];
+      // #1041: ORDER MATTERS -- line tracking first, filter second.
+      //
+      // csv-parser emits an interior blank line as `{}`, and the old guard
+      // (`typeof row === 'object'`) kept it. That empty object occupied an
+      // array slot, was counted in totalRows, classified INVALID, and
+      // persisted as a durable quarantine record whose `row` was `{}` -- a
+      // rejected row an operator can neither correct nor resubmit, for a line
+      // carrying no data.
+      //
+      // Dropping it ALONE would have introduced a defect this reader did not
+      // have: the old `index + rowBaseNumber` arithmetic stayed aligned
+      // precisely BECAUSE the `{}` held a slot. So the counter below is
+      // incremented on EVERY data event and pushed only for rows we keep --
+      // the same shape as import-lgpd.service.js's #1023 reader.
+      //
+      // The residual is #1035's and is unchanged here: csv-parser emits one
+      // data event per RECORD, so a quoted embedded newline still spans
+      // physical lines this counter cannot see.
+      let physicalLine = 1;
+      const sourceLines = [];
       const separator = this.detectCsvSeparator(filePath);
 
       fs.createReadStream(filePath)
         .pipe(csvParser({ separator }))
         .on('data', (row) => {
           if (row && typeof row === 'object') {
-            rows.push(row);
+            physicalLine += 1;
+            const hasData = Object.values(row).some((value) => value && String(value).trim());
+            if (hasData) {
+              rows.push(row);
+              sourceLines.push(physicalLine);
+            }
           }
         })
-        .on('end', () => resolve(rows))
+        .on('end', () => {
+          // Non-enumerable for the same reason as readXlsxRows' pair: the
+          // readers' tests compare the array itself with `toEqual`.
+          Object.defineProperty(rows, 'sourceLines', {
+            value: sourceLines,
+            enumerable: false,
+          });
+          resolve(rows);
+        })
         .on('error', reject);
     });
   }
