@@ -67,6 +67,21 @@ function createCollectionMock(overrides = {}) {
   return {
     deleteOne: v.fn().mockResolvedValue({ deletedCount: 0 }),
     insertOne: v.fn().mockResolvedValue({ insertedId: randomUUID() }),
+    // #1043: this default makes `matchedCount === 0` UNREACHABLE for any
+    // test that leaves it alone. Every compare-and-set occupancy guard in
+    // MongoStorageRepository.js -- moveSamplePosition's source (line 330)
+    // and target/STORAGE_COLLISION (line 365) checks, its sample-update
+    // check (line 381), allocateSamplePosition's STORAGE_COLLISION (line
+    // 460), autoAssignSamplePosition's box (line 548) and sample (line 566)
+    // checks, and releaseSamplePosition's "Origem inconsistente" check
+    // (line 686) -- branches on that comparison and can never fire against
+    // this default. A test asserting one of those guards MUST override
+    // `updateOne` on this mock itself, or use `createContendedCollectionMock`
+    // below, which supplies `{ matchedCount: 0, modifiedCount: 0 }` instead.
+    // A green test against the default alone proves only that the write
+    // path was reached, not that the guard does anything. Left unchanged on
+    // purpose -- see createContendedCollectionMock, not this default, for
+    // the compare-and-set-contended case.
     updateOne: v.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     findOne: v.fn().mockResolvedValue(null),
     findOneAndUpdate: v.fn().mockResolvedValue({ seq: 1 }),
@@ -212,8 +227,31 @@ function createForeignBsonGuardCollectionMock(overrides = {}) {
   return mock;
 }
 
+// #1043: createCollectionMock's own `updateOne` default (`matchedCount: 1,
+// modifiedCount: 1`) makes every compare-and-set occupancy guard in
+// MongoStorageRepository.js unreachable -- see the comment on that default
+// above. This is the additive, opt-in fix: identical to createCollectionMock
+// except `updateOne` resolves `{ matchedCount: 0, modifiedCount: 0 }` by
+// construction, so a test asserting a guard fires doesn't have to hand-roll
+// the override itself. `overrides` is applied last, same as
+// createCollectionMock's own contract, so a caller can still override
+// `updateOne` (or anything else) on top. Additive only -- does not change
+// createCollectionMock's own default for existing callers.
+function createContendedCollectionMock(overrides = {}) {
+  const v = globalThis.vi;
+  if (!v) {
+    throw new Error('Vitest global "vi" is not available in db factory context');
+  }
+
+  return createCollectionMock({
+    updateOne: v.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 }),
+    ...overrides,
+  });
+}
+
 module.exports = {
   createCollectionMock,
   createDbMock,
   createForeignBsonGuardCollectionMock,
+  createContendedCollectionMock,
 };

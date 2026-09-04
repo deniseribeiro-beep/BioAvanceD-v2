@@ -4,6 +4,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const MongoStorageRepository = require('../../src/infrastructure/persistence/mongo/MongoStorageRepository.js');
+const { createContendedCollectionMock } = require('../factories/db.factory.js');
 
 function makeCollection(overrides = {}) {
   return {
@@ -663,6 +664,34 @@ describe('MongoStorageRepository', () => {
       const storageBoxes = makeCollection({
         findOne: vi.fn().mockResolvedValueOnce(boxDoc),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 0 })
+      });
+      const db = makeDb({ samples, storageBoxes });
+      const repo = new MongoStorageRepository(db);
+
+      await expect(repo.allocateSamplePosition(baseInput, {})).rejects.toThrow(
+        'STORAGE_COLLISION'
+      );
+    });
+
+    // #1043: pins the STORAGE_COLLISION guard (matchedCount === 0 at
+    // MongoStorageRepository.js:460) actually firing, via
+    // createContendedCollectionMock rather than a hand-rolled
+    // `{ matchedCount: 0 }` override -- see db.factory.js's warning on
+    // createCollectionMock's own `updateOne` default (matchedCount: 1) for
+    // why the two are not interchangeable: a test built on that default
+    // alone can never reach this branch.
+    it('#1043: throws STORAGE_COLLISION when the box updateOne is contended via createContendedCollectionMock', async () => {
+      // `samples.updateOne` resolves a real matched result on purpose: with a
+      // bare vi.fn() the post-guard `updateSample.modifiedCount` read throws a
+      // TypeError, so deleting the guard would red this test for the wrong
+      // reason. Given a real result, deleting it makes the call RESOLVE, and
+      // the failure reads "promise resolved instead of rejecting".
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId }),
+        updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
+      });
+      const storageBoxes = createContendedCollectionMock({
+        findOne: vi.fn().mockResolvedValueOnce(boxDoc)
       });
       const db = makeDb({ samples, storageBoxes });
       const repo = new MongoStorageRepository(db);
