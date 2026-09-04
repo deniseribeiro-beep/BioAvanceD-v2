@@ -4,6 +4,7 @@ const logger = require('../utils/logger');
 const defaultQuarantineService = require('./equipment-sensor-quarantine.service');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 const { isTransactionCapable } = require('../utils/mongoTransaction');
+const { ensureSensorMetadataIndexes } = require('../utils/storageIndexes');
 
 function createSensorValidationError(message, statusCode = 422) {
   const error = new Error(message);
@@ -81,6 +82,7 @@ class SensorService {
   async linkSensorMetadata(db, sensorId, macAddress, storageContainerId) {
     try {
       const sensorMetadataCollection = db.collection('sensorMetadata');
+      ensureSensorMetadataIndexes(sensorMetadataCollection);
       const set = { sensorId, macAddress, updatedAt: new Date() };
       if (storageContainerId) {
         set.storageContainer = ObjectId.isValid(storageContainerId)

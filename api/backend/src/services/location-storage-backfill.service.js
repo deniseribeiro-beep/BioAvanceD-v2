@@ -1,4 +1,5 @@
 const StorageAssignmentModel = require('../models/StorageAssignment');
+const { ensureStorageContainerIndexes } = require('../utils/storageIndexes');
 
 /**
  * #461 — one-time backfill: legacy `locations` (+ Sample.locationID
@@ -16,6 +17,7 @@ async function backfillLocationsToStorage(db) {
   const equipmentCollection = db.collection('equipment');
   const samplesCollection = db.collection('samples');
   const storageContainersCollection = db.collection('storageContainers');
+  ensureStorageContainerIndexes(storageContainersCollection);
   const storageBoxesCollection = db.collection('storageBoxes');
   const storageAssignmentsCollection = db.collection('storageAssignments');
 
