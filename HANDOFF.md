@@ -3,7 +3,9 @@
 **Written 2026-09-04, fourteenth queue sitting. INTERIM — no end signal
 given, so treat the session as CONTINUING.** Dennis asked for "the next 10
 issues, Docker is on." **7 of the 10 are closed; 3 are open with the work
-recorded on them.** Both owed gates from the previous note have now run.
+recorded on them.** An 8th issue, **#1059**, was found BY the Docker gate,
+filed and fixed here. Both owed gates from the previous note have now run,
+and both are green.
 
 Re-derive every count below rather than trusting it.
 
@@ -13,12 +15,12 @@ Re-derive every count below rather than trusting it.
 
 - Branch `feature/docker-e2e-backend-integration`, **clean and matching
   origin**. `main` untouched, no PR.
-- **5 commits this sitting**, last substantive one `8a7750bc` (#1037).
+- **7 commits this sitting**, last substantive one `59e19054` (#1059).
   `git status -sb` and `git log` are authoritative.
 - **No new npm scripts, dependencies or env keys.** One new import in
   `auth.routes.js` (`requirePermission`, from a module already in the tree).
 
-## The two owed gates: both RUN, and one is RED for a reason that is not ours
+## The two owed gates: both RUN, both GREEN
 
 - **Native regression — GREEN.** `[ran it]` the sanctioned three-directory
   form: **460 files / 8466 tests / 0 failures, 703s.** Coverage 92.12%
@@ -33,23 +35,26 @@ Re-derive every count below rather than trusting it.
     Past the Bash tool's 600s ceiling, so backgrounding it is mandatory.
 - **Frontend — GREEN.** `[ran it]` 32 files / 262 tests, and
   `tsc --noEmit` clean (0 `error TS`).
-- **Docker gate — RED, pre-existing, filed as #1059.** `[ran it]`
-  `backend-unit-runner` (the exact command CI's `current-state-validation`
-  runs): **108 pass / 13 fail**. All 13 are
-  `e2e-fixture-model-fidelity.arch.test.js`, all `ENOENT
-  /tests/e2e/helpers/seedParticipant.ts`. That file climbs four directories
-  to read repo-root `tests/e2e/`, which the backend image cannot contain —
-  its build context is `./api/backend`. **`[ran it]` the same suite is
-  122/122 natively**, and `git merge-base --is-ancestor f8443983 9232979b`
-  confirms the test predates this sitting.
-  - **So CI is red on `main` today and nobody can see it**, because CI fires
-    only on `main` (frozen, #90) and last ran 2026-07-31 — before the test
-    landed. **Read #1059 before opening any PR to `main`.**
-  - `[ran it]` The rest of `current-state:ci` **passes in-container** when
-    run past the arch step: essential reference data validated, dictionary
-    catalog **929/929 (v1.3.0)**, compliance evidence generated. So the
-    branch's own work has a green Docker signal; only the pre-existing
-    arch test is red.
+- **Docker gate — was RED on arrival, found, fixed and now GREEN.**
+  `[ran it]` `backend-unit-runner` (the exact command CI's
+  `current-state-validation` runs) initially gave **108 pass / 13 fail**,
+  exit 1. All 13 were `e2e-fixture-model-fidelity.arch.test.js` failing
+  `ENOENT /tests/e2e/helpers/seedParticipant.ts` — that file climbs four
+  directories to repo-root `tests/e2e/`, which the backend image cannot
+  contain (build context `./api/backend`). Latent since `f8443983`
+  (2026-08-28), and **invisible because CI fires only on `main`** (frozen,
+  #90) and last ran 2026-07-31.
+  - **Worse than a red check: `current-state:ci` chains with `&&` starting
+    at that suite, so seed validation, dictionary validation and
+    compliance-evidence generation were not executing at all.**
+  - **Fixed in `59e19054` (#1059, closed).** `[ran it]` the gate now:
+    **122 tests, 108 pass, 0 fail, 14 skipped, exit 0**, and the three
+    downstream steps run — essential reference data validated, dictionary
+    catalog **929/929 (v1.3.0)**, compliance evidence generated.
+  - `[ran it]` CONTROL, native: **122/122, 0 skipped** — unchanged, so the
+    guard still runs in full wherever the e2e tree exists.
+  - **So the gate now means what `ship-integration-branch` says it means:
+    exit 0 with nothing to explain away.**
 - **Nothing left running.** No containers (`--rm`), tree clean. Build cache
   pruned (`-af`, 610.5MB). Images and named volumes are the usual persistent
   set — kept deliberately; the rebuilt `bioavanced-test-backend-unit-runner`
@@ -59,9 +64,10 @@ Re-derive every count below rather than trusting it.
   re-derived from `coverage/coverage-summary.json` (`lines.pct` per file)
   **without paying the 703s run again**. Delete it once that is done.
 
-## Closed (7)
+## Closed (8)
 
-`#1044` `#1048` `#1052` `#1047` `#983` `#1037` `#1046`.
+`#1044` `#1048` `#1052` `#1047` `#983` `#1037` `#1046` — plus `#1059`,
+filed and closed this sitting.
 Each carries its own evidence in its close comment.
 
 **`#1044` was reported closed by the previous handoff and was not.** Its fix
@@ -117,9 +123,15 @@ commit message discharges nothing. Close by hand, every time.
 
 ## Filed this sitting
 
-**#1053 #1054 #1055 #1056 #1057 #1058 #1059** — all OPEN and unworked.
-**#1056 and #1054 are security findings**, #1059 is the CI blocker above.
-Query the board for everything else: `gh issue list --state open`.
+**#1053 #1054 #1055 #1056 #1057 #1058** open and unworked; **#1059 filed
+and CLOSED this sitting** (the gate fix above). **#1056 and #1054 are
+security findings.** Query the board for everything else:
+`gh issue list --state open`.
+
+On the pack: **#753** (three stale facts in `ship-integration-branch`'s
+overlay, including the "2 expected compliance failures" that no longer
+occur), **#754**, **#755**. Those three cannot be worked from this repo —
+Rule 0 makes skill files editable only from a pack-repo session.
 
 ## Conventions this sitting relied on / established
 
@@ -149,9 +161,13 @@ Query the board for everything else: `gh issue list --state open`.
 
 ## Recommended next
 
-**Dennis named no successor to the ten.** On the evidence above, **#1059
-first** — it is the only thing standing between this branch and a green CI
-check, it is not the branch's own defect, and its cheapest direction is a
-few lines. Then **#1056** (audit-trail bypass, the most severe of the
-security findings). #1050 piece 2 and #1058 are one change and should be
-done together.
+**Dennis named no successor to the ten.** #1059 is done, so the CI blocker
+is cleared. On the evidence above, **#1056 first** — the audit-trail bypass
+is the most severe finding of the sitting, its direction 1 ("add
+`requireAuditReader` to the audit-trail report types") is stated in the
+issue as not optional under any reading, and it was filed and left unworked
+by choice, not by any blocker. Then **#1050 piece 2 together with #1058** —
+they are one `COLUMN_CATALOG` change approached from opposite ends, and
+doing either alone wastes the other. **#1054** is a one-`git grep` triage
+away from being decidable (does anything call `POST
+/api/temperature/system/reading`?).
