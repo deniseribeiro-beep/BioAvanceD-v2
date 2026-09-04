@@ -204,7 +204,8 @@ class ImportLGPDService {
         return reject(new Error('Arquivo não encontrado'));
       }
 
-      const fileContent = fs.readFileSync(filePath, 'utf8');
+      const fileBuffer = fs.readFileSync(filePath);
+      const fileContent = fileBuffer.toString('utf8');
       const firstNonEmptyLine = fileContent
         .split(/\r?\n/)
         .find((line) => String(line || '').trim().length > 0) || '';
@@ -240,28 +241,53 @@ class ImportLGPDService {
       // Ou seja: a contagem abaixo sempre esteve correta; o que estava errado
       // era este comentario atribuir o descarte a `skipEmptyLines`.
       let skippedByHasData = 0;
-      // #1023: a linha FISICA no arquivo que o operador enviou. Comeca em 1
-      // (o header) e e' incrementada para TODA linha que chega ao handler,
-      // antes do teste `hasData` -- exatamente como
-      // reference-imports/parseJsonLines.js ja faz do outro lado do repo.
-      // Sem isto o numero reportado era o indice na lista JA FILTRADA mais um
-      // header, que so' coincide com a linha fisica quando nao ha linha em
-      // branco antes dela.
+      // #1035: a linha FISICA no arquivo que o operador enviou, derivada do
+      // `byteOffset` que o csv-parser 3.2.0 reporta por registro quando
+      // `outputByteOffset: true` (ver node_modules/csv-parser/index.js --
+      // `writeRow` empacota `{ row, byteOffset }` nesse modo, e o offset
+      // aponta para o primeiro byte do registro). `newlineByteOffsets` e' a
+      // posicao de cada 0x0A no arquivo, calculada uma unica vez sobre
+      // `fileBuffer` (O(n)); a linha fisica de um registro e' quantas dessas
+      // posicoes ficam estritamente antes do seu `byteOffset`, mais 1 --
+      // resolvido por busca binaria por registro (O(log n)), nao por
+      // varredura.
       //
-      // Limitacao conhecida, nao uma regressao: um registro CSV com uma quebra
-      // de linha dentro de campo entre aspas ocupa varias linhas fisicas e
-      // produz um unico evento 'data', entao o contador desliza nesse caso. O
-      // `i + 2` anterior errava igualmente ali.
-      let physicalLine = 1;
+      // Byte, nao caractere: `fileBuffer` e' lido como Buffer (nao
+      // `.toString('utf8')`) exatamente para isto -- o texto e' portugues
+      // acentuado, e um indice de string diverge de um indice de byte a
+      // partir do primeiro caractere multibyte.
+      //
+      // Substitui o contador antigo (`physicalLine += 1` por evento 'data'),
+      // que era exato so' enquanto o csv-parser emitia um evento por linha
+      // fisica -- falso para um registro com quebra de linha dentro de um
+      // campo entre aspas, que ocupa varias linhas fisicas mas produz um
+      // unico evento. A partir desse registro o contador antigo desliza para
+      // todo registro seguinte; a busca por byteOffset nao depende de quantas
+      // linhas fisicas um registro ocupou.
+      const newlineByteOffsets = [];
+      for (let i = 0; i < fileBuffer.length; i += 1) {
+        if (fileBuffer[i] === 0x0a) newlineByteOffsets.push(i);
+      }
+      const physicalLineForByteOffset = (byteOffset) => {
+        let lo = 0;
+        let hi = newlineByteOffsets.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (newlineByteOffsets[mid] < byteOffset) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo + 1;
+      };
       const sourceLines = [];
       fs.createReadStream(filePath)
         .pipe(csv({
           separator,
           skipEmptyLines: true,
-          skipLinesWithError: false
+          skipLinesWithError: false,
+          outputByteOffset: true
         }))
-        .on('data', (row) => {
-          physicalLine += 1;
+        .on('data', ({ row, byteOffset }) => {
+          const physicalLine = physicalLineForByteOffset(byteOffset);
           // Filtra linhas vazias
           const hasData = Object.values(row).some(val => val && String(val).trim());
           if (hasData) {

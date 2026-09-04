@@ -171,6 +171,76 @@ describe('ImportLGPDService.readCSV', () => {
     expect(Object.keys(rows)).not.toContain('sourceLines');
   });
 
+  // #1035: a record with a quoted embedded newline spans multiple physical
+  // lines but is still a single csv-parser 'data' event. The record itself
+  // (patientName "multi\nline") occupies physical lines 3-4 and is correctly
+  // reported at its start line, 3 -- the assertion that actually pins the
+  // fix is the record AFTER it: Maria Souza is truly on physical line 5, but
+  // the old per-event counter (one increment per 'data' event, regardless of
+  // how many physical lines that event consumed) reports 4 there.
+  it('#1035: reports the true physical line for a record after one with a quoted embedded newline', async () => {
+    const filePath = writeTmpFile(
+      'embedded-newline.csv',
+      'patientName,birthDate,notes\nJoão Silva,25/12/1990,ok\n"multi\nline",01/01/2000,notes2\nMaria Souza,02/02/2000,ok3\n'
+    );
+
+    const rows = await importLgpdService.readCSV(filePath);
+
+    expect(rows).toEqual([
+      { patientName: 'João Silva', birthDate: '25/12/1990', notes: 'ok' },
+      { patientName: 'multi\nline', birthDate: '01/01/2000', notes: 'notes2' },
+      { patientName: 'Maria Souza', birthDate: '02/02/2000', notes: 'ok3' },
+    ]);
+    // Physical lines: 1=header, 2=João, 3-4=quoted record (starts at 3),
+    // 5=Maria. The old per-event counter reports [2, 3, 4] here.
+    expect(rows.sourceLines).toEqual([2, 3, 5]);
+  });
+
+  // Control twin of the case above: same row count and shape, but no
+  // embedded newline anywhere, so every record occupies exactly one
+  // physical line. Numbers here must be identical before and after #1035 --
+  // this is what separates a real fix from a broken fixture in the case
+  // above.
+  it('#1035: control -- physical line numbers are unchanged when no record spans multiple lines', async () => {
+    const filePath = writeTmpFile(
+      'no-embedded-newline.csv',
+      'patientName,birthDate,notes\nJoão Silva,25/12/1990,ok\nPedro Costa,03/03/1985,ok2\nMaria Souza,02/02/2000,ok3\n'
+    );
+
+    const rows = await importLgpdService.readCSV(filePath);
+
+    expect(rows).toEqual([
+      { patientName: 'João Silva', birthDate: '25/12/1990', notes: 'ok' },
+      { patientName: 'Pedro Costa', birthDate: '03/03/1985', notes: 'ok2' },
+      { patientName: 'Maria Souza', birthDate: '02/02/2000', notes: 'ok3' },
+    ]);
+    expect(rows.sourceLines).toEqual([2, 3, 4]);
+  });
+
+  // #1035: multi-byte UTF-8 (accented Portuguese) before later records. The
+  // reader now derives physical lines from BYTE offsets over a Buffer
+  // (fileBuffer), not from JS string/character positions -- a char-index
+  // mistake would undercount here, because each accented character below is
+  // 2 bytes in UTF-8 but 1 UTF-16 code unit in a JS string. Verified by hand
+  // (Buffer.byteLength arithmetic): a char-offset-based newline table would
+  // misreport the row after the accented one as line 4 (not 3) and the row
+  // after that as line 5 (not 4).
+  it('#1035: reports the true physical line for records after one with multi-byte UTF-8 fields', async () => {
+    const filePath = writeTmpFile(
+      'multibyte-utf8.csv',
+      'patientName,birthDate,notes\náéíóúÁÉÍÓÚãõÃÕçÇâêîôûÂÊÎÔÛàèìòù,25/12/1990,acentuado\nx,1,y\nMaria Souza,02/02/2000,ok3\n'
+    );
+
+    const rows = await importLgpdService.readCSV(filePath);
+
+    expect(rows).toEqual([
+      { patientName: 'áéíóúÁÉÍÓÚãõÃÕçÇâêîôûÂÊÎÔÛàèìòù', birthDate: '25/12/1990', notes: 'acentuado' },
+      { patientName: 'x', birthDate: '1', notes: 'y' },
+      { patientName: 'Maria Souza', birthDate: '02/02/2000', notes: 'ok3' },
+    ]);
+    expect(rows.sourceLines).toEqual([2, 3, 4]);
+  });
+
   it('rejects a CSV with a header but no data rows', async () => {
     const filePath = writeTmpFile('header-only.csv', 'patientName,birthDate\n');
 
