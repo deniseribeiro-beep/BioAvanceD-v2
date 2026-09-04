@@ -56,6 +56,14 @@ async function postLoginAttempts(app, count) {
 }
 
 describe('#359: authLimiter budget requires the explicit AUTH_RATE_LIMIT_RELAXED opt-in', () => {
+  // #1038: this test measured at 3966ms of the default 5000ms budget (79%)
+  // on an idle machine, and timed out under scheduling pressure in a full
+  // 458-file regression run. The duration is INHERENT to what the test
+  // proves: exhausting the strict (non-relaxed) budget requires actually
+  // firing enough real requests to exceed it, so this is real work, not a
+  // sleep to optimise away. 15000ms leaves generous headroom over the
+  // measured cost and matches this repo's convention for slow tests
+  // (see tests/unit/iot.controller.test.js).
   it('stays strict under NODE_ENV=development alone, with no explicit opt-in set', async () => {
     const app = loadAppWithEnv('development', { relaxed: false });
 
@@ -63,7 +71,7 @@ describe('#359: authLimiter budget requires the explicit AUTH_RATE_LIMIT_RELAXED
 
     const rateLimited = responses.filter((res) => res.status === 429);
     expect(rateLimited.length).toBeGreaterThan(0);
-  });
+  }, 15000);
 
   it('allows more than 10 /api/auth requests/min when the explicit opt-in is set (real Docker dev stack)', async () => {
     const app = loadAppWithEnv('development', { relaxed: true });
