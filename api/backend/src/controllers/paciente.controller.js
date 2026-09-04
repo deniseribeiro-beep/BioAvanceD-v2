@@ -370,7 +370,11 @@ class PacienteController {
       // fields on the participant resource even to callers with createPatient
       // permission. Re-identification is a separate authorized/audited flow
       // (not yet built — tracked in the #363 follow-up).
-      const { patientName, birthDate, identityDocument, ...participantResource } = patient;
+      // #1045: consentToken rode along in this rest-spread. It is the sole
+      // credential for the public consent-tokens/accept route, so it comes
+      // out here too -- not just on the list/search routes the issue named.
+      const { patientName, birthDate, identityDocument, ...rawParticipantResource } = patient;
+      const participantResource = PatientModel.stripConsentSecrets(rawParticipantResource);
 
       return res.status(200).json({
         success: true,
@@ -855,7 +859,9 @@ class PacienteController {
 
       return res.status(200).json({
         success: true,
-        data: patient
+        // #1045: this handler returned the RAW Mongo document with no shaping
+        // at all, consentToken included.
+        data: PatientModel.stripConsentSecrets(patient)
       });
     } catch (error) {
       logger.error('Erro ao buscar paciente para edição:', error.message);

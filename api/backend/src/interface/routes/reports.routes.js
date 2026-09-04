@@ -4,6 +4,8 @@ const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const ReportsModel = require('../../models/Reports');
+// #1045: stripConsentSecrets -- the patient reports return raw participant documents.
+const PatientModel = require('../../models/Patient');
 const { SampleModel } = require('../../models/Sample');
 const { SPECIMEN_TYPE_IDS, SAMPLE_ORIGIN_IDS } = require('../../config/constants/specimen.constants');
 const logger = require('../../utils/logger');
@@ -457,7 +459,10 @@ async function handleSamplesByPatient(db, filters) {
     return acc;
   }, {});
 
-  const enrichedPatients = patients.map((patient) => {
+  const enrichedPatients = patients.map((rawPatient) => {
+    // #1045: same leak as handlePatient above -- the spread below carried
+    // consentToken into the samples-by-patient report.
+    const patient = PatientModel.stripConsentSecrets(rawPatient);
     const key = String(patient.participantId || '');
     const patientSamples = groupedSamples[key] || [];
     const limitedSamples = patientSamples.slice(0, 10);
@@ -518,7 +523,14 @@ async function handlePatient(db, filters) {
   }
 
   const query = patientQueryParts.length > 0 ? { $and: patientQueryParts } : {};
-  const patients = await collection.find(query).limit(50).toArray();
+  const rawPatients = await collection.find(query).limit(50).toArray();
+  // #1045: these raw documents feed the preview, the CSV export and the
+  // "PDF" export. toCsvRows derives its columns from Object.keys(rows[0])
+  // with no allow-list, so an operator-downloadable CSV carried every
+  // participant's live consentToken. Note this route is gated on
+  // `viewReports`, NOT `createPatient` -- a different and broader population
+  // than the two routes #1045 examined.
+  const patients = PatientModel.stripConsentSecrets(rawPatients);
   const total = await collection.countDocuments(query);
   return { total, patients, previewLimited: total > 50 };
 }

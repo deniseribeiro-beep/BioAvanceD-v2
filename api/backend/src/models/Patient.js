@@ -113,4 +113,40 @@ class ParticipantModel {
 
 ParticipantModel.CANONICAL_FIELDS = CANONICAL_FIELDS;
 
+/**
+ * #1045: removes the consent CREDENTIAL from a participant document on its way
+ * out of the API.
+ *
+ * `consentToken` is the 64-char secret minted by NotificationService and is
+ * the SOLE credential for the deliberately-unauthenticated
+ * POST /api/e-consent/consent-tokens/accept. Any response carrying it lets an
+ * authenticated org user record a legally-meaningful consent on a
+ * participant's behalf through a call that cannot name them -- and it then
+ * survives wherever that response goes: devtools, an HAR on a support ticket,
+ * a client log, a proxy. The window is 7 days.
+ *
+ * `consentTokenCreatedAt` goes too: it is only ever useful next to the token.
+ *
+ * DELIBERATELY KEPT: `consentTokenExpiresAt` and `consentNotifiedAt`. The
+ * patient directory renders both and neither is a credential -- stripping the
+ * whole consent block would break the badge and the resend flow instead.
+ *
+ * This is containment, not the fix. The token is still stored in plaintext and
+ * still compared with `!==`; hashing it at rest is tracked separately, and it
+ * is gated on `resendConsentNotification`, which READS the stored token back
+ * to re-send the same link and so cannot work against a hash unchanged.
+ *
+ * Applied at the RESPONSE boundary rather than in a query projection on
+ * purpose: the same documents are read internally by paths that legitimately
+ * need the token (validateConsentToken, acceptConsentToken,
+ * resendConsentNotification), so a projection would break them.
+ */
+ParticipantModel.stripConsentSecrets = function stripConsentSecrets(patient) {
+  if (!patient || typeof patient !== 'object') return patient;
+  if (Array.isArray(patient)) return patient.map(ParticipantModel.stripConsentSecrets);
+
+  const { consentToken, consentTokenCreatedAt, ...rest } = patient;
+  return rest;
+};
+
 module.exports = ParticipantModel;

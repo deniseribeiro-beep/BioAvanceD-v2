@@ -68,6 +68,20 @@ class PatientService {
     return doc;
   }
 
+  /**
+   * #1045: the single response boundary for a participant document. Decrypts
+   * the segregated fields as before, then removes the consent CREDENTIAL --
+   * see PatientModel.stripConsentSecrets for why the token cannot simply be
+   * projected away at the query.
+   *
+   * Every path that returns a participant to a client goes through this.
+   * validateConsentToken, acceptConsentToken and resendConsentNotification
+   * deliberately do NOT, because they need the token itself.
+   */
+  toClientPatient(patient = {}) {
+    return PatientModel.stripConsentSecrets(this.decryptSensitivePatientFields(patient));
+  }
+
   decryptSensitivePatientFields(patient = {}) {
     if (!patient || typeof patient !== 'object') return patient;
 
@@ -622,7 +636,7 @@ class PatientService {
       } else {
         patient = await patientsCollection.findOne({ participantId });
       }
-      return this.decryptSensitivePatientFields(patient);
+      return this.toClientPatient(patient);
     } catch (error) {
       logger.error('Erro ao buscar paciente:', error.message);
       throw error;
@@ -667,7 +681,7 @@ class PatientService {
 
       const total = await patientsCollection.countDocuments(query);
 
-      return { patients: patients.map((patient) => this.decryptSensitivePatientFields(patient)), total, limit, skip };
+      return { patients: patients.map((patient) => this.toClientPatient(patient)), total, limit, skip };
     } catch (error) {
       logger.error('Erro ao listar pacientes:', error.message);
       throw error;
@@ -780,7 +794,7 @@ class PatientService {
       const patients = await patientsCollection.find(query).limit(50).toArray();
       const total = await patientsCollection.countDocuments(query);
 
-      return { patients: patients.map((patient) => this.decryptSensitivePatientFields(patient)), total };
+      return { patients: patients.map((patient) => this.toClientPatient(patient)), total };
     } catch (error) {
       logger.error('Erro ao buscar pacientes:', error.message);
       throw error;
@@ -918,7 +932,7 @@ class PatientService {
       logger.info('Paciente atualizado:', sanitizedData);
 
       const updatedPatient = await patientsCollection.findOne(query);
-      const decryptedUpdatedPatient = this.decryptSensitivePatientFields(updatedPatient);
+      const decryptedUpdatedPatient = this.toClientPatient(updatedPatient);
 
       // RF005/RNF007 (#561): keep ParticipantIdentity in sync on update —
       // #363's dual-write only covered createPatient, so an edit to any of

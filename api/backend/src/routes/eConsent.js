@@ -1,5 +1,7 @@
 // backend/src/routes/eConsent.js
 const express = require('express');
+// #1045: stripConsentSecrets -- this route returns a raw patients document.
+const PatientModel = require('../models/Patient');
 const jwt = require('jsonwebtoken');
 const router = express.Router();
 const notificationService = require('../services/notification.service');
@@ -85,7 +87,11 @@ router.get('/validate/:token', async (req, res) => {
     const currentConsent = await consentService.getPatientConsent(db, payload.participantId);
 
     res.json({
-      patient: patientWithIdentity,
+      // #1045: this is the OTHER consent system -- a JWT flow with its own
+      // CONSENT_SECRET -- but it reads the same `patients` document, so it was
+      // echoing the bulk flow's plaintext `consentToken` to whoever holds a
+      // valid JWT for that participant. Different route file, same credential.
+      patient: PatientModel.stripConsentSecrets(patientWithIdentity),
       template: template
         ? { id: String(template._id), title: template.title, permissions: template.permissions || [] }
         : null,

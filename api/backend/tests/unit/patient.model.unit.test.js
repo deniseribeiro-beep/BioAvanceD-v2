@@ -365,4 +365,49 @@ describe('PatientModel.fillAcronym', () => {
   it('returns null when normalized string is empty (whitespace only)', () => {
     expect(PatientModel.fillAcronym('   ')).toBeNull();
   });
+
+  // #1045: the shared sanitizer. Pinned here as well as at the four route
+  // boundaries because reports.routes.js's two patient handlers use it and
+  // have no route-level spec of their own.
+  describe('stripConsentSecrets (#1045)', () => {
+    const withSecrets = {
+      participantId: '77222497',
+      status: 'PENDING_CONSENT',
+      consentToken: 'a'.repeat(64),
+      consentTokenCreatedAt: new Date('2026-09-02T00:00:00Z'),
+      consentTokenExpiresAt: new Date('2026-09-09T00:00:00Z'),
+      consentNotifiedAt: new Date('2026-09-02T00:01:00Z'),
+    };
+
+    it('removes the credential and its mint timestamp', () => {
+      const out = PatientModel.stripConsentSecrets(withSecrets);
+      expect(out.consentToken).toBeUndefined();
+      expect(out.consentTokenCreatedAt).toBeUndefined();
+      expect('consentToken' in out).toBe(false);
+    });
+
+    it('KEEPS consentTokenExpiresAt and consentNotifiedAt -- the directory renders both', () => {
+      const out = PatientModel.stripConsentSecrets(withSecrets);
+      expect(out.consentTokenExpiresAt).toEqual(withSecrets.consentTokenExpiresAt);
+      expect(out.consentNotifiedAt).toEqual(withSecrets.consentNotifiedAt);
+      expect(out.participantId).toBe('77222497');
+      expect(out.status).toBe('PENDING_CONSENT');
+    });
+
+    it('maps over an array, so a raw find().toArray() can be passed straight in', () => {
+      const out = PatientModel.stripConsentSecrets([withSecrets, withSecrets]);
+      expect(out).toHaveLength(2);
+      expect(out.every((doc) => doc.consentToken === undefined)).toBe(true);
+    });
+
+    it('does not mutate its input', () => {
+      PatientModel.stripConsentSecrets(withSecrets);
+      expect(withSecrets.consentToken).toBe('a'.repeat(64));
+    });
+
+    it('passes null/undefined through untouched', () => {
+      expect(PatientModel.stripConsentSecrets(null)).toBeNull();
+      expect(PatientModel.stripConsentSecrets(undefined)).toBeUndefined();
+    });
+  });
 });
