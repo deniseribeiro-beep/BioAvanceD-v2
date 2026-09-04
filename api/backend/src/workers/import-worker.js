@@ -14,6 +14,34 @@ const batchValidationEngine = require('../services/batch-validation-engine.servi
 const { connectDB } = require('../database/mongo');
 const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
 
+// #1040: observability-only, matching this file's own fatal-error style
+// (logger.error + process.exit(1), same as the require.main block's
+// initWorker().catch() below). The process must still die -- do NOT turn
+// this into a swallow/continue path. Three call sites deliberately depend on
+// "an unhandled rejection kills the process" staying true:
+// src/services/auth.service.js:540, src/services/consent.service.js:911 and
+// src/utils/collectionResolver.js:23.
+//
+// Registered before any other startup work in this module. Guarded on
+// `process`, not on this module, because src/workers/worker.js requires this
+// file directly, so both files' handler-registration code can run in the
+// SAME worker process -- the guard is what keeps that a single registration
+// instead of two. server.js and neo4jProjection.worker.js register the same
+// pair in their own processes.
+if (!process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__) {
+  process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__ = true;
+
+  process.on('unhandledRejection', (reason) => {
+    logger.error('❌ [#1040] unhandledRejection não tratada -- encerrando worker:', reason);
+    process.exit(1);
+  });
+
+  process.on('uncaughtException', (err) => {
+    logger.error('❌ [#1040] uncaughtException -- encerrando worker:', err);
+    process.exit(1);
+  });
+}
+
 // Lazy getter para evitar TDZ/ciclos de require
 const getNotificationService = () => require('../services/notification.service');
 

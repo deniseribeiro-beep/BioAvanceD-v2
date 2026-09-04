@@ -17,6 +17,41 @@ const logger = require('../utils/logger');
 // a /tmp tmpfs; dev/test have no read_only at all).
 const HEARTBEAT_PATH = '/tmp/worker-heartbeat';
 
+// #1040: observability-only, matching this file's own fatal-error style
+// (logger.error + optional stack line + process.exit(1), same as the catch
+// in startWorker() below). The process must still die -- do NOT turn this
+// into a swallow/continue path. Three call sites deliberately depend on "an
+// unhandled rejection kills the process" staying true:
+// src/services/auth.service.js:540, src/services/consent.service.js:911 and
+// src/utils/collectionResolver.js:23.
+//
+// Registered before any other startup work (background jobs, startWorker())
+// so a rejection during startup is also caught. Guarded on `process`, not on
+// this module, because this file requires ./import-worker directly (line 9
+// above), so both files' handler-registration code runs in the SAME worker
+// process -- the guard is what keeps that a single registration instead of
+// two. server.js and neo4jProjection.worker.js register the same pair in
+// their own processes.
+if (!process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__) {
+  process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__ = true;
+
+  process.on('unhandledRejection', (reason) => {
+    logger.error('[ERROR] [#1040] unhandledRejection não tratada -- encerrando worker:', reason?.message || reason);
+    if (reason?.stack) {
+      logger.error(`Rastreamento: ${reason.stack}`);
+    }
+    process.exit(1);
+  });
+
+  process.on('uncaughtException', (err) => {
+    logger.error('[ERROR] [#1040] uncaughtException -- encerrando worker:', err.message || err);
+    if (err?.stack) {
+      logger.error(`Rastreamento: ${err.stack}`);
+    }
+    process.exit(1);
+  });
+}
+
 // Register background jobs
 try {
   const dailyMerkleJob = require('./jobs/daily-merkle.job');

@@ -15,6 +15,41 @@ const { initializeSecuritySystem } = require("./src/infrastructure/middleware/in
 const { seedReportTemplates } = require("./src/services/report-template-seed.service");
 const { seedRolesAndPermissions } = require("./src/services/rbac-catalog-seed.service");
 
+// #1040: Model.createIndexes() index-build errors (and unhandled rejections
+// generally) reach `Model.emit('error')` on a Mongoose Model with no default
+// 'error' listener, which throws outside any try/catch the caller's `await`
+// owns -- so before this handler existed the process died anonymously,
+// unattributed, on whatever this happened to interrupt.
+//
+// Observability-only: log with attribution, then still terminate exactly as
+// the rest of this file already does on a fatal startup error (see the
+// startServer() catch below). Do NOT turn this into a swallow/continue path
+// -- three call sites in this codebase deliberately rely on "an unhandled
+// rejection kills this process" staying true: src/services/auth.service.js:540,
+// src/services/consent.service.js:911 and src/utils/collectionResolver.js:23.
+//
+// Registered before any other startup work so a rejection during startup is
+// also caught. Guarded on `process` itself (not on this module) because this
+// file, src/workers/worker.js, src/workers/import-worker.js and
+// src/workers/neo4jProjection.worker.js each install the same pair of
+// handlers, and worker.js requires import-worker.js into the very same OS
+// process -- an unguarded second `process.on()` would just mean two log
+// lines and two process.exit() races on one real event, not a bug, but the
+// guard makes that explicit instead of accidental.
+if (!process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__) {
+  process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__ = true;
+
+  process.on('unhandledRejection', (reason) => {
+    logger.error('[#1040] unhandledRejection não tratada -- encerrando servidor:', reason);
+    process.exit(1);
+  });
+
+  process.on('uncaughtException', (err) => {
+    logger.error('[#1040] uncaughtException -- encerrando servidor:', err);
+    process.exit(1);
+  });
+}
+
 let httpServerInstance = null;
 
 // =======================
