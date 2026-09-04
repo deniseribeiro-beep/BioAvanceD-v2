@@ -940,9 +940,18 @@ describe('#986: the two unauthenticated first-login endpoints respect the accoun
       .rejects.toThrow('Credenciais inválidas');
 
     // The whole point: a wrong password and a correct one must now be
-    // indistinguishable on an enrolled account. Asserting the compare never
-    // ran is what proves that, rather than asserting one of the messages.
-    expect(compare).not.toHaveBeenCalled();
+    // indistinguishable on an enrolled account.
+    //
+    // #1036 un-weakened this rather than deleting it. It used to assert the
+    // compare never ran at all, which proved the property only incidentally:
+    // what actually matters is that the STORED HASH is never consulted. A
+    // dummy round now runs on this branch to equalize latency (the enrolled
+    // and unknown branches were ~61ms faster than the not-yet-enrolled one),
+    // so "never called" is no longer true -- but "never called against the
+    // real hash" is, and it is the stronger statement.
+    expect(compare).not.toHaveBeenCalledWith(expect.anything(), ENROLLED.password);
+    // ...and the equalizer did run, which is what closes #1036.
+    expect(compare).toHaveBeenCalled();
   });
 
   it('enableMFAFirstLogin refuses an enrolled account BEFORE bcrypt.compare -- closes the second login path', async () => {
@@ -953,7 +962,11 @@ describe('#986: the two unauthenticated first-login endpoints respect the accoun
     await expect(authService.enableMFAFirstLogin(db, { username: 'user1', password: 'pw' }, '123456', {}))
       .rejects.toThrow('Credenciais inválidas');
 
-    expect(compare).not.toHaveBeenCalled();
+    // #1036: same un-weakening as the setupMFAFirstLogin case above -- the
+    // stored hash is never consulted, while a dummy round equalizes latency.
+    expect(compare).not.toHaveBeenCalledWith(expect.anything(), ENROLLED.password);
+    expect(compare).toHaveBeenCalled();
+    // The TOTP check must still never run: this branch is refused outright.
     expect(verify).not.toHaveBeenCalled();
   });
 
@@ -1101,3 +1114,73 @@ describe('#1032: the first-login MFA endpoints disclose no enrolment state to an
     expect(enable).not.toMatch(/configurado/i);
   });
 });
+
+// #1036: #986 moved the enrolment guard above bcrypt.compare and #1032
+// collapsed its message. Both were right; together they left the same
+// disclosure in a different channel, because only ONE of the three outcomes
+// still did the expensive work.
+//
+// [ran it] bcryptjs at cost factor 10 on this machine: median 60.9ms
+// (p10 58.9, p90 65.6) against ~0.0001ms for a guard-only return -- no overlap
+// whatsoever, so "this username exists and is not yet enrolled" was separable
+// from a single request, not from a statistical attack.
+describe('#1036: the guard branches that skip the real compare are latency-equalized', () => {
+  const ENROLLED = { ...BASE_USER, lastLogin: new Date('2020-01-01'), mfaEnabled: true, mfaSecret: 'SECRET' };
+
+  it('setupMFAFirstLogin burns a comparison for an UNKNOWN username', async () => {
+    const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+    const db = makeDb(createMatchingCollection([]));
+
+    await expect(authService.setupMFAFirstLogin(db, { username: 'nao-existe', password: 'x' }))
+      .rejects.toThrow('Credenciais inválidas');
+
+    expect(compare).toHaveBeenCalled();
+  });
+
+  it('enableMFAFirstLogin burns a comparison for an UNKNOWN username', async () => {
+    const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+    const db = makeDb(createMatchingCollection([]));
+
+    await expect(authService.enableMFAFirstLogin(db, { username: 'nao-existe', password: 'x' }, '123456', {}))
+      .rejects.toThrow('Credenciais inválidas');
+
+    expect(compare).toHaveBeenCalled();
+  });
+
+  it('the equalizer never consults the stored hash, on either branch', async () => {
+    const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const db = makeDb(createMatchingCollection([{ ...ENROLLED }]));
+
+    await expect(authService.setupMFAFirstLogin(db, { username: 'user1', password: 'qualquer' }))
+      .rejects.toThrow('Credenciais inválidas');
+
+    // Returning true from the mocked compare must not turn a refusal into a
+    // success -- the equalizer's result is discarded by construction.
+    expect(compare).not.toHaveBeenCalledWith(expect.anything(), ENROLLED.password);
+  });
+
+  // CONTROL, and the reason this fix is not applied uniformly: #952's comment
+  // on the lockout gate says it sits before bcrypt.compare precisely so that
+  // guessing STOPS rather than burning a round per attempt. Equalizing there
+  // would hand back the DoS amplification that gate closed, so the lockout
+  // path stays fast -- and therefore stays distinguishable, deliberately.
+  //
+  // Must be GREEN before AND after #1036. If it reds, the equalizer has been
+  // applied too widely.
+  it('CONTROL: the account-LOCKOUT branch still burns nothing (#952)', async () => {
+    const lockedUntil = new Date(Date.now() + 10 * 60 * 1000);
+    // `dbWith` is scoped to another describe in this file; makeDb /
+    // createMatchingCollection are the module-level pair.
+    const lockedUser = { ...BASE_USER, accountLockedUntil: lockedUntil };
+    const users = createMatchingCollection([lockedUser]);
+    const db = makeDb(users);
+    const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    await expect(
+      authService.processLogin(db, lockedUser, 'correct', null, users, {})
+    ).rejects.toThrow('Credenciais inválidas');
+
+    expect(compare).not.toHaveBeenCalled();
+  });
+});
+

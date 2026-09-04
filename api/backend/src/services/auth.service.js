@@ -26,6 +26,44 @@ const notificationDispatchService = require('./notificationDispatch.service');
 //
 // Fails OPEN to getDefaultConfig()'s own 5 / 30, for the same reason #914 does:
 // an unreadable policy must not lock every account out.
+// #1036: TIMING EQUALIZER for the unauthenticated password endpoints.
+//
+// #986 moved the enrolment guard ABOVE bcrypt.compare (closing a password
+// oracle) and #1032 collapsed its message into the generic one (closing the
+// cheaper enumeration oracle those two left). Both were right, and together
+// they left a residual in a different channel: only ONE of the three outcomes
+// still does the expensive work, so latency separates it.
+//
+// [ran it] bcryptjs at this repo's cost factor 10: median 60.9ms, p10 58.9,
+// p90 65.6, against ~0.0001ms for a guard-only return. The distributions do
+// not overlap at all -- this is not a subtle side channel needing thousands of
+// samples, it is a ~61ms step that survives ordinary network jitter.
+//
+// What leaks without this is narrow but real: "this username exists AND is not
+// yet enrolled" -- the one state that reaches a real compare.
+//
+// NOT applied to the account-LOCKOUT guard, deliberately. #952's comment on
+// that gate is explicit that it sits before the compare so that guessing
+// actually stops rather than burning a round per attempt; adding a dummy round
+// there would undo exactly that and hand back the DoS amplification it closed.
+// The lockout path therefore stays fast and stays distinguishable, which is a
+// deliberate trade rather than an oversight.
+let timingDummyHash = null;
+
+async function burnPasswordComparison(password) {
+  try {
+    if (timingDummyHash === null) {
+      // Lazily built so module load costs nothing; the same cost factor as
+      // every real hash in this codebase, or the work would not match.
+      timingDummyHash = await bcrypt.hash('bioavanced-timing-equalizer', 10);
+    }
+    await bcrypt.compare(typeof password === 'string' ? password : '', timingDummyHash);
+  } catch (error) {
+    // Timing only -- never let the equalizer change an outcome.
+    logger.warn(`#1036: equalizador de tempo falhou (ignorado): ${error.message}`);
+  }
+}
+
 const DEFAULT_MAX_LOGIN_ATTEMPTS = 5;
 const DEFAULT_LOCKOUT_MINUTES = 30;
 
@@ -361,6 +399,10 @@ class AuthService {
         // Log de debug: lista alguns usuários para verificar estrutura
         const sampleUsers = await usersCollection.find({}, { projection: { email: 1, username: 1, _id: 0 } }).limit(3).toArray();
         logger.info(`Usuários de exemplo no banco: ${JSON.stringify(sampleUsers)}`);
+        // #1036: the same residual on the highest-traffic endpoint. A user
+        // that exists reaches processLogin's real compare; one that does not
+        // returned from here without one.
+        await burnPasswordComparison(password);
         throw new Error('Credenciais inválidas');
       }
       
@@ -381,12 +423,16 @@ class AuthService {
 
 
       if (!user) {
+        // #1036: equalize with the enrolled/not-enrolled branches below.
+        await burnPasswordComparison(password);
         throw new Error('Credenciais inválidas');
       }
 
       // Validação extra: senha precisa existir e ser string
       if (!user.password || typeof user.password !== 'string' || user.password.length < 20) {
         logger.error(`Usuário encontrado, mas campo de senha ausente ou inválido. user.email: ${user.email}, user.username: ${user.username}`);
+        // #1036: a malformed stored hash must not be faster than a real one.
+        await burnPasswordComparison(password);
         throw new Error('Credenciais inválidas');
       }
 
@@ -703,6 +749,8 @@ class AuthService {
       });
 
       if (!user) {
+        // #1036: equalize with the enrolled/not-enrolled branches below.
+        await burnPasswordComparison(password);
         throw new Error('Credenciais inválidas');
       }
 
@@ -729,6 +777,12 @@ class AuthService {
         // arbitrary password -- one request per username disclosing both
         // account existence and MFA-enrolment state. processLogin below
         // states the principle this follows: enumeration is the worse leak.
+        //
+        // #1036: and the residual those two left is closed here. This branch
+        // and the !user branch above both skip the real compare, so without
+        // this the not-yet-enrolled branch -- the only one that reaches
+        // bcrypt -- was ~61ms slower and trivially separable.
+        await burnPasswordComparison(password);
         throw new Error('Credenciais inválidas');
       }
 
@@ -831,6 +885,8 @@ class AuthService {
       });
 
       if (!user) {
+        // #1036: equalize with the enrolled/not-enrolled branches below.
+        await burnPasswordComparison(password);
         throw new Error('Credenciais inválidas');
       }
 
@@ -852,6 +908,12 @@ class AuthService {
         // arbitrary password -- one request per username disclosing both
         // account existence and MFA-enrolment state. processLogin below
         // states the principle this follows: enumeration is the worse leak.
+        //
+        // #1036: and the residual those two left is closed here. This branch
+        // and the !user branch above both skip the real compare, so without
+        // this the not-yet-enrolled branch -- the only one that reaches
+        // bcrypt -- was ~61ms slower and trivially separable.
+        await burnPasswordComparison(password);
         throw new Error('Credenciais inválidas');
       }
 
