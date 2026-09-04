@@ -193,3 +193,160 @@ describe('AuthService.login', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// #1052: login() leaked account identifiers into the application log.
+//
+// src/utils/logger.js is a 26-line console shim with no transports, so every
+// line below lands wherever the container's stdout goes. Four sites, all on
+// paths an UNAUTHENTICATED caller can drive:
+//
+//   1. the not-found branch ran `usersCollection.find({}, ...).limit(3)` and
+//      logged three REAL users' emails and usernames at info level -- an
+//      attacker-triggerable dump, reachable by anyone who types a wrong
+//      username. `git log -S` puts it in c68aea04, "fix: forcing build
+//      command 2", whose message never mentions it: a debug aid that rode in
+//      on a build-poking commit rather than something deliberately shipped.
+//   2. the SUCCESS branch logged the resolved user's username AND email on
+//      every login. NOT named by #1052, and worse than (1) in frequency --
+//      it fires on every successful lookup, not only on a typo.
+//   3. the malformed-password-field branch logged the same pair again.
+//      Also not named by #1052.
+//   4. the attempt line and the not-found line echoed the raw caller-supplied
+//      identifier verbatim -- the log-injection/forging shape, since the
+//      shim does no escaping and a newline in the identifier forges a line.
+//
+// (1) was additionally an unbounded extra round trip an anonymous caller
+// could trigger on the failure path, inside the very window a675abb7 (#1036)
+// works to keep constant -- so removing it helps that equalizer rather than
+// competing with it.
+//
+// These tests pin the ABSENCE of identifiers and raw input in log output.
+// The CONTROL tests at the end assert behaviour the fix does not change and
+// are green both before and after it; a red there would mean the harness is
+// wrong, not that the bug reproduced (#695).
+describe('AuthService.login -- #1052 no account identifiers in the application log', () => {
+  const SECRET_EMAIL = 'victim@example.test';
+  const SECRET_USERNAME = 'victimuser';
+
+  // Captures every message the service emits through the logger shim, across
+  // all four levels, flattened to one searchable string per call. Asserting
+  // over the whole transcript rather than a single spy is what makes these
+  // tests indifferent to WHICH line a future edit puts an identifier on.
+  function captureLogs() {
+    const logger = require('../../src/utils/logger');
+    const lines = [];
+    const record = (level) => (message, ...args) => {
+      lines.push([level, message, ...args].map((v) => String(v)).join(' '));
+    };
+    vi.spyOn(logger, 'info').mockImplementation(record('info'));
+    vi.spyOn(logger, 'warn').mockImplementation(record('warn'));
+    vi.spyOn(logger, 'error').mockImplementation(record('error'));
+    vi.spyOn(logger, 'debug').mockImplementation(record('debug'));
+    return lines;
+  }
+
+  it('does not query for sample users, at all, when the identifier is not found', async () => {
+    const db = makeLoginDb(vi.fn().mockResolvedValue(null));
+
+    await expect(
+      authService.login(db, { email: 'nobody@example.test', password: 'pw' }, {})
+    ).rejects.toThrow('Credenciais inválidas');
+
+    // The debug dump was the ONLY `find` the users collection saw on this
+    // path, so its absence is provable directly rather than by inspecting
+    // what was logged.
+    expect(db.usersCollectionApi.find).not.toHaveBeenCalled();
+  });
+
+  it('does not log another account’s email or username when the identifier is not found', async () => {
+    const lines = captureLogs();
+    const db = makeLoginDb(vi.fn().mockResolvedValue(null));
+    // Seed the sample-user query with real-looking identifiers, so that if
+    // the dump is ever reintroduced this test fails on its actual payload
+    // rather than merely on the shape of the call.
+    db.usersCollectionApi.find.mockReturnValue({
+      limit: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([
+          { email: SECRET_EMAIL, username: SECRET_USERNAME },
+        ]),
+      }),
+    });
+
+    await expect(
+      authService.login(db, { email: 'nobody@example.test', password: 'pw' }, {})
+    ).rejects.toThrow('Credenciais inválidas');
+
+    const transcript = lines.join('\n');
+    expect(transcript).not.toContain(SECRET_EMAIL);
+    expect(transcript).not.toContain(SECRET_USERNAME);
+  });
+
+  it('does not log the resolved user’s email or username on a SUCCESSFUL login', async () => {
+    const lines = captureLogs();
+    const user = makeUser({ email: SECRET_EMAIL, username: SECRET_USERNAME });
+    const db = makeLoginDb(vi.fn().mockResolvedValue(user));
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    const result = await authService.login(db, { email: SECRET_EMAIL, password: 'pw' }, {});
+    expect(result.token).toBeTruthy();
+
+    const transcript = lines.join('\n');
+    expect(transcript).not.toContain(SECRET_EMAIL);
+    expect(transcript).not.toContain(SECRET_USERNAME);
+  });
+
+  it('does not log the resolved user’s email or username when the stored password field is unusable', async () => {
+    const lines = captureLogs();
+    // A password field too short to be a bcrypt hash drives processLogin's
+    // "campo de senha ausente ou inválido" branch, which logged the pair.
+    const user = makeUser({ email: SECRET_EMAIL, username: SECRET_USERNAME, password: 'short' });
+    const db = makeLoginDb(vi.fn().mockResolvedValue(user));
+
+    await expect(
+      authService.login(db, { email: SECRET_EMAIL, password: 'pw' }, {})
+    ).rejects.toThrow();
+
+    const transcript = lines.join('\n');
+    expect(transcript).not.toContain(SECRET_EMAIL);
+    expect(transcript).not.toContain(SECRET_USERNAME);
+  });
+
+  it('does not echo the raw caller-supplied identifier into the log', async () => {
+    const lines = captureLogs();
+    // Carries a newline, which is what makes a verbatim echo a log-FORGING
+    // surface rather than merely a noisy one: the shim does no escaping, so
+    // everything after the newline reads as its own log line.
+    const forged = 'attacker\n[INFO] 2026-01-01T00:00:00.000Z - forged line';
+    const db = makeLoginDb(vi.fn().mockResolvedValue(null));
+
+    await expect(
+      authService.login(db, { email: forged, password: 'pw' }, {})
+    ).rejects.toThrow('Credenciais inválidas');
+
+    const transcript = lines.join('\n');
+    expect(transcript).not.toContain('forged line');
+    expect(transcript).not.toContain('attacker');
+  });
+
+  // --- CONTROL: unchanged by the fix, green before and after (#695) --------
+
+  it('CONTROL: still rejects an unknown identifier with the generic message', async () => {
+    const db = makeLoginDb(vi.fn().mockResolvedValue(null));
+
+    await expect(
+      authService.login(db, { email: 'nobody@example.test', password: 'pw' }, {})
+    ).rejects.toThrow('Credenciais inválidas');
+  });
+
+  it('CONTROL: still issues a token for a valid identifier and password', async () => {
+    const user = makeUser();
+    const db = makeLoginDb(vi.fn().mockResolvedValue(user));
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    const result = await authService.login(db, { email: user.email, password: 'pw' }, {});
+
+    expect(result.token).toBeTruthy();
+    expect(result.user.email).toBe(user.email);
+  });
+});

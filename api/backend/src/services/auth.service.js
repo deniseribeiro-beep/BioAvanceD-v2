@@ -370,7 +370,12 @@ class AuthService {
 
       // Remove espaços do termo de busca
       const searchTerm = email.trim();
-      logger.info(`Tentativa de login com: "${searchTerm}"`);
+      // #1052: the raw caller-supplied identifier is NOT echoed here. The
+      // shim in src/utils/logger.js does no escaping, so a newline in the
+      // identifier forges a log line -- and this path is unauthenticated, so
+      // the identifier is attacker-controlled. The signal that an attempt
+      // happened is what an operator needs; the payload is not.
+      logger.info('Tentativa de login recebida');
 
       const usersCollection = db.collection('users');
       
@@ -395,10 +400,17 @@ class AuthService {
       }
       
       if (!user) {
-        logger.warn(`Usuário não encontrado para: "${searchTerm}"`);
-        // Log de debug: lista alguns usuários para verificar estrutura
-        const sampleUsers = await usersCollection.find({}, { projection: { email: 1, username: 1, _id: 0 } }).limit(3).toArray();
-        logger.info(`Usuários de exemplo no banco: ${JSON.stringify(sampleUsers)}`);
+        // #1052: no identifier and no raw caller input on this line. It used
+        // to echo searchTerm and then dump three REAL users' emails and
+        // usernames at info level -- a debug aid added by c68aea04 ("fix:
+        // forcing build command 2", whose message never mentions it),
+        // triggerable by anyone who types a wrong username, on a system
+        // holding participant and operator identities.
+        //
+        // Removing that query also drops an unbounded extra round trip an
+        // anonymous caller could force, which sat INSIDE the window #1036's
+        // equalizer below exists to keep constant.
+        logger.warn('Tentativa de login falhou: identificador não encontrado');
         // #1036: the same residual on the highest-traffic endpoint. A user
         // that exists reaches processLogin's real compare; one that does not
         // returned from here without one.
@@ -406,7 +418,11 @@ class AuthService {
         throw new Error('Credenciais inválidas');
       }
       
-      logger.info(`Usuário encontrado: username="${user.username}", email="${user.email}"`);
+      // #1052: this line logged the resolved user's username AND email on
+      // EVERY successful lookup -- not named by that issue, and higher
+      // frequency than the not-found dump it was filed for. auditLogger
+      // .logLogin already records the login against a pseudonymized actor,
+      // so the identifiers added nothing an operator needs here.
       
       return await this.processLogin(db, user, password, mfaCode, usersCollection, req, newPassword);
     } catch (error) {
@@ -430,7 +446,9 @@ class AuthService {
 
       // Validação extra: senha precisa existir e ser string
       if (!user.password || typeof user.password !== 'string' || user.password.length < 20) {
-        logger.error(`Usuário encontrado, mas campo de senha ausente ou inválido. user.email: ${user.email}, user.username: ${user.username}`);
+        // #1052: same class -- this carried the user's email and username
+        // too. The audit row this path writes already identifies the account.
+        logger.error('Usuário encontrado, mas campo de senha ausente ou inválido');
         // #1036: a malformed stored hash must not be faster than a real one.
         await burnPasswordComparison(password);
         throw new Error('Credenciais inválidas');
