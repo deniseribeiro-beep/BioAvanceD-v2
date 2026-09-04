@@ -42,16 +42,48 @@ function buildSystemTemplateDocs() {
 }
 
 /**
- * Upserts by `code` (the model's own stable business key) -- skips a `code`
- * that already exists rather than overwriting it, same as
- * rbac-catalog-seed.service.js's `upsertByKey`, so a Coordenador's later
- * edit to a seeded row's name/description survives a re-run of this seed.
+ * #1064: a bare "already exists? skip" upsert (matching
+ * rbac-catalog-seed.service.js's old `upsertByKey`, before #646 Wave 3's
+ * `upsertRole` fix) froze `handlerKey`/`handlerOptions`/`isSystemDefined` at
+ * whatever they were the first time a `code` was seeded -- indistinguishable
+ * from an operator edit, so a later SYSTEM_REPORT_TEMPLATES correction (e.g.
+ * a fixed `handlerOptions.mode`) never reached an already-seeded database,
+ * on any later re-run or process restart, silently.
+ *
+ * Mirrors `upsertRole`'s shape: reconcile ONLY the fields that went stale,
+ * and return the existing document untouched -- issuing no `updateOne` at
+ * all -- when none of them differ, so a no-op re-run performs no write.
+ *
+ * `handlerKey`/`handlerOptions`/`isSystemDefined` are system-owned (derived
+ * from SYSTEM_REPORT_TEMPLATES, the code's own source of truth) and are
+ * reconciled. Everything else on the existing document -- `name`,
+ * `description`, `templateStatus`, `createdBy`, `updatedBy`, `createdAt`,
+ * `code` -- is operator-owned or identity/audit and is never touched, so a
+ * Coordenador's later edit to a seeded row's name/description (or a
+ * Coordenador retiring a system template via `templateStatus`) survives a
+ * re-run of this seed.
  */
 async function upsertByCode(collection, doc) {
-  const existing = await collection.findOne({ code: doc.code });
-  if (existing) return existing;
-  await collection.insertOne(doc);
-  return doc;
+  const filter = { code: doc.code };
+  const existing = await collection.findOne(filter);
+  if (!existing) {
+    await collection.insertOne(doc);
+    return doc;
+  }
+
+  const handlerOptionsChanged = JSON.stringify(existing.handlerOptions || {}) !== JSON.stringify(doc.handlerOptions || {});
+  const handlerKeyChanged = existing.handlerKey !== doc.handlerKey;
+  const isSystemDefinedChanged = Boolean(existing.isSystemDefined) !== Boolean(doc.isSystemDefined);
+  if (!handlerOptionsChanged && !handlerKeyChanged && !isSystemDefinedChanged) return existing;
+
+  const reconciled = {
+    handlerKey: doc.handlerKey,
+    handlerOptions: doc.handlerOptions,
+    isSystemDefined: doc.isSystemDefined,
+    updatedAt: new Date(),
+  };
+  await collection.updateOne(filter, { $set: reconciled });
+  return { ...existing, ...reconciled };
 }
 
 async function seedReportTemplates(db) {
