@@ -1,124 +1,151 @@
 # HANDOFF
 
-**Written 2026-09-04, thirteenth queue sitting. INTERIM — the session is
-CONTINUING.** Dennis asked for "the next 10 issues, Docker is on."
-**All 10 are closed.** The full native regression is running as this is
-written and the **Docker gate has not run yet** — both are owed before
-this branch is shippable, and neither result is in this file.
+**Written 2026-09-04, fourteenth queue sitting. INTERIM — no end signal
+given, so treat the session as CONTINUING.** Dennis asked for "the next 10
+issues, Docker is on." **7 of the 10 are closed; 3 are open with the work
+recorded on them.** Both owed gates from the previous note have now run.
 
-Do not read this as an end-of-session note. Re-derive every count below
-rather than trusting it.
+Re-derive every count below rather than trusting it.
 
 ---
 
 ## Repo state
 
-- Branch `feature/docker-e2e-backend-integration`, pushed. `main`
-  untouched, no PR.
-- **11 substantive commits this sitting**, last one `a675abb7` (the
-  #1036 timing equalizer). `git status -sb` is authoritative.
-- **No new npm scripts, dependencies or env keys.** Two new test files
-  (`tests/integration/consent-token-response-leak.1045.test.js`,
-  `tests/unit/process-fatal-handlers.1040.test.js`) plus one new arch
-  test and one new frontend module.
+- Branch `feature/docker-e2e-backend-integration`, **clean and matching
+  origin**. `main` untouched, no PR.
+- **5 commits this sitting**, last substantive one `8a7750bc` (#1037).
+  `git status -sb` and `git log` are authoritative.
+- **No new npm scripts, dependencies or env keys.** One new import in
+  `auth.routes.js` (`requirePermission`, from a module already in the tree).
 
-## Docker state
+## The two owed gates: both RUN, and one is RED for a reason that is not ours
 
-- **Nothing running.** No stack was brought up this sitting; no
-  container of any kind was started.
-- **The Docker gate is OWED and has not run**, against 11 commits that
-  include product source under `api/backend/src` and `frontend/src`.
-- **The frontend suite and typecheck have NOT been run since the #1041
-  `App.tsx` comment change** — only the per-iteration targeted runs.
-  `npm --prefix frontend run test:unit` and `typecheck` are owed too.
+- **Native regression — GREEN.** `[ran it]` the sanctioned three-directory
+  form: **460 files / 8466 tests / 0 failures, 703s.** Coverage 92.12%
+  statements / **86.21% branches** / 92.10% functions / 92.28% lines.
+  - **Two things to note.** The **2 pre-existing compliance failures that
+    `ship-integration-branch`'s overlay says to expect did NOT occur** —
+    that expectation is stale. And **branches fell from 88.74% (2026-07-27
+    reconcile) to 86.21%**, moving away from Milestone #1's 90% target;
+    `COVERAGE_NOTES.md`'s reconcile section is now stale and nobody has
+    updated it.
+  - Duration is climbing: 569s (09-01) → 615s (09-03) → **703s** today.
+    Past the Bash tool's 600s ceiling, so backgrounding it is mandatory.
+- **Frontend — GREEN.** `[ran it]` 32 files / 262 tests, and
+  `tsc --noEmit` clean (0 `error TS`).
+- **Docker gate — RED, pre-existing, filed as #1059.** `[ran it]`
+  `backend-unit-runner` (the exact command CI's `current-state-validation`
+  runs): **108 pass / 13 fail**. All 13 are
+  `e2e-fixture-model-fidelity.arch.test.js`, all `ENOENT
+  /tests/e2e/helpers/seedParticipant.ts`. That file climbs four directories
+  to read repo-root `tests/e2e/`, which the backend image cannot contain —
+  its build context is `./api/backend`. **`[ran it]` the same suite is
+  122/122 natively**, and `git merge-base --is-ancestor f8443983 9232979b`
+  confirms the test predates this sitting.
+  - **So CI is red on `main` today and nobody can see it**, because CI fires
+    only on `main` (frozen, #90) and last ran 2026-07-31 — before the test
+    landed. **Read #1059 before opening any PR to `main`.**
+  - `[ran it]` The rest of `current-state:ci` **passes in-container** when
+    run past the arch step: essential reference data validated, dictionary
+    catalog **929/929 (v1.3.0)**, compliance evidence generated. So the
+    branch's own work has a green Docker signal; only the pre-existing
+    arch test is red.
+- **Nothing left running.** No containers (`--rm`), tree clean. Images and
+  named volumes are the usual persistent set — not cleaned, deliberately.
 
-## Closed (10)
+## Closed (7)
 
-`#1039` `#1043` `#1044` `#1041` `#1040` `#1038` `#1042` `#1028` `#1045`
-`#1036`. Every one has a close comment carrying its own evidence.
+`#1044` `#1048` `#1052` `#1047` `#983` `#1037` `#1046`.
+Each carries its own evidence in its close comment.
+
+**`#1044` was reported closed by the previous handoff and was not.** Its fix
+(`9b5861f4`) says `Fixes #1044`, but **auto-close keywords fire only on the
+default branch**, and `main` is frozen — so on this branch a `Fixes #N` in a
+commit message discharges nothing. Close by hand, every time.
+
+## Still open from the queue (3) — work recorded, not resolved
+
+- **`#1029`** sensor org-scope. Re-derived; the sweep it asked for is run and
+  it is a **class**, split out to #1053. Six citation corrections posted.
+  Carries a rider that matters: **the full fix would not turn the existing
+  tests red either**, because `getSensor` is unmocked and `db.factory`
+  defaults `findOne` to `null`, so a null-tolerant post-fetch check no-ops.
+  New cross-tenant tests seeding a foreign-org document are mandatory.
+- **`#1050`** piece 1 shipped (`f81dfea5`, pin probed by reverting both
+  product sites). **Piece 2 (the `toCsvRows` column allow-list) is not
+  done.** The sweep says it must be **per-`handlerKey`** — seven distinct row
+  shapes — and that it is the same change as #1058.
+- **`#979`** Redis posture. The decision is untouched, but its
+  `[not established]` is answered and **stale in the good direction**: all
+  six worker services gained healthchecks in `bab590e8`.
 
 ## The judgment a query cannot carry
 
-- **`[read it]` #1045 was five leaks wider than it said, across TWO
-  permission gates.** It examined `/api/patients` and `/search`; the raw
-  participant document was also returned by `buscar`, `findForEdit`, and
-  **both patient report handlers — which are gated on `viewReports`, not
-  `createPatient`** — plus the JWT e-consent `validate/:token` route in a
-  different token system's file. `toCsvRows` derives CSV columns from
-  `Object.keys(rows[0])` with **no allow-list**, so the token reached a
-  file operators download. Containment shipped; **#1049 (hash at rest) and
-  #1050 (the allow-list) are the remainder.**
-- **`[read it]` #1036's direction 2 is WRONG if applied uniformly, and
-  the issue does not say so.** It says "dummy compare on the early-return
-  paths"; there are four such guards, and the fourth is the account
-  lockout gate whose own comment (#952) says it sits before the compare
-  *"so that guessing actually stops"* rather than burning a round per
-  attempt. Equalizing it hands back that DoS. **The lockout path is left
-  fast and distinguishable on purpose — #1051 is the decision record**, and
-  a CONTROL test reds if someone equalizes it.
-- **`[ran it]` #1036's own `[not established]` measured: bcrypt cost 10 is
-  median 60.9ms (p10 58.9, p90 65.6) against ~0.0001ms for a guard-only
-  return.** No distribution overlap. Direction 1 ("do nothing") does not
-  survive that number.
-- **`[read it]` #1037's guard does NOT cover #1028's trigger.**
-  `rejectCallerSuppliedPrivilege` filters only `accessType` and
-  `roleName`; `organizationId` passes through an unauthenticated
-  `POST /api/auth/register` untouched, so the orphaned-user window was
-  anonymously reachable until `8b64756a`. This body's "not P1" is
-  withdrawn.
-- **`[ran it]` #1039 settled its own sweep: of 86 files in `src/models`,
-  only 14 export a Mongoose model and exactly ONE carried the duplicate
-  index declaration.** The other 72 are native-driver collections.
-- **`[read it]` #1040 is not free hygiene.** Three call sites
-  (`auth.service.js:540`, `consent.service.js:911`,
-  `collectionResolver.js:23`) reason explicitly FROM the absence of a
-  global `unhandledRejection` handler. The new handlers log and still
-  `process.exit(1)`; **a swallow would silently invalidate all three.**
-- **`[read it]` the #1041 delegated draft made `rowNumber` a STRING,
-  which would have broken `getQuarantineBatch`'s `.sort({rowNumber: 1})`.**
-  `tests/e2e/async-import-quarantine.spec.ts:155` pins it as a number.
-  Reworked to keep it numeric with the sheet name beside it.
+- **`[ran it]` #1048 is answered and the metric it proposed is partly
+  measuring the wrong thing.** 0 tests at >=60% of budget, 1 at 50.7%.
+  But **5 of the top 6 are the FIRST test in their file**, and the run's own
+  breakdown is `import 431.20s` against `tests 93.97s` — vitest bills a
+  file's module-load cost to whichever test runs first. So a high percentage
+  there measures the import graph, not test slowness. #1038's test was the
+  opposite shape (genuinely slow, and not first in its file).
+- **`[ran it]` #1046 does not reproduce.** Six container runs, 501/501 lines
+  each, ~250KB through a pipe with an immediate `process.exit(1)`, marker
+  always last. Directions 2-4 declined on evidence, not postponed.
+- **`[read it]` #1037's remedy was NOT the owner's call, and the issue said
+  it was.** RF003 makes the Administrador the primary actor for the account
+  lifecycle; RF001 creates sessions and has no account-creation clause;
+  RF003 AC#6 requires auditing creation; RF012 AC#1 and RNF009 AC#2
+  (Crítica) make the actor mandatory. Zero corpus hits for self-registration
+  vocabulary. **Run `resolve-issue`'s inference step before accepting an
+  issue's own "this is Denise's call" — it is circular evidence (#529).**
+- **`[read it]` #983's direction 3 has the same shape.** The canonical
+  Foundation Data Pipeline plan (`:79`) records "Seed manual separado do
+  startup" as the **superseded** model. Recorded on #1055.
+- **`[ran it]` #1047's production claim was FALSE.** `import-worker.js` and
+  `neo4jProjection.worker.js` both guard their signal handlers on
+  `require.main === module`, so no double-registration exists. Only the
+  test-pollution half was real.
+- **`[ran it]` the two-hop consumer sweep paid again.** On #1037 it caught
+  `auth.controller.test.js` asserting `registerUser`'s 2-argument call —
+  invisible to the targeted run, which was green.
+
+## Filed this sitting
+
+**#1053 #1054 #1055 #1056 #1057 #1058 #1059** — all OPEN and unworked.
+**#1056 and #1054 are security findings**, #1059 is the CI blocker above.
+Query the board for everything else: `gh issue list --state open`.
 
 ## Conventions this sitting relied on / established
 
-- **A probe that reverts ONE hunk of an N-hunk change proves nothing about
-  the others, and this sitting has the receipt.** `[ran it]` the first
-  `createFirstAdmin` pin passed in BOTH worlds — it called
-  `createFirstAdmin(db, env)` where every sibling uses
-  `createFirstAdmin({ db, env, logger })`, so it rejected on missing env
-  before reaching the code under test. Only the 3-hunk probe caught it.
-- **Copy the sibling test's WHOLE `it` body — its spies and its call, not
-  just its fixture — and check the helpers it names are module-level.**
-  Three failures this sitting from hand-writing an invocation next to a
-  correctly-copied fixture. Recorded on pack #695.
-- **A design decision that blocks a fix is often an in-code comment on an
-  ADJACENT guard, not anything in `docs/`.** That is what stopped #1036
-  becoming a security regression. Pack #749.
-- **Manual test-stack Playwright env** (unchanged, not re-run this
-  sitting — **unverified**):
-  `PLAYWRIGHT_BASE_URL=http://localhost:5173`,
+- **Never chain a `git push` with a gated command.** `[ran it]` a
+  `push && npm run test:unit && typecheck` one-liner was blocked whole by
+  `full-suite-guard` and **the push silently did not happen**. `fix-bugs`
+  already says this (#413/#657); it was read this session and skipped anyway.
+- **`npm --prefix frontend run test:unit` is blocked by `full-suite-guard`.**
+  The sanctioned form, from `frontend/`:
+  `npx vitest run src/components src/contexts src/foundation src/hooks
+  src/pages src/utils src/views --reporter=dot`.
+- **Don't splice two disjoint `sed -n 'A,Bp;C,Dp'` ranges into one read.**
+  It creates a false adjacency — here it read as a `create-db.js` entry whose
+  `name` and `description` disagreed, costing a full re-read to disprove.
+- **A subagent's characterisation can be materially weaker than the truth.**
+  One reported `POST /api/temperature/system/reading` as missing a *scope
+  gate*; firsthand reading showed it has **no middleware at all**. Another's
+  "18 collections → 13" arithmetic was wrong (12). Both caught only by
+  verifying — which is the non-delegable rule earning its keep.
+- **Manual test-stack Playwright env** (unchanged, **not re-run this
+  sitting — unverified**): `PLAYWRIGHT_BASE_URL=http://localhost:5173`,
   `PLAYWRIGHT_API_BASE_URL=http://localhost:3000`,
   `PLAYWRIGHT_SKIP_WEBSERVER=1`, `TEST_USER=admin`, `TEST_PASS=Admin@123`,
   `E2E_MONGO_URI='mongodb://localhost:27017?directConnection=true'`,
   `E2E_MONGO_DB=bioavanced_test`,
   `TEST_SUPPORT_SECRET=e2e-test-support-secret`.
 
-## Filed this sitting
-
-Here: **#1046 #1047 #1048 #1049 #1050 #1051 #1052** — all OPEN and
-unworked. **None is blocked on information**; #1049 and #1051 turn on a
-decision only Denise/Dennis can make, the rest are actionable.
-On the pack: **#746 #747 #748 #749**, plus recurrence comments on #683
-and #695 and a measured one on #409.
-
-Query the board for everything else: `gh issue list --state open`.
-
 ## Recommended next
 
-**Dennis named no successor to the ten.** The two owed gates come first —
-the native regression in flight, then Docker — because 11 commits of
-product change have landed against neither.
-
-`#1048` is the whole-suite per-test duration sweep, and the regression
-now running with `--reporter=verbose` **is** that sweep: read its
-durations rather than re-running it.
+**Dennis named no successor to the ten.** On the evidence above, **#1059
+first** — it is the only thing standing between this branch and a green CI
+check, it is not the branch's own defect, and its cheapest direction is a
+few lines. Then **#1056** (audit-trail bypass, the most severe of the
+security findings). #1050 piece 2 and #1058 are one change and should be
+done together.
