@@ -1,11 +1,12 @@
 # HANDOFF
 
-**Written 2026-09-04, fourteenth queue sitting. INTERIM — no end signal
-given, so treat the session as CONTINUING.** Dennis asked for "the next 10
-issues, Docker is on." **7 of the 10 are closed; 3 are open with the work
-recorded on them.** An 8th issue, **#1059**, was found BY the Docker gate,
-filed and fixed here. Both owed gates from the previous note have now run,
-and both are green.
+**Written 2026-09-04, fifteenth queue sitting. INTERIM — no end signal given,
+so treat the session as CONTINUING.** Dennis asked for "the next 10 issues,
+Docker is on." **7 of the 10 are closed.** The sitting also filed **14
+issues** and closed 2 of those, so the backlog grew rather than shrank.
+
+**Two gates are OWED and NOT yet run at the time of writing** — see "Gates"
+below. Do not read this note as a ship-ready state.
 
 Re-derive every count below rather than trusting it.
 
@@ -13,161 +14,125 @@ Re-derive every count below rather than trusting it.
 
 ## Repo state
 
-- Branch `feature/docker-e2e-backend-integration`, **clean and matching
-  origin**. `main` untouched, no PR.
-- **7 commits this sitting**, last substantive one `59e19054` (#1059).
-  `git status -sb` and `git log` are authoritative.
-- **No new npm scripts, dependencies or env keys.** One new import in
-  `auth.routes.js` (`requirePermission`, from a module already in the tree).
+- Branch `feature/docker-e2e-backend-integration`, clean and matching origin.
+  `main` untouched, no PR. `git status -sb` and `git log` are authoritative.
+- **9 commits this sitting.** Last substantive one is the #1068 secret-strip.
+- **One new env key: `TELEMETRY_INGEST_SECRET`**, documented in all three
+  `.env.*.example` files, read via `process.env` (not `config/env.js`,
+  matching `TEST_SUPPORT_SECRET`, which is also undeclared there). **It fails
+  CLOSED** — unset means the two machine-ingest routes are unavailable, not
+  anonymous. That is deliberate and is the whole point of the fix.
+- **One new compose mount:** `compose.dev.yml` bind-mounts
+  `./infra/audit/secrets` read-only at `/run/secrets` in backend and worker.
+  The directory is gitignored and does not exist until
+  `generate-env-docker-secrets.sh` runs.
+- No new npm scripts, no new dependencies.
 
-## The two owed gates: both RUN, both GREEN
+## Gates — one in flight, one NOT RUN
 
-- **Native regression — GREEN.** `[ran it]` the sanctioned three-directory
-  form: **460 files / 8466 tests / 0 failures, 703s.** Coverage 92.12%
-  statements / **86.21% branches** / 92.10% functions / 92.28% lines.
-  - **Two things to note.** The **2 pre-existing compliance failures that
-    `ship-integration-branch`'s overlay says to expect did NOT occur** —
-    that expectation is stale. And **branches fell from 88.74% (2026-07-27
-    reconcile) to 86.21%**, moving away from Milestone #1's 90% target;
-    `COVERAGE_NOTES.md`'s reconcile section is now stale and nobody has
-    updated it.
-  - Duration is climbing: 569s (09-01) → 615s (09-03) → **703s** today.
-    Past the Bash tool's 600s ceiling, so backgrounding it is mandatory.
-- **Frontend — GREEN.** `[ran it]` 32 files / 262 tests, and
-  `tsc --noEmit` clean (0 `error TS`).
-- **Docker gate — was RED on arrival, found, fixed and now GREEN.**
-  `[ran it]` `backend-unit-runner` (the exact command CI's
-  `current-state-validation` runs) initially gave **108 pass / 13 fail**,
-  exit 1. All 13 were `e2e-fixture-model-fidelity.arch.test.js` failing
-  `ENOENT /tests/e2e/helpers/seedParticipant.ts` — that file climbs four
-  directories to repo-root `tests/e2e/`, which the backend image cannot
-  contain (build context `./api/backend`). Latent since `f8443983`
-  (2026-08-28), and **invisible because CI fires only on `main`** (frozen,
-  #90) and last ran 2026-07-31.
-  - **Worse than a red check: `current-state:ci` chains with `&&` starting
-    at that suite, so seed validation, dictionary validation and
-    compliance-evidence generation were not executing at all.**
-  - **Fixed in `59e19054` (#1059, closed).** `[ran it]` the gate now:
-    **122 tests, 108 pass, 0 fail, 14 skipped, exit 0**, and the three
-    downstream steps run — essential reference data validated, dictionary
-    catalog **929/929 (v1.3.0)**, compliance evidence generated.
-  - `[ran it]` CONTROL, native: **122/122, 0 skipped** — unchanged, so the
-    guard still runs in full wherever the e2e tree exists.
-  - **So the gate now means what `ship-integration-branch` says it means:
-    exit 0 with nothing to explain away.**
-- **Nothing left running.** No containers (`--rm`), tree clean. Build cache
-  pruned (`-af`, 610.5MB). Images and named volumes are the usual persistent
-  set — kept deliberately; the rebuilt `bioavanced-test-backend-unit-runner`
-  image is what #1059 needs, so re-running that gate costs no rebuild.
-- **`api/backend/coverage/` (33MB, gitignored) is KEPT on purpose.** It holds
-  this sitting's full reconcile, so `COVERAGE_NOTES.md`'s stale buckets can be
-  re-derived from `coverage/coverage-summary.json` (`lines.pct` per file)
-  **without paying the 703s run again**. Delete it once that is done.
+- **Native regression: a first pass ran GREEN-after-fix and a second is IN
+  FLIGHT at the time of writing.** `[ran it]` pass 1: **462 files / 8537
+  tests / 12 failed**, all in `sensor.controller.test.js`, fixed in
+  `8d110918`; that file is now 35/35. Pass 2 covers the three commits since.
+  **Its result is not in this note — read the run, don't assume.** Duration
+  ~600s, past the Bash tool's ceiling, so background it and grep your own
+  redirect.
+- **Docker gate: NOT RUN.** The command is
+  `docker compose --env-file .env.test.example -f compose.test.yml run --rm
+  --no-deps backend-unit-runner` (exactly what CI's `current-state-validation`
+  runs). It was deferred because the native regression was still in flight and
+  `docker-workflow` forbids two workloads against the machine at once.
+- **Nothing left running.** No containers started this sitting; no images
+  built.
 
-## Closed (8)
+## The ten: 7 closed, 3 open
 
-`#1044` `#1048` `#1052` `#1047` `#983` `#1037` `#1046` — plus `#1059`,
-filed and closed this sitting.
-Each carries its own evidence in its close comment.
+**Closed:** `#989` `#1056` `#1035` `#1054` `#1029` — plus `#1063` and `#1068`,
+both filed AND closed this sitting.
 
-**`#1044` was reported closed by the previous handoff and was not.** Its fix
-(`9b5861f4`) says `Fixes #1044`, but **auto-close keywords fire only on the
-default branch**, and `main` is frozen — so on this branch a `Fixes #N` in a
-commit message discharges nothing. Close by hand, every time.
+**Open, with the work recorded on each:**
 
-## Still open from the queue (3) — work recorded, not resolved
+- **`#941`** — two indexes shipped (`Refs`, not `Fixes`). Verification found
+  **both call sites are unreachable**: `linkSensorMetadata` has zero callers,
+  and `backfillLocationsToStorage` is reached only from a `src/scripts/` file
+  with no npm script. The indexes are correct, tested, and create nothing on
+  any stack. Split to **#1070**, which is the larger finding.
+- **`#1050` / `#1058`** — mechanism decided, membership is genuinely Denise's.
+  **RF008 AC#6 forbids keying an allow-list to a fixed list of report types**,
+  so it must key on `handlerKey` (12) not `code` (14). `FILTER_CATALOG` in the
+  same file is the precedent and cites AC#6 for exactly this reason.
+  **Recorded on #1058: shipping it alone WIDENS the leak** — two of its three
+  broken exports would start emitting raw documents including `ipAddress`,
+  `userAgent` and ledger hashes. `sampleAnalysis` is the safe third.
+- **`#1026`** — mechanism confirmed, genuinely blocked on **#1069**: nothing
+  emits a specimen into the graph outbox, so the doc-conformant fix has
+  nothing to traverse. Also corrected: this issue's own remedy #2 would break
+  consent-node keying, because the producer writes `ethicalConsentId` and the
+  consumer reads `consentId`.
+- **`#1053`** — confirmed as a class across **8 route files and 3 distinct
+  defect shapes**. Two of its three stated mechanisms are corrected on the
+  issue. `dataset-file.routes.js` and the sensor allow-list are the cheapest
+  first slices.
 
-- **`#1029`** sensor org-scope. Re-derived; the sweep it asked for is run and
-  it is a **class**, split out to #1053. Six citation corrections posted.
-  Carries a rider that matters: **the full fix would not turn the existing
-  tests red either**, because `getSensor` is unmocked and `db.factory`
-  defaults `findOne` to `null`, so a null-tolerant post-fetch check no-ops.
-  New cross-tenant tests seeding a foreign-org document are mandatory.
-- **`#1050`** piece 1 shipped (`f81dfea5`, pin probed by reverting both
-  product sites). **Piece 2 (the `toCsvRows` column allow-list) is not
-  done.** The sweep says it must be **per-`handlerKey`** — seven distinct row
-  shapes — and that it is the same change as #1058.
-- **`#979`** Redis posture. The decision is untouched, but its
-  `[not established]` is answered and **stale in the good direction**: all
-  six worker services gained healthchecks in `bab590e8`.
+## Pile-up (the numbers `issue-loop` rung 3 asks for)
+
+**7 discharged, 14 filed.** No `rabbit-hole` conversion claimed: there were
+free agent slots and unblocked work throughout, which #590 says disqualifies
+one. Where the sitting stopped on a filed issue it said so plainly rather than
+dressing it as a blocker.
+
+Query the board rather than trusting a list: `gh issue list --state open`.
+
+**Most serious thing found: #1072** — `mfaSecret` is stored **plaintext**
+under a canonical field typed `secret/encrypted`, against RNF020 AC#3's
+explicit *"segredos MFA são cifrados"*. The TOTP verifier consumes the raw
+seed, so no decrypt is missing — there never was one.
 
 ## The judgment a query cannot carry
 
-- **`[ran it]` #1048 is answered and the metric it proposed is partly
-  measuring the wrong thing.** 0 tests at >=60% of budget, 1 at 50.7%.
-  But **5 of the top 6 are the FIRST test in their file**, and the run's own
-  breakdown is `import 431.20s` against `tests 93.97s` — vitest bills a
-  file's module-load cost to whichever test runs first. So a high percentage
-  there measures the import graph, not test slowness. #1038's test was the
-  opposite shape (genuinely slow, and not first in its file).
-- **`[ran it]` #1046 does not reproduce.** Six container runs, 501/501 lines
-  each, ~250KB through a pipe with an immediate `process.exit(1)`, marker
-  always last. Directions 2-4 declined on evidence, not postponed.
-- **`[read it]` #1037's remedy was NOT the owner's call, and the issue said
-  it was.** RF003 makes the Administrador the primary actor for the account
-  lifecycle; RF001 creates sessions and has no account-creation clause;
-  RF003 AC#6 requires auditing creation; RF012 AC#1 and RNF009 AC#2
-  (Crítica) make the actor mandatory. Zero corpus hits for self-registration
-  vocabulary. **Run `resolve-issue`'s inference step before accepting an
-  issue's own "this is Denise's call" — it is circular evidence (#529).**
-- **`[read it]` #983's direction 3 has the same shape.** The canonical
-  Foundation Data Pipeline plan (`:79`) records "Seed manual separado do
-  startup" as the **superseded** model. Recorded on #1055.
-- **`[ran it]` #1047's production claim was FALSE.** `import-worker.js` and
-  `neo4jProjection.worker.js` both guard their signal handlers on
-  `require.main === module`, so no double-registration exists. Only the
-  test-pollution half was real.
-- **`[ran it]` the two-hop consumer sweep paid again.** On #1037 it caught
-  `auth.controller.test.js` asserting `registerUser`'s 2-argument call —
-  invisible to the targeted run, which was green.
-
-## Filed this sitting
-
-**#1053 #1054 #1055 #1056 #1057 #1058** open and unworked; **#1059 filed
-and CLOSED this sitting** (the gate fix above). **#1056 and #1054 are
-security findings.** Query the board for everything else:
-`gh issue list --state open`.
-
-On the pack: **#753** (three stale facts in `ship-integration-branch`'s
-overlay, including the "2 expected compliance failures" that no longer
-occur), **#754**, **#755**. Those three cannot be worked from this repo —
-Rule 0 makes skill files editable only from a pack-repo session.
+- **The end-of-loop regression earned its keep and the per-fix sweep did
+  not.** `#1029`'s consumer sweep used `ls tests/**/*sensor*.test.js`.
+  **`globstar` is OFF in this shell**, so `**` collapsed to one level and
+  silently missed `tests/unit/controllers/sensor.controller.test.js` — 12
+  failures nothing else would have caught. **Derive a test list with
+  `git ls-files`, never a `**` glob.** Filed as pack#762.
+- **`git stash push -- <paths>` REFUSES when the fix adds an untracked
+  file**, and chaining it to the test run printed a confident **false pass**
+  on a can-it-fail probe. Use `git stash push -u --`. Filed as pack#760.
+- **`docs-primacy-guard` blocked an edit to `models/User.js`, and the block
+  paid.** Reading `dict-02_DICIONARIO.md` firsthand surfaced
+  `passwordResetToken` (P1X-0207) — a raw account-takeover credential in the
+  same responses — which #1068's body never named. Do not treat an agent's
+  quotation of the dictionary as the dictionary.
+- **A worker was briefed on #941 without checking the paths were reachable.**
+  It built exactly what was asked, correctly, on dead code. Filed as
+  pack#761: the delegability triage gates on "diagnosis complete" and "file
+  set bounded", and neither asks whether the code RUNS.
+- **`agent-delegation`'s cap is 2, not 3** — #707 lowered it and nine
+  downstream passages still say three, including `issue-loop`'s queue-mode
+  line that a sitting reads when deciding concurrency. Filed as pack#757.
+  This sitting ran 2.
 
 ## Conventions this sitting relied on / established
 
-- **Never chain a `git push` with a gated command.** `[ran it]` a
-  `push && npm run test:unit && typecheck` one-liner was blocked whole by
-  `full-suite-guard` and **the push silently did not happen**. `fix-bugs`
-  already says this (#413/#657); it was read this session and skipped anyway.
-- **`npm --prefix frontend run test:unit` is blocked by `full-suite-guard`.**
-  The sanctioned form, from `frontend/`:
-  `npx vitest run src/components src/contexts src/foundation src/hooks
-  src/pages src/utils src/views --reporter=dot`.
-- **Don't splice two disjoint `sed -n 'A,Bp;C,Dp'` ranges into one read.**
-  It creates a false adjacency — here it read as a `create-db.js` entry whose
-  `name` and `description` disagreed, costing a full re-read to disprove.
-- **A subagent's characterisation can be materially weaker than the truth.**
-  One reported `POST /api/temperature/system/reading` as missing a *scope
-  gate*; firsthand reading showed it has **no middleware at all**. Another's
-  "18 collections → 13" arithmetic was wrong (12). Both caught only by
-  verifying — which is the non-delegable rule earning its keep.
-- **Manual test-stack Playwright env** (unchanged, **not re-run this
-  sitting — unverified**): `PLAYWRIGHT_BASE_URL=http://localhost:5173`,
-  `PLAYWRIGHT_API_BASE_URL=http://localhost:3000`,
-  `PLAYWRIGHT_SKIP_WEBSERVER=1`, `TEST_USER=admin`, `TEST_PASS=Admin@123`,
-  `E2E_MONGO_URI='mongodb://localhost:27017?directConnection=true'`,
-  `E2E_MONGO_DB=bioavanced_test`,
-  `TEST_SUPPORT_SECRET=e2e-test-support-secret`.
+- **Derive a consumer-test list with `git ls-files`, then substitute the file
+  bare** — `npx vitest run $(cat consumers.txt)`. No `| tr` inside the
+  substitution (it defeats `full-suite-guard`'s file read), no `**`.
+- **`machineIngestGate.js` is the repo's machine-credential gate** — a sibling
+  of `testSupportGate.js`, not a reuse: that one requires
+  `NODE_ENV !== 'production'` and so refuses to register in production, which
+  a telemetry ingest path cannot do. Both compare with `!==`; whether to
+  harden both is **#1067**, deliberately not decided on one of the two.
+- **`UserModel.stripSecrets` and `PatientModel.stripConsentSecrets`** are the
+  two response-boundary helpers. There is still no shared utility; a third
+  would be the moment to build one.
+- **When a fix adds a guard that FETCHES before acting, expect existing tests
+  that stub only the mutator to go red** — that is the un-weakening, not a
+  regression. Three sensor tests and twelve controller tests did exactly this.
 
 ## Recommended next
 
-**Dennis named no successor to the ten.** #1059 is done, so the CI blocker
-is cleared. On the evidence above, **#1056 first** — the audit-trail bypass
-is the most severe finding of the sitting, its direction 1 ("add
-`requireAuditReader` to the audit-trail report types") is stated in the
-issue as not optional under any reading, and it was filed and left unworked
-by choice, not by any blocker. Then **#1050 piece 2 together with #1058** —
-they are one `COLUMN_CATALOG` change approached from opposite ends, and
-doing either alone wastes the other. **#1054** is a one-`git grep` triage
-away from being decidable (does anything call `POST
-/api/temperature/system/reading`?).
+**Dennis named no successor to the ten**, so: none queued. If the gates are
+wanted first, the two above are owed. Otherwise **#1073** (a read permission
+gating sensor deletion) is one `git grep` from decidable, and **#1072** is the
+most serious open finding.
