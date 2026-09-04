@@ -14,6 +14,7 @@ import { dataImportService, patientService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import ImportResultSummary, { type ImportResultSummaryData } from '../components/ImportResultSummary';
 import { convertExcelFileToFhirBundle, downloadFhirExcelTemplate } from '../utils/fhirExcelImport';
+import { normalizeConsentStatus } from './patientsConsentStatus';
 import './PatientsPage.css';
 
 const styles: Record<string, CSSProperties> = {
@@ -62,14 +63,6 @@ export default function PatientsPage() {
   const isConnectionError = (errorMessage?: string) => {
     const normalized = String(errorMessage || '').toLowerCase();
     return normalized.includes('econnrefused') || normalized.includes('network error') || normalized.includes('backend não está disponível') || normalized.includes('backend is unavailable');
-  };
-
-  const normalizeConsentStatus = (value?: string): ConsentStatus => {
-    const normalized = (value || '').trim().toUpperCase();
-    if (normalized === 'GRANTED' || normalized === 'SIGNED') return 'GRANTED';
-    if (normalized === 'REVOKED') return 'REVOKED';
-    if (normalized === 'PENDING' || normalized === 'PENDING_CONSENT') return 'PENDING';
-    return 'EXPIRED';
   };
 
   const handleOpenSignatureModal = (participantId: string) => {
