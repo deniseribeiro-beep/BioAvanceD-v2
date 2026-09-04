@@ -185,5 +185,59 @@ class UserModel {
   }
 }
 
+/**
+ * #1068: removes the credentials from a user document on its way out of the API.
+ *
+ * Every user read path destructured `password` and nothing else, so everything
+ * else on the document rode out. The dictionary is unusually explicit about
+ * which of those must not — these are the four fields it marks, read from
+ * docs/docs-7-27-2026/extracted/dict-02_DICIONARIO.md directly:
+ *
+ *   P1X-0190 passwordHash            "Nunca persistir ou retornar senha em
+ *                                     texto claro."
+ *   P1X-0197 mfaSecretCiphertext     "Nunca retornar na API de consulta."
+ *   P1X-0203 passwordHistoryHashes   "Não exibir; retenção limitada."
+ *   P1X-0207 passwordResetTokenHash  "Compartimento «secret»"
+ *
+ * `mfaSecret` is the worst of them: it is the live TOTP seed, so returning it
+ * is a full MFA bypass rather than an information leak — anyone holding it can
+ * mint valid second-factor codes indefinitely. `passwordResetToken` is the
+ * same shape for the password: auth.service.js and user-security.service.js
+ * both $set the RAW token onto the user document, so during a reset window a
+ * plain user listing carried an account-takeover credential.
+ *
+ * #993 and #998 closed the WRITE-side siblings of this defect on the same
+ * route — caller-writable mfaSecret, and privilege escalation. The read side
+ * had never been examined.
+ *
+ * DELIBERATELY KEPT: mfaEnabled (P1X-0195), mfaActivationDate (P1X-0198),
+ * mfaLocked (P1X-0200), mfaFailedAttempts (P1X-0199), passwordChangedAt
+ * (P1X-0204) and passwordResetExpires (P1X-0208). None is a credential, none
+ * carries a never-return note, and the dictionary's own Draw.io/tela column
+ * places several of them on real admin screens ("Usuário > Segurança/MFA",
+ * "Administração > Segurança da conta"). Stripping the whole MFA or
+ * password block would break the enrolment badge and the lockout display —
+ * the same distinction PatientModel.stripConsentSecrets draws when it keeps
+ * consentTokenExpiresAt while removing the token itself.
+ *
+ * Applied at the RESPONSE boundary rather than as a query projection, for the
+ * reason stripConsentSecrets documents: the same documents are read internally
+ * by paths that legitimately need these values (MFA verification, enrolment,
+ * password-reset validation), so a projection would break them.
+ */
+UserModel.stripSecrets = function stripSecrets(user) {
+  if (!user || typeof user !== 'object') return user;
+  if (Array.isArray(user)) return user.map(UserModel.stripSecrets);
+
+  const {
+    password,
+    mfaSecret,
+    passwordHistory,
+    passwordResetToken,
+    ...rest
+  } = user;
+  return rest;
+};
+
 module.exports = UserModel;
 

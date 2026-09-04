@@ -207,7 +207,9 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
 
     // Remove senhas dos resultados e traduz status para português
     const sanitizedUsers = await Promise.all(users.map(async (user) => {
-      const { password, ...userWithoutPassword } = user;
+      // #1068: strips mfaSecret and passwordResetToken too -- see
+      // UserModel.stripSecrets for the dictionary entries that require it.
+      const userWithoutPassword = UserModel.stripSecrets(user);
       // Traduz status para português para o frontend
       if (userWithoutPassword.status) {
         userWithoutPassword.status = UserModel.translateStatus(userWithoutPassword.status);
@@ -291,8 +293,10 @@ router.get('/:id', authenticate, async (req, res) => {
       });
     }
 
-    const { password, ...userWithoutPassword } = user;
     const UserModel = require('../../models/User');
+    // #1068: strips mfaSecret and passwordResetToken too -- see
+    // UserModel.stripSecrets for the dictionary entries that require it.
+    const userWithoutPassword = UserModel.stripSecrets(user);
     
     // Traduz status para português para o frontend
     if (userWithoutPassword.status) {
@@ -683,7 +687,10 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       await auditLogger.logUpdate(req, 'User', req.params.id);
     }
     
-    const { password: __unusedPassword2, ...userWithoutPassword } = updatedUser;
+    // #1068: strips mfaSecret and passwordResetToken too -- see
+    // UserModel.stripSecrets for the dictionary entries that require it.
+    // (UserModel is already required earlier in this handler -- #566.)
+    const userWithoutPassword = UserModel.stripSecrets(updatedUser);
 
     // #427: roleName resolved from the active RBAC assignment for display —
     // no longer persisted on the User document.

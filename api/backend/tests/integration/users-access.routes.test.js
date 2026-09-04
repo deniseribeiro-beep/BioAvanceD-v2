@@ -232,6 +232,68 @@ describe('Users and Access routes', () => {
     expect(res.payload.data[0].id).toBe('user-1');
   });
 
+  // #1068: dict-02 P1X-0197 says of mfaSecretCiphertext: "Nunca retornar na API
+  // de consulta." Every user read path destructured `password` and nothing else,
+  // so the live TOTP seed rode out on all three. Anyone holding it can mint valid
+  // second-factor codes indefinitely -- a full MFA bypass, not an info leak.
+  //
+  // #993 and #998 are the write-side siblings of this defect and are both closed;
+  // the read side had never been looked at.
+  describe('#1068: user read paths never return mfaSecret', () => {
+    const LEAKED_SECRET = 'M'.repeat(32);
+
+    function seededUser(overrides = {}) {
+      return {
+        _id: 'user-1',
+        name: 'Administrador',
+        email: 'admin@bioavanced.com.br',
+        username: 'admin',
+        password: 'hashed',
+        accessType: 4,
+        status: 'active',
+        mfaEnabled: true,
+        mfaSecret: LEAKED_SECRET,
+        // CONTROL: kept deliberately. It is not a credential, and the UI renders
+        // it -- stripping the whole MFA block would be the wrong fix.
+        mfaActivationDate: '2026-01-01T00:00:00.000Z',
+        ...overrides,
+      };
+    }
+
+    it('GET /api/users does not return mfaSecret', async () => {
+      const handler = getHandler(userRoutes, 'get', '/');
+      usersCollection.find.mockReturnValue({ toArray: vi.fn().mockResolvedValue([seededUser()]) });
+      const req = createRequest();
+      req.app.locals.db = db;
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.stringify(res.payload)).not.toContain(LEAKED_SECRET);
+      expect(res.payload.data[0]).not.toHaveProperty('mfaSecret');
+      expect(res.payload.data[0].password).toBeUndefined();
+      // CONTROL: the non-credential MFA fields survive.
+      expect(res.payload.data[0].mfaEnabled).toBe(true);
+      expect(res.payload.data[0].mfaActivationDate).toBe('2026-01-01T00:00:00.000Z');
+    });
+
+    it('GET /api/users/:id does not return mfaSecret', async () => {
+      const handler = getHandler(userRoutes, 'get', '/:id');
+      usersCollection.findOne.mockResolvedValue(seededUser());
+      const req = createRequest({ params: { id: 'user-1' } });
+      req.app.locals.db = db;
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.stringify(res.payload)).not.toContain(LEAKED_SECRET);
+      expect(res.payload.data).not.toHaveProperty('mfaSecret');
+      expect(res.payload.data.mfaEnabled).toBe(true);
+    });
+  });
+
   it('POST /api/users/register deve normalizar status, telefone e organizationId', async () => {
     const handler = getHandler(userRoutes, 'post', '/register');
     const req = createRequest({
