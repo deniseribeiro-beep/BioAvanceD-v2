@@ -628,4 +628,117 @@ describe('Reports API integration', () => {
       expect(lines[1]).toBe('"1","Freezer A"');
     });
   });
+
+  // #1050: pins the WIRING of #1045's PatientModel.stripConsentSecrets call
+  // inside handlePatient and handleSamplesByPatient (reports.routes.js), not
+  // the helper itself -- stripConsentSecrets already has its own unit tests,
+  // so the strip logic is covered; what #1045's own response-boundary spec
+  // (consent-token-response-leak.1045.test.js) does NOT cover is these two
+  // handlers, which are gated on `viewReports` (a broader population than
+  // the `createPatient`-gated routes #1045 examined) and whose raw documents
+  // feed a CSV an operator can download and keep. A future edit that drops
+  // either handler's stripConsentSecrets call must go red here.
+  describe('#1050: relatórios de paciente não vazam segredos de consentimento', () => {
+    function appWithDb(db) {
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.use((req, _res, next) => {
+        req.app.locals.db = db;
+        next();
+      });
+      const reportsRouter = require(modulePaths.controller);
+      testApp.use('/api/reports', reportsRouter);
+      return testApp;
+    }
+
+    // Distinctive from every other fixture in this suite, so "token absent"
+    // can't pass by accident (nothing else in this file's collections could
+    // coincidentally match it).
+    const LEAKED_SECRET = 'c'.repeat(64);
+
+    function seededPatient(overrides = {}) {
+      return {
+        participantId: 'P-CONSENT-1050',
+        status: 'PENDING_CONSENT',
+        clinicalUnitId: 'unit-1',
+        consentToken: LEAKED_SECRET,
+        consentTokenCreatedAt: new Date('2026-09-02T15:45:01.834Z'),
+        consentTokenExpiresAt: new Date('2026-09-09T15:45:01.834Z'),
+        consentNotifiedAt: new Date('2026-09-02T15:45:02.000Z'),
+        ...overrides,
+      };
+    }
+
+    // Same shape as consent-token-response-leak.1045.test.js's own
+    // expectNoConsentSecret: serialize first, so one check covers the
+    // secret showing up as a nested field (preview JSON) OR as a bare CSV
+    // column name (toCsvRows derives headers from Object.keys(rows[0]) with
+    // no allow-list).
+    function expectNoConsentSecret(serializedBody) {
+      expect(serializedBody).not.toContain(LEAKED_SECRET);
+      expect(serializedBody).not.toContain('consentTokenCreatedAt');
+    }
+
+    it('patient preview (handlePatient): não devolve consentToken/consentTokenCreatedAt', async () => {
+      const { db } = buildCollectionDb({ patients: [seededPatient()] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/patients/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expectNoConsentSecret(JSON.stringify(response.body));
+      // Not-empty guard: a handler that silently returned nothing would
+      // also pass a bare "no consentToken" check.
+      expect(response.body.data.total).toBe(1);
+      expect(response.body.data.patients).toHaveLength(1);
+      expect(response.body.data.patients[0].participantId).toBe('P-CONSENT-1050');
+      // CONTROL: the two harmless consent fields #1045 deliberately keeps
+      // must survive -- proves this isn't "strip the whole consent block".
+      expect(response.body.data.patients[0].consentTokenExpiresAt).toBeTruthy();
+    });
+
+    it('patient export CSV (handlePatient): consentToken não aparece nem como coluna nem como valor', async () => {
+      const { db } = buildCollectionDb({ patients: [seededPatient()] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/patients/export');
+
+      expect(response.status).toBe(200);
+      expectNoConsentSecret(response.text);
+      const headers = response.text.split('\n')[0].split(',');
+      expect(headers).not.toContain('consentToken');
+      expect(headers).not.toContain('consentTokenCreatedAt');
+      expect(headers).toContain('participantId');
+      expect(response.text.split('\n')).toHaveLength(2);
+    });
+
+    it('samplesbypatient preview (handleSamplesByPatient): não devolve consentToken/consentTokenCreatedAt', async () => {
+      const { db } = buildCollectionDb({ patients: [seededPatient()] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/samples_by_patient/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expectNoConsentSecret(JSON.stringify(response.body));
+      expect(response.body.data.total).toBe(1);
+      expect(response.body.data.patients).toHaveLength(1);
+      expect(response.body.data.patients[0].participantId).toBe('P-CONSENT-1050');
+      expect(response.body.data.patients[0].consentTokenExpiresAt).toBeTruthy();
+    });
+
+    it('samplesbypatient export CSV (handleSamplesByPatient): consentToken não aparece nem como coluna nem como valor', async () => {
+      const { db } = buildCollectionDb({ patients: [seededPatient()] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/samples_by_patient/export');
+
+      expect(response.status).toBe(200);
+      expectNoConsentSecret(response.text);
+      const headers = response.text.split('\n')[0].split(',');
+      expect(headers).not.toContain('consentToken');
+      expect(headers).not.toContain('consentTokenCreatedAt');
+      expect(headers).toContain('participantId');
+      expect(response.text.split('\n')).toHaveLength(2);
+    });
+  });
 });
