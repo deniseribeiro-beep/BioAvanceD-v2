@@ -6,9 +6,27 @@ issues, Docker is on." **8 of the 10 are closed**, a ninth (`#1053`) has its
 load-bearing slice shipped and stays open as a tracking issue, and the tenth
 (`#1072`) is researched but deliberately not shipped — see below.
 
-**Gates: native regression IN FLIGHT at the time of writing. Architecture
-suite GREEN (122/122). Docker gate NOT YET RUN.** Re-derive all three rather
-than trusting this paragraph.
+**BOTH GATES RAN AND BOTH ARE GREEN.**
+
+- **Native regression** `[ran it]` the sanctioned three-directory form:
+  **462 files / 8615 tests / 0 failures, exit 0, 613s.** Past the Bash tool's
+  600s ceiling, so background it and grep your own redirect. The count moved
+  **8544 -> 8615** against the previous sitting; the 71 are this sitting's
+  own additions.
+- **Architecture suite** `[ran it]` `npm run test:architecture` natively —
+  **122/122, exit 0.** Note vitest does NOT run these; they are `node --test`.
+- **Docker gate** `[ran it]` the exact command CI's `current-state-validation`
+  runs: `docker compose --env-file .env.test.example -f compose.test.yml run
+  --rm --no-deps backend-unit-runner` -> **exit 0**, and all four chained
+  steps completed: architecture **122 tests / 108 pass / 0 fail / 14
+  skipped**, essential reference-data validation passed, dictionary catalog
+  **929/929 (v1.3.0)**, compliance evidence generated. That four-step chain
+  completing is the property #1059 restored, and it still holds.
+- **Nothing left running.** `docker ps -a` empty. **No image was built** —
+  the gate reused the 9-hour-old `backend-unit-runner` image — and the
+  builder cache is **610.5MB, unchanged**.
+
+Re-derive all three rather than trusting this paragraph.
 
 Re-derive every count below rather than trusting it.
 
@@ -114,8 +132,8 @@ one. Where the sitting stopped it says so plainly.
 
 **Dennis named no successor to the ten**, so: none queued.
 
-If the gates are wanted first, the Docker gate is still owed. Otherwise
-`#1083` is the highest-value open item (a live plaintext-at-rest defect with
+Both gates are green, so nothing is owed there. `#1083` is the
+highest-value open item (a live plaintext-at-rest defect with
 a precedent-shaped remedy), and it is a **prerequisite for `#1072`**.
 `#1081` (equipment PUT/DELETE, both failure modes) is the cheapest of the
 `#1053` children.
