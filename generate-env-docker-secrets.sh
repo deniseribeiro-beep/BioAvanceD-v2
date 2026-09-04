@@ -29,17 +29,39 @@ KEY_ID="audit-ed25519-dev-1"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-openssl genpkey -algorithm ED25519 -out "$TMP/private.pem"
-openssl pkey -in "$TMP/private.pem" -pubout -out "$TMP/public.pem"
+# #989: the audit signing key must land on DISK and reach the containers as a FILE
+# PATH. Both loaders -- merkle-envelope.service.js#getPrivateKeyPem and
+# audit-signing.provider.js#loadPrivateKey -- readFile() whatever
+# AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE names and throw otherwise; 2b1ae120 deleted the
+# last inline-PEM path. This script used to generate the key into $TMP, export it as
+# AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM -- a name no code in the repo reads -- and then let
+# the EXIT trap delete the only artifact either loader wants. A stack built from this
+# script's own output could therefore never seal a daily root or a tree head.
+#
+# The key is reused when already present, following infra/witness/entrypoint.sh's
+# idempotency guard, so re-running this script cannot orphan a key that
+# already-signed audit_roots documents were verified against.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KEY_DIR="$SCRIPT_DIR/infra/audit/secrets"
+KEY_FILE="$KEY_DIR/merkle_signing_key.pem"
+# compose.dev.yml bind-mounts $KEY_DIR read-only at /run/secrets in backend and worker.
+KEY_FILE_IN_CONTAINER="/run/secrets/merkle_signing_key.pem"
 
-PRIVATE_ENV="$(python3 - "$TMP/private.pem" <<'PY'
-from pathlib import Path
-import sys
-s=Path(sys.argv[1]).read_text().rstrip("\n")
-print(s.replace("\\","\\\\").replace("\n","\\n"))
-PY
-)"
+mkdir -p "$KEY_DIR"
+chmod 700 "$KEY_DIR" || true
+if [[ ! -f "$KEY_FILE" ]]; then
+  openssl genpkey -algorithm ED25519 -out "$KEY_FILE"
+  chmod 600 "$KEY_FILE" || true
+  echo "Chave de assinatura de auditoria gerada: $KEY_FILE"
+else
+  echo "Reutilizando chave de assinatura de auditoria existente: $KEY_FILE"
+fi
+openssl pkey -in "$KEY_FILE" -pubout -out "$TMP/public.pem"
 
+# The registry MUST be the SPKI half of the key file above: auditRoot.service.js's
+# processTimestampBacklog verifies every signed root against it and stamps a mismatch
+# FAILED / signature_unknown_key_id, so a key with no matching registry entry yields a
+# stack that signs correctly and reports every artifact invalid.
 PUBLIC_JSON="$(python3 - "$KEY_ID" "$TMP/public.pem" <<'PY'
 from pathlib import Path
 import json, sys
@@ -66,8 +88,8 @@ USER_ANON_SALT=$USER_ANON_SALT
 NEO4J_CANONICAL_SALT=$NEO4J_CANONICAL_SALT
 
 AUDIT_MERKLE_SIGN_KEY_ID=$KEY_ID
-AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM="$PRIVATE_ENV"
-AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON='$PUBLIC_JSON'
+AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE=$KEY_FILE_IN_CONTAINER
+AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON=$PUBLIC_JSON
 AUDIT_RFC3161_MODE=disabled
 AUDIT_RFC3161_TSA_URL=
 AUDIT_RFC3161_TSA_AUTH_TOKEN=
@@ -89,4 +111,5 @@ EOF
 
 chmod 600 "$OUT"
 echo "Gerado: $OUT"
+echo "AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE -> $KEY_FILE_IN_CONTAINER (host: $KEY_FILE)."
 echo "Cole sua chave real em RESEND_API_KEY e mantenha o arquivo fora do Git."

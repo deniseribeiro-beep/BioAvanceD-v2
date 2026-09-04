@@ -52,6 +52,11 @@ services:
       - backend_node_modules:/app/node_modules
       - ./orpha-data-raw:/workspace/orpha-data-raw:ro
       - ./artifacts:/workspace/artifacts
+      # #989: AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE is /run/secrets/merkle_signing_key.pem
+      # in .env.docker(.example), and generate-env-docker-secrets.sh writes the key
+      # here on the host. The backend needs it because POST /api/audit/anchor (#959)
+      # reaches the same signing chains as the nightly worker job.
+      - ./infra/audit/secrets:/run/secrets:ro
     env_file:
       - .env.docker
     environment:
@@ -86,6 +91,9 @@ services:
       - ./api/backend:/app
       - backend_node_modules:/app/node_modules
       - ./artifacts:/workspace/artifacts
+      # #989: this is the container that runs daily-merkle.job -- without the signing
+      # key on disk here, every nightly run throws and seals nothing.
+      - ./infra/audit/secrets:/run/secrets:ro
     env_file:
       - .env.docker
     healthcheck:

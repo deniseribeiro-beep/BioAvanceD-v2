@@ -25,6 +25,7 @@ const integrityService = require('../../src/services/integrityCheckService');
 const auditRootService = require('../../src/services/auditRoot.service');
 const auditV2Service = require('../../src/services/audit-v2.service');
 const logger = require('../../src/utils/logger');
+const env = require('../../src/config/env');
 
 function makeFakeDb(previousTreeHeads = []) {
   return {
@@ -340,6 +341,93 @@ describe('daily-merkle.job', () => {
       expect(result).toBeNull();
       expect(auditRootService.saveDailyRoot).not.toHaveBeenCalled();
       expect(auditV2Service.createTreeHead).not.toHaveBeenCalled();
+    });
+  });
+
+  // #989: the catch in runOnce() swallows every error into one generic line, so a
+  // missing audit signing key -- a configuration error that never clears on its own
+  // and silently stops every daily root and tree head from being sealed -- is
+  // indistinguishable in the log from "Mongo blipped". These cases pin the two
+  // shapes apart. The swallow itself is deliberate and unchanged: scheduleNextRun()
+  // documents that runOnce() never rejects, and a rethrow would both become an
+  // unhandled rejection in a detached setTimeout and skip the reschedule.
+  describe('#989: signing-key configuration errors get their own log shape', () => {
+    it('CONTROL: an ordinary failure still logs the generic job-error line', async () => {
+      auditRootService.saveDailyRoot.mockRejectedValue(new Error('connection 3 to mongodb:27017 closed'));
+
+      await expect(job.runOnce()).resolves.toBeUndefined();
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      const [message] = logger.error.mock.calls[0];
+      expect(message).toContain('Erro ao executar job');
+      expect(message).not.toContain('AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE');
+    });
+
+    it("merkle-envelope's missing-key throw is reported as a configuration error naming the variables", async () => {
+      auditRootService.saveDailyRoot.mockRejectedValue(
+        new Error('Audit signing key must be provided via AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE')
+      );
+
+      await expect(job.runOnce()).resolves.toBeUndefined();
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      const [message] = logger.error.mock.calls[0];
+      expect(message).toContain('chave de assinatura');
+      expect(message).toContain('AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE');
+      expect(message).toContain('AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON');
+    });
+
+    it("audit-signing.provider's missing-key-id throw is reported as a configuration error", async () => {
+      // anchorV2ForDate reads db.collection('audit_tree_heads') before calling
+      // createTreeHead, so this case needs the full fake db, not connectDB's default.
+      mongo.connectDB.mockResolvedValue(makeFakeDb([]));
+      auditV2Service.createTreeHead.mockRejectedValue(
+        new Error('AUDIT_MERKLE_SIGN_KEY_ID nao configurado')
+      );
+
+      await expect(job.runOnce()).resolves.toBeUndefined();
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      const [message] = logger.error.mock.calls[0];
+      expect(message).toContain('chave de assinatura');
+    });
+
+    it('an unreadable key file at the CONFIGURED path is reported as a configuration error', async () => {
+      const originalKeyFile = env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE;
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = '/run/secrets/merkle_signing_key.pem';
+      const enoent = new Error("ENOENT: no such file or directory, open '/run/secrets/merkle_signing_key.pem'");
+      enoent.code = 'ENOENT';
+      enoent.path = '/run/secrets/merkle_signing_key.pem';
+      auditRootService.saveDailyRoot.mockRejectedValue(enoent);
+
+      try {
+        await expect(job.runOnce()).resolves.toBeUndefined();
+
+        expect(logger.error).toHaveBeenCalledTimes(1);
+        const [message] = logger.error.mock.calls[0];
+        expect(message).toContain('chave de assinatura');
+      } finally {
+        env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = originalKeyFile;
+      }
+    });
+
+    it('CONTROL: an ENOENT on some OTHER path is NOT reported as a signing-key problem', async () => {
+      const originalKeyFile = env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE;
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = '/run/secrets/merkle_signing_key.pem';
+      const enoent = new Error("ENOENT: no such file or directory, open '/workspace/artifacts/whatever.json'");
+      enoent.code = 'ENOENT';
+      enoent.path = '/workspace/artifacts/whatever.json';
+      auditRootService.saveDailyRoot.mockRejectedValue(enoent);
+
+      try {
+        await expect(job.runOnce()).resolves.toBeUndefined();
+
+        expect(logger.error).toHaveBeenCalledTimes(1);
+        const [message] = logger.error.mock.calls[0];
+        expect(message).toContain('Erro ao executar job');
+      } finally {
+        env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = originalKeyFile;
+      }
     });
   });
 });
