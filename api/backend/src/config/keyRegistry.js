@@ -56,7 +56,17 @@ function getPreviousKeyId() {
  *   2. ENCRYPTION_KEY / ENCRYPTION_KEY_ID      <- o par novo
  *   3. reiniciar; envelopes novos saem sob a chave nova, os antigos ainda
  *      decifram
- *   4. depois de reescrever os envelopes antigos, esvaziar o slot anterior
+ *
+ * #1101: NAO ha passo 4. O slot e aposentado POR POLITICA, nao
+ * mecanicamente -- nada neste repositorio reescreve envelopes antigos,
+ * entao "depois de reescrever os antigos, esvaziar o slot" era um passo
+ * sem gatilho e sem como ser dado por concluido. Esvaziar o slot e
+ * IRREVERSIVEL para os dados sob a chave antiga: os envelopes passam a
+ * decifrar como null, silenciosamente, e desde #1099 os indices cegos vao
+ * junto -- identityDocumentHash/birthDateHash sao casados sob TODA chave
+ * registrada, entao um valor indexado antes da rotacao deixa de casar, e
+ * uma identidade nao casada gera participante DUPLICADO em vez de erro.
+ * O inventario de campos e o ferramental de reescrita sao o #1103.
  */
 function getKeyEntries() {
   const entries = [];
