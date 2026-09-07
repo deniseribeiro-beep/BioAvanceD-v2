@@ -110,4 +110,23 @@ describe('machineIngestGate.requireMachineIngestSecret (#1054)', () => {
 
     expect(res.body.message).toContain('x-telemetry-ingest-secret');
   });
+
+  // #1067: the one case where the shared helper's fail-closed early return is
+  // load-bearing, and the only one nothing pinned. With NO header sent and NO
+  // secret configured, both operands are the empty string -- a comparison
+  // without that guard hashes '' against '' and OPENS the route. The case
+  // above sends a header, so it can never reach this.
+  // Pinned by assertion rather than by crash: before this, a regression here
+  // surfaced only as a TypeError dereferencing a null res.body.
+  it('fails closed (403) when neither a secret nor a header is present', () => {
+    delete process.env.TELEMETRY_INGEST_SECRET;
+    const req = { get: () => undefined };
+    const res = createRes();
+    let called = false;
+
+    requireMachineIngestSecret(req, res, () => { called = true; });
+
+    expect(called).toBe(false);
+    expect(res.statusCode).toBe(403);
+  });
 });
