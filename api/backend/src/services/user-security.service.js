@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const speakeasy = require('speakeasy');
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
+const { hashToken } = require('../utils/tokenHash');
 
 /**
  * Service de Segurança do Usuário
@@ -673,7 +674,11 @@ class UserSecurityService {
         { _id: new ObjectId(userID) },
         {
           $set: {
-            passwordResetToken: resetToken,
+            // #1078: same hash-at-rest rule as auth.service's writer. Note
+            // this path mints a token valid for up to 24h, so the window in
+            // which a raw stored value would have been readable was the
+            // longer of the two.
+            passwordResetTokenHash: hashToken(resetToken),
             passwordResetExpires: expiresAt,
             updatedAt: new Date()
           }

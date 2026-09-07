@@ -49,6 +49,8 @@ function makeDb(overrides = {}) {
 }
 
 const HASHED = 'a'.repeat(60); // 20+ chars to pass length check
+const { hashToken } = require('../../src/utils/tokenHash');
+
 const BASE_USER = {
   _id: { toString: () => 'user-1' },
   email: 'user@test.com',
@@ -680,8 +682,15 @@ describe('AuthService.requestPasswordReset', () => {
     expect(result.success).toBe(true);
     expect(usersMock.updateOne).toHaveBeenCalledWith(
       { _id: BASE_USER._id },
-      expect.objectContaining({ $set: expect.objectContaining({ passwordResetToken: expect.any(String) }) })
+      expect.objectContaining({ $set: expect.objectContaining({ passwordResetTokenHash: expect.any(String) }) })
     );
+    // #1078: and the stored value must not BE the token. dict-02 P1X-0207 is
+    // passwordResetTokenHash, type secret/hash, and its description says "O
+    // token bruto não deve ser armazenado". A sha256 hex digest is 64 lowercase
+    // hex chars; the JWT this route mints is far longer and contains dots, so
+    // this assertion cannot pass on the raw value.
+    const storedHash = usersMock.updateOne.mock.calls[0][1].$set.passwordResetTokenHash;
+    expect(storedHash).toMatch(/^[0-9a-f]{64}$/);
     expect(usersMock.findOne).toHaveBeenCalledWith({
       $or: [{ email: 'user@test.com' }, { username: 'user@test.com' }]
     });
@@ -743,14 +752,15 @@ describe('AuthService.resetPassword', () => {
   it('throws when saved reset token does not match', async () => {
     vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
     const db = makeDb({
-      findOne: vi.fn().mockResolvedValue({ ...BASE_USER, passwordResetToken: 'different-token' }),
+      findOne: vi.fn().mockResolvedValue({ ...BASE_USER, passwordResetTokenHash: hashToken('a-different-token') }),
     });
     await expect(
       authService.resetPassword(db, 'tok', 'NewPass123!@#', {})
     ).rejects.toThrow('já utilizado');
   });
 
-  // #1084: both guards were written as `if (user.passwordResetToken && ...)`,
+  // #1084: both guards were written as `if (user.passwordResetTokenHash && ...)`
+  // (then spelled passwordResetToken, before #1078 hashed it),
   // and a successful reset $unsets that very field -- so the check that exists
   // to refuse an already-used token was disabled by the act of using it. The
   // stored token is not what authenticates the request either: the user is
@@ -758,7 +768,7 @@ describe('AuthService.resetPassword', () => {
   // past both guards. The reset link is a URL query parameter, so a leaked
   // USED link was a full account takeover for the rest of the JWT's lifetime
   // -- 1h on the unauthenticated path, up to 24h on the authenticated one.
-  it('#1084: refuses a REPLAYED token once passwordResetToken has been cleared, and does not touch the password', async () => {
+  it('#1084: refuses a REPLAYED token once passwordResetTokenHash has been cleared, and does not touch the password', async () => {
     vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
     const collectionApi = {
       // Exactly the post-reset state: $unset removed both fields.
@@ -778,7 +788,7 @@ describe('AuthService.resetPassword', () => {
   it('#1084: refuses when the stored token matches but the stored expiry is absent', async () => {
     vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
     const collectionApi = {
-      findOne: vi.fn().mockResolvedValue({ ...BASE_USER, passwordResetToken: 'tok' }),
+      findOne: vi.fn().mockResolvedValue({ ...BASE_USER, passwordResetTokenHash: hashToken('tok') }),
       updateOne: vi.fn().mockResolvedValue({}),
       find: vi.fn(),
       insertOne: vi.fn(),
@@ -799,7 +809,7 @@ describe('AuthService.resetPassword', () => {
     const collectionApi = {
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
-        passwordResetToken: 'tok',
+        passwordResetTokenHash: hashToken('tok'),
         passwordResetExpires: new Date(Date.now() + 100000),
       }),
       updateOne: vi.fn().mockResolvedValue({}),
@@ -813,12 +823,66 @@ describe('AuthService.resetPassword', () => {
     expect(collectionApi.updateOne).toHaveBeenCalled();
   });
 
+  // #1078: dict-02 P1X-0207 names the field passwordResetTokenHash, type
+  // secret/hash, and RNF020 AC#3's FIRST clause is "Tokens de recuperação e
+  // códigos sensíveis são armazenados por hash". The code stored the raw
+  // token at two writers and compared it directly, so during a reset window
+  // a plain user listing carried an account-takeover credential -- the same
+  // shape models/User.js's own docblock described and nobody filed.
+  it('#1078: accepts a token whose HASH matches the stored value, proving the compare is hash-based', async () => {
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    const collectionApi = {
+      findOne: vi.fn().mockResolvedValue({
+        ...BASE_USER,
+        passwordResetTokenHash: hashToken('tok'),
+        passwordResetExpires: new Date(Date.now() + 100000),
+      }),
+      updateOne: vi.fn().mockResolvedValue({}),
+      find: vi.fn(),
+      insertOne: vi.fn(),
+    };
+    const db = makeDb(collectionApi);
+
+    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
+
+    expect(result.success).toBe(true);
+    expect(collectionApi.updateOne).toHaveBeenCalledWith(
+      { _id: BASE_USER._id },
+      expect.objectContaining({
+        $unset: { passwordResetTokenHash: '', passwordResetExpires: '' },
+      })
+    );
+  });
+
+  // Fails CLOSED across the rename: a row still carrying the old plaintext
+  // field has no passwordResetTokenHash, so #1084's unconditional guard
+  // refuses it rather than falling back to a raw compare.
+  it('#1078: refuses a row still holding the OLD plaintext passwordResetToken field', async () => {
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    const collectionApi = {
+      findOne: vi.fn().mockResolvedValue({
+        ...BASE_USER,
+        passwordResetToken: 'tok',
+        passwordResetExpires: new Date(Date.now() + 100000),
+      }),
+      updateOne: vi.fn().mockResolvedValue({}),
+      find: vi.fn(),
+      insertOne: vi.fn(),
+    };
+    const db = makeDb(collectionApi);
+
+    await expect(
+      authService.resetPassword(db, 'tok', 'NewPass123!@#', {})
+    ).rejects.toThrow('já utilizado');
+    expect(collectionApi.updateOne).not.toHaveBeenCalled();
+  });
+
   it('throws when the saved reset token has expired', async () => {
     vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
     const db = makeDb({
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
-        passwordResetToken: 'tok',
+        passwordResetTokenHash: hashToken('tok'),
         passwordResetExpires: new Date(Date.now() - 1000),
       }),
     });
@@ -832,7 +896,7 @@ describe('AuthService.resetPassword', () => {
     const collectionApi = {
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
-        passwordResetToken: 'tok',
+        passwordResetTokenHash: hashToken('tok'),
         passwordResetExpires: new Date(Date.now() + 100000),
       }),
       updateOne: vi.fn().mockResolvedValue({}),
@@ -846,7 +910,7 @@ describe('AuthService.resetPassword', () => {
       { _id: BASE_USER._id },
       expect.objectContaining({
         $set: expect.objectContaining({ password: expect.any(String) }),
-        $unset: { passwordResetToken: '', passwordResetExpires: '' },
+        $unset: { passwordResetTokenHash: '', passwordResetExpires: '' },
       })
     );
   });
@@ -877,7 +941,7 @@ describe('#958: password changes revoke sessions', () => {
     const { db, sessionsCollection } = dbWithSessions({
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
-        passwordResetToken: 'tok',
+        passwordResetTokenHash: hashToken('tok'),
         passwordResetExpires: new Date(Date.now() + 100000),
       }),
       updateOne: vi.fn().mockResolvedValue({}),

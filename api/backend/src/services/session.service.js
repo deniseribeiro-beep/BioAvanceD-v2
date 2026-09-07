@@ -1,13 +1,12 @@
 const SessionModel = require('../models/Session');
 const logger = require('../utils/logger');
-const crypto = require('crypto');
+// #1078: moved to utils/tokenHash so the password-reset writers share one
+// implementation instead of adding a third copy. Byte-identical body; the
+// only crypto use in this file was inside it, so the require went with it.
+const { hashToken } = require('../utils/tokenHash');
 
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-function hashToken(token) {
-  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
-}
 
 // #914 / RF014 AC#1. session.timeoutMinutes was one of 43 SecurityConfiguration
 // keys that nothing read, so the admin UI wrote a policy and four hardcoded

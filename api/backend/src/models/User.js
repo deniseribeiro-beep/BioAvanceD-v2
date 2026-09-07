@@ -201,10 +201,14 @@ class UserModel {
  *
  * `mfaSecret` is the worst of them: it is the live TOTP seed, so returning it
  * is a full MFA bypass rather than an information leak — anyone holding it can
- * mint valid second-factor codes indefinitely. `passwordResetToken` is the
- * same shape for the password: auth.service.js and user-security.service.js
- * both $set the RAW token onto the user document, so during a reset window a
- * plain user listing carried an account-takeover credential.
+ * mint valid second-factor codes indefinitely. `passwordResetTokenHash` was
+ * the same shape for the password until #1078: auth.service.js and
+ * user-security.service.js both $set the RAW token onto the user document, so
+ * during a reset window a plain user listing carried an account-takeover
+ * credential. It is now a sha256 digest (utils/tokenHash), which is what
+ * P1X-0207 always required -- but it stays stripped here, because a digest of
+ * a live credential is still a "Compartimento «secret»" field and there is no
+ * reason for any response to carry it.
  *
  * #993 and #998 closed the WRITE-side siblings of this defect on the same
  * route — caller-writable mfaSecret, and privilege escalation. The read side
@@ -233,7 +237,7 @@ UserModel.stripSecrets = function stripSecrets(user) {
     password,
     mfaSecret,
     passwordHistory,
-    passwordResetToken,
+    passwordResetTokenHash,
     ...rest
   } = user;
   return rest;

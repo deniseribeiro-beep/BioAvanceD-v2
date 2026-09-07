@@ -8,6 +8,7 @@ const UserModel = require('../models/User');
 const LogModel = require('../models/Log');
 const logger = require('../utils/logger');
 const sessionService = require('./session.service');
+const { hashToken } = require('../utils/tokenHash');
 const passwordService = require('./password.service');
 const { grantRoleForAccessType, assertGrantPreconditions, isAdministrator, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
 const notificationDispatchService = require('./notificationDispatch.service');
@@ -1195,7 +1196,14 @@ class AuthService {
         { _id: user._id },
         {
           $set: {
-            passwordResetToken: resetToken,
+            // #1078: the HASH, never the token. dict-02 P1X-0207 is
+            // passwordResetTokenHash (secret/hash) and its description reads
+            // "O token bruto não deve ser armazenado"; RNF020 AC#3's first
+            // clause says the same. The raw token still goes out in the
+            // emailed link -- it just stops being recoverable from the
+            // database, so a reset window no longer leaves an
+            // account-takeover credential at rest.
+            passwordResetTokenHash: hashToken(resetToken),
             passwordResetExpires: new Date(Date.now() + 3600000), // 1 hora
             updatedAt: new Date()
           }
@@ -1295,7 +1303,9 @@ class AuthService {
       // ($set at requestPasswordReset, and user-security.service's) set the
       // token and its expiry together. So there is no live flow that reaches
       // here with either field missing -- only a replay.
-      if (!user.passwordResetToken || user.passwordResetToken !== token) {
+      // #1078: compare digests. Still unconditional -- see #1084; hashing
+      // the field does not make the absent case safe, it just renames it.
+      if (!user.passwordResetTokenHash || user.passwordResetTokenHash !== hashToken(token)) {
         throw new Error('Token inválido ou já utilizado');
       }
 
@@ -1318,7 +1328,7 @@ class AuthService {
             updatedAt: new Date()
           },
           $unset: {
-            passwordResetToken: '',
+            passwordResetTokenHash: '',
             passwordResetExpires: ''
           }
         }

@@ -207,7 +207,7 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
 
     // Remove senhas dos resultados e traduz status para português
     const sanitizedUsers = await Promise.all(users.map(async (user) => {
-      // #1068: strips mfaSecret and passwordResetToken too -- see
+      // #1068: strips mfaSecret and passwordResetTokenHash too -- see
       // UserModel.stripSecrets for the dictionary entries that require it.
       const userWithoutPassword = UserModel.stripSecrets(user);
       // Traduz status para português para o frontend
@@ -294,7 +294,7 @@ router.get('/:id', authenticate, async (req, res) => {
     }
 
     const UserModel = require('../../models/User');
-    // #1068: strips mfaSecret and passwordResetToken too -- see
+    // #1068: strips mfaSecret and passwordResetTokenHash too -- see
     // UserModel.stripSecrets for the dictionary entries that require it.
     const userWithoutPassword = UserModel.stripSecrets(user);
     
@@ -700,7 +700,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       await auditLogger.logUpdate(req, 'User', req.params.id);
     }
     
-    // #1068: strips mfaSecret and passwordResetToken too -- see
+    // #1068: strips mfaSecret and passwordResetTokenHash too -- see
     // UserModel.stripSecrets for the dictionary entries that require it.
     // (UserModel is already required earlier in this handler -- #566.)
     const userWithoutPassword = UserModel.stripSecrets(updatedUser);
