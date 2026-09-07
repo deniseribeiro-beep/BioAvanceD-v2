@@ -1279,13 +1279,30 @@ class AuthService {
         throw new Error('Usuário não encontrado');
       }
 
-      // Verifica se o token salvo no banco corresponde (opcional, mas aumenta segurança)
-      if (user.passwordResetToken && user.passwordResetToken !== token) {
+      // #1084: both checks are UNCONDITIONAL, and the '&&' they used to carry
+      // is the whole bug. The stored token is not what authenticates this
+      // request -- the user is fetched by an id read out of the JWT above --
+      // so these two guards are the only thing making a reset token
+      // single-use. And a successful reset $unsets both fields (see below),
+      // which is exactly the state a '&&' short-circuits on: using the token
+      // disabled the check that refuses a used token. Since the JWT stays
+      // signature-valid for the rest of its lifetime (1h here, up to 24h via
+      // user-security.service's authenticated path), a leaked USED reset link
+      // was a full account takeover, needing no password and no second factor.
+      //
+      // Absent is therefore REFUSED, not waved through: a legitimately issued
+      // reset JWT always has a matching stored token, because both writers
+      // ($set at requestPasswordReset, and user-security.service's) set the
+      // token and its expiry together. So there is no live flow that reaches
+      // here with either field missing -- only a replay.
+      if (!user.passwordResetToken || user.passwordResetToken !== token) {
         throw new Error('Token inválido ou já utilizado');
       }
 
-      // Verifica se token não expirou no banco
-      if (user.passwordResetExpires && new Date(user.passwordResetExpires) < new Date()) {
+      // Verifica se token não expirou no banco. Also unconditional: a missing
+      // expiry alongside a present token is an inconsistent record, and the
+      // safe reading of "no expiry" is expired, not "never expires".
+      if (!user.passwordResetExpires || new Date(user.passwordResetExpires) < new Date()) {
         throw new Error('Token de recuperação expirado. Solicite um novo link.');
       }
 

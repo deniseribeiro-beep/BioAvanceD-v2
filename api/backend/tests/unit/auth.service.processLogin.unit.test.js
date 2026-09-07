@@ -750,6 +750,69 @@ describe('AuthService.resetPassword', () => {
     ).rejects.toThrow('já utilizado');
   });
 
+  // #1084: both guards were written as `if (user.passwordResetToken && ...)`,
+  // and a successful reset $unsets that very field -- so the check that exists
+  // to refuse an already-used token was disabled by the act of using it. The
+  // stored token is not what authenticates the request either: the user is
+  // looked up by an id taken from inside the JWT, so a replay walks straight
+  // past both guards. The reset link is a URL query parameter, so a leaked
+  // USED link was a full account takeover for the rest of the JWT's lifetime
+  // -- 1h on the unauthenticated path, up to 24h on the authenticated one.
+  it('#1084: refuses a REPLAYED token once passwordResetToken has been cleared, and does not touch the password', async () => {
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    const collectionApi = {
+      // Exactly the post-reset state: $unset removed both fields.
+      findOne: vi.fn().mockResolvedValue({ ...BASE_USER }),
+      updateOne: vi.fn().mockResolvedValue({}),
+      find: vi.fn(),
+      insertOne: vi.fn(),
+    };
+    const db = makeDb(collectionApi);
+
+    await expect(
+      authService.resetPassword(db, 'tok', 'NewPass123!@#', {})
+    ).rejects.toThrow('já utilizado');
+    expect(collectionApi.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('#1084: refuses when the stored token matches but the stored expiry is absent', async () => {
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    const collectionApi = {
+      findOne: vi.fn().mockResolvedValue({ ...BASE_USER, passwordResetToken: 'tok' }),
+      updateOne: vi.fn().mockResolvedValue({}),
+      find: vi.fn(),
+      insertOne: vi.fn(),
+    };
+    const db = makeDb(collectionApi);
+
+    await expect(
+      authService.resetPassword(db, 'tok', 'NewPass123!@#', {})
+    ).rejects.toThrow('expirado');
+    expect(collectionApi.updateOne).not.toHaveBeenCalled();
+  });
+
+  // CONTROL for #1084: same expected behaviour before and after the fix. A
+  // first, unused token with a live expiry must still reset -- the guards
+  // becoming unconditional must not close the happy path.
+  it('#1084 control: a first, unused token with a live expiry still resets', async () => {
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    const collectionApi = {
+      findOne: vi.fn().mockResolvedValue({
+        ...BASE_USER,
+        passwordResetToken: 'tok',
+        passwordResetExpires: new Date(Date.now() + 100000),
+      }),
+      updateOne: vi.fn().mockResolvedValue({}),
+      find: vi.fn(),
+      insertOne: vi.fn(),
+    };
+    const db = makeDb(collectionApi);
+
+    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
+    expect(result.success).toBe(true);
+    expect(collectionApi.updateOne).toHaveBeenCalled();
+  });
+
   it('throws when the saved reset token has expired', async () => {
     vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
     const db = makeDb({
