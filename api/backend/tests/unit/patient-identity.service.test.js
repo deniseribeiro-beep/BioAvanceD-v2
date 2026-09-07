@@ -158,7 +158,8 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       expect(result.patient.participantId).toBe('87654321');
       const expectedHash = participantIdentityService.computeBlindIndex('birthDate', birthDate);
       expect(capturedFindQuery.$or).toEqual(
-        expect.arrayContaining([{ birthDateHash: expectedHash }])
+        // #1099: matched under every registered key, via $in.
+        expect.arrayContaining([{ birthDateHash: { $in: expect.arrayContaining([expectedHash]) } }])
       );
     });
   });

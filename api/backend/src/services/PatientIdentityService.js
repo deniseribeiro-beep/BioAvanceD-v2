@@ -73,9 +73,11 @@ class participantIdentityService {
       // match without a plaintext range query once birthDate is eventually
       // dropped; the range condition stays as a fallback for records
       // written before the hash sibling existed.
-      const birthDateHash = identityCryptoService.computeBlindIndex('birthDate', birthDate);
-      const dateOrConditions = birthDateHash
-        ? [{ birthDateHash }, { birthDate: { $gte: startOfDay, $lt: endOfDay } }]
+      // #1099: match under EVERY registered key, so a hash written before
+      // an ENCRYPTION_KEY rotation stays matchable.
+      const birthDateHashes = identityCryptoService.computeBlindIndexCandidates('birthDate', birthDate);
+      const dateOrConditions = birthDateHashes.length
+        ? [{ birthDateHash: { $in: birthDateHashes } }, { birthDate: { $gte: startOfDay, $lt: endOfDay } }]
         : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
       const candidates = await identities.find({ $or: dateOrConditions }).toArray();
       const matchedIdentity = candidates.find((rawCandidate) => {

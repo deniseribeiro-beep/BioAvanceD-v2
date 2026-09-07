@@ -162,7 +162,9 @@ describe('ImportService.importPatients (JSON)', () => {
         // Only the identityDocumentHash branch of the $or matches -- no
         // record has a plaintext identityDocument to match on anymore.
         const hashCondition = query.$or?.find((c) => c.identityDocumentHash);
-        return hashCondition?.identityDocumentHash === expectedHash
+        // #1099: the hash branch is now an $in over every registered key,
+        // so a value indexed before a rotation is still matchable.
+        return hashCondition?.identityDocumentHash?.$in?.includes(expectedHash)
           ? { participantId: '10203040', identityDocumentHash: expectedHash }
           : null;
       },
@@ -177,7 +179,7 @@ describe('ImportService.importPatients (JSON)', () => {
 
     expect(result.success).toBe(1);
     expect(capturedQuery.$or).toEqual(
-      expect.arrayContaining([{ identityDocumentHash: expectedHash }])
+      expect.arrayContaining([{ identityDocumentHash: { $in: expect.arrayContaining([expectedHash]) } }])
     );
     expect(patientsCollection.updates).toHaveLength(1);
     expect(patientsCollection.updates[0].update.$set.participantId).toBe('10203040');

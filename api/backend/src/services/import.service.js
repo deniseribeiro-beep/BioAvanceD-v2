@@ -321,9 +321,13 @@ class ImportService {
           // without querying the plaintext field once it's eventually
           // dropped; the plaintext branch stays as a fallback for records
           // written before the hash sibling existed.
-          const identityDocumentHash = participantIdentityService.computeBlindIndex('identityDocument', patientData.identityDocument);
-          const orConditions = identityDocumentHash
-            ? [{ identityDocumentHash }, { identityDocument: patientData.identityDocument }]
+          // #1099: match under EVERY registered key, not just the active
+          // one -- a hash written before a rotation is otherwise
+          // unmatchable, and a missed dedup here creates a DUPLICATE
+          // participant rather than raising an error.
+          const identityDocumentHashes = participantIdentityService.computeBlindIndexCandidates('identityDocument', patientData.identityDocument);
+          const orConditions = identityDocumentHashes.length
+            ? [{ identityDocumentHash: { $in: identityDocumentHashes } }, { identityDocument: patientData.identityDocument }]
             : [{ identityDocument: patientData.identityDocument }];
           const existingIdentity = await identityCollection.findOne({ $or: orConditions });
           if (existingIdentity) {

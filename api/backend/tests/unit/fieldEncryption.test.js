@@ -192,6 +192,81 @@ describe('utils/fieldEncryption', () => {
     });
   });
 
+  // #1099: hmacBlindIndex keys off getActiveKey() and stores a BARE hex
+  // string with no keyId, so #1086's previous-key slot has nothing to
+  // dispatch on and a rotation orphans every pre-rotation index value.
+  // The remedy cannot be a keyId lookup the way decryptValue's is -- there
+  // is no keyId on the stored value to look up. It is to build a candidate
+  // hash under EVERY registered key and let the query match on any of
+  // them, which makes the blind index behave exactly like the envelope
+  // under rotation. RNF020 AC#5: secrets rotate "sem alteracao de codigo".
+  describe('#1099 blind index across a rotation', () => {
+    it('offers the PREVIOUS key hash as a candidate after a rotation', () => {
+      process.env.ENCRYPTION_KEY = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_ID = 'key-2025';
+      const stored = loadModule().hmacBlindIndex('11144477735');
+
+      // The documented four-step rotation -- new pair active, old pair
+      // parked in the previous slot. Rows written before it still hold a
+      // hash under 'chave-antiga'.
+      process.env.ENCRYPTION_KEY = 'chave-nova';
+      process.env.ENCRYPTION_KEY_ID = 'key-2026';
+      process.env.ENCRYPTION_KEY_PREVIOUS = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_PREVIOUS_ID = 'key-2025';
+
+      expect(loadModule().hmacBlindIndexCandidates('11144477735')).toContain(stored);
+    });
+
+    it('puts the ACTIVE key hash first, so new writes stay on the active key', () => {
+      process.env.ENCRYPTION_KEY = 'chave-nova';
+      process.env.ENCRYPTION_KEY_ID = 'key-2026';
+      process.env.ENCRYPTION_KEY_PREVIOUS = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_PREVIOUS_ID = 'key-2025';
+      const { hmacBlindIndex, hmacBlindIndexCandidates } = loadModule();
+
+      expect(hmacBlindIndexCandidates('11144477735')[0]).toBe(hmacBlindIndex('11144477735'));
+    });
+
+    it('stops offering the previous hash once the slot is emptied -- retirement is real', () => {
+      process.env.ENCRYPTION_KEY = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_ID = 'key-2025';
+      const stored = loadModule().hmacBlindIndex('11144477735');
+
+      process.env.ENCRYPTION_KEY = 'chave-nova';
+      process.env.ENCRYPTION_KEY_ID = 'key-2026';
+      delete process.env.ENCRYPTION_KEY_PREVIOUS;
+      delete process.env.ENCRYPTION_KEY_PREVIOUS_ID;
+
+      expect(loadModule().hmacBlindIndexCandidates('11144477735')).not.toContain(stored);
+    });
+
+    // Control case: unchanged before and after the fix (#695).
+    it('control: with a SINGLE key configured, yields exactly the active hash', () => {
+      process.env.ENCRYPTION_KEY = 'chave-unica';
+      process.env.ENCRYPTION_KEY_ID = 'key-2026';
+      const { hmacBlindIndex, hmacBlindIndexCandidates } = loadModule();
+
+      expect(hmacBlindIndexCandidates('11144477735')).toEqual([hmacBlindIndex('11144477735')]);
+    });
+
+    // Control case: the empty-input contract matches hmacBlindIndex's.
+    it('control: null/undefined/empty yield no candidates at all', () => {
+      process.env.ENCRYPTION_KEY = 'chave-unica';
+      const { hmacBlindIndexCandidates } = loadModule();
+
+      expect(hmacBlindIndexCandidates(null)).toEqual([]);
+      expect(hmacBlindIndexCandidates(undefined)).toEqual([]);
+      expect(hmacBlindIndexCandidates('')).toEqual([]);
+    });
+
+    // Control case: no key configured is not silently an empty match-all.
+    it('control: with NO key configured, yields no candidates', () => {
+      const { hmacBlindIndexCandidates } = loadModule();
+
+      expect(hmacBlindIndexCandidates('11144477735')).toEqual([]);
+    });
+  });
+
   describe('encryptValue', () => {
     it('returns null when no active key is configured', () => {
       const { encryptValue } = loadModule();

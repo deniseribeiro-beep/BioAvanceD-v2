@@ -64,6 +64,39 @@ describe('ParticipantIdentityService.computeBlindIndex', () => {
   });
 });
 
+describe('ParticipantIdentityService.computeBlindIndexCandidates', () => {
+  // #1099: the query-side counterpart of computeBlindIndex. It fans out over
+  // every registered key so a value indexed before an ENCRYPTION_KEY rotation
+  // stays matchable; the rotation behaviour itself is pinned in
+  // fieldEncryption.test.js, which can bust the keyRegistry module cache.
+  // Here the contract that matters is that it agrees with computeBlindIndex
+  // on normalization -- if the two ever normalize differently, a write and
+  // its own query stop matching.
+  it('contains the computeBlindIndex hash for the same value (#1099)', () => {
+    const candidates = participantIdentityService.computeBlindIndexCandidates('identityDocument', '11144477735');
+    expect(candidates).toContain(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
+  });
+
+  it('applies the SAME normalization as computeBlindIndex -- whitespace (#1099)', () => {
+    const candidates = participantIdentityService.computeBlindIndexCandidates('identityDocument', '  11144477735  ');
+    expect(candidates).toContain(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
+  });
+
+  it('applies the SAME normalization as computeBlindIndex -- birthDate calendar day (#1099)', () => {
+    const a = participantIdentityService.computeBlindIndexCandidates('birthDate', new Date(1990, 0, 20, 3, 15));
+    const b = participantIdentityService.computeBlindIndexCandidates('birthDate', new Date(1990, 0, 20, 23, 59));
+    expect(a).toEqual(b);
+    expect(a).toContain(participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20)));
+  });
+
+  it('returns an EMPTY LIST for null/undefined/empty, so callers keep the plaintext arm (#1099)', () => {
+    expect(participantIdentityService.computeBlindIndexCandidates('identityDocument', null)).toEqual([]);
+    expect(participantIdentityService.computeBlindIndexCandidates('identityDocument', undefined)).toEqual([]);
+    expect(participantIdentityService.computeBlindIndexCandidates('identityDocument', '')).toEqual([]);
+    expect(participantIdentityService.computeBlindIndexCandidates('birthDate', null)).toEqual([]);
+  });
+});
+
 describe('ParticipantIdentityService.encryptIdentityFields', () => {
   it('encrypts patientName/birthDate/identityDocument at rest without dropping the plaintext (dual-write, #566 is additive-only)', () => {
     const fields = {

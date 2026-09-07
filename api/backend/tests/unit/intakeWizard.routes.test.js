@@ -991,7 +991,8 @@ function defaultStorageContainersFindOne({ _id }) {
       expect(res.body.matched).toBe(true);
       expect(identityFind).toHaveBeenCalledWith(
         expect.objectContaining({
-          $or: expect.arrayContaining([{ birthDateHash: expectedHash }]),
+          // #1099: matched under every registered key, via $in.
+          $or: expect.arrayContaining([{ birthDateHash: { $in: expect.arrayContaining([expectedHash]) } }]),
         })
       );
     });

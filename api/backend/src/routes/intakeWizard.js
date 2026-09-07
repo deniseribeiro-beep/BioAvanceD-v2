@@ -1016,9 +1016,11 @@ router.get('/patient-match', async (req, res) => {
       // match without a plaintext range query once birthDate is eventually
       // dropped; the range condition stays as a fallback for records
       // written before the hash sibling existed.
-      const birthDateHash = participantIdentityService.computeBlindIndex('birthDate', birthDate);
-      const dateOrConditions = birthDateHash
-        ? [{ birthDateHash }, { birthDate: { $gte: startOfDay, $lt: endOfDay } }]
+      // #1099: match under EVERY registered key, so a hash written before
+      // an ENCRYPTION_KEY rotation stays matchable.
+      const birthDateHashes = participantIdentityService.computeBlindIndexCandidates('birthDate', birthDate);
+      const dateOrConditions = birthDateHashes.length
+        ? [{ birthDateHash: { $in: birthDateHashes } }, { birthDate: { $gte: startOfDay, $lt: endOfDay } }]
         : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
       const candidates = await identityCollection.find({ $or: dateOrConditions }).toArray();
       identity = candidates.find((rawCandidate) => {

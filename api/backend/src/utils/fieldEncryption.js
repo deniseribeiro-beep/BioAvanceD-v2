@@ -134,6 +134,48 @@ function hmacBlindIndex(value) {
 }
 
 /**
+ * #1099: every candidate hash for a value, one per registered key.
+ *
+ * hmacBlindIndex stores a BARE hex string with no keyId, so #1086's
+ * previous-key slot has nothing to dispatch on: after a rotation, rows
+ * written earlier hold a hash under the old key and nothing on the stored
+ * value says so. decryptValue's remedy (#1100) is structurally unavailable
+ * here -- there is no keyId to look up, and re-deriving the old hash would
+ * need the plaintext, at which point you are doing #1101's migration.
+ *
+ * So the query side asks for ALL of them and matches on any. The active key
+ * is first, because getKeyEntries stacks it first, and getFallbackKeys
+ * already dedups by key material -- so a previous slot holding the same key
+ * costs nothing, and [0] is always the key new writes use.
+ *
+ * This makes the blind index behave exactly like the envelope under
+ * rotation: both survive while the previous slot is populated, and both stop
+ * matching once it is emptied. One rotation story rather than two.
+ *
+ * RNF020 AC#5 requires secrets be rotatable "sem alteracao de codigo".
+ * Before this, rotating ENCRYPTION_KEY silently broke identity matching --
+ * and the bad failure is not an error but a MISSED dedup, which creates a
+ * duplicate participant record: a data-integrity fault in exactly the domain
+ * RF005/RNF007 govern. Masked today by the plaintext arm of each caller's
+ * $or, which is precisely what #574/#1072 exist to remove.
+ *
+ * WRITES stay on hmacBlindIndex (active key only). Only queries fan out.
+ */
+function hmacBlindIndexCandidates(value) {
+  if (value === undefined || value === null || value === '') {
+    return [];
+  }
+
+  const keys = keyRegistry.getFallbackKeys();
+  if (!keys.length) {
+    logger.warn('[SECURITY][AES256] ENCRYPTION_KEY ausente. Índice cego não gerado.');
+    return [];
+  }
+
+  return keys.map((key) => crypto.createHmac('sha256', key).update(String(value)).digest('hex'));
+}
+
+/**
  * #1083: the explicit, deliberate opt-out from field encryption at rest.
  * Deliberately NOT a truthy check -- only the exact string 'true' disables
  * the requirement, so a stray '1'/'yes' in an env file cannot silently turn
@@ -201,6 +243,7 @@ module.exports = {
   encryptValue,
   decryptValue,
   hmacBlindIndex,
+  hmacBlindIndexCandidates,
   isFieldEncryptionAvailable,
   assertFieldEncryptionConfigured
 };

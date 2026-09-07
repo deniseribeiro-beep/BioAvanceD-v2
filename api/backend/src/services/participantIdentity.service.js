@@ -1,5 +1,5 @@
 const { getCollection } = require('../utils/collectionResolver');
-const { encryptValue, decryptValue, hmacBlindIndex } = require('../utils/fieldEncryption');
+const { encryptValue, decryptValue, hmacBlindIndex, hmacBlindIndexCandidates } = require('../utils/fieldEncryption');
 
 // RF005/RNF007 (#560): read access to ParticipantIdentity, the segregated
 // civil-identity collection created by #363. Kept separate from
@@ -101,6 +101,17 @@ class ParticipantIdentityService {
     const normalized = this.normalizeForHash(field, value);
     if (normalized === null) return null;
     return hmacBlindIndex(normalized);
+  }
+
+  // #1099: the QUERY-side counterpart of computeBlindIndex -- one
+  // candidate hash per registered key, so a value indexed before an
+  // ENCRYPTION_KEY rotation is still matchable while the previous slot
+  // is populated. Callers match with $in rather than equality. Writes
+  // keep using computeBlindIndex, which is active-key only.
+  computeBlindIndexCandidates(field, value) {
+    const normalized = this.normalizeForHash(field, value);
+    if (normalized === null) return [];
+    return hmacBlindIndexCandidates(normalized);
   }
 
   decryptIdentity(identity) {
