@@ -71,17 +71,23 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
  * Retorna apenas equipamentos analíticos (excluindo freezers)
  * Filtra por type='Analytical' e status != 'Maintenance'
  */
-router.get('/analytical', authenticate, async (req, res) => {
+router.get('/analytical', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
     const equipmentCollection = db.collection('equipment');
 
     // Filtra equipamentos analíticos que não estão em manutenção
-    const analyticalEquipment = await equipmentCollection.find({
+    // #1087: this read had NO organization scope at all, so it returned
+    // every organization's analytical equipment to any authenticated
+    // caller. The middleware alone is not enough -- without the filter it
+    // would refuse an unassigned caller while still handing an assigned one
+    // every other organization's rows. Same idiom as GET / above (#635).
+    const query = applyOrganizationScopeFilter({
       type: 'Analytical',
       status: { $ne: 'Maintenance' }
-    }).toArray();
+    }, req.organizationScope, 'organizationId');
+    const analyticalEquipment = await equipmentCollection.find(query).toArray();
 
     // Registra log de consulta
     const auditLogger = require('../../utils/auditLogger');

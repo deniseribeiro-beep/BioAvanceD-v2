@@ -195,8 +195,11 @@ const UPDATE_SPREAD_EXEMPT = new Map([
   // removal case documented at the top of this map, which is what #875 did
   // for master-data.routes.js and result.routes.js. Renumbering then would
   // red this guard just as hard as deleting now would.
-  ['interface/routes/equipment.routes.js:426:updateData', 'validated (#868)'],
-  ['interface/routes/equipment.routes.js:455:updateData', 'validated (#868)'],
+  // :426/:455 -> :432/:461, a uniform +6 shift, when #1087 added
+  // GET /analytical's organization-scope filter above both sites. The sites
+  // themselves are unchanged.
+  ['interface/routes/equipment.routes.js:432:updateData', 'validated (#868)'],
+  ['interface/routes/equipment.routes.js:461:updateData', 'validated (#868)'],
 ]);
 
 test('#839: no NEW update document is built by spreading a request body', () => {

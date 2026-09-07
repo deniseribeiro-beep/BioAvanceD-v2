@@ -140,6 +140,45 @@ describe('GET /api/equipment/analytical', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
+
+  // #1087: this route was the one equipment read with NO requireOrganizationScope
+  // and no filter, so it returned every organization's analytical equipment to
+  // any authenticated caller. Mirrors GET /'s #635 pair above.
+  it('filters the query by organizationId for an organization-scoped caller', async () => {
+    const find = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) });
+    const coll = createCollectionMock({ find });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, organizations: scopedOrganizations(), equipment: coll });
+
+    await request(app).get('/api/equipment/analytical').set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(find).toHaveBeenCalledWith({
+      type: 'Analytical',
+      status: { $ne: 'Maintenance' },
+      organizationId: { $in: ['test-org-default'] },
+    });
+  });
+
+  it('does not filter by organizationId for a global-scope caller (Administrador)', async () => {
+    const find = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) });
+    const coll = createCollectionMock({ find });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, organizations: scopedOrganizations(), equipment: coll });
+
+    await request(app).get('/api/equipment/analytical').set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(find).toHaveBeenCalledWith({ type: 'Analytical', status: { $ne: 'Maintenance' } });
+  });
+
+  // Proves the middleware is genuinely wired in, not just the filter -- an
+  // org-scopeType assignment with no scopeId is unusable and hard-403s.
+  it('returns 403 for a caller whose org assignment has no scopeId (unassigned)', async () => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: userIdFor(2), accessType: 2, organizationId: '' }]),
+      equipment: createCollectionMock(),
+    });
+
+    const res = await request(app).get('/api/equipment/analytical').set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(403);
+  });
 });
 
 describe('GET /api/equipment/:id', () => {
