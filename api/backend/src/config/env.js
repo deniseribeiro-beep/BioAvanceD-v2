@@ -81,8 +81,13 @@ module.exports = {
   // was never built, so this key is currently inert. Do not assume a
   // signature check exists on the strength of this declaration alone.
   AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: process.env.AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY,
-  // ENCRYPTION_KEY_LEGACY removido
-  // ENCRYPTION_KEY_LEGACY_ID removido
+  // #1086: slot da chave ANTERIOR, somente para decriptação, que torna a
+  // rotação de ENCRYPTION_KEY um ato de configuração e não de código
+  // (RNF020 AC#5). Substitui o par ENCRYPTION_KEY_LEGACY/_LEGACY_ID que
+  // havia sido removido antes do primeiro commit deste repositório -- não
+  // existe commit de remoção para reverter, por isso o slot foi reescrito.
+  ENCRYPTION_KEY_PREVIOUS: process.env.ENCRYPTION_KEY_PREVIOUS,
+  ENCRYPTION_KEY_PREVIOUS_ID: process.env.ENCRYPTION_KEY_PREVIOUS_ID,
   USER_ANON_SALT: process.env.USER_ANON_SALT,
 
   // URLs

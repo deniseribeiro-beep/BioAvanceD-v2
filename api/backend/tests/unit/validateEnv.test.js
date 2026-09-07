@@ -7,6 +7,7 @@ const {
   validateRedisOnly,
   validateEncryptionEnv,
   validateEncryptionAndHalt,
+  validateKeyRotationEnv,
 } = require('../../src/config/validateEnv');
 
 const logger = require('../../src/utils/logger');
@@ -455,6 +456,108 @@ describe('validateEnv', () => {
       expect(validateEncryptionAndHalt()).toBe(true);
       expect(warnSpy).not.toHaveBeenCalled();
       expect(errorSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // #1086: keyRegistry silently DISCARDS a previous-key slot it cannot use
+  // (no id of its own, or an id equal to the active one). Silence is the
+  // defect there, so the boot gate announces it. Always a warning, never
+  // fatal -- a broken slot is a data-availability problem, not a
+  // confidentiality one, and refusing the boot would punish the operator
+  // mid-rotation, who is exactly who the slot exists to help.
+  describe('validateKeyRotationEnv (#1086)', () => {
+    function clearRotationEnv() {
+      delete process.env.ENCRYPTION_KEY_PREVIOUS;
+      delete process.env.ENCRYPTION_KEY_PREVIOUS_ID;
+      delete process.env.ENCRYPTION_KEY_ID;
+    }
+
+    it('says nothing when no previous slot is configured at all', () => {
+      clearRotationEnv();
+
+      expect(validateKeyRotationEnv()).toEqual([]);
+    });
+
+    it('says nothing about a correctly configured rotation', () => {
+      clearRotationEnv();
+      process.env.ENCRYPTION_KEY_ID = 'key-2026';
+      process.env.ENCRYPTION_KEY_PREVIOUS = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_PREVIOUS_ID = 'key-2025';
+
+      expect(validateKeyRotationEnv()).toEqual([]);
+    });
+
+    it('warns when the previous key has no id of its own', () => {
+      clearRotationEnv();
+      process.env.ENCRYPTION_KEY_PREVIOUS = 'chave-antiga';
+
+      const warnings = validateKeyRotationEnv();
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/ENCRYPTION_KEY_PREVIOUS_ID/);
+    });
+
+    it('warns about an orphan previous id with no key behind it', () => {
+      clearRotationEnv();
+      process.env.ENCRYPTION_KEY_PREVIOUS_ID = 'key-2025';
+
+      const warnings = validateKeyRotationEnv();
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/id órfão/);
+    });
+
+    it('warns when the previous id collides with the active id', () => {
+      clearRotationEnv();
+      process.env.ENCRYPTION_KEY_ID = 'key-unica';
+      process.env.ENCRYPTION_KEY_PREVIOUS = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_PREVIOUS_ID = 'key-unica';
+
+      const warnings = validateKeyRotationEnv();
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/igual a ENCRYPTION_KEY_ID/);
+    });
+
+    it('compares against the "default" active id when ENCRYPTION_KEY_ID is unset', () => {
+      clearRotationEnv();
+      process.env.ENCRYPTION_KEY_PREVIOUS = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_PREVIOUS_ID = 'default';
+
+      expect(validateKeyRotationEnv()).toHaveLength(1);
+    });
+
+    it('stays a WARNING in production rather than becoming a fatal error', () => {
+      clearRotationEnv();
+      process.env.NODE_ENV = 'production';
+      process.env.ENCRYPTION_KEY = 'chave-nova';
+      process.env.ENCRYPTION_KEY_ID = 'key-unica';
+      process.env.ENCRYPTION_KEY_PREVIOUS = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_PREVIOUS_ID = 'key-unica';
+      delete process.env.ALLOW_UNENCRYPTED_FILE_STORAGE;
+      delete process.env.ALLOW_UNENCRYPTED_FIELD_STORAGE;
+
+      const { errors, warnings } = validateEncryptionEnv();
+
+      expect(errors).toEqual([]);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/#1086/);
+    });
+
+    it('does not stop a production boot on its own', () => {
+      clearRotationEnv();
+      process.env.NODE_ENV = 'production';
+      process.env.ENCRYPTION_KEY = 'chave-nova';
+      process.env.ENCRYPTION_KEY_ID = 'key-unica';
+      process.env.ENCRYPTION_KEY_PREVIOUS = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_PREVIOUS_ID = 'key-unica';
+      delete process.env.ALLOW_UNENCRYPTED_FILE_STORAGE;
+      delete process.env.ALLOW_UNENCRYPTED_FIELD_STORAGE;
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      expect(validateEncryptionAndHalt()).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('#1086'));
     });
   });
 

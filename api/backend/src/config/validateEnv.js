@@ -90,12 +90,61 @@ const UNENCRYPTED_STORAGE_OPT_OUTS = [
   ]
 ];
 
+/**
+ * #1086: sanidade do slot de chave ANTERIOR que #1086 restaurou em
+ * keyRegistry.js.
+ *
+ * Estas condições são SEMPRE aviso, nunca fatal, inclusive em produção --
+ * deliberadamente uma severidade diferente das de validateEncryptionEnv. Um
+ * slot mal configurado é um problema de DISPONIBILIDADE (envelopes antigos
+ * decifram para null), não de confidencialidade: nada passa a ser gravado em
+ * texto claro por causa dele. Derrubar um boot de produção por isso puniria
+ * o operador que está no meio de uma rotação, que é exatamente quem este
+ * slot existe para ajudar.
+ *
+ * O silêncio é o defeito real aqui: keyRegistry descarta um slot inválido
+ * sem dizer nada, então sem este aviso o operador só descobre no primeiro
+ * decryptValue null -- que #1086 mostra ser silencioso por construção.
+ */
+function validateKeyRotationEnv() {
+  const warnings = [];
+
+  const previousKey = String(process.env.ENCRYPTION_KEY_PREVIOUS || '').trim();
+  const previousKeyId = String(process.env.ENCRYPTION_KEY_PREVIOUS_ID || '').trim();
+  const activeKeyId = String(process.env.ENCRYPTION_KEY_ID || 'default').trim();
+
+  if (previousKey && !previousKeyId) {
+    warnings.push(
+      '[SECURITY] ENCRYPTION_KEY_PREVIOUS está definida sem ENCRYPTION_KEY_PREVIOUS_ID: '
+        + 'o slot anterior é descartado e todo envelope gravado sob a chave anterior '
+        + 'decifra para null (#1086)'
+    );
+  }
+
+  if (!previousKey && previousKeyId) {
+    warnings.push(
+      '[SECURITY] ENCRYPTION_KEY_PREVIOUS_ID está definido sem ENCRYPTION_KEY_PREVIOUS: '
+        + 'não há chave anterior registrada, apenas um id órfão (#1086)'
+    );
+  }
+
+  if (previousKey && previousKeyId && previousKeyId === activeKeyId) {
+    warnings.push(
+      `[SECURITY] ENCRYPTION_KEY_PREVIOUS_ID é igual a ENCRYPTION_KEY_ID ("${activeKeyId}"): `
+        + 'o slot anterior é descartado, porque getKeyById resolve sempre a entrada ativa. '
+        + 'Dê um id próprio à chave anterior antes de rotacionar (#1086)'
+    );
+  }
+
+  return warnings;
+}
+
 function validateEncryptionEnv() {
-  const messages = [];
+  const insecureStorage = [];
   const nodeEnv = String(process.env.NODE_ENV || 'development').toLowerCase();
 
   if (!String(process.env.ENCRYPTION_KEY || '').trim()) {
-    messages.push(
+    insecureStorage.push(
       '[SECURITY] ENCRYPTION_KEY não está definida: nenhum campo sensível pode ser cifrado '
         + 'em repouso (RNF020 AC#3, RNF007) e todo envelope já gravado fica indecifrável'
     );
@@ -103,13 +152,13 @@ function validateEncryptionEnv() {
 
   for (const [name, consequence] of UNENCRYPTED_STORAGE_OPT_OUTS) {
     if (process.env[name] === 'true') {
-      messages.push(`[SECURITY] ${name}=true: ${consequence}`);
+      insecureStorage.push(`[SECURITY] ${name}=true: ${consequence}`);
     }
   }
 
   return nodeEnv === 'production'
-    ? { errors: messages, warnings: [] }
-    : { errors: [], warnings: messages };
+    ? { errors: insecureStorage, warnings: validateKeyRotationEnv() }
+    : { errors: [], warnings: [...insecureStorage, ...validateKeyRotationEnv()] };
 }
 
 /**
@@ -239,6 +288,7 @@ function validateEncryptionAndHalt() {
 module.exports = {
   validateRedisEnv,
   validateEncryptionEnv,
+  validateKeyRotationEnv,
   validateEncryptionAndHalt,
   validateAllEnv,
   validateAndHalt,
