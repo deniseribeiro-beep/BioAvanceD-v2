@@ -1,126 +1,128 @@
 # HANDOFF
 
-**Written 2026-09-07, eighteenth queue sitting. INTERIM — no end signal was
-given, so treat the session as CONTINUING.** Dennis asked to read the handoff,
-pick the next group of issues, and said Docker was on. I took the #1053
-org-scope family — **#1082, #1087, #1088** — then worked one of my own
-findings to close. Six commits, **three issues closed**, four filed.
+**Written 2026-09-07, nineteenth queue sitting. INTERIM — no end signal was
+given, so treat the session as CONTINUING.** Dennis asked to read the handoff
+and pick the next group of issues. I took the machine-ingest gate family —
+**#1091, #1067, #1080** — chose directions with him, and worked all three.
+Four commits, **three issues closed**, one filed (#1093).
 
-**BOTH GATES RAN. That is the headline, and it reverses the previous note.**
-The last sitting's "NEITHER GATE RAN" is discharged: everything that was
-unverified then is verified now.
+## THE E2E GATE IS GREEN: 223 passed / 0 failed
 
-## Gate results
+**That is the headline, and it discharges the previous note's central
+correction.** `[ran it]` full `compose.test.yml` stack, `backend-app-test`
+rebuilt (`--build`), reference-data chain all `Exited (0)`, `--workers=1`:
+**223/223 in 2.4m.** The previous sitting was 205 passed / 18 failed.
 
-Native, all at the final tree, all exit 0:
+The previous note argued the suite **could not** have been green at
+`01791b44` and warned against using it as a baseline. That was right, and it
+is now moot: this is, as far as anything here shows, the first fully green
+run of this suite on this recipe. **This one IS a usable baseline.**
 
-- **Backend vitest 463 files / 8663 tests** (`tests/unit tests/integration
-  tests/compliance`). The +12 over the previous 8651 is exactly this
-  sitting's new cases.
-- **`npm run test:architecture` 124/124** (was 122; #1088 added two).
-- **Frontend 32 files / 262 tests**, `typecheck` (both halves), `lint` 469
-  files.
+### The gate recipe, including one thing that is not obvious
 
-**Docker e2e gate: 205 passed / 18 failed.** Full `compose.test.yml` stack,
-`backend-app-test` rebuilt (`--build`; it is build-not-mount and the image
-timestamp was confirmed newer than the last backend commit), 17-service
-reference-data chain all `Exited (0)`, `playwright-runner` stopped,
-`--workers=1`.
+`[ran it]` `compose.test.yml` declares **no `profiles:` anywhere**, so a bare
+`up -d` starts `playwright-runner`, which immediately runs the whole e2e
+suite inside the stack. To bring the stack up without it:
 
-**All 18 failures are pre-existing and none is from this sitting's commits.**
-`[ran it]` `git merge-base --is-ancestor` puts all three root causes before
-`01791b44`. One is now fixed; 17 are **#1091**.
+```
+docker compose -f compose.test.yml --env-file .env.test.example \
+  up -d --build --scale playwright-runner=0
+```
 
-## The correction that matters most
+then run host-side: `npm run test:e2e:docker -- --workers=1 --reporter=list`.
 
-**The previous note's "the last green gate at `01791b44`" is FALSE for the
-e2e half, and the next session must not use it as a baseline.** `[ran it]`
-`f5c671c7` and `956f3b85` (#1054's machine-credential gate, 2026-09-04) are
-both ancestors of `01791b44`, and they make 17 `interop-monitoring.spec.ts`
-tests 403 by construction — `compose.test.yml` sets no
-`TELEMETRY_INGEST_SECRET` and no spec sends the header. The e2e suite cannot
-have been green at that commit. Filed as **#1091** with both halves of the
-fix. `[ran it]` CI has no e2e job at all (no `playwright`/`test:e2e` in
-either workflow file), so only the local gate can ever catch this class.
+`[ran it]` `up -d` exits 0 regardless, so read `docker compose ps -a` — 13
+running/healthy, 20 `Exited (0)` is the correct shape.
+
+## Other gates
+
+- **Backend native: 464 files / 8681 tests, exit 0** (`tests/unit
+  tests/integration tests/compliance`). Was 463 / 8663.
+- **`npm run test:architecture` 124/124**, unchanged.
+- Frontend not run this sitting — nothing touched it.
 
 ## Repo state
 
 - Branch `feature/docker-e2e-backend-integration`, clean and matching origin.
   `main` untouched, no PR. `git status -sb` is authoritative.
-- **Six commits.** Last substantive is the #1090 specimenId-tier fix, which
-  landed AFTER the gate run below — it is covered by native runs only.
-- **No new files, no new env keys, no new npm scripts, no dependency or
-  compose changes.**
-- **Nothing left running.** Stack torn down with `down --remove-orphans`;
-  `docker ps -a` empty. Named volumes kept (they are meant to persist).
+- **Four commits.** Last substantive is `3201918f` (#1080).
+- **One new file pair** — `api/backend/src/utils/secretCompare.js` and its
+  test. **One new env key in the TEST stack only**:
+  `TELEMETRY_INGEST_SECRET=e2e-telemetry-ingest-secret`, in
+  `compose.test.yml` (twice), `package.json:22` and `.env.test.example`. The
+  `.env.docker.example` / `.env.production.example` copies stay **blank**,
+  which is the fail-closed posture and is deliberate.
+- **Nothing left running.** Stack torn down with `down --remove-orphans`,
+  `docker ps -a` empty. Named volumes kept (5). Build cache pruned, 4.9GB.
+  Images kept (7.7GB) so the next gate does not rebuild from scratch.
 
 ## Issue state
 
 Query it — `gh issue list --state open`. What a query cannot carry:
 
-- **#1082, #1088 and #1090 closed.** #1087 had its org-scope half shipped
-  and is **deliberately open** on its real question.
-- **#1087's open half is a capability decision for Denise**, not a defect:
-  may a Técnico and an external user read the equipment inventory? Gating the
-  two list routes on `manageStorageTopology` breaks Técnico and
-  UsuarioExterno across three views, two of them `ALL_ROLES`, and it fails
-  *silently* because `useEquipment` swallows the error into an empty list.
-  Do not "finish" #1087 without that answer.
+- **#1067, #1080, #1091 closed.** #1080 and #1091 carry `premise-corrected`.
+- **#1093 filed and deliberately NOT worked** — I chose to stop on it, rather
+  than being blocked. Its remedy is a genuine fork (mirror #1080's
+  `auditLogger` call, or wire the HTTP path into the `mqtt-ingestion-audit`
+  hash-chained trail with a `source` discriminator) and it turns on a
+  question I did not check: whether the canonical requirements treat MQTT and
+  HTTP telemetry as one ingestion surface or two.
+- **#284 got this sitting's measurement** — CI still has no e2e job, which is
+  why #1091 survived three days unnoticed. Worth sequencing with **#599**
+  (CI is main-only, so this branch gets no CI at all); an e2e job does
+  nothing for this branch until that is settled.
 
 ## The judgment a query cannot carry
 
-- **#1088's direction 1, implemented exactly as the issue specified, is
-  VACUOUS on its own.** `[ran it]` population 511 before and after — all nine
-  measured sites pass non-literal arguments, so a literal-only detector
-  matches none of them. It shipped anyway (the idiom is what #1053's children
-  are adding) plus a second half that enumerates the shapes actually present.
-  **The can-it-fail probe passed cleanly while the detector was inert** —
-  filed against the pack as dyeallpies-skills-pack#797.
-- **Reading the three helpers #1088's new list marks `UNCHECKED` immediately
-  found a real one: #1090.** `normalizeSampleIdFilter` returns
-  `{ sampleID: ... }` — a `RETIRED_FILTER_KEYS` member — unexempted and
-  invisible. It also skips the canonical `specimenId` tier entirely, unlike
-  the three exempted siblings.
-- **#1092 records a consequence of #1082, not a defect in it:** an `amostras`
-  row with no `collectionSite` is now unwritable through all three
-  destination-checked result routes for every non-Administrador. Correct
-  fail-closed behaviour; **`[not established]`** whether legacy rows lack the
-  field, which is the whole question.
-- **"This tree is CRLF" is per-file, not repo-wide.** `[ran it]`
-  `result.routes.js` and both integration test files are **LF** — the
-  previous note's CRLF tape did not apply. Detect per file; don't assume
-  either way.
-- **Bounding every replacement paid twice again.** `const fileType =
-  getResultFileType(file.originalname);` matches **2** (multer's own
-  `fileFilter` carries the identical line), and `results:
-  createCollectionMock()` matches **9**. Both caught before anything was
-  written.
-- **A can-it-fail probe leaves residue that reds a later run.** The #1082
-  probe's ungated upload really does write a file, the failing assertion
-  skips the trailing `rmSync`, and the next full-file run inherits it. A test
-  asserting on `storage/` contents must clear the directory *before* the
-  request, not only after.
-- **Two line-keyed arch guards shifted, and they behave differently.**
-  `filter-keys` has no companion "still found" assertion, so a stale entry is
-  harmless there and the red arrives via the main test;
-  `request-body-boundary` *does* have one and fails loudly. Both renumbered.
+- **#1080 carries a decision Dennis did not explicitly authorise and may want
+  reversed.** He chose "reject 4xx" for an unresolvable sensor. Working it
+  surfaced a third state: `[read it]` `Sensor.js:61` declares
+  `organizationId` with `default: null`, and #634's own comment says *"No
+  backfill for pre-existing sensors."* So an existing-but-unscoped sensor is
+  neither unknown nor deleted, and refusing it would be a hard outage on any
+  pre-#634 database. **Shipped: unknown sensor → 404; unscoped sensor →
+  stored unattributed.** The defect still closes because the *body* can no
+  longer choose. Reversing this to the stricter posture is a small edit.
+- **A green suite after a shared-helper swap proves nothing, and the probe
+  that checks it can itself be invalid.** `[ran it]` my first #1067 probe
+  drove vitest from inside a Node `execSync`; vitest could not resolve its
+  runner, every targeted suite failed at import with **`Tests no tests`**, and
+  three red files read exactly like a successful probe. Re-run from the shell:
+  2 failed / 22 passed, and the real finding was that
+  `testSupportGate.test.js` had **no** test for the load-bearing case at all.
+  **Check the executed-test count, not just the red.** Filed as
+  dyeallpies-skills-pack#804.
+- **#1091 was four fixes, not the two its body names**, and two of the four
+  are the ones that would have left the gate red: `compose.test.yml` needs the
+  key on the `x-test-env` anchor **and** separately on `playwright-runner`,
+  which does not merge the anchor; and `package.json:22`'s `test:e2e:docker`
+  prefix needs it or the host-side run has it unset.
+- **`.env.test.example` is a runtime NO-OP on this stack.** `[ran it]`
+  `compose.test.yml` has no `env_file:` key and no `${...}` interpolation, so
+  nothing in that file reaches a container — the literals in `x-test-env` are
+  what arrive. Editing only it looks like a fix and changes nothing.
+- **No e2e spec posts to `/api/temperature/system/reading`** — `[ran it]`
+  zero hits under `tests/`. The e2e ingest surface is `/api/iot/telemetry`,
+  15 sites in one file. Several env-template comments still name only the
+  temperature route.
+- **A dead CONTROL test can sit green for weeks.**
+  `temperature.api.test.js`'s machine-ingest control set `x-telemetry-secret`
+  where the gate reads `x-telemetry-ingest-secret`, so it always 403'd into an
+  `else` branch asserting `[401, 403]` — and its own comment called a refusal
+  "acceptable", making it unfalsifiable. Its `organizationId` assertion had
+  never executed. Replaced.
+- **Per-file EOL again, and it bit in both directions.** `compose.test.yml` is
+  **LF**; `package.json`, `.env.test.example` and the e2e spec are **CRLF**,
+  in the same fix. Detect per file.
 
 ## Recommended next
 
-**Dennis named no successor**, so nothing is queued by him. In dependency
-order, from what this sitting established:
+**Dennis named no successor, so nothing is queued.** From what this sitting
+established, in dependency order:
 
-1. **#1091** — it is the only reason the e2e gate is not green, it is fully
-   diagnosed with both halves of the fix named, and until it lands every
-   future gate run costs an investigation to re-clear the same 17.
-2. **#1092** — its premise widened after filing: `Sample.js:61` declares
-   `collectionSite` with `default: null` and no `required`, so new rows can
-   lack it too, not just legacy ones. One query against a populated database
-   answers it; it either closes or becomes a backfill plus a model change.
+1. **#1093** — the direction question above; it is the direct sibling of work
+   just shipped, so the context is cheapest now.
+2. **#1092** — unchanged from the previous note and still untouched. One query
+   against a populated database answers it.
 3. **#1086 then #1072**, in that order and not the reverse — unchanged from
-   the previous note, still untouched.
-
-**#1090 is done** (`dcf8d2c3`), and it is the evidence #1088's second half
-earns its keep: its enumeration is what surfaced the helper, and tracing the
-five callers found `sampleComplianceSync.service.js:26` passing a canonical
-`specimenId` into a filter on the retired `sampleID` key.
+   the previous two notes, still untouched.
