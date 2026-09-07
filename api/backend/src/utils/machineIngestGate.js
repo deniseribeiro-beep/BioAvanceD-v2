@@ -33,13 +33,18 @@
 // rule for no gain, and would make this gate the odd one out among the
 // request-time secrets.
 //
-// The comparison is a plain `!==`, the same as testSupportGate.js's. A
-// constant-time compare would be defensible here, and this file is the more
-// exposed of the two -- but making ONE of two sibling secret checks
-// timing-hardened without the other is precisely the undocumented divergence
-// that later reads as a mistake in whichever direction the next reader
-// approaches it from. If it is worth doing it is worth doing to both, as one
-// decision; that is filed rather than settled here.
+// #1067 settled the comparison, and settled it for BOTH gates at once. It was
+// a plain `!==` here and in testSupportGate.js, which short-circuits at the
+// first differing byte; the objection to fixing only one was never that the
+// hardening was wrong, but that two sibling checks differing on a security
+// property with nothing recording why reads as a mistake from whichever side
+// the next reader approaches it from. So neither file owns the comparison now
+// -- utils/secretCompare.js does, and both call it. See that file for why it
+// hashes both operands instead of guarding on length.
+// #1067: the comparison moved to utils/secretCompare.js so both gates share
+// one constant-time implementation and neither can drift from the other.
+const { constantTimeSecretEquals } = require('./secretCompare');
+
 function machineIngestEnabled() {
   return Boolean(String(process.env.TELEMETRY_INGEST_SECRET || '').trim());
 }
@@ -47,7 +52,7 @@ function machineIngestEnabled() {
 function requireMachineIngestSecret(req, res, next) {
   const expected = process.env.TELEMETRY_INGEST_SECRET;
   const provided = req.get('x-telemetry-ingest-secret');
-  if (!expected || provided !== expected) {
+  if (!constantTimeSecretEquals(provided, expected)) {
     return res.status(403).json({
       success: false,
       error: 'Não autorizado',
