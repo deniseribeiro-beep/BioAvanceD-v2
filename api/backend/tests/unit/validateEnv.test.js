@@ -5,6 +5,8 @@ const {
   validateAllEnv,
   validateAndHalt,
   validateRedisOnly,
+  validateEncryptionEnv,
+  validateEncryptionAndHalt,
 } = require('../../src/config/validateEnv');
 
 const logger = require('../../src/utils/logger');
@@ -198,6 +200,103 @@ describe('validateEnv', () => {
       expect(errors).toEqual([]);
       expect(isValid).toBe(true);
     });
+
+    // #1085: nothing validated ENCRYPTION_KEY and nothing warned when either
+    // plaintext-storage opt-out was set, so a stack could be configured to
+    // store everything in the clear and say nothing. Direction 3 (Dennis,
+    // 2026-09-07): warn in every environment, fatal in production.
+    it('#1085: warns when ENCRYPTION_KEY is absent, in a non-production environment', () => {
+      process.env.NODE_ENV = 'test';
+      process.env.REDIS_URL = 'redis://:pass@redis-host:6379';
+      process.env.MONGO_URI = 'mongodb://localhost:27017/db';
+      delete process.env.ENCRYPTION_KEY;
+      delete process.env.ALLOW_UNENCRYPTED_FILE_STORAGE;
+      delete process.env.ALLOW_UNENCRYPTED_FIELD_STORAGE;
+
+      const { warnings, errors, isValid } = validateAllEnv();
+
+      expect(warnings.some((w) => /\[SECURITY\].*ENCRYPTION_KEY/.test(w))).toBe(true);
+      expect(errors).toEqual([]);
+      expect(isValid).toBe(true);
+    });
+
+    it('#1085: warns when ALLOW_UNENCRYPTED_FILE_STORAGE is exactly "true"', () => {
+      process.env.NODE_ENV = 'test';
+      process.env.REDIS_URL = 'redis://:pass@redis-host:6379';
+      process.env.MONGO_URI = 'mongodb://localhost:27017/db';
+      process.env.ENCRYPTION_KEY = 'chave-de-teste';
+      process.env.ALLOW_UNENCRYPTED_FILE_STORAGE = 'true';
+      delete process.env.ALLOW_UNENCRYPTED_FIELD_STORAGE;
+
+      const { warnings } = validateAllEnv();
+
+      expect(warnings.some((w) => /\[SECURITY\].*ALLOW_UNENCRYPTED_FILE_STORAGE/.test(w))).toBe(true);
+    });
+
+    it('#1085: warns when ALLOW_UNENCRYPTED_FIELD_STORAGE is exactly "true"', () => {
+      process.env.NODE_ENV = 'test';
+      process.env.REDIS_URL = 'redis://:pass@redis-host:6379';
+      process.env.MONGO_URI = 'mongodb://localhost:27017/db';
+      process.env.ENCRYPTION_KEY = 'chave-de-teste';
+      delete process.env.ALLOW_UNENCRYPTED_FILE_STORAGE;
+      process.env.ALLOW_UNENCRYPTED_FIELD_STORAGE = 'true';
+
+      const { warnings } = validateAllEnv();
+
+      expect(warnings.some((w) => /\[SECURITY\].*ALLOW_UNENCRYPTED_FIELD_STORAGE/.test(w))).toBe(true);
+    });
+
+    it('#1085: promotes every insecure-storage condition to a fatal error in production', () => {
+      process.env.NODE_ENV = 'production';
+      process.env.REDIS_URL = 'redis://:pass@redis-host:6379';
+      process.env.REDIS_PASSWORD = 'pass';
+      process.env.MONGO_URI = 'mongodb://localhost:27017/db';
+      delete process.env.ENCRYPTION_KEY;
+      process.env.ALLOW_UNENCRYPTED_FILE_STORAGE = 'true';
+      process.env.ALLOW_UNENCRYPTED_FIELD_STORAGE = 'true';
+
+      const { errors, warnings, isValid } = validateAllEnv();
+
+      expect(errors.some((e) => /\[SECURITY\].*ENCRYPTION_KEY/.test(e))).toBe(true);
+      expect(errors.some((e) => /\[SECURITY\].*ALLOW_UNENCRYPTED_FILE_STORAGE/.test(e))).toBe(true);
+      expect(errors.some((e) => /\[SECURITY\].*ALLOW_UNENCRYPTED_FIELD_STORAGE/.test(e))).toBe(true);
+      expect(warnings.filter((w) => /\[SECURITY\]/.test(w))).toEqual([]);
+      expect(isValid).toBe(false);
+    });
+
+    // Control case: same expectation before and after the fix, so a red here
+    // is the fixture, not the bug (#695).
+    it('#1085 control: says nothing about encryption when a key is set and neither opt-out is enabled', () => {
+      process.env.NODE_ENV = 'test';
+      process.env.REDIS_URL = 'redis://:pass@redis-host:6379';
+      process.env.MONGO_URI = 'mongodb://localhost:27017/db';
+      process.env.ENCRYPTION_KEY = 'chave-de-teste';
+      delete process.env.ALLOW_UNENCRYPTED_FILE_STORAGE;
+      delete process.env.ALLOW_UNENCRYPTED_FIELD_STORAGE;
+
+      const { warnings, errors, isValid } = validateAllEnv();
+
+      expect(warnings.filter((w) => /\[SECURITY\]/.test(w))).toEqual([]);
+      expect(errors).toEqual([]);
+      expect(isValid).toBe(true);
+    });
+
+    // Control case: the opt-outs are deliberately exact-string checks, not
+    // truthy ones, matching fileCrypto.js and fieldEncryption.js -- a stray
+    // '1'/'yes' must not read as consent to plaintext storage.
+    it('#1085 control: a non-"true" opt-out value is not treated as enabled', () => {
+      process.env.NODE_ENV = 'test';
+      process.env.REDIS_URL = 'redis://:pass@redis-host:6379';
+      process.env.MONGO_URI = 'mongodb://localhost:27017/db';
+      process.env.ENCRYPTION_KEY = 'chave-de-teste';
+      process.env.ALLOW_UNENCRYPTED_FILE_STORAGE = '1';
+      process.env.ALLOW_UNENCRYPTED_FIELD_STORAGE = 'yes';
+
+      const { warnings, errors } = validateAllEnv();
+
+      expect(warnings.filter((w) => /\[SECURITY\]/.test(w))).toEqual([]);
+      expect(errors).toEqual([]);
+    });
   });
 
   describe('validateAndHalt', () => {
@@ -249,6 +348,113 @@ describe('validateEnv', () => {
 
       expect(result).toBe(true);
       expect(warnSpy).toHaveBeenCalled();
+    });
+  });
+
+  // #1085: the boot-path entry point. validateAllEnv/validateAndHalt had NO
+  // production caller at all, so "add a warning to validateEnv.js" would have
+  // produced no observable output -- this is the callable server.js and
+  // worker.js actually invoke, and it is deliberately NOT a caller of
+  // validateAndHalt (that would newly make a bad Redis config fatal for the
+  // backend in production, inverting #977's documented posture).
+  describe('validateEncryptionEnv / validateEncryptionAndHalt (#1085)', () => {
+    function clearEncryptionEnv() {
+      delete process.env.ENCRYPTION_KEY;
+      delete process.env.ALLOW_UNENCRYPTED_FILE_STORAGE;
+      delete process.env.ALLOW_UNENCRYPTED_FIELD_STORAGE;
+    }
+
+    it('reports nothing at all when a key is set and neither opt-out is enabled', () => {
+      process.env.NODE_ENV = 'production';
+      clearEncryptionEnv();
+      process.env.ENCRYPTION_KEY = 'chave-de-teste';
+
+      expect(validateEncryptionEnv()).toEqual({ errors: [], warnings: [] });
+    });
+
+    it('routes every finding to warnings outside production', () => {
+      process.env.NODE_ENV = 'development';
+      clearEncryptionEnv();
+      process.env.ALLOW_UNENCRYPTED_FILE_STORAGE = 'true';
+      process.env.ALLOW_UNENCRYPTED_FIELD_STORAGE = 'true';
+
+      const { errors, warnings } = validateEncryptionEnv();
+
+      expect(errors).toEqual([]);
+      expect(warnings).toHaveLength(3);
+      expect(warnings.every((w) => w.startsWith('[SECURITY]'))).toBe(true);
+    });
+
+    it('routes the same findings to errors in production', () => {
+      process.env.NODE_ENV = 'production';
+      clearEncryptionEnv();
+      process.env.ALLOW_UNENCRYPTED_FILE_STORAGE = 'true';
+      process.env.ALLOW_UNENCRYPTED_FIELD_STORAGE = 'true';
+
+      const { errors, warnings } = validateEncryptionEnv();
+
+      expect(warnings).toEqual([]);
+      expect(errors).toHaveLength(3);
+      expect(errors.every((e) => e.startsWith('[SECURITY]'))).toBe(true);
+    });
+
+    it('treats an unset NODE_ENV as development, not production', () => {
+      delete process.env.NODE_ENV;
+      clearEncryptionEnv();
+
+      const { errors, warnings } = validateEncryptionEnv();
+
+      expect(errors).toEqual([]);
+      expect(warnings).toHaveLength(1);
+    });
+
+    it('logs a loud [SECURITY] warning and returns true outside production', () => {
+      process.env.NODE_ENV = 'development';
+      clearEncryptionEnv();
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      expect(validateEncryptionAndHalt()).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('[SECURITY]'));
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('throws in production when ENCRYPTION_KEY is blank, after logging it via logger.error', () => {
+      process.env.NODE_ENV = 'production';
+      clearEncryptionEnv();
+      process.env.ENCRYPTION_KEY = '   ';
+      vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      expect(() => validateEncryptionAndHalt()).toThrow(
+        /Configuração de criptografia inaceitável em produção/
+      );
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('ENCRYPTION_KEY'));
+    });
+
+    it('throws in production when an opt-out is enabled even though a key IS configured', () => {
+      process.env.NODE_ENV = 'production';
+      clearEncryptionEnv();
+      process.env.ENCRYPTION_KEY = 'chave-de-teste';
+      process.env.ALLOW_UNENCRYPTED_FIELD_STORAGE = 'true';
+      vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      expect(() => validateEncryptionAndHalt()).toThrow(
+        /ALLOW_UNENCRYPTED_FIELD_STORAGE/
+      );
+    });
+
+    it('returns true in production once a key is set and both opt-outs are absent', () => {
+      process.env.NODE_ENV = 'production';
+      clearEncryptionEnv();
+      process.env.ENCRYPTION_KEY = 'chave-de-teste';
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      expect(validateEncryptionAndHalt()).toBe(true);
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
     });
   });
 

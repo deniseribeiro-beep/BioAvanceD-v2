@@ -59,6 +59,60 @@ function validateRedisEnv() {
 }
 
 /**
+ * #1085: postura de criptografia em repouso.
+ *
+ * Direção 3 (decisão de Dennis, 2026-09-07): avisar em TODO ambiente, e
+ * tratar as mesmas condições como erro fatal de configuração quando
+ * NODE_ENV === 'production'. É a mesma forma que este arquivo já usa --
+ * aviso para MONGO_URI, validação para Redis -- e deixa qualquer stack de
+ * desenvolvimento subindo exatamente como sobe hoje.
+ *
+ * Sem ENCRYPTION_KEY nenhum campo sensível é cifrado em repouso: encryptValue
+ * devolve null e, antes de #1083, todo chamador lia esse null como "pule este
+ * campo", persistindo texto claro e respondendo 201. Os dois opt-outs abaixo
+ * são o consentimento explícito para esse comportamento, e até aqui nada os
+ * anunciava: um stack podia ser configurado para guardar tudo em claro e
+ * ficar em silêncio.
+ *
+ * Os opt-outs são comparados com a string exata 'true', e não por
+ * truthiness, exatamente como fileCrypto.js (#938) e fieldEncryption.js
+ * (#1083) já fazem -- um '1'/'yes' perdido num arquivo .env não pode valer
+ * como consentimento para armazenamento em texto claro.
+ */
+const UNENCRYPTED_STORAGE_OPT_OUTS = [
+  [
+    'ALLOW_UNENCRYPTED_FILE_STORAGE',
+    'blobs de arquivo serão gravados sem criptografia (RNF029 AC#5, #938)'
+  ],
+  [
+    'ALLOW_UNENCRYPTED_FIELD_STORAGE',
+    'campos sensíveis serão gravados em texto claro em repouso (RNF020 AC#3, #1083)'
+  ]
+];
+
+function validateEncryptionEnv() {
+  const messages = [];
+  const nodeEnv = String(process.env.NODE_ENV || 'development').toLowerCase();
+
+  if (!String(process.env.ENCRYPTION_KEY || '').trim()) {
+    messages.push(
+      '[SECURITY] ENCRYPTION_KEY não está definida: nenhum campo sensível pode ser cifrado '
+        + 'em repouso (RNF020 AC#3, RNF007) e todo envelope já gravado fica indecifrável'
+    );
+  }
+
+  for (const [name, consequence] of UNENCRYPTED_STORAGE_OPT_OUTS) {
+    if (process.env[name] === 'true') {
+      messages.push(`[SECURITY] ${name}=true: ${consequence}`);
+    }
+  }
+
+  return nodeEnv === 'production'
+    ? { errors: messages, warnings: [] }
+    : { errors: [], warnings: messages };
+}
+
+/**
  * Valida todas as variáveis de ambiente essenciais
  */
 function validateAllEnv() {
@@ -68,6 +122,10 @@ function validateAllEnv() {
   const redisValidation = validateRedisEnv();
   errors.push(...redisValidation.errors);
   warnings.push(...redisValidation.warnings);
+
+  const encryptionValidation = validateEncryptionEnv();
+  errors.push(...encryptionValidation.errors);
+  warnings.push(...encryptionValidation.warnings);
 
   if (!process.env.MONGO_URI) {
     warnings.push('MONGO_URI não está definido (algumas funcionalidades podem não funcionar)');
@@ -149,8 +207,39 @@ function validateRedisOnly(allowDevelopment = true, silent = false) {
   return true;
 }
 
+/**
+ * #1085: ponto de entrada de boot para a postura de criptografia.
+ *
+ * Deliberadamente separado de validateAndHalt, e NÃO um chamador dele. Se o
+ * boot passasse a chamar validateAndHalt, uma configuração Redis inválida
+ * passaria a ser fatal para o backend em produção -- e isso inverteria a
+ * postura que #977 documenta explicitamente em server.js ("uma falha de Redis
+ * NÃO é fatal para o backend; só o enfileiramento de importação degrada").
+ * Este gate decide sobre criptografia e sobre mais nada.
+ *
+ * Aviso alto em qualquer ambiente; erro fatal em produção. Lança em vez de
+ * chamar process.exit para que o catch de startup de cada entrypoint faça a
+ * terminação do jeito que aquele arquivo já faz.
+ */
+function validateEncryptionAndHalt() {
+  const { errors, warnings } = validateEncryptionEnv();
+
+  warnings.forEach((warning) => logger.warn(warning));
+  errors.forEach((error) => logger.error(error));
+
+  if (errors.length > 0) {
+    throw new Error(
+      `Configuração de criptografia inaceitável em produção (#1085): ${errors.join(' | ')}`
+    );
+  }
+
+  return true;
+}
+
 module.exports = {
   validateRedisEnv,
+  validateEncryptionEnv,
+  validateEncryptionAndHalt,
   validateAllEnv,
   validateAndHalt,
   validateRedisOnly,

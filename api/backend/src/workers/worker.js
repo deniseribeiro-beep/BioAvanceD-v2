@@ -8,6 +8,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '.e
 const fs = require('fs');
 const { initWorker } = require('./import-worker');
 const { testConnection } = require('../config/queue');
+const { validateEncryptionAndHalt } = require('../config/validateEnv');
 const logger = require('../utils/logger');
 
 // #992: heartbeat file probed by the container healthcheck (mtime-based).
@@ -79,6 +80,14 @@ try {
 async function startWorker() {
   try {
     logger.info('[INFO] Iniciando worker de importação...');
+
+    // #1085: mesmo gate de criptografia do backend. Este processo drena a
+    // fila de importação, que grava identidade de participante cifrada, então
+    // uma chave ausente aqui tem exatamente a mesma consequência que no
+    // backend -- e os dois containers compartilham o mesmo .env.production.
+    // Aviso em dev/test, fatal em produção; o throw cai no catch abaixo, que
+    // já encerra o processo com process.exit(1).
+    validateEncryptionAndHalt();
 
     // Testa conexão Redis diretamente (sem precisar da fila)
     logger.info('[INFO] Testando conexão Redis...');

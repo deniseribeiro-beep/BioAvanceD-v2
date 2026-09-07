@@ -103,4 +103,60 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
     expect(fakeInitWorker).toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
   });
+
+  // #1085: the encryption gate sits at the top of startWorker(), ahead of the
+  // Redis connectivity test, so its refusal must terminate this process the
+  // same way every other startup failure here does. Pinned because the call
+  // site is one line and a later edit can drop it silently -- the worker would
+  // then keep draining import jobs that write participant identity, with no
+  // key to encrypt it under.
+  describe('#1085 the encryption posture gate is fatal for this process in production', () => {
+    let nodeEnvBefore;
+    let encryptionKeyBefore;
+
+    beforeEach(() => {
+      nodeEnvBefore = process.env.NODE_ENV;
+      encryptionKeyBefore = process.env.ENCRYPTION_KEY;
+    });
+
+    afterEach(() => {
+      if (nodeEnvBefore === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = nodeEnvBefore;
+      if (encryptionKeyBefore === undefined) delete process.env.ENCRYPTION_KEY;
+      else process.env.ENCRYPTION_KEY = encryptionKeyBefore;
+    });
+
+    it('exits(1) before testing Redis when ENCRYPTION_KEY is blank in production', async () => {
+      process.env.NODE_ENV = 'production';
+      delete process.env.ENCRYPTION_KEY;
+
+      await loadWorker();
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(fakeTestRedisConnection).not.toHaveBeenCalled();
+      expect(fakeInitWorker).not.toHaveBeenCalled();
+    });
+
+    // Control case: same expectation before and after the gate existed, so a
+    // red here is the fixture rather than the behaviour under test (#695).
+    it('control: a blank ENCRYPTION_KEY outside production warns and lets the worker start', async () => {
+      process.env.NODE_ENV = 'test';
+      delete process.env.ENCRYPTION_KEY;
+
+      await loadWorker();
+
+      expect(fakeInitWorker).toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it('control: a configured ENCRYPTION_KEY lets the worker start in production', async () => {
+      process.env.NODE_ENV = 'production';
+      process.env.ENCRYPTION_KEY = 'chave-de-teste';
+
+      await loadWorker();
+
+      expect(fakeInitWorker).toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+  });
 });

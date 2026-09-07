@@ -14,6 +14,7 @@ const { initScheduler } = require("./src/services/scheduler.service");
 const { initializeSecuritySystem } = require("./src/infrastructure/middleware/integrationSecurityMiddleware");
 const { seedReportTemplates } = require("./src/services/report-template-seed.service");
 const { seedRolesAndPermissions } = require("./src/services/rbac-catalog-seed.service");
+const { validateEncryptionAndHalt } = require("./src/config/validateEnv");
 
 // #1040: Model.createIndexes() index-build errors (and unhandled rejections
 // generally) reach `Model.emit('error')` on a Mongoose Model with no default
@@ -66,6 +67,21 @@ async function startServer() {
       logger.error("Variáveis críticas ausentes: MONGO_URI, JWT_SECRET e USER_ANON_SALT são obrigatórias.");
       process.exit(1);
     }
+
+    // #1085: até aqui NADA validava ENCRYPTION_KEY no boot e nada avisava
+    // quando ALLOW_UNENCRYPTED_FILE_STORAGE / ALLOW_UNENCRYPTED_FIELD_STORAGE
+    // estavam ligados -- validateAllEnv/validateAndHalt existem desde sempre e
+    // não têm um único chamador de produção, então "adicionar um aviso ao
+    // validateEnv.js" não produziria saída observável nenhuma. Este é o
+    // chamador que faltava. Aviso alto em todo ambiente, fatal em produção
+    // (direção 3); o throw cai no catch de startup abaixo, que já encerra com
+    // process.exit(1) do mesmo jeito que o bloco acima.
+    //
+    // Um stack de produção copiado de .env.production.example sobe hoje com
+    // ENCRYPTION_KEY em branco (#978, "sete chaves em branco"). A partir daqui
+    // ele recusa subir, ruidosamente, em vez de guardar identidade civil em
+    // texto claro em silêncio.
+    validateEncryptionAndHalt();
 
     const PORT = parseInt(process.env.PORT || "3000");
     const actualPort = await portManager.getAvailablePort(PORT);
