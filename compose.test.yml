@@ -64,6 +64,11 @@ x-test-env: &test-env
   # see utils/testSupportGate.js. This stack is exactly the "controlled
   # suite" the flag exists for.
   ENABLE_TEST_SUPPORT_ROUTES: "true"
+  # #1091: machine-ingest credential for POST /api/iot/telemetry
+  # (utils/machineIngestGate.js). Fails closed like TEST_SUPPORT_SECRET
+  # above -- unset means every request 403s regardless of header. The
+  # specs send it as the x-telemetry-ingest-secret header.
+  TELEMETRY_INGEST_SECRET: e2e-telemetry-ingest-secret
   # #959: these live on the SHARED anchor, not on backend-app-test alone.
   # The container that runs the sealing job is worker-test, which inherits
   # only <<: *test-env -- so while these sat in backend-app-test's own
@@ -745,6 +750,11 @@ services:
       E2E_MONGO_URI: mongodb://mongodb-test:27017
       E2E_MONGO_DB: bioavanced_test
       TEST_SUPPORT_SECRET: e2e-test-support-secret
+      # #1091: this service's environment block is flat and does not merge
+      # x-test-env, so the anchor's TELEMETRY_INGEST_SECRET above is
+      # repeated here -- same reason TEST_SUPPORT_SECRET is repeated on the
+      # line above.
+      TELEMETRY_INGEST_SECRET: e2e-telemetry-ingest-secret
     depends_on:
       frontend-app-test:
         condition: service_healthy

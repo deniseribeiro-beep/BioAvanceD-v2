@@ -19,7 +19,7 @@
     "lint": "npm --prefix api/backend run lint",
     "typecheck": "npm --prefix frontend run typecheck && npm run typecheck:e2e",
     "test:e2e": "playwright test",
-    "test:e2e:docker": "cross-env PLAYWRIGHT_BASE_URL=http://localhost:5173 PLAYWRIGHT_API_BASE_URL=http://localhost:3000 PLAYWRIGHT_SKIP_WEBSERVER=1 TEST_SUPPORT_SECRET=e2e-test-support-secret playwright test",
+    "test:e2e:docker": "cross-env PLAYWRIGHT_BASE_URL=http://localhost:5173 PLAYWRIGHT_API_BASE_URL=http://localhost:3000 PLAYWRIGHT_SKIP_WEBSERVER=1 TEST_SUPPORT_SECRET=e2e-test-support-secret TELEMETRY_INGEST_SECRET=e2e-telemetry-ingest-secret playwright test",
     "typecheck:e2e": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

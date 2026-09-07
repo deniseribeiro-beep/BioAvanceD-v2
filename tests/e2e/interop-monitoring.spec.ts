@@ -30,6 +30,10 @@ import {
 // InfluxDB, not a mock).
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 
+// #1091: POST /api/iot/telemetry is gated by machineIngestGate.js, which
+// fails closed on a missing/mismatched x-telemetry-ingest-secret header.
+const ingestHeaders = () => ({ 'x-telemetry-ingest-secret': process.env.TELEMETRY_INGEST_SECRET ?? '' });
+
 test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
 test.describe('Telemetria e monitoramento ambiental (RF009) — real backend, ingestion path', () => {
@@ -53,6 +57,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real backend, in
     const temperature = 4.5;
 
     const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { sensorId: sensor.sensorId, temperature, timestamp: new Date().toISOString() },
     });
 
@@ -76,6 +81,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real backend, in
 
   test('rejects a reading with no sensorId (criterion 4, invalid)', async ({ request }) => {
     const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { temperature: 4.5 },
     });
 
@@ -86,6 +92,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real backend, in
     request,
   }) => {
     const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { sensorId: 'rf009-e2e-invalid-temp', temperature: 'not-a-number' },
     });
 
@@ -98,6 +105,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real backend, in
     const sensor = await seedSensorWithPolicy(2, 8);
 
     const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { sensorId: sensor.sensorId, temperature: 25, timestamp: new Date().toISOString() },
     });
 
@@ -118,6 +126,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real backend, in
     const sensor = await seedSensorWithPolicy(2, 8);
 
     const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { sensorId: sensor.sensorId, temperature: 5, timestamp: new Date().toISOString() },
     });
 
@@ -146,6 +155,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — EnvironmentalExc
     const sensor = await seedSensorWithPolicy(2, 8);
 
     const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { sensorId: sensor.sensorId, temperature: 25, timestamp: new Date().toISOString() },
     });
 
@@ -171,6 +181,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — EnvironmentalExc
     const sensor = await seedSensorWithPolicy(2, 8);
 
     await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { sensorId: sensor.sensorId, temperature: 25, timestamp: new Date().toISOString() },
     });
     await expect
@@ -178,6 +189,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — EnvironmentalExc
       .toBeTruthy();
 
     await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { sensorId: sensor.sensorId, temperature: 30, timestamp: new Date().toISOString() },
     });
     await expect
@@ -193,6 +205,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — EnvironmentalExc
     const sensor = await seedSensorWithPolicy(2, 8);
 
     await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { sensorId: sensor.sensorId, temperature: 5, timestamp: new Date().toISOString() },
     });
 
@@ -213,6 +226,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — EnvironmentalExc
     const sensor = await seedSensorWithPolicy(2, 8);
 
     await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { sensorId: sensor.sensorId, temperature: 25, timestamp: new Date().toISOString() },
     });
 
@@ -299,6 +313,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — missing-reading 
     const sensor = await seedSensorWithPolicy(2, 8);
     try {
       await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
         data: { sensorId: sensor.sensorId, temperature: 5, timestamp: new Date().toISOString() },
       });
       await expect
@@ -356,6 +371,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real findCritica
     timestamp: Date
   ) {
     const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { sensorId, temperature, timestamp: timestamp.toISOString() },
     });
     expect(response.status()).toBe(200);
@@ -473,6 +489,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real Neo4j propa
     timestamp: Date
   ) {
     const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { sensorId, temperature, timestamp: timestamp.toISOString() },
     });
     expect(response.status()).toBe(200);
@@ -772,6 +789,7 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
 
     const sensor = await seedSensorWithPolicy(2, 8);
     const telemetryRes = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { sensorId: sensor.sensorId, temperature: 25, timestamp: new Date().toISOString() },
     });
     expect(telemetryRes.status()).toBe(200);
@@ -847,6 +865,7 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
 
     const sensor = await seedSensorWithPolicy(2, 8);
     await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
       data: { sensorId: sensor.sensorId, temperature: 30, timestamp: new Date().toISOString() },
     });
 
