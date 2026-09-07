@@ -1,6 +1,6 @@
 const logger = require('../utils/logger');
 const BiomarkerObservationModel = require('../models/BiomarkerObservation');
-const { encryptValue, decryptValue } = require('../utils/fieldEncryption');
+const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require('../utils/fieldEncryption');
 const { getCollection } = require('../utils/collectionResolver');
 
 const indexedObservationCollections = new Set();
@@ -37,6 +37,8 @@ class BiomarkerObservationService {
 
   encryptObservationValue(doc = {}) {
     const nextDoc = { ...doc };
+    // #1083: refuse rather than persist the observation value in plaintext.
+    assertFieldEncryptionConfigured(nextDoc.value);
     const encryptedPayload = encryptValue(nextDoc.value);
     if (encryptedPayload) {
       nextDoc.valueEncrypted = encryptedPayload;

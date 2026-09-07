@@ -4,7 +4,7 @@ const participantIdentityService = require('./participantIdentity.service');
 const OrganizationModel = require('../models/Organization');
 const logger = require('../utils/logger');
 const { generateUniqueParticipantId, sanitizePatientForLogs } = require('../utils/patientAnonymization');
-const { encryptValue, decryptValue } = require('../utils/fieldEncryption');
+const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require('../utils/fieldEncryption');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
 const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
@@ -53,6 +53,9 @@ class PatientService {
         continue;
       }
 
+      // #1083: refuse rather than fall through to encryptValue's null and
+      // leave the civil-identity document in plaintext.
+      assertFieldEncryptionConfigured(plainValue);
       const encryptedPayload = encryptValue(plainValue);
       if (encryptedPayload) {
         doc[encryptedField] = encryptedPayload;
@@ -829,6 +832,9 @@ class PatientService {
       const encryptedFieldMap = this.getEncryptedFieldMap();
       for (const [plainField, encryptedField] of Object.entries(encryptedFieldMap)) {
         if (Object.prototype.hasOwnProperty.call(updateData, plainField)) {
+          // #1083: same gate on the update path -- without it the write
+          // returned success with the plaintext still in $set.
+          assertFieldEncryptionConfigured(updateData[plainField]);
           const encryptedPayload = encryptValue(updateData[plainField]);
           if (encryptedPayload) {
             updateData[encryptedField] = encryptedPayload;

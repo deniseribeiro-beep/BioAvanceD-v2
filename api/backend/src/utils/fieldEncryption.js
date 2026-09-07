@@ -95,8 +95,74 @@ function hmacBlindIndex(value) {
   return crypto.createHmac('sha256', key).update(String(value)).digest('hex');
 }
 
+/**
+ * #1083: the explicit, deliberate opt-out from field encryption at rest.
+ * Deliberately NOT a truthy check -- only the exact string 'true' disables
+ * the requirement, so a stray '1'/'yes' in an env file cannot silently turn
+ * plaintext storage back on. Absent by default, which is what makes the
+ * shipped templates' blank ENCRYPTION_KEY a loud failure instead of a
+ * silent one. Separate from #938's ALLOW_UNENCRYPTED_FILE_STORAGE because
+ * files and fields carry different data classifications (RNF029 AC#5), so
+ * accepting plaintext blobs must not also accept plaintext civil identity.
+ */
+const UNENCRYPTED_FIELD_OPT_OUT = 'ALLOW_UNENCRYPTED_FIELD_STORAGE';
+
+function unencryptedFieldStorageAllowed() {
+  return process.env[UNENCRYPTED_FIELD_OPT_OUT] === 'true';
+}
+
+/** #1083: whether a key is configured at all -- no side effects, no throw. */
+function isFieldEncryptionAvailable() {
+  return Boolean(keyRegistry.getActiveKey());
+}
+
+/**
+ * #1083: fail closed before a caller can persist a sensitive field in
+ * plaintext.
+ *
+ * encryptValue returns null with a single warn when no key is configured,
+ * and every caller reads that null as "skip this field" -- with the
+ * plaintext-clearing step inside the if. So a keyless stack wrote no
+ * ciphertext, kept the plaintext, and still answered 201.
+ *
+ * RNF020 AC#3 and RNF007 make encryption at rest the standing
+ * classification for civil-identity and clinical values, so the correct
+ * behaviour when a key is missing is to refuse the write, not to degrade
+ * to plaintext and report success.
+ *
+ * This mirrors #938's assertFileEncryptionConfigured (fileCrypto.js) and
+ * #734's assertEncryptionKeyConfigured (backup.service.js), for the same
+ * reason and by the same means: encryptValue keeps returning null -- that
+ * is right for participantIdentity.service, whose map is deliberately
+ * additive pending #574 -- and the callers that must not degrade check up
+ * front instead.
+ *
+ * Takes the value so encryptValue's empty-input contract lives in one
+ * file: '', null and undefined return null with or without a key, so no
+ * plaintext survives and there is nothing to refuse. 0 and false DO
+ * encrypt, so they are gated.
+ *
+ * Throws with statusCode 500 -- a keyless deployment is a server
+ * misconfiguration, not a bad request, and the caller can do nothing
+ * about it.
+ */
+function assertFieldEncryptionConfigured(value) {
+  if (value === undefined || value === null || value === '') return;
+  if (isFieldEncryptionAvailable() || unencryptedFieldStorageAllowed()) return;
+
+  const error = new Error(
+    '[SECURITY][AES256] ENCRYPTION_KEY nao configurada: gravacao recusada para nao persistir '
+      + 'campo sensivel em texto claro em repouso (RNF020 AC#3, #1083). Configure ENCRYPTION_KEY, '
+      + `ou defina ${UNENCRYPTED_FIELD_OPT_OUT}=true para aceitar armazenamento sem criptografia.`
+  );
+  error.statusCode = 500;
+  throw error;
+}
+
 module.exports = {
   encryptValue,
   decryptValue,
-  hmacBlindIndex
+  hmacBlindIndex,
+  isFieldEncryptionAvailable,
+  assertFieldEncryptionConfigured
 };
