@@ -239,6 +239,56 @@ async function ingestTelemetry(req, res) {
       }
     }
 
+    // #1093: this route wrote no audit row at all. Its HTTP machine-ingest
+    // sibling, POST /api/temperature/system/reading, at least had one guarded
+    // on `if (req.user)` -- removed in #1080 because a machine caller has no
+    // session. Here there was nothing to unguard. The route was outside the
+    // MQTT hash-chained ingestion trail too (mqtt-ingestion-audit.service.js
+    // writes source: 'mqtt' and is reached from no HTTP path), so a
+    // TELEMETRY_INGEST_SECRET holder could submit cold-chain readings that
+    // left no record anywhere that anything had submitted them.
+    //
+    // Which of the two trails it belongs in is settled by dict-02 P1X-0331:
+    // AuditEvent.source is a single 1..1 Core field whose vocabulary is
+    // "api, frontend, worker, mqtt, scheduler ou system". So the canonical
+    // model treats the transports as ONE audit surface discriminated by
+    // source, not as two parallel trails -- and an HTTP route is 'api', a
+    // value already in that vocabulary, rather than a new 'http'. An
+    // auditLogger row also already reaches the integrity chain:
+    // integrityCheckService.buildMerkleForDate hashes every `logs` row into
+    // the same daily Merkle root as the mqtt leaves, so this is tamper-evident
+    // without wiring a second chained collection.
+    //
+    // resourceType is the canonical entity for this body -- TelemetryReading,
+    // ELM-0357..ELM-0365 -- rather than the sibling's 'Temperature', which
+    // names the Mongo record that route creates. resourceId is the sensorId:
+    // the reading's only persistence here is the fire-and-forget InfluxDB
+    // write above, so there is no document id to name.
+    //
+    // Only the ACCEPTED ingest is audited, matching the #1080 sibling. The
+    // MQTT transport additionally audits its rejections; both HTTP machine
+    // routes diverge from it there, which is #1095 rather than something
+    // widened into this fix.
+    try {
+      const auditDb = policyData?.db || await connectMongoDB();
+      const auditLogger = require('../utils/auditLogger');
+      auditLogger.init(auditDb);
+      await auditLogger.log({
+        action: 'CREATE',
+        resourceType: 'TelemetryReading',
+        resourceId: normalizedSensorId,
+        status: 'success',
+        severity: 'info',
+        message: `Telemetria recebida: ${normalizedSensorId} = ${normalizedTemperature}`,
+        req: req
+      });
+    } catch (error) {
+      // auditLogger.log swallows its own failures; this guards the connection
+      // lookup, so an unavailable audit trail cannot turn an accepted ingest
+      // into a 500.
+      logger.error('[ISO20387][IOT] Falha ao registrar trilha de auditoria da telemetria:', error.message || error);
+    }
+
     return res.status(200).json({ success: true, accepted: true });
   } catch (error) {
     logger.error('[ISO20387][IOT] Falha no controller de telemetria:', error.message || error);

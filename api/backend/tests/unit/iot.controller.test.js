@@ -3,6 +3,11 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
+// #1093: the controller lazily requires this singleton, and both sides resolve
+// through Node's own require cache (createRequire), which vi.resetModules()
+// does not clear -- so a spy installed here is the one the controller calls.
+const auditLogger = require('../../src/utils/auditLogger');
+
 const {
   saveTelemetryPointMock,
   sendCriticalAlertEmailMock,
@@ -79,6 +84,8 @@ function createResponse() {
 describe('iot.controller', () => {
   let ingestTelemetry;
   let consoleLogSpy;
+  let auditLogSpy;
+  let auditInitSpy;
   let mongooseConnectSpy;
   let temperatureIncidentsCollection;
   let usersCollection;
@@ -254,10 +261,14 @@ describe('iot.controller', () => {
     const controllerModule = require('../../src/controllers/iot.controller.js');
     ingestTelemetry = controllerModule.ingestTelemetry;
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    auditInitSpy = vi.spyOn(auditLogger, 'init').mockImplementation(() => undefined);
+    auditLogSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     consoleLogSpy?.mockRestore();
+    auditInitSpy?.mockRestore();
+    auditLogSpy?.mockRestore();
     mongooseConnectSpy?.mockRestore();
     delete process.env.RESEND_API_KEY;
     delete process.env.ALERT_EMAIL_TO;
@@ -334,6 +345,84 @@ describe('iot.controller', () => {
     await ingestTelemetry(req, res);
 
     expect(res.statusCode).toBe(200);
+    expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
+  }, 15000);
+
+  // #1093: POST /api/iot/telemetry is the second HTTP machine-ingest route --
+  // the first, POST /api/temperature/system/reading, was fixed in #1080 -- and
+  // it wrote no audit row at all: not guarded on req.user like its sibling,
+  // simply absent. It was outside the MQTT hash-chained trail too
+  // (mqtt-ingestion-audit.service.js, source: 'mqtt'), so it reached neither.
+  //
+  // dict-02 P1X-0331 decides which of the two it belongs in: AuditEvent.source
+  // is ONE 1..1 Core field over "api, frontend, worker, mqtt, scheduler ou
+  // system", so the canonical model treats the transports as a single audit
+  // surface discriminated by source, not as two trails.
+  it('#1093: writes an audit row for the machine caller, which has no req.user', async () => {
+    const req = { body: { sensorId: 'sensor-2', temperature: 5, timestamp: '2026-04-08T12:00:00.000Z' } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(auditInitSpy).toHaveBeenCalled();
+    expect(auditLogSpy).toHaveBeenCalled();
+
+    const entry = auditLogSpy.mock.calls[0][0];
+    expect(entry.action).toBe('CREATE');
+    // The canonical entity for this body is TelemetryReading (ELM-0357..0365),
+    // not the sibling route's 'Temperature'.
+    expect(entry.resourceType).toBe('TelemetryReading');
+    expect(entry.resourceId).toBe('sensor-2');
+    expect(entry.status).toBe('success');
+    // req is passed through so auditLogger captures IP, user-agent and path.
+    expect(entry.req).toBe(req);
+  }, 15000);
+
+  // The audit row records that a machine submitted a reading, which is true
+  // whether or not the sensor's policy could be resolved -- so it must not sit
+  // behind the policy lookup.
+  it('#1093: still audits when the sensor policy cannot be resolved', async () => {
+    sensorMetadataLeanMock.mockRejectedValueOnce(new Error('mongo indisponível'));
+
+    const req = { body: { sensorId: 'sensor-2', temperature: 5 } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(auditLogSpy).toHaveBeenCalled();
+    expect(auditLogSpy.mock.calls[0][0].resourceType).toBe('TelemetryReading');
+  }, 15000);
+
+  // Deliberate: only the ACCEPTED ingest is audited, matching the #1080 sibling.
+  // The MQTT transport does audit its three rejection reasons into the hash
+  // chain, so both HTTP machine routes diverge from it there -- that gap is
+  // #1095, filed rather than widened into this fix. If #1095 is resolved in
+  // favour of auditing rejections, THIS TEST INVERTS: that is the intended
+  // signal, not an oversight.
+  it('#1093: an invalid payload is refused before anything is audited', async () => {
+    const req = { body: { sensorId: '', temperature: 'abc' } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(auditLogSpy).not.toHaveBeenCalled();
+  });
+
+  // CONTROL: this path behaves identically before and after #1093, so a red
+  // here in the pre-fix run means the spy setup above is wrong rather than the
+  // bug being present.
+  it('CONTROL: an in-policy reading is still accepted and still persisted', async () => {
+    const req = { body: { sensorId: 'sensor-2', temperature: 5 } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ success: true, accepted: true });
+    expect(saveTelemetryPointMock).toHaveBeenCalledWith('sensor-2', 5, expect.any(Date));
     expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
   }, 15000);
 
