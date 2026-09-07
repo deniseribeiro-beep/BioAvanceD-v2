@@ -50,6 +50,16 @@ const RESULT_OID = new ObjectId().toString();
 // this separate value.
 const SPECIMEN_ID = 'SPX-628-1';
 
+// #1082: buildRbacCollections gives every non-accessType-4 user scopeType
+// 'organization' with scopeId 'test-org-default'. The five write routes now
+// gate on the destination sample's collectionSite, and
+// isRecordInOrganizationScope treats a record with no value in the scoped
+// field as OUT of scope by design -- so a fixture sample carrying no
+// organization is refused for everyone but Administrador. The fixtures below
+// never modelled the field; that is fixture debt, not a wrong gate.
+const FIXTURE_ORG = 'test-org-default';
+const OTHER_ORG = 'some-other-org';
+
 const FAKE_RESULT = {
   _id: RESULT_OID,
   specimenId: SPECIMEN_ID,
@@ -250,7 +260,7 @@ describe('POST /api/results/upload', () => {
     // legacy numeric Sample.sampleID -- only the third tier's query
     // actually matches here, proving the fallback itself works rather
     // than an earlier tier accidentally short-circuiting it.
-    const sampleDoc = { _id: new ObjectId(), specimenId: SPECIMEN_ID, sampleID: 42 };
+    const sampleDoc = { _id: new ObjectId(), specimenId: SPECIMEN_ID, sampleID: 42, collectionSite: FIXTURE_ORG };
     const findOneSpy = vi.fn().mockImplementation(async (query) => (
       Object.prototype.hasOwnProperty.call(query, 'sampleID') ? sampleDoc : null
     ));
@@ -275,7 +285,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('returns 400 and cleans up the temp file when the insert throws', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     const insertOne = vi.fn().mockRejectedValue(new Error('insert failed'));
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
@@ -295,7 +305,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('resolves specimenId from the parsed multipart body when checking commercial consent', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     const spy = vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -362,7 +372,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('returns 400 for an invalid analysis method', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -382,7 +392,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('creates the result on success, storing the sample\'s own specimenId, and stores the file under storage/results/<specimenId-as-sent>', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
     const resultsColl = createCollectionMock({ insertOne });
@@ -411,7 +421,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('accepts .zip, .csv, and .raw as valid result file extensions', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
 
@@ -434,7 +444,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('stores equipmentID as a number when provided', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
@@ -491,7 +501,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('invalid-method cleanup skips unlink when the temp file no longer exists on disk', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -513,7 +523,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('insert-failure cleanup skips unlink when the temp file no longer exists on disk', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     const insertOne = vi.fn().mockRejectedValue(new Error('insert failed'));
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
@@ -535,7 +545,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('logs (does not throw) when the catch-block cleanup unlink itself fails', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     const insertOne = vi.fn().mockRejectedValue(new Error('insert failed'));
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
@@ -557,7 +567,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('rejects the upload (multer storage error) when the destination directory cannot be created', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -579,7 +589,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('rejects the upload (multer storage error) when the unique filename cannot be generated', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -609,7 +619,7 @@ describe('POST /api/results/upload', () => {
   });
 
   it('rejects unsupported file extensions with a 400 from multer fileFilter', async () => {
-    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID };
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG };
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -659,7 +669,7 @@ describe('POST /api/results', () => {
   });
 
   it('returns 422 for invalid payload (missing fileType/resultFilePath)', async () => {
-    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID }) });
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG }) });
     app.locals.db = createDbMock({ amostras: amostrasColl });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
 
@@ -687,7 +697,7 @@ describe('POST /api/results', () => {
   });
 
   it('creates a result record on success, storing the sample\'s own specimenId', async () => {
-    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID }) });
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG }) });
     const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -713,7 +723,7 @@ describe('POST /api/results', () => {
   });
 
   it('returns 400 when the insert throws', async () => {
-    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID }) });
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG }) });
     const insertOne = vi.fn().mockRejectedValue(new Error('insert failed'));
     app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -744,7 +754,10 @@ describe('PUT /api/results/:id', () => {
   });
 
   it('returns 404 when no document matches', async () => {
-    const resultsColl = createCollectionMock({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 }) });
+    // #1082: a findOne is supplied deliberately. Without it the new source
+    // fetch 404s first and this case would stop exercising the matchedCount
+    // branch it is named for -- right status, wrong reason, no coverage.
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_RESULT), updateOne: vi.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 }) });
     app.locals.db = createDbMock({ results: resultsColl });
 
     const res = await request(app)
@@ -756,7 +769,7 @@ describe('PUT /api/results/:id', () => {
   });
 
   it('updates the result on success', async () => {
-    const resultsColl = createCollectionMock({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }) });
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_RESULT), updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }) });
     app.locals.db = createDbMock({ results: resultsColl });
 
     const res = await request(app)
@@ -774,7 +787,7 @@ describe('PUT /api/results/:id', () => {
   // plain $set; use PUT /:id/link-sample to change the linked sample.
   it('strips specimenId/sampleID/sampleId from the body before $set, even when the caller sends them', async () => {
     const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
-    const resultsColl = createCollectionMock({ updateOne });
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_RESULT), updateOne });
     app.locals.db = createDbMock({ results: resultsColl });
 
     const res = await request(app)
@@ -795,7 +808,7 @@ describe('PUT /api/results/:id', () => {
   // it too, not just the identity/linkage fields covered by #628 above.
   it('drops unrecognized keys from the body before $set (#875)', async () => {
     const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
-    const resultsColl = createCollectionMock({ updateOne });
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_RESULT), updateOne });
     app.locals.db = createDbMock({ results: resultsColl });
 
     const res = await request(app)
@@ -820,7 +833,7 @@ describe('PUT /api/results/:id', () => {
   });
 
   it('returns 400 when the update throws', async () => {
-    const resultsColl = createCollectionMock({ updateOne: vi.fn().mockRejectedValue(new Error('update failed')) });
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_RESULT), updateOne: vi.fn().mockRejectedValue(new Error('update failed')) });
     app.locals.db = createDbMock({ results: resultsColl });
 
     const res = await request(app)
@@ -860,7 +873,7 @@ describe('PUT /api/results/:id/link-sample', () => {
 
   it('returns 404 when the referenced sample does not exist', async () => {
     const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_RESULT) }) });
 
     const res = await request(app)
       .put(`/api/results/${RESULT_OID}/link-sample`)
@@ -872,8 +885,10 @@ describe('PUT /api/results/:id/link-sample', () => {
   });
 
   it('returns 404 when no result document matches', async () => {
-    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID }) });
-    const resultsColl = createCollectionMock({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 }) });
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG }) });
+    // #1082: see the PUT /:id equivalent -- the findOne keeps this on the
+    // matchedCount branch instead of the new source fetch.
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_RESULT), updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 }) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: resultsColl });
 
     const res = await request(app)
@@ -885,9 +900,9 @@ describe('PUT /api/results/:id/link-sample', () => {
   });
 
   it('links the sample on success, storing the sample\'s own specimenId', async () => {
-    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID }) });
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG }) });
     const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
-    const resultsColl = createCollectionMock({ updateOne });
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_RESULT), updateOne });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: resultsColl });
 
     const res = await request(app)
@@ -913,8 +928,8 @@ describe('PUT /api/results/:id/link-sample', () => {
   });
 
   it('returns 400 when the update throws', async () => {
-    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID }) });
-    const resultsColl = createCollectionMock({ updateOne: vi.fn().mockRejectedValue(new Error('link failed')) });
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(SAMPLE_OID), specimenId: SPECIMEN_ID, collectionSite: FIXTURE_ORG }) });
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_RESULT), updateOne: vi.fn().mockRejectedValue(new Error('link failed')) });
     app.locals.db = createDbMock({ amostras: amostrasColl, results: resultsColl });
 
     const res = await request(app)
@@ -942,7 +957,9 @@ describe('DELETE /api/results/:id', () => {
   });
 
   it('returns 404 when nothing was deleted', async () => {
-    const resultsColl = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }) });
+    // #1082: see the PUT /:id equivalent -- the findOne keeps this on the
+    // deletedCount branch instead of the new source fetch.
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_RESULT), deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }) });
     app.locals.db = createDbMock({ results: resultsColl });
 
     const res = await request(app)
@@ -953,7 +970,7 @@ describe('DELETE /api/results/:id', () => {
   });
 
   it('deletes the result on success', async () => {
-    const resultsColl = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_RESULT), deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
     app.locals.db = createDbMock({ results: resultsColl });
 
     const res = await request(app)
@@ -973,7 +990,7 @@ describe('DELETE /api/results/:id', () => {
   });
 
   it('returns 400 when the delete throws', async () => {
-    const resultsColl = createCollectionMock({ deleteOne: vi.fn().mockRejectedValue(new Error('delete failed')) });
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_RESULT), deleteOne: vi.fn().mockRejectedValue(new Error('delete failed')) });
     app.locals.db = createDbMock({ results: resultsColl });
 
     const res = await request(app)
@@ -1099,5 +1116,200 @@ describe('GET /api/results organization scoping (#910)', () => {
     const res = await request(app).get(`/api/results/${RESULT_OID}`).set('Authorization', `Bearer ${makeToken(2)}`);
 
     expect(res.status).toBe(403);
+  });
+});
+
+// #1082: the five WRITE routes. Every pre-existing write case above
+// authenticates as makeToken(4) (Administrador -> scope 'global'), which
+// short-circuits isResultInOrganizationScope at its first line -- so none of
+// them can observe this gate at all. makeToken(3) (Coordenador) is the
+// deciding fixture: it holds uploadFiles/createResult/editResult/deleteResult
+// while being scoped to a single organization.
+describe('result write-route organization scoping (#1082)', () => {
+  const MINE = 'SPX-MINE';
+  const THEIRS = 'SPX-THEIRS';
+
+  const SAMPLES = [
+    { _id: new ObjectId(SAMPLE_OID), specimenId: MINE, collectionSite: FIXTURE_ORG },
+    { _id: new ObjectId(), specimenId: THEIRS, collectionSite: OTHER_ORG },
+  ];
+
+  // Honours the filter it is handed rather than returning a canned document --
+  // a findOne that ignored its filter would pass whether or not the route
+  // resolved the right sample (#797/#803 mock-fidelity trap).
+  function amostrasMock() {
+    return createCollectionMock({
+      findOne: vi.fn(async (query = {}) => SAMPLES.find((d) => (
+        (query.specimenId !== undefined && d.specimenId === String(query.specimenId))
+        || (query._id !== undefined && String(d._id) === String(query._id))
+      )) || null),
+    });
+  }
+
+  const mineResult = { ...FAKE_RESULT, specimenId: MINE };
+  const theirsResult = { ...FAKE_RESULT, specimenId: THEIRS };
+
+  it('403s an upload naming a destination sample in another organization, and removes the temp file', async () => {
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(SAMPLES[1]) });
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+
+    // multer writes the file before this handler ever runs, so the assertion
+    // below is about THIS request's leftovers only. Clear the directory first:
+    // a previous failing run (or a can-it-fail probe, where the ungated upload
+    // really does succeed) leaves a file behind and would otherwise red this
+    // test for a reason that has nothing to do with the gate.
+    const resultDir = path.join(__dirname, '../../storage/results', THEIRS);
+    fs.rmSync(resultDir, { recursive: true, force: true });
+
+    const res = await request(app)
+      .post('/api/results/upload')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .field('specimenId', THEIRS)
+      .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
+
+    expect(res.status).toBe(403);
+    expect(insertOne).not.toHaveBeenCalled();
+    // The 403 branch owes the same cleanup its neighbours do, or every
+    // rejected upload leaves an orphaned file on disk.
+    const leftovers = fs.existsSync(resultDir) ? fs.readdirSync(resultDir) : [];
+    expect(leftovers).toEqual([]);
+    fs.rmSync(resultDir, { recursive: true, force: true });
+  });
+
+  it('403s a create naming a destination sample in another organization', async () => {
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+    app.locals.db = createDbMock({ amostras: amostrasMock(), results: createCollectionMock({ insertOne }) });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+
+    const res = await request(app)
+      .post('/api/results')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ specimenId: THEIRS, fileType: 'PDF', resultFilePath: '/tmp/x.pdf' });
+
+    expect(res.status).toBe(403);
+    expect(insertOne).not.toHaveBeenCalled();
+  });
+
+  it('403s an edit of a result belonging to another organization, without updating', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    app.locals.db = createDbMock({
+      amostras: amostrasMock(),
+      results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(theirsResult), updateOne }),
+    });
+
+    const res = await request(app)
+      .put(`/api/results/${RESULT_OID}`)
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ description: 'new' });
+
+    expect(res.status).toBe(403);
+    expect(updateOne).not.toHaveBeenCalled();
+  });
+
+  it('allows an edit of a result inside the caller organization', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    app.locals.db = createDbMock({
+      amostras: amostrasMock(),
+      results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(mineResult), updateOne }),
+    });
+
+    const res = await request(app)
+      .put(`/api/results/${RESULT_OID}`)
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ description: 'new' });
+
+    expect(res.status).toBe(200);
+    expect(updateOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('403s link-sample when the SOURCE result belongs to another organization', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    app.locals.db = createDbMock({
+      amostras: amostrasMock(),
+      results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(theirsResult), updateOne }),
+    });
+
+    const res = await request(app)
+      .put(`/api/results/${RESULT_OID}/link-sample`)
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ specimenId: MINE });
+
+    expect(res.status).toBe(403);
+    expect(updateOne).not.toHaveBeenCalled();
+  });
+
+  it('403s link-sample when the DESTINATION sample belongs to another organization -- the re-parent vector', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    app.locals.db = createDbMock({
+      amostras: amostrasMock(),
+      results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(mineResult), updateOne }),
+    });
+
+    const res = await request(app)
+      .put(`/api/results/${RESULT_OID}/link-sample`)
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ specimenId: THEIRS });
+
+    expect(res.status).toBe(403);
+    expect(updateOne).not.toHaveBeenCalled();
+  });
+
+  it('checks the SOURCE before resolving the destination, so a caller owning neither end learns nothing about which sample ids exist', async () => {
+    // Ordering, not cosmetics: destination-first would 404 on an unknown
+    // sample id and 403 on a known one, handing an out-of-scope caller an
+    // existence oracle over the whole amostras collection.
+    const amostrasColl = amostrasMock();
+    app.locals.db = createDbMock({
+      amostras: amostrasColl,
+      results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(theirsResult), updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) }),
+    });
+
+    const res = await request(app)
+      .put(`/api/results/${RESULT_OID}/link-sample`)
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ specimenId: 'SPX-DOES-NOT-EXIST' });
+
+    expect(res.status).toBe(403);
+    // amostras IS queried once here -- by isResultInOrganizationScope, to
+    // resolve the SOURCE result's own sample. The property under test is that
+    // the CALLER-SUPPLIED id is never looked up: the request is refused on the
+    // source before the destination is resolved at all.
+    expect(amostrasColl.findOne).toHaveBeenCalledTimes(1);
+    expect(amostrasColl.findOne).toHaveBeenCalledWith({ specimenId: THEIRS });
+    const lookedUp = amostrasColl.findOne.mock.calls.map((c) => JSON.stringify(c[0]));
+    expect(lookedUp.some((q) => q.includes('SPX-DOES-NOT-EXIST'))).toBe(false);
+  });
+
+  it('403s a delete of a result belonging to another organization, without deleting', async () => {
+    const deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+    app.locals.db = createDbMock({
+      amostras: amostrasMock(),
+      results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(theirsResult), deleteOne }),
+    });
+
+    const res = await request(app)
+      .delete(`/api/results/${RESULT_OID}`)
+      .set('Authorization', `Bearer ${makeToken(3)}`);
+
+    expect(res.status).toBe(403);
+    expect(deleteOne).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on an orphaned result whose specimenId resolves to no sample', async () => {
+    const deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+    const orphan = { ...FAKE_RESULT, specimenId: 'SPX-ORPHAN' };
+    app.locals.db = createDbMock({
+      amostras: amostrasMock(),
+      results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(orphan), deleteOne }),
+    });
+
+    const res = await request(app)
+      .delete(`/api/results/${RESULT_OID}`)
+      .set('Authorization', `Bearer ${makeToken(3)}`);
+
+    expect(res.status).toBe(403);
+    expect(deleteOne).not.toHaveBeenCalled();
   });
 });

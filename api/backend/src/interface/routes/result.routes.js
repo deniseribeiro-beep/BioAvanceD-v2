@@ -144,7 +144,7 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
   }
 });
 
-router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpload.single('file'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.specimenId }), async (req, res) => {
+router.post('/upload', authenticate, requirePermission('uploadFiles'), requireOrganizationScope, resultUpload.single('file'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.specimenId }), async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -185,6 +185,17 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpl
         success: false,
         error: 'Amostra não encontrada'
       });
+    }
+
+    // #1082: the destination sample must be in the caller's scope, or an
+    // upload is a way to plant a result inside another organization. Placed
+    // with the other post-resolution guards so it owes the same temp-file
+    // cleanup they do.
+    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      if (fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+      return denyOutOfScope(res);
     }
 
     const fileType = getResultFileType(file.originalname);
@@ -420,7 +431,7 @@ router.get('/:id/download', authenticate, requireOrganizationScope, async (req, 
   }
 });
 
-router.post('/', authenticate, requirePermission('createResult'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.specimenId }), async (req, res) => {
+router.post('/', authenticate, requirePermission('createResult'), requireOrganizationScope, enforceCommercialConsent({ resolveSampleId: (req) => req.body?.specimenId }), async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -444,6 +455,13 @@ router.post('/', authenticate, requirePermission('createResult'), enforceCommerc
         success: false,
         error: 'Amostra não encontrada'
       });
+    }
+
+    // #1082: the destination sample must be in the caller's scope. The
+    // handler forces specimenId from the resolved sample, so the body cannot
+    // itself re-parent -- this gates which sample may be named at all.
+    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      return denyOutOfScope(res);
     }
 
     const resultData = { ...req.body, specimenId: sample.specimenId };
@@ -494,12 +512,29 @@ router.post('/', authenticate, requirePermission('createResult'), enforceCommerc
   }
 });
 
-router.put('/:id', authenticate, requirePermission('editResult'), async (req, res) => {
+router.put('/:id', authenticate, requirePermission('editResult'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
     const { ObjectId } = require('mongodb');
     const resultsCollection = db.collection('results');
+
+    // #1082: fetch-404-then-403, mirroring GET /:id (#910) rather than
+    // sample.routes.js:1088's null-tolerant `if (record && !inScope)` --
+    // that shape is invisible against a mock whose findOne defaults to null.
+    // ALLOWED_UPDATE_FIELDS below already excludes specimenId, so there is no
+    // destination to check here; only whether this result is the caller's.
+    const existing = await resultsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: 'Arquivo de analise não encontrado'
+      });
+    }
+    if (!(await isResultInOrganizationScope(db, existing, req.organizationScope))) {
+      return denyOutOfScope(res);
+    }
+
     // #875: a denylist here (previously just specimenId/sampleID/sampleId,
     // #628) passes every other body key straight into $set, including keys
     // that don't belong to the Result document at all. Use an allowlist
@@ -571,7 +606,7 @@ router.put('/:id', authenticate, requirePermission('editResult'), async (req, re
   }
 });
 
-router.put('/:id/link-sample', authenticate, requirePermission('editResult'), async (req, res) => {
+router.put('/:id/link-sample', authenticate, requirePermission('editResult'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -583,10 +618,28 @@ router.put('/:id/link-sample', authenticate, requirePermission('editResult'), as
       });
     }
 
+    const { ObjectId } = require('mongodb');
+    const resultsCollection = db.collection('results');
+
+    // #1082: SOURCE check first -- "is the result I am re-parenting mine?".
+    // The ordering is load-bearing, not cosmetic: resolving the destination
+    // first would let a caller who owns neither end learn from the
+    // 404-vs-403 split whether an arbitrary sample id exists before being
+    // refused.
+    const existing = await resultsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: 'Arquivo de analise não encontrado'
+      });
+    }
+    if (!(await isResultInOrganizationScope(db, existing, req.organizationScope))) {
+      return denyOutOfScope(res);
+    }
+
     // #628: resolve the referenced Sample first, same three-tier
     // resolution the create paths use -- never trust the caller-supplied
     // specimenId verbatim, whatever shape it's in.
-    const { ObjectId } = require('mongodb');
     const samplesCollection = db.collection('amostras');
     let sample = null;
     if (ObjectId.isValid(String(specimenId))) {
@@ -605,7 +658,13 @@ router.put('/:id/link-sample', authenticate, requirePermission('editResult'), as
       });
     }
 
-    const resultsCollection = db.collection('results');
+    // #1082: DESTINATION check -- rewriting specimenId IS the re-parent,
+    // since a Result's organization identity is entirely the
+    // specimenId -> amostras.collectionSite join. Without this, a caller can
+    // push their own result into another organization.
+    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      return denyOutOfScope(res);
+    }
 
     const result = await resultsCollection.updateOne(
       { _id: new ObjectId(req.params.id) },
@@ -650,12 +709,26 @@ router.put('/:id/link-sample', authenticate, requirePermission('editResult'), as
   }
 });
 
-router.delete('/:id', authenticate, requirePermission('deleteResult'), async (req, res) => {
+router.delete('/:id', authenticate, requirePermission('deleteResult'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
     const { ObjectId } = require('mongodb');
     const resultsCollection = db.collection('results');
+
+    // #1082: fetch-404-then-403 before the destructive call, mirroring
+    // GET /:id (#910).
+    const existing = await resultsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: 'Arquivo de analise não encontrado'
+      });
+    }
+    if (!(await isResultInOrganizationScope(db, existing, req.organizationScope))) {
+      return denyOutOfScope(res);
+    }
+
     const result = await resultsCollection.deleteOne({ _id: new ObjectId(req.params.id) });
 
     if (result.deletedCount === 0) {

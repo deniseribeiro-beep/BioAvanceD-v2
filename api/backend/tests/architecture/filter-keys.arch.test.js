@@ -204,12 +204,16 @@ const RETIRED_FILTER_KEYS = [
 // and should be dropped, which would shrink these four exemptions.
 const RETIRED_KEY_EXEMPT = new Set([
   'interface/routes/result.routes.js:177',
-  'interface/routes/result.routes.js:440',
+  // :440 -> :451 when #1082's destination scope check added 11 lines to
+  // POST /upload, above POST /'s own legacy-resolution tier.
+  'interface/routes/result.routes.js:451',
   // :522 -> :543 when #875's allowlist rework added ~21 lines above the
   // link-sample legacy-resolution tier (the entry itself is #628's
   // deliberate _id -> specimenId -> legacy sampleID fallback; #804 owns
   // sampleID's eventual retirement).
-  'interface/routes/result.routes.js:599',
+  // :543 -> :599 (#875 era) -> :652 when #1082 added the source scope
+  // checks to PUT /:id and link-sample above this site.
+  'interface/routes/result.routes.js:652',
   'services/result-specimenid-backfill.service.js:56',
   // #857: _id -> specimenId -> legacy sampleID/sampleId/barcode.
   // :619/:696/:789 -> :683/:760/:853, a uniform +64 shift, when #789 added
