@@ -72,7 +72,7 @@ async function createFirstAdmin(options = {}) {
       password: passwordHash,
       status: 'active',
       mfaEnabled: false,
-      mfaSecret: null,
+      mfaSecretCiphertext: null, // #1072: dict-02 P1X-0197
       forceReset,
       passwordHistory: [],
       failedLoginAttempts: 0,

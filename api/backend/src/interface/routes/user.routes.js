@@ -63,7 +63,7 @@ async function writeMfaResetAudit(db, req, targetUser, { operation, enrolmentPre
     // originais de reset-mfa as duas coisas coincidiam (o desbloqueio
     // preserva ambos, a redefinição destrói ambos), então derivar uma da
     // outra funcionava. disable-mfa é onde elas se separam: mantém o
-    // mfaSecret e ainda assim zera mfaEnabled, e [ran it] auth.service.js:507
+    // mfaSecretCiphertext e ainda assim zera mfaEnabled, e [ran it] auth.service.js:507
     // condiciona TODO o desafio de MFA a `if (user.mfaEnabled)` -- ou seja, a
     // conta fica com um único fator, exatamente como após uma redefinição.
     // O segredo preservado é inerte até alguém religar a flag.
@@ -207,7 +207,7 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
 
     // Remove senhas dos resultados e traduz status para português
     const sanitizedUsers = await Promise.all(users.map(async (user) => {
-      // #1068: strips mfaSecret and passwordResetTokenHash too -- see
+      // #1068: strips mfaSecretCiphertext and passwordResetTokenHash too -- see
       // UserModel.stripSecrets for the dictionary entries that require it.
       const userWithoutPassword = UserModel.stripSecrets(user);
       // Traduz status para português para o frontend
@@ -294,7 +294,7 @@ router.get('/:id', authenticate, async (req, res) => {
     }
 
     const UserModel = require('../../models/User');
-    // #1068: strips mfaSecret and passwordResetTokenHash too -- see
+    // #1068: strips mfaSecretCiphertext and passwordResetTokenHash too -- see
     // UserModel.stripSecrets for the dictionary entries that require it.
     const userWithoutPassword = UserModel.stripSecrets(user);
     
@@ -472,7 +472,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       }
     }
 
-    // #993: mfaSecret e mfaActivationDate NUNCA são graváveis pelo chamador.
+    // #993: mfaSecretCiphertext e mfaActivationDate NUNCA são graváveis pelo chamador.
     // Removidos do body ANTES de qualquer branch abaixo -- a única escrita
     // legítima destes dois campos nesta rota é o CLEAR (null) do branch de
     // admin logo abaixo, que é server-set. Sem este delete, um PUT com
@@ -487,7 +487,11 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // Os dois campos permanecem em ALLOWED_USER_UPDATE_FIELDS de propósito:
     // é por ali que o null do clear chega ao $set. Depois deste delete, o
     // único valor que eles podem carregar é o que esta rota mesma escreveu.
+    // #1072: BOTH names. The live field is mfaSecretCiphertext; the old
+    // plaintext name stays deleted so a caller cannot smuggle it onto the
+    // document under a name some other reader might still honour.
     delete req.body.mfaSecret;
+    delete req.body.mfaSecretCiphertext;
     delete req.body.mfaActivationDate;
 
     // #1021: mfaEnabled agora também sai do body ANTES de qualquer branch.
@@ -504,7 +508,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // estreitar o gatilho do clear para a PROMOÇÃO de fato. Desabilitar MFA
     // passa a ter um caminho só -- POST /:id/disable-mfa -- que exige
     // requirePermission('disableMFA'), verifica isAdministrator do chamador,
-    // PRESERVA o mfaSecret para reativação e escreve a própria linha de
+    // PRESERVA o mfaSecretCiphertext para reativação e escreve a própria linha de
     // auditoria. A UI já chama exatamente esse endpoint num botão dedicado
     // (SystemManagementPage.tsx), então nada no produto perde capacidade.
     delete req.body.mfaEnabled;
@@ -516,7 +520,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // promovido, e um PUT nele não é uma decisão sobre o MFA dele.
     if (isBecomingAdmin) {
       req.body.mfaEnabled = false;
-      req.body.mfaSecret = null;
+      req.body.mfaSecretCiphertext = null;
       req.body.mfaActivationDate = null;
     }
     
@@ -542,7 +546,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // inject arbitrary keys (e.g. userID, or anything else) that reach the
     // driver untouched. Allowlist to UserModel.create()'s own fields, plus
     // the route-managed fields the preprocessing above legitimately writes
-    // (password/mfaEnabled/mfaSecret/mfaActivationDate/roleValidFrom/
+    // (password/mfaEnabled/mfaSecretCiphertext/mfaActivationDate/roleValidFrom/
     // roleValidUntil/organizationId — already covered by create()'s field
     // set) and updatedAt (server-set above, never caller-supplied).
     // Excluded: _id/id (identity, already deleted above), userID (business
@@ -556,7 +560,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     const ALLOWED_USER_UPDATE_FIELDS = [
       'name', 'email', 'phone', 'organizationId', 'organizationIds', 'username',
       'password', 'status',
-      'mfaEnabled', 'mfaSecret', 'mfaActivationDate',
+      'mfaEnabled', 'mfaSecretCiphertext', 'mfaActivationDate',
       'anonId',
       // #952: 'failedLoginAttempts' was HERE and is deliberately gone. It is now
       // load-bearing (RF001 AC#2), so leaving it client-writable would let any
@@ -700,7 +704,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       await auditLogger.logUpdate(req, 'User', req.params.id);
     }
     
-    // #1068: strips mfaSecret and passwordResetTokenHash too -- see
+    // #1068: strips mfaSecretCiphertext and passwordResetTokenHash too -- see
     // UserModel.stripSecrets for the dictionary entries that require it.
     // (UserModel is already required earlier in this handler -- #566.)
     const userWithoutPassword = UserModel.stripSecrets(updatedUser);
@@ -1129,7 +1133,7 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
       {
         $set: {
           mfaEnabled: false,
-          mfaSecret: null,
+          mfaSecretCiphertext: null,
           mfaActivationDate: null,
           mfaFailedAttempts: 0,
           mfaLocked: false,
@@ -1159,7 +1163,7 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
       operation: 'reset',
       enrolmentPreserved: false,
       secondFactorActive: false,
-      fieldsCleared: ['mfaEnabled', 'mfaSecret', 'mfaActivationDate', 'mfaFailedAttempts', 'mfaLocked', 'lastLogin'],
+      fieldsCleared: ['mfaEnabled', 'mfaSecretCiphertext', 'mfaActivationDate', 'mfaFailedAttempts', 'mfaLocked', 'lastLogin'],
       sessionsRevoked: true,
       message: 'MFA redefinido (cadastro do segundo fator removido, sessões revogadas)'
     });
@@ -1326,7 +1330,7 @@ router.post('/:id/disable-mfa', authenticate, requirePermission('disableMFA', 'U
     // contido em ambos) -- então sem isto esta rota fica indistinguível de
     // qualquer um dos dois ramos de reset-mfa na trilha, apesar de ser uma
     // terceira operação com forma própria: desliga mfaEnabled mas
-    // deliberadamente MANTÉM o mfaSecret (comentário acima), diferente dos
+    // deliberadamente MANTÉM o mfaSecretCiphertext (comentário acima), diferente dos
     // dois ramos de reset-mfa. `operation: 'disable'` é o discriminador --
     // não o papel do alvo, que não fica registrado em outro lugar da linha.
     await writeMfaResetAudit(db, req, targetUser, {

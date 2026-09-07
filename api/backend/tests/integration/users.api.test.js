@@ -319,11 +319,11 @@ describe('reset-mfa on an administrator target unlocks without re-enrolling (#93
   });
   afterEach(() => { vi.restoreAllMocks(); });
 
-  it('clears the lock flags on an administrator target and preserves mfaSecret/mfaEnabled', async () => {
+  it('clears the lock flags on an administrator target and preserves mfaSecretCiphertext/mfaEnabled', async () => {
     const usersCollection = createCollectionMock({
       findOne: vi.fn().mockResolvedValue({
         _id: 'admin-target-1', roleName: 'Administrador',
-        mfaEnabled: true, mfaSecret: 'SECRET-DO-NOT-CLEAR', mfaLocked: true, mfaFailedAttempts: 5,
+        mfaEnabled: true, mfaSecretCiphertext: 'SECRET-DO-NOT-CLEAR', mfaLocked: true, mfaFailedAttempts: 5,
       }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     });
@@ -346,6 +346,7 @@ describe('reset-mfa on an administrator target unlocks without re-enrolling (#93
     expect($set.mfaLocked).toBe(false);
     expect($set.mfaFailedAttempts).toBe(0);
     // The enrolment is deliberately untouched: this is an unlock, not a reset.
+    expect($set).not.toHaveProperty('mfaSecretCiphertext');
     expect($set).not.toHaveProperty('mfaSecret');
     expect($set).not.toHaveProperty('mfaEnabled');
     expect($set).not.toHaveProperty('lastLogin');
@@ -358,7 +359,7 @@ describe('reset-mfa on an administrator target unlocks without re-enrolling (#93
     const usersCollection = createCollectionMock({
       findOne: vi.fn().mockResolvedValue({
         _id: 'tecnico-target-1', roleName: 'Tecnico',
-        mfaEnabled: true, mfaSecret: 'SECRET-SHOULD-BE-CLEARED', mfaLocked: true, mfaFailedAttempts: 5,
+        mfaEnabled: true, mfaSecretCiphertext: 'SECRET-SHOULD-BE-CLEARED', mfaLocked: true, mfaFailedAttempts: 5,
       }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     });
@@ -376,7 +377,7 @@ describe('reset-mfa on an administrator target unlocks without re-enrolling (#93
 
     expect(response.status).toBe(200);
     const $set = setFrom(usersCollection.updateOne);
-    expect($set.mfaSecret).toBeNull();
+    expect($set.mfaSecretCiphertext).toBeNull();
     expect($set.mfaEnabled).toBe(false);
     expect($set.mfaLocked).toBe(false);
     expect(sessionService.invalidateUserSessions).toHaveBeenCalled();
@@ -463,7 +464,7 @@ describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () =
 
   it('the UNLOCK branch writes a row naming the unlock and the preserved enrolment', async () => {
     givenTarget('admin-target-1', 'role-administrator', {
-      roleName: 'Administrador', mfaEnabled: true, mfaSecret: 'S', mfaLocked: true, mfaFailedAttempts: 5,
+      roleName: 'Administrador', mfaEnabled: true, mfaSecretCiphertext: 'S', mfaLocked: true, mfaFailedAttempts: 5,
     });
 
     const response = await request(app)
@@ -486,7 +487,7 @@ describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () =
 
   it('the FULL RESET branch writes a row naming the reset and the removed enrolment', async () => {
     givenTarget('tecnico-target-1', 'role-tecnico', {
-      roleName: 'Tecnico', mfaEnabled: true, mfaSecret: 'S', mfaLocked: true, mfaFailedAttempts: 5,
+      roleName: 'Tecnico', mfaEnabled: true, mfaSecretCiphertext: 'S', mfaLocked: true, mfaFailedAttempts: 5,
     });
 
     const response = await request(app)
@@ -508,9 +509,9 @@ describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () =
 
   // CONTROL: unchanged by this fix, must be GREEN before and after (#695).
   // If this is red the harness is wrong, not the product.
-  it('CONTROL: the unlock branch still leaves mfaSecret and mfaEnabled untouched', async () => {
+  it('CONTROL: the unlock branch still leaves mfaSecretCiphertext and mfaEnabled untouched', async () => {
     const usersCollection = givenTarget('admin-target-2', 'role-administrator', {
-      roleName: 'Administrador', mfaEnabled: true, mfaSecret: 'S', mfaLocked: true, mfaFailedAttempts: 5,
+      roleName: 'Administrador', mfaEnabled: true, mfaSecretCiphertext: 'S', mfaLocked: true, mfaFailedAttempts: 5,
     });
 
     const response = await request(app)
@@ -520,6 +521,7 @@ describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () =
     expect(response.status).toBe(200);
     const $set = usersCollection.updateOne.mock.calls[0][1].$set;
     expect($set.mfaLocked).toBe(false);
+    expect($set).not.toHaveProperty('mfaSecretCiphertext');
     expect($set).not.toHaveProperty('mfaSecret');
   });
 });
@@ -530,7 +532,7 @@ describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () =
 // query}, no response body. audit.middleware classifies by PATH substring
 // ('/mfa' -> 'MFA'), so disable-mfa landed in the SAME bucket as reset-mfa's
 // two branches despite being a third, materially different operation (it
-// deliberately KEEPS mfaSecret). force-password-reset contains no special
+// deliberately KEEPS mfaSecretCiphertext). force-password-reset contains no special
 // substring, so it fell through to the bare HTTP-verb mapping (POST ->
 // 'CREATE'), which is misleading for a write against an existing account.
 describe('disable-mfa and force-password-reset write their own distinguishable audit rows (#1033)', () => {
@@ -610,7 +612,7 @@ describe('disable-mfa and force-password-reset write their own distinguishable a
 
   it('disable-mfa writes a row naming the disable and the preserved enrolment, distinct from reset-mfa', async () => {
     givenTarget('admin-target-1', 'role-administrator', {
-      roleName: 'Administrador', mfaEnabled: true, mfaSecret: 'S', mfaLocked: true, mfaFailedAttempts: 5,
+      roleName: 'Administrador', mfaEnabled: true, mfaSecretCiphertext: 'S', mfaLocked: true, mfaFailedAttempts: 5,
     });
 
     const response = await request(app)
@@ -657,7 +659,7 @@ describe('disable-mfa and force-password-reset write their own distinguishable a
   // LogsPage.tsx offers to operators as a filter.
   it('grades disable-mfa critical: it leaves the account single-factor, as reset does', async () => {
     givenTarget('admin-target-2', 'role-administrator', {
-      roleName: 'Administrador', mfaEnabled: true, mfaSecret: 'S', mfaLocked: true, mfaFailedAttempts: 5,
+      roleName: 'Administrador', mfaEnabled: true, mfaSecretCiphertext: 'S', mfaLocked: true, mfaFailedAttempts: 5,
     });
 
     const response = await request(app)

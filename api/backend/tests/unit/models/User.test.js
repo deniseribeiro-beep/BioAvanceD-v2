@@ -278,7 +278,7 @@ describe('UserModel - Unit Tests', () => {
         password: 'Senha@123',
         status: 'Ativo',
         mfaEnabled: true,
-        mfaSecret: 'secret123',
+        mfaSecretCiphertext: 'secret123',
         mfaActivationDate: '2026-01-01',
         mfaFailedAttempts: 2,
         mfaLocked: true,
@@ -297,7 +297,7 @@ describe('UserModel - Unit Tests', () => {
       expect(user.organizationId).toBe('org-uuid-1');
       expect(user.status).toBe('active'); // normalizado
       expect(user.mfaEnabled).toBe(true);
-      expect(user.mfaSecret).toBe('secret123');
+      expect(user.mfaSecretCiphertext).toBe('secret123');
       expect(user.mfaActivationDate).toBe('2026-01-01');
       expect(user.mfaFailedAttempts).toBe(2);
       expect(user.mfaLocked).toBe(true);
@@ -325,7 +325,7 @@ describe('UserModel - Unit Tests', () => {
       expect(user.organizationId).toBeNull();
       expect(user.status).toBe('active');
       expect(user.mfaEnabled).toBe(false);
-      expect(user.mfaSecret).toBeNull();
+      expect(user.mfaSecretCiphertext).toBeNull();
       expect(user.mfaActivationDate).toBeNull();
       expect(user.mfaFailedAttempts).toBe(0);
       expect(user.mfaLocked).toBe(false);

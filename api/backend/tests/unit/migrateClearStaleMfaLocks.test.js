@@ -86,7 +86,7 @@ describe('scripts/migrateClearStaleMfaLocks', () => {
     }
   });
 
-  it('clears mfaLocked and mfaFailedAttempts for every locked user, leaving mfaEnabled/mfaSecret untouched', async () => {
+  it('clears mfaLocked and mfaFailedAttempts for every locked user, leaving mfaEnabled/mfaSecretCiphertext untouched', async () => {
     process.env.MONGODB_URI = 'mongodb://primary-host/db';
     process.env.MONGODB_DB_NAME = 'custom-db';
 
@@ -96,14 +96,14 @@ describe('scripts/migrateClearStaleMfaLocks', () => {
         mfaLocked: true,
         mfaFailedAttempts: 7,
         mfaEnabled: true,
-        mfaSecret: 'SECRET-1',
+        mfaSecretCiphertext: 'SECRET-1',
       },
       {
         _id: { toString: () => 'user-2' },
         mfaLocked: true,
         mfaFailedAttempts: 5,
         mfaEnabled: false,
-        mfaSecret: null,
+        mfaSecretCiphertext: null,
       },
     ];
     const dbApi = fakeDb(users);
@@ -128,11 +128,11 @@ describe('scripts/migrateClearStaleMfaLocks', () => {
         { _id: users[1]._id },
         { $set: { mfaLocked: false, mfaFailedAttempts: 0 } },
       );
-      // mfaEnabled/mfaSecret are never part of the $set payload -- clearing
+      // mfaEnabled/mfaSecretCiphertext are never part of the $set payload -- clearing
       // the lock must not disable or re-enable anyone's MFA.
       for (const call of dbApi.updateOne.mock.calls) {
         expect(call[1].$set).not.toHaveProperty('mfaEnabled');
-        expect(call[1].$set).not.toHaveProperty('mfaSecret');
+        expect(call[1].$set).not.toHaveProperty('mfaSecretCiphertext');
       }
     } finally {
       restore();

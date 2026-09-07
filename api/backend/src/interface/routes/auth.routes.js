@@ -72,7 +72,7 @@ router.post('/login', async (req, res, next) => {
 // para 'administrator' em ROLE_CODE_BY_ACCESS_TYPE, e resolveScopeForRole
 // atalha hierarchyLevel 4 para escopo GLOBAL sem validar organizationId --
 // ou seja, a concessão não pode falhar. O mesmo pedido ainda cai no ramo que
-// zera mfaEnabled/mfaSecret por padrão. Resultado medido: um POST anônimo
+// zera mfaEnabled/mfaSecretCiphertext por padrão. Resultado medido: um POST anônimo
 // devolvia 201 e gravava uma atribuição de administrador global, ativa, com
 // MFA desligado.
 //

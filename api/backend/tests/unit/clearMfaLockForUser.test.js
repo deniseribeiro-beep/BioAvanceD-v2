@@ -122,7 +122,7 @@ describe('scripts/clearMfaLockForUser', () => {
     }
   });
 
-  it('clears mfaLocked and mfaFailedAttempts for the matched user, leaving mfaEnabled/mfaSecret untouched, and reports who was unlocked', async () => {
+  it('clears mfaLocked and mfaFailedAttempts for the matched user, leaving mfaEnabled/mfaSecretCiphertext untouched, and reports who was unlocked', async () => {
     process.env.MONGODB_URI = 'mongodb://primary-host/db';
     process.env.MONGODB_DB_NAME = 'custom-db';
 
@@ -133,7 +133,7 @@ describe('scripts/clearMfaLockForUser', () => {
       mfaLocked: true,
       mfaFailedAttempts: 5,
       mfaEnabled: true,
-      mfaSecret: 'SECRET-1',
+      mfaSecretCiphertext: 'SECRET-1',
     };
     const dbApi = fakeDb(user);
     const connect = vi.fn().mockResolvedValue(undefined);
@@ -158,7 +158,7 @@ describe('scripts/clearMfaLockForUser', () => {
       );
       const setPayload = dbApi.updateOne.mock.calls[0][1].$set;
       expect(setPayload).not.toHaveProperty('mfaEnabled');
-      expect(setPayload).not.toHaveProperty('mfaSecret');
+      expect(setPayload).not.toHaveProperty('mfaSecretCiphertext');
 
       // The script must print who it unlocked -- the whole point is an
       // auditable deliberate act, not a silent sweep.
@@ -178,7 +178,7 @@ describe('scripts/clearMfaLockForUser', () => {
       mfaLocked: false,
       mfaFailedAttempts: 0,
       mfaEnabled: true,
-      mfaSecret: 'SECRET-1',
+      mfaSecretCiphertext: 'SECRET-1',
     };
     const dbApi = fakeDb(alreadyClearedUser);
     const connect = vi.fn().mockResolvedValue(undefined);

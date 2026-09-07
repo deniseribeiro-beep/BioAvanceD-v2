@@ -134,7 +134,10 @@ class AuditLogger {
 
     // Remove campos sensíveis
     const sensitiveFields = [
-      'password', 'passwordHash', 'mfaSecret', 'token', 'secret',
+      // #1072: both the pre-rename plaintext name and the live ciphertext
+      // field -- a redaction list is the one place where over-inclusion costs
+      // nothing and under-inclusion leaks a credential.
+      'password', 'passwordHash', 'mfaSecret', 'mfaSecretCiphertext', 'token', 'secret',
       'patientName', 'name', 'email', 'cpf', 'document', 'address',
       'phone', 'telefone', 'birthDate', 'dataNascimento',
       // RF005/RNF007 (#363/#564): identityDocument is the canonical

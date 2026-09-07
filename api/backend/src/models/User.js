@@ -120,7 +120,9 @@ class UserModel {
       password: data.password, // Será hashado no service
       status: this.normalizeStatus(data.status || 'active'), // Normaliza status para formato inglês
       mfaEnabled: data.mfaEnabled || false,
-      mfaSecret: data.mfaSecret || null,
+      // #1072: dict-02 P1X-0197, type secret/encrypted. Holds the
+      // encryptValue envelope, never the raw base32 TOTP seed.
+      mfaSecretCiphertext: data.mfaSecretCiphertext || null,
       mfaActivationDate: data.mfaActivationDate || null,
       mfaFailedAttempts: data.mfaFailedAttempts || 0,
       mfaLocked: data.mfaLocked || false,
@@ -199,9 +201,12 @@ class UserModel {
  *   P1X-0203 passwordHistoryHashes   "Não exibir; retenção limitada."
  *   P1X-0207 passwordResetTokenHash  "Compartimento «secret»"
  *
- * `mfaSecret` is the worst of them: it is the live TOTP seed, so returning it
- * is a full MFA bypass rather than an information leak — anyone holding it can
- * mint valid second-factor codes indefinitely. `passwordResetTokenHash` was
+ * `mfaSecretCiphertext` is the worst of them: it wraps the live TOTP seed, so
+ * returning it is a full MFA bypass rather than an information leak — anyone
+ * holding it and the key can mint valid second-factor codes indefinitely.
+ * Since #1072 it is an AES-GCM envelope rather than the raw base32, which
+ * lowers the blast radius of a leak but does not remove the reason to strip
+ * it: the envelope is still the credential to anyone who also holds the key. `passwordResetTokenHash` was
  * the same shape for the password until #1078: auth.service.js and
  * user-security.service.js both $set the RAW token onto the user document, so
  * during a reset window a plain user listing carried an account-takeover
@@ -211,8 +216,8 @@ class UserModel {
  * reason for any response to carry it.
  *
  * #993 and #998 closed the WRITE-side siblings of this defect on the same
- * route — caller-writable mfaSecret, and privilege escalation. The read side
- * had never been examined.
+ * route — a caller-writable MFA secret, and privilege escalation. The read
+ * side had never been examined.
  *
  * DELIBERATELY KEPT: mfaEnabled (P1X-0195), mfaActivationDate (P1X-0198),
  * mfaLocked (P1X-0200), mfaFailedAttempts (P1X-0199), passwordChangedAt
@@ -233,9 +238,16 @@ UserModel.stripSecrets = function stripSecrets(user) {
   if (!user || typeof user !== 'object') return user;
   if (Array.isArray(user)) return user.map(UserModel.stripSecrets);
 
+  // #1072: BOTH names are stripped on purpose. `mfaSecretCiphertext` is the
+  // live field; `mfaSecret` is the pre-#1072 plaintext name, kept here as
+  // defence in depth so that any document still carrying it -- a fixture, a
+  // hand-written row, a stale export -- cannot leak a raw TOTP seed through a
+  // response. It costs one destructured key and removes a whole class of
+  // regression; the reverse (dropping it and being wrong) re-opens #1068.
   const {
     password,
     mfaSecret,
+    mfaSecretCiphertext,
     passwordHistory,
     passwordResetTokenHash,
     ...rest

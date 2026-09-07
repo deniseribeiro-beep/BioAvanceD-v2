@@ -26,7 +26,10 @@ export function buildUserSubmissionPayload(formData: Partial<User>, editingUser:
   delete dataToSave.id;
   delete dataToSave.createdAt;
   delete dataToSave.lastLogin;
+  // #1072: the backend field is mfaSecretCiphertext since the rename; both
+  // names are dropped so a stale client payload can never carry either.
   delete dataToSave.mfaSecret;
+  delete dataToSave.mfaSecretCiphertext;
   delete dataToSave.mfaActivationDate;
   delete dataToSave.mfaFailedAttempts;
   delete dataToSave.mfaLocked;

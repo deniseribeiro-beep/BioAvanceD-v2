@@ -34,7 +34,7 @@
  * usuário -- o mesmo escopo que user.routes.js já suporta, nada além disso.
  *
  * Campos tocados, mesmo raciocínio de migrateClearStaleMfaLocks.js: apenas
- * mfaLocked e mfaFailedAttempts. mfaEnabled e mfaSecret não são mexidos,
+ * mfaLocked e mfaFailedAttempts. mfaEnabled e mfaSecretCiphertext não são mexidos,
  * para não desabilitar/reabilitar MFA de ninguém.
  *
  * Log de auditoria: NÃO usa src/utils/auditLogger.js. Seu log() depende de

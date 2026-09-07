@@ -9,9 +9,41 @@ const LogModel = require('../models/Log');
 const logger = require('../utils/logger');
 const sessionService = require('./session.service');
 const { hashToken } = require('../utils/tokenHash');
+const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require('../utils/fieldEncryption');
 const passwordService = require('./password.service');
 const { grantRoleForAccessType, assertGrantPreconditions, isAdministrator, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
 const notificationDispatchService = require('./notificationDispatch.service');
+
+/**
+ * #1072: the ONE place that turns a stored MFA envelope back into a TOTP seed.
+ *
+ * dict-02 P1X-0197 names the field mfaSecretCiphertext, type secret/encrypted,
+ * and RNF020 AC#3 requires "segredos MFA sao cifrados". The seed is written
+ * encrypted at the two enrolment sites and read back only here, immediately
+ * before speakeasy.totp.verify.
+ *
+ * THE INVARIANT, and it is the whole security argument of #1072: every
+ * ENROLMENT PRESENCE GUARD in this file tests user.mfaSecretCiphertext
+ * -- the stored field -- and NEVER this function's result. decryptValue
+ * returns null on every failure (unknown keyId, rotated key, bad auth tag),
+ * so a guard keyed on a decrypted value would read "not enrolled" for a user
+ * who IS enrolled. setupMFAFirstLogin's write at the end of that guard is
+ * unconditional, so it would then replace the victim's secret with a fresh
+ * one and hand it to an UNAUTHENTICATED caller -- #986/#1032 reopened by a
+ * key rotation instead of by a missing check. #1086's previous-key slot makes
+ * that rotation survivable; this invariant is what makes it non-catastrophic
+ * if it is ever misconfigured anyway.
+ *
+ * Returning null on failure is deliberate and safe HERE, and only here:
+ * [ran it] speakeasy.totp.verify({ secret: null }) returns false rather than
+ * throwing, so an undecryptable enrolment refuses the code with this file's
+ * ordinary generic message. A distinct "your secret is unreadable" error
+ * would be an enumeration oracle on the unauthenticated endpoints, which is
+ * exactly what #1032 removed.
+ */
+function readMfaSecret(user) {
+  return decryptValue(user && user.mfaSecretCiphertext);
+}
 
 // #952 / RF001 AC#2: "Bloquear temporariamente a conta apos o limite configurado
 // de tentativas malsucedidas." dict-02 P1X-0206 says the counter "deve seguir
@@ -285,7 +317,7 @@ class AuthService {
       if (resolvedAccessType === 4 || userData.roleName === 'Administrador') {
         if (userData.mfaEnabled === undefined || userData.mfaEnabled === false) {
           user.mfaEnabled = false;
-          user.mfaSecret = null;
+          user.mfaSecretCiphertext = null;
           user.mfaActivationDate = null;
         }
         // Se mfaEnabled foi setado como true, mantém (será configurado no primeiro login se necessário)
@@ -546,7 +578,8 @@ class AuthService {
       // Para admin, MFA é opcional - se estiver habilitado, verifica; se não, pula
       // Para não-admin, MFA é obrigatório no primeiro login
       const isFirstLogin = user.lastLogin === null || user.lastLogin === undefined;
-      const mfaNotConfigured = !user.mfaEnabled || !user.mfaSecret;
+      // #1072: ciphertext presence, not a decrypted value -- see readMfaSecret.
+      const mfaNotConfigured = !user.mfaEnabled || !user.mfaSecretCiphertext;
 
       // MFA obrigatório apenas para não-admin no primeiro login
       // Admin com MFA habilitado também precisa configurar no primeiro login se não estiver configurado
@@ -601,7 +634,7 @@ class AuthService {
         }
 
         const verified = speakeasy.totp.verify({
-          secret: user.mfaSecret,
+          secret: readMfaSecret(user),
           encoding: 'base32',
           token: mfaCode,
           window: 2
@@ -782,12 +815,19 @@ class AuthService {
       // outcomes indistinguishable, which is the whole point.
       //
       // The condition itself is unchanged, and the mfaEnabled term is
-      // load-bearing: setupMFAFirstLogin writes mfaSecret WITHOUT setting
+      // load-bearing: setupMFAFirstLogin writes the secret WITHOUT setting
       // lastLogin, so a legitimate enrolment arrives back here with a secret
       // present and lastLogin still null. A guard keyed on !isFirstLogin
-      // alone, or on mfaSecret alone, would break that live flow.
+      // alone, or on the secret alone, would break that live flow.
+      //
+      // #1072: the third conjunct is CIPHERTEXT PRESENCE -- the stored field
+      // -- and must never become a decrypted value. readMfaSecret's docblock
+      // has the full argument; the short version is that decryptValue returns
+      // null on a rotated or missing key, which would make this guard skip
+      // and let the unconditional write below replace an enrolled user's
+      // secret, from an unauthenticated request.
       const isFirstLogin = user.lastLogin === null || user.lastLogin === undefined;
-      if (!isFirstLogin && user.mfaEnabled && user.mfaSecret) {
+      if (!isFirstLogin && user.mfaEnabled && user.mfaSecretCiphertext) {
         // #1032: the generic message, NOT a distinct one. The guard order
         // above is deliberate (#986) and unchanged; what changes here is
         // that reaching this branch no longer TELLS the caller it was
@@ -822,7 +862,10 @@ class AuthService {
         throw new Error('Credenciais inválidas');
       }
 
-      const mfaNotConfigured = !user.mfaEnabled || !user.mfaSecret;
+      // #1072: a `mfaNotConfigured` binding sat here, computed and never
+      // read -- dead, and a live trap for anyone editing this function
+      // believing it gated something. Removed with the rename rather than
+      // carried forward under a new field name.
 
       // Gera secret
       const secret = speakeasy.generateSecret({
@@ -847,10 +890,19 @@ class AuthService {
         throw new Error('QR Code não foi gerado corretamente');
       }
 
+      // #1072: refuse BEFORE the write rather than degrade. encryptValue
+      // returns null when no key is configured, and a bare $set of that null
+      // would silently unset the enrolment while still handing the caller a
+      // QR code for a secret that was never stored -- worse than the
+      // plaintext posture this replaces. #1083 built this assert for exactly
+      // that shape; #1085 now also refuses to boot a keyless production
+      // stack, so this fires only on a stack that deliberately opted out.
+      assertFieldEncryptionConfigured(secret.base32);
+
       // Salva secret temporariamente (usuário precisa confirmar)
       await usersCollection.updateOne(
         { _id: user._id },
-        { $set: { mfaSecret: secret.base32, mfaActivationDate: null } }
+        { $set: { mfaSecretCiphertext: encryptValue(secret.base32), mfaActivationDate: null } }
       );
 
       logger.info('MFA secret gerado e salvo para primeiro login:', { 
@@ -910,15 +962,18 @@ class AuthService {
       }
 
       // #986: this endpoint had NO enrollment guard at all -- only the
-      // `!user.mfaSecret` check below, which an already-enrolled user passes.
+      // `!user.mfaSecretCiphertext` check below, which an already-enrolled user passes.
       // So a correct password plus a valid current TOTP reached updateOne and
       // issueSessionTokens: a complete alternate authentication path through
       // an UNAUTHENTICATED endpoint, bypassing the lockout by construction
       // rather than merely failing to count. Same mfaEnabled-bearing form as
       // setupMFAFirstLogin, for the same reason -- an enrolment in progress
-      // has mfaSecret set and lastLogin still null, and must still get here.
+      // has the secret set and lastLogin still null, and must still get here.
+      //
+      // #1072: ciphertext presence, never a decrypted value. Same argument as
+      // the sibling guard in setupMFAFirstLogin; readMfaSecret has it in full.
       const isFirstLogin = user.lastLogin === null || user.lastLogin === undefined;
-      if (!isFirstLogin && user.mfaEnabled && user.mfaSecret) {
+      if (!isFirstLogin && user.mfaEnabled && user.mfaSecretCiphertext) {
         // #1032: the generic message, NOT a distinct one. The guard order
         // above is deliberate (#986) and unchanged; what changes here is
         // that reaching this branch no longer TELLS the caller it was
@@ -948,12 +1003,14 @@ class AuthService {
         throw new Error('Credenciais inválidas');
       }
 
-      if (!user.mfaSecret) {
+      // #1072: ciphertext presence gates reachability; the decrypt happens
+      // only inside the verify call below.
+      if (!user.mfaSecretCiphertext) {
         throw new Error('MFA não configurado. Gere o QR code primeiro.');
       }
 
       const verified = speakeasy.totp.verify({
-        secret: user.mfaSecret,
+        secret: readMfaSecret(user),
         encoding: 'base32',
         token: mfaCode,
         window: 2
@@ -1044,10 +1101,13 @@ class AuthService {
       // Gera QR Code
       const qrCodeUrl = await QRCode.toDataURL(secret.otpauth_url);
 
+      // #1072: same fail-closed assert as setupMFAFirstLogin -- see there.
+      assertFieldEncryptionConfigured(secret.base32);
+
       // Salva secret temporariamente (usuário precisa confirmar)
       await usersCollection.updateOne(
         { _id: new ObjectId(userID) },
-        { $set: { mfaSecret: secret.base32, mfaActivationDate: null } }
+        { $set: { mfaSecretCiphertext: encryptValue(secret.base32), mfaActivationDate: null } }
       );
 
       return {
@@ -1070,12 +1130,13 @@ class AuthService {
       const { ObjectId } = require('mongodb');
       const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
 
-      if (!user || !user.mfaSecret) {
+      // #1072: ciphertext presence, not a decrypted value.
+      if (!user || !user.mfaSecretCiphertext) {
         throw new Error('MFA não configurado');
       }
 
       const verified = speakeasy.totp.verify({
-        secret: user.mfaSecret,
+        secret: readMfaSecret(user),
         encoding: 'base32',
         token: mfaCode,
         window: 2

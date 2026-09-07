@@ -14,7 +14,7 @@
  * dois juntos -- e que desde #933 zera SOMENTE esses dois quando o alvo é
  * administrador, exatamente o par usado aqui): mfaLocked e
  * mfaFailedAttempts. Apenas esses dois são tocados aqui — mfaEnabled e
- * mfaSecret não são campos pareados com o lock e não são mexidos, para não
+ * mfaSecretCiphertext não são campos pareados com o lock e não são mexidos, para não
  * desabilitar/reabilitar MFA de ninguém.
  *
  * Idempotente via filtro de query, mesma convenção de

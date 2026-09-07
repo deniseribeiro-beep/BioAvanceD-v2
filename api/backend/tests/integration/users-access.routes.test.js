@@ -239,7 +239,7 @@ describe('Users and Access routes', () => {
   //
   // #993 and #998 are the write-side siblings of this defect and are both closed;
   // the read side had never been looked at.
-  describe('#1068: user read paths never return mfaSecret', () => {
+  describe('#1068: user read paths never return mfaSecretCiphertext', () => {
     const LEAKED_SECRET = 'M'.repeat(32);
 
     function seededUser(overrides = {}) {
@@ -252,6 +252,10 @@ describe('Users and Access routes', () => {
         accessType: 4,
         status: 'active',
         mfaEnabled: true,
+        // #1072: the row carries BOTH the live ciphertext field and the
+        // pre-rename plaintext name, because UserModel.stripSecrets
+        // deliberately strips both -- a stale row must not leak a raw seed.
+        mfaSecretCiphertext: LEAKED_SECRET,
         mfaSecret: LEAKED_SECRET,
         // CONTROL: kept deliberately. It is not a credential, and the UI renders
         // it -- stripping the whole MFA block would be the wrong fix.
@@ -260,7 +264,7 @@ describe('Users and Access routes', () => {
       };
     }
 
-    it('GET /api/users does not return mfaSecret', async () => {
+    it('GET /api/users does not return mfaSecretCiphertext', async () => {
       const handler = getHandler(userRoutes, 'get', '/');
       usersCollection.find.mockReturnValue({ toArray: vi.fn().mockResolvedValue([seededUser()]) });
       const req = createRequest();
@@ -271,6 +275,7 @@ describe('Users and Access routes', () => {
 
       expect(res.statusCode).toBe(200);
       expect(JSON.stringify(res.payload)).not.toContain(LEAKED_SECRET);
+      expect(res.payload.data[0]).not.toHaveProperty('mfaSecretCiphertext');
       expect(res.payload.data[0]).not.toHaveProperty('mfaSecret');
       expect(res.payload.data[0].password).toBeUndefined();
       // CONTROL: the non-credential MFA fields survive.
@@ -278,7 +283,7 @@ describe('Users and Access routes', () => {
       expect(res.payload.data[0].mfaActivationDate).toBe('2026-01-01T00:00:00.000Z');
     });
 
-    it('GET /api/users/:id does not return mfaSecret', async () => {
+    it('GET /api/users/:id does not return mfaSecretCiphertext', async () => {
       const handler = getHandler(userRoutes, 'get', '/:id');
       usersCollection.findOne.mockResolvedValue(seededUser());
       const req = createRequest({ params: { id: 'user-1' } });
@@ -289,6 +294,7 @@ describe('Users and Access routes', () => {
 
       expect(res.statusCode).toBe(200);
       expect(JSON.stringify(res.payload)).not.toContain(LEAKED_SECRET);
+      expect(res.payload.data).not.toHaveProperty('mfaSecretCiphertext');
       expect(res.payload.data).not.toHaveProperty('mfaSecret');
       expect(res.payload.data.mfaEnabled).toBe(true);
     });
@@ -405,7 +411,7 @@ describe('Users and Access routes', () => {
     usersCollection.findOne.mockResolvedValueOnce({
       _id: '507f1f77bcf86cd799439011',
       accessType: 4, roleName: 'Administrador', mfaEnabled: true,
-      mfaSecret: 'SECRET-DO-NOT-CLEAR', mfaLocked: true, mfaFailedAttempts: 5,
+      mfaSecretCiphertext: 'SECRET-DO-NOT-CLEAR', mfaLocked: true, mfaFailedAttempts: 5,
     });
 
     const req = createRequest({ params: { id: '507f1f77bcf86cd799439011' } });
@@ -423,7 +429,7 @@ describe('Users and Access routes', () => {
     const $set = usersCollection.updateOne.mock.calls[0][1].$set;
     expect($set.mfaLocked).toBe(false);
     expect($set.mfaFailedAttempts).toBe(0);
-    expect($set).not.toHaveProperty('mfaSecret');
+    expect($set).not.toHaveProperty('mfaSecretCiphertext');
     expect($set).not.toHaveProperty('mfaEnabled');
   });
 
@@ -1040,7 +1046,7 @@ describe('Users and Access routes', () => {
     expect(sessionsCollection.updateMany).not.toHaveBeenCalled();
   });
 
-  // #993: mfaSecret/mfaActivationDate sat on ALLOWED_USER_UPDATE_FIELDS, and
+  // #993: mfaSecretCiphertext/mfaActivationDate sat on ALLOWED_USER_UPDATE_FIELDS, and
   // the admin branch above keeps whatever the caller sent when mfaEnabled is
   // explicitly true. So one PUT could set a target's password AND replace
   // their TOTP secret with one the caller generated -- a silent account
@@ -1048,7 +1054,7 @@ describe('Users and Access routes', () => {
   // longer hold. The route only ever legitimately writes these two fields as
   // a server-set null (the disable-MFA clear); it must never carry a
   // caller-supplied value.
-  it('#993: PUT /api/users/:id nunca aceita mfaSecret do chamador, mesmo com mfaEnabled=true em alvo admin', async () => {
+  it('#993: PUT /api/users/:id nunca aceita mfaSecretCiphertext do chamador, mesmo com mfaEnabled=true em alvo admin', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
       _id: 'user-target-11',
@@ -1059,7 +1065,7 @@ describe('Users and Access routes', () => {
       accessType: 4,
       roleName: 'Administrador',
       mfaEnabled: true,
-      mfaSecret: 'SEGREDO-LEGITIMO-DO-ALVO',
+      mfaSecretCiphertext: 'SEGREDO-LEGITIMO-DO-ALVO',
     };
     usersCollection.findOne
       .mockResolvedValueOnce(targetUser)
@@ -1082,7 +1088,7 @@ describe('Users and Access routes', () => {
       params: { id: 'user-target-11' },
       body: {
         mfaEnabled: true,
-        mfaSecret: 'SEGREDO-DO-ATACANTE',
+        mfaSecretCiphertext: 'SEGREDO-DO-ATACANTE', mfaSecret: 'SEGREDO-DO-ATACANTE',
         mfaActivationDate: '2026-01-01T00:00:00.000Z',
       },
     });
@@ -1096,6 +1102,7 @@ describe('Users and Access routes', () => {
     // Assert the VALUE is absent, not merely that it differs -- writing the
     // attacker's string would be the takeover, and writing any other
     // caller-derived value would be the same defect wearing a new shape.
+    expect(setPayload).not.toHaveProperty('mfaSecretCiphertext');
     expect(setPayload).not.toHaveProperty('mfaSecret');
     expect(setPayload).not.toHaveProperty('mfaActivationDate');
     expect(JSON.stringify(setPayload)).not.toContain('SEGREDO-DO-ATACANTE');
@@ -1110,10 +1117,10 @@ describe('Users and Access routes', () => {
   // enrolment made under its old role.
   //
   // Repointed rather than deleted, because the property #993 exists for is
-  // unchanged: the clear is server-set, the caller's own mfaSecret must never
+  // unchanged: the clear is server-set, the caller's own mfaSecretCiphertext must never
   // reach $set, and a blanket removal from ALLOWED_USER_UPDATE_FIELDS would
   // still leave a stale secret behind an mfaEnabled:false flag.
-  it('#993/#1021: a PROMOCAO a Administrador zera mfaSecret/mfaActivationDate, e nunca grava o do chamador', async () => {
+  it('#993/#1021: a PROMOCAO a Administrador zera mfaSecretCiphertext/mfaActivationDate, e nunca grava o do chamador', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
       _id: 'user-target-12',
@@ -1124,7 +1131,7 @@ describe('Users and Access routes', () => {
       accessType: 3,
       roleName: 'Coordenador',
       mfaEnabled: true,
-      mfaSecret: 'SEGREDO-A-SER-LIMPO',
+      mfaSecretCiphertext: 'SEGREDO-A-SER-LIMPO',
     };
     usersCollection.findOne
       .mockResolvedValueOnce(targetUser)
@@ -1145,7 +1152,7 @@ describe('Users and Access routes', () => {
 
     const req = createRequest({
       params: { id: 'user-target-12' },
-      body: { accessType: 4, mfaEnabled: true, mfaSecret: 'SEGREDO-DO-ATACANTE' },
+      body: { accessType: 4, mfaEnabled: true, mfaSecretCiphertext: 'SEGREDO-DO-ATACANTE', mfaSecret: 'SEGREDO-DO-ATACANTE' },
     });
     req.app.locals.db = dbWithTarget;
     const res = createResponse();
@@ -1155,7 +1162,7 @@ describe('Users and Access routes', () => {
     expect(res.statusCode).toBe(200);
     const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
     expect(setPayload.mfaEnabled).toBe(false);
-    expect(setPayload.mfaSecret).toBeNull();
+    expect(setPayload.mfaSecretCiphertext).toBeNull();
     expect(setPayload.mfaActivationDate).toBeNull();
     // #993's own point: the caller's value must not survive anywhere in the
     // write, not merely differ from it.
@@ -1190,7 +1197,7 @@ describe('Users and Access routes', () => {
       accessType: 4,
       roleName: 'Administrador',
       mfaEnabled: true,
-      mfaSecret: 'SEGREDO-QUE-DEVE-SOBREVIVER',
+      mfaSecretCiphertext: 'SEGREDO-QUE-DEVE-SOBREVIVER',
     };
     usersCollection.findOne
       .mockResolvedValueOnce(targetUser)
@@ -1221,6 +1228,7 @@ describe('Users and Access routes', () => {
     expect(res.statusCode).toBe(200);
     const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
     expect(setPayload).not.toHaveProperty('mfaEnabled');
+    expect(setPayload).not.toHaveProperty('mfaSecretCiphertext');
     expect(setPayload).not.toHaveProperty('mfaSecret');
     expect(setPayload).not.toHaveProperty('mfaActivationDate');
     // CONTROL within the case: the rename it actually asked for still happens,
@@ -1241,7 +1249,7 @@ describe('Users and Access routes', () => {
       accessType: 4,
       roleName: 'Administrador',
       mfaEnabled: true,
-      mfaSecret: 'SEGREDO-QUE-DEVE-SOBREVIVER',
+      mfaSecretCiphertext: 'SEGREDO-QUE-DEVE-SOBREVIVER',
     };
     usersCollection.findOne
       .mockResolvedValueOnce(targetUser)
@@ -1272,6 +1280,7 @@ describe('Users and Access routes', () => {
     expect(res.statusCode).toBe(200);
     const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
     expect(setPayload).not.toHaveProperty('mfaEnabled');
+    expect(setPayload).not.toHaveProperty('mfaSecretCiphertext');
     expect(setPayload).not.toHaveProperty('mfaSecret');
   });
 

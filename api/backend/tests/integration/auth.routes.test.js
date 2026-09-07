@@ -152,7 +152,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     // 'administrator' in ROLE_CODE_BY_ACCESS_TYPE, and resolveScopeForRole
     // short-circuits hierarchyLevel 4 to a GLOBAL scope without validating an
     // organizationId -- so the grant cannot fail. The same request also takes
-    // the branch that sets mfaEnabled:false/mfaSecret:null by default.
+    // the branch that sets mfaEnabled:false/mfaSecretCiphertext:null by default.
     //
     // The sibling POST /api/users/register carries #998's hierarchy floor,
     // whose own comment describes this exact escalation one level down. Both
