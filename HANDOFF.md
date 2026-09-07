@@ -3,8 +3,8 @@
 **Written 2026-09-07, eighteenth queue sitting. INTERIM — no end signal was
 given, so treat the session as CONTINUING.** Dennis asked to read the handoff,
 pick the next group of issues, and said Docker was on. I took the #1053
-org-scope family — **#1082, #1087, #1088** — shipped four commits, closed two
-issues, and filed four.
+org-scope family — **#1082, #1087, #1088** — then worked one of my own
+findings to close. Six commits, **three issues closed**, four filed.
 
 **BOTH GATES RAN. That is the headline, and it reverses the previous note.**
 The last sitting's "NEITHER GATE RAN" is discharged: everything that was
@@ -47,7 +47,8 @@ either workflow file), so only the local gate can ever catch this class.
 
 - Branch `feature/docker-e2e-backend-integration`, clean and matching origin.
   `main` untouched, no PR. `git status -sb` is authoritative.
-- **Four commits.** Last substantive is the stale-e2e-assertion fix.
+- **Six commits.** Last substantive is the #1090 specimenId-tier fix, which
+  landed AFTER the gate run below — it is covered by native runs only.
 - **No new files, no new env keys, no new npm scripts, no dependency or
   compose changes.**
 - **Nothing left running.** Stack torn down with `down --remove-orphans`;
@@ -57,8 +58,8 @@ either workflow file), so only the local gate can ever catch this class.
 
 Query it — `gh issue list --state open`. What a query cannot carry:
 
-- **#1082 and #1088 closed.** #1087 had its org-scope half shipped and is
-  **deliberately open** on its real question.
+- **#1082, #1088 and #1090 closed.** #1087 had its org-scope half shipped
+  and is **deliberately open** on its real question.
 - **#1087's open half is a capability decision for Denise**, not a defect:
   may a Técnico and an external user read the equipment inventory? Gating the
   two list routes on `manageStorageTopology` breaks Técnico and
@@ -112,9 +113,14 @@ order, from what this sitting established:
 1. **#1091** — it is the only reason the e2e gate is not green, it is fully
    diagnosed with both halves of the fix named, and until it lands every
    future gate run costs an investigation to re-clear the same 17.
-2. **#1090** — small, self-contained, and #1088's new guard already marks the
-   spot. Needs one caller trace to decide between its three directions.
-3. **#1092** — one database query answers it; it either closes or becomes a
-   backfill.
-4. **#1086 then #1072**, in that order and not the reverse — unchanged from
+2. **#1092** — its premise widened after filing: `Sample.js:61` declares
+   `collectionSite` with `default: null` and no `required`, so new rows can
+   lack it too, not just legacy ones. One query against a populated database
+   answers it; it either closes or becomes a backfill plus a model change.
+3. **#1086 then #1072**, in that order and not the reverse — unchanged from
    the previous note, still untouched.
+
+**#1090 is done** (`dcf8d2c3`), and it is the evidence #1088's second half
+earns its keep: its enumeration is what surfaced the helper, and tracing the
+five callers found `sampleComplianceSync.service.js:26` passing a canonical
+`specimenId` into a filter on the retired `sampleID` key.
