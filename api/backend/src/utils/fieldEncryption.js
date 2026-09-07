@@ -43,6 +43,49 @@ function tryDecryptWithKey(key, payload) {
   return JSON.parse(plaintext);
 }
 
+/**
+ * #1100: the keyed branch tries EVERY registered key before giving up.
+ *
+ * getKeyById matches on the id ALONE, and #1086's registry stacks the
+ * active entry first, so an operator who rotates ENCRYPTION_KEY while
+ * KEEPING ENCRYPTION_KEY_ID makes every pre-rotation envelope resolve to
+ * the NEW key: the AES-GCM auth tag fails, and the previous key -- sitting
+ * right there in the registry -- is never tried. It is the one rotation
+ * shape that produced no diagnostic at all.
+ *
+ * #1086's boot gate reports [] for that configuration and is RIGHT to:
+ * whether it is wrong depends on the keyIds stamped on rows in the
+ * database, which no boot-time check can know. Warning harder was never
+ * available, which is why this is a decrypt change and not a validateEnv
+ * one.
+ *
+ * Safe by construction: AES-GCM authenticates, so a wrong key cannot yield
+ * a wrong plaintext -- it can only throw. The loop is bounded by
+ * CONFIGURATION (getFallbackKeys returns at most the active key plus the
+ * previous slot, deduped by hex), not by anything a caller supplies, and
+ * it runs only on a decrypt that returns null today. That is what
+ * separates it from the CPU amplification #1036/#952 refused, which was a
+ * bcrypt round per unauthenticated REQUEST -- attacker-triggerable,
+ * unbounded in rate, and deliberately slow per unit. None of those three
+ * holds here.
+ *
+ * exclude skips the key the caller already tried, so the keyed branch does
+ * not re-attempt the entry getKeyById just returned.
+ */
+function decryptWithFallbackKeys(payload, exclude) {
+  for (const key of keyRegistry.getFallbackKeys()) {
+    if (exclude && key.equals(exclude)) continue;
+
+    try {
+      return tryDecryptWithKey(key, payload);
+    } catch (_) {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 function decryptValue(payload) {
   if (!payload || typeof payload !== 'object') {
     return null;
@@ -52,6 +95,10 @@ function decryptValue(payload) {
 
   if (keyId) {
     const key = keyRegistry.getKeyById(keyId);
+    // #1100: an UNKNOWN keyId stays fail-closed here rather than falling
+    // through. No configured key claims that id, the operator already gets
+    // a diagnostic, and widening this branch is not what the issue is
+    // about -- the silent case is the id that RESOLVES, to the wrong key.
     if (!key) {
       logger.warn(`[SECURITY][AES256] keyId desconhecido para decriptação: ${keyId}`);
       return null;
@@ -60,20 +107,11 @@ function decryptValue(payload) {
     try {
       return tryDecryptWithKey(key, payload);
     } catch (_) {
-      return null;
+      return decryptWithFallbackKeys(payload, key);
     }
   }
 
-  const fallbackKeys = keyRegistry.getFallbackKeys();
-  for (const key of fallbackKeys) {
-    try {
-      return tryDecryptWithKey(key, payload);
-    } catch (_) {
-      continue;
-    }
-  }
-
-  return null;
+  return decryptWithFallbackKeys(payload, null);
 }
 
 // RF005/RNF007 (#574): deterministic blind index for fields ciphertext can't

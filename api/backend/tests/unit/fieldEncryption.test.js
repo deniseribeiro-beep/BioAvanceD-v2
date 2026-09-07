@@ -120,6 +120,78 @@ describe('utils/fieldEncryption', () => {
     });
   });
 
+  // #1100: getKeyById matches on the id ALONE, and #1086's registry stacks
+  // the active entry first, so an operator who rotates ENCRYPTION_KEY while
+  // KEEPING ENCRYPTION_KEY_ID makes every pre-rotation envelope resolve to
+  // the NEW key. The AES-GCM auth tag then fails and the previous key --
+  // sitting right there in the registry -- was never tried. #1086's boot
+  // gate reports [] for this configuration and is RIGHT to: whether it is
+  // wrong depends on the keyIds stamped on rows in the database, which no
+  // boot-time check can know, so warning harder was never available.
+  describe('#1100 rotation that keeps ENCRYPTION_KEY_ID', () => {
+    it('decrypts an envelope whose keyId now resolves to the NEW key', () => {
+      process.env.ENCRYPTION_KEY = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_ID = 'key-fixo';
+      const envelope = loadModule().encryptValue('identidade civil');
+      expect(envelope.keyId).toBe('key-fixo');
+
+      // The key rotates; the id does not. The old key is parked under a new
+      // previous id, so the registry HOLDS it -- getKeyById just never
+      // reaches it, because the active entry claims 'key-fixo' first.
+      process.env.ENCRYPTION_KEY = 'chave-nova';
+      process.env.ENCRYPTION_KEY_ID = 'key-fixo';
+      process.env.ENCRYPTION_KEY_PREVIOUS = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_PREVIOUS_ID = 'key-antigo';
+
+      expect(loadModule().decryptValue(envelope)).toBe('identidade civil');
+    });
+
+    it('still writes NEW envelopes under the active key when the id is kept', () => {
+      process.env.ENCRYPTION_KEY = 'chave-nova';
+      process.env.ENCRYPTION_KEY_ID = 'key-fixo';
+      process.env.ENCRYPTION_KEY_PREVIOUS = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_PREVIOUS_ID = 'key-antigo';
+      const { encryptValue, decryptValue } = loadModule();
+
+      const envelope = encryptValue('novo segredo');
+
+      expect(envelope.keyId).toBe('key-fixo');
+      expect(decryptValue(envelope)).toBe('novo segredo');
+    });
+
+    // Control case: unchanged before and after the fix, so a red here is the
+    // fixture rather than the behaviour under test (#695). This is also the
+    // fail-closed floor -- the fall-through must not invent a plaintext.
+    it('control: an envelope NO configured key can decrypt still returns null', () => {
+      process.env.ENCRYPTION_KEY = 'chave-nova';
+      process.env.ENCRYPTION_KEY_ID = 'key-fixo';
+      process.env.ENCRYPTION_KEY_PREVIOUS = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_PREVIOUS_ID = 'key-antigo';
+      const { encryptValue, decryptValue } = loadModule();
+      const envelope = encryptValue('segredo');
+      envelope.tag = Buffer.from('0000000000000000', 'hex').toString('base64');
+
+      expect(decryptValue(envelope)).toBeNull();
+    });
+
+    // Control case: an UNKNOWN keyId deliberately stays fail-closed on its
+    // own warn. No configured key claims that id, the operator gets a
+    // diagnostic, and widening that branch is not what #1100 is about.
+    it('control: an unknown keyId still fails closed, without trying every key', () => {
+      process.env.ENCRYPTION_KEY = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_ID = 'key-fixo';
+      const envelope = loadModule().encryptValue('antigo');
+      envelope.keyId = 'key-que-nunca-existiu';
+
+      process.env.ENCRYPTION_KEY = 'chave-nova';
+      process.env.ENCRYPTION_KEY_ID = 'key-fixo';
+      process.env.ENCRYPTION_KEY_PREVIOUS = 'chave-antiga';
+      process.env.ENCRYPTION_KEY_PREVIOUS_ID = 'key-antigo';
+
+      expect(loadModule().decryptValue(envelope)).toBeNull();
+    });
+  });
+
   describe('encryptValue', () => {
     it('returns null when no active key is configured', () => {
       const { encryptValue } = loadModule();
