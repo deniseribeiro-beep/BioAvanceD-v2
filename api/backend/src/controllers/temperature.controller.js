@@ -4,6 +4,51 @@ const logger = require('../utils/logger');
 const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
 const { resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
 
+// #1080: organization resolution for the machine-ingest path.
+//
+// POST /temperature/system/reading has no session, so there is no caller
+// scope to stamp from -- but the BODY must not choose either. Before this, a
+// TELEMETRY_INGEST_SECRET holder could attribute a cold-chain reading to any
+// organization in the catalogue, because assertOrganizationIdResolves checks
+// only that the organization EXISTS, never that the caller may write to it.
+//
+// The sensor is the answer. Sensor.organizationId (#634) carries it, and the
+// canonical model hangs organizational custody off the device rather than the
+// reading (TelemetryReading.sensorId, 1..1 Core, ELM-0357).
+//
+// An UNKNOWN sensor is a 404 -- this codebase's settled answer for a
+// named-but-nonexistent referenced entity (api/backend/docs/
+// STORAGE_API_EXAMPLES.js's CODIGOS DE ERRO table; sensor.controller.js does
+// the same, deliberately 404ing before any scope check so that a missing
+// sensor is never conflated with a foreign-organization one).
+//
+// A sensor that EXISTS but carries organizationId: null is deliberately NOT a
+// refusal, and this is the one judgment call in the change. #634 added the
+// field without backfilling, so every sensor predating it is legitimately
+// unscoped; refusing those would turn a working telemetry ingest into a hard
+// outage on any database older than that commit. Such a reading is stored
+// unattributed instead -- exactly what it was before. The defect is closed
+// either way, because what is removed is the BODY's ability to choose.
+async function resolveMachineIngestOrganization(db, body) {
+  const sensorId = body?.sensorId || body?.sensorID;
+
+  if (!sensorId) {
+    // Nothing to derive from. TemperatureModel.validate makes sensorId
+    // mandatory, so this goes on to the usual 400 -- but the body's
+    // organizationId is dropped on the way rather than honoured.
+    return { ...body, organizationId: null };
+  }
+
+  const sensor = await db.collection('sensors').findOne({ sensorId: String(sensorId) });
+  if (!sensor) {
+    const error = new Error(`sensorId ${sensorId} não encontrado`);
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return { ...body, organizationId: sensor.organizationId || null };
+}
+
 /**
  * Controller de Temperatura
  * RF009 - Registro de Temperatura e Alertas
@@ -23,29 +68,36 @@ class TemperatureController {
       }
 
       // #1071: stamp the organization from the caller's resolved scope.
-      // req.organizationScope is undefined on POST /system/reading, the
-      // machine-ingest sibling, which has no user session and therefore no
-      // scope to derive from -- that route keeps the body's value and needs
-      // its own answer (recorded on #1071, not decided here).
+      // #1080: req.organizationScope is undefined on POST /system/reading, the
+      // machine-ingest sibling, which has no session. That route used to keep
+      // the body's value; it now derives the organization from the sensor.
+      // See resolveMachineIngestOrganization above for why an unknown sensor
+      // is a 404 and an unscoped one is not.
       const temperatureData = req.organizationScope
         ? { ...req.body, organizationId: resolveOrganizationIdForCreate(req.organizationScope, req.body?.organizationId) }
-        : req.body;
+        : await resolveMachineIngestOrganization(db, req.body);
       const temperature = await temperatureService.createTemperatureReading(db, temperatureData);
 
       // Registra log (anonimizado via auditLogger)
-      if (req.user) {
-        const auditLogger = require('../utils/auditLogger');
-        auditLogger.init(db);
-        await auditLogger.log({
-          action: 'CREATE',
-          resourceType: 'Temperature',
-          resourceId: temperature._id.toString(),
-          status: 'success',
-          severity: 'info',
-          message: `Leitura de temperatura registrada: ${temperature.temperatureValue}${temperature.temperatureUnit}`,
-          req: req
-        });
-      }
+      //
+      // #1080: this was guarded on `if (req.user)`, so the ONE route here with
+      // no session -- machine ingest -- wrote no audit row at all, and a
+      // mis-attributed reading arrived with no record that anything submitted
+      // it. The guard is gone: auditLogger degrades the actor to USR-SYSTEM by
+      // itself when there is no req.user, and ingestionTestSupport.routes.js
+      // already audits a sessionless secret-gated route exactly this way. `req`
+      // is still passed, so IP, user-agent, method and path are still captured.
+      const auditLogger = require('../utils/auditLogger');
+      auditLogger.init(db);
+      await auditLogger.log({
+        action: 'CREATE',
+        resourceType: 'Temperature',
+        resourceId: temperature._id.toString(),
+        status: 'success',
+        severity: 'info',
+        message: `Leitura de temperatura registrada: ${temperature.temperatureValue}${temperature.temperatureUnit}`,
+        req: req
+      });
 
       return res.status(201).json({
         success: true,

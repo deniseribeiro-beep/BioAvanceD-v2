@@ -229,28 +229,46 @@ describe('POST /api/temperature/reading stamps organizationId from the caller sc
     expect(create.mock.calls[0][1].organizationId).toBe('org-a');
   });
 
-  // CONTROL: the machine-ingest sibling has no user session and therefore no
-  // scope to derive from, so it deliberately still takes the body's value.
-  // Green before and after -- a red here is the fixture, not the bug (#695).
-  it('CONTROL: the machine-ingest route still takes organizationId from the body', async () => {
+  // #1080: this replaced a CONTROL asserting the machine route "still takes
+  // organizationId from the body". That control could never fail. It set
+  // 'x-telemetry-secret' where the gate reads 'x-telemetry-ingest-secret', so
+  // it always 403d into an else branch asserting only [401, 403] -- the
+  // organizationId expectation on the line above it never executed once. Its
+  // premise is inverted now anyway: the machine route derives the organization
+  // from the sensor, so the body cannot choose.
+  function givenMachineIngest(sensorDoc) {
     process.env.TELEMETRY_INGEST_SECRET = 'test-ingest-secret';
-    givenScopedCaller('org-a');
-    const create = vi.spyOn(temperatureService, 'createTemperatureReading')
+    app.locals.db = createDbMock({
+      sensors: createCollectionMock({ findOne: vi.fn().mockResolvedValue(sensorDoc) }),
+      organizations: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ organizationId: 'org-real' }) })
+    });
+    return vi.spyOn(temperatureService, 'createTemperatureReading')
       .mockResolvedValue({ _id: { toString: () => 't2' }, temperatureValue: -70, temperatureUnit: 'C' });
+  }
+
+  it('#1080: the machine-ingest route derives organizationId from the sensor, not the body', async () => {
+    const create = givenMachineIngest({ sensorId: 'SEN-2', organizationId: 'org-real' });
 
     const res = await request(app)
       .post('/api/temperature/system/reading')
-      .set('x-telemetry-secret', 'test-ingest-secret')
+      .set('x-telemetry-ingest-secret', 'test-ingest-secret')
       .send({ sensorId: 'SEN-2', temperatureValue: -70, organizationId: 'org-b' });
 
-    if (res.status === 201 || res.status === 200) {
-      expect(create.mock.calls[0][1].organizationId).toBe('org-b');
-    } else {
-      // The gate refused (secret header name differs); the point of this
-      // control is only that the authenticated route's stamp did not leak
-      // onto the machine route, so a refusal is an acceptable outcome here.
-      expect([401, 403]).toContain(res.status);
-    }
+    expect(res.status).toBe(201);
+    expect(create.mock.calls[0][1].organizationId).toBe('org-real');
+    delete process.env.TELEMETRY_INGEST_SECRET;
+  });
+
+  it('#1080: the machine-ingest route 404s when the sensor is unknown', async () => {
+    const create = givenMachineIngest(null);
+
+    const res = await request(app)
+      .post('/api/temperature/system/reading')
+      .set('x-telemetry-ingest-secret', 'test-ingest-secret')
+      .send({ sensorId: 'GHOST', temperatureValue: -70, organizationId: 'org-b' });
+
+    expect(res.status).toBe(404);
+    expect(create).not.toHaveBeenCalled();
     delete process.env.TELEMETRY_INGEST_SECRET;
   });
 });

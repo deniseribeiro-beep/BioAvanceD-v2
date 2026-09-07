@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 
 const temperatureController = require('../../src/controllers/temperature.controller');
 const temperatureService = require('../../src/services/temperature.service');
+const auditLogger = require('../../src/utils/auditLogger');
 
 function buildRes() {
   const res = {};
@@ -67,6 +68,100 @@ describe('temperature.controller.createReading', () => {
     await temperatureController.createReading(req, res);
 
     expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  // #1080: POST /system/reading is machine ingest -- no session, so no
+  // req.organizationScope. It used to keep the body's organizationId verbatim,
+  // which let any TELEMETRY_INGEST_SECRET holder attribute a cold-chain reading
+  // to ANY organization in the catalogue: assertOrganizationIdResolves only
+  // checks that the organization EXISTS, never that the caller may write to it.
+  // The organization is now derived from the sensor instead, which is where the
+  // dictionary hangs organizational custody (TelemetryReading.sensorId, 1..1).
+  function machineIngestSetup(sensorDoc, body) {
+    const fakeReading = { _id: { toString: () => 'r1' }, temperatureValue: 4.2, temperatureUnit: 'C' };
+    const create = vi.spyOn(temperatureService, 'createTemperatureReading').mockResolvedValue(fakeReading);
+    const findOne = vi.fn().mockResolvedValue(sensorDoc);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const req = { app: { locals: { db } }, body };
+    return { create, db, logSpy, req, res: buildRes(), fakeReading };
+  }
+
+  it('#1080: derives organizationId from the sensor, ignoring the body\'s', async () => {
+    const { create, db, req, res } = machineIngestSetup(
+      { sensorId: 's-1', organizationId: 'org-real' },
+      { sensorId: 's-1', value: 4.2, organizationId: 'org-attacker' }
+    );
+
+    await temperatureController.createReading(req, res);
+
+    expect(db.collection).toHaveBeenCalledWith('sensors');
+    expect(create.mock.calls[0][1].organizationId).toBe('org-real');
+    expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  it('#1080: 404s when the reading names a sensor that does not exist', async () => {
+    const { create, req, res } = machineIngestSetup(null, { sensorId: 'ghost', value: 4.2, organizationId: 'org-attacker' });
+
+    await temperatureController.createReading(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  // A sensor predating #634 carries organizationId: null by design -- that
+  // commit declined to backfill. Rejecting it would turn a working telemetry
+  // ingest into a hard outage on any legacy database, so it is stored
+  // unattributed. The defect is still closed: the BODY cannot choose.
+  it('#1080: stores null rather than rejecting when the sensor carries no organization', async () => {
+    const { create, req, res } = machineIngestSetup(
+      { sensorId: 's-legacy', organizationId: null },
+      { sensorId: 's-legacy', value: 4.2, organizationId: 'org-attacker' }
+    );
+
+    await temperatureController.createReading(req, res);
+
+    expect(create.mock.calls[0][1].organizationId).toBeNull();
+    expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  it('#1080: writes an audit row for the machine caller, which has no req.user', async () => {
+    const { logSpy, req, res } = machineIngestSetup(
+      { sensorId: 's-1', organizationId: 'org-real' },
+      { sensorId: 's-1', value: 4.2 }
+    );
+
+    await temperatureController.createReading(req, res);
+
+    expect(logSpy).toHaveBeenCalled();
+    const entry = logSpy.mock.calls[0][0];
+    expect(entry.action).toBe('CREATE');
+    expect(entry.resourceType).toBe('Temperature');
+  });
+
+  // CONTROL: the authenticated path behaves identically before and after
+  // #1080, so a red here in the pre-fix run means the setup is wrong rather
+  // than the bug being present.
+  it('CONTROL: the authenticated path stamps from the caller scope and looks up no sensor', async () => {
+    const fakeReading = { _id: { toString: () => 'r1' }, temperatureValue: 4.2, temperatureUnit: 'C' };
+    const create = vi.spyOn(temperatureService, 'createTemperatureReading').mockResolvedValue(fakeReading);
+    const db = { collection: vi.fn() };
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const req = {
+      app: { locals: { db } },
+      organizationScope: { scope: 'global' },
+      user: { id: 'u1' },
+      body: { sensorId: 's-1', value: 4.2, organizationId: 'org-a' },
+    };
+    const res = buildRes();
+
+    await temperatureController.createReading(req, res);
+
+    expect(db.collection).not.toHaveBeenCalledWith('sensors');
+    expect(create.mock.calls[0][1].organizationId).toBe('org-a');
+    expect(res.status).toHaveBeenCalledWith(201);
   });
 });
 
