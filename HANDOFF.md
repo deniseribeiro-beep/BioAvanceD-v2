@@ -1,139 +1,127 @@
 # HANDOFF
 
-**Written 2026-09-04, sixteenth queue sitting. INTERIM — no end signal
-given, so treat the session as CONTINUING.** Dennis asked for "the next 10
-issues, Docker is on." **8 of the 10 are closed**, a ninth (`#1053`) has its
-load-bearing slice shipped and stays open as a tracking issue, and the tenth
-(`#1072`) is researched but deliberately not shipped — see below.
+**Written 2026-09-07, seventeenth queue sitting. INTERIM — no end signal
+was given, so treat the session as CONTINUING.** Dennis asked for "the next
+groups of issues, Docker is on." I picked two groups — secrets-at-rest and
+the #1053 org-scope children — and **shipped five, filed six**.
 
-**BOTH GATES RAN AND BOTH ARE GREEN.**
+**NEITHER GATE RAN THIS SITTING. That is the single most important line
+here.** Docker was on and I did not use it. Five substantive commits have
+landed since the last green gate at `01791b44`, so the previous handoff's
+"both gates green" is now a statement about an older tree, not this one.
 
-- **Native regression** `[ran it]` the sanctioned three-directory form:
-  **462 files / 8615 tests / 0 failures, exit 0, 613s.** Past the Bash tool's
-  600s ceiling, so background it and grep your own redirect. The count moved
-  **8544 -> 8615** against the previous sitting; the 71 are this sitting's
-  own additions.
-- **Architecture suite** `[ran it]` `npm run test:architecture` natively —
-  **122/122, exit 0.** Note vitest does NOT run these; they are `node --test`.
-- **Docker gate** `[ran it]` the exact command CI's `current-state-validation`
-  runs: `docker compose --env-file .env.test.example -f compose.test.yml run
-  --rm --no-deps backend-unit-runner` -> **exit 0**, and all four chained
-  steps completed: architecture **122 tests / 108 pass / 0 fail / 14
-  skipped**, essential reference-data validation passed, dictionary catalog
-  **929/929 (v1.3.0)**, compliance evidence generated. That four-step chain
-  completing is the property #1059 restored, and it still holds.
-- **Nothing left running.** `docker ps -a` empty. **No image was built** —
-  the gate reused the 9-hour-old `backend-unit-runner` image — and the
-  builder cache is **610.5MB, unchanged**.
+What DID run, every iteration:
 
-Re-derive all three rather than trusting this paragraph.
+- **Targeted consumer sets, derived two-hop and run bare** — 71 / 42 / 46 /
+  39 / 27 files across the five iterations, all exit 0.
+- **`npm run test:architecture` five times — 122/122, exit 0 each time**,
+  including after the two commits that shifted arch-guard line keys.
+- **Nothing left running.** No container was started; no image was built.
 
-Re-derive every count below rather than trusting it.
+Re-derive all of it rather than trusting this paragraph.
 
 ---
 
 ## Repo state
 
-- Branch `feature/docker-e2e-backend-integration`. `main` untouched, no PR.
-  `git status -sb` and `git log` are authoritative.
-- **8 substantive commits this sitting**, last is the `#1021` MFA fix.
-- **No new env keys, no new npm scripts, no new dependencies, no compose
-  changes.** Everything this sitting is application code and tests.
-- Two new permission codes exist in `PERMISSION_CATALOG` — `manageSensor`
-  (`Device`, CRUD) and `recordTemperature` (`Temperature`, CREATE) — both
-  seeded to exactly the three roles that already held `viewTemperature`, so
-  **no caller gained or lost a capability**. That was deliberate: it makes
-  "should a Tecnico delete a sensor?" a catalogue edit rather than a code
-  change, and that question is still Denise's.
+- Branch `feature/docker-e2e-backend-integration`, clean and matching
+  origin. `main` untouched, no PR. `git status -sb` and `git log` are
+  authoritative.
+- **Five substantive commits**, last is the `#1074` policy-read gate.
+- **One new file:** `api/backend/src/utils/tokenHash.js`.
+- **One new env key:** `ALLOW_UNENCRYPTED_FIELD_STORAGE`, documented in both
+  shipped templates. No new npm scripts, no new dependencies, no compose
+  changes.
 
 ## What shipped
 
 Query the board rather than trusting a list: `gh issue list --state open`.
 
-`#1073` `#1064` `#1058` `#1061` `#1050` `#1071` `#1062` `#1021` closed.
-`#1053` slice A shipped, issue left open as the class tracker.
-
-Three of those are one commit: `#1058`/`#1061`/`#1050` had to land together,
-because fixing `#1058` alone would have made the export **wider** — the
-custody-ledger rows it un-hides carry `ipAddress`, `userAgent` and the
-ledger hash chain.
+`#1083` `#1084` `#1078` closed. `#1081` and `#1074` had their load-bearing
+halves shipped and are **deliberately left open** — each has a comment
+saying which half and why the remainder is a decision rather than a defect.
 
 ## The judgment a query cannot carry
 
-- **`#1072` is not blocked — I chose to stop on it, and the reason changes
-  the issue.** `[read it]` `auth.service.js`'s enrolment guards key on
-  `user.mfaSecret` being **truthy**, and `decryptValue` returns `null` on
-  every failure. So encrypting the field as `#1072` describes turns a
-  rotated/missing key into a **silent MFA bypass** — the guard is skipped
-  and the login proceeds with no second factor. Encryption must land with a
-  re-keying of those guards, not before it. Sequencing is on the issue.
-- **`ENCRYPTION_KEY_ID` cannot carry a rotation.** `[read it]`
-  `config/keyRegistry.js` holds at most one key (`// Suporte a chave legada
-  removido`), so RNF020 AC#5 ("rotacionados sem alteração de código") is
-  unsatisfied and rotating orphans every envelope into a `null`.
-- **`#1083` is the most serious NEW finding.** `[read it]` `encryptValue`
-  fails **open** — a `warn` and a `null` — and every caller treats `null` as
-  "skip", leaving the plaintext. Both shipped env templates ship
-  `ENCRYPTION_KEY` blank and nothing validates it at boot. Field-level
-  sibling of the closed `#938`/`#734`; the remedy shape is theirs (an
-  `assert...Configured()` at the call site, **not** a change to
-  `encryptValue`'s return contract).
-- **An issue's "smallest change" can be broken by a mechanism it does not
-  mention.** `#1073` proposed swapping onto `manageTemperature`; `[read it]`
-  that code is `allowedActions: ['UPDATE']` and `requirePermission` enforces
-  the derived action (#631), so the swap would have 403'd every CREATE and
-  DELETE. `rbac-catalog-seed.service.js` already records the identical trap
-  for `manageStorageTopology` (#929). **Read a permission's
-  `allowedActions` before repointing a route at it.**
-- **A comment on an adjacent file can dissolve a proposed slice.**
-  `#1053` recommended `dataset-file.routes.js` as its cheapest first slice;
-  `[read it]` that file's own header explains it omits org scope because
-  Dataset has no organization field in dict-02 (ELM-0416..0423, verified).
-  Recorded on `#1053`; the recommendation is struck.
+- **`#1084` did not exist when the sitting started.** Research into #1078
+  turned up that `resetPassword`'s "já utilizado" guard is short-circuited
+  by its own `&&`: clearing `passwordResetToken` on use is what disables the
+  check that refuses a used token, so the same reset JWT was replayable for
+  the rest of its 1h–24h life. `[ran it]` Fixed and closed the same sitting.
+- **The previous handoff's `#1072` claim was WRONG, and I corrected it on
+  the issue.** It recorded the MFA fail-open as being in the login path.
+  `[read it]` `processLogin` gates the challenge on `user.mfaEnabled` alone
+  — a boolean no encryption touches — so it is **fail-CLOSED**. The real
+  fail-open is `auth.service.js:789` and `:920`, on two **unauthenticated**
+  first-login endpoints, and the outcome is worse: a keyless or rotated
+  stack lets a password-only caller **overwrite** the victim's secret at
+  `:852` and take a session. Do not re-derive from the old framing.
+- **`#1072` gained a hard prerequisite, `#1086`.** `[read it]`
+  `keyRegistry.getKeyEntries()` can hold exactly one key, so any rotation
+  turns every existing envelope into a `decryptValue` null — which is what
+  makes the fail-open above reachable by an operator action.
+- **`#1081`'s body was factually wrong on its central premise.** It claimed
+  the equipment PUT "has no fetch at all" and built its not-a-copy-paste
+  argument on it. `[read it]` It fetches at `:311` and 404s at `:341-348`.
+  Corrected on the issue.
+- **`#1087` flipped on evidence.** `[ran it]` Gating the equipment GETs on
+  `manageStorageTopology` would break **Técnico and UsuarioExterno** across
+  three views, two of which are `ALL_ROLES`. `GET /:id` has zero frontend
+  callers and is free to gate. The e2e cost is zero, which is why no test
+  would have told you.
+- **`#1085` is worse than filed.** `[read it]` `generate-env-docker-secrets.sh`
+  refuses to overwrite an existing `.env.docker`, and the documented setup
+  step is `cp .env.docker.example .env.docker` — so the generator is
+  **unreachable** to anyone following the README. `[ran it]` And
+  `validateAllEnv`/`validateAndHalt` have **no production caller**, so a
+  boot warning added there today would print nothing.
 
 ## Conventions this sitting relied on / established
 
-- **Under auto mode, write a non-trivial source edit as a script file via
-  the `Write` tool and run the file.** Two independent guards stand in the
-  heredoc path — the ~8.1 KB command-assembly ceiling and
-  `backslash-collapse-guard` — and you meet them in sequence. Filed as
-  pack#771. **And pass an explicit count on every replace**: `str.replace`
-  replaces ALL occurrences where the `Edit` tool would have refused a
-  non-unique match. One unbounded call reddened 27 tests here.
-- **A derived consumer list can contain both test runners.**
-  `tests/architecture/*.arch.test.js` is `node --test`; `npx vitest run
-  $(cat consumers.txt)` silently ignores those entries and still exits 0.
-  Compare the reported file count against `wc -l` every time. Hit twice.
-  Filed as pack#772.
-- **`git grep` flags must precede the pattern** — `git grep "pat" -A3`
-  parses `-A3` as a *revision* and dies. GNU `grep` accepts either order,
-  which is why it recurs. Filed as pack#770.
-- **The `#682` all-sites probe earned its keep twice.** Both times a
-  changed site turned out unpinned and only the whole-change revert showed
-  it — the `#1062` scheduler stamp, and a "CONTROL" that had silently
-  stopped being one.
-- **`assertOrganizationIdResolves` is an EXISTENCE check, not a scope
-  check.** It is the single most load-bearing correction of the sitting:
-  naming a real organization you do not belong to passed it, on every
-  create and every update. `resolveOrganizationIdForCreate` (#1071) and
-  `assertOrganizationFieldNotReparented` (#1053 slice A) are the two
-  helpers that now decide it, and they live beside the other scope
-  primitives in `rbac-assignment.service.js`.
+- **The CRLF tape.** This tree is CRLF. An anchored replacement script
+  written with `\n` anchors matches **zero** times and the bounded-count
+  assert catches it — but only if you wrote one. Normalise anchors to the
+  file's dominant EOL. `[ran it]` cost one round trip on the first script.
+- **Bound every replacement — it paid twice.** Once on the CRLF miss above,
+  and once when a `catch`-block anchor in `equipment.routes.js` matched
+  **2** (POST's catch is verbatim identical to PUT's). An unbounded replace
+  would have silently edited both.
+- **A derived consumer list can contain a `node --test` file, and vitest
+  drops it at exit 0.** `[ran it]` 47 paths named, **46** reported — the
+  missing one was `tests/architecture/rbac-actions.arch.test.js`. Compare
+  the counts in the same command every time; this is pack#772 and it fired
+  again here.
+- **Write the consumer list to the SESSION SCRATCHPAD, not `/tmp`.**
+  `full-suite-guard` reads the named file itself, and a native Node process
+  resolves bare `/tmp` as `C:\tmp`. `[ran it]` the run was blocked until the
+  list moved. Test-output redirects to `/tmp` are fine — only Bash reads
+  those.
+- **Long `gh` bodies go through `Write` + `--body-file`.** `[ran it]` an
+  inline heredoc comment hit the ~8.1 KB command-assembly ceiling (#665).
 
-## Pile-up (the numbers `issue-loop` rung 3 asks for)
+## Pile-up
 
-**8 discharged (+1 partial), 10 product issues filed** — `#1074` through
-`#1083` — plus 6 pack issues filed and 2 reopened on recurrences. **The
-backlog grew.** No `rabbit-hole` conversion is claimed: agent slots were
-free throughout and unblocked work remained, which `#590` says disqualifies
-one. Where the sitting stopped it says so plainly.
+**3 issues closed and 2 partially shipped, against 6 filed** — `#1084`
+through `#1089`. **The queue grew.** Agent slots were used throughout (7
+read-only research agents, never above the cap of 2 concurrent), and the
+research repeatedly earned its keep by closing issues' own
+`[not established]` claims — which is this repo's documented
+highest-value research shape.
+
+**No `rabbit-hole` conversion is claimed.** `#1082` is unblocked and
+undelegable-but-doable; **I chose to stop** rather than start a five-route
+authorization edit I could not verify to the standard the other four got.
+That is a choice, not a blocker, and it is said plainly here for that
+reason.
 
 ## Recommended next
 
-**Dennis named no successor to the ten**, so: none queued.
+**Dennis named no successor**, so nothing is queued by him. In dependency
+order, from what this sitting established:
 
-Both gates are green, so nothing is owed there. `#1083` is the
-highest-value open item (a live plaintext-at-rest defect with
-a precedent-shaped remedy), and it is a **prerequisite for `#1072`**.
-`#1081` (equipment PUT/DELETE, both failure modes) is the cheapest of the
-`#1053` children.
+1. **The gates.** Five unverified commits is the largest outstanding risk,
+   and Docker is on.
+2. **`#1082`** — its comment now carries a complete, per-route
+   implementable plan, including two corrections a first reading would get
+   wrong and the measured test cost (13 fixtures, 2 distinct shapes).
+3. **`#1086` then `#1072`**, in that order and not the reverse.
