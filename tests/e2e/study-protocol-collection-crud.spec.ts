@@ -156,7 +156,11 @@ test.describe('organizations create+list (#325)', () => {
       data: { officialName: `e2e org invalid ${Date.now()}` },
     });
 
-    expect(response.status()).toBe(400);
+    // 422, not 400, since 6da2bf31 (#884) made model-validation failures
+    // answer 422 repo-wide. This assertion was left on the old status and has
+    // been red on every e2e gate run since 2026-09-02; the product is correct
+    // and the spec was stale.
+    expect(response.status()).toBe(422);
   });
 });
 
