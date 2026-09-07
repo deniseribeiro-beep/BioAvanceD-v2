@@ -134,6 +134,42 @@ const MEMBER_WRITE = /\b[A-Za-z_$][\w$]*\.([A-Za-z_$][\w$]*)\s*=[^=]/g;
 // #771's `{ [sortField]: order }` sites.
 const UNFOLLOWABLE_FILTER = /\.(?:find|findOne)\(\s*\{\s*\[/g;
 
+// #1088: the fifth collector's pattern. FILTER_SPEC requires a `{`
+// immediately after the paren, and FILTER_CALL_IDENTIFIER requires a bare
+// identifier followed by `,` or `)` -- so this codebase's own standard
+// scope-filter idiom,
+//
+//   .findOne(applyOrganizationScopeFilter({ sampleID: Number(id) }, scope, 'collectionSite'))
+//
+// satisfies NEITHER: the character after `(` is `a`, and
+// `applyOrganizationScopeFilter` is followed by `(`. The call site was
+// therefore absent from the population entirely -- not exempted, not
+// reported -- and the retired key rode along invisibly. The floor test below
+// cannot see that either: one dropped site against hundreds of slack.
+//
+// Keyed on the CALL-SITE SHAPE, not the helper's name, and that is the
+// load-bearing choice. #1088 measured 9 such sites across 6 files in src/,
+// under three different naming conventions (`resolveTemplateQuery`,
+// `buildSensorLookup`, `normalizeSampleIdFilter`) -- QUERY_BUILDER's
+// `build*Query` declaration pattern reaches only two of the six, and
+// `applyOrganizationScopeFilter` would have been a fourth convention. A
+// name-based detector loses that race by construction.
+//
+// This supersedes the reasoning at QUERY_BUILDER's comment below, which
+// declined to widen on the grounds that the shape was "not there yet". That
+// was true when written and is not any more.
+//
+// Only the helper's FIRST argument is read, and only when it is an object
+// literal. A helper handed a pre-built variable stays Band B -- the same
+// unresolvable case FILTER_CALL_IDENTIFIER already scopes out.
+const HELPER_WRAPPED_FILTER = /\.(?:find|findOne)\(\s*([A-Za-z_$][\w$]*)\s*\(\s*\{/g;
+
+// Coercions and constructors, which take a scalar rather than a filter. A
+// `new X({...})` cannot match HELPER_WRAPPED_FILTER anyway (there is no
+// `new` in the pattern), but these are named so the exclusion reads as a
+// decision rather than an accident of the regex.
+const NOT_A_FILTER_HELPER = new Set(['String', 'Number', 'parseInt', 'parseFloat', 'Boolean', 'ObjectId', 'Date']);
+
 // #847: FILTER_SPEC only sees a filter object literal written directly at
 // the `.find(`/`.findOne(` call site — it misses one built inside a helper
 // and `return`ed, which is exactly the shape #847 shipped as
@@ -404,6 +440,41 @@ function operatorFilterCallSites(content) {
     sites.push({
       start: match.index,
       end: closeIndex + 1,
+      keys: [...topKeys, ...operatorArrayKeys(body, SPEC_KEY)],
+      raw: content.slice(match.index, closeIndex + 1).replace(/\s+/g, ' ')
+    });
+  }
+
+  return sites;
+}
+
+// #1088: the fifth collector -- a filter literal passed through a helper
+// call at the `.find(`/`.findOne(` call site. Reports in the same shape a
+// FILTER_SPEC match is reported in, and reuses matchingBrace so the literal's
+// true extent is found however deeply it nests, exactly as the #854 pass
+// above does.
+function helperWrappedFilterSites(content) {
+  const sites = [];
+
+  for (const match of content.matchAll(HELPER_WRAPPED_FILTER)) {
+    if (NOT_A_FILTER_HELPER.has(match[1])) continue;
+
+    const openIndex = match.index + match[0].length; // just past the '{'
+    const closeIndex = matchingBrace(content, openIndex);
+    if (closeIndex === -1) continue;
+
+    const body = content.slice(openIndex, closeIndex);
+    const topKeys = keysIn(body, SPEC_KEY);
+    if (topKeys.length === 0) continue; // `helper({})` carries nothing to check
+
+    sites.push({
+      start: match.index,
+      end: closeIndex + 1,
+      // Blank the LITERAL, not the whole call: the helper's later arguments
+      // (a scope object, a field name) are ordinary code and must keep
+      // counting toward the written-field vocabulary.
+      blankStart: openIndex - 1,
+      blankEnd: closeIndex + 1,
       keys: [...topKeys, ...operatorArrayKeys(body, SPEC_KEY)],
       raw: content.slice(match.index, closeIndex + 1).replace(/\s+/g, ' ')
     });
@@ -775,6 +846,18 @@ function analyze(rawContent) {
       raw: site.raw
     });
     stripped = stripped.slice(0, site.start) + ' '.repeat(site.end - site.start) + stripped.slice(site.end);
+  }
+
+  // #1088: the helper-wrapped call-site pass. Same "blank it so it can't
+  // vouch for its own keys" rule as the other loops, aimed at the literal
+  // inside the helper call rather than at the whole call.
+  for (const site of helperWrappedFilterSites(content)) {
+    filterSites.push({
+      line: content.slice(0, site.start).split('\n').length,
+      keys: site.keys,
+      raw: site.raw
+    });
+    stripped = stripped.slice(0, site.blankStart) + ' '.repeat(site.blankEnd - site.blankStart) + stripped.slice(site.blankEnd);
   }
 
   // #847: the query-builder analogue of the loop above — same "blank it so
@@ -1489,5 +1572,125 @@ test('#788: every literal filter this guard cannot follow is a known one', () =>
     'These pass a computed key inside an otherwise-literal filter, so the '
       + 'key is unchecked by the guard above. Use a static key, or add the '
       + 'file to KNOWN with a note on why its keys are safe:\n  ' + unexpected.join('\n  ')
+  );
+});
+
+// #1088: the helper-wrapped call site. Two halves, because the shape splits
+// in two and only one half is parseable.
+//
+// HALF ONE -- the helper is handed an object LITERAL. That is this codebase's
+// standard scope-filter idiom, and helperWrappedFilterSites reads the keys
+// straight out of it. Pinned here on synthetic sources, because as of this
+// writing src/ contains ZERO instances: the idiom is what #1053/#1081/#1082
+// are actively adding, and the guard is meant to be ready before it lands
+// rather than after. A real-source assertion would be vacuous today and would
+// silently stay vacuous if the collector broke.
+test('#1088: a filter literal wrapped in a helper call is collected, not skipped', () => {
+  // The exact shape from #1088's body. Before the fifth collector this was
+  // absent from the population entirely -- not exempted, not reported.
+  const wrapped = [
+    'const doc = { participantId: id };',
+    'const found = await samples.findOne(applyOrganizationScopeFilter({ neverWrittenByCode: id }, scope, "collectionSite"));'
+  ].join('\n');
+
+  const offenders = offendersInSynthetic(wrapped);
+  assert.equal(offenders.length, 1, 'a helper-wrapped filter literal is invisible to the sweep again');
+  assert.match(offenders[0], /neverWrittenByCode/);
+
+  // The retired-key tier rides along too -- that is the leg #1082 would have
+  // dropped had it implemented its destination check as a scope-filtered
+  // query instead of a post-fetch check.
+  const retired = [
+    'const doc = { participantId: id };',
+    'const found = await samples.findOne(applyOrganizationScopeFilter({ patientId: id }, scope, "collectionSite"));'
+  ].join('\n');
+
+  const retiredOffenders = offendersInSynthetic(retired);
+  assert.equal(retiredOffenders.length, 1, 'a retired key rides invisibly through a helper wrapper');
+  assert.match(retiredOffenders[0], /patientId/);
+
+  // And the helper's LATER arguments stay ordinary code: only the literal is
+  // blanked, so a field written in a sibling argument still counts as written.
+  const onlyLiteralBlanked = [
+    'const doc = { collectionSite: site };',
+    'const found = await samples.findOne(applyOrganizationScopeFilter({ collectionSite: site }, scope, "collectionSite"));'
+  ].join('\n');
+
+  assert.deepEqual(
+    offendersInSynthetic(onlyLiteralBlanked),
+    [],
+    'blanking the whole helper call, rather than just its literal, would strip legitimate written fields'
+  );
+});
+
+// HALF TWO -- the helper is handed something that is NOT a literal
+// (buildParentIdQuery(parentIdField, rawId)). The keys live inside the
+// helper's own body, so there is nothing at the call site to parse: this is
+// the same Band B unresolvable case FILTER_CALL_IDENTIFIER already scopes
+// out, and #1088's direction 2 rather than direction 1.
+//
+// The point of this test is VISIBILITY, not parsing. #1088's finding was that
+// these sites are absent from the population with no "N sites skipped"
+// signal anywhere -- the floor test cannot see one dropped site against
+// hundreds of slack, and none of its three named anchor files is affected.
+// Enumerating them makes a new one a deliberate decision instead of a silent
+// absence.
+//
+// Keyed on file + helper NAME, deliberately not on line numbers: this file's
+// line-keyed RETIRED_KEY_EXEMPT entries have needed renumbering twice in a
+// single sitting (#875, #1082, #1087), and a churn-prone key trains readers
+// to update the entry without re-reading what it asserts.
+//
+// QUERY_BUILDER reaches two of these helpers by DECLARATION (build*Query), so
+// their keys are checked even though the call site is not: buildParentIdQuery
+// and buildWorkflowRunQuery. The other three are in no collector's population
+// at all, which is what makes this list worth having.
+const HELPER_WRAPPED_ANY = /\.(?:find|findOne)\(\s*([A-Za-z_$][\w$]*)\s*\(/g;
+
+test('#1088: every helper-wrapped filter whose argument is unresolvable is enumerated', () => {
+  const KNOWN = {
+    'controllers/createLinkedFileController.js:buildParentIdQuery': 'keys checked via QUERY_BUILDER',
+    'interface/routes/reportTemplates.routes.js:resolveTemplateQuery': 'UNCHECKED -- name does not match build*Query',
+    'interface/routes/workflow-run-file-link.routes.js:buildWorkflowRunQuery': 'keys checked via QUERY_BUILDER',
+    'services/SampleGraphValidator.js:normalizeSampleIdFilter': 'UNCHECKED -- name does not match build*Query',
+    'services/equipment-sensor-quarantine.service.js:buildSensorLookup': 'UNCHECKED -- name does not match build*Query'
+  };
+
+  const found = new Set();
+  for (const file of walk(BACKEND_SRC)) {
+    const content = blankComments(fs.readFileSync(file, 'utf8'));
+    for (const match of content.matchAll(HELPER_WRAPPED_ANY)) {
+      if (NOT_A_FILTER_HELPER.has(match[1])) continue;
+      // A literal first argument is HALF ONE's job, and is already collected.
+      const after = content.slice(match.index + match[0].length);
+      if (/^\s*\{/.test(after)) continue;
+      found.add(relative(file) + ':' + match[1]);
+    }
+  }
+
+  const unexpected = [...found].filter((key) => !(key in KNOWN)).sort();
+
+  assert.deepEqual(
+    unexpected,
+    [],
+    'A .find()/.findOne() whose filter is built by a helper call is invisible '
+      + 'to every collector in this file unless the helper is declared as '
+      + 'build<Something>Query. Pass the literal at the call site, rename the '
+      + 'helper to build<Something>Query, or add it to KNOWN with a note '
+      + 'saying why its keys are safe:\n  ' + unexpected.join('\n  ')
+  );
+
+  // And the mirror, which is the half that actually decays: an entry that
+  // stops being found is either a helper that moved or a detector that broke,
+  // and deleting it would make this guard pass by seeing less. Same discipline
+  // request-body-boundary.arch.test.js applies to its own exemptions.
+  const missing = Object.keys(KNOWN).filter((key) => !found.has(key)).sort();
+
+  assert.deepEqual(
+    missing,
+    [],
+    'These are enumerated but the sweep no longer finds them. Either the call '
+      + 'site moved (update KNOWN) or HELPER_WRAPPED_ANY stopped matching its '
+      + 'shape (fix the detector) -- do not just delete the entry:\n  ' + missing.join('\n  ')
   );
 });
