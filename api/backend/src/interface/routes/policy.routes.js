@@ -6,7 +6,23 @@ const logger = require('../../utils/logger');
 const PolicyModel = require('../../models/Policy');
 
 // CRUD de Políticas de Temperatura
-router.get('/', authenticate, async (req, res) => {
+// #1074: the three READS carried `authenticate` and nothing else, so the
+// read population was every authenticated user -- UsuarioExterno, whose only
+// seeded grant is viewReports, included -- while the three WRITES below
+// already carried viewTemperature. A policy row holds the thresholds
+// checkPolicyAndAlert compares a reading against, so this is RF009's
+// excursion detection being readable by anyone with an account.
+//
+// viewTemperature is the READ population's own code and needs no catalogue
+// change: its allowedActions are CRUD (rbac-catalog-seed.service.js:96), so
+// the #631 derived-action check passes for GET -> READ. And it costs nothing
+// in the UI -- usePolicies' only consumer is FacilityManagementPage, which
+// ProtectedRoute already limits to the three roles seeded with this code.
+//
+// The WRITE half of #1074 is deliberately NOT changed here: whether
+// rewriting an alert threshold should be a Coordenador-and-above capability
+// rather than a Tecnico one is a catalogue decision, not a defect.
+router.get('/', authenticate, requirePermission('viewTemperature'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -33,7 +49,8 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-router.get('/:id', authenticate, async (req, res) => {
+// #1074, as above.
+router.get('/:id', authenticate, requirePermission('viewTemperature'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -81,7 +98,8 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
-router.get('/:id/active-limit', authenticate, async (req, res) => {
+// #1074, as above.
+router.get('/:id/active-limit', authenticate, requirePermission('viewTemperature'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {

@@ -93,6 +93,91 @@ describe('GET /api/policies/:id', () => {
   });
 });
 
+// #1074: all three policy READS carried `authenticate` and nothing else,
+// while the three WRITES carried requirePermission('viewTemperature'). So the
+// write population was every role above UsuarioExterno and the read population
+// was EVERY authenticated user, UsuarioExterno included.
+//
+// It is not cosmetic: temperature.service.js#checkPolicyAndAlert resolves a
+// policy and reads minThreshold/maxThreshold off it to decide whether a
+// reading is an excursion, so these rows are the thresholds that decide
+// whether the cold chain reports failures at all (RF009 AC#4/AC#6).
+//
+// Gating the reads is backend-only. usePolicies has exactly one consumer,
+// FacilityManagementPage, which ProtectedRoute already restricts to
+// Administrador/Coordenador/Tecnico -- and those are precisely the three roles
+// seeded with viewTemperature (rbac-catalog-seed.service.js:41,46,51).
+// viewTemperature's allowedActions are CRUD (:96), so the #631 derived-action
+// check passes for GET -> READ with no catalogue change.
+describe('#1074: the three policy READS are permission-gated', () => {
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  function policiesCollection() {
+    return createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_POLICY),
+      find: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([FAKE_POLICY]),
+        sort: vi.fn().mockReturnThis(),
+        skip: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+        project: vi.fn().mockReturnThis(),
+      }),
+      countDocuments: vi.fn().mockResolvedValue(1),
+    });
+  }
+
+  it('GET / refuses an accessType 1 caller, who holds only viewReports', async () => {
+    app.locals.db = createDbMock({ policies: policiesCollection(), ...rbacFor(1) });
+
+    const res = await request(app)
+      .get('/api/policies')
+      .set('Authorization', `Bearer ${makeToken(1)}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /:id refuses an accessType 1 caller', async () => {
+    app.locals.db = createDbMock({ policies: policiesCollection(), ...rbacFor(1) });
+
+    const res = await request(app)
+      .get('/api/policies/policy-1')
+      .set('Authorization', `Bearer ${makeToken(1)}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /:id/active-limit refuses an accessType 1 caller', async () => {
+    app.locals.db = createDbMock({ policies: policiesCollection(), ...rbacFor(1) });
+
+    const res = await request(app)
+      .get('/api/policies/policy-1/active-limit')
+      .set('Authorization', `Bearer ${makeToken(1)}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  // CONTROL: green before and after. Tecnico holds viewTemperature and is the
+  // narrowest role that legitimately reads policies, so if the gate closed the
+  // route rather than scoping it, this is what would show it.
+  it('#1074 control: an accessType 2 caller, who holds viewTemperature, still reads the list', async () => {
+    app.locals.db = createDbMock({ policies: policiesCollection(), ...rbacFor(2) });
+
+    const res = await request(app)
+      .get('/api/policies')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  // CONTROL: the unauthenticated refusal must stay a 401, not become a 403.
+  it('#1074 control: no token is still 401, not 403', async () => {
+    const res = await request(app).get('/api/policies');
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('POST /api/policies', () => {
   beforeEach(() => { givenSession(); });
   afterEach(() => { vi.restoreAllMocks(); });
