@@ -6,7 +6,7 @@ const logger = require('../../utils/logger');
 const EquipmentModel = require('../../models/Equipment');
 const { generateUniqueEquipmentID } = require('../../utils/equipmentIDGenerator');
 const defaultQuarantineService = require('../../services/equipment-sensor-quarantine.service');
-const { applyOrganizationScopeFilter, isRecordInOrganizationScope, resolveOrganizationIdForCreate } = require('../../services/rbac-assignment.service');
+const { applyOrganizationScopeFilter, isRecordInOrganizationScope, resolveOrganizationIdForCreate, assertOrganizationFieldNotReparented } = require('../../services/rbac-assignment.service');
 const { isTransactionCapable } = require('../../utils/mongoTransaction');
 
 function createEquipmentValidationError(message, statusCode = 422) {
@@ -280,7 +280,13 @@ router.post('/', authenticate, requirePermission('manageStorageTopology'), requi
   }
 });
 
-router.put('/:id', authenticate, requirePermission('manageStorageTopology'), async (req, res) => {
+// #1081: requireOrganizationScope was on both GETs since #635 and on POST
+// since #1071, but not here or on DELETE -- so create was gated while update
+// and delete were not. It is load-bearing rather than decoration: the source
+// check below is written in this file's own guarded form, so without the
+// middleware req.organizationScope is undefined and the check silently
+// passes everything.
+router.put('/:id', authenticate, requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
   try {
     const quarantineService = req.app?.locals?.quarantineService || defaultQuarantineService;
     const db = req.app.locals.db;
@@ -346,6 +352,32 @@ router.put('/:id', authenticate, requirePermission('manageStorageTopology'), asy
         message: `Nenhum equipamento encontrado com o ID: ${req.params.id}`
       });
     }
+
+    // #1081 SOURCE check -- is the equipment I am updating mine? Deliberately
+    // AFTER the 404, mirroring GET /:id at the top of this file and
+    // sensor.controller.js's update: a record that does not exist 404s, and
+    // one that exists outside your scope 403s. The fetch this needs was
+    // already here; #1081's body claimed it was not, which was wrong.
+    if (req.organizationScope && !isRecordInOrganizationScope(foundEquipment, req.organizationScope, 'organizationId')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Equipamento fora do escopo organizacional do usuário'
+      });
+    }
+
+    // #1081 DESTINATION check -- am I moving it somewhere that is mine?
+    // assertOrganizationIdResolves above only asserts the Organization
+    // EXISTS, so naming a real organization you do not belong to passed it
+    // (the correction #1071 recorded). A global scope is unconstrained and
+    // an absent organizationId in the body is a no-op; both are handled
+    // inside the helper. It throws statusCode 403, which the catch below
+    // now maps -- previously anything but a 404 fell through to 400.
+    assertOrganizationFieldNotReparented(
+      req.organizationScope,
+      foundEquipment.organizationId,
+      req.body?.organizationId
+    );
 
     // #868: PUT was writing whatever it was handed. EquipmentModel.validate
     // is a whole-document validator, so it cannot be applied to the patch
@@ -502,6 +534,17 @@ router.put('/:id', authenticate, requirePermission('manageStorageTopology'), asy
         message: error.message
       });
     }
+    // #1081: assertOrganizationFieldNotReparented throws statusCode 403.
+    // Mapped explicitly rather than by honouring error.statusCode generally,
+    // for the reason sensor.controller.js:327-330 gives -- widening it would
+    // reclassify the validation errors that deliberately answer 422/400.
+    if (error.statusCode === 403) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: error.message
+      });
+    }
     return res.status(400).json({
       success: false,
       error: 'Erro ao atualizar equipamento',
@@ -510,7 +553,9 @@ router.put('/:id', authenticate, requirePermission('manageStorageTopology'), asy
   }
 });
 
-router.delete('/:id', authenticate, requirePermission('manageStorageTopology'), async (req, res) => {
+// #1081: same gap as PUT, and the unrecoverable half of it -- a re-parent
+// can be undone, a cross-organization delete cannot.
+router.delete('/:id', authenticate, requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -520,13 +565,17 @@ router.delete('/:id', authenticate, requirePermission('manageStorageTopology'), 
     // Tenta deletar por _id primeiro, depois por equipmentID
     let result = null;
     let deletedEquipment = null;
+    // #1081: the fetch and the delete used to be adjacent inside each
+    // branch, leaving nowhere to put a scope check. Resolving the query
+    // first and deleting once, below, is what makes room for it.
+    let deleteQuery = null;
     
     // Tenta como ObjectId (MongoDB _id)
     try {
       const objectId = new ObjectId(req.params.id);
       deletedEquipment = await equipmentCollection.findOne({ _id: objectId });
       if (deletedEquipment) {
-        result = await equipmentCollection.deleteOne({ _id: objectId });
+        deleteQuery = { _id: objectId };
       }
     } catch (err) {
       // Se não for ObjectId válido, tenta como equipmentID numérico
@@ -534,9 +583,24 @@ router.delete('/:id', authenticate, requirePermission('manageStorageTopology'), 
       if (!isNaN(equipmentID)) {
         deletedEquipment = await equipmentCollection.findOne({ equipmentID: equipmentID });
         if (deletedEquipment) {
-          result = await equipmentCollection.deleteOne({ equipmentID: equipmentID });
+          deleteQuery = { equipmentID: equipmentID };
         }
       }
+    }
+
+    // #1081 SOURCE check, between the fetch and the delete. Same
+    // 404-then-403 ordering as PUT and as GET /:id.
+    if (deletedEquipment && req.organizationScope
+      && !isRecordInOrganizationScope(deletedEquipment, req.organizationScope, 'organizationId')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Equipamento fora do escopo organizacional do usuário'
+      });
+    }
+
+    if (deleteQuery) {
+      result = await equipmentCollection.deleteOne(deleteQuery);
     }
 
     if (!result || result.deletedCount === 0) {

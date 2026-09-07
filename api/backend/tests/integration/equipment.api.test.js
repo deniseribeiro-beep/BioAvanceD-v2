@@ -245,6 +245,76 @@ describe('PUT /api/equipment/:id', () => {
     expect(equipment.updateOne).not.toHaveBeenCalled();
   });
 
+  // #1081: PUT and DELETE carried NO requireOrganizationScope, and neither
+  // handler called either scope primitive -- so an org-scoped
+  // manageStorageTopology holder could PUT any organization's equipment, and
+  // set organizationId to anything. Both GETs had been gated since #635 and
+  // POST since #1071, so create was gated while update and delete were not.
+  //
+  // makeToken(3) is the deciding fixture: Coordenador holds
+  // manageStorageTopology (so requirePermission passes) AND is org-scoped by
+  // buildRbacCollections to 'test-org-default' (so the scope check is not
+  // short-circuited the way accessType 4's global scope short-circuits it).
+  // Every existing PUT/DELETE case here authenticates as accessType 4, which
+  // is why none of them moved when this shipped.
+  it('#1081: returns 403 when the target equipment is outside the caller organizationScope', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ ...FAKE_EQ, organizationId: 'org-other' }),
+      updateOne,
+    });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, organizations: scopedOrganizations(), equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ equipmentDescription: 'Freezer principal' });
+
+    expect(res.status).toBe(403);
+    expect(updateOne).not.toHaveBeenCalled();
+  });
+
+  // The destination half. assertOrganizationIdResolves only asserts the
+  // Organization EXISTS -- naming a real organization you do not belong to
+  // passed it, which is the correction #1071 recorded and the reason this
+  // needs its own check rather than leaning on that one.
+  it('#1081: returns 403 when the update re-parents the equipment into another organization', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      updateOne,
+    });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, organizations: scopedOrganizations(), equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ organizationId: 'org-other' });
+
+    expect(res.status).toBe(403);
+    expect(updateOne).not.toHaveBeenCalled();
+  });
+
+  // CONTROL: same expected behaviour before and after. An org-scoped caller
+  // updating equipment INSIDE their own scope must still succeed, or the
+  // fix has closed the route rather than scoped it.
+  it('#1081 control: an org-scoped caller still updates equipment inside their own scope', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      updateOne,
+    });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, organizations: scopedOrganizations(), equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ equipmentDescription: 'Freezer principal' });
+
+    expect(res.status).toBe(200);
+    expect(updateOne).toHaveBeenCalled();
+  });
+
   it('updates equipment for admin', async () => {
     const coll = createCollectionMock({
       findOne: vi.fn().mockResolvedValue(FAKE_EQ),
@@ -828,6 +898,41 @@ describe('DELETE /api/equipment/:id', () => {
       .delete('/api/equipment/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(2)}`);
     expect(res.status).toBe(403);
+  });
+
+  // #1081: the DELETE is the unrecoverable half of the same gap -- a
+  // re-parent can be undone, a cross-organization delete cannot.
+  it('#1081: returns 403 when deleting equipment outside the caller organizationScope', async () => {
+    const deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ ...FAKE_EQ, organizationId: 'org-other' }),
+      deleteOne,
+    });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, organizations: scopedOrganizations(), equipment: coll });
+
+    const res = await request(app)
+      .delete('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(3)}`);
+
+    expect(res.status).toBe(403);
+    expect(deleteOne).not.toHaveBeenCalled();
+  });
+
+  // CONTROL: green before and after.
+  it('#1081 control: an org-scoped caller still deletes equipment inside their own scope', async () => {
+    const deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      deleteOne,
+    });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, organizations: scopedOrganizations(), equipment: coll });
+
+    const res = await request(app)
+      .delete('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(3)}`);
+
+    expect(res.status).toBe(200);
+    expect(deleteOne).toHaveBeenCalled();
   });
 
   it('deletes equipment for admin', async () => {

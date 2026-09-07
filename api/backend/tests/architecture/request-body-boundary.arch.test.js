@@ -181,13 +181,22 @@ const UPDATE_SPREAD_EXEMPT = new Map([
   // not cause. Two entries because the write happens twice, once inside a
   // transaction and once in the non-transactional fallback.
   // Both moved down one line by #951, which added an `isTransactionCapable`
-  // require at the top of the file, and down a further six by #1071, which
-  // added requireOrganizationScope to the POST plus its comment. The code and
-  // the reasoning are unchanged both times; only the line numbers moved,
-  // which is the "update the entry" case the companion test below names --
-  // not the "delete the exemption" one.
-  ['interface/routes/equipment.routes.js:394:updateData', 'validated (#868)'],
-  ['interface/routes/equipment.routes.js:423:updateData', 'validated (#868)'],
+  // require at the top of the file, down a further six by #1071, which added
+  // requireOrganizationScope to the POST plus its comment, and down 32 more by
+  // #1081, which added requireOrganizationScope to the PUT and DELETE plus the
+  // source and destination scope checks. The code and the reasoning are
+  // unchanged all three times; only the line numbers moved, which is the
+  // "update the entry" case the companion test below names -- not the "delete
+  // the exemption" one.
+  //
+  // #1081 note for whoever finally does the allowlist: at that point these
+  // two entries must be DELETED rather than renumbered, because an allowlist
+  // removes the body-spread shape the detector matches on -- the sanctioned
+  // removal case documented at the top of this map, which is what #875 did
+  // for master-data.routes.js and result.routes.js. Renumbering then would
+  // red this guard just as hard as deleting now would.
+  ['interface/routes/equipment.routes.js:426:updateData', 'validated (#868)'],
+  ['interface/routes/equipment.routes.js:455:updateData', 'validated (#868)'],
 ]);
 
 test('#839: no NEW update document is built by spreading a request body', () => {
