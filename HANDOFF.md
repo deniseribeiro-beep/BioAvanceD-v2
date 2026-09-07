@@ -4,7 +4,8 @@
 was given, so treat the session as CONTINUING.** Dennis asked to read the
 handoff and pick the next *group* of issues. I picked the encryption chain
 the previous note recommended first — **#1085 → #1086 → #1072** — and all
-three shipped, in dependency order, three commits.
+three shipped, in dependency order. Then #1097, filed by this sitting and
+worked by it. Four commits.
 
 ## What shipped: the whole encryption chain
 
@@ -13,6 +14,14 @@ three shipped, in dependency order, three commits.
 | `0c40f7dd` | **#1085** | encryption posture validated at boot — warn always, fatal in production |
 | `d5982b07` | **#1086** | decrypt-only previous-key slot, so `ENCRYPTION_KEY` rotates without a code change |
 | `4fe66bee` | **#1072** | MFA seed encrypted at rest, `mfaSecret` → `mfaSecretCiphertext` |
+| `fc87d790` | **#1097** | `CONSENT_SECRET` read lazily; boot refusal moved into `server.js`'s guard |
+
+**#1097 was filed by this sitting and then worked by it** (the absorption
+rule — a sitting works the issues it files). `[ran it]` after it landed, all
+**55** modules under `src/routes/` + `src/interface/routes/` load cleanly
+with every secret-shaped env var stripped, so the module-scope-throw class is
+now empty at the route layer. The class is `[not established]` for
+`src/services/`, which cannot kill the boot the same way.
 
 All three directions were pre-settled by Dennis on 2026-09-07, so this was
 implementation with no design round trips — the previous note's central claim,
@@ -61,8 +70,9 @@ all — both pass the gate, dev with a loud warning if its key is blank.
 Query it — `gh issue list --state open` (116 open at rotation). What a query
 cannot carry:
 
-- **#1085, #1086, #1072 all closed.** Filed this sitting: **#1097, #1098,
-  #1099, #1100, #1101**, plus **dyeallpies-skills-pack #812, #813, #814**.
+- **#1085, #1086, #1072 and #1097 all closed.** Filed this sitting: **#1097
+  (worked and closed), #1098, #1099, #1100, #1101**, plus
+  **dyeallpies-skills-pack #812, #813, #814**.
 - **#1099, #1100 and #1101 are the direct follow-ups on the chain**, and they
   are genuinely independent of each other:
   - **#1099** — a rotation cannot repair the BLIND INDEXES. `hmacBlindIndex`
@@ -78,12 +88,19 @@ cannot carry:
   - **#1101** — the previous-key slot's documented retirement step ("rewrite
     the old envelopes, then empty the slot") has **no tooling behind it**.
     Explicitly invited by #1086's own body.
-- **#1097 is unrelated to the chain and cheap.** `eConsent.js:17` throws on a
-  missing `CONSENT_SECRET` at MODULE LOAD, so the backend dies with a bare
-  Node stack trace before `server.js:40` installs the #1040 handlers and
-  before any of its critical-variable guards. Found by running a real boot
-  probe. `[ran it]` The conventions skill already names this class as needing
-  lazy init; the *service* half was done, this *route* half was not.
+- **#1097 CLOSED (`fc87d790`)** — filed and worked in the same sitting. It
+  was unrelated to the chain: `eConsent.js` threw on a missing
+  `CONSENT_SECRET` at MODULE LOAD, during `require("./app")` on `server.js:3`,
+  so the backend died with a bare Node loader stack trace before the #1040
+  handlers were installed — and, firing first, it MASKED #972's and #1085's
+  boot guards. Found by running a real boot probe for #1085. The remedy was
+  the one `bioavanced-v2-conventions` already names for the class (lazy init),
+  and `fhir-import-staging.service.js:326` already had the pattern.
+  **One consequence worth knowing:** the two token handlers answer 401 from a
+  catch wrapping the whole body, so the secret is resolved *before* it —
+  otherwise a config fault reads as an invalid token. It is deliberately not
+  hoisted outside a `try`, because #829 records that an uncaught throw here
+  becomes a fatal unhandled rejection.
 - **#1098** — `startServer()` is never invoked by any test. `server.js` IS
   loaded (`process-fatal-handlers.1040.test.js:39`) but that suite
   deliberately keeps the boot sequence from running, so four deliberate
@@ -98,9 +115,9 @@ cannot carry:
   #1072 sweep **75 named / 73 ran / 1605 passed** (the two unrun are
   `tests/factories/*.factory.js` — fixture helpers, not suites; `[ran it]`
   neither mentions MFA). `npm run test:architecture` **124/124** after each.
-  Frontend typecheck exit 0; `NewUserPage.test.tsx` 4/4.
-- **Can-it-fail probes on all three, executed-count checked both runs**
-  (#804): 45/45 with 13 red, 88/88 with 13 red, 248/248 with 28 red.
+  Frontend typecheck exit 0; `NewUserPage.test.tsx` 4/4. #1097 sweep 47 / 996.
+- **Can-it-fail probes on all four, executed-count checked both runs**
+  (#804): 45/45 with 13 red, 88/88 with 13 red, 248/248 with 28 red, 49/49 with 4 red.
 - **Docker NOT run this sitting, deliberately** — end-loaded gate, and this
   was a three-slice queue. Dennis noted Docker is on; the daemon is up and
   **nothing was started**. `[ran it]` at rotation: **zero containers**
@@ -147,13 +164,10 @@ by name. In rough order of value:
    generated. #1099 is the one with a real correctness consequence once the
    plaintext fallbacks retire; #1100 needs a direction call before it can be
    worked.
-2. **#1097** — small, self-contained, and `[read it]` the remedy shape is
-   already settled by precedent (#972's critical-variable block plus lazy
-   init in the route).
-3. **#1098** — pins four existing postures and is the natural home for the
+2. **#1098** — pins four existing postures and is the natural home for the
    one #1085 guard that a runtime probe rather than a test currently covers.
-4. **#1094 + #1096 together**, unchanged from the previous note and still
+3. **#1094 + #1096 together**, unchanged from the previous note and still
    untouched — same two files (`auditLogger.js`, `log.service.js`). #1096
    carries an availability trade that is Denise's call.
-5. **#1092**, unchanged across three notes now. One query against a populated
+4. **#1092**, unchanged across three notes now. One query against a populated
    database answers it.
