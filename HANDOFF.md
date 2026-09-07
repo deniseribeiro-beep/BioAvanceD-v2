@@ -1,123 +1,159 @@
 # HANDOFF
 
-**Written 2026-09-07, twentieth queue sitting. INTERIM — no end signal was
-given, so treat the session as CONTINUING.** Dennis asked to read the handoff
-and pick the next groups of issues. I proposed three groups plus the previous
-note's own recommendation; he chose **"just #1093 first"**. That shipped —
-one commit, one issue closed, three filed here plus one on the pack.
+**Written 2026-09-07, twenty-first queue sitting. INTERIM — no end signal
+was given, so treat the session as CONTINUING.** Dennis asked to read the
+handoff and pick the next *group* of issues. I picked the encryption chain
+the previous note recommended first — **#1085 → #1086 → #1072** — and all
+three shipped, in dependency order, three commits.
 
-## What shipped: #1093, and its open question is now answered
+## What shipped: the whole encryption chain
 
-`d77cde86` — `POST /api/iot/telemetry` now audits its accepted ingest.
-**Direction 1** (mirror #1080's `auditLogger` call), but not for the reason
-the issue gave. #1093 left `[not established]` *whether the canonical
-requirements treat MQTT and HTTP telemetry as one ingestion surface or two*.
+| commit | issue | what |
+|---|---|---|
+| `0c40f7dd` | **#1085** | encryption posture validated at boot — warn always, fatal in production |
+| `d5982b07` | **#1086** | decrypt-only previous-key slot, so `ENCRYPTION_KEY` rotates without a code change |
+| `4fe66bee` | **#1072** | MFA seed encrypted at rest, `mfaSecret` → `mfaSecretCiphertext` |
 
-**They answer it, and it is worth carrying forward as a fact rather than a
-re-derivation.** `[read it]` `dict-02_DICIONARIO.md:762`, **P1X-0331**:
-`AuditEvent.source` is a **1..1 Core** field whose vocabulary is
-*"api, frontend, worker, mqtt, scheduler ou system"*. One audit surface with
-a transport discriminator — not two trails. That also kills #1093's own
-suggested `source: 'http'`: an HTTP route is **`api`**, already in the
-vocabulary.
+All three directions were pre-settled by Dennis on 2026-09-07, so this was
+implementation with no design round trips — the previous note's central claim,
+and it held.
 
-`[read it]` And direction 2's stated advantage does not hold:
-`integrityCheckService#buildMerkleForDate` folds **every** `logs` row into the
-same daily Merkle root as the `mqtt_ingestion_audit` leaves
-(`allLeaves = leaves.concat(biomarkerLeaves, mqttLeaves)`), so an
-`auditLogger` row is already tamper-evident with no second chained
-collection.
+## The two facts from this work worth carrying forward
 
-## Three direction decisions are now SETTLED — this is the thing a query cannot carry
+**1. The rename IS the security fix in #1072, not a cosmetic half of it.**
+Every enrolment presence guard now tests `user.mfaSecretCiphertext` — a field
+on the document — so gating on a *decrypted* value became structurally
+impossible rather than merely discouraged. `decryptValue` returns null on any
+failure, and `setupMFAFirstLogin`'s write is unconditional, so a guard keyed
+on a decrypt result would let an unauthenticated caller replace an enrolled
+user's secret. `readMfaSecret()` in `auth.service.js` is the single decrypt
+point and carries the full argument in its docblock. **Do not "simplify" a
+guard onto a decrypted value.**
 
-Dennis chose these in chat this sitting. **All three issues are still OPEN and
-unworked**; the direction is recorded as a comment on each, so don't
-re-litigate:
+**2. `[ran it]` `speakeasy.totp.verify({ secret: null })` returns `false`, it
+does not throw** — for `null`, `undefined` and `''`. That is what makes
+decrypting only at the three verify sites fail-closed, and it is the fact the
+whole #1072 design rests on. Re-measure it if speakeasy is ever upgraded.
 
-- **#1085** → direction 3, **warn always, refuse in production**.
-- **#1086** → direction 1, **previous-key slot only** (`ENCRYPTION_KEY_PREVIOUS`
-  / `_PREVIOUS_ID`, `isActive: false`). No re-encryption migration.
-- **#1072** → direction 1, **encrypt AND rename to `mfaSecretCiphertext`
-  together**. **#1086 must land first** — its slot is what stops a later
-  rotation turning every enrolled secret into a `decryptValue` `null`, which
-  #1072's body traces into the two unauthenticated first-login guards.
+**3. `validateEncryptionAndHalt` is deliberately NOT a caller of
+`validateAndHalt`.** Wiring the latter into the boot path would newly make an
+invalid *Redis* config fatal for the backend in production, inverting the
+posture #977 documents in both `server.js` and `worker.js`. The docblock says
+so; change both ends or neither.
 
-That is a ready-to-work chain of three with no forks left in it.
+## The consequence a next session must not mistake for a regression
+
+**A production stack built from `.env.production.example` no longer boots.**
+`[ran it]` that template ships `ENCRYPTION_KEY` blank, and #1085 direction 3
+makes that fatal when `NODE_ENV=production` — the backend and the import
+worker both exit 1 on a `[SECURITY]` line. **That is the direction working.**
+The fix is to mint a key, not to relax the gate; `ALLOW_UNENCRYPTED_FIELD_STORAGE=true`
+is the explicit loud opt-out. Written up on #978, whose item 1 (no tracked
+production secrets generator) is now load-bearing rather than merely a
+repeatability concern.
+
+`[read it]` The other two stacks are unaffected: `compose.test.yml:26` sets a
+real key under `NODE_ENV: test`, and `compose.dev.yml` sets no `NODE_ENV` at
+all — both pass the gate, dev with a loud warning if its key is blank.
 
 ## Issue state
 
-Query it — `gh issue list --state open`. What a query cannot carry:
+Query it — `gh issue list --state open` (116 open at rotation). What a query
+cannot carry:
 
-- **#1093 closed.** Filed this sitting: **#1094, #1095, #1096**, plus
-  **dyeallpies-skills-pack#809**.
-- **#1095 inverts a test if it is resolved in favour of auditing.**
-  `iot.controller.test.js`'s `'#1093: an invalid payload is refused before
-  anything is audited'` deliberately pins today's behaviour and says so
-  in-file. That is the intended signal, not a regression.
-- **#1096 is the sharpest of the three filed.** `[read it]`
-  `log.service#createLog` **rethrows** on a failed primary `logs` insert, on
-  purpose — and `auditLogger.log`'s outer catch converts it to a bare
-  `console.error`. The repo already escalates the *narrower* failure (the
-  `audit_events` mirror) to a critical `AUDIT_TRAIL_WRITE_FAILURE`, with an
-  in-code comment saying a warn line alone hid it for ~4 weeks (#369/#394).
-  The escalation guards the copy and not the original.
-- **#1094 and #1096 are both about `auditLogger`/`log.service`, a shared
-  helper on every audited path.** They are a natural pair and neither is
-  route-specific.
+- **#1085, #1086, #1072 all closed.** Filed this sitting: **#1097, #1098,
+  #1099, #1100, #1101**, plus **dyeallpies-skills-pack #812, #813, #814**.
+- **#1099, #1100 and #1101 are the direct follow-ups on the chain**, and they
+  are genuinely independent of each other:
+  - **#1099** — a rotation cannot repair the BLIND INDEXES. `hmacBlindIndex`
+    keys off `getActiveKey()` and stores a bare hex string with **no keyId**,
+    so #1086's slot has nothing to dispatch on. Masked today only by the `$or`
+    plaintext fallback that #574/#1072 exist to remove. This is the sharpest
+    of the three.
+  - **#1100** — one rotation shape is still a silent null: rotating
+    `ENCRYPTION_KEY` while KEEPING `ENCRYPTION_KEY_ID`. `[ran it]` measured.
+    The boot gate reports `[]` and correctly cannot see it, so **warning
+    harder is not available** — the remedy is a decrypt fall-through or
+    documentation, and the trade is Denise's/Dennis's.
+  - **#1101** — the previous-key slot's documented retirement step ("rewrite
+    the old envelopes, then empty the slot") has **no tooling behind it**.
+    Explicitly invited by #1086's own body.
+- **#1097 is unrelated to the chain and cheap.** `eConsent.js:17` throws on a
+  missing `CONSENT_SECRET` at MODULE LOAD, so the backend dies with a bare
+  Node stack trace before `server.js:40` installs the #1040 handlers and
+  before any of its critical-variable guards. Found by running a real boot
+  probe. `[ran it]` The conventions skill already names this class as needing
+  lazy init; the *service* half was done, this *route* half was not.
+- **#1098** — `startServer()` is never invoked by any test. `server.js` IS
+  loaded (`process-fatal-handlers.1040.test.js:39`) but that suite
+  deliberately keeps the boot sequence from running, so four deliberate
+  postures (#972, #977, #1040, #1085) sit unpinned. `worker.js` got
+  `worker.entrypoint.test.js` for exactly this reason. `RUN_SERVER_IN_TEST=1`
+  already exists and nothing uses it.
 
 ## Gates
 
-- **Targeted native only. `[ran it]`** `iot.controller.test.js` 23/23;
-  two-hop consumer sweep **84 derived / 80 ran / 2329 passed / exit 0** (the
-  four unrun are two `tests/architecture/` files, a generator and
-  `vitest.setup.js` — none are vitest suites); `npm run test:architecture`
-  **124/124**.
-- **Docker NOT run this sitting, deliberately** — the gate order is
-  end-loaded and this was one slice. Dennis noted Docker is on; nothing was
-  started. `[ran it]` at cleanup: **zero containers** (`docker ps -a` empty),
-  so the previous note's teardown holds. **33 images / 7.73GB and 19 volumes /
-  919MB retained, build cache 0** — none created this sitting, all deliberately
-  left so the next gate does not rebuild from scratch.
-- **Full backend native suite NOT run this sitting.** The previous note's
-  464 files / 8681 tests stands as the last measurement, not as a fresh one.
+- **Targeted native only, as the end-loaded order requires.** `[ran it]`
+  per iteration: #1085 sweep 10 files / 180 passed; #1086 sweep 18 / 342;
+  #1072 sweep **75 named / 73 ran / 1605 passed** (the two unrun are
+  `tests/factories/*.factory.js` — fixture helpers, not suites; `[ran it]`
+  neither mentions MFA). `npm run test:architecture` **124/124** after each.
+  Frontend typecheck exit 0; `NewUserPage.test.tsx` 4/4.
+- **Can-it-fail probes on all three, executed-count checked both runs**
+  (#804): 45/45 with 13 red, 88/88 with 13 red, 248/248 with 28 red.
+- **Docker NOT run this sitting, deliberately** — end-loaded gate, and this
+  was a three-slice queue. Dennis noted Docker is on; the daemon is up and
+  **nothing was started**. `[ran it]` at rotation: **zero containers**
+  (`docker ps -a` empty). **33 images / 7.73GB, 19 volumes / 919MB, build
+  cache 0** — unchanged from the previous note, none created this sitting.
+- **Full backend native suite NOT run this sitting.** The 464 files / 8681
+  tests figure is still the last measurement, not a fresh one.
 
 ## The judgment a query cannot carry
 
-- **An 84-file consumer sweep exceeds the Bash tool's 120s foreground
-  ceiling** and gets auto-backgrounded. `[ran it]` this sitting. Not a
-  failure — but read your own redirect when it lands, not the harness's task
-  `.output`.
-- **`full-suite-guard` reads the consumer-list file at PreToolUse, i.e.
-  BEFORE your command runs.** So writing the list and running the sweep in
-  one compound command blocks every time — the file does not exist yet.
-  `[ran it]`, cost one retry. Filed as pack#809; it is the third distinct
-  way the derived-list idiom composes into a block (after #758 and #796).
-- **`iot.controller.js` and its test are both CRLF; `mqtt-ingestion-audit.service.js`
-  is too.** Detect per file, as always — the EOL-aware bounded-anchor script
-  shape worked cleanly here for all three edits.
-- **The iot unit test harness drives the controller through
-  `createRequire` + `require.cache`, not vitest's module graph.** A
-  `vi.spyOn` on the `auditLogger` singleton required at the test file's top
-  level therefore IS the object the controller's lazy `require` gets —
-  `vi.resetModules()` does not clear Node's own cache. That is why the
-  reproduction worked without mocking the module.
-- **`resourceType` for this route is `TelemetryReading`, not `Temperature`.**
-  `[read it]` `contracts/canonical/v1/index.js:218` already maps
-  `POST /api/iot/telemetry` to it (ELM-0357..0365). The sibling route's
-  `'Temperature'` names the Mongo record *that* route creates.
+- **A 75-file consumer sweep DOES fit in a foreground Bash call** with
+  `timeout: 600000` — `[ran it]` this sitting, it completed. The previous
+  note's "84 files exceeds the 120s ceiling and gets auto-backgrounded" is
+  about the *default* timeout, not a hard limit. Raising the timeout is the
+  simpler move than backgrounding when you want the result in-line.
+- **Writing the consumer list in a PRIOR tool call worked cleanly** — pack
+  #809's fix is live and the idiom is now: write the list, then a separate
+  call doing `wc -l < list && npx vitest run $(cat list)`. Split the
+  `tests/architecture/` entries out first; vitest drops them silently.
+- **`node --check <script>` before running a generated patch script.** A
+  JSDoc backtick inside the script's template literal is a `SyntaxError`
+  pointing at the *script's* line number, which reads like a logic bug. Cost
+  one retry; filed as pack #813.
+- **A SCRIPT written to bare `/tmp` resolves its own relative `require()`
+  against `/tmp`.** The argv token translates fine and the run still dies.
+  The `/tmp` reminder's "only Bash reads it back" blessing does not apply to
+  an executable. Cost one retry; filed as pack #814.
+- **Line endings stayed per-file and mattered:** `auth.service.js`,
+  `User.js`, `user.routes.js`, `keyRegistry.js`, `validateEnv.js` and
+  `.env.docker.example` are **CRLF**; `.env.production.example`, the
+  integration tests and `auth.service.processLogin.unit.test.js` are **LF**.
+  The EOL-detecting bounded-anchor script shape handled all of it; detect per
+  file, never per repo.
+- **`gh issue create` on the PACK repo needs `--label`** — the guard blocks
+  without one and the whole body must be re-sent. The project repo's habit of
+  always passing one is why this only bit on the pack.
 
 ## Recommended next
 
-Dennis said "**first**", so more was expected; nothing is queued by name.
-In dependency order, and the first item is unusually cheap right now:
+Dennis named a *group*, and the group is finished; nothing further is queued
+by name. In rough order of value:
 
-1. **#1085 → #1086 → #1072**, in that order. All three directions are
-   settled above, so this is implementation with no design round trips.
-   `[unverified]` as a sizing claim — I read the issues but did not open
-   `keyRegistry.js` or `auth.service.js` this sitting.
-2. **#1094 + #1096 together** — same two files (`auditLogger.js`,
-   `log.service.js`), both filed an hour ago, context is cheapest now.
-   #1096 carries a real availability trade (fail-closed machine ingest) that
-   is Denise's call; #1094 does not.
-3. **#1092**, unchanged from the previous two notes and still untouched. One
-   query against a populated database answers it.
+1. **#1099**, then **#1100/#1101** — the three follow-ups this chain
+   generated. #1099 is the one with a real correctness consequence once the
+   plaintext fallbacks retire; #1100 needs a direction call before it can be
+   worked.
+2. **#1097** — small, self-contained, and `[read it]` the remedy shape is
+   already settled by precedent (#972's critical-variable block plus lazy
+   init in the route).
+3. **#1098** — pins four existing postures and is the natural home for the
+   one #1085 guard that a runtime probe rather than a test currently covers.
+4. **#1094 + #1096 together**, unchanged from the previous note and still
+   untouched — same two files (`auditLogger.js`, `log.service.js`). #1096
+   carries an availability trade that is Denise's call.
+5. **#1092**, unchanged across three notes now. One query against a populated
+   database answers it.
