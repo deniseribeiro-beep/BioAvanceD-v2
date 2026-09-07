@@ -10,11 +10,63 @@ const { requireRole, requirePermission } = require('../infrastructure/middleware
 const consentController = require('../controllers/consent.controller');
 const participantIdentityService = require('../services/participantIdentity.service');
 const logger = require('../utils/logger');
-const CONSENT_SECRET = String(process.env.CONSENT_SECRET || '').trim();
 const CONSENT_EXPIRATION = 60 * 60 * 2; // 2h
 
-if (!CONSENT_SECRET) {
-  throw new Error('CONSENT_SECRET é obrigatório. O servidor não pode inicializar sem esse segredo.');
+/**
+ * #1097: read the secret at CALL time, not at module load.
+ *
+ * This file used to do the read and the throw at module scope. server.js:3
+ * requires ./app, app.js mounts this router, so that throw fired before
+ * server.js installed its #1040 uncaughtException handler and before
+ * startServer()'s critical-variable guards ran -- a missing secret killed the
+ * backend with a bare Node loader stack trace, unattributed, and masked every
+ * other boot guard by firing first.
+ *
+ * The refusal is still absolute; it just happens somewhere it can be reported.
+ * server.js now names CONSENT_SECRET alongside MONGO_URI/JWT_SECRET/
+ * USER_ANON_SALT, so a misconfigured stack still refuses to start -- loudly,
+ * through the logger, and without hiding its siblings.
+ *
+ * Same shape as fhir-import-staging.service.js's getConsentSecret(), which
+ * already read this variable this way.
+ */
+function getConsentSecret() {
+  const secret = String(process.env.CONSENT_SECRET || '').trim();
+  if (!secret) {
+    const error = new Error(
+      'CONSENT_SECRET e obrigatorio para fluxos de consentimento e nao esta configurado.'
+    );
+    error.statusCode = 500;
+    throw error;
+  }
+  return secret;
+}
+
+/**
+ * #1097: a MISSING SECRET is a server misconfiguration, not a bad token.
+ *
+ * The two token-consuming handlers below answer 401 'Token invalido ou
+ * expirado' from a catch that wraps the whole body. Reading the secret
+ * inside that catch would launder a config fault into an authentication
+ * failure -- the operator would chase a token bug forever. So the read
+ * happens first, in its own try, and reports 500.
+ *
+ * Deliberately not hoisted OUTSIDE a try: #829 records that an uncaught
+ * throw in a handler here becomes an unhandled rejection, which this
+ * process treats as fatal (server.js:41). One request would take the API
+ * down -- the exact hazard #829 closed.
+ */
+function resolveConsentSecretOr500(res) {
+  try {
+    return getConsentSecret();
+  } catch (configError) {
+    logger.error('Erro de configuracao no fluxo de consentimento:', configError);
+    res.status(500).json({
+      error: 'Erro de configuracao do servidor',
+      message: configError.message,
+    });
+    return null;
+  }
 }
 
 // Gera link seguro para o paciente
@@ -37,7 +89,7 @@ router.post('/generate-link', authenticate, requirePermission('createPatient'), 
   // (/validate/:token, /update, and the FHIR import consent pair) all already
   // had one; this was an omission, not a pattern.
   try {
-    const token = jwt.sign({ participantId }, CONSENT_SECRET, { expiresIn: CONSENT_EXPIRATION });
+    const token = jwt.sign({ participantId }, getConsentSecret(), { expiresIn: CONSENT_EXPIRATION });
     // #829: the link is built from the service's own resolver rather than a
     // second, more lenient reading of the same variable. The route used to
     // default to 'http://localhost:5173' while getFrontendUrl() threw on an
@@ -60,9 +112,14 @@ router.post('/generate-link', authenticate, requirePermission('createPatient'), 
 // ativo (para renderizar as permissões granulares dinamicamente) e as
 // respostas já registradas no Consent ativo do paciente, se houver.
 router.get('/validate/:token', async (req, res) => {
+  // #1097: resolved before the 401 catch below, so a missing secret reports
+  // a 500 configuration error instead of an invalid-token answer.
+  const consentSecret = resolveConsentSecretOr500(res);
+  if (!consentSecret) return;
+
   try {
     const { token } = req.params;
-    const payload = jwt.verify(token, CONSENT_SECRET);
+    const payload = jwt.verify(token, consentSecret);
     const db = req.app.locals.db;
     const patient = await db.collection('patients').findOne({ participantId: payload.participantId });
     if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
@@ -105,9 +162,14 @@ router.get('/validate/:token', async (req, res) => {
 // Atualiza consentimento (aceite ou revogação)
 router.post('/update', async (req, res) => {
   const { token, consents } = req.body;
+  // #1097: same reason as /validate/:token -- a config fault must not be
+  // reported as an invalid token.
+  const consentSecret = resolveConsentSecretOr500(res);
+  if (!consentSecret) return;
+
   let participantId;
   try {
-    participantId = jwt.verify(token, CONSENT_SECRET).participantId;
+    participantId = jwt.verify(token, consentSecret).participantId;
   } catch (err) {
     return res.status(401).json({ error: 'Token inválido ou expirado' });
   }

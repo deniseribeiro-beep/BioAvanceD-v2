@@ -63,8 +63,14 @@ async function startServer() {
     // fechado em vez de cair num literal público -- mas o erro apareceria no
     // primeiro registro de usuário, não no boot. Aqui ele é alto e imediato,
     // como MONGO_URI e JWT_SECRET.
-    if (!env.MONGO_URI || !env.JWT_SECRET || !env.USER_ANON_SALT) {
-      logger.error("Variáveis críticas ausentes: MONGO_URI, JWT_SECRET e USER_ANON_SALT são obrigatórias.");
+    // #1097: CONSENT_SECRET joins the criticals. It was already mandatory --
+    // eConsent.js threw on it at MODULE LOAD, which fired during
+    // require("./app") on line 3, before the #1040 handlers were installed and
+    // before this guard ran. The refusal is unchanged; what changes is that it
+    // is now logged, attributed, and no longer masks its siblings by aborting
+    // the boot before they are evaluated.
+    if (!env.MONGO_URI || !env.JWT_SECRET || !env.USER_ANON_SALT || !String(env.CONSENT_SECRET || '').trim()) {
+      logger.error("Variáveis críticas ausentes: MONGO_URI, JWT_SECRET, USER_ANON_SALT e CONSENT_SECRET são obrigatórias.");
       process.exit(1);
     }
 

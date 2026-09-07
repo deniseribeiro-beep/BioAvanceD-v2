@@ -66,6 +66,10 @@ module.exports = {
   // Auth
   JWT_SECRET: process.env.JWT_SECRET,
   JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
+  // #1097: read by server.js's critical-variable guard. eConsent.js and
+  // fhir-import-staging.service.js both read process.env directly at call
+  // time; this declaration is what lets the BOOT check name it.
+  CONSENT_SECRET: process.env.CONSENT_SECRET,
   ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
   ENCRYPTION_KEY_ID: process.env.ENCRYPTION_KEY_ID,
   AUDIT_MERKLE_SIGN_KEY_ID: process.env.AUDIT_MERKLE_SIGN_KEY_ID,
