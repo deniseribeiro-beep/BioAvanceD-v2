@@ -154,12 +154,27 @@ function isComplianceGraphOwnedAction(action) {
     && action.reasonCodes.every((code) => String(code).startsWith('COMPLIANCE_GRAPH_'));
 }
 
+// #1090: the canonical specimenId tier was missing entirely -- a non-ObjectId
+// argument went straight to the RETIRED sampleID key (filter-keys.arch.test.js's
+// RETIRED_FILTER_KEYS), so a caller handing this a canonical specimenId matched
+// nothing. Per #788 that is worse than an empty result: a filter on a key the
+// document lacks matches every other document that also lacks it, and findOne
+// returns an arbitrary one.
+//
+// Not hypothetical -- sampleComplianceSync.service.js:26 calls this with
+// `String(sample._id || sample.specimenId || '')`, so any sample reaching it
+// without an _id is looked up by specimenId against the sampleID key.
+//
+// Mirrors the _id -> specimenId -> legacy sampleID fallback result.routes.js
+// (#628) and sample.routes.js (#857) already use. The legacy leg is kept
+// deliberately; #804 owns sampleID's eventual retirement.
 function normalizeSampleIdFilter(sampleId) {
   if (ObjectId.isValid(sampleId)) {
     return { _id: new ObjectId(sampleId) };
   }
 
-  return { sampleID: normalizeString(sampleId) };
+  const raw = normalizeString(sampleId);
+  return { $or: [{ specimenId: raw }, { sampleID: raw }] };
 }
 
 class SampleGraphValidator {

@@ -351,6 +351,51 @@ describe('SampleGraphValidator', () => {
     expect(failReport.suggestedStatus).toBe('BLOCKED');
   });
 
+  // #1090: normalizeSampleIdFilter had two tiers -- _id, then the RETIRED
+  // sampleID key (filter-keys.arch.test.js's RETIRED_FILTER_KEYS). A
+  // non-ObjectId argument therefore never queried the canonical specimenId at
+  // all, and per #788 a filter on a key the document lacks matches every other
+  // document that also lacks it. Reachable in production:
+  // sampleComplianceSync.service.js:26 calls this with
+  // `String(sample._id || sample.specimenId || '')`.
+  //
+  // Every other test in this file passes `sample._id`, so none of them
+  // exercises the non-ObjectId branch at all.
+  describe('#1090: identifier resolution tiers', () => {
+    it('queries the canonical specimenId for a non-ObjectId identifier, not only the retired sampleID', async () => {
+      samplesCollection.findOne.mockResolvedValue(null);
+
+      await expect(validator.validateSampleCompliance('SPX-CANONICAL-1'))
+        .rejects.toThrow('Amostra não encontrada para validação de conformidade');
+
+      const filter = samplesCollection.findOne.mock.calls[0][0];
+      expect(JSON.stringify(filter)).toContain('specimenId');
+    });
+
+    // Control: green before and after the fix. The legacy tier is kept
+    // deliberately -- #804 owns sampleID's eventual retirement -- so a fix
+    // that dropped it to satisfy the case above would be wrong.
+    it('keeps the legacy sampleID leg for a non-ObjectId identifier', async () => {
+      samplesCollection.findOne.mockResolvedValue(null);
+
+      await expect(validator.validateSampleCompliance('S-0001'))
+        .rejects.toThrow('Amostra não encontrada para validação de conformidade');
+
+      const filter = samplesCollection.findOne.mock.calls[0][0];
+      expect(JSON.stringify(filter)).toContain('sampleID');
+    });
+
+    // Control: green before and after the fix.
+    it('still resolves an ObjectId identifier by _id', async () => {
+      samplesCollection.findOne.mockResolvedValue(null);
+
+      await expect(validator.validateSampleCompliance('507f1f77bcf86cd799439011'))
+        .rejects.toThrow('Amostra não encontrada para validação de conformidade');
+
+      expect(samplesCollection.findOne.mock.calls[0][0]).toHaveProperty('_id');
+    });
+  });
+
   describe('#532: writes specimenStatus/QuarantineAction instead of release_status', () => {
     function mockActiveAction(reasonCodes) {
       quarantineActionsCollection.find.mockReturnValue({
