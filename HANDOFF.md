@@ -1,127 +1,120 @@
 # HANDOFF
 
-**Written 2026-09-07, seventeenth queue sitting. INTERIM — no end signal
-was given, so treat the session as CONTINUING.** Dennis asked for "the next
-groups of issues, Docker is on." I picked two groups — secrets-at-rest and
-the #1053 org-scope children — and **shipped five, filed six**.
+**Written 2026-09-07, eighteenth queue sitting. INTERIM — no end signal was
+given, so treat the session as CONTINUING.** Dennis asked to read the handoff,
+pick the next group of issues, and said Docker was on. I took the #1053
+org-scope family — **#1082, #1087, #1088** — shipped four commits, closed two
+issues, and filed four.
 
-**NEITHER GATE RAN THIS SITTING. That is the single most important line
-here.** Docker was on and I did not use it. Five substantive commits have
-landed since the last green gate at `01791b44`, so the previous handoff's
-"both gates green" is now a statement about an older tree, not this one.
+**BOTH GATES RAN. That is the headline, and it reverses the previous note.**
+The last sitting's "NEITHER GATE RAN" is discharged: everything that was
+unverified then is verified now.
 
-What DID run, every iteration:
+## Gate results
 
-- **Targeted consumer sets, derived two-hop and run bare** — 71 / 42 / 46 /
-  39 / 27 files across the five iterations, all exit 0.
-- **`npm run test:architecture` five times — 122/122, exit 0 each time**,
-  including after the two commits that shifted arch-guard line keys.
-- **Nothing left running.** No container was started; no image was built.
+Native, all at the final tree, all exit 0:
 
-Re-derive all of it rather than trusting this paragraph.
+- **Backend vitest 463 files / 8663 tests** (`tests/unit tests/integration
+  tests/compliance`). The +12 over the previous 8651 is exactly this
+  sitting's new cases.
+- **`npm run test:architecture` 124/124** (was 122; #1088 added two).
+- **Frontend 32 files / 262 tests**, `typecheck` (both halves), `lint` 469
+  files.
 
----
+**Docker e2e gate: 205 passed / 18 failed.** Full `compose.test.yml` stack,
+`backend-app-test` rebuilt (`--build`; it is build-not-mount and the image
+timestamp was confirmed newer than the last backend commit), 17-service
+reference-data chain all `Exited (0)`, `playwright-runner` stopped,
+`--workers=1`.
+
+**All 18 failures are pre-existing and none is from this sitting's commits.**
+`[ran it]` `git merge-base --is-ancestor` puts all three root causes before
+`01791b44`. One is now fixed; 17 are **#1091**.
+
+## The correction that matters most
+
+**The previous note's "the last green gate at `01791b44`" is FALSE for the
+e2e half, and the next session must not use it as a baseline.** `[ran it]`
+`f5c671c7` and `956f3b85` (#1054's machine-credential gate, 2026-09-04) are
+both ancestors of `01791b44`, and they make 17 `interop-monitoring.spec.ts`
+tests 403 by construction — `compose.test.yml` sets no
+`TELEMETRY_INGEST_SECRET` and no spec sends the header. The e2e suite cannot
+have been green at that commit. Filed as **#1091** with both halves of the
+fix. `[ran it]` CI has no e2e job at all (no `playwright`/`test:e2e` in
+either workflow file), so only the local gate can ever catch this class.
 
 ## Repo state
 
-- Branch `feature/docker-e2e-backend-integration`, clean and matching
-  origin. `main` untouched, no PR. `git status -sb` and `git log` are
-  authoritative.
-- **Five substantive commits**, last is the `#1074` policy-read gate.
-- **One new file:** `api/backend/src/utils/tokenHash.js`.
-- **One new env key:** `ALLOW_UNENCRYPTED_FIELD_STORAGE`, documented in both
-  shipped templates. No new npm scripts, no new dependencies, no compose
-  changes.
+- Branch `feature/docker-e2e-backend-integration`, clean and matching origin.
+  `main` untouched, no PR. `git status -sb` is authoritative.
+- **Four commits.** Last substantive is the stale-e2e-assertion fix.
+- **No new files, no new env keys, no new npm scripts, no dependency or
+  compose changes.**
+- **Nothing left running.** Stack torn down with `down --remove-orphans`;
+  `docker ps -a` empty. Named volumes kept (they are meant to persist).
 
-## What shipped
+## Issue state
 
-Query the board rather than trusting a list: `gh issue list --state open`.
+Query it — `gh issue list --state open`. What a query cannot carry:
 
-`#1083` `#1084` `#1078` closed. `#1081` and `#1074` had their load-bearing
-halves shipped and are **deliberately left open** — each has a comment
-saying which half and why the remainder is a decision rather than a defect.
+- **#1082 and #1088 closed.** #1087 had its org-scope half shipped and is
+  **deliberately open** on its real question.
+- **#1087's open half is a capability decision for Denise**, not a defect:
+  may a Técnico and an external user read the equipment inventory? Gating the
+  two list routes on `manageStorageTopology` breaks Técnico and
+  UsuarioExterno across three views, two of them `ALL_ROLES`, and it fails
+  *silently* because `useEquipment` swallows the error into an empty list.
+  Do not "finish" #1087 without that answer.
 
 ## The judgment a query cannot carry
 
-- **`#1084` did not exist when the sitting started.** Research into #1078
-  turned up that `resetPassword`'s "já utilizado" guard is short-circuited
-  by its own `&&`: clearing `passwordResetToken` on use is what disables the
-  check that refuses a used token, so the same reset JWT was replayable for
-  the rest of its 1h–24h life. `[ran it]` Fixed and closed the same sitting.
-- **The previous handoff's `#1072` claim was WRONG, and I corrected it on
-  the issue.** It recorded the MFA fail-open as being in the login path.
-  `[read it]` `processLogin` gates the challenge on `user.mfaEnabled` alone
-  — a boolean no encryption touches — so it is **fail-CLOSED**. The real
-  fail-open is `auth.service.js:789` and `:920`, on two **unauthenticated**
-  first-login endpoints, and the outcome is worse: a keyless or rotated
-  stack lets a password-only caller **overwrite** the victim's secret at
-  `:852` and take a session. Do not re-derive from the old framing.
-- **`#1072` gained a hard prerequisite, `#1086`.** `[read it]`
-  `keyRegistry.getKeyEntries()` can hold exactly one key, so any rotation
-  turns every existing envelope into a `decryptValue` null — which is what
-  makes the fail-open above reachable by an operator action.
-- **`#1081`'s body was factually wrong on its central premise.** It claimed
-  the equipment PUT "has no fetch at all" and built its not-a-copy-paste
-  argument on it. `[read it]` It fetches at `:311` and 404s at `:341-348`.
-  Corrected on the issue.
-- **`#1087` flipped on evidence.** `[ran it]` Gating the equipment GETs on
-  `manageStorageTopology` would break **Técnico and UsuarioExterno** across
-  three views, two of which are `ALL_ROLES`. `GET /:id` has zero frontend
-  callers and is free to gate. The e2e cost is zero, which is why no test
-  would have told you.
-- **`#1085` is worse than filed.** `[read it]` `generate-env-docker-secrets.sh`
-  refuses to overwrite an existing `.env.docker`, and the documented setup
-  step is `cp .env.docker.example .env.docker` — so the generator is
-  **unreachable** to anyone following the README. `[ran it]` And
-  `validateAllEnv`/`validateAndHalt` have **no production caller**, so a
-  boot warning added there today would print nothing.
-
-## Conventions this sitting relied on / established
-
-- **The CRLF tape.** This tree is CRLF. An anchored replacement script
-  written with `\n` anchors matches **zero** times and the bounded-count
-  assert catches it — but only if you wrote one. Normalise anchors to the
-  file's dominant EOL. `[ran it]` cost one round trip on the first script.
-- **Bound every replacement — it paid twice.** Once on the CRLF miss above,
-  and once when a `catch`-block anchor in `equipment.routes.js` matched
-  **2** (POST's catch is verbatim identical to PUT's). An unbounded replace
-  would have silently edited both.
-- **A derived consumer list can contain a `node --test` file, and vitest
-  drops it at exit 0.** `[ran it]` 47 paths named, **46** reported — the
-  missing one was `tests/architecture/rbac-actions.arch.test.js`. Compare
-  the counts in the same command every time; this is pack#772 and it fired
-  again here.
-- **Write the consumer list to the SESSION SCRATCHPAD, not `/tmp`.**
-  `full-suite-guard` reads the named file itself, and a native Node process
-  resolves bare `/tmp` as `C:\tmp`. `[ran it]` the run was blocked until the
-  list moved. Test-output redirects to `/tmp` are fine — only Bash reads
-  those.
-- **Long `gh` bodies go through `Write` + `--body-file`.** `[ran it]` an
-  inline heredoc comment hit the ~8.1 KB command-assembly ceiling (#665).
-
-## Pile-up
-
-**3 issues closed and 2 partially shipped, against 6 filed** — `#1084`
-through `#1089`. **The queue grew.** Agent slots were used throughout (7
-read-only research agents, never above the cap of 2 concurrent), and the
-research repeatedly earned its keep by closing issues' own
-`[not established]` claims — which is this repo's documented
-highest-value research shape.
-
-**No `rabbit-hole` conversion is claimed.** `#1082` is unblocked and
-undelegable-but-doable; **I chose to stop** rather than start a five-route
-authorization edit I could not verify to the standard the other four got.
-That is a choice, not a blocker, and it is said plainly here for that
-reason.
+- **#1088's direction 1, implemented exactly as the issue specified, is
+  VACUOUS on its own.** `[ran it]` population 511 before and after — all nine
+  measured sites pass non-literal arguments, so a literal-only detector
+  matches none of them. It shipped anyway (the idiom is what #1053's children
+  are adding) plus a second half that enumerates the shapes actually present.
+  **The can-it-fail probe passed cleanly while the detector was inert** —
+  filed against the pack as dyeallpies-skills-pack#797.
+- **Reading the three helpers #1088's new list marks `UNCHECKED` immediately
+  found a real one: #1090.** `normalizeSampleIdFilter` returns
+  `{ sampleID: ... }` — a `RETIRED_FILTER_KEYS` member — unexempted and
+  invisible. It also skips the canonical `specimenId` tier entirely, unlike
+  the three exempted siblings.
+- **#1092 records a consequence of #1082, not a defect in it:** an `amostras`
+  row with no `collectionSite` is now unwritable through all three
+  destination-checked result routes for every non-Administrador. Correct
+  fail-closed behaviour; **`[not established]`** whether legacy rows lack the
+  field, which is the whole question.
+- **"This tree is CRLF" is per-file, not repo-wide.** `[ran it]`
+  `result.routes.js` and both integration test files are **LF** — the
+  previous note's CRLF tape did not apply. Detect per file; don't assume
+  either way.
+- **Bounding every replacement paid twice again.** `const fileType =
+  getResultFileType(file.originalname);` matches **2** (multer's own
+  `fileFilter` carries the identical line), and `results:
+  createCollectionMock()` matches **9**. Both caught before anything was
+  written.
+- **A can-it-fail probe leaves residue that reds a later run.** The #1082
+  probe's ungated upload really does write a file, the failing assertion
+  skips the trailing `rmSync`, and the next full-file run inherits it. A test
+  asserting on `storage/` contents must clear the directory *before* the
+  request, not only after.
+- **Two line-keyed arch guards shifted, and they behave differently.**
+  `filter-keys` has no companion "still found" assertion, so a stale entry is
+  harmless there and the red arrives via the main test;
+  `request-body-boundary` *does* have one and fails loudly. Both renumbered.
 
 ## Recommended next
 
 **Dennis named no successor**, so nothing is queued by him. In dependency
 order, from what this sitting established:
 
-1. **The gates.** Five unverified commits is the largest outstanding risk,
-   and Docker is on.
-2. **`#1082`** — its comment now carries a complete, per-route
-   implementable plan, including two corrections a first reading would get
-   wrong and the measured test cost (13 fixtures, 2 distinct shapes).
-3. **`#1086` then `#1072`**, in that order and not the reverse.
+1. **#1091** — it is the only reason the e2e gate is not green, it is fully
+   diagnosed with both halves of the fix named, and until it lands every
+   future gate run costs an investigation to re-clear the same 17.
+2. **#1090** — small, self-contained, and #1088's new guard already marks the
+   spot. Needs one caller trace to decide between its three directions.
+3. **#1092** — one database query answers it; it either closes or becomes a
+   backfill.
+4. **#1086 then #1072**, in that order and not the reverse — unchanged from
+   the previous note, still untouched.
