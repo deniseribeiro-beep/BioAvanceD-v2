@@ -74,8 +74,10 @@ Query it — `gh issue list --state open`. What a query cannot carry:
   **124/124**.
 - **Docker NOT run this sitting, deliberately** — the gate order is
   end-loaded and this was one slice. Dennis noted Docker is on; nothing was
-  started, and `docker ps` was not checked, so treat the stack's state as
-  **unknown** rather than as the previous note's torn-down end state.
+  started. `[ran it]` at cleanup: **zero containers** (`docker ps -a` empty),
+  so the previous note's teardown holds. **33 images / 7.73GB and 19 volumes /
+  919MB retained, build cache 0** — none created this sitting, all deliberately
+  left so the next gate does not rebuild from scratch.
 - **Full backend native suite NOT run this sitting.** The previous note's
   464 files / 8681 tests stands as the last measurement, not as a fresh one.
 
