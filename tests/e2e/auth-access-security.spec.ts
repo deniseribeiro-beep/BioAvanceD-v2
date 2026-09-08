@@ -605,10 +605,19 @@ test.describe('Security policy management (RF014) — real backend', () => {
       // requireMFA is one of security.service.js's own criticalPaths, so
       // this isn't just "some audit event fired" (assertAuditEventRecorded
       // below already proves that generically) but specifically a
-      // severity=critical SecurityConfig entry.
+      // severity=critical SecurityConfiguration entry.
+      //
+      // #1121: this queried resourceType=SecurityConfig until 4a51a916
+      // (#1116) renamed the last writer to the canonical dict-02 spelling.
+      // log.service.js:202-214 matches resourceType/entity EXACTLY, and
+      // auditLogger writes both columns from the same value, so the old
+      // spelling matched zero rows and this assertion could only fail.
+      // ENTITY_MAP maps /api/security to SecurityConfiguration too (#1115,
+      // reached at runtime as of #1119), so both the explicit row and the
+      // automatic one now answer to this name.
       await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
       const criticalLogs = await request.get(
-        `${apiBaseURL}/api/logs?resourceType=SecurityConfig&severity=critical&limit=20`,
+        `${apiBaseURL}/api/logs?resourceType=SecurityConfiguration&severity=critical&limit=20`,
         { headers: { Authorization: `Bearer ${admin.token}` } }
       );
       expect(criticalLogs.ok()).toBeTruthy();
