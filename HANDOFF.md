@@ -1,173 +1,160 @@
 # HANDOFF
 
-**Written 2026-09-07, twenty-first queue sitting. INTERIM — no end signal
+**Written 2026-09-07, twenty-second queue sitting. INTERIM — no end signal
 was given, so treat the session as CONTINUING.** Dennis asked to read the
-handoff and pick the next *group* of issues. I picked the encryption chain
-the previous note recommended first — **#1085 → #1086 → #1072** — and all
-three shipped, in dependency order. Then #1097, filed by this sitting and
-worked by it. Four commits.
+handoff and pick the next *group* of issues, and said Docker was on. I took
+the previous note's recommendation #1 — the three encryption-rotation
+follow-ups **#1099, #1100, #1101** — and all three shipped. Then the
+end-loaded gate ran, Docker included. Three commits.
 
-## What shipped: the whole encryption chain
+## What shipped: the rotation chain's follow-ups
 
 | commit | issue | what |
 |---|---|---|
-| `0c40f7dd` | **#1085** | encryption posture validated at boot — warn always, fatal in production |
-| `d5982b07` | **#1086** | decrypt-only previous-key slot, so `ENCRYPTION_KEY` rotates without a code change |
-| `4fe66bee` | **#1072** | MFA seed encrypted at rest, `mfaSecret` → `mfaSecretCiphertext` |
-| `fc87d790` | **#1097** | `CONSENT_SECRET` read lazily; boot refusal moved into `server.js`'s guard |
+| `07320216` | **#1100** | `decryptValue` falls through to the previous key when a resolved `keyId` fails |
+| `fa0069a7` | **#1099** | blind indexes matched under EVERY registered key, via `$in` |
+| `584ed3c5` | **#1101** | the templates stop promising a retirement step nothing implements |
 
-**#1097 was filed by this sitting and then worked by it** (the absorption
-rule — a sitting works the issues it files). `[ran it]` after it landed, all
-**55** modules under `src/routes/` + `src/interface/routes/` load cleanly
-with every secret-shaped env var stripped, so the module-scope-throw class is
-now empty at the route layer. The class is `[not established]` for
-`src/services/`, which cannot kill the boot the same way.
+**Dennis handed all three direction calls back** ("what do you think is
+best?") rather than picking. All three were then settled from the source in
+the same sitting — see "The judgment a query cannot carry" below, which is
+the load-bearing lesson of this sitting.
 
-All three directions were pre-settled by Dennis on 2026-09-07, so this was
-implementation with no design round trips — the previous note's central claim,
-and it held.
+## The one thing a next session must not undo
 
-## The two facts from this work worth carrying forward
+**#1099 and #1100 are the same idea — "try the keys you actually have" —
+applied to the two artefacts `fieldEncryption.js` produces.** After them the
+blind index and the envelope behave *identically* under rotation: both
+survive while `ENCRYPTION_KEY_PREVIOUS` is populated, both stop matching once
+it is emptied. That symmetry is the point, and #1101's template text now
+documents the consequence. Don't "optimise" one half back to active-key-only.
 
-**1. The rename IS the security fix in #1072, not a cosmetic half of it.**
-Every enrolment presence guard now tests `user.mfaSecretCiphertext` — a field
-on the document — so gating on a *decrypted* value became structurally
-impossible rather than merely discouraged. `decryptValue` returns null on any
-failure, and `setupMFAFirstLogin`'s write is unconditional, so a guard keyed
-on a decrypt result would let an unauthenticated caller replace an enrolled
-user's secret. `readMfaSecret()` in `auth.service.js` is the single decrypt
-point and carries the full argument in its docblock. **Do not "simplify" a
-guard onto a decrypted value.**
+- **#1100** — an UNKNOWN `keyId` deliberately still fails closed on its warn.
+  The silent case was the id that *resolves*, to the wrong key. A control
+  test pins this; do not widen that branch.
+- **#1099** — **WRITES stay active-key only** (`encryptIdentityFields` still
+  calls `computeBlindIndex`). Only queries fan out, via
+  `computeBlindIndexCandidates`. Do not make writes multi-key.
 
-**2. `[ran it]` `speakeasy.totp.verify({ secret: null })` returns `false`, it
-does not throw** — for `null`, `undefined` and `''`. That is what makes
-decrypting only at the three verify sites fail-closed, and it is the fact the
-whole #1072 design rests on. Re-measure it if speakeasy is ever upgraded.
-
-**3. `validateEncryptionAndHalt` is deliberately NOT a caller of
-`validateAndHalt`.** Wiring the latter into the boot path would newly make an
-invalid *Redis* config fatal for the backend in production, inverting the
-posture #977 documents in both `server.js` and `worker.js`. The docblock says
-so; change both ends or neither.
-
-## The consequence a next session must not mistake for a regression
-
-**A production stack built from `.env.production.example` no longer boots.**
-`[ran it]` that template ships `ENCRYPTION_KEY` blank, and #1085 direction 3
-makes that fatal when `NODE_ENV=production` — the backend and the import
-worker both exit 1 on a `[SECURITY]` line. **That is the direction working.**
-The fix is to mint a key, not to relax the gate; `ALLOW_UNENCRYPTED_FIELD_STORAGE=true`
-is the explicit loud opt-out. Written up on #978, whose item 1 (no tracked
-production secrets generator) is now load-bearing rather than merely a
-repeatability concern.
-
-`[read it]` The other two stacks are unaffected: `compose.test.yml:26` sets a
-real key under `NODE_ENV: test`, and `compose.dev.yml` sets no `NODE_ENV` at
-all — both pass the gate, dev with a loud warning if its key is blank.
+**`[ran it]` the #1036/#952 CPU-amplification precedent does NOT transfer to
+#1100**, and that is what decided it. `[read it]` #1036's own body: what it
+refused was *"a bcrypt round per unauthenticated request"* — attacker-
+triggerable, unbounded in rate, deliberately slow per unit. `decryptValue`'s
+loop is bounded at **two** keys by configuration, fires only on a decrypt that
+already returned `null`, and is triggered by stored data rather than request
+volume. Re-measure only if `getFallbackKeys` ever stops being bounded by the
+registry.
 
 ## Issue state
 
-Query it — `gh issue list --state open` (116 open at rotation). What a query
+Query it — `gh issue list --state open` (114 open at rotation). What a query
 cannot carry:
 
-- **#1085, #1086, #1072 and #1097 all closed.** Filed this sitting: **#1097
-  (worked and closed), #1098, #1099, #1100, #1101**, plus
-  **dyeallpies-skills-pack #812, #813, #814**.
-- **#1099, #1100 and #1101 are the direct follow-ups on the chain**, and they
-  are genuinely independent of each other:
-  - **#1099** — a rotation cannot repair the BLIND INDEXES. `hmacBlindIndex`
-    keys off `getActiveKey()` and stores a bare hex string with **no keyId**,
-    so #1086's slot has nothing to dispatch on. Masked today only by the `$or`
-    plaintext fallback that #574/#1072 exist to remove. This is the sharpest
-    of the three.
-  - **#1100** — one rotation shape is still a silent null: rotating
-    `ENCRYPTION_KEY` while KEEPING `ENCRYPTION_KEY_ID`. `[ran it]` measured.
-    The boot gate reports `[]` and correctly cannot see it, so **warning
-    harder is not available** — the remedy is a decrypt fall-through or
-    documentation, and the trade is Denise's/Dennis's.
-  - **#1101** — the previous-key slot's documented retirement step ("rewrite
-    the old envelopes, then empty the slot") has **no tooling behind it**.
-    Explicitly invited by #1086's own body.
-- **#1097 CLOSED (`fc87d790`)** — filed and worked in the same sitting. It
-  was unrelated to the chain: `eConsent.js` threw on a missing
-  `CONSENT_SECRET` at MODULE LOAD, during `require("./app")` on `server.js:3`,
-  so the backend died with a bare Node loader stack trace before the #1040
-  handlers were installed — and, firing first, it MASKED #972's and #1085's
-  boot guards. Found by running a real boot probe for #1085. The remedy was
-  the one `bioavanced-v2-conventions` already names for the class (lazy init),
-  and `fhir-import-staging.service.js:326` already had the pattern.
-  **One consequence worth knowing:** the two token handlers answer 401 from a
-  catch wrapping the whole body, so the secret is resolved *before* it —
-  otherwise a config fault reads as an invalid token. It is deliberately not
-  hoisted outside a `try`, because #829 records that an uncaught throw here
-  becomes a fatal unhandled rejection.
-- **#1098** — `startServer()` is never invoked by any test. `server.js` IS
-  loaded (`process-fatal-handlers.1040.test.js:39`) but that suite
-  deliberately keeps the boot sequence from running, so four deliberate
-  postures (#972, #977, #1040, #1085) sit unpinned. `worker.js` got
-  `worker.entrypoint.test.js` for exactly this reason. `RUN_SERVER_IN_TEST=1`
-  already exists and nothing uses it.
+- **#1099, #1100, #1101 all closed.** Filed this sitting: **#1102, #1103**,
+  plus dyeallpies-skills-pack **#816, #817, #818, #819**.
+- **#1102** — `identityDocumentHash`/`birthDateHash` have **no Mongo index
+  anywhere**, and `participantIdentities` is absent from `create-db.js`
+  entirely (no model file either — it is a raw-driver collection). Distinct
+  from #941 (declared-but-unbuilt Mongoose indexes — there is no declaration
+  here to build) and #971 (the *unique* index for the dedup race). **This is
+  the most workable of the two filed**: direction 2, a hand-rolled
+  ensure-index on the `sampleIndexes.js`/`collectionResolver.js:48` precedent
+  #936 established, needs no design round trip. **I chose to stop on it** to
+  run the gate instead — not blocked.
+- **#1103** — no re-encryption tooling and no encrypted-field inventory.
+  Deliberately not built: no deployed data (#362/#682), so it would be
+  written for zero rows. Two measurements in its body are the useful part:
+  - `[ran it]` `encryptValue` has **SIX** production call sites, not the four
+    #1101 recorded — #1072's two `mfaSecretCiphertext` writes in
+    `auth.service.js` landed in `4fe66bee`, the sitting immediately before.
+    **A hand-listed inventory drifted 50% in one sitting.**
+  - `[ran it]` `encryptionKeyVersion` is written by
+    `participantIdentity.service.js:50` **only**. Five of six sites leave no
+    worklist marker, so a rewrite cannot be scoped by query anywhere but
+    `participantIdentities`. This settles #1101's `[not established]`.
 
-## Gates
+## Gates — ALL GREEN, Docker included
 
-- **Targeted native only, as the end-loaded order requires.** `[ran it]`
-  per iteration: #1085 sweep 10 files / 180 passed; #1086 sweep 18 / 342;
-  #1072 sweep **75 named / 73 ran / 1605 passed** (the two unrun are
-  `tests/factories/*.factory.js` — fixture helpers, not suites; `[ran it]`
-  neither mentions MFA). `npm run test:architecture` **124/124** after each.
-  Frontend typecheck exit 0; `NewUserPage.test.tsx` 4/4. #1097 sweep 47 / 996.
-- **Can-it-fail probes on all four, executed-count checked both runs**
-  (#804): 45/45 with 13 red, 88/88 with 13 red, 248/248 with 28 red, 49/49 with 4 red.
-- **Docker NOT run this sitting, deliberately** — end-loaded gate, and this
-  was a three-slice queue. Dennis noted Docker is on; the daemon is up and
-  **nothing was started**. `[ran it]` at rotation: **zero containers**
-  (`docker ps -a` empty). **33 images / 7.73GB, 19 volumes / 919MB, build
-  cache 0** — unchanged from the previous note, none created this sitting.
-- **Full backend native suite NOT run this sitting.** The 464 files / 8681
-  tests figure is still the last measurement, not a fresh one.
+Run once at the end, as the end-loaded order requires:
+
+- **Full backend native suite: `[ran it]` 465 files / 8754 tests, 0 failures,
+  exit 0.** Supersedes the previous note's 464/8681. Backgrounded — it is
+  past the 600s foreground ceiling.
+- **`npm run test:architecture` 124/124** after every iteration.
+- **Docker e2e: `[ran it]` 223/223 passed, `--workers=1`, 2.0 minutes, zero
+  failures.** Recipe as the `docker-workflow` overlay documents it, with
+  `--build` (mandatory — `api/backend/src` was touched). All 12 core services
+  healthy, `mongo-rs-init-test` + `admin-bootstrap-test` + all 17 bootstrap
+  chain services `Exited (0)`, nothing restarting.
+- **Per-iteration consumer sweeps:** #1100 18 files / 535; #1099 51 files /
+  1751; #1101 4 files / 116.
+- **Can-it-fail probes, executed-count checked both runs (#804):** #1100
+  22/22 with 1 red; #1099 **102/102 with 13 red across all five changed
+  files**, all three query sites red independently (#682).
+
+**Stack is DOWN and cleaned.** `[ran it]` at rotation: **zero containers**,
+33 images / 8.697GB, 26 volumes / 928.9MB, **build cache 0**. `builder prune
+-af` reclaimed 1.048GB — note `system df` had reported only 433MB, the exact
+gap `-af` exists to close. `playwright-report/`, `test-results/`, the
+scratchpad and every `/tmp` redirect target were removed.
+
+**Not done, needs Dennis:** 21 anonymous Docker volumes remain and only ~7
+are this sitting's; `docker volume prune` would take the other 14 too, so it
+was left alone rather than guessed at.
 
 ## The judgment a query cannot carry
 
-- **A 75-file consumer sweep DOES fit in a foreground Bash call** with
-  `timeout: 600000` — `[ran it]` this sitting, it completed. The previous
-  note's "84 files exceeds the 120s ceiling and gets auto-backgrounded" is
-  about the *default* timeout, not a hard limit. Raising the timeout is the
-  simpler move than backgrounding when you want the result in-line.
-- **Writing the consumer list in a PRIOR tool call worked cleanly** — pack
-  #809's fix is live and the idiom is now: write the list, then a separate
-  call doing `wc -l < list && npx vitest run $(cat list)`. Split the
-  `tests/architecture/` entries out first; vitest drops them silently.
-- **`node --check <script>` before running a generated patch script.** A
-  JSDoc backtick inside the script's template literal is a `SyntaxError`
-  pointing at the *script's* line number, which reads like a logic bug. Cost
-  one retry; filed as pack #813.
-- **A SCRIPT written to bare `/tmp` resolves its own relative `require()`
-  against `/tmp`.** The argv token translates fine and the run still dies.
-  The `/tmp` reminder's "only Bash reads it back" blessing does not apply to
-  an executable. Cost one retry; filed as pack #814.
-- **Line endings stayed per-file and mattered:** `auth.service.js`,
-  `User.js`, `user.routes.js`, `keyRegistry.js`, `validateEnv.js` and
-  `.env.docker.example` are **CRLF**; `.env.production.example`, the
-  integration tests and `auth.service.processLogin.unit.test.js` are **LF**.
-  The EOL-detecting bounded-anchor script shape handled all of it; detect per
-  file, never per repo.
-- **`gh issue create` on the PACK repo needs `--label`** — the guard blocks
-  without one and the whole body must be re-sent. The project repo's habit of
-  always passing one is why this only bit on the pack.
+- **The central lesson: an issue body's own "this is the owner's call" is a
+  CLAIM, and it is the one claim class no skill tells you to re-verify.** All
+  three issues said some variant of it; I inherited that and asked Dennis,
+  who handed all three back; all three then fell to one re-trace each. These
+  bodies are unusually well-graded (`[ran it]`, `[read it]`,
+  `[not established]` throughout), which is exactly what made the single
+  UNGRADED sentence read as settled. Filed as pack **#816**. **Next session:
+  re-run the trace before inheriting a deferral.**
+- **#1099's cost estimate in its own body was wrong in our favour.** It
+  costed direction 1 as "two fields plus every query site"; `[ran it]` all
+  three query sites *and* the write path funnel through one
+  `computeBlindIndex`, and `PatientIdentityService.js:6`'s
+  `identityCryptoService` **is** `participantIdentity.service` under another
+  name. No schema migration was needed.
+- **`[ran it]` a multi-grep sweep chained with `&&` silently drops every
+  later search when an earlier grep legitimately matches nothing** (exit 1 is
+  grep's correct answer for no-match). It cost me the search that found the
+  three tests pinning the filter shape I was changing. **Use `;`.** Filed as
+  pack **#817** — distinct from #675/#760/#770, all of which are about a
+  command that *failed*.
+- **`fix-bugs`' inert-first split (#781) is scoped to statically-typed
+  languages but is needed identically in JS**: a missing export throws
+  `TypeError`, which #676 rejects as a setup-shaped red. `[ran it]` landing
+  `hmacBlindIndexCandidates` returning `[active]` first gave a behavioural
+  red naming my assertion instead. Pack **#818**.
+- **Line endings stayed per-file and mattered again, twice in one script:**
+  `intakeWizard.js` is **LF** while `fieldEncryption.js`,
+  `participantIdentity.service.js`, `import.service.js` and
+  `PatientIdentityService.js` are CRLF; `.env.docker.example` is CRLF and
+  `.env.production.example` is LF. Detect per file, never per repo.
+- **`node --check <script> && node <script>` before every generated patch
+  script**, and put replacement payloads in their own plain files rather than
+  a JS template literal — the payloads here contained backticks and
+  `${keyId}` outright.
 
 ## Recommended next
 
-Dennis named a *group*, and the group is finished; nothing further is queued
-by name. In rough order of value:
+Dennis named a *group* and the group is finished; **nothing further is queued
+by name.** In rough order of value:
 
-1. **#1099**, then **#1100/#1101** — the three follow-ups this chain
-   generated. #1099 is the one with a real correctness consequence once the
-   plaintext fallbacks retire; #1100 needs a direction call before it can be
-   worked.
-2. **#1098** — pins four existing postures and is the natural home for the
-   one #1085 guard that a runtime probe rather than a test currently covers.
-3. **#1094 + #1096 together**, unchanged from the previous note and still
-   untouched — same two files (`auditLogger.js`, `log.service.js`). #1096
-   carries an availability trade that is Denise's call.
-4. **#1092**, unchanged across three notes now. One query against a populated
+1. **#1102** — the sharpest of the two this sitting filed, and the one that
+   needs no design round trip. Direction 2 (hand-rolled ensure-index on the
+   `sampleIndexes.js` precedent).
+2. **#1098** — pins the four `startServer()` boot postures (#972, #977,
+   #1040, #1085); `RUN_SERVER_IN_TEST=1` already exists and nothing uses it.
+   Unchanged from the previous note.
+3. **#1094 + #1096 together** — same two files (`auditLogger.js`,
+   `log.service.js`). #1096 carries an availability trade that is Denise's.
+4. **#1092** — unchanged across four notes now. One query against a populated
    database answers it.
+
+The four pack issues (**#816, #817, #818, #819**) can only be worked from a
+`dyeallpies_skills_pack` session — Rule 0, and `junction-write-guard`
+enforces it mechanically from here.
