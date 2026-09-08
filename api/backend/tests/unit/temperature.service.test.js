@@ -201,7 +201,11 @@ describe('temperatureService.checkPolicyAndAlert', () => {
     const policy = { minThreshold: 0, maxThreshold: 10 };
     const findOne = vi.fn().mockResolvedValue(policy);
     const insertOne = vi.fn();
-    const db = makeDb({ policies: { findOne }, alerts: { insertOne } });
+    // #1079: the in-range branch now resolves active threshold alerts, so
+    // this fixture needs updateMany or the call lands in the catch and the
+    // assertion below passes for the wrong reason.
+    const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
+    const db = makeDb({ policies: { findOne }, alerts: { insertOne, updateMany } });
 
     await temperatureService.checkPolicyAndAlert(db, {
       policyId: 'p1',
@@ -262,6 +266,69 @@ describe('temperatureService.checkPolicyAndAlert', () => {
     expect(insertOne).toHaveBeenCalledTimes(1);
   });
 
+  // #1079: the alerts collection has two writers with disjoint shapes.
+  // scheduler.service.js emits type: 'missing_reading'/'stale_reading' and
+  // both of its lifecycle helpers filter on { sensorId, type, status }, so
+  // this writer's untyped document could be matched by neither -- threshold
+  // breaches were never deduplicated and never resolved.
+  it('#1079: tags the alert with a threshold_breach type so the scheduler lifecycle helpers can match it', async () => {
+    const policy = { minThreshold: 0, maxThreshold: 10 };
+    const findOne = vi.fn().mockResolvedValue(policy);
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert1' });
+    const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
+    const db = makeDb({ policies: { findOne }, alerts: { insertOne, updateMany } });
+    vi.spyOn(notificationServiceV2, 'sendCriticalTempAlert').mockResolvedValue(undefined);
+    vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+
+    await temperatureService.checkPolicyAndAlert(db, {
+      policyId: 'p1',
+      sensorId: 'sensor-a',
+      temperatureValue: 99
+    });
+
+    expect(insertOne).toHaveBeenCalledTimes(1);
+    expect(insertOne.mock.calls[0][0].type).toBe('threshold_breach');
+  });
+
+  it('#1079: resolves active threshold alerts for the sensor once a reading is back within range', async () => {
+    const policy = { minThreshold: 0, maxThreshold: 10 };
+    const findOne = vi.fn().mockResolvedValue(policy);
+    const insertOne = vi.fn();
+    const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 2 });
+    const db = makeDb({ policies: { findOne }, alerts: { insertOne, updateMany } });
+
+    await temperatureService.checkPolicyAndAlert(db, {
+      policyId: 'p1',
+      sensorId: 'sensor-a',
+      temperatureValue: 5
+    });
+
+    expect(insertOne).not.toHaveBeenCalled();
+    expect(updateMany).toHaveBeenCalledTimes(1);
+    expect(updateMany.mock.calls[0][0]).toEqual({ sensorId: 'sensor-a', type: 'threshold_breach', status: 'active' });
+    expect(updateMany.mock.calls[0][1].$set.status).toBe('resolved');
+    expect(updateMany.mock.calls[0][1].$set.resolvedAt).toBeInstanceOf(Date);
+  });
+
+  // Control: the resolve must not fire while the reading is still bad, or a
+  // sensor sitting out of range would clear its own alert on every reading.
+  it('#1079: does not resolve anything while the reading is still out of range', async () => {
+    const policy = { minThreshold: 0, maxThreshold: 10 };
+    const findOne = vi.fn().mockResolvedValue(policy);
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert1' });
+    const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
+    const db = makeDb({ policies: { findOne }, alerts: { insertOne, updateMany } });
+    vi.spyOn(notificationServiceV2, 'sendCriticalTempAlert').mockResolvedValue(undefined);
+    vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+
+    await temperatureService.checkPolicyAndAlert(db, {
+      policyId: 'p1',
+      sensorId: 'sensor-a',
+      temperatureValue: 99
+    });
+
+    expect(updateMany).not.toHaveBeenCalled();
+  });
   it('swallows internal errors (e.g. policiesCollection.findOne rejecting) and resolves', async () => {
     const findOne = vi.fn().mockRejectedValue(new Error('db unreachable'));
     const db = makeDb({ policies: { findOne } });
@@ -409,7 +476,9 @@ describe('temperatureService.getActiveAlerts', () => {
   it('returns the array from toArray() on success', async () => {
     const docs = [{ status: 'active', sensorId: 's1' }];
     const toArray = vi.fn().mockResolvedValue(docs);
-    const sort = vi.fn().mockReturnValue({ toArray });
+    // #1079: the read is bounded now, so the chain gains a .limit() stage.
+    const limit = vi.fn().mockReturnValue({ toArray });
+    const sort = vi.fn().mockReturnValue({ limit, toArray });
     const find = vi.fn().mockReturnValue({ sort });
     const db = makeDb({ alerts: { find } });
 
@@ -439,6 +508,36 @@ describe('temperatureService.getActiveAlerts', () => {
     expect(find).not.toHaveBeenCalled();
   });
 
+  // #1079: the only read of this collection was unbounded -- no limit, no
+  // projection, toArray() over a set that only ever grew.
+  it('#1079: bounds the active-alert read with the default limit', async () => {
+    const toArray = vi.fn().mockResolvedValue([]);
+    const limit = vi.fn().mockReturnValue({ toArray });
+    const sort = vi.fn().mockReturnValue({ limit, toArray });
+    const find = vi.fn().mockReturnValue({ sort });
+    const db = makeDb({ alerts: { find } });
+
+    await temperatureService.getActiveAlerts(db, {
+      organizationScope: { scope: 'organization', organizationIds: ['org-a'] },
+    });
+
+    expect(limit).toHaveBeenCalledWith(1000);
+  });
+
+  it('#1079: honours a caller-supplied limit, same as getTemperatureHistory', async () => {
+    const toArray = vi.fn().mockResolvedValue([]);
+    const limit = vi.fn().mockReturnValue({ toArray });
+    const sort = vi.fn().mockReturnValue({ limit, toArray });
+    const find = vi.fn().mockReturnValue({ sort });
+    const db = makeDb({ alerts: { find } });
+
+    await temperatureService.getActiveAlerts(db, {
+      organizationScope: { scope: 'organization', organizationIds: ['org-a'] },
+      limit: 50,
+    });
+
+    expect(limit).toHaveBeenCalledWith(50);
+  });
   it('swallows a thrown error from .find and returns []', async () => {
     const find = vi.fn(() => {
       throw new Error('sensors offline');

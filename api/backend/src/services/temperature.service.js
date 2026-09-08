@@ -6,6 +6,13 @@ const notificationServiceV2 = require('./NotificationService');
 const notificationDispatchService = require('./notificationDispatch.service');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 
+// #1079: scheduler.service.js's resolveActiveAlert/ensureActiveAlert both
+// filter on { sensorId, type, status }, so every alert writer has to emit a
+// `type` for those two lifecycle helpers to reach it. The scheduler owns
+// 'missing_reading' and 'stale_reading'; this module owns the threshold
+// breach.
+const THRESHOLD_BREACH_ALERT_TYPE = 'threshold_breach';
+
 function createTemperatureValidationError(message, statusCode = 422) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -105,6 +112,12 @@ class TemperatureService {
           // gave Sensor, Equipment and Temperature: stamp new rows, null on
           // anything that predates it, no backfill.
           organizationId: temperature.organizationId || null,
+          // #1079: written without a `type` this document could never be
+          // matched by the scheduler's resolveActiveAlert, so a threshold
+          // breach stayed `active` forever -- one permanent document per
+          // out-of-range reading, with nothing in the repo setting
+          // status: 'resolved' on it.
+          type: THRESHOLD_BREACH_ALERT_TYPE,
           policyId: policyId,
           temperatureValue: temperature.temperatureValue,
           threshold: {
@@ -147,6 +160,23 @@ class TemperatureService {
         }).catch((error) => {
           logger.error('[NOTIFICATION_DISPATCH] Falha ao disparar notificação baseada em regra:', error.message || error);
         });
+      } else {
+        // #1079: the mirror of the insert above. scheduler.service.js
+        // resolves its own two types the moment the good condition holds
+        // (checkStaleTemperatureReadings, the `else` beside its isStale
+        // branch), with no debounce or hysteresis; this matches that
+        // semantics deliberately rather than inventing a second one.
+        // Kept inline rather than importing scheduler.service, which would
+        // pull node-cron and three unrelated services into every caller of
+        // this module for one updateMany.
+        const sensorId = temperature.sensorId || temperature.sensorID;
+        if (sensorId) {
+          const alertsCollection = db.collection('alerts');
+          await alertsCollection.updateMany(
+            { sensorId, type: THRESHOLD_BREACH_ALERT_TYPE, status: 'active' },
+            { $set: { status: 'resolved', resolvedAt: new Date() } }
+          );
+        }
       }
     } catch (error) {
       logger.error('Erro ao verificar política:', error.message);
@@ -260,9 +290,15 @@ class TemperatureService {
         return [];
       }
       const query = applyOrganizationScopeFilter({ status: 'active' }, filters.organizationScope, 'organizationId');
+      // #1079: this read was unbounded -- no limit, no projection, a
+      // toArray() over a collection that (before the auto-resolve above)
+      // only ever grew. Mirrors getTemperatureHistory's own
+      // `filters.limit || 1000` convention rather than inventing a second.
+      const limit = filters.limit || 1000;
       const alerts = await alertsCollection
         .find(query)
         .sort({ timestamp: -1 })
+        .limit(limit)
         .toArray();
 
       return alerts;

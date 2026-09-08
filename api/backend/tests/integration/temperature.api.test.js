@@ -295,12 +295,22 @@ describe('#1062: GET /api/temperature/alerts is organization-scoped', () => {
       alerts: createCollectionMock({
         find: vi.fn((query = {}) => {
           captured.query = query;
+          const toArray = async () => alerts.filter((a) => {
+            const scoped = query.organizationId;
+            if (!scoped) return true;
+            return (scoped.$in || []).includes(a.organizationId);
+          });
           return {
-            sort: () => ({ toArray: async () => alerts.filter((a) => {
-              const scoped = query.organizationId;
-              if (!scoped) return true;
-              return (scoped.$in || []).includes(a.organizationId);
-            }) }),
+            // #1079: getActiveAlerts bounds the read now, so the cursor
+            // grows a .limit() stage. Captured rather than swallowed --
+            // a mock that returns the chain unchanged from .limit() hides
+            // whether the bound is actually applied.
+            sort: () => ({
+              limit: (n) => {
+                captured.limit = n;
+                return { toArray };
+              },
+            }),
           };
         }),
       }),
