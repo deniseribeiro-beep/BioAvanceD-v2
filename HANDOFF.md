@@ -22,13 +22,13 @@ origin. `main` untouched and still frozen.
 **Open and awaiting someone: #1089, #1118, #1120, #1121.**
 Query the tracker for state — `gh issue list --state open`.
 
-## Two gates did NOT run — read this before trusting anything below
+## Gates
 
-- **The full backend suite was STILL RUNNING when this was written.** It
-  was launched backgrounded and its result is *unknown*. Its log is at
-  `<scratchpad>/backend-full.log`; the scratchpad is session-scoped and
-  may be gone. **Re-run it.** Every commit above is covered by targeted
-  runs (below), but nothing has confirmed the whole suite green.
+- **Backend full suite: GREEN.** `[ran it]` **467 files / 8818 tests**,
+  exit 0, 621.91s (was 466/8806 before this sitting's additions). Covers
+  every commit above.
+- **Frontend: GREEN** — 32 files / 264 tests, exit 0.
+- **Architecture: 131/131.**
 - **The Docker e2e gate did NOT run.** `[ran it]` `docker ps -a` is empty:
   stack DOWN, no containers, volumes still gone from the previous
   sitting's prune. **Bootstrap state: NONE.** The next gate starts cold —
@@ -39,12 +39,14 @@ Query the tracker for state — `gh issue list --state open`.
     `backend-app-test` is build-not-mount, so a plain `up -d --wait`
     reuses a stale image. That trap is recorded three times already.
 
-## What targeted runs DO cover
+## Per-issue targeted runs, for attribution if the full suite ever reds
 
 - **#1079**: `temperature.service.test.js` 31/31; consumers 10 files / 175
-  tests; architecture 131/131.
-- **#1119**: consumers 34 files / 1179 tests; architecture 131/131.
-- **Frontend**: 32 files / 264 tests, exit 0.
+  tests. Probe: reverting the product file reds 6 of 48 across the two
+  files, one per behaviour site.
+- **#1119**: consumers 34 files / 1179 tests. Probe: reverting the
+  middleware reds 5 of 33 — the 5 new cases at both levels — with all 11
+  pre-existing middleware cases green.
 
 ## #1121 is the one thing a gate must settle
 
