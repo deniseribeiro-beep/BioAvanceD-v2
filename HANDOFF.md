@@ -18,8 +18,8 @@ origin. `main` untouched and still frozen.
 | `79b62087` | Refs #1095 | corrects `iot.controller.test.js`'s wrong prediction that its rejection test would invert |
 | `b04cb00c` | Refs **#1121** | the RF014 criterion-7 e2e query asks for `SecurityConfiguration` |
 
-**Closed: #1079, #1095, #1119.** #1095 closed `premise-corrected`.
-**Open and awaiting someone: #1089, #1118, #1120, #1121.**
+**Closed: #1079, #1095, #1119, #1121.** #1095 closed `premise-corrected`.
+**Open and awaiting someone: #1089, #1118, #1120.**
 Query the tracker for state — `gh issue list --state open`.
 
 ## Gates
@@ -29,15 +29,23 @@ Query the tracker for state — `gh issue list --state open`.
   every commit above.
 - **Frontend: GREEN** — 32 files / 264 tests, exit 0.
 - **Architecture: 131/131.**
-- **The Docker e2e gate did NOT run.** `[ran it]` `docker ps -a` is empty:
-  stack DOWN, no containers, volumes still gone from the previous
-  sitting's prune. **Bootstrap state: NONE.** The next gate starts cold —
-  12 core services **with `--build`**, then `admin-bootstrap-test`, then
-  the 17-service chain, then `--workers=1`.
-  - **`--build` is not optional this time**: `api/backend/src` changed
-    (`temperature.service.js`, `audit.middleware.js`), and
+- **Docker e2e gate: GREEN.** `[ran it]` **223 passed (2.0m)**, exit 0,
+  `--workers=1`, zero failures, on a cold stack built this sitting with
+  `--build`. Verified per container, not by `--wait`'s exit code: 12 core
+  services `Up (healthy)`, `mongo-rs-init-test` `Exited (0)`,
+  `admin-bootstrap-test` `Exited (0)`, all 17 bootstrap-chain containers
+  `Exited (0)`.
+  - **The stack is DOWN again and its volumes are gone** — `down
+    --volumes` at cleanup, containers 0, volumes 0, build cache pruned
+    (1.048GB; `docker system df` claimed 433.3MB, `docker buildx du` had
+    it right). **Bootstrap state: NONE.** The next gate starts cold.
+  - **Images KEPT** — 33, 8.697GB, none active. Removing them buys 8.697GB
+    against a multi-minute rebuild of a 12-service stack plus the
+    17-service chain on the next gate; a machine-wide prune is Dennis's
+    call, not a session's.
+  - **`--build` is not optional after any `api/backend/src` change**:
     `backend-app-test` is build-not-mount, so a plain `up -d --wait`
-    reuses a stale image. That trap is recorded three times already.
+    reuses a stale image. Recorded three times already; it held again.
 
 ## Per-issue targeted runs, for attribution if the full suite ever reds
 
@@ -48,11 +56,13 @@ Query the tracker for state — `gh issue list --state open`.
   middleware reds 5 of 33 — the 5 new cases at both levels — with all 11
   pre-existing middleware cases green.
 
-## #1121 is the one thing a gate must settle
+## #1121 is CLOSED, and how it was proven is the reusable part
 
-`b04cb00c` is `Refs`, not `Fixes`, and **#1121 stays open until an e2e run
-takes `auth-access-security.spec.ts` green.** Its assertion is a static
-trace plus a typecheck, not an observation.
+The gate took `auth-access-security.spec.ts` green. Then, because a green
+spec does not show the fix caused it, the pre-fix query was restored to
+that one file and re-run against the same live stack: **1 failed**, at
+exactly `expect(requireMfaEntry).toBeTruthy()`, line 619. Red with
+`SecurityConfig`, green with `SecurityConfiguration`, same stack.
 
 **The finding behind it matters more than the fix**: the previous handoff
 cleared `4a51a916` as having no e2e surface because *"no spec references
@@ -103,8 +113,20 @@ unless the search covered spec *query strings*, not just symbols.
 **None queued by name.** Dennis named no specific issue; "pick the next
 group" was the whole instruction.
 
-The honest candidates, in order: **finish the two gates above** (the
-backend suite and the Docker e2e run, which together also close #1121);
-then **#1089** if its four questions get answers. `ship-integration-branch`
-is premature until the gates are green — the PR to `main` is Dennis's call,
-never yours.
+**Every gate is green** — backend 467/8818, frontend 32/264, architecture
+131/131, Docker e2e 223/223 — and the tree matches origin, so the branch is
+at its cleanest since the last ship.
+
+The honest candidates, in order:
+
+1. **`ship-integration-branch`.** The PR to `main` is where real CI signal
+   comes from, and it is **Dennis's call, never yours**. This is the first
+   sitting in a while where nothing is unproven.
+2. **#1089**, but only once its four questions have answers — the issue
+   carries them and the reasoning for why no slice stands alone.
+3. **#1118 / #1120**, both filed this sitting and both still needing their
+   own `[not established]` items established before a direction is chosen.
+   Neither is an owner's call yet; nobody has done the tracing.
+
+**#1117 is not on this list on purpose** — read the note above before
+answering it.
