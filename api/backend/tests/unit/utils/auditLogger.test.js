@@ -301,6 +301,57 @@ describe('auditLogger', () => {
       expect(logData.metadata.tracking.ip).toBe('1.1.1.1');
     });
 
+    // #1094: AuditEvent.source is a 1..1 Core field with a CLOSED vocabulary
+    // -- dict-02 P1X-0331: "api, frontend, worker, mqtt, scheduler ou system".
+    // auditLogger stamped it from the HTTP Origin header instead, so a browser
+    // row carried a URL and a machine-ingest row (no Origin header) carried the
+    // literal string "N/A". Neither is in the vocabulary, and source is hashed
+    // into the Merkle chain (integrityCheckService.js:60's buildHashPayload) on
+    // immutable rows, so a wrong value is sealed in rather than correctable.
+    it('stamps a canonical source, not the browser Origin URL (#1094)', async () => {
+      auditLogger.init({});
+
+      await auditLogger.log({
+        action: 'X',
+        resourceType: 'Y',
+        req: { ip: '1.1.1.1', headers: { origin: 'https://app.example.com' }, path: '/patients' }
+      });
+
+      const [, logData] = logService.createLog.mock.calls[0];
+      expect(logData.source).toBe('api');
+    });
+
+    // The sharper of the two: "N/A" is TRUTHY, so it actively suppressed
+    // Log.js:124's `data.source || data.origin || 'api'` fallback rather than
+    // merely being an odd value. This is the shape every machine-ingest route
+    // produces (iot.controller.js, temperature.controller.js).
+    it('stamps a canonical source for a request with no Origin header, not "N/A" (#1094)', async () => {
+      auditLogger.init({});
+
+      await auditLogger.log({ action: 'X', resourceType: 'Y', req: { ip: '1.1.1.1', headers: {} } });
+
+      const [, logData] = logService.createLog.mock.calls[0];
+      expect(logData.source).toBe('api');
+      expect(logData.source).not.toBe('N/A');
+    });
+
+    // CONTROL (#695): the raw Origin header is not discarded by this fix -- it
+    // already lives in metadata.request.origin and stays there. Same before and
+    // after, so a red here is the setup rather than the bug. (#1094 said this
+    // was metadata.TRACKING.origin; it is metadata.REQUEST.origin.)
+    it('keeps the raw Origin header in metadata.request.origin', async () => {
+      auditLogger.init({});
+
+      await auditLogger.log({
+        action: 'X',
+        resourceType: 'Y',
+        req: { ip: '1.1.1.1', headers: { origin: 'https://app.example.com' } }
+      });
+
+      const [, logData] = logService.createLog.mock.calls[0];
+      expect(logData.metadata.request.origin).toBe('https://app.example.com');
+    });
+
     it('uses the provided module over the auto-determined one', async () => {
       auditLogger.init({});
       await auditLogger.log({ action: 'X', resourceType: 'Y', module: 'Custom', req: { headers: {} } });

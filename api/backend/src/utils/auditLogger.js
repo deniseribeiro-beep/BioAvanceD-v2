@@ -267,7 +267,26 @@ class AuditLogger {
         severity: severity || 'info',
         sourceIP: requestInfo.ip, // IP principal para compatibilidade
         ipSource: requestInfo.ip, // Alias para compatibilidade
-        source: requestInfo.origin,
+        // #1094: dict-02 P1X-0331 makes AuditEvent.source a 1..1 Core field
+        // with a CLOSED vocabulary -- api, frontend, worker, mqtt, scheduler,
+        // system. This used to be `requestInfo.origin`, the HTTP Origin header,
+        // which is never one of those: a browser row got a URL and a
+        // machine-ingest row got the literal "N/A" (truthy, so it suppressed
+        // Log.js:124's own canonical `|| 'api'` fallback rather than merely
+        // being odd). The field is hashed into the daily Merkle root
+        // (integrityCheckService.js:60) on immutable rows, so a wrong value is
+        // sealed into the integrity chain, not correctable later.
+        //
+        // The raw header is NOT lost -- metadata.request.origin below still
+        // carries it verbatim.
+        //
+        // Hardcoded rather than caller-declared on purpose: every caller that
+        // reaches this with a req IS an API request. The non-API callers
+        // (import-worker.js, retentionSweep.service.js, backup-policy.service.js)
+        // should declare 'worker'/'scheduler' instead, which is #1105 -- they
+        // already land on 'api' today via Log.js's default, so this changes
+        // nothing for them.
+        source: 'api',
         module: moduleName,
         message: message || `${action} em ${entity}`,
         payload: sanitizedPayload,
