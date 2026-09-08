@@ -7,9 +7,8 @@ previous note's recommendation #1 plus its "together" pair — **#1102, #1094,
 #1096** — and all three shipped and closed. A fourth slice (#1106 direction 3)
 was split out and shipped too. Five commits.
 
-**Gate state at rotation: the full native suite is RUNNING and the Docker e2e
-gate has NOT been run yet.** Both are this session's remaining work. Do not
-read the previous note's green gate as covering these commits.
+**The FULL end-loaded gate ran and is GREEN, Docker included** — native
+466/8773 and Docker e2e 223/223, both against these five commits.
 
 ## What shipped
 
@@ -79,13 +78,31 @@ Query it — `gh issue list --state open`. What a query cannot carry:
 - **Can-it-fail probes on every slice, executed count checked against the
   green baseline both runs (#804):** #1102 1 red/8 then 4 red/8 across both
   sites; #1094 2 red/80; #1096 2 red/84; #1106 3 red/136 across both sites.
-- **Full native suite: RUNNING at rotation — result not yet known.**
-- **Docker e2e: NOT RUN.** Recipe as the `docker-workflow` overlay documents
-  it, and **`--build` is mandatory** — `api/backend/src` was touched in four
-  commits. Engine reachable (28.5.1), **zero containers**, all 13 core service
-  names and the 17-service bootstrap chain verified against
-  `compose.test.yml config --services`. **Stack: DOWN. Bootstrap: NONE has run
-  against the current volumes.**
+- **Full native suite: `[ran it]` 466 files / 8773 tests, 0 failures, exit 0.**
+  Supersedes the previous note's 465/8754. Backgrounded — 589s, past the 600s
+  foreground ceiling in practice.
+- **Docker e2e: `[ran it]` 223/223 passed, `--workers=1`, 2.1 minutes, zero
+  failures, exit 0.** Recipe as the `docker-workflow` overlay documents it,
+  with `--build` (mandatory — four commits touched `api/backend/src`). All 12
+  core services healthy and none restarting (#664), `admin-bootstrap-test`
+  `Exited (0)` (compose reported 1 — gotcha 3's known false negative), and all
+  **17 bootstrap-chain services `Exited (0)`**, verified as a count of
+  non-zero-or-still-running rather than by eye.
+
+**Stack is DOWN and cleaned.** `[ran it]` at rotation: **zero containers**,
+33 images / 8.697GB, 33 volumes / 939.9MB, **build cache 0**. `builder prune
+-af` reclaimed **1.048GB** — `system df` had reported only 9.2MB of build
+cache, the exact gap `-af` exists to close, and the second sitting running to
+reproduce it. `test-results/` and every `/tmp` redirect target and scratchpad
+script were removed.
+
+**Not done, needs Dennis:** **28 anonymous Docker volumes** remain (21 at the
+previous rotation, so ~7 are this sitting's). `docker volume prune` would take
+the other 21 too, so it was left alone rather than guessed at — unchanged in
+kind from the previous note, just larger. The 33 images are kept deliberately:
+they share layers (33 images = 8.697GB total, not the naive sum of the
+per-image figures) and the component that actually bloats, the build cache, is
+at zero.
 
 ## The judgment a query cannot carry
 
@@ -121,18 +138,23 @@ Query it — `gh issue list --state open`. What a query cannot carry:
 Dennis named a *group* and the group is finished; **nothing further is queued
 by name.** In rough order of value:
 
-1. **Finish this session's gates** — the native suite result, then the Docker
-   e2e gate with `--build`. Nothing else should start first.
-2. **#1107** — the security finding, and the only one with a real exposure.
-   Establish its consumer question first; a zero-consumer answer makes it a
-   deletion.
-3. **#1104** — the ciphertext cutover, now unblocked. Directions 1 and 2 both
+1. **#1107** — the security finding, the only one with a real exposure, and
+   **now fully scoped: both halves of the dead-code bar are met.** `[ran it]`
+   the route has a frontend binding (`api.ts:692` → `useLogs.ts:145`) but
+   **zero live callers** — `LogsPage.tsx:40` is the only consumer of `useLogs`
+   and never destructures `registerEvent`. `[ran it]` the docs are silent on
+   any client-submitted audit event (searched the Portuguese concept, not the
+   identifier, per this repo's rule); the RF/RNF hits are RNF009's append-only
+   server-side trail and outbox projection. So **direction 3 — remove the
+   route — is available and is the cheapest fix**, taking three dead frontend
+   symbols with it. Start here.
+2. **#1104** — the ciphertext cutover, now unblocked. Directions 1 and 2 both
    end correctly and differ only in sequencing, so no design round trip is
    needed. This is what makes #1102's hash indexes start paying.
-4. **#1105** — smallest of the three: a validated caller-declared `source`,
+3. **#1105** — smallest of the three: a validated caller-declared `source`,
    plumbed through the `logImport`/`logError` wrappers.
-5. **#1098** — pins the four `startServer()` boot postures;
+4. **#1098** — pins the four `startServer()` boot postures;
    `RUN_SERVER_IN_TEST=1` already exists and nothing uses it. Unchanged from
    the previous two notes.
-6. **#1092** — unchanged across five notes now. One query against a populated
+5. **#1092** — unchanged across five notes now. One query against a populated
    database answers it.
