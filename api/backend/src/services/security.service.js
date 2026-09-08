@@ -238,7 +238,15 @@ class SecurityService {
         const severity = this.getSeverityForChange(change.path);
         await auditLogger.log({
           action: 'UPDATE',
-          resourceType: 'SecurityConfig',
+          // #1116: dict-02 Entidade is SecurityConfiguration (49 rows) and
+          // never SecurityConfig. This was the last writer emitting the short
+          // form, so the same entity was landing in the logs collection under
+          // two resourceType values -- #1115's ENTITY_MAP already resolves
+          // /api/security to the canonical name for the automatic rows.
+          // Rows written before this keep the old spelling: the trail is
+          // immutable and hash-chained (#1094/#1105), so a query over
+          // resourceType has to accept both regardless.
+          resourceType: 'SecurityConfiguration',
           resourceId: 'main',
           status: 'success',
           severity: severity,

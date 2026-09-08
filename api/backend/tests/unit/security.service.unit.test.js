@@ -256,6 +256,28 @@ describe('SecurityService.updateConfig', () => {
     expect(logSpy.mock.calls[0][0].severity).toBe('critical');
   });
 
+  // #1116: the audit row for a security-config change must carry the
+  // canonical entity name. dict-02 Entidade says SecurityConfiguration in 49
+  // rows and never SecurityConfig, and #1115 already maps /api/security there
+  // in audit.middleware.js ENTITY_MAP -- so this explicit writer was the last
+  // thing still emitting the short form, splitting one entity across two
+  // resourceType values in the same collection.
+  it('audits a security-config change under the canonical SecurityConfiguration entity', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ updateOne })) };
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue({});
+
+    const currentConfig = { authentication: { requireMFA: false }, configVersion: 1 };
+    const newConfig = { authentication: { requireMFA: true } };
+    const req = { user: { userID: 'u1' } };
+
+    await securityService.updateConfig(db, newConfig, currentConfig, req);
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy.mock.calls[0][0].resourceType).toBe('SecurityConfiguration');
+  });
+
   it('uses SYSTEM as lastUpdatedBy when req has no user', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
     const db = { collection: vi.fn(() => ({ updateOne })) };
