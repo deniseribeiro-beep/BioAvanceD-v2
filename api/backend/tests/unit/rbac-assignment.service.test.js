@@ -210,6 +210,26 @@ describe('rbac-assignment.service (#421)', () => {
     expect(result.skipped).toEqual([{ userAccountId: 'u2', reason: 'orphan-no-access-type-no-assignment' }]);
   });
 
+  // #1125: this service's one-shot entry point is src/scripts/backfillUserRoleAssignments.js,
+  // and until now it had no npm script, no compose service and no boot path --
+  // the class this repo's conventions name outright: a script under
+  // src/scripts/ that is neither an npm script nor invoked by a boot path or
+  // compose service never runs on any stack.
+  //
+  // It is the sharpest member of that population because it is the DOCUMENTED
+  // EXEMPLAR: docs/architecture/legacy-location-migration-mapping.md names it
+  // as the pattern backfillLocationStorage.js was copied from (#461), so the
+  // file the repo points at as "how a one-shot migration is shaped here" was
+  // itself unrunnable while its copy got wired in #1070.
+  //
+  // Same shape as location-storage-backfill.service.test.js's #1070 case,
+  // which is the precedent this follows.
+  it('#1125: is wired as an npm script pointing at its CLI wrapper (#933: unwired scripts never effectively run)', () => {
+    const pkg = require('../../package.json');
+
+    expect(pkg.scripts['migrate:user-role-assignments']).toBe('node src/scripts/backfillUserRoleAssignments.js');
+  });
+
   it('userHasPermission retorna false quando o usuário não tem nenhuma assignment ativa', async () => {
     const db = buildDb({ roles, permissionDocs: [{ permissionId: 'perm-createUser', permissionCode: 'createUser' }], assignments: [] });
 

@@ -13,7 +13,19 @@
 // Harmless and idempotent; left in so the script still works standalone
 // against a database whose server never started.
 //
-// Hand-run only: no npm script entry, no compose reference.
+// #1125: exposed as `npm run migrate:user-role-assignments`. It was hand-run
+// only -- no npm entry, no compose service, no boot path -- which is the class
+// this repo's conventions name outright: a script under src/scripts/ that is
+// none of those never runs on any stack. Sharpest case in that population
+// because docs/architecture/legacy-location-migration-mapping.md names THIS
+// file as the pattern backfillLocationStorage.js was copied from (#461), so
+// the documented exemplar was itself unrunnable while its copy got wired in
+// #1070.
+//
+// Still deliberately NOT on the boot path or in compose: it is a one-shot
+// legacy migration over pre-RBAC users, not a seed. Placement 3 of the
+// conventions' "Where a new seed belongs" -- a manual npm script -- which is
+// what admin:create-first and the two mfa scripts are.
 const { connectDB, closeConnection } = require('../database/mongo');
 const { backfillUserRoleAssignments } = require('../services/rbac-assignment.service');
 
