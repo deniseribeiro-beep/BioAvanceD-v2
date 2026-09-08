@@ -1062,7 +1062,11 @@ describe('ConsentController.validateConsentToken', () => {
     expect(validateSpy).toHaveBeenCalledWith(req.app.locals.db, 'p2', 'tok2');
   });
 
-  it('returns 400 with "Token inválido" when the service throws', async () => {
+  // #823: was 'returns 400 with "Token inválido"', asserting `message:
+  // 'expired'` -- i.e. it pinned the raw service message being echoed to an
+  // unauthenticated caller, which is the enumeration oracle itself. The
+  // response must now carry no service detail at all.
+  it('returns 400 with an opaque error when the service throws', async () => {
     vi.spyOn(patientService, 'validateConsentToken').mockRejectedValue(new Error('expired'));
     const req = createReq({ body: { patientId: 'p1', token: 'bad' } });
     const res = createRes();
@@ -1072,8 +1076,7 @@ describe('ConsentController.validateConsentToken', () => {
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
-      error: 'Token inválido',
-      message: 'expired',
+      error: 'Link inválido ou expirado',
     });
   });
 
@@ -1120,7 +1123,11 @@ describe('ConsentController.acceptConsentToken', () => {
     });
   });
 
-  it('returns 400 when the service throws', async () => {
+  // #823: same change as the validate case above -- this asserted the raw
+  // service message echoed back, and this route is unauthenticated too. It also
+  // now answers with the SAME body as validate, so the two routes cannot be
+  // played off each other.
+  it('returns 400 with an opaque error when the service throws', async () => {
     vi.spyOn(patientService, 'acceptConsentToken').mockRejectedValue(new Error('invalid token'));
     const req = createReq({ body: { patientId: 'p1', token: 'bad' } });
     const res = createRes();
@@ -1130,8 +1137,7 @@ describe('ConsentController.acceptConsentToken', () => {
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
-      error: 'Erro ao aceitar consentimento',
-      message: 'invalid token',
+      error: 'Link inválido ou expirado',
     });
   });
 

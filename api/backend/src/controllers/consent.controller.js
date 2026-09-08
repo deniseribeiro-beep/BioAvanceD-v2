@@ -683,11 +683,19 @@ class ConsentController {
         }
       });
     } catch (error) {
+      // #823: this route is unauthenticated by design -- the emailed token is
+      // the only credential -- so this response IS the disclosure boundary.
+      // patientService.validateConsentToken throws four distinguishable
+      // messages (participant unknown / not awaiting consent / wrong token /
+      // expired), and echoing them let an unauthenticated caller walk the
+      // 8-digit participantId space and read biobank membership and consent
+      // state straight off the reply. One opaque answer for every failure; the
+      // detail stays in the log line above. Deliberately no `message` key --
+      // the frontend maps this by status alone (mapConsentTokenError).
       logger.error('Erro ao validar token de consentimento:', error.message);
       return res.status(400).json({
         success: false,
-        error: 'Token inválido',
-        message: error.message
+        error: 'Link inválido ou expirado'
       });
     }
   }
@@ -713,11 +721,15 @@ class ConsentController {
         data: result
       });
     } catch (error) {
+      // #823: same oracle as validateConsentToken above, and reached through
+      // the same four throws -- acceptConsentToken delegates to
+      // validateConsentToken before it writes anything. The issue named only
+      // the validate route; both leak, so both answer identically, which also
+      // stops the PAIR of endpoints from distinguishing each other.
       logger.error('Erro ao aceitar consentimento:', error.message);
       return res.status(400).json({
         success: false,
-        error: 'Erro ao aceitar consentimento',
-        message: error.message
+        error: 'Link inválido ou expirado'
       });
     }
   }
