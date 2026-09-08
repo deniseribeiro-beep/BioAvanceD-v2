@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const patientIdentityService = require('../../src/services/PatientIdentityService');
+const identityCryptoService = require('../../src/services/participantIdentity.service');
 
 describe('PatientIdentityService - Heuristic Patient Matching', () => {
   let db;
@@ -24,6 +25,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
 
     identitiesCollection = {
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+      findOne: vi.fn().mockResolvedValue(null),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     };
 
@@ -288,6 +290,76 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       expect(identitySet.identityDocumentEncrypted).toBeTruthy();
       expect(identitySet.identityDocumentHash).toBeTruthy();
       expect(identitySet.birthDateHash).toBeTruthy();
+    });
+  });
+
+  // #1113: the identity fallbacks were built from the PATIENTS document,
+  // which has carried no civil identity since #575. Every fixture above is
+  // pre-#575-shaped -- the patient still carries patientName/birthDate --
+  // which is why none of them ever saw this.
+  describe('#1113: an id-only call must not null the stored civil identity', () => {
+    // Exactly what createPatient writes today: omitLegacyIdentityFields
+    // strips all three civil-identity fields before insertOne.
+    const POST_575_PATIENT = {
+      _id: '507f1f77bcf86cd799439011',
+      participantId: '77777777',
+    };
+
+    function storedIdentity(patientName) {
+      return identityCryptoService.encryptIdentityFields({
+        participantId: '77777777',
+        patientName,
+        birthDate: new Date(1990, 0, 20),
+        identityDocument: '11144477735',
+      });
+    }
+
+    it('falls back to the ParticipantIdentity mirror, not the post-#575 Patient document', async () => {
+      patientsCollection.findOne.mockResolvedValueOnce(POST_575_PATIENT);
+      identitiesCollection.findOne.mockResolvedValueOnce(storedIdentity('Paciente QA'));
+
+      await patientIdentityService.matchOrUpsertParticipant(db, {
+        participantId: '77777777',
+      });
+
+      const identitySet = identitiesCollection.updateOne.mock.calls[0][1].$set;
+      expect(identitySet.patientName).toBe('Paciente QA');
+      expect(identitySet.identityDocument).toBe('11144477735');
+      // birthDate is ciphertext-only since #1104, so the plaintext is
+      // deliberately absent -- the ciphertext and blind index are the
+      // representation that must survive.
+      expect(identitySet.birthDateEncrypted).toBeTruthy();
+      expect(identitySet.birthDateHash).toBeTruthy();
+    });
+
+    it('never writes null over a stored civil-identity field', async () => {
+      patientsCollection.findOne.mockResolvedValueOnce(POST_575_PATIENT);
+      identitiesCollection.findOne.mockResolvedValueOnce(storedIdentity('Paciente QA'));
+
+      await patientIdentityService.matchOrUpsertParticipant(db, {
+        participantId: '77777777',
+      });
+
+      const identitySet = identitiesCollection.updateOne.mock.calls[0][1].$set;
+      for (const field of ['patientName', 'identityDocument']) {
+        expect(identitySet[field]).not.toBeNull();
+        expect(identitySet[field]).not.toBeUndefined();
+      }
+    });
+
+    // Control: expected behaviour is identical before and after the fix.
+    // A red here would mean the setup is wrong, not that the bug is real.
+    it('still writes a caller-supplied name over the stored one', async () => {
+      patientsCollection.findOne.mockResolvedValueOnce(POST_575_PATIENT);
+      identitiesCollection.findOne.mockResolvedValueOnce(storedIdentity('Nome Antigo'));
+
+      await patientIdentityService.matchOrUpsertParticipant(db, {
+        participantId: '77777777',
+        patientName: 'Nome Novo',
+      });
+
+      const identitySet = identitiesCollection.updateOne.mock.calls[0][1].$set;
+      expect(identitySet.patientName).toBe('Nome Novo');
     });
   });
 

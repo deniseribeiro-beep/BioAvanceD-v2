@@ -103,11 +103,34 @@ class participantIdentityService {
       // existed to support matching against Patient — matching above already
       // resolves via `identities`, so they're dead weight too) never land on
       // Patient. Only non-identity fields get persisted there.
-      const identityValues = {
-        patientName: patientName || existing.patientName,
-        birthDate: birthDate || existing.birthDate,
-        identityDocument: identityDocument || existing.identityDocument || null,
+      // #1113: these fallbacks used to read off `existing`, which is a
+      // PATIENTS document -- and since #575 a Patient carries no
+      // patientName/birthDate/identityDocument at all. So every fallback
+      // resolved to undefined and an id-only call (import-lgpd.service.js
+      // names its participant by participantId and carries no civil-identity
+      // columns) overwrote all three stored plaintext values with null.
+      // The mirror is the collection these values actually live in, so read
+      // the fallbacks from there, decrypted -- which is what the code always
+      // meant. It stayed invisible because the ciphertext and blind-index
+      // siblings survived the null write, so decryptIdentity recovered the
+      // real values and nothing observable broke (#1113 records that in
+      // full, and it is the same accident #1104 relies on as evidence).
+      const existingIdentity = identityCryptoService.decryptIdentity(
+        await identities.findOne({ participantId: matchedParticipantId })
+      ) || {};
+      // Omit a field that resolves to nothing rather than writing null over
+      // a stored value: a caller that supplies nothing must change nothing.
+      const identityValues = {};
+      const resolvedIdentity = {
+        patientName: patientName || existingIdentity.patientName,
+        birthDate: birthDate || existingIdentity.birthDate,
+        identityDocument: identityDocument || existingIdentity.identityDocument,
       };
+      for (const [identityField, resolvedValue] of Object.entries(resolvedIdentity)) {
+        if (resolvedValue !== null && resolvedValue !== undefined && resolvedValue !== '') {
+          identityValues[identityField] = resolvedValue;
+        }
+      }
       // #640: route through encryptIdentityFields so this write gets the same
       // ciphertext/hash siblings every other participantIdentities writer
       // produces (#566/#574), not plaintext-only.
