@@ -156,8 +156,10 @@ describe('PatientService.searchPatients', () => {
     await patientService.searchPatients(db, '15/06/1990');
 
     const identityQueryArg = identitiesCollection.find.mock.calls[0][0];
-    expect(identityQueryArg.birthDate.$gte).toEqual(new Date(1990, 5, 15));
-    expect(identityQueryArg.birthDate.$lt).toEqual(new Date(1990, 5, 16));
+    // #1104: birthDate range is now one $or branch alongside birthDateHash.
+    const rangeClause = identityQueryArg.$or.find((clause) => clause.birthDate);
+    expect(rangeClause.birthDate.$gte).toEqual(new Date(1990, 5, 15));
+    expect(rangeClause.birthDate.$lt).toEqual(new Date(1990, 5, 16));
 
     const queryArg = patientsCollection.find.mock.calls[0][0];
     const participantClause = queryArg.$or.find((clause) => clause.participantId && clause.participantId.$in);
@@ -195,7 +197,9 @@ describe('PatientService.searchPatients', () => {
     const expectedStart = new Date(parsedUtc.getFullYear(), parsedUtc.getMonth(), parsedUtc.getDate());
 
     const identityQueryArg = identitiesCollection.find.mock.calls[0][0];
-    expect(identityQueryArg.birthDate.$gte).toEqual(expectedStart);
+    // #1104: birthDate range is now one $or branch alongside birthDateHash.
+    const rangeClause = identityQueryArg.$or.find((clause) => clause.birthDate);
+    expect(rangeClause.birthDate.$gte).toEqual(expectedStart);
 
     const queryArg = patientsCollection.find.mock.calls[0][0];
     const participantClause = queryArg.$or.find((clause) => clause.participantId && clause.participantId.$in);

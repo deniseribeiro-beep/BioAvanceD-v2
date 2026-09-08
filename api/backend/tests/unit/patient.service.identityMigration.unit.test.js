@@ -99,6 +99,44 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     expect(conflict).toMatchObject({ field: 'identityDocument', value: '11144477735' });
   });
 
+  // #1104: fifth participantIdentities matching site. It queried the
+  // plaintext identityDocument with no blind-index arm, so a ciphertext-only
+  // row was invisible and the uniqueness check would have gone dead under the
+  // cutover -- letting a second participant be created for the same document.
+  it('#1104: checkIdentifierConflict matches a CIPHERTEXT-ONLY identity via identityDocumentHash', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '11111111',
+      identityDocument: '11144477735',
+    });
+    const patients = makeInMemoryCollection([]);
+    const participantIdentities = makeInMemoryCollection([
+      { ...encrypted, identityDocument: null },
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    const conflict = await patientService.checkIdentifierConflict(db, { identityDocument: '11144477735' });
+
+    expect(conflict).toMatchObject({ field: 'identityDocument', value: '11144477735' });
+  });
+
+  it('#1104: checkIdentifierConflict still returns null for a ciphertext-only identity with a DIFFERENT document', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '11111111',
+      identityDocument: '52998224725',
+    });
+    const patients = makeInMemoryCollection([]);
+    const participantIdentities = makeInMemoryCollection([
+      { ...encrypted, identityDocument: null },
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    const conflict = await patientService.checkIdentifierConflict(db, { identityDocument: '11144477735' });
+
+    expect(conflict).toBeNull();
+  });
+
   it('checkIdentifierConflict still checks recordNumber against Patient (not a civil-identity field)', async () => {
     const patients = makeInMemoryCollection([
       { participantId: '11111111', recordNumber: 'PRONT-1' },
@@ -197,6 +235,29 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     ]);
     const participantIdentities = makeInMemoryCollection([
       { participantId: '11111111', birthDate: new Date(1990, 0, 20) },
+      { participantId: '22222222', birthDate: new Date(1985, 5, 1) },
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    const result = await patientService.searchPatients(db, '20/01/1990');
+
+    expect(result.patients.map((p) => p.participantId)).toEqual(['11111111']);
+  });
+
+  // #1104: sixth participantIdentities matching site, same shape as the
+  // fifth -- a plaintext birthDate range query with no blind-index arm.
+  it('#1104: searchPatients matches a CIPHERTEXT-ONLY identity via birthDateHash', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '11111111',
+      birthDate: new Date(1990, 0, 20),
+    });
+    const patients = makeInMemoryCollection([
+      { participantId: '11111111', birthDate: new Date(1985, 5, 1) },
+      { participantId: '22222222', birthDate: new Date(1985, 5, 1) },
+    ]);
+    const participantIdentities = makeInMemoryCollection([
+      { ...encrypted, birthDate: null },
       { participantId: '22222222', birthDate: new Date(1985, 5, 1) },
     ]);
     const db = makeDb({ patients, participantIdentities });

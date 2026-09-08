@@ -342,7 +342,16 @@ class PatientService {
     // number, not civil identity, so it stays checked against Patient.
     if (normalizedidentityDocument) {
       const identityCollection = await this.getIdentityCollection(db);
-      const existingIdentity = await identityCollection.findOne({ identityDocument: normalizedidentityDocument });
+      // RF005/RNF007 (#1104): fifth participantIdentities matching site. Was a
+      // plaintext-only lookup with no blind-index arm, so a ciphertext-only row
+      // was invisible -- under the cutover the identityDocument uniqueness
+      // check would have gone dead, allowing a second participant for the same
+      // document. #1099: match under every registered key.
+      const identityDocumentHashes = participantIdentityService.computeBlindIndexCandidates('identityDocument', normalizedidentityDocument);
+      const documentOrConditions = identityDocumentHashes.length
+        ? [{ identityDocumentHash: { $in: identityDocumentHashes } }, { identityDocument: normalizedidentityDocument }]
+        : [{ identityDocument: normalizedidentityDocument }];
+      const existingIdentity = await identityCollection.findOne({ $or: documentOrConditions });
       if (existingIdentity) {
         return { field: 'identityDocument', value: normalizedidentityDocument, existing: existingIdentity };
       }
@@ -776,8 +785,15 @@ class PatientService {
 
         if (startDate && endDate) {
           const identityCollection = await this.getIdentityCollection(db);
+          // RF005/RNF007 (#1104): sixth participantIdentities matching site,
+          // same shape as checkIdentifierConflict's -- a plaintext range query
+          // with no blind-index arm. #1099: match under every registered key.
+          const birthDateHashes = participantIdentityService.computeBlindIndexCandidates('birthDate', startDate);
+          const dateOrConditions = birthDateHashes.length
+            ? [{ birthDateHash: { $in: birthDateHashes } }, { birthDate: { $gte: startDate, $lt: endDate } }]
+            : [{ birthDate: { $gte: startDate, $lt: endDate } }];
           const matchingIdentities = await identityCollection
-            .find({ birthDate: { $gte: startDate, $lt: endDate } })
+            .find({ $or: dateOrConditions })
             .toArray();
           if (matchingIdentities.length > 0) {
             query.$or.push({ participantId: { $in: matchingIdentities.map((identity) => identity.participantId) } });
