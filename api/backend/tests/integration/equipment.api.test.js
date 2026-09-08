@@ -424,6 +424,121 @@ describe('PUT /api/equipment/:id', () => {
 
     delete app.locals.quarantineService;
   });
+
+  // #1081: the allowlist half. The PUT spread `{ ...req.body }` straight into
+  // $set, so every key a caller sent was persisted -- including ones no schema
+  // knows about and ones the model treats as identity or immutable.
+  //
+  // The projection is deliberately AFTER the #868 validate diff, never before
+  // it. Before it, a body key that is invalid AND off the allowlist would stop
+  // producing an `introducedError`, turning a 422-with-a-message into a 200
+  // with the field silently discarded -- the stripping-by-silence outcome
+  // #1053's slice-A comment refuses. The ordering control below is the only
+  // test that can tell the two orderings apart, and it is green in both
+  // directions by design.
+  it('#1081: does not persist body keys outside the update allowlist', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      updateOne,
+    });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({
+        equipmentDescription: 'Updated description',
+        _id: '507f1f77bcf86cd799439099',
+        createdAt: '1999-01-01T00:00:00.000Z',
+        quarantineOverride: true,
+        bogusField: 'should never be written',
+      });
+
+    expect(res.status).toBe(200);
+    const [, update] = updateOne.mock.calls[0];
+    expect(update.$set).toHaveProperty('equipmentDescription', 'Updated description');
+    // The handler still stamps this one itself; it is not caller-supplied.
+    expect(update.$set).toHaveProperty('updatedAt');
+    expect(update.$set).not.toHaveProperty('_id');
+    expect(update.$set).not.toHaveProperty('createdAt');
+    expect(update.$set).not.toHaveProperty('quarantineOverride');
+    expect(update.$set).not.toHaveProperty('bogusField');
+  });
+
+  // equipmentID is identity: it is this route's own numeric-fallback lookup
+  // key, and #1070 records five live readers joining storageContainers on it.
+  // Off the allowlist for the same reason sensorId/sensorID are off
+  // ALLOWED_SENSOR_UPDATE_FIELDS.
+  it('#1081: does not persist equipmentID, which is identity and a lookup key', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      updateOne,
+    });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ equipmentDescription: 'Updated description', equipmentID: 999 });
+
+    expect(res.status).toBe(200);
+    const [, update] = updateOne.mock.calls[0];
+    expect(update.$set).not.toHaveProperty('equipmentID');
+  });
+
+  // #1081 ordering control -- GREEN both before and after the allowlist.
+  // equipmentID is off the allowlist AND is one of the six things
+  // EquipmentModel.validate checks, which makes it the single field that
+  // separates the two orderings: allowlist-before-the-diff answers 200 and
+  // discards silently, allowlist-after-the-diff answers 422, which is what
+  // this route did before an allowlist existed. A red here pre-fix means the
+  // arrange block is wrong, not the product.
+  it('#1081 ordering control: an invalid value in an allowlist-dropped field still 422s', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const coll = createCollectionMock({
+      // Stored equipmentID is NUMERIC here, unlike FAKE_EQ's 'EQ-001'.
+      // Against FAKE_EQ the error is pre-existing and the #868 diff correctly
+      // declines to charge the request for it, so the case would prove nothing.
+      findOne: vi.fn().mockResolvedValue({ ...FAKE_EQ, equipmentID: 7, equipmentDescription: 'Freezer A' }),
+      updateOne,
+    });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ equipmentID: 'EQ-NOT-A-NUMBER' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.message).toMatch(/equipmentID deve ser um número/);
+    expect(updateOne).not.toHaveBeenCalled();
+  });
+
+  // #1081 control -- GREEN both before and after. organizationId is ON the
+  // allowlist deliberately, the same call ALLOWED_SENSOR_UPDATE_FIELDS makes:
+  // the re-parent guard governs it, so the allowlist must not also block it.
+  // Dropping it would be invisible to the re-parent test above, which asserts
+  // a 403 raised BEFORE $set is built -- the ability to assign an organization
+  // would die with every test in this file still green.
+  it('#1081 control: a global-scope caller can still set organizationId', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      updateOne,
+    });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, organizations: scopedOrganizations(), equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ equipmentDescription: 'Updated description', organizationId: 'test-org-default' });
+
+    expect(res.status).toBe(200);
+    const [, update] = updateOne.mock.calls[0];
+    expect(update.$set).toHaveProperty('organizationId', 'test-org-default');
+  });
 });
 
 describe('GET /api/equipment db-unavailable guard', () => {
@@ -818,6 +933,54 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
       expect.objectContaining({ session: expect.objectContaining({ withTransaction, endSession }) })
     );
     expect(res.body.quarantine.triggered).toBe(true);
+
+    delete app.locals.quarantineService;
+  });
+
+  // #1081: the allowlist has to hold on BOTH writes. The transactional path
+  // is a separate updateOne call from the fallback one, and no test in this
+  // file asserted its $set contents -- so reverting the projection at that
+  // site alone would have left every other case green.
+  it('#1081: applies the update allowlist on the transactional write too', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      updateOne,
+    });
+    const dbMock = createDbMock({ ...RBAC_COLLECTIONS, equipment: coll });
+
+    const withTransaction = vi.fn(async (cb) => cb());
+    const endSession = vi.fn().mockResolvedValue(undefined);
+    const startSession = vi.fn(() => ({ withTransaction, endSession }));
+    const helloCommand = vi.fn().mockResolvedValue({ setName: 'rs0' });
+    app.locals.db = { ...dbMock, client: { startSession, db: vi.fn(() => ({ command: helloCommand })) } };
+
+    const quarantineByEquipmentStatus = vi.fn().mockResolvedValue({
+      triggered: true, matched: 1, quarantined: 1, movements: 1, reason: 'status:inactive'
+    });
+    app.locals.quarantineService = {
+      isQuarantineTriggerStatus: vi.fn().mockReturnValue(true),
+      quarantineByEquipmentStatus,
+    };
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ status: 'Inactive', _id: '507f1f77bcf86cd799439099', bogusField: 'x' });
+
+    expect(res.status).toBe(200);
+    expect(withTransaction).toHaveBeenCalledTimes(1);
+    const [, update, options] = updateOne.mock.calls[0];
+    expect(options).toEqual(expect.objectContaining({ session: expect.anything() }));
+    expect(update.$set).toHaveProperty('status', 'Inactive');
+    expect(update.$set).not.toHaveProperty('_id');
+    expect(update.$set).not.toHaveProperty('bogusField');
+
+    // The quarantine context is built from the same projection, so caller
+    // keys no schema knows about do not reach the quarantine service either.
+    const [, quarantineContext] = quarantineByEquipmentStatus.mock.calls[0];
+    expect(quarantineContext).not.toHaveProperty('bogusField');
+    expect(quarantineContext.equipmentID).toBe(FAKE_EQ.equipmentID);
 
     delete app.locals.quarantineService;
   });

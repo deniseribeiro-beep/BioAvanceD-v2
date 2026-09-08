@@ -9,6 +9,26 @@ const defaultQuarantineService = require('../../services/equipment-sensor-quaran
 const { applyOrganizationScopeFilter, isRecordInOrganizationScope, resolveOrganizationIdForCreate, assertOrganizationFieldNotReparented } = require('../../services/rbac-assignment.service');
 const { isTransactionCapable } = require('../../utils/mongoTransaction');
 
+// #1081: the fields a PUT may write, derived from EquipmentModel.create()'s
+// own shape rather than from what callers happen to send. The PUT used to
+// spread req.body straight into $set, so any key reached the document --
+// including _id, createdAt, and keys no schema knows about.
+//
+// Three of create()'s fields are deliberately absent:
+//   equipmentID -- identity. It is this route's own numeric-fallback lookup
+//     key, and #1070 records five live readers joining storageContainers on
+//     it. Same call ALLOWED_SENSOR_UPDATE_FIELDS makes for sensorId/sensorID.
+//   createdAt   -- immutable by definition.
+//   updatedAt   -- stamped by the handler below, never caller-supplied.
+//
+// organizationId IS here, deliberately: assertOrganizationFieldNotReparented
+// is what governs re-parenting, so the allowlist must not also block it or
+// an Administrador loses the ability to assign an organization at all.
+const ALLOWED_EQUIPMENT_UPDATE_FIELDS = [
+  'equipmentDescription', 'name', 'model', 'serialNumber',
+  'type', 'status', 'purchaseDate', 'organizationId'
+];
+
 function createEquipmentValidationError(message, statusCode = 422) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -417,6 +437,21 @@ router.put('/:id', authenticate, requirePermission('manageStorageTopology'), req
       });
     }
 
+    // #1081: project through the allowlist HERE, after the #868 diff above
+    // and before either $set below. The ordering is load-bearing and is not
+    // interchangeable: projecting BEFORE the diff would stop an invalid value
+    // in a dropped field from producing an introducedError, turning today's
+    // 422-with-a-message into a 200 that discards the field in silence. The
+    // diff therefore still sees the caller's whole patch; only persistence is
+    // filtered. equipment.api.test.js's "#1081 ordering control" pins this.
+    const persistedUpdate = {};
+    for (const field of ALLOWED_EQUIPMENT_UPDATE_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(updateData, field)) {
+        persistedUpdate[field] = updateData[field];
+      }
+    }
+    persistedUpdate.updatedAt = updateData.updatedAt;
+
     const finalStatus = updateData.status !== undefined ? updateData.status : foundEquipment.status;
     const shouldTriggerQuarantine = quarantineService.isQuarantineTriggerStatus(finalStatus);
     const mongoClient = db?.client;
@@ -429,7 +464,7 @@ router.put('/:id', authenticate, requirePermission('manageStorageTopology'), req
         await session.withTransaction(async () => {
           result = await equipmentCollection.updateOne(
             query,
-            { $set: updateData },
+            { $set: persistedUpdate },
             { session }
           );
 
@@ -437,7 +472,7 @@ router.put('/:id', authenticate, requirePermission('manageStorageTopology'), req
             db,
             {
               ...foundEquipment,
-              ...updateData,
+              ...persistedUpdate,
               _id: foundEquipment._id,
               equipmentID: foundEquipment.equipmentID
             },
@@ -458,14 +493,14 @@ router.put('/:id', authenticate, requirePermission('manageStorageTopology'), req
         await session.endSession();
       }
     } else {
-      result = await equipmentCollection.updateOne(query, { $set: updateData });
+      result = await equipmentCollection.updateOne(query, { $set: persistedUpdate });
 
       if (shouldTriggerQuarantine) {
         quarantineResult = await quarantineService.quarantineByEquipmentStatus(
           db,
           {
             ...foundEquipment,
-            ...updateData,
+            ...persistedUpdate,
             _id: foundEquipment._id,
             equipmentID: foundEquipment.equipmentID
           },

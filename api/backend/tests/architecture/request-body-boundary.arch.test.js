@@ -136,9 +136,9 @@ const SET_SITES = [
   /\$set\s*:\s*([A-Za-z_$][\w$]*)\s*[,}]/g,
 ];
 
-function updateDocumentSites() {
+function updateDocumentSites(fileList = sources()) {
   const sites = [];
-  for (const { file, content } of sources()) {
+  for (const { file, content } of fileList) {
     const aliases = new Set();
     for (const pattern of BODY_ALIASES) {
       for (const match of content.matchAll(pattern)) aliases.add(match[1]);
@@ -173,33 +173,19 @@ const UPDATE_SPREAD_EXEMPT = new Map([
   // the sweep not finding them is the fix landing, not the detector
   // regressing (this is the sanctioned reason to remove an entry).
 
-  // Equipment PUT -- NOT a defect, and the reason is worth stating so a
-  // later reader does not "fix" it. It validates the MERGED document and
-  // rejects only the errors the patch introduces
-  // (equipment.routes.js:358-372, #868), which is stricter than a plain
-  // validate: it cannot punish a request for a pre-existing defect it did
-  // not cause. Two entries because the write happens twice, once inside a
-  // transaction and once in the non-transactional fallback.
-  // Both moved down one line by #951, which added an `isTransactionCapable`
-  // require at the top of the file, down a further six by #1071, which added
-  // requireOrganizationScope to the POST plus its comment, and down 32 more by
-  // #1081, which added requireOrganizationScope to the PUT and DELETE plus the
-  // source and destination scope checks. The code and the reasoning are
-  // unchanged all three times; only the line numbers moved, which is the
-  // "update the entry" case the companion test below names -- not the "delete
-  // the exemption" one.
+  // The two equipment.routes.js entries that stood here (:432:updateData,
+  // :461:updateData) were removed when #1081 CLOSED the allowlist half: the
+  // PUT now projects through ALLOWED_EQUIPMENT_UPDATE_FIELDS *after* the #868
+  // validate diff, and both writes take `$set: persistedUpdate`, so the
+  // body-spread shape this sweep detects no longer exists at either site.
+  // Same sanctioned removal case as the #875 pair above -- and the entry's
+  // own note said to expect exactly this rather than a third renumbering.
   //
-  // #1081 note for whoever finally does the allowlist: at that point these
-  // two entries must be DELETED rather than renumbered, because an allowlist
-  // removes the body-spread shape the detector matches on -- the sanctioned
-  // removal case documented at the top of this map, which is what #875 did
-  // for master-data.routes.js and result.routes.js. Renumbering then would
-  // red this guard just as hard as deleting now would.
-  // :426/:455 -> :432/:461, a uniform +6 shift, when #1087 added
-  // GET /analytical's organization-scope filter above both sites. The sites
-  // themselves are unchanged.
-  ['interface/routes/equipment.routes.js:432:updateData', 'validated (#868)'],
-  ['interface/routes/equipment.routes.js:461:updateData', 'validated (#868)'],
+  // The map is now EMPTY. That is the end state this guard is written to
+  // reach, and also the moment it is weakest: with no keys, the companion
+  // test's exemption loop below iterates nothing, so the detector is pinned
+  // against nothing real. The synthetic probe added there in the same commit
+  // is what replaces it -- do not delete that probe to "simplify" this file.
 ]);
 
 test('#839: no NEW update document is built by spreading a request body', () => {
@@ -247,13 +233,45 @@ test('#839: the sweep still sees the sites it is supposed to judge', () => {
         + 'make this guard pass by seeing less.'
     );
   }
+
+  // #1081: with UPDATE_SPREAD_EXEMPT now empty, the loop above iterates
+  // nothing and the live population is legitimately zero -- every site it
+  // ever named has been fixed. That is precisely the #863 shape this test
+  // exists to refuse: "the detector stopped matching" and "the codebase has
+  // nothing left to match" are indistinguishable from a green run. So pin
+  // the detector against a fixture instead of against the tree.
+  const PROBE = [
+    'const a = req.body;',
+    'coll.updateOne(q, { $set: a });',
+    'const b = { ...req.body };',
+    'coll.updateOne(q, { $set: { ...b } });',
+    'const { x, ...c } = req.body;',
+    'coll.updateOne(q, { $set: c });',
+  ].join('\n');
+
+  const probed = updateDocumentSites([
+    { file: path.join(BACKEND_SRC, '__detector_probe__.js'), content: PROBE },
+  ]).map((site) => site.split(':').pop());
+
+  assert.deepEqual(
+    probed.sort(),
+    ['a', 'b', 'c'],
+    'The update-document detector no longer matches all three body-alias '
+      + 'shapes it was written for -- plain `= req.body`, `= { ...req.body }`, '
+      + 'and the rest half of a destructure -- against both `$set` forms. '
+      + `Matched: [${probed.join(', ')}]. Test 2 above is passing over `
+      + 'whatever it stopped seeing.'
+  );
 });
 
 test('#839: the exemption set has not grown', () => {
   // Same convention as filter-keys.arch.test.js's UNWRITTEN_KEY_EXEMPT and
   // env-declarations' READ_EXEMPT: growing this is a review event, not a
-  // fix. #875's two open-defect entries were removed when that issue
-  // closed both sites with model-derived allowlists (4 -> 2); the two
-  // that remain are the deliberate #868 merge-validate pattern.
-  assert.equal(UPDATE_SPREAD_EXEMPT.size, 2);
+  // fix. 4 -> 2 when #875 closed master-data.routes.js and result.routes.js
+  // with model-derived allowlists; 2 -> 0 when #1081 did the same for
+  // equipment.routes.js's PUT. Zero does not mean there is nothing to guard
+  // -- it means the whole population is clean, which is exactly when a
+  // rotted detector is invisible, and why the companion test's synthetic
+  // probe now carries the detector's liveness instead of this map.
+  assert.equal(UPDATE_SPREAD_EXEMPT.size, 0);
 });
