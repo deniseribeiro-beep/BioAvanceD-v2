@@ -41,7 +41,7 @@ const logger = require('./logger');
  * written alongside the ciphertext -- so both matching sites query
  * `{ $or: [{ <field>Hash: { $in: [...] } }, { <plaintext arm> }] }`, and Mongo
  * can only serve an `$or` from indexes when EVERY arm is indexed. Until the
- * plaintext columns are dropped (#574/#1072) the union still scans.
+ * plaintext columns are dropped (#1104) the union still scans.
  *
  * The plaintext arms are deliberately left unindexed rather than indexed to
  * close that gap: they are the columns being removed, so indexing them buys
@@ -49,6 +49,11 @@ const logger = require('./logger');
  * cost half of the sequencing argument #1099 makes about correctness -- the
  * index has to exist *before* the plaintext arm goes, or the day it goes is
  * the day every import-path dedup becomes an unindexed scan per row.
+ *
+ * #1102 originally cited "#574/#1072" for that removal. Both are CLOSED and
+ * #1072 is about mfaSecret, not identity -- #574 shipped only its own
+ * precondition (repointing consumers) and closed, leaving the drop its title
+ * describes untracked. #1104 is the issue that actually carries it.
  *
  * ## Why non-unique, and why no partial filter
  *
