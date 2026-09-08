@@ -7,6 +7,7 @@ const { connectMongoDB } = require('../infrastructure/database/mongodb/connectio
 const { getQueue } = require('../config/queue');
 const logger = require('../utils/logger');
 const { UPLOADS_BASE } = require('../config/uploadConfig');
+const { ensureStagingImportIndexes } = require('../utils/stagingImportIndexes');
 
 class StagingImportService {
   getStagingDirectory() {
@@ -50,6 +51,16 @@ class StagingImportService {
 
   async createStagingImport(file) {
     await connectMongoDB();
+
+    // #941: build the jobId index the schema has always declared. Mongoose
+    // connects with autoIndex:false and nothing calls syncIndexes(), so
+    // `unique: true` on StagingImport.js never reaches Mongo on its own.
+    // Un-awaited and best-effort, the same terms collectionResolver.js uses
+    // for ensureSampleIndexes: the helper never rejects, index creation is
+    // idempotent and latched, and a first insert racing the build is
+    // harmless -- jobId is a uuidv4 from this single writer, so the index is
+    // the lookup path these rows are read by, not the uniqueness mechanism.
+    ensureStagingImportIndexes(StagingImport.collection);
 
     const jobId = uuidv4();
     const rawData = await this.persistRawFile(file, jobId);
