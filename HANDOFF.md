@@ -1,10 +1,10 @@
 # HANDOFF
 
-**Written 2026-09-08, twenty-seventh queue sitting. INTERIM — no end signal
+**Written 2026-09-08, twenty-eighth queue sitting. INTERIM — no end signal
 was given, so treat the session as CONTINUING.** Dennis asked to read the
-handoff, pick the next *group* of issues, and said Docker was on. I took a
-cold-chain telemetry group — **#1089, #1079, #1095** — and the two issues
-that work turned up, **#1119** and **#1121**.
+handoff and pick the next *group* of issues, and said Docker was on but had
+been off between sessions. I took the **reachability group** — code that
+cannot take effect on a running stack: **#941, #1125, #1124**.
 
 ## What shipped
 
@@ -13,120 +13,101 @@ origin. `main` untouched and still frozen.
 
 | commit | issue | what |
 |---|---|---|
-| `213567d1` | **#1079** | threshold alerts carry `type: 'threshold_breach'`, auto-resolve on the first in-range reading, and `getActiveAlerts` is bounded |
-| `60b62093` | **#1119** | `auditRequest` resolves the audit row's entity from the path captured at middleware entry |
-| `79b62087` | Refs #1095 | corrects `iot.controller.test.js`'s wrong prediction that its rejection test would invert |
-| `b04cb00c` | Refs **#1121** | the RF014 criterion-7 e2e query asks for `SecurityConfiguration` |
+| `524592a5` | Refs **#941** | `stagingImports.jobId` built natively by `utils/stagingImportIndexes.js`, wired at `createStagingImport` |
+| `4d9c220d` | Refs **#1125** | `migrate:user-role-assignments` exposes `backfillUserRoleAssignments.js` |
 
-**Closed: #1079, #1095, #1119, #1121.** #1095 closed `premise-corrected`.
-**Open and awaiting someone: #1089, #1118, #1120.**
-Query the tracker for state — `gh issue list --state open`.
+**Filed: #1126** (project), **pack #852**, plus a recurrence comment on
+closed pack #648. **Closed: nothing.** Query the tracker for state —
+`gh issue list --state open`.
 
 ## Gates
 
-- **Backend full suite: GREEN.** `[ran it]` **467 files / 8818 tests**,
-  exit 0, 621.91s (was 466/8806 before this sitting's additions). Covers
-  every commit above.
-- **Frontend: GREEN** — 32 files / 264 tests, exit 0.
-- **Architecture: 131/131.**
-- **Docker e2e gate: GREEN.** `[ran it]` **223 passed (2.0m)**, exit 0,
-  `--workers=1`, zero failures, on a cold stack built this sitting with
-  `--build`. Verified per container, not by `--wait`'s exit code: 12 core
-  services `Up (healthy)`, `mongo-rs-init-test` `Exited (0)`,
-  `admin-bootstrap-test` `Exited (0)`, all 17 bootstrap-chain containers
-  `Exited (0)`.
-  - **The stack is DOWN again and its volumes are gone** — `down
-    --volumes` at cleanup, containers 0, volumes 0, build cache pruned
-    (1.048GB; `docker system df` claimed 433.3MB, `docker buildx du` had
-    it right). **Bootstrap state: NONE.** The next gate starts cold.
-  - **Images KEPT** — 33, 8.697GB, none active. Removing them buys 8.697GB
-    against a multi-minute rebuild of a 12-service stack plus the
-    17-service chain on the next gate; a machine-wide prune is Dennis's
-    call, not a session's.
-  - **`--build` is not optional after any `api/backend/src` change**:
-    `backend-app-test` is build-not-mount, so a plain `up -d --wait`
-    reuses a stale image. Recorded three times already; it held again.
+- **Targeted native only, per the end-loaded gate order.** `[ran it]`
+  6-file consumer set 120/120; 21-file consumer set 551/551;
+  `npm run test:architecture` **131/131** twice. All exit 0.
+- **NOT run this sitting: the full backend suite, the frontend suite, and
+  the Docker e2e gate.** The last known-green figures are the previous
+  sitting's — backend 467/8818, frontend 32/264, Docker e2e 223/223 — and
+  **five commits have landed since that backend run** (`d96ae079`,
+  `da6346a0`, `a66b5a9c`, and this sitting's two). Whoever gates next
+  should not treat those numbers as covering the current tree.
+- **Docker: Desktop is ON, no stack up, no volumes, bootstrap NONE.** The
+  previous sitting tore down with `down --volumes`. The next gate starts
+  cold, and `--build` is not optional after any `api/backend/src` change —
+  `backend-app-test` is build-not-mount.
 
-## Per-issue targeted runs, for attribution if the full suite ever reds
+## The correction that matters most
 
-- **#1079**: `temperature.service.test.js` 31/31; consumers 10 files / 175
-  tests. Probe: reverting the product file reds 6 of 48 across the two
-  files, one per behaviour site.
-- **#1119**: consumers 34 files / 1179 tests. Probe: reverting the
-  middleware reds 5 of 33 — the 5 new cases at both levels — with all 11
-  pre-existing middleware cases green.
+**#941's own most recent comment (2026-09-04) says "BOTH call sites are
+currently unreachable", and `[ran it]` both halves are false at
+`a66b5a9c`.** `linkSensorMetadata` is called from `sensor.service.js:57`,
+wired into `POST /api/sensors` by `be435d6c` on 2026-07-28 — five weeks
+*before* that comment; the sweep that reported one hit appears to have
+counted only a code comment. And `backfillLocationStorage.js` gained its
+npm script in `a66b5a9c`.
 
-## #1121 is CLOSED, and how it was proven is the reusable part
+So **both indexes from `9c190b1b` are on live paths**, and the
+`sensorMetadata.sensorId` upsert race that comment calls "load-bearing" is
+live on `POST /api/sensors` today. **The severity is higher than #941's
+latest word on it, not lower.** Corrected on #941; #1070 already carried
+the other half on the closed side.
 
-The gate took `auth-access-security.spec.ts` green. Then, because a green
-spec does not show the fix caused it, the pre-fix query was restored to
-that one file and re-run against the same live stack: **1 failed**, at
-exactly `expect(requireMfaEntry).toBeTruthy()`, line 619. Red with
-`SecurityConfig`, green with `SecurityConfiguration`, same stack.
-
-**The finding behind it matters more than the fix**: the previous handoff
-cleared `4a51a916` as having no e2e surface because *"no spec references
-`SecurityConfig`"*. `[ran it]` that is false — `auth-access-security.spec.ts`
-referenced it as a **URL query parameter**, which an emitting-side search
-does not see. Treat "no e2e surface" claims about a rename as unproven
-unless the search covered spec *query strings*, not just symbols.
+The reusable part: **a "zero callers" sweep that returns only comment lines
+has not established anything.** Read what the hits actually are.
 
 ## Things a next session must not undo
 
-1. **#1119's fix is `const requestPath = req.path` captured at middleware
-   ENTRY**, before `next()`. Moving that read back inside the `res.send`
-   wrapper reinstates the bug — Express has stripped the mount prefix by
-   then. The `ignoredPaths` check above it deliberately still reads
-   `req.path` directly and is correct.
-2. **`audit-entity-coverage.arch.test.js` proves the MAP, not the
-   composition.** It feeds `determineEntity` the full `/api/<mount>` path,
-   which the runtime never supplies; it was green for the entire period
-   the behaviour was broken. Its new SCOPE note says so and names the two
-   files that pin the composition. Don't "simplify" it back.
-3. **`iot.controller.test.js`'s `#1093` rejection test is CORRECT and must
-   stay green.** It asserts the *controller* audits nothing on a 400. The
-   request is audited anyway, by middleware that unit test never mounts.
+1. **`stagingImports.jobId` is built UNIQUE deliberately, against #941's own
+   wording.** That thread says the unique half "guards nothing worth
+   guarding" and only the lookup index is wanted. It is built unique anyway
+   because `StagingImport.js` *declares* `unique: true`, and an index built
+   non-unique would leave the declaration reading as a guarantee while
+   enforcing nothing — #941's own trap one level down. Pinned by value.
+2. **`sensorMetadata.macAddress` stays UNBUILT.** The upsert filter is on
+   `sensorId`, so two sensors may already legitimately share a MAC; building
+   it converts a tolerated state into a hard `E11000`.
+3. **`backfillUserRoleAssignments.js` is npm-only on purpose** — a one-shot
+   legacy migration, not a seed, so placement 3 of the conventions' "Where a
+   new seed belongs". Don't promote it to a boot path or compose service.
 
 ## The judgment a query cannot carry
 
-- **#1117 should not be answered until someone re-reads it.** Its premise
-  is that `Sistema` rows are a closed historical population before
-  `a84eaa63`. `[ran it]` 57 of 61 mounted prefixes were still recording
-  `Sistema` after it; the real boundary is `60b62093`. `ENTITY_MAP`'s
-  `HISTORICAL CUTOFF` docblock still names the wrong commit — deliberately
-  not edited, because that is #1117's own subject. Commented there.
-- **#1089 is atomic, not chunkable, and both its `[not established]`
-  items are now settled.** `temperaturePolicies` is canonical; `Policy.js`
-  is temperature-only by its own docblock and untouched since the initial
-  commit. `[ran it]` the blocker: feeding `PolicyModel.create()`'s output
-  to `TemperaturePolicy` fails on **four** required fields and drops
-  **eight**, and dict-02's `profileName` (P1X-0106, 1..1 Core) has no API
-  source. Four questions on the issue; **do not start it without answers**.
-- **A premise-wrong issue can be worth more than a correct one.** #1095's
-  central claim was false, and establishing that is what found #1119 —
-  a defect four times its size. Re-running a body's trace is not overhead.
-- **`docker compose config --services` before naming services**, and
-  `docker ps -a` per container rather than `--wait`'s exit code. Unchanged.
+- **#941 is now down to its non-unique half.** All four unique specs are
+  resolved (three built, `macAddress` deliberately not). What remains is the
+  performance declarations at `Facility.js:48`, `Room.js:52`,
+  `StorageBox.js:97/98`, `StorageContainer.js:100/101/102` — still never
+  built, nothing *incorrect* without them. The title's "nine unique
+  constraints across 10 models" is still the wrong number for that
+  remainder.
+- **#1125 is 11 of 19 now, and the eleven are two populations, not one.**
+  `[ran it]` **six already have a unit test** (`migrateClinicalUnitOrganizations`,
+  `migrateRoleAssignmentScopes`, `migrateUserAnonIds`, `migrateUserOrganizations`,
+  `seedDiseaseValidationRules`, `testEnvironment`) and five do not. A
+  dedicated test is a *consumer*, so the six are not deletion candidates
+  under `fix-bugs`' dead-code default — their question is "wire it or invoke
+  it", and only the other five carry a keep-or-delete question.
+  `[not established]` whether those six tests exercise the CLI wrapper or
+  only the service beneath it; that decides whether the test would even
+  notice the script being deleted, and it should be checked per script.
+- **#1124 was NOT worked** — it is the group's third member and its core is
+  a capability decision (should the API create a StorageContainer at all?),
+  which is Denise's. Its premise was established fresh by `a66b5a9c` last
+  sitting; it does not need re-deriving, it needs an answer.
+- **#1126 is the wiring gap this sitting's own fix avoided.** `[ran it]`
+  nothing asserts either `utils/storageIndexes.js` helper is ever *called*,
+  so deleting both call sites leaves the suite green. Test-only work; an
+  `unit-test-loop` slice, not a `fix-bugs` one.
 
 ## Recommended next
 
-**None queued by name.** Dennis named no specific issue; "pick the next
-group" was the whole instruction.
+**None queued by name.** Dennis named no specific issue.
 
-**Every gate is green** — backend 467/8818, frontend 32/264, architecture
-131/131, Docker e2e 223/223 — and the tree matches origin, so the branch is
-at its cleanest since the last ship.
-
-The honest candidates, in order:
-
-1. **`ship-integration-branch`.** The PR to `main` is where real CI signal
-   comes from, and it is **Dennis's call, never yours**. This is the first
-   sitting in a while where nothing is unproven.
-2. **#1089**, but only once its four questions have answers — the issue
-   carries them and the reasoning for why no slice stands alone.
-3. **#1118 / #1120**, both filed this sitting and both still needing their
-   own `[not established]` items established before a direction is chosen.
-   Neither is an owner's call yet; nobody has done the tracing.
-
-**#1117 is not on this list on purpose** — read the note above before
-answering it.
+1. **The group's remainder**: #1125 direction 1 (triage the other eleven,
+   now split into two populations above) and #1126. Both are small and both
+   have their direction settled.
+2. **`ship-integration-branch`** — still Dennis's call, never yours, and
+   note the gate caveat above: the full suites have not run against the last
+   five commits.
+3. **#1089 / #1118 / #1120 / #1123 / #1124** all still need someone; the
+   first has four unanswered questions on it and should not be started
+   without them.
