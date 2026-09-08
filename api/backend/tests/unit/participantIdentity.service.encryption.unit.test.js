@@ -45,6 +45,22 @@ describe('ParticipantIdentityService.computeBlindIndex', () => {
     expect(a).toBe(b);
   });
 
+  // #1109: the write side stored the document verbatim while
+  // patient.service.js#checkIdentifierConflict searched for the digits-only
+  // form, so a CPF typed as 111.444.777-35 hashed differently at write time
+  // and at query time and the uniqueness check missed it entirely.
+  it('#1109: is deterministic for the same identityDocument regardless of punctuation', () => {
+    const a = participantIdentityService.computeBlindIndex('identityDocument', '11144477735');
+    const b = participantIdentityService.computeBlindIndex('identityDocument', '111.444.777-35');
+    expect(a).toBe(b);
+  });
+
+  it('#1109: still differs across genuinely different documents', () => {
+    const a = participantIdentityService.computeBlindIndex('identityDocument', '111.444.777-35');
+    const b = participantIdentityService.computeBlindIndex('identityDocument', '529.982.247-25');
+    expect(a).not.toBe(b);
+  });
+
   it('is deterministic for the same birthDate calendar day regardless of time-of-day', () => {
     const a = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20, 3, 15));
     const b = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20, 23, 59));
@@ -79,6 +95,14 @@ describe('ParticipantIdentityService.computeBlindIndexCandidates', () => {
 
   it('applies the SAME normalization as computeBlindIndex -- whitespace (#1099)', () => {
     const candidates = participantIdentityService.computeBlindIndexCandidates('identityDocument', '  11144477735  ');
+    expect(candidates).toContain(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
+  });
+
+  // #1109: import.service.js#importPatients passes patientData.identityDocument
+  // through UNNORMALIZED, so the query-side fan-out has to strip punctuation
+  // itself -- normalizing only at the write site would leave that dedup blind.
+  it('#1109: applies the SAME normalization as computeBlindIndex -- punctuation', () => {
+    const candidates = participantIdentityService.computeBlindIndexCandidates('identityDocument', '111.444.777-35');
     expect(candidates).toContain(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
   });
 
@@ -127,6 +151,31 @@ describe('ParticipantIdentityService.encryptIdentityFields', () => {
     // RF005/RNF007 (#574): blind-index siblings for the two queried fields.
     expect(result.identityDocumentHash).toBe(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
     expect(result.birthDateHash).toBe(participantIdentityService.computeBlindIndex('birthDate', new Date('1990-01-20')));
+  });
+
+  // #1109: every writer other than createPatient handed this function the
+  // raw value, so the stored plaintext, its ciphertext and its blind index
+  // all carried punctuation the query side had already stripped.
+  it('#1109: canonicalizes a punctuated identityDocument across plaintext, ciphertext and hash', () => {
+    const result = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      identityDocument: '111.444.777-35',
+    });
+
+    expect(result.identityDocument).toBe('11144477735');
+    expect(result.identityDocumentHash).toBe(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
+    expect(JSON.stringify(result.identityDocumentEncrypted)).not.toContain('111.444.777-35');
+  });
+
+  // #1109 control: a document with no punctuation is untouched, so a red
+  // here means the fixture is wrong rather than the bug reproduced.
+  it('#1109 control: leaves an already-canonical identityDocument unchanged', () => {
+    const result = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      identityDocument: '11144477735',
+    });
+
+    expect(result.identityDocument).toBe('11144477735');
   });
 
   it('does not mutate the input object', () => {

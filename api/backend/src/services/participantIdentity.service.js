@@ -29,6 +29,20 @@ class ParticipantIdentityService {
 
   encryptIdentityFields(fields = {}) {
     const doc = { ...fields };
+
+    // #1109: canonicalize identityDocument BEFORE deriving the ciphertext
+    // and the blind index, so the stored plaintext, the ciphertext and
+    // identityDocumentHash all carry the same digits-only spelling for
+    // every writer. Only patient.service.js#createPatient normalized ahead
+    // of this call -- import, updatePatient, the FHIR staging path, the
+    // backfill and PatientIdentityService all passed the raw value through,
+    // so a CPF typed as 111.444.777-35 was stored verbatim and invisible to
+    // checkIdentifierConflict, which searches for the stripped form.
+    const canonicalDocument = this.normalizeIdentityDocument(doc.identityDocument);
+    if (canonicalDocument) {
+      doc.identityDocument = canonicalDocument;
+    }
+
     const encryptedFieldMap = this.getEncryptedFieldMap();
     let keyVersion = null;
 
@@ -76,6 +90,18 @@ class ParticipantIdentityService {
     };
   }
 
+  // #1109: the one canonical spelling of identityDocument -- digits only.
+  // The field is a CPF throughout this codebase (utils/security.js#validateCPF
+  // wants 11 digits, and patient.service.js has always stripped non-digits on
+  // the query side), so punctuation is formatting rather than identity.
+  // patient.service.js#normalizeidentityDocument delegates here so the read
+  // and write sides cannot drift apart again.
+  normalizeIdentityDocument(value) {
+    if (value === null || value === undefined) return null;
+    const digits = String(value).replace(/\D/g, '').trim();
+    return digits || null;
+  }
+
   // Normalizes a raw value into the exact string that gets hashed, so the
   // same input always produces the same blind-index value at write time and
   // at query time. birthDate normalizes to the local calendar date
@@ -84,6 +110,15 @@ class ParticipantIdentityService {
   // local midnight.
   normalizeForHash(field, value) {
     if (value === null || value === undefined || value === '') return null;
+
+    // #1109: hash the digits-only form on both sides. Writers stored the
+    // value verbatim while checkIdentifierConflict searched for the stripped
+    // form, so a punctuated CPF matched neither the plaintext arm nor the
+    // blind index and a second participant was created for the same civil
+    // identity.
+    if (field === 'identityDocument') {
+      return this.normalizeIdentityDocument(value);
+    }
 
     if (field === 'birthDate') {
       const date = value instanceof Date ? value : new Date(value);

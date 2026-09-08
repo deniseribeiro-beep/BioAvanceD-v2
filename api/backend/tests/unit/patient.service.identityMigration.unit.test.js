@@ -137,6 +137,63 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     expect(conflict).toBeNull();
   });
 
+  // #1109: every participantIdentities writer other than createPatient stores
+  // identityDocument verbatim (ParticipantIdentityModel.fieldsOf only trims,
+  // and updatePatient/import pass the raw value straight through), while
+  // checkIdentifierConflict searches for the digits-only form. A CPF typed
+  // with punctuation therefore missed BOTH arms -- the plaintext one and the
+  // #1104 hash one -- so a second participant was created for the same civil
+  // identity.
+  it('#1109: checkIdentifierConflict matches a PUNCTUATED stored document (ciphertext-only)', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const ParticipantIdentityModel = require('../../src/models/ParticipantIdentity');
+    const encrypted = participantIdentityService.encryptIdentityFields(
+      ParticipantIdentityModel.create({ participantId: '11111111', identityDocument: '111.444.777-35' })
+    );
+    const patients = makeInMemoryCollection([]);
+    const participantIdentities = makeInMemoryCollection([
+      { ...encrypted, identityDocument: null },
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    const conflict = await patientService.checkIdentifierConflict(db, { identityDocument: '111.444.777-35' });
+
+    expect(conflict).toMatchObject({ field: 'identityDocument', value: '11144477735' });
+  });
+
+  it('#1109: checkIdentifierConflict matches a PUNCTUATED stored document from an UNPUNCTUATED query', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const ParticipantIdentityModel = require('../../src/models/ParticipantIdentity');
+    const encrypted = participantIdentityService.encryptIdentityFields(
+      ParticipantIdentityModel.create({ participantId: '11111111', identityDocument: '111.444.777-35' })
+    );
+    const patients = makeInMemoryCollection([]);
+    const participantIdentities = makeInMemoryCollection([encrypted]);
+    const db = makeDb({ patients, participantIdentities });
+
+    const conflict = await patientService.checkIdentifierConflict(db, { identityDocument: '11144477735' });
+
+    expect(conflict).toMatchObject({ field: 'identityDocument', value: '11144477735' });
+  });
+
+  // #1109 control: same punctuated write path, a genuinely different
+  // document. Expected behaviour is identical before and after the fix, so a
+  // red here means the fixture is wrong rather than the bug reproduced.
+  it('#1109 control: a PUNCTUATED stored document with a different number still returns null', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const ParticipantIdentityModel = require('../../src/models/ParticipantIdentity');
+    const encrypted = participantIdentityService.encryptIdentityFields(
+      ParticipantIdentityModel.create({ participantId: '11111111', identityDocument: '529.982.247-25' })
+    );
+    const patients = makeInMemoryCollection([]);
+    const participantIdentities = makeInMemoryCollection([encrypted]);
+    const db = makeDb({ patients, participantIdentities });
+
+    const conflict = await patientService.checkIdentifierConflict(db, { identityDocument: '111.444.777-35' });
+
+    expect(conflict).toBeNull();
+  });
+
   it('checkIdentifierConflict still checks recordNumber against Patient (not a civil-identity field)', async () => {
     const patients = makeInMemoryCollection([
       { participantId: '11111111', recordNumber: 'PRONT-1' },

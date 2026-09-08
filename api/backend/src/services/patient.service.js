@@ -321,10 +321,12 @@ class PatientService {
     return digits;
   }
 
+  // #1109: single definition, shared with the write side.
+  // participantIdentity.service.js normalizes identically before hashing and
+  // before storing, so this query-side helper cannot drift from what writers
+  // persist.
   normalizeidentityDocument(identityDocument) {
-    if (identityDocument === undefined || identityDocument === null) return null;
-    const normalized = String(identityDocument).replace(/\D/g, '').trim();
-    return normalized || null;
+    return participantIdentityService.normalizeIdentityDocument(identityDocument);
   }
 
   normalizeRecordNumber(recordNumber) {
