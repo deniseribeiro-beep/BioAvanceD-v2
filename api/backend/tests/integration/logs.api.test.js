@@ -193,38 +193,43 @@ describe('POST /api/logs/query', () => {
   });
 });
 
-describe('POST /api/logs/register', () => {
+// #1107: POST /api/logs/register was `authenticate`-only while every other
+// route in this file carries requireAuditReader, and the handler passed
+// `req.body` straight through to logService.createLog -- so any logged-in
+// principal could forge an audit row with an arbitrary `userId`, a backdated
+// `timestamp` and a spoofed `source`, sealed into the immutable Merkle chain
+// by integrityCheckService#buildMerkleForDate. The route had a frontend
+// binding (api.ts -> useLogs.ts) but ZERO live callers, and nothing in the
+// canonical docs mandates a client-submitted audit event: RNF009's subject is
+// "O sistema deve registrar", its AC#2 requires a pseudonymized actor and AC#3
+// a sanitized payload, and every dict-02 AuditEvent row names "Backend Log.*"
+// as its own evidence field. So the route was REMOVED rather than gated.
+// These two pin the removal; the previous block asserted the hole as intended
+// behaviour ("allows any authenticated user (no requireAuditReader)").
+describe('POST /api/logs/register (removed by #1107)', () => {
   beforeEach(() => { givenSession(); });
   afterEach(() => { vi.restoreAllMocks(); });
 
-  it('returns 401 without token', async () => {
-    const res = await request(app).post('/api/logs/register').send({ action: 'TEST' });
-    expect(res.status).toBe(401);
-  });
-
-  it('allows any authenticated user (no requireAuditReader) and returns 201 on success', async () => {
-    const created = { _id: 'log-1', action: 'LOGIN' };
-    vi.spyOn(logService, 'createLog').mockResolvedValue(created);
+  it('is not routed for an authenticated non-privileged user, and writes nothing', async () => {
+    const createLogSpy = vi.spyOn(logService, 'createLog');
     app.locals.db = createDbMock({});
     const res = await request(app)
       .post('/api/logs/register')
       .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Pesquisador' })}`)
-      .send({ action: 'LOGIN' });
-    expect(res.status).toBe(201);
-    expect(res.body).toEqual({ success: true, data: created });
+      .send({ action: 'LOGIN', userId: 'some-other-user', source: 'worker' });
+    expect(res.status).toBe(404);
+    expect(createLogSpy).not.toHaveBeenCalled();
   });
 
-  it('returns 400 (not 500) when logService.createLog rejects', async () => {
-    vi.spyOn(logService, 'createLog').mockRejectedValue(new Error('write failed'));
-    app.locals.db = createDbMock({});
+  it('is not routed for an administrator either -- the surface is gone, not gated', async () => {
+    const createLogSpy = vi.spyOn(logService, 'createLog');
+    app.locals.db = dbForAccessType(4);
     const res = await request(app)
       .post('/api/logs/register')
-      .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Pesquisador' })}`)
+      .set('Authorization', `Bearer ${makeToken()}`)
       .send({ action: 'LOGIN' });
-    expect(res.status).toBe(400);
-    expect(res.body.success).toBe(false);
-    expect(res.body.error).toBe('Erro ao registrar log');
-    expect(res.body.message).toBe('write failed');
+    expect(res.status).toBe(404);
+    expect(createLogSpy).not.toHaveBeenCalled();
   });
 });
 

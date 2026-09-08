@@ -218,29 +218,22 @@ describe('logs.routes.js', () => {
     });
   });
 
-  describe('POST /api/logs/register', () => {
-    it('retorna 503 quando o db não está disponível', async () => {
-      const response = await request(appWithDb(null)).post('/api/logs/register').send({ action: 'create' });
-      expect(response.status).toBe(503);
-    });
-
-    it('retorna 201 com o log criado', async () => {
+  // #1107: the route was removed outright rather than gated -- full rationale
+  // in logs.api.test.js's sibling block. The retired case here was
+  // `não exige requireAuditReader (perfil sem permissão ainda registra)`,
+  // which pinned the forgery surface as intended behaviour.
+  describe('POST /api/logs/register (removed by #1107)', () => {
+    it('não está mais roteado, e o serviço de log não é chamado', async () => {
       const response = await request(appWithDb({})).post('/api/logs/register').send({ action: 'create' });
-      expect(response.status).toBe(201);
-      expect(response.body).toEqual({ success: true, data: { action: 'create', _id: 'new-log' } });
+      expect(response.status).toBe(404);
+      expect(logServiceMock.createLog).not.toHaveBeenCalled();
     });
 
-    it('não exige requireAuditReader (perfil sem permissão ainda registra)', async () => {
+    it('não está roteado nem para um perfil sem permissão', async () => {
       currentUser = { accessType: 1, roleName: 'tecnico' };
       const response = await request(appWithDb({})).post('/api/logs/register').send({ action: 'create' });
-      expect(response.status).toBe(201);
-    });
-
-    it('retorna 400 quando o serviço falha', async () => {
-      logServiceMock.createLog.mockRejectedValueOnce(new Error('invalid payload'));
-      const response = await request(appWithDb({})).post('/api/logs/register').send({});
-      expect(response.status).toBe(400);
-      expect(response.body).toEqual({ success: false, error: 'Erro ao registrar log', message: 'invalid payload' });
+      expect(response.status).toBe(404);
+      expect(logServiceMock.createLog).not.toHaveBeenCalled();
     });
   });
 

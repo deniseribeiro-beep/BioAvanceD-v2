@@ -91,20 +91,26 @@ router.post('/query', authenticate, requireAuditReader, async (req, res) => {
   }
 });
 
-router.post('/register', authenticate, async (req, res) => {
-  try {
-    const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
-    }
-
-    const created = await logService.createLog(db, req.body || {}, req);
-    return res.status(201).json({ success: true, data: created });
-  } catch (error) {
-    logger.error('Erro ao registrar log:', error.message || error);
-    return res.status(400).json({ success: false, error: 'Erro ao registrar log', message: error.message });
-  }
-});
+// #1107: there is deliberately NO write route in this file. `POST /register`
+// used to sit here carrying `authenticate` alone, while every route above and
+// below carries requireAuditReader -- reading the RNF009 trail needed
+// Admin/Auditor, writing it needed only a login. It handed `req.body` straight
+// to logService.createLog, which sources `userId`, `timestamp` and `source`
+// from that body, so any logged-in principal (UsuarioExterno included) could
+// write a misattributed, backdated, subsystem-spoofing row into an immutable
+// trail that integrityCheckService#buildMerkleForDate then folds into the
+// daily Merkle root -- cryptographically indistinguishable from a genuine one,
+// because the chain attests that a row was not ALTERED, not that it was
+// legitimately produced. Write-side mirror of #1056.
+//
+// Removed rather than gated: it had zero live callers, and no RF/RNF mandates
+// a client-submitted audit event. RNF009's subject is "O sistema deve
+// registrar", its AC#2 requires a pseudonymized actor and AC#3 a sanitized
+// payload, and every dict-02 AuditEvent row (P1X-0325..0343) names "Backend
+// Log.*" as its evidence with the frontend appearing only as a Logs-screen
+// column. Audit rows are produced server-side by auditLogger.log, which
+// anonymizes the actor and stamps a canonical `source` (#1094).
+// Do not re-add a client-facing write route here.
 
 router.get('/export/csv', authenticate, requireAuditReader, async (req, res) => {
   try {

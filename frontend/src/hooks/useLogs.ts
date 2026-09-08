@@ -140,17 +140,11 @@ export function useLogs() {
     }
   };
 
-  const registerEvent = async (data: Partial<Log>) => {
-    try {
-      const response = await logService.registerEvent(data);
-      const responseData = response.data as { data?: Log } | Log;
-      const newLog: Log = (responseData as { data?: Log })?.data || (responseData as Log);
-      setLogs([newLog, ...logs]);
-      return newLog;
-    } catch (err: unknown) {
-      throw new Error(extractErrorMessage(err, 'Erro ao registrar evento'));
-    }
-  };
+  // #1107: `registerEvent` was removed along with the POST /api/logs/register
+  // route it wrapped -- it had no consumer (LogsPage is the only caller of this
+  // hook and never destructured it), and the route was a forgery surface on the
+  // immutable audit trail. Audit rows are written server-side, not submitted by
+  // the client.
 
   return {
     logs,
@@ -158,7 +152,6 @@ export function useLogs() {
     error,
     loadLogs,
     queryLogs,
-    registerEvent,
   };
 }
 
