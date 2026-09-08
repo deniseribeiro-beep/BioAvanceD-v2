@@ -348,13 +348,11 @@ describe('PatientService.searchPatients — date-search branches', () => {
     await patientService.searchPatients(db, '15/03/2000');
 
     const identityQuery = identitiesFindMock.mock.calls[0][0];
-    // #1104: the day-range condition is now ONE BRANCH of an $or alongside
-    // birthDateHash, the same shape the other five matching sites use, so a
-    // ciphertext-only identity is still found.
-    expect(identityQuery.$or).toEqual(expect.arrayContaining([
-      expect.objectContaining({ birthDate: expect.objectContaining({ $gte: expect.any(Date), $lt: expect.any(Date) }) }),
-    ]));
+    // #1104: birthDate is ciphertext-only, so the day-range branch is gone and
+    // the query narrows on birthDateHash alone -- the same shape the other
+    // three birthDate matching sites now use.
     expect(identityQuery.$or.some((clause) => clause.birthDateHash)).toBe(true);
+    expect(identityQuery.$or.some((clause) => clause.birthDate)).toBe(false);
 
     const passedQuery = findMock.mock.calls[0][0];
     expect(passedQuery.$or).toEqual(expect.arrayContaining([{ participantId: { $in: ['11111111'] } }]));

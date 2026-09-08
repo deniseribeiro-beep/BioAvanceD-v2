@@ -103,7 +103,13 @@ describe('fhir-import-staging.service#commitBatch — ParticipantIdentity dual-w
     expect(identity).toBeTruthy();
     expect(identity.patientName).toBe('Maria Silva');
     expect(identity.identityDocument).toBe('12345678900');
-    expect(identity.birthDate).toBeInstanceOf(Date);
+    // RF005/RNF007, dict-07 row 1 (#1104): birthDate is ciphertext-only now.
+    // The plaintext is dropped once the ciphertext exists, so the value lives
+    // in birthDateEncrypted and stays matchable via birthDateHash.
+    // patientName and identityDocument above still dual-write.
+    expect(identity.birthDate).toBeNull();
+    expect(identity.birthDateEncrypted).toBeTruthy();
+    expect(identity.birthDateHash).toBeTruthy();
   });
 
   it('#571: carries sex onto Patient when the FHIR resource provides Patient.gender', async () => {

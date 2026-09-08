@@ -35,13 +35,15 @@ const logger = require('./logger');
  * `participantId` is an immediate win: those are bare `findOne({ participantId })`
  * lookups and they scan the collection today.
  *
- * The two hash indexes are **not** yet, and it would be wrong to imply
- * otherwise. `participantIdentity.service.js#getEncryptedFieldMap` is still
- * deliberately *additive* -- plaintext `identityDocument`/`birthDate` are
- * written alongside the ciphertext -- so both matching sites query
- * `{ $or: [{ <field>Hash: { $in: [...] } }, { <plaintext arm> }] }`, and Mongo
- * can only serve an `$or` from indexes when EVERY arm is indexed. Until the
- * plaintext columns are dropped (#1104) the union still scans.
+ * `birth_date_hash` IS now an immediate win too, as of #1104: birthDate is
+ * ciphertext-only, its plaintext arm has been removed from all four matching
+ * sites, and those queries are now a single indexed condition.
+ *
+ * `identity_document_hash` is **not** yet, and it would be wrong to imply
+ * otherwise. identityDocument is still dual-written, so its matching sites
+ * query `{ $or: [{ identityDocumentHash: { $in: [...] } }, { <plaintext arm> }] }`,
+ * and Mongo can only serve an `$or` from indexes when EVERY arm is indexed.
+ * Until that plaintext column is dropped (#1104) that union still scans.
  *
  * The plaintext arms are deliberately left unindexed rather than indexed to
  * close that gap: they are the columns being removed, so indexing them buys

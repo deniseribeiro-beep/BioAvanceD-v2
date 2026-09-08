@@ -1017,15 +1017,17 @@ router.get('/patient-match', async (req, res) => {
     if (!identity && patientNameNormalized && birthDate) {
       const startOfDay = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
       const endOfDay = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), startOfDay.getDate() + 1);
-      // RF005/RNF007 (#574): birthDateHash lets this narrow-by-day-of-birth
-      // match without a plaintext range query once birthDate is eventually
-      // dropped; the range condition stays as a fallback for records
-      // written before the hash sibling existed.
+      // RF005/RNF007 (#574, done for this field in #1104): birthDate is
+      // ciphertext-only, so this narrows by day of birth on the blind index
+      // alone. The plaintext range condition below is NOT a fallback for old
+      // records -- it is the keyless-stack branch (#1083), reached only when
+      // no ENCRYPTION_KEY is configured and the plaintext is therefore the
+      // only thing that was written.
       // #1099: match under EVERY registered key, so a hash written before
       // an ENCRYPTION_KEY rotation stays matchable.
       const birthDateHashes = participantIdentityService.computeBlindIndexCandidates('birthDate', birthDate);
       const dateOrConditions = birthDateHashes.length
-        ? [{ birthDateHash: { $in: birthDateHashes } }, { birthDate: { $gte: startOfDay, $lt: endOfDay } }]
+        ? [{ birthDateHash: { $in: birthDateHashes } }]
         : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
       const candidates = await identityCollection.find({ $or: dateOrConditions }).toArray();
       identity = candidates.find((rawCandidate) => {

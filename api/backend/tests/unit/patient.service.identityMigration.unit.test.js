@@ -210,8 +210,17 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     const patients = makeInMemoryCollection([
       { participantId: '11111111', patientName: 'STALE NAME ON PATIENT', birthDate: new Date(1990, 0, 20) },
     ]);
+    // #1104: built through the real write path rather than by hand -- since
+    // the birthDate cutover a stored identity carries birthDateEncrypted and
+    // birthDateHash and NO plaintext birthDate, and the query matches on the
+    // hash. A hand-written plaintext-only row is a shape no writer produces.
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
     const participantIdentities = makeInMemoryCollection([
-      { participantId: '11111111', patientName: 'Ana Silva', birthDate: new Date(1990, 0, 20) },
+      participantIdentityService.encryptIdentityFields({
+        participantId: '11111111',
+        patientName: 'Ana Silva',
+        birthDate: new Date(1990, 0, 20),
+      }),
     ]);
     const db = makeDb({ patients, participantIdentities });
 
@@ -290,9 +299,13 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
       { participantId: '11111111', birthDate: new Date(1985, 5, 1) },
       { participantId: '22222222', birthDate: new Date(1985, 5, 1) },
     ]);
+    // #1104: built through the real write path -- see the checkDuplicatePatient
+    // sibling above for why a hand-written plaintext-only row no longer
+    // represents anything a writer produces.
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
     const participantIdentities = makeInMemoryCollection([
-      { participantId: '11111111', birthDate: new Date(1990, 0, 20) },
-      { participantId: '22222222', birthDate: new Date(1985, 5, 1) },
+      participantIdentityService.encryptIdentityFields({ participantId: '11111111', birthDate: new Date(1990, 0, 20) }),
+      participantIdentityService.encryptIdentityFields({ participantId: '22222222', birthDate: new Date(1985, 5, 1) }),
     ]);
     const db = makeDb({ patients, participantIdentities });
 

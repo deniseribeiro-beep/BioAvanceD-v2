@@ -142,7 +142,7 @@ describe('PatientService.searchPatients', () => {
     expect(queryArg.$or).toContainEqual({ participantId: '12345678' });
   });
 
-  it('parses a DD/MM/YYYY date term into a birthDate range clause', async () => {
+  it('parses a DD/MM/YYYY date term into a birthDateHash clause (#1104)', async () => {
     // RF005/RNF007 (#575): birthDate matching queries ParticipantIdentity;
     // a hit there becomes a participantId $in clause on the Patient query.
     const identitiesCollection = makeFakeCollection({
@@ -155,11 +155,17 @@ describe('PatientService.searchPatients', () => {
 
     await patientService.searchPatients(db, '15/06/1990');
 
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
     const identityQueryArg = identitiesCollection.find.mock.calls[0][0];
-    // #1104: birthDate range is now one $or branch alongside birthDateHash.
-    const rangeClause = identityQueryArg.$or.find((clause) => clause.birthDate);
-    expect(rangeClause.birthDate.$gte).toEqual(new Date(1990, 5, 15));
-    expect(rangeClause.birthDate.$lt).toEqual(new Date(1990, 5, 16));
+    // #1104: birthDate is ciphertext-only, so the parsed term drives a
+    // birthDateHash clause rather than a plaintext range. Asserting the hash
+    // of the expected calendar day still pins the DD/MM/YYYY parsing, which
+    // is what this test is for.
+    const hashClause = identityQueryArg.$or.find((clause) => clause.birthDateHash);
+    expect(hashClause.birthDateHash.$in).toContain(
+      participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 5, 15))
+    );
+    expect(identityQueryArg.$or.some((clause) => clause.birthDate)).toBe(false);
 
     const queryArg = patientsCollection.find.mock.calls[0][0];
     const participantClause = queryArg.$or.find((clause) => clause.participantId && clause.participantId.$in);
@@ -177,7 +183,7 @@ describe('PatientService.searchPatients', () => {
     expect(birthClause).toBeUndefined();
   });
 
-  it('parses a YYYY-MM-DD date term into a birthDate range clause', async () => {
+  it('parses a YYYY-MM-DD date term into a birthDateHash clause (#1104)', async () => {
     // RF005/RNF007 (#575): birthDate matching queries ParticipantIdentity;
     // a hit there becomes a participantId $in clause on the Patient query.
     const identitiesCollection = makeFakeCollection({
@@ -196,10 +202,15 @@ describe('PatientService.searchPatients', () => {
     const parsedUtc = new Date('1990-06-15');
     const expectedStart = new Date(parsedUtc.getFullYear(), parsedUtc.getMonth(), parsedUtc.getDate());
 
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
     const identityQueryArg = identitiesCollection.find.mock.calls[0][0];
-    // #1104: birthDate range is now one $or branch alongside birthDateHash.
-    const rangeClause = identityQueryArg.$or.find((clause) => clause.birthDate);
-    expect(rangeClause.birthDate.$gte).toEqual(expectedStart);
+    // #1104: as above -- the hash of the expected calendar day pins the same
+    // local/UTC reconstruction the comment above describes.
+    const hashClause = identityQueryArg.$or.find((clause) => clause.birthDateHash);
+    expect(hashClause.birthDateHash.$in).toContain(
+      participantIdentityService.computeBlindIndex('birthDate', expectedStart)
+    );
+    expect(identityQueryArg.$or.some((clause) => clause.birthDate)).toBe(false);
 
     const queryArg = patientsCollection.find.mock.calls[0][0];
     const participantClause = queryArg.$or.find((clause) => clause.participantId && clause.participantId.$in);

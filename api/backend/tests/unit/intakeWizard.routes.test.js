@@ -987,15 +987,22 @@ function defaultStorageContainersFindOne({ _id }) {
 
       expect(res.status).toBe(200);
       expect(res.body.matched).toBe(true);
-      // RF005/RNF007 (#574): the day-range condition is now one branch of an
-      // $or alongside birthDateHash, not the top-level query.
+      // RF005/RNF007 (#574, done for birthDate in #1104): birthDate is
+      // ciphertext-only, so the query narrows on the blind index alone. The
+      // plaintext day-range branch is gone -- keeping it would have made this
+      // an unindexable $or (#1102), and it could never match a row written
+      // since the cutover.
+      const participantIdentityServiceForQuery = require('../../src/services/participantIdentity.service');
       expect(identityFind).toHaveBeenCalledWith(
         expect.objectContaining({
           $or: expect.arrayContaining([
-            expect.objectContaining({ birthDate: expect.objectContaining({ $gte: expect.any(Date), $lt: expect.any(Date) }) }),
+            expect.objectContaining({ birthDateHash: expect.objectContaining({ $in: expect.any(Array) }) }),
           ]),
         })
       );
+      const identityQuery = identityFind.mock.calls[0][0];
+      expect(identityQuery.$or.some((clause) => clause.birthDate)).toBe(false);
+      expect(participantIdentityServiceForQuery.getCiphertextOnlyFields()).toContain('birthDate');
     });
 
     it('matches by birthDateHash (RF005/RNF007 #574) when the candidate has no plaintext-queryable birthDate range hit needed', async () => {

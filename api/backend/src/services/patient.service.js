@@ -431,8 +431,15 @@ class PatientService {
       const startOfDay = new Date(normalizedBirthDate.getFullYear(), normalizedBirthDate.getMonth(), normalizedBirthDate.getDate());
       const endOfDay = new Date(normalizedBirthDate.getFullYear(), normalizedBirthDate.getMonth(), normalizedBirthDate.getDate() + 1);
       const birthDateHashes = participantIdentityService.computeBlindIndexCandidates('birthDate', normalizedBirthDate);
+      // #1104: birthDate is ciphertext-only as of this change, so the plaintext
+      // range arm can never match a row written since. Removed rather than kept
+      // as a fallback because Mongo serves an $or from indexes only when EVERY
+      // arm is indexed, and the plaintext column is deliberately unindexed
+      // (#1102) -- keeping it would make this query a collection scan forever.
+      // The keyless branch below still queries the plaintext, which is the only
+      // thing a stack with no ENCRYPTION_KEY writes (#1083).
       const dateOrConditions = birthDateHashes.length
-        ? [{ birthDateHash: { $in: birthDateHashes } }, { birthDate: { $gte: startOfDay, $lt: endOfDay } }]
+        ? [{ birthDateHash: { $in: birthDateHashes } }]
         : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
       const allIdentities = await identityCollection.find({ $or: dateOrConditions }).toArray();
 
@@ -791,8 +798,15 @@ class PatientService {
           // same shape as checkIdentifierConflict's -- a plaintext range query
           // with no blind-index arm. #1099: match under every registered key.
           const birthDateHashes = participantIdentityService.computeBlindIndexCandidates('birthDate', startDate);
+          // #1104: birthDate is ciphertext-only as of this change, so the plaintext
+          // range arm can never match a row written since. Removed rather than kept
+          // as a fallback because Mongo serves an $or from indexes only when EVERY
+          // arm is indexed, and the plaintext column is deliberately unindexed
+          // (#1102) -- keeping it would make this query a collection scan forever.
+          // The keyless branch below still queries the plaintext, which is the only
+          // thing a stack with no ENCRYPTION_KEY writes (#1083).
           const dateOrConditions = birthDateHashes.length
-            ? [{ birthDateHash: { $in: birthDateHashes } }, { birthDate: { $gte: startDate, $lt: endDate } }]
+            ? [{ birthDateHash: { $in: birthDateHashes } }]
             : [{ birthDate: { $gte: startDate, $lt: endDate } }];
           const matchingIdentities = await identityCollection
             .find({ $or: dateOrConditions })

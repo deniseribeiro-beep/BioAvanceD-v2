@@ -11,14 +11,18 @@ class ParticipantIdentityService {
   }
 
   // RF005/RNF007 (#566), dict-07 row 1 ("cifrar"): the three civil-identity
-  // fields that must be encrypted at rest. Unlike patient.service.js's
-  // getEncryptedFieldMap (which nulls the plaintext once ciphertext exists),
-  // this stays additive-only for now — #561-#564 migrated 10+ consumers to
-  // read patientName/birthDate/identityDocument directly off this
-  // collection's plaintext fields, and #566's own scope is storage only
-  // ("it only touches how participantIdentities documents are stored, not
-  // who reads them"). Cutting the plaintext over to ciphertext-only needs
-  // those consumers repointed first — tracked as a follow-up, not done here.
+  // fields that must be encrypted at rest.
+  //
+  // #1104: this is no longer uniformly additive. getCiphertextOnlyFields()
+  // below names the fields that have completed the cutover and now match
+  // patient.service.js's getEncryptedFieldMap precedent -- the plaintext is
+  // nulled once the ciphertext exists. birthDate has; patientName and
+  // identityDocument have not, and that list carries the reason for each.
+  //
+  // The original blocker was that #561-#564 migrated 10+ consumers to read
+  // these off the plaintext fields while #566's own scope was storage only.
+  // Every reader now goes through decryptIdentity, which is what made the
+  // birthDate half safe to do.
   getEncryptedFieldMap() {
     return {
       patientName: 'patientNameEncrypted',
@@ -45,6 +49,11 @@ class ParticipantIdentityService {
 
     const encryptedFieldMap = this.getEncryptedFieldMap();
     let keyVersion = null;
+    // #1104: which fields THIS call actually enciphered. Tracked rather than
+    // inferred from the presence of doc[encryptedField], so a caller that
+    // passes a ciphertext through untouched cannot cause its plaintext to be
+    // cleared.
+    const encryptedThisCall = new Set();
 
     for (const [plainField, encryptedField] of Object.entries(encryptedFieldMap)) {
       if (!Object.prototype.hasOwnProperty.call(doc, plainField) || doc[plainField] === null || doc[plainField] === undefined) {
@@ -55,6 +64,7 @@ class ParticipantIdentityService {
       if (encryptedPayload) {
         doc[encryptedField] = encryptedPayload;
         keyVersion = encryptedPayload.keyId;
+        encryptedThisCall.add(plainField);
       }
     }
 
@@ -80,7 +90,40 @@ class ParticipantIdentityService {
       }
     }
 
+    // RF005/RNF007, dict-07 row 1 ("cifrar") (#1104): drop the plaintext for
+    // every field that has completed the cutover. This is what makes the
+    // encryption load-bearing -- decryptIdentity skips its ciphertext branch
+    // whenever the plaintext is present, so while both were written the
+    // ciphertext was a write-only artefact and the data it exists to protect
+    // sat in the clear in the same document.
+    //
+    // Runs AFTER the hash loop, which reads doc[plainField].
+    //
+    // CONDITIONAL ON HAVING ENCIPHERED IT, and that is load-bearing (#1083).
+    // encryptValue returns null on a keyless stack, and #1083 deliberately
+    // left THIS service degrading to plaintext for exactly that case -- its
+    // own comment says so, "that is right for participantIdentity.service,
+    // whose map is deliberately additive pending #574". Dropping the
+    // plaintext unconditionally would invert it: no plaintext, no ciphertext
+    // and no hash written, and the request still answering 201.
+    for (const plainField of this.getCiphertextOnlyFields()) {
+      if (encryptedThisCall.has(plainField)) {
+        doc[plainField] = null;
+      }
+    }
+
     return doc;
+  }
+
+  // RF005/RNF007, dict-07 row 1 (#1104): the fields whose plaintext copy is
+  // no longer written, so the ciphertext is the only representation at rest.
+  // Deliberately a LIST rather than the whole encryptedFieldMap -- this is a
+  // per-field cutover. patientName still has a live plaintext consumer
+  // (patient.service.js#listPatients' $regex substring search, which a blind
+  // index cannot serve) and identityDocument still has plaintext query arms,
+  // so both keep dual-writing until those are resolved.
+  getCiphertextOnlyFields() {
+    return ['birthDate'];
   }
 
   getHashFieldMap() {

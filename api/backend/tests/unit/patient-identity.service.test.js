@@ -123,7 +123,13 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
 
       const identityDoc = identitiesCollection.updateOne.mock.calls[0][1].$set;
       expect(identityDoc.patientName).toBe('Novo Paciente');
-      expect(identityDoc.birthDate).toBeInstanceOf(Date);
+      // RF005/RNF007, dict-07 row 1 (#1104): birthDate is ciphertext-only
+      // now -- the plaintext is dropped once the ciphertext exists, so the
+      // value lives in birthDateEncrypted and stays matchable via
+      // birthDateHash. patientName above still dual-writes.
+      expect(identityDoc.birthDate).toBeNull();
+      expect(identityDoc.birthDateEncrypted).toBeTruthy();
+      expect(identityDoc.birthDateHash).toBeTruthy();
     });
   });
 

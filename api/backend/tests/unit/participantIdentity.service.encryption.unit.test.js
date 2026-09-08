@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 process.env.ENCRYPTION_KEY = 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXQ=';
 process.env.ENCRYPTION_KEY_ID = 'test-key-1';
 
 const participantIdentityService = require('../../src/services/participantIdentity.service');
+const keyRegistry = require('../../src/config/keyRegistry');
 
 function makeFakeCollection(overrides = {}) {
   return {
@@ -188,6 +189,82 @@ describe('ParticipantIdentityService.encryptIdentityFields', () => {
     const result = participantIdentityService.encryptIdentityFields({ participantId: '1', patientName: null });
     expect(result.patientNameEncrypted).toBeUndefined();
     expect(result.encryptionKeyVersion).toBeUndefined();
+  });
+});
+
+describe('ParticipantIdentityService.encryptIdentityFields -- birthDate ciphertext-only (#1104)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // #574 is TITLED for this cutover and closed on its precondition only.
+  // dict-07 row 1 requires birthDate encrypted at rest, and a field
+  // encrypted BESIDE its own plaintext copy does not satisfy that --
+  // decryptIdentity prefers the plaintext whenever it is present, so the
+  // ciphertext branch was never taken for a current row.
+  it('#1104: writes NO plaintext birthDate once the ciphertext exists', () => {
+    const result = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      birthDate: new Date(1990, 0, 20),
+    });
+
+    expect(result.birthDate).toBeNull();
+    expect(result.birthDateEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+    expect(result.birthDateHash).toBe(
+      participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20))
+    );
+  });
+
+  // The value must still be recoverable -- the cutover moves birthDate from
+  // plaintext to ciphertext, it does not drop it.
+  it('#1104: the dropped plaintext birthDate round-trips back through decryptIdentity', () => {
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      birthDate: new Date(1990, 0, 20),
+    });
+
+    const decrypted = participantIdentityService.decryptIdentity(encrypted);
+
+    expect(decrypted.birthDate).toBeInstanceOf(Date);
+    expect(decrypted.birthDate.getFullYear()).toBe(1990);
+    expect(decrypted.birthDate.getMonth()).toBe(0);
+    expect(decrypted.birthDate.getDate()).toBe(20);
+  });
+
+  // #1083 PRECONDITION, and the reason the drop is conditional rather than
+  // unconditional. That issue deliberately left THIS service degrading to
+  // plaintext when no key is configured -- its own comment says so, "that is
+  // right for participantIdentity.service, whose map is deliberately additive
+  // pending #574". Dropping the plaintext unconditionally inverts that: a
+  // keyless stack would write no plaintext, no ciphertext and no hash, and
+  // still answer 201.
+  it('#1104/#1083: KEEPS the plaintext birthDate when no ciphertext could be produced', () => {
+    vi.spyOn(keyRegistry, 'getActiveKey').mockReturnValue(null);
+
+    const result = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      birthDate: new Date(1990, 0, 20),
+    });
+
+    expect(result.birthDateEncrypted).toBeUndefined();
+    expect(result.birthDate).toBeInstanceOf(Date);
+    expect(result.birthDate.getFullYear()).toBe(1990);
+  });
+
+  // Control: this is a birthDate-ONLY cutover. patientName and
+  // identityDocument still have live plaintext readers and plaintext query
+  // arms, so their dual-write must be untouched. Expected behaviour is the
+  // same before and after, so a red here is the fixture, not the cutover.
+  it('#1104 control: patientName and identityDocument keep their plaintext', () => {
+    const result = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      patientName: 'Paciente QA Teste',
+      birthDate: new Date(1990, 0, 20),
+      identityDocument: '11144477735',
+    });
+
+    expect(result.patientName).toBe('Paciente QA Teste');
+    expect(result.identityDocument).toBe('11144477735');
   });
 });
 
