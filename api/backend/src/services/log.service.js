@@ -93,7 +93,15 @@ class LogService {
       
       const validation = LogModel.validate(sanitizedLogData);
       if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
+        // #1106: tag the failure KIND at its only throw site. Everything in
+        // this method that can throw reaches one catch in auditLogger.log,
+        // where a caller defect and a dead database were indistinguishable.
+        // The two are cleanly separable here and nowhere else: validation
+        // throws BEFORE logsCollection.insertOne is reached, so the tag is a
+        // fact rather than a guess made downstream from a message string.
+        const validationError = new Error(validation.errors.join(', '));
+        validationError.code = 'LOG_VALIDATION_FAILED';
+        throw validationError;
       }
 
       const logsCollection = db.collection('logs');

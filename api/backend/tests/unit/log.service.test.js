@@ -148,6 +148,21 @@ describe('LogService', () => {
       expect(collection.insertOne).not.toHaveBeenCalled();
     });
 
+    // #1106: the two failure kinds reach the same catch in auditLogger and
+    // were indistinguishable there. They are cleanly separable at the source:
+    // validation throws BEFORE logsCollection.insertOne is ever reached, so
+    // the tag goes on at its only throw site rather than being guessed at
+    // from a message string downstream.
+    it('tags a validation failure with LOG_VALIDATION_FAILED (#1106)', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      const error = await logService.createLog(db, { action: 'CREATE' }, null).catch((e) => e);
+
+      expect(error.code).toBe('LOG_VALIDATION_FAILED');
+      expect(collection.insertOne).not.toHaveBeenCalled();
+    });
+
     it('logs a warning but does not throw when insertOne returns no insertedId', async () => {
       const collection = makeCollection({ insertOne: vi.fn().mockResolvedValue({}) });
       const db = makeDb(collection);
@@ -175,6 +190,23 @@ describe('LogService', () => {
       }, null)).rejects.toThrow('db down');
 
       expect(errorSpy).toHaveBeenCalled();
+    });
+
+    // The other half of the pair: an infrastructure failure must stay
+    // UNTAGGED, or the discriminator says "validation" for everything.
+    it('leaves an insertOne failure untagged, so the kinds stay distinguishable (#1106)', async () => {
+      const collection = makeCollection({ insertOne: vi.fn().mockRejectedValue(new Error('db down')) });
+      const db = makeDb(collection);
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      const error = await logService.createLog(db, {
+        userID: 'user-1',
+        action: 'CREATE',
+        entity: 'Sample'
+      }, null).catch((e) => e);
+
+      expect(error.message).toBe('db down');
+      expect(error.code).toBeUndefined();
     });
   });
 

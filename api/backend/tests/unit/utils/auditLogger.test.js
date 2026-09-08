@@ -440,6 +440,38 @@ describe('auditLogger', () => {
       expect(alert.details.error).toContain('insert failed');
     });
 
+    // #1106 direction 3: the alert now says WHICH kind of failure it was, so
+    // an operator can tell "page someone" from "file a bug". Both stay
+    // CRITICAL deliberately -- the audit row is unwritten either way, which
+    // is the whole #369/#394 lesson; only the diagnosis differs.
+    it('marks an infrastructure failure as such, and keeps it critical (#1106)', async () => {
+      auditLogger.init({});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const alertSpy = vi.spyOn(securityAlertsService, 'logSecurityAlert').mockResolvedValue(undefined);
+      logService.createLog.mockRejectedValueOnce(new Error('db down'));
+
+      await auditLogger.log({ action: 'X', resourceType: 'Y' });
+
+      const alert = alertSpy.mock.calls[0][0];
+      expect(alert.details.failureKind).toBe('infrastructure');
+      expect(alert.severity).toBe('critical');
+    });
+
+    it('marks a validation failure as a caller defect, and keeps it critical too (#1106)', async () => {
+      auditLogger.init({});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const alertSpy = vi.spyOn(securityAlertsService, 'logSecurityAlert').mockResolvedValue(undefined);
+      const validationError = new Error('severity deve ser: info, warning, error ou critical');
+      validationError.code = 'LOG_VALIDATION_FAILED';
+      logService.createLog.mockRejectedValueOnce(validationError);
+
+      await auditLogger.log({ action: 'X', resourceType: 'Y' });
+
+      const alert = alertSpy.mock.calls[0][0];
+      expect(alert.details.failureKind).toBe('validation');
+      expect(alert.severity).toBe('critical');
+    });
+
     // CONTROL (#695): same expectation before and after -- a red here is the
     // setup rather than the bug. Also the discriminator against an over-broad
     // fix that alerts on every write.

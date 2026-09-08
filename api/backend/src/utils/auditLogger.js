@@ -358,14 +358,29 @@ class AuditLogger {
       // is out of scope here, and reaching for `req.user` instead would write a
       // RAW user identifier into security_alerts -- the exact leak
       // anonymizeLogUser exists to prevent.
+      // #1106 direction 3: say WHICH kind of failure this was.
+      // log.service.js tags a validation failure at its throw site; anything
+      // untagged got past validation and failed at the insert.
+      //
+      // Both stay CRITICAL, deliberately. The tempting move is to downgrade
+      // the validation case to `error` because it is "only" a caller defect,
+      // but the audit row is unwritten either way and that is the entire
+      // #369/#394 lesson -- a quieter signal for a missing audit row is what
+      // hid the last one for ~4 weeks. The KIND changes the diagnosis (page
+      // an operator vs. file a bug), not the urgency.
+      const failureKind = error?.code === 'LOG_VALIDATION_FAILED' ? 'validation' : 'infrastructure';
+
       try {
         securityAlertsService.init(this.db);
         await securityAlertsService.logSecurityAlert({
           type: 'AUDIT_TRAIL_WRITE_FAILURE',
           severity: 'critical',
           action: 'AUDIT_LOG_WRITE_FAILED',
-          reason: 'Falha ao gravar o log de auditoria primário (coleção logs)',
+          reason: failureKind === 'validation'
+            ? 'Log de auditoria rejeitado na validação (defeito do chamador): a linha não foi gravada'
+            : 'Falha ao gravar o log de auditoria primário (coleção logs)',
           details: {
+            failureKind,
             entity: formatEntity(entity),
             entityID: entityID || null,
             attemptedAction: (action || 'LOG').toString().toUpperCase(),
