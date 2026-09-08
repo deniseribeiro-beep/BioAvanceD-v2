@@ -27,15 +27,15 @@ origin. `main` untouched and still frozen.
 - **Targeted native, per iteration.** `[ran it]` #823: 12 consumer files /
   466 tests. #832: **76 consumer files / 1187 tests**. `npm run
   test:architecture` **131/131**, twice. All exit 0.
-- **Full native backend suite: LAUNCHED THIS SITTING, still running when
-  this file was written.** Read the result before trusting anything above
-  as a whole-tree signal:
-  `<scratchpad>/run-full-backend.txt`, the sanctioned form
+- **Full native backend suite: GREEN.** `[ran it]` **470 files / 8852
+  tests**, 0 failures, exit 0, **621.24s** — the sanctioned form
   `npx vitest run tests/unit tests/integration tests/compliance
-  --reporter=dot` from `api/backend`. It had passed ~900 KB of output with
-  no summary line at write time — longer than the 569-615s the conventions
-  record, plausibly because the new `consent-rate-limiter.test.js`
-  deliberately exhausts a rate-limit budget nine times.
+  --reporter=dot` from `api/backend`, backgrounded per the 600s ceiling.
+  This covers the whole tree at `308e09d2`, so it supersedes the previous
+  handoff's caveat that five commits had landed since the last full run.
+  Note the duration is at the top of the 569-615s range the conventions
+  record and now exceeds the Bash ceiling outright; `import` alone was
+  386s of it.
 - **Frontend suite NOT run** — this sitting touched no frontend file.
 - **Docker e2e NOT run.** Docker Desktop is ON; no stack up, no volumes,
   bootstrap NONE.
@@ -114,11 +114,11 @@ This is a fresh instance of open **#1060**, commented there.
 
 **None queued by name.** Dennis named no specific issue.
 
-1. **Read the full-suite result** named under Gates before anything else.
-2. **#1127** — small, direction settled, and it is this sitting's own debt.
-3. **`ship-integration-branch`** — still Dennis's call, never yours. Note
-   the frontend suite has not run since before the previous sitting either.
-4. **#1118** remains the live member of the temperature-policy cluster —
+1. **#1127** — small, direction settled, and it is this sitting's own debt.
+2. **`ship-integration-branch`** — still Dennis's call, never yours. The
+   backend suite is now green on the whole tree; the **frontend** suite is
+   the one that has not run since before the previous sitting.
+3. **#1118** remains the live member of the temperature-policy cluster —
    zero comments, two `[not established]` items that look answerable
    natively (whether any consumer needs `sourceEventId` unique per
    notification; whether `docs/docs-7-27-2026/extracted/` states a
