@@ -208,6 +208,71 @@ describe('participant-identity-backfill.service#checkParticipantIdentityParity',
     expect(parity).toEqual({ isFullParity: true, totalPatients: 1, missing: [], drifted: [] });
   });
 
+  // #1111: every fixture above is a pre-#363-shaped Patient carrying the
+  // legacy civil-identity fields -- the population this function was
+  // written for, and no longer the population that exists. #575 removed
+  // all three fields from Patient, so the cases below are what
+  // createPatient actually writes today.
+  it('reports full parity for a post-#575 Patient whose identity mirror is correct', async () => {
+    const participantIdentityService = require('../../../src/services/participantIdentity.service');
+    const mirrored = participantIdentityService.encryptIdentityFields({
+      participantId: '66666666',
+      patientName: 'Paciente Pos 575',
+      birthDate: new Date('1991-04-05'),
+      identityDocument: '11144477735'
+    });
+
+    const db = createFakeDb({
+      // omitLegacyIdentityFields strips patientName/birthDate/
+      // identityDocument before insertOne, so the Patient carries none.
+      patients: [{ _id: 'p1', participantId: '66666666' }],
+      participantIdentities: [mirrored]
+    });
+
+    const parity = await checkParticipantIdentityParity(db);
+
+    expect(parity).toEqual({ isFullParity: true, totalPatients: 1, missing: [], drifted: [] });
+  });
+
+  it('still flags a post-#575 Patient whose identity mirror holds no civil identity', async () => {
+    // backfillParticipantIdentities above will happily create exactly this
+    // record for a post-#575 Patient -- ParticipantIdentityModel.create
+    // nulls every absent field and only requires participantId. Calling it
+    // parity would open #574 gate on data that was never backfilled, which
+    // is the one thing this check exists to prevent.
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '77777777' }],
+      participantIdentities: [{ _id: 'i1', participantId: '77777777', patientName: null, birthDate: null, identityDocument: null }]
+    });
+
+    const parity = await checkParticipantIdentityParity(db);
+
+    expect(parity.isFullParity).toBe(false);
+    expect(parity.drifted).toEqual(['77777777']);
+  });
+
+  it('reports full parity for a pre-#363 Patient whose legacy identityDocument is punctuated', async () => {
+    // #1109 canonicalized identityDocument to digits-only at rest, while a
+    // legacy Patient field keeps whatever spelling was typed. Comparing the
+    // two spellings verbatim reported drift for every punctuated legacy row.
+    const participantIdentityService = require('../../../src/services/participantIdentity.service');
+    const mirrored = participantIdentityService.encryptIdentityFields({
+      participantId: '88888888',
+      patientName: 'Paciente Legado',
+      birthDate: new Date('1979-11-30'),
+      identityDocument: '111.444.777-35'
+    });
+
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '88888888', patientName: 'Paciente Legado', birthDate: new Date('1979-11-30'), identityDocument: '111.444.777-35' }],
+      participantIdentities: [mirrored]
+    });
+
+    const parity = await checkParticipantIdentityParity(db);
+
+    expect(parity).toEqual({ isFullParity: true, totalPatients: 1, missing: [], drifted: [] });
+  });
+
   it('ignores a Patient document with no participantId', async () => {
     const db = createFakeDb({
       patients: [{ _id: 'p1', patientName: 'Sem Id', birthDate: new Date('1990-01-01'), identityDocument: '00000000000' }]

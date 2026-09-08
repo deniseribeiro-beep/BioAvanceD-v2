@@ -56,8 +56,15 @@ async function backfillParticipantIdentities(db) {
   return { summary };
 }
 
-function normalizeForCompare(value) {
+function normalizeForCompare(field, value) {
   if (value === undefined || value === null || value === '') return null;
+  // #1111 (and #1109): identityDocument is canonicalized to digits-only at
+  // rest for every writer, while a pre-#363 Patient document keeps whatever
+  // spelling was typed. Comparing the two verbatim reported drift for every
+  // punctuated legacy row. Punctuation is formatting, not identity.
+  if (field === 'identityDocument') {
+    return participantIdentityService.normalizeIdentityDocument(value);
+  }
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
     return new Date(value).toISOString().slice(0, 10);
@@ -97,8 +104,37 @@ async function checkParticipantIdentityParity(db) {
     }
 
     const decrypted = participantIdentityService.decryptIdentity(identity);
-    const fieldsMatch = IDENTITY_FIELDS.every(
-      (field) => normalizeForCompare(patient[field]) === normalizeForCompare(decrypted[field])
+
+    // #1111: #575 removed patientName/birthDate/identityDocument from the
+    // Patient document entirely, so for every patient created since there
+    // is nothing on the Patient side to compare -- and comparing anyway
+    // reported drift for all of them, which meant isFullParity could never
+    // be true on a live database and the gate #574 depends on could never
+    // open. Compare only the fields this Patient actually still carries.
+    const legacyFields = IDENTITY_FIELDS.filter(
+      (field) => normalizeForCompare(field, patient[field]) !== null
+    );
+
+    if (legacyFields.length === 0) {
+      // Nothing was ever on this Patient to drop, so the precondition is
+      // about the mirror alone: it must exist and actually hold a civil
+      // identity. "Exists and decrypts" is NOT enough -- backfill above
+      // creates an all-null record for a post-#575 Patient (fieldsOf nulls
+      // every absent field and create() only requires participantId), and
+      // calling that parity would open the gate on data that was never
+      // backfilled, which is exactly what this check exists to prevent.
+      // patientName is the criterion because it is the one field every
+      // writer must supply -- patient.service.js#createPatient rejects a
+      // missing patientName outright and matchOrUpsertParticipant defaults
+      // it to 'PACIENTE SEM NOME'.
+      if (normalizeForCompare('patientName', decrypted.patientName) === null) {
+        drifted.push(patient.participantId);
+      }
+      continue;
+    }
+
+    const fieldsMatch = legacyFields.every(
+      (field) => normalizeForCompare(field, patient[field]) === normalizeForCompare(field, decrypted[field])
     );
     if (!fieldsMatch) {
       drifted.push(patient.participantId);
