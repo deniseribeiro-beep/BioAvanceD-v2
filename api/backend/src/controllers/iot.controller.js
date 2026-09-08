@@ -283,9 +283,12 @@ async function ingestTelemetry(req, res) {
         req: req
       });
     } catch (error) {
-      // auditLogger.log swallows its own failures; this guards the connection
-      // lookup, so an unavailable audit trail cannot turn an accepted ingest
-      // into a 500.
+      // auditLogger.log does not reject; since #1096 it also raises a critical
+      // AUDIT_TRAIL_WRITE_FAILURE alert when the audit row cannot be written,
+      // so a failed ingest audit is no longer silent. This catch guards the
+      // connection lookup above it, so an unavailable audit trail cannot turn
+      // an accepted ingest into a 500 -- that fail-open trade is deliberate and
+      // is direction 2 of #1096, which was not taken.
       logger.error('[ISO20387][IOT] Falha ao registrar trilha de auditoria da telemetria:', error.message || error);
     }
 

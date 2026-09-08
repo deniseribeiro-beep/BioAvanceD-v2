@@ -5,6 +5,7 @@ const require = createRequire(import.meta.url);
 
 const logService = require('../../../src/services/log.service');
 const auditLogger = require('../../../src/utils/auditLogger');
+const securityAlertsService = require('../../../src/services/securityAlerts.service');
 const { buildRbacCollections } = require('../../factories/rbac.factory');
 
 const ANON_ID_RE = /^USR-[0-9A-F]{8}$/;
@@ -394,6 +395,74 @@ describe('auditLogger', () => {
         'Erro ao registrar log de auditoria:',
         'createLog failed'
       );
+    });
+
+    // #1096: that console.error was the WHOLE response to a failed audit
+    // write. log.service.js#createLog rethrows on purpose -- covering
+    // validation, LogModel.create, computeAuditHash and the primary
+    // logsCollection.insertOne, i.e. the audit row not being written at all
+    // -- and this catch threw that away. Meanwhile log.service.js:124-140
+    // raises a CRITICAL security alert for the narrower failure (a failed
+    // audit_events MIRROR), with #369/#394 behind it: "A warn-level log line
+    // alone was proven to hide that for ~4 weeks." The escalation guarded the
+    // copy and not the original, and console.error is strictly quieter than
+    // the logger.warn that case was judged insufficient by.
+    it('raises the AUDIT_TRAIL_WRITE_FAILURE critical alert when the audit write fails (#1096)', async () => {
+      auditLogger.init({});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const alertSpy = vi.spyOn(securityAlertsService, 'logSecurityAlert').mockResolvedValue(undefined);
+      logService.createLog.mockRejectedValueOnce(new Error('insert failed'));
+
+      await expect(auditLogger.log({ action: 'X', resourceType: 'Patient' })).resolves.toBeUndefined();
+
+      expect(alertSpy).toHaveBeenCalledTimes(1);
+      const alert = alertSpy.mock.calls[0][0];
+      expect(alert.type).toBe('AUDIT_TRAIL_WRITE_FAILURE');
+      expect(alert.severity).toBe('critical');
+    });
+
+    // An alert that does not say WHAT was not audited is not much better than
+    // the console.error -- integrityCheckService#buildMerkleForDate builds the
+    // daily root from rows that EXIST, so a row never written is invisible to
+    // the tamper-evidence check and the alert is the only record of it.
+    it('names the lost event and the cause in the alert details (#1096)', async () => {
+      auditLogger.init({});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const alertSpy = vi.spyOn(securityAlertsService, 'logSecurityAlert').mockResolvedValue(undefined);
+      logService.createLog.mockRejectedValueOnce(new Error('insert failed'));
+
+      await auditLogger.log({ action: 'ingest', resourceType: 'Patient', resourceId: 'p1' });
+
+      const alert = alertSpy.mock.calls[0][0];
+      expect(alert.action).toBe('AUDIT_LOG_WRITE_FAILED');
+      expect(alert.details.entity).toBe('Patient');
+      expect(alert.details.attemptedAction).toBe('INGEST');
+      expect(alert.details.error).toContain('insert failed');
+    });
+
+    // CONTROL (#695): same expectation before and after -- a red here is the
+    // setup rather than the bug. Also the discriminator against an over-broad
+    // fix that alerts on every write.
+    it('raises no alert when the audit write succeeds', async () => {
+      auditLogger.init({});
+      const alertSpy = vi.spyOn(securityAlertsService, 'logSecurityAlert').mockResolvedValue(undefined);
+
+      await auditLogger.log({ action: 'X', resourceType: 'Y' });
+
+      expect(alertSpy).not.toHaveBeenCalled();
+    });
+
+    // The alert path must not become a second way for an audit failure to take
+    // the request down. securityAlerts.service.js#logSecurityAlert already
+    // returns early without a db and swallows its own errors, so this is
+    // belt-and-braces -- but it is the trade #1096 flagged, so it is pinned.
+    it('still does not reject when the alert itself fails', async () => {
+      auditLogger.init({});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.spyOn(securityAlertsService, 'logSecurityAlert').mockRejectedValue(new Error('alerts down'));
+      logService.createLog.mockRejectedValueOnce(new Error('insert failed'));
+
+      await expect(auditLogger.log({ action: 'X', resourceType: 'Y' })).resolves.toBeUndefined();
     });
   });
 

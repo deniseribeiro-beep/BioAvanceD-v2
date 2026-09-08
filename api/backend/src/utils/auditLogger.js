@@ -3,6 +3,7 @@ const logService = require('../services/log.service');
 const { sanitizePatientForLogs } = require('./patientAnonymization');
 const { getUserAnonId, anonymizeLogUser } = require('./userAnonymization');
 const { getActiveRoleCodes } = require('../services/rbac-assignment.service');
+const securityAlertsService = require('../services/securityAlerts.service');
 
 const ROLE_LABEL_BY_CODE = {
   administrator: 'Administrador',
@@ -328,6 +329,55 @@ class AuditLogger {
       await logService.createLog(this.db, anonymizedLogData, req);
     } catch (error) {
       console.error('Erro ao registrar log de auditoria:', error.message);
+
+      // #1096: escalate, exactly as log.service.js:124-140 already does for
+      // the audit_events MIRROR. createLog rethrows deliberately -- covering
+      // validation, LogModel.create, computeAuditHash and the primary
+      // logsCollection.insertOne, i.e. the audit row not being written AT ALL
+      // -- and this catch used to throw that away, leaving one console.error
+      // while the request continued as though it had been audited.
+      //
+      // The escalation guarded the copy and not the original: a failed mirror
+      // raised a critical alert, while a failed primary insert produced output
+      // strictly QUIETER than the logger.warn that case was judged insufficient
+      // by (#369/#394 -- "A warn-level log line alone was proven to hide that
+      // for ~4 weeks"). And a row that was never written is not a gap the
+      // Merkle check can find: integrityCheckService#buildMerkleForDate builds
+      // the daily root over rows that EXIST, so a missing leaf is
+      // indistinguishable from a quiet day. This alert is the only record.
+      //
+      // No recursion guard is needed: securityAlerts.service.js requires
+      // neither log.service nor this module, writes to its own
+      // `security_alerts` collection, returns early when it has no db, and
+      // wraps its own body in a catch -- so logSecurityAlert cannot re-enter
+      // the audit path and cannot throw. The try below is belt-and-braces so a
+      // future change there can never turn a failed audit into a failed
+      // request.
+      //
+      // Deliberately no userID: the anonymized one is built inside the try and
+      // is out of scope here, and reaching for `req.user` instead would write a
+      // RAW user identifier into security_alerts -- the exact leak
+      // anonymizeLogUser exists to prevent.
+      try {
+        securityAlertsService.init(this.db);
+        await securityAlertsService.logSecurityAlert({
+          type: 'AUDIT_TRAIL_WRITE_FAILURE',
+          severity: 'critical',
+          action: 'AUDIT_LOG_WRITE_FAILED',
+          reason: 'Falha ao gravar o log de auditoria primário (coleção logs)',
+          details: {
+            entity: formatEntity(entity),
+            entityID: entityID || null,
+            attemptedAction: (action || 'LOG').toString().toUpperCase(),
+            error: error.message || String(error)
+          }
+        });
+      } catch (alertError) {
+        console.error(
+          'Erro ao emitir alerta AUDIT_TRAIL_WRITE_FAILURE:',
+          alertError.message || alertError
+        );
+      }
     }
   }
 
