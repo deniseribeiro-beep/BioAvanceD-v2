@@ -395,12 +395,28 @@ describe('iot.controller', () => {
     expect(auditLogSpy.mock.calls[0][0].resourceType).toBe('TelemetryReading');
   }, 15000);
 
-  // Deliberate: only the ACCEPTED ingest is audited, matching the #1080 sibling.
-  // The MQTT transport does audit its three rejection reasons into the hash
-  // chain, so both HTTP machine routes diverge from it there -- that gap is
-  // #1095, filed rather than widened into this fix. If #1095 is resolved in
-  // favour of auditing rejections, THIS TEST INVERTS: that is the intended
-  // signal, not an oversight.
+  // Deliberate: only the ACCEPTED ingest is audited by THIS CONTROLLER,
+  // matching the #1080 sibling. The assertion below is about the controller
+  // and is correct as written.
+  //
+  // CORRECTED (#1095, closed premise-corrected). This comment used to say
+  // "If #1095 is resolved in favour of auditing rejections, THIS TEST
+  // INVERTS". It does not, and the prediction was wrong for a reason worth
+  // keeping: #1095 assumed a rejected submission left no record at all, and
+  // it always did. app.js:194 mounts audit.middleware.js#auditRequest
+  // globally, before every route, and it wraps res.send -- so the 400 below
+  // already produces a CREATE_FAILED row, and the machine-ingest gate's 403
+  // produces a FORBIDDEN one before this controller is even reached.
+  //
+  // This test cannot see either, because it calls ingestTelemetry directly
+  // and never mounts the middleware. That is exactly why it stays green and
+  // must not be "fixed": auditLogSpy is the CONTROLLER's audit call, not
+  // the request's. The composition is pinned in
+  // tests/integration/machineIngestRejectionAudit.api.test.js.
+  //
+  // What actually survives of #1095 is #1120: the middleware row carries no
+  // `reason`, so one 400 covers both an empty sensorId and a non-finite
+  // temperature, where MQTT names three reasons.
   it('#1093: an invalid payload is refused before anything is audited', async () => {
     const req = { body: { sensorId: '', temperature: 'abc' } };
     const res = createResponse();
