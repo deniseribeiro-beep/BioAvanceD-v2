@@ -75,18 +75,24 @@ describe('i18n', () => {
       expect(result).toBe('F');
     });
 
+    // #1110: these three exercise nested-key resolution and the
+    // cross-language fallback; they used assistant.title only as a
+    // convenient real key, and that key is gone with the rest of the
+    // assistant scaffolding. auth.confirmPassword is the replacement --
+    // present in all three locales with a genuinely different value in
+    // each, which is what these assertions need.
     it('resolves a real nested key in pt-BR', () => {
-      expect(i18n.translate('assistant.title', 'pt-BR')).toBe('Assistente Inteligente');
+      expect(i18n.translate('auth.confirmPassword', 'pt-BR')).toBe('Confirmar Senha');
     });
 
     it('resolves a real nested key in en-US', () => {
-      expect(i18n.translate('assistant.title', 'en-US')).toBe('Intelligent Assistant');
+      expect(i18n.translate('auth.confirmPassword', 'en-US')).toBe('Confirm Password');
     });
 
     it('resolves via the pt-BR fallback when an unloaded lang is requested', () => {
       // 'fr-FR' was never loaded, so the first lookup falls straight into
       // the cross-language fallback, which finds the key under pt-BR.
-      expect(i18n.translate('assistant.title', 'fr-FR')).toBe('Assistente Inteligente');
+      expect(i18n.translate('auth.confirmPassword', 'fr-FR')).toBe('Confirmar Senha');
     });
   });
 
@@ -210,7 +216,7 @@ describe('i18n', () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       expect(() => i18n.loadTranslations()).not.toThrow();
-      expect(i18n.translate('assistant.title', 'pt-BR', 'F')).toBe('F');
+      expect(i18n.translate('auth.confirmPassword', 'pt-BR', 'F')).toBe('F');
       expect(errorSpy).toHaveBeenCalled();
 
       readSpy.mockRestore();
@@ -223,6 +229,13 @@ describe('i18n', () => {
   // #878: es-ES.json was missing `assistant.title`, which pt-BR and en-US
   // both carried. #872, on the same file, was every one of its 150 values
   // being verbatim Portuguese. This suite passed 26/26 through both.
+  //
+  // #1110 postscript: `assistant.title` is gone from all three locales. It
+  // was scaffolding for a feature deleted in 5e571099 and excluded from the
+  // current scope by RF012 AC#10 -- so #878 was maintenance spent on dead
+  // code, which is the argument #1110 makes, with #190 as its other
+  // instance. The parity checks below are unaffected and are what would now
+  // catch the same class of drift.
   //
   // It could, because nothing here compared the locale files to each other
   // -- every test drove translate() against whatever happened to be loaded.

@@ -207,13 +207,33 @@ describe('auditRequest', () => {
   it('falls back to a capitalized VALID_ENTITIES match when the resource has no explicit entityMap entry', async () => {
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue();
+    // #1110: was /api/assistant, whose capitalized form left VALID_ENTITIES
+    // with the assistant scaffolding. /api/authentication exercises the same
+    // fallback -- absent from entityMap, present in VALID_ENTITIES.
+    const { req, res, next } = buildReqRes({ path: '/api/authentication', method: 'GET' });
+
+    auditRequest(req, res, next);
+    res.send('ok');
+    await flushSetImmediate();
+
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ resourceType: 'Authentication' }));
+  });
+
+  // #1110: determineEntity capitalizes an unmapped resource and returns it
+  // only if VALID_ENTITIES contains it, else the safe default. Removing the
+  // assistant scaffolding from that list is therefore behavioural HERE --
+  // unlike Log.js, whose copy of the list is checked in two places with an
+  // empty else-if body and so gates nothing.
+  it('#1110: falls back to Sistema for the removed assistant entities', async () => {
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue();
     const { req, res, next } = buildReqRes({ path: '/api/assistant', method: 'GET' });
 
     auditRequest(req, res, next);
     res.send('ok');
     await flushSetImmediate();
 
-    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ resourceType: 'Assistant' }));
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ resourceType: 'Sistema' }));
   });
 
   it('passes through an unrecognized HTTP method verbatim as the action', async () => {

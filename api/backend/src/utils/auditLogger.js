@@ -213,12 +213,6 @@ class AuditLogger {
     if (pathLower.includes('/config') || pathLower.includes('/settings')) {
       return 'Configurações';
     }
-    if (pathLower.includes('/assistant')) {
-      return 'IA Assistente';
-    }
-    if (pathLower.includes('/ia')) {
-      return 'Sistema';
-    }
     if (pathLower.includes('/security') || pathLower.includes('/mfa')) {
       return 'Segurança';
     }
@@ -560,18 +554,6 @@ class AuditLogger {
     });
   }
 
-  async logAssistant(req, question, response) {
-    await this.log({
-      action: 'QUERY',
-      resourceType: 'Assistant',
-      status: 'success',
-      severity: 'info',
-      message: 'Consulta ao sistema',
-      payload: { questionLength: question?.length || 0, responseLength: response?.length || 0 },
-      req: req,
-      module: 'Sistema'
-    });
-  }
 }
 
 function formatEntity(entity) {

@@ -104,8 +104,11 @@ describe('AuditLogger.determineModule', () => {
     expect(auditLogger.determineModule('/api/config/settings')).toBe('Configurações');
   });
 
-  it('returns IA Assistente for /assistant path', () => {
-    expect(auditLogger.determineModule('/api/assistant/chat')).toBe('IA Assistente');
+  // #1110: /assistant used to return 'IA Assistente', a mapping #190 added
+  // for a route 5e571099 had already deleted. With the branch gone it falls
+  // through to the default, which is what an unserved path should do.
+  it('#1110: returns Sistema for the removed /assistant path', () => {
+    expect(auditLogger.determineModule('/api/assistant/chat')).toBe('Sistema');
   });
 
   it('returns Segurança for /security path', () => {

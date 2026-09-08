@@ -1771,7 +1771,7 @@
     "roleAdministrator": "🛡️ Administrador - Acesso completo ao sistema",
     "roleCoordinator": "👔 Coordenador - Gerenciamento e relatórios",
     "roleDescription": "{role}: {description}",
-    "roleExternalUser": "👤 Usuário Externo - Acesso limitado a relatórios e assistente",
+    "roleExternalUser": "👤 Usuário Externo - Acesso limitado a relatórios",
     "roleLabel": "Role (Função)",
     "roleRequired": "Role (Função) é obrigatória",
     "roleTechnician": "🔬 Técnico - Operações básicas do sistema",

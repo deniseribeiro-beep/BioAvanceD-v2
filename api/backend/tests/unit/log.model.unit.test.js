@@ -80,4 +80,5 @@ describe('LogModel.validate', () => {
     const result = LogModel.validate({ userId: 'user-1', action: 'CREATE', entity: 'Sample' });
     expect(result.isValid).toBe(true);
   });
+
 });

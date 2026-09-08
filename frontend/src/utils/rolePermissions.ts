@@ -177,7 +177,7 @@ export function getRoleDescription(roleName: RoleName): string {
     'Administrador': 'Acesso completo ao sistema, incluindo gerenciamento de usuários e backup',
     'Coordenador': 'Gerenciamento e relatórios',
     'Técnico': 'Operações básicas do sistema',
-    'Usuário Externo': 'Acesso limitado a relatórios e assistente',
+    'Usuário Externo': 'Acesso limitado a relatórios',
   };
   
   return descriptions[roleName] || 'Acesso básico';

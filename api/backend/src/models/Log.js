@@ -7,11 +7,9 @@
 const VALID_ENTITIES = [
   'Access',
   'Authentication',
-  'Assistant',
   'Equipment',
   'Export',
   'Import',
-  'IntelligentAssistant',
   'Location',
   'Log',
   'Patient',

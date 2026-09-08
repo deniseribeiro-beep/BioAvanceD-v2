@@ -245,7 +245,6 @@ describe('auditLogger', () => {
       ['/users', 'Usuários'],
       ['/config', 'Configurações'],
       ['/settings', 'Configurações'],
-      ['/assistant', 'IA Assistente'],
       ['/ia/chat', 'Sistema'],
       ['/security/mfa', 'Segurança'],
       ['/backup/run', 'Backup'],
@@ -683,20 +682,6 @@ describe('auditLogger', () => {
       expect(logData.entityID).toBe('user1');
     });
 
-    it('logAssistant', async () => {
-      await auditLogger.logAssistant({ headers: {} }, 'question?', 'an answer');
-      const [, logData] = logService.createLog.mock.calls[0];
-      expect(logData.action).toBe('QUERY');
-      expect(logData.payload.questionLength).toBe(9);
-      expect(logData.payload.responseLength).toBe(9);
-    });
-
-    it('logAssistant with undefined question/response falls back to 0 length', async () => {
-      await auditLogger.logAssistant({ headers: {} }, undefined, undefined);
-      const [, logData] = logService.createLog.mock.calls[0];
-      expect(logData.payload.questionLength).toBe(0);
-      expect(logData.payload.responseLength).toBe(0);
-    });
   });
 
   describe('formatEntity (via log() resourceType field)', () => {

@@ -91,11 +91,9 @@ const auditRequest = async (req, res, next) => {
 const VALID_ENTITIES = [
   'Access',
   'Authentication',
-  'Assistant',
   'Equipment',
   'Export',
   'Import',
-  'IntelligentAssistant',
   'Log',
   'Patient',
   'Policy',

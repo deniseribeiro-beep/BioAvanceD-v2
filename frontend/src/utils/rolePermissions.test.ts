@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { canRoleAccessRoute, RoleName } from './rolePermissions';
+import { canRoleAccessRoute, getRoleDescription, RoleName } from './rolePermissions';
 
 const ROLES: RoleName[] = ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'];
 
@@ -187,5 +187,24 @@ describe('every route declared in App.tsx is covered by the allow-list', () => {
     }
 
     expect(disagreements).toEqual([]);
+  });
+});
+
+// #1110: the assistant feature was deleted in 5e571099, and RF012 AC#10
+// excludes IA/Assistente from the current scope outright ("Nao introduzir
+// IA, Assistente Inteligente ou XAI no escopo atual"). This copy went on
+// telling Usuario Externo they had assistant access, and security.service.js's
+// useAssistant default -- the only thing that could have backed the claim --
+// granted nothing and is removed in the same change. getRoleDescription had
+// no test at all, which is how the copy outlived the feature.
+describe('getRoleDescription — no role is promised a deleted feature (#1110)', () => {
+  it('does not offer Usuário Externo an assistant', () => {
+    expect(getRoleDescription('Usuário Externo')).toBe('Acesso limitado a relatórios');
+  });
+
+  it('mentions no assistant for any role', () => {
+    for (const role of ROLES) {
+      expect(getRoleDescription(role).toLowerCase()).not.toContain('assistente');
+    }
   });
 });

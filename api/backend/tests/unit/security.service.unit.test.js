@@ -429,16 +429,39 @@ describe('SecurityService.getPermissions', () => {
     expect(result['1'].createUser).toBeUndefined();
   });
 
+  // #1110: was profile 1, which had exactly two defaults -- viewReports and
+  // useAssistant. With useAssistant removed as assistant scaffolding, profile
+  // 1 has one default and this test overrides it, leaving no witness for the
+  // 'untouched default retained' assertion. Profile 2 has five defaults, so
+  // the case keeps all four of its original intents: override wins, added key
+  // appears, untouched default survives, unrelated profile is not merged into.
   it('merges custom permissions over defaults for the matching profile only', async () => {
-    const findOne = vi.fn().mockResolvedValue({ permissions: { '1': { viewReports: false, createUser: true } } });
+    const findOne = vi.fn().mockResolvedValue({ permissions: { '2': { viewReports: false, createUser: true } } });
     const db = { collection: vi.fn(() => ({ findOne })) };
 
     const result = await securityService.getPermissions(db);
 
-    expect(result['1'].viewReports).toBe(false);
-    expect(result['1'].createUser).toBe(true);
-    expect(result['1'].useAssistant).toBe(true); // untouched default retained
+    expect(result['2'].viewReports).toBe(false);
+    expect(result['2'].createUser).toBe(true);
+    expect(result['2'].uploadFiles).toBe(true); // untouched default retained
     expect(result['4'].manageSystem).toBe(true); // unrelated profile untouched
+  });
+
+  // #1110: Usuario Externo was granted useAssistant: true by default. It
+  // appeared nowhere else in the tracked tree -- no gate read it, no caller
+  // sent it -- so it granted nothing while the UI told the user they had
+  // assistant access. RF012 AC#10 excludes the feature from this scope.
+  it('#1110: grants no useAssistant permission to any profile', async () => {
+    const findOne = vi.fn().mockResolvedValue(null);
+    const db = { collection: vi.fn(() => ({ findOne })) };
+
+    const result = await securityService.getPermissions(db);
+
+    for (const profile of Object.values(result)) {
+      expect(profile).not.toHaveProperty('useAssistant');
+    }
+    // control: profile 1 still carries its one real grant
+    expect(result['1'].viewReports).toBe(true);
   });
 
   it('logs and rethrows when db access fails', async () => {
@@ -520,7 +543,7 @@ describe('SecurityService.updatePermissions', () => {
 
 describe('SecurityService.detectPermissionChanges', () => {
   it('reports every permission as changed (oldValue=false) for a brand new profile', () => {
-    const changes = securityService.detectPermissionChanges({}, { '1': { viewReports: true, useAssistant: false } });
+    const changes = securityService.detectPermissionChanges({}, { '1': { viewReports: true, uploadFiles: false } });
 
     expect(changes).toHaveLength(2);
     expect(changes.every(c => c.profile === '1')).toBe(true);

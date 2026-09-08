@@ -1,7 +1,4 @@
 {
-  "assistant": {
-    "title": "Intelligent Assistant"
-  },
   "auth": {
     "attemptsRemaining": "Attempts remaining",
     "confirmPassword": "Confirm Password",
