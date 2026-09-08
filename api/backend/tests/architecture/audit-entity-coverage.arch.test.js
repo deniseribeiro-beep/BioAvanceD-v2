@@ -20,6 +20,16 @@
  * matched a single segment and was blind to /api/v1/patients, which was a
  * live instance of exactly the defect under repair -- a pattern that cannot
  * match the shape it hunts returns a confident, wrong number.
+ *
+ * SCOPE (#1119). Everything here tests determineEntity as a FUNCTION, on
+ * the full '/api/<mount>' path. That is the right question for the map,
+ * and it is NOT evidence about what the middleware passes at runtime:
+ * these assertions stayed green for the whole period in which auditRequest
+ * handed determineEntity Express's router-relative path, so every row
+ * recorded 'Sistema' anyway. The composition is pinned elsewhere, and
+ * both are needed:
+ *   tests/unit/infrastructure/middleware/audit.middleware.test.js  (#1119)
+ *   tests/integration/machineIngestRejectionAudit.api.test.js      (#1095)
  */
 
 const test = require('node:test');

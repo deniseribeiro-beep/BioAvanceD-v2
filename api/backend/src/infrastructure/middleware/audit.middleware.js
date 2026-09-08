@@ -15,6 +15,26 @@ const auditRequest = async (req, res, next) => {
   }
 
   const startTime = Date.now();
+
+  // #1119: capture the path NOW, not inside the res.send wrapper below.
+  // auditRequest is mounted at app level (app.js:194), so at this point
+  // req.path is the full '/api/iot/telemetry'. Express then strips the
+  // mount prefix off req.url for the duration of the mounted router, and
+  // the response is sent from INSIDE that router -- so by the time the
+  // wrapper runs, req.path reads '/telemetry'.
+  //
+  // determineEntity is keyed on the first segment after /api, so the
+  // stripped path missed the map entirely and fell through to the
+  // 'Sistema' catch-all: 57 of the 61 prefixes app.js mounts, i.e. exactly
+  // the defect #1115 built ENTITY_MAP to fix. determineModule and
+  // normalizeHttpMethodToAction match on substrings of the same path and
+  // were wrong for the same reason.
+  //
+  // The ignoredPaths check above is NOT affected and deliberately still
+  // reads req.path: it runs here, synchronously, while the path is still
+  // full.
+  const requestPath = req.path;
+
   const originalSend = res.send.bind(res);
   
   // Intercepta resposta para registrar status
@@ -30,7 +50,7 @@ const auditRequest = async (req, res, next) => {
           auditLogger.init(db);
           
           // Determina ação baseada no método HTTP e status
-          let action = normalizeHttpMethodToAction(req.method, req.path);
+          let action = normalizeHttpMethodToAction(req.method, requestPath);
           let result = 'success';
           let severity = 'info';
           
@@ -51,22 +71,22 @@ const auditRequest = async (req, res, next) => {
           }
           
           // Determina entidade baseada na rota
-          const entity = determineEntity(req.path);
+          const entity = determineEntity(requestPath);
           
           // Determina módulo
-          const module = determineModule(req.path);
+          const module = determineModule(requestPath);
           
           await auditLogger.log({
             action: action,
             resourceType: entity,
             status: result,
             severity: severity,
-            message: `${req.method} ${req.path} - ${statusCode} (${duration}ms)`,
+            message: `${req.method} ${requestPath} - ${statusCode} (${duration}ms)`,
             req: req,
             module: module,
             payload: {
               method: req.method,
-              path: req.path,
+              path: requestPath,
               statusCode: statusCode,
               duration: duration,
               query: Object.keys(req.query).length > 0 ? 'present' : null

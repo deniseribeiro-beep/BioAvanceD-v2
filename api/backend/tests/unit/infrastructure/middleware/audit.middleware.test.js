@@ -107,6 +107,56 @@ describe('auditRequest', () => {
     );
   });
 
+  // #1119: every other case in this file hands auditRequest a req whose
+  // `path` is the FULL path and never changes -- a shape Express only
+  // produces for a route registered directly on the app. For a router
+  // mounted with app.use('/api/iot', ...), Express strips the mount prefix
+  // off req.url for the duration of that router, and the response is sent
+  // from INSIDE it. So the wrapper used to see `/telemetry`, determineEntity
+  // missed ENTITY_MAP entirely, and the row recorded the 'Sistema'
+  // catch-all -- for 57 of the 61 prefixes app.js mounts.
+  //
+  // This case simulates that strip by rewriting req.path between
+  // auditRequest() and res.send(), which is exactly when Express does it.
+  it('#1119: resolves the entity from the path as it was at middleware entry, not the router-relative one', async () => {
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const { req, res, next } = buildReqRes({ path: '/api/iot/telemetry', method: 'POST' });
+
+    auditRequest(req, res, next);
+
+    // Express enters the mounted router and strips the prefix.
+    req.path = '/telemetry';
+    res.statusCode = 400;
+    res.send('body');
+    await flushSetImmediate();
+
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resourceType: 'TelemetryReading',
+        payload: expect.objectContaining({ path: '/api/iot/telemetry' })
+      })
+    );
+  });
+
+  // The same strip must not cost the module either -- determineModule
+  // matches on substrings like '/temperature', which the stripped path of a
+  // route under app.use('/api/temperature', ...) no longer contains.
+  it('#1119: resolves the module from the entry path too', async () => {
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const { req, res, next } = buildReqRes({ path: '/api/temperature/system/reading', method: 'POST' });
+
+    auditRequest(req, res, next);
+
+    req.path = '/system/reading';
+    res.send('body');
+    await flushSetImmediate();
+
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ resourceType: 'Temperature', module: 'Monitoramento' })
+    );
+  });
   it('maps a 401 response to UNAUTHORIZED', async () => {
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue();
