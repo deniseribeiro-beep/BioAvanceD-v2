@@ -104,6 +104,17 @@ const auditRequest = async (req, res, next) => {
  * SecurityConfiguration, TerminologyConcept), else the singular of the
  * resource. audit-entity-coverage.arch.test.js fails if a newly mounted
  * prefix is missing from here and not declared entity-less below.
+ *
+ * HISTORICAL CUTOFF (#1117). This map was filled in a84eaa63. Audit rows
+ * written BEFORE that commit carry resourceType Sistema for the 41 route
+ * families it added, and cannot be corrected -- the trail is immutable and
+ * hash-chained (#1094/#1105). Only 4 of those 41 also audited explicitly
+ * via auditLogger (facilities, rooms, security, storage), so for the other
+ * 37 -- e-consent, legal-holds, retention-policies, access-requests and
+ * disposition-actions among them -- Sistema is the only type their
+ * historical rows ever recorded. A resourceType query over any of those
+ * families is incomplete before that commit, and Sistema does not look
+ * wrong the way a null would.
  */
 const ENTITY_MAP = {
   'auth': 'Authentication',
