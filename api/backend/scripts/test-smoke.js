@@ -140,8 +140,15 @@ function main() {
   if (affected.size > MAX_SMOKE_FILES) {
     console.error(
       `test:smoke: ${affected.size} test files are affected relative to ${base} — ` +
-        `too many for a cheap smoke pass (this usually means the base ref is stale, ` +
-        `not that the change itself is broad). Run "npm run test:unit" instead.`,
+        `too many for a cheap smoke pass. Two causes, and they need opposite ` +
+        `responses: the base ref is stale (check it), or the change really is ` +
+        `broad — an entrypoint or shared config such as app.js or ` +
+        `src/config/env.js is imported by nearly everything, and then this ` +
+        `count is correct. For the broad case run the sanctioned ` +
+        `explicit-breadth form, which full-suite-guard allows:\n` +
+        `  npx vitest run tests/unit tests/integration tests/compliance --reporter=dot\n` +
+        `Do NOT run "npm run test:unit" or "npm test" — both are bare ` +
+        `vitest invocations that full-suite-guard blocks.`,
     );
     process.exitCode = 1;
     return;
