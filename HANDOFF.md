@@ -36,11 +36,19 @@ have now.
   `backend-app-test` rebuilt, because that fix touches middleware on every
   request. `--workers=1`, host-side, full 17-service bootstrap chain.
 
-**The stack is UP and BOOTSTRAPPED, deliberately left running.** 12 core
-services healthy; `admin-bootstrap-test` and all 17 foundation/reference-data
-services `Exited (0)`. A next session can run e2e immediately without
-re-bootstrapping. **Volumes now carry this sitting's fixture data** — a
-from-scratch run needs `down --volumes` first and a full re-bootstrap.
+**The stack is DOWN, and its volumes are gone — Dennis's call at cleanup.**
+`down --volumes` plus `docker volume prune -f`: zero containers, zero
+volumes. **So the next gate starts genuinely from scratch** — bring up the
+12 core services (with `--build` if source changed), then
+`admin-bootstrap-test`, then the 17-service foundation/reference-data chain,
+per `docker-workflow`'s bioavanced overlay. Budget for that; it is not a
+warm stack.
+
+The upside is that the fixture-accumulation class the overlay warns about
+(specs asserting "the first event of its kind") cannot bite the next run.
+Images are kept — 33, 8.697GB, nothing active — so the rebuild is layer
+cache, not a cold pull. Build cache was pruned (1.055GB;
+`docker system df` claimed 16.34MB, `docker buildx du` had it right).
 
 ## Recommended next
 
