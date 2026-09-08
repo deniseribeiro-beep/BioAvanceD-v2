@@ -1005,9 +1005,14 @@ router.get('/patient-match', async (req, res) => {
         .replace(/\s+/g, ' ')
       : '';
 
-    let identity = participantIdQuery
+    // #1104: decrypt here too. The name+birthDate branch below already
+    // decrypts its candidates, but this participantId branch did not -- so a
+    // ciphertext-only row came back with a null patientName/birthDate while a
+    // grep for decryptIdentity made this file look fully repointed.
+    const rawIdentityById = participantIdQuery
       ? await identityCollection.findOne({ participantId: participantIdQuery })
       : null;
+    let identity = rawIdentityById ? participantIdentityService.decryptIdentity(rawIdentityById) : null;
 
     if (!identity && patientNameNormalized && birthDate) {
       const startOfDay = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());

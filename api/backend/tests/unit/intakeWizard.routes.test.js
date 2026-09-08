@@ -944,6 +944,36 @@ function defaultStorageContainersFindOne({ _id }) {
       );
     });
 
+    // #1104: the name+birthDate branch below decrypts its candidates (see the
+    // birthDateHash test), but this participantId branch did not -- twenty
+    // lines apart in the same handler, which is why grepping decryptIdentity
+    // made this file look fully repointed. A ciphertext-only row came back
+    // with null patientName/birthDate.
+    it('#1104: decrypts a ciphertext-only identity found by patientID, not just the name+birthDate candidates', async () => {
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      const birthDate = new Date(2000, 0, 1);
+      const encrypted = participantIdentityService.encryptIdentityFields({
+        participantId: '12345678',
+        patientName: 'Paciente Teste',
+        birthDate,
+      });
+      const { getCollectionImpl } = makeIdentityCollectionRouter({
+        identityFindOne: vi.fn().mockResolvedValue({ ...encrypted, patientName: null, birthDate: null }),
+        patientRecord: { status: 'ACTIVE' },
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.matched).toBe(true);
+      expect(res.body.patient).toEqual(
+        expect.objectContaining({ patientID: '12345678', patientName: 'Paciente Teste', status: 'ACTIVE' })
+      );
+      expect(res.body.patient.birthDate).toBeTruthy();
+    });
+
     it('matches by normalized name + birthDate when patientID is absent', async () => {
       const { getCollectionImpl, identityFind } = makeIdentityCollectionRouter({
         identityCandidates: [{ participantId: '87654321', patientName: 'João Ção', birthDate: new Date(2000, 1, 1) }],

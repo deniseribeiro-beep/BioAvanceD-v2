@@ -461,6 +461,42 @@ describe('PatientService.resendConsentNotification', () => {
     expect(setPayload).not.toHaveProperty('consentToken');
   });
 
+  // #1104: this read went straight to identity.patientName off a raw
+  // participantIdentities document, with no decryptIdentity anywhere in the
+  // path -- so a ciphertext-only row would have sent the consent invitation
+  // with an undefined patient name.
+  it('#1104: decrypts a ciphertext-only identity before putting patientName on the notification', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      patientName: 'Ana Silva',
+    });
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({
+        _id: 'p1',
+        participantId: '12345678',
+        status: 'PENDING_CONSENT',
+        consentToken: 'existing-token',
+        consentTokenExpiresAt: new Date(Date.now() + 60000)
+      }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+    });
+    const identitiesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ ...encrypted, patientName: null })
+    });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: identitiesCollection });
+
+    vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('http://link');
+    const enqueueSpy = vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+    await patientService.resendConsentNotification(db, '12345678');
+
+    expect(enqueueSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ patientName: 'Ana Silva' }),
+      'http://link'
+    );
+  });
+
   it('generates a new token when there is no valid existing one', async () => {
     const newExpiry = new Date(Date.now() + 3600000);
     const patientsCollection = makeFakeCollection({

@@ -126,6 +126,54 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     expect(duplicate.participantId).toBe('11111111');
   });
 
+  // #1104: checkDuplicatePatient is the FOURTH participantIdentities matching
+  // site and the one #574's repointing missed entirely -- it queried the
+  // plaintext birthDate with no blind-index arm, then compared
+  // identity.patientName raw. A ciphertext-only row was invisible to it, so
+  // the ciphertext-only cutover would have silently disabled duplicate
+  // detection on createPatient and both LGPD import paths -- exactly the
+  // "dois Participants para uma pessoa" failure import-lgpd.service.js:817
+  // warns about. It also fails open (catch -> return null), so nothing would
+  // have surfaced.
+  it('#1104: checkDuplicatePatient matches a CIPHERTEXT-ONLY identity -- via birthDateHash, decrypting the name before comparing', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const birthDate = new Date(1990, 0, 20);
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '11111111',
+      patientName: 'Ana Silva',
+      birthDate,
+    });
+    const patients = makeInMemoryCollection([]);
+    const participantIdentities = makeInMemoryCollection([
+      { ...encrypted, patientName: null, birthDate: null },
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    const duplicate = await patientService.checkDuplicatePatient(db, { patientName: 'ana   silva', birthDate });
+
+    expect(duplicate).toBeTruthy();
+    expect(duplicate.participantId).toBe('11111111');
+  });
+
+  it('#1104: checkDuplicatePatient still returns null for a ciphertext-only identity with a DIFFERENT name', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const birthDate = new Date(1990, 0, 20);
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '11111111',
+      patientName: 'Bruno Costa',
+      birthDate,
+    });
+    const patients = makeInMemoryCollection([]);
+    const participantIdentities = makeInMemoryCollection([
+      { ...encrypted, patientName: null, birthDate: null },
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    const duplicate = await patientService.checkDuplicatePatient(db, { patientName: 'ana silva', birthDate });
+
+    expect(duplicate).toBeNull();
+  });
+
   it('listPatients({ patientName }) resolves matching participantIds via ParticipantIdentity, not Patient.patientName', async () => {
     const patients = makeInMemoryCollection([
       { participantId: '11111111', patientName: 'STALE' },

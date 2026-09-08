@@ -402,15 +402,36 @@ class PatientService {
 
       // Busca todas as identidades e verifica manualmente (mais confiável para comparação de strings)
       // Alternativa: usar índice composto se necessário para performance
-      const allIdentities = await identityCollection.find({
-        birthDate: {
-          $gte: new Date(normalizedBirthDate.getFullYear(), normalizedBirthDate.getMonth(), normalizedBirthDate.getDate()),
-          $lt: new Date(normalizedBirthDate.getFullYear(), normalizedBirthDate.getMonth(), normalizedBirthDate.getDate() + 1)
-        }
-      }).toArray();
+      //
+      // RF005/RNF007 (#1104): this is the FOURTH participantIdentities
+      // matching site and the one #574's "repoint remaining consumers"
+      // precondition missed -- it queried the plaintext birthDate with no
+      // blind-index arm and compared identity.patientName raw, so a
+      // ciphertext-only row was invisible to it. Since this function also
+      // fails open (see the catch below: "Em caso de erro, permite
+      // continuar"), the ciphertext-only cutover would have silently
+      // disabled duplicate detection on createPatient and both LGPD import
+      // paths -- the "dois Participants para uma pessoa" failure
+      // import-lgpd.service.js:817 warns about in capitals. Same $or shape
+      // as the three sibling sites (import.service.js, intakeWizard.js,
+      // PatientIdentityService.js).
+      // #1099: match under EVERY registered key, so a hash written before an
+      // ENCRYPTION_KEY rotation stays matchable.
+      const startOfDay = new Date(normalizedBirthDate.getFullYear(), normalizedBirthDate.getMonth(), normalizedBirthDate.getDate());
+      const endOfDay = new Date(normalizedBirthDate.getFullYear(), normalizedBirthDate.getMonth(), normalizedBirthDate.getDate() + 1);
+      const birthDateHashes = participantIdentityService.computeBlindIndexCandidates('birthDate', normalizedBirthDate);
+      const dateOrConditions = birthDateHashes.length
+        ? [{ birthDateHash: { $in: birthDateHashes } }, { birthDate: { $gte: startOfDay, $lt: endOfDay } }]
+        : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
+      const allIdentities = await identityCollection.find({ $or: dateOrConditions }).toArray();
 
       // Verifica se alguma identidade tem o mesmo nome normalizado
-      for (const identity of allIdentities) {
+      for (const rawIdentity of allIdentities) {
+        // #1104: patientName/birthDate are civil identity -- decrypt before
+        // comparing so a ciphertext-only row still matches. The RAW document
+        // is what gets returned, so this decryption never escapes the
+        // comparison and callers see the same shape as before.
+        const identity = participantIdentityService.decryptIdentity(rawIdentity);
         if (identity.patientName && identity.birthDate) {
           const existingName = identity.patientName.trim().toLowerCase().replace(/\s+/g, ' ');
           const existingDate = identity.birthDate instanceof Date
@@ -419,7 +440,7 @@ class PatientService {
 
           if (existingName === normalizedName &&
               existingDate.getTime() === normalizedBirthDate.getTime()) {
-            return identity;
+            return rawIdentity;
           }
         }
       }
@@ -1060,7 +1081,11 @@ class PatientService {
     // RF005/RNF007 (#561/#564): patientName resolved via ParticipantIdentity
     // instead of read directly off the Patient document.
     const identityCollection = await this.getIdentityCollection(db);
-    const identity = await identityCollection.findOne({ participantId });
+    const rawIdentity = await identityCollection.findOne({ participantId });
+    // #1104: patientName is civil identity -- decrypt before reading it, or a
+    // ciphertext-only row sends the consent invitation with no name. This read
+    // had no decryptIdentity anywhere in its path.
+    const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
     const patientWithIdentity = identity ? { ...patient, patientName: identity.patientName } : patient;
 
     const consentLink = notificationService.buildConsentLink(patientWithIdentity, token);
