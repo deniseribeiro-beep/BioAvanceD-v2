@@ -15,16 +15,24 @@ origin. `main` untouched and still frozen.
 |---|---|---|
 | `524592a5` | Refs **#941** | `stagingImports.jobId` built natively by `utils/stagingImportIndexes.js`, wired at `createStagingImport` |
 | `4d9c220d` | Refs **#1125** | `migrate:user-role-assignments` exposes `backfillUserRoleAssignments.js` |
+| `26d36ba3` | **Fixes #1126** | both `utils/storageIndexes.js` helpers now pinned as actually CALLED |
 
-**Filed: #1126** (project), **pack #852**, plus a recurrence comment on
-closed pack #648. **Closed: nothing.** Query the tracker for state —
-`gh issue list --state open`.
+**Filed: #1126** (project, and closed same sitting), **pack #852**, plus
+recurrence comments on closed pack #648 and #653. **Closed: #1126.**
+Query the tracker for state — `gh issue list --state open`.
 
 ## Gates
 
 - **Targeted native only, per the end-loaded gate order.** `[ran it]`
-  6-file consumer set 120/120; 21-file consumer set 551/551;
-  `npm run test:architecture` **131/131** twice. All exit 0.
+  6-file consumer set 120/120; 21-file consumer set 551/551; 10-file
+  consumer set 227/227; `npm run test:architecture` **131/131** three
+  times. All exit 0.
+- **Cross-file smoke check: GREEN.** `[ran it]`
+  `node scripts/test-smoke.js a66b5a9c` from `api/backend` — **9 affected
+  files / 299 tests**, exit 0, covering every commit this sitting. This is
+  the `unit-test-loop` overlay's mandated between-gates check and it is
+  cheap; run it after any shared-module change rather than waiting for the
+  ship gate.
 - **NOT run this sitting: the full backend suite, the frontend suite, and
   the Docker e2e gate.** The last known-green figures are the previous
   sitting's — backend 467/8818, frontend 32/264, Docker e2e 223/223 — and
@@ -93,21 +101,26 @@ has not established anything.** Read what the hits actually are.
   a capability decision (should the API create a StorageContainer at all?),
   which is Denise's. Its premise was established fresh by `a66b5a9c` last
   sitting; it does not need re-deriving, it needs an answer.
-- **#1126 is the wiring gap this sitting's own fix avoided.** `[ran it]`
-  nothing asserts either `utils/storageIndexes.js` helper is ever *called*,
-  so deleting both call sites leaves the suite green. Test-only work; an
-  `unit-test-loop` slice, not a `fix-bugs` one.
+- **#1126 was filed AND closed this sitting** — `26d36ba3` pins both
+  `utils/storageIndexes.js` call sites. `[ran it]` the probe: reverting both
+  reds exactly 2 of 44; before the commit the same deletion was green.
+- **Do NOT re-open the "do the sibling helpers pin their wiring" question.**
+  `[ran it]` they do: `sampleIndexes.unit.test.js:81` and
+  `participantIdentityIndexes.unit.test.js:109` both carry a
+  `collectionResolver wiring` describe using the same spy-then-reload
+  helper, and `MongoAuditRepository.test.js:359` pins
+  `ensureSampleMovementIndexes`. `storageIndexes.js` was the lone outlier
+  across four helper families — settled on #1126 and worth not re-deriving.
 
 ## Recommended next
 
 **None queued by name.** Dennis named no specific issue.
 
-1. **The group's remainder**: #1125 direction 1 (triage the other eleven,
-   now split into two populations above) and #1126. Both are small and both
-   have their direction settled.
+1. **#1125 direction 1** — triage the other eleven scripts, now split into
+   the two populations above. Small, direction settled.
 2. **`ship-integration-branch`** — still Dennis's call, never yours, and
-   note the gate caveat above: the full suites have not run against the last
-   five commits.
+   note the gate caveat above: the full backend/frontend suites have not run
+   against the last six commits, though the smoke check is green.
 3. **#1089 / #1118 / #1120 / #1123 / #1124** all still need someone; the
    first has four unanswered questions on it and should not be started
    without them.
