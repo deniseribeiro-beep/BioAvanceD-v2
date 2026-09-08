@@ -11,6 +11,7 @@
     "worker:dev": "nodemon ./src/workers/worker.js",
     "create-db": "node scripts/create-db.js",
     "migrate:rcs": "node src/scripts/migrate-rcs-governance-indexes.js",
+    "migrate:location-storage": "node src/scripts/backfillLocationStorage.js",
     "audit": "node scripts/audit-database.js",
     "audit:verify": "node scripts/audit-verify.js",
     "audit:verify-chain": "node scripts/audit-verify-chain.js",

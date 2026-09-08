@@ -195,4 +195,28 @@ describe('location-storage-backfill.service', () => {
     expect(db.collections.storageAssignments.docs).toHaveLength(1);
     expect(secondRun.summary.assignmentsCreated).toBe(0);
   });
+
+  // #1070: this service is the ONLY thing in src/ that inserts into
+  // `storageContainers` -- [ran it] every other reference across the eight
+  // files touching that collection is a findOne/find/updateOne, and
+  // storage.routes.js's PATCH /freezer/:id/room 404s rather than upserting.
+  // So until this ran, the storage topology could not exist at all, and
+  // `sample.service.js`, `intakeWizard.js`, `import-lgpd.service.js` and
+  // `equipment-sensor-quarantine.service.js` all join on a freezer's
+  // `containerID` that nothing had written.
+  //
+  // And it was reachable only through src/scripts/backfillLocationStorage.js,
+  // which had no npm script, no compose service and no boot path -- the
+  // #933 shape the mfa scripts were wired for, and the class this repo's
+  // conventions name outright: a script under src/scripts/ that is neither
+  // an npm script nor invoked by a boot path or compose service never runs
+  // on any stack.
+  //
+  // Whether an API should be able to create a container at all is a
+  // separate and larger question -- #1124.
+  it('#1070: is wired as an npm script pointing at its CLI wrapper (#933: unwired scripts never effectively run)', () => {
+    const pkg = require('../../../package.json');
+
+    expect(pkg.scripts['migrate:location-storage']).toBe('node src/scripts/backfillLocationStorage.js');
+  });
 });
