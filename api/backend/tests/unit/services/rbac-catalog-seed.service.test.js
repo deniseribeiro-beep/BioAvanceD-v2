@@ -127,6 +127,95 @@ describe('rbac-catalog-seed.service', () => {
     expect(coordinator.roleId).toBe(staleRoleId);
     expect(db.collections.roles.docs).toHaveLength(5);
   });
+  // #1075: `permissions` was the last collection still seeded through the
+  // skip-on-existing `upsertByKey` -- the same defect #646 Wave 3 fixed for
+  // `roles` and #1064 for `reportTemplates`, and the one both of those
+  // docblocks cite as their negative example. A row seeded before a
+  // PERMISSION_CATALOG correction kept the old catalog values forever,
+  // because `existing` was returned as-is and no write was ever issued.
+  //
+  // Simulates the exact change shape #929 and #632 both performed -- an
+  // EXISTING code whose allowedActions were later widened -- since a NEW
+  // permissionCode inserts normally and the skip never bites for it.
+  it('#1075: reconciles a stale catalog-owned permission field on re-seed, without minting a new permissionId', async () => {
+    const db = createFakeDb();
+
+    const first = await seedRolesAndPermissions(db);
+    const seeded = db.collections.permissions.docs.find((p) => p.permissionCode === 'manageStorageTopology');
+    const stablePermissionId = seeded.permissionId;
+    seeded.allowedActions = ['READ', 'UPDATE'];
+    seeded.displayName = 'Nome anterior a #929';
+    seeded.resourceType = 'System';
+
+    const second = await seedRolesAndPermissions(db);
+
+    const catalogEntry = PERMISSION_CATALOG.manageStorageTopology;
+    const returned = second.permissions.find((p) => p.permissionCode === 'manageStorageTopology');
+    expect(returned.allowedActions).toEqual(catalogEntry.allowedActions);
+    expect(returned.displayName).toBe(catalogEntry.displayName);
+    expect(returned.resourceType).toBe(catalogEntry.resourceType);
+
+    // The STORED document, not just the returned one -- returning a
+    // reconciled object while writing nothing is the failure this heals.
+    const stored = db.collections.permissions.docs.find((p) => p.permissionCode === 'manageStorageTopology');
+    expect(stored.allowedActions).toEqual(catalogEntry.allowedActions);
+    expect(stored.displayName).toBe(catalogEntry.displayName);
+    expect(stored.resourceType).toBe(catalogEntry.resourceType);
+
+    // roles reference permissions by permissionId, so re-minting it would
+    // silently orphan every role document. Same contract upsertRole keeps
+    // for roleId.
+    expect(stored.permissionId).toBe(stablePermissionId);
+    expect(returned.permissionId).toBe(stablePermissionId);
+    expect(db.collections.permissions.docs).toHaveLength(first.permissions.length);
+  });
+
+  // The other half of #1064's stated split, applied here: only the fields
+  // buildPermissionDocs derives from PERMISSION_CATALOG are system-owned.
+  // description, permissionStatus and conditionExpression are operator-owned
+  // (dict-02 P1X-0220/P1X-0224/P1X-0223) and must survive a re-seed --
+  // including one that DOES write, which is why allowedActions is dirtied
+  // here too.
+  it('#1075: leaves operator-owned permission fields untouched by a reconciling re-seed', async () => {
+    const db = createFakeDb();
+    await seedRolesAndPermissions(db);
+
+    const seeded = db.collections.permissions.docs.find((p) => p.permissionCode === 'viewReports');
+    seeded.description = 'Descrição escrita por um operador';
+    seeded.permissionStatus = 'deprecated';
+    seeded.conditionExpression = 'organizationId == user.organizationId';
+    seeded.allowedActions = ['READ'];
+
+    await seedRolesAndPermissions(db);
+
+    const stored = db.collections.permissions.docs.find((p) => p.permissionCode === 'viewReports');
+    expect(stored.allowedActions).toEqual(PERMISSION_CATALOG.viewReports.allowedActions);
+    expect(stored.description).toBe('Descrição escrita por um operador');
+    expect(stored.permissionStatus).toBe('deprecated');
+    expect(stored.conditionExpression).toBe('organizationId == user.organizationId');
+  });
+
+  // #1075 control -- GREEN both before and after. The pre-fix helper wrote
+  // nothing at all, so "no write on a clean re-run" cannot distinguish the
+  // fix from the bug; it is here to pin the half of upsertByCode's contract
+  // that says a no-op re-run performs no updateOne, which a naive
+  // reconcile-always implementation would break on every boot.
+  it('#1075 control: a re-seed matching the catalog issues no write at all', async () => {
+    const db = createFakeDb();
+    await seedRolesAndPermissions(db);
+
+    const permissions = db.collections.permissions;
+    const insertedCount = permissions.docs.length;
+    let updateCalls = 0;
+    const realUpdateOne = permissions.updateOne.bind(permissions);
+    permissions.updateOne = async (...args) => { updateCalls += 1; return realUpdateOne(...args); };
+
+    await seedRolesAndPermissions(db);
+
+    expect(updateCalls).toBe(0);
+    expect(permissions.docs).toHaveLength(insertedCount);
+  });
+
 
   // #921 finding 2: this comment used to claim the table below was
   // "audited against every real requirePermission() call site in

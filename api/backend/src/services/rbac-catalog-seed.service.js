@@ -227,21 +227,73 @@ function buildRoleDocs(permissionIdByCode) {
 }
 
 /**
- * Upserts by the catalog's own stable business key (roleCode/permissionCode,
- * per dict-02's "índice único" note on both fields), not `_id` — running
- * this twice must not create duplicates or new permissionIds for an
- * already-seeded role/permission.
+ * #1075: `permissions` was the last collection seeded through a bare
+ * "already exists? skip" upsert -- the shape #646 Wave 3 replaced for
+ * `roles` (upsertRole, below) and #1064 for `reportTemplates`
+ * (report-template-seed.service.js's upsertByCode), and the one both of
+ * those docblocks cite as their negative example. `existing` was returned
+ * as-is, so a later PERMISSION_CATALOG correction never reached an
+ * already-seeded database, on any re-run or process restart, silently.
+ *
+ * That is a change shape this repo performs routinely rather than a
+ * contrived one: #929 widened `manageStorageTopology`'s allowedActions and
+ * #632 did the same for `manageBackup`. A NEW permissionCode inserts
+ * normally, so the skip only ever bit an EXISTING code being corrected --
+ * exactly the case nothing was watching.
+ *
+ * Mirrors upsertByCode's shape: reconcile ONLY the fields that went stale,
+ * and return the existing document untouched -- issuing no updateOne at
+ * all -- when none of them differ, so a no-op boot performs no write.
+ *
+ * `displayName`, `resourceType` and `allowedActions` are catalog-owned:
+ * buildPermissionDocs derives all three from PERMISSION_CATALOG, the code's
+ * own source of truth, and dict-02 declares each Core (P1X-0219 /
+ * P1X-0221 / P1X-0222). Everything else on the existing document is
+ * preserved -- `permissionId` above all, since Role.permissionIds
+ * references it and re-minting would orphan every role document, and also
+ * `description` (P1X-0220), `conditionExpression` (P1X-0223) and
+ * `permissionStatus` (P1X-0224), which are operator-owned in the same
+ * sense reportTemplates' `name`/`templateStatus` are.
+ *
+ * `allowedActions` is compared with JSON.stringify, which for an array is
+ * ORDER-sensitive. Both sides originate from the same catalog literal, so
+ * a reorder there is a genuine change and one reconciling write is the
+ * correct response -- it settles on the next boot rather than churning.
+ *
+ * NOTE the enforcing path does NOT read this row: requirePermission takes
+ * `allowedActions` from the in-process PERMISSION_CATALOG constant
+ * (infrastructure/middleware/rbac.js, #631), and the only database reader
+ * of this collection is rbac-assignment.service.js's userHasPermission,
+ * which uses `permissionId` alone. So a stale row does not currently cause
+ * a wrong 403 -- it makes the persisted catalog disagree with the enforced
+ * one, with nothing reconciling them. #1123 carries that larger question.
  */
-async function upsertByKey(collection, doc, keyField) {
-  const filter = { [keyField]: doc[keyField] };
+async function upsertPermission(collection, doc) {
+  const filter = { permissionCode: doc.permissionCode };
   const existing = await collection.findOne(filter);
-  if (existing) return existing;
-  await collection.insertOne(doc);
-  return doc;
+  if (!existing) {
+    await collection.insertOne(doc);
+    return doc;
+  }
+
+  const displayNameChanged = existing.displayName !== doc.displayName;
+  const resourceTypeChanged = existing.resourceType !== doc.resourceType;
+  const allowedActionsChanged =
+    JSON.stringify(existing.allowedActions || []) !== JSON.stringify(doc.allowedActions || []);
+  if (!displayNameChanged && !resourceTypeChanged && !allowedActionsChanged) return existing;
+
+  const reconciled = {
+    displayName: doc.displayName,
+    resourceType: doc.resourceType,
+    allowedActions: doc.allowedActions,
+    updatedAt: new Date(),
+  };
+  await collection.updateOne(filter, { $set: reconciled });
+  return { ...existing, ...reconciled };
 }
 
 /**
- * RF024 (#646 Wave 3): a plain upsertByKey on `roles` left an
+ * RF024 (#646 Wave 3): a plain skip-on-existing upsert on `roles` left an
  * already-seeded role's permissionIds frozen forever at whatever they were
  * the first time this ran — `existing` was returned as-is, so a later
  * PERMISSION_CATALOG/LEGACY_ROLES_SEED addition (a new permission granted
@@ -276,7 +328,7 @@ async function seedRolesAndPermissions(db) {
   const permissionDocs = buildPermissionDocs();
   const storedPermissions = [];
   for (const doc of permissionDocs) {
-    storedPermissions.push(await upsertByKey(permissionsCollection, doc, 'permissionCode'));
+    storedPermissions.push(await upsertPermission(permissionsCollection, doc));
   }
   const permissionIdByCode = Object.fromEntries(storedPermissions.map((p) => [p.permissionCode, p.permissionId]));
 

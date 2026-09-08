@@ -133,10 +133,12 @@ async function startServer() {
     // catalog" -- a property the catalog did not actually have. This is what
     // makes that sentence true.
     //
-    // Safe to run every boot: upsertByKey inserts a missing permissionCode,
-    // and upsertRole MERGES freshly computed permissionIds into an existing
-    // role rather than skipping it (#646, test-pinned), which is exactly the
-    // "new permission granted to an existing role" case. Permitted on the boot
+    // Safe to run every boot: upsertPermission inserts a missing
+    // permissionCode and RECONCILES an already-seeded one's catalog-owned
+    // fields rather than skipping it (#1075), and upsertRole MERGES freshly
+    // computed permissionIds into an existing role rather than skipping it
+    // (#646) -- both test-pinned. The latter is exactly the "new permission
+    // granted to an existing role" case. Permitted on the boot
     // path -- seed-boundary.arch.test.js fences off seed-essential-reference-
     // data specifically, not this. Non-fatal, same shape as the seed below.
     try {
