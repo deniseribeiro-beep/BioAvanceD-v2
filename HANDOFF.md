@@ -3,8 +3,8 @@
 **Written 2026-09-08, twenty-sixth queue sitting. INTERIM — no end signal was
 given, so treat the session as CONTINUING.** Dennis asked to read the handoff,
 pick the next *group* of issues, and said Docker was on. I took the previous
-note's recommended list — **#1111, #1114, #1113** — and **all three are
-done**. The end-loaded gates are **mid-flight**, not finished; see below.
+note's recommended list — **#1111, #1114, #1113** — plus **#1115**, which the
+#1114 work turned up. **All four are done and every gate has run green.**
 
 ## What shipped
 
@@ -16,106 +16,99 @@ origin. `main` untouched and still frozen.
 | `3a0f3e04` | **#1113** closed | `matchOrUpsertParticipant` reads its identity fallbacks off the mirror, decrypted, and omits absent fields instead of nulling stored ones |
 | `610804c0` | **#1111** closed | the parity gate compares only the fields the Patient still carries, so `isFullParity` is reachable again — plus an emptiness check so it cannot open vacuously |
 | `713168b2` | **#1114** closed | `Log.js`'s inert `VALID_ENTITIES` removed; labelled `premise-corrected` |
+| `a84eaa63` | **#1115** closed | one audit-entity vocabulary covering every mounted `/api` route, pinned by a new architecture test |
 
-**Filed: #1115.** Query the tracker for state — `gh issue list --state open`.
+Query the tracker for state — `gh issue list --state open`.
 
-## GATES ARE NOT FINISHED — this is the first thing to check
+## Gates — ALL GREEN, and they now cover every commit on this branch
 
-- **`npm run test:architecture` 124/124** (matches the previous note's
-  baseline).
-- **Consumer sweeps, all green:** #1113 26 files / 538 tests; #1111 9 / 91;
-  #1114 36 / 735 **plus** `canonical-catalog-conformance.arch.test.js` 4/4
-  via `node --test`.
-- **Full backend regression: STARTED, RESULT UNKNOWN.** Launched as
+The previous note's three commits had never been through a full suite. They
+have now.
+
+- **Backend regression 466 files / 8806 tests**, exit 0 (606s). Form:
   `npx vitest run tests/unit tests/integration tests/compliance
-  --reporter=dot` from `api/backend`, backgrounded, redirected to the
-  session scratchpad. It had not printed a summary when this note was
-  written. **Re-run it; do not assume it passed.** Last known green is
-  466 files / 8783 tests and that predates all six commits on this branch
-  since the previous note.
-- **Frontend suite: NOT run this sitting.**
-- **Docker: NOT run.** Dennis said it was on and the gate is end-loaded, so
-  it is the next thing after the native suites. **No stack running, no
-  containers or volumes created by this sitting.** The previous note's 35
-  anonymous volumes and `api/backend/coverage/` (33MB, mtime 2026-09-04)
-  are untouched and still need Dennis.
-- **When that bring-up happens it needs `--build`.** This sitting touched
-  `api/backend/src`, and `backend-app-test`/`frontend-app-test` are
-  build-not-mount services, so the overlay's recipe as written reuses a
-  stale image. `[read it]` `docker-workflow`'s bioavanced overlay records
-  this being hit three times by sessions that had just read the warning.
+  --reporter=dot` from `api/backend`. Previous known-green was 8783.
+- **Frontend 32 files / 264 tests**, exit 0. Form: the seven `src/`
+  directories named explicitly.
+- **`npm run test:architecture` 131/131** (124 + 7 new from #1115).
+- **`npm run typecheck`** clean.
+- **Docker e2e 223/223**, twice — once before #1115 and again after, with
+  `backend-app-test` rebuilt, because that fix touches middleware on every
+  request. `--workers=1`, host-side, full 17-service bootstrap chain.
 
-## The three things a next session must not undo
+**The stack is UP and BOOTSTRAPPED, deliberately left running.** 12 core
+services healthy; `admin-bootstrap-test` and all 17 foundation/reference-data
+services `Exited (0)`. A next session can run e2e immediately without
+re-bootstrapping. **Volumes now carry this sitting's fixture data** — a
+from-scratch run needs `down --volumes` first and a full re-bootstrap.
+
+## Recommended next
+
+**Nothing queued by name.** Dennis named no follow-up, so this is a
+suggestion, not a queue.
+
+The branch is in the cleanest state it has been in: four issues closed, every
+gate green, tree matching origin. **That makes this the natural moment for
+`ship-integration-branch`** — the PR to `main` is where real CI signal comes
+from, and it is Dennis's call, never yours.
+
+## Things a next session must not undo
 
 **1. #1111's post-#575 branch is NOT "exists and decrypts", deliberately.**
 An identity record that decrypts to no `patientName` is still reported as
-drifted. `[read it]` `backfillParticipantIdentities`, in the same file and
-on the same script run, creates an **all-null** identity record for a
-post-#575 Patient — `ParticipantIdentityModel.fieldsOf` nulls every absent
-field and `create()` requires only `participantId`. Relaxing the check to
-mere existence would make the gate open on data that was never backfilled,
-which is the one thing it exists to prevent. A test pins it.
+drifted. `[read it]` `backfillParticipantIdentities`, in the same file and on
+the same script run, creates an **all-null** identity record for a post-#575
+Patient. Relaxing this to mere existence opens the gate on data that was
+never backfilled — the one thing it exists to prevent. A test pins it.
 
-**2. #1114's removal is NOT an invitation to enforce the vocabulary
-elsewhere.** `[ran it]` production emits **54** distinct `resourceType`
-literals and **42** are outside the list that was removed, including
-`Settings` from `auditLogger`'s own `logLanguageChange`. Rejecting them
-fails the audit write; coercing them to `'Sistema'` rewrites the
-resourceType on an immutable hash-chained trail. Tests pin both directions
-as red.
+**2. #1114's removal is NOT an invitation to enforce the vocabulary.**
+`[ran it]` production emits **54** distinct `resourceType` literals and **42**
+were outside the removed list, `Settings` among them from `auditLogger`'s own
+`logLanguageChange`. Rejecting them fails the audit write; coercing them to
+`'Sistema'` rewrites the resourceType on an immutable hash-chained trail.
+Tests pin both wrong directions as red.
 
-**3. `audit.middleware.js`'s copy of that list is load-bearing and was left
-alone.** `determineEntity` genuinely consults it. That is now the only
-enforced audit vocabulary in the codebase — which is what #1115 is about.
+**3. `audit.middleware.js` now has ONE vocabulary, and `NO_ENTITY_ROUTES` is
+a decision, not a gap.** `health`, `dictionary`, `phone-codes` and
+`intake-wizard` are declared entity-less on purpose.
+`audit-entity-coverage.arch.test.js` fails if a newly mounted router is
+neither mapped nor declared — that test *is* the fix, because the defect was
+drift rather than the missing entries.
 
-## #1115 is the live one, and it is deferred with a named expiry
+## Fixture lesson that generalises
 
-`checkParticipantIdentityParity`'s sibling problem: `[ran it]`
-`determineEntity` resolves only **14 of the 59** `/api` prefixes `app.js`
-mounts. The other 45 — including `security`, `legal-holds`,
-`retention-policies`, `e-consent`, `backup` and `audit` itself — record
-`resourceType: 'Sistema'` on every automatic audit row, against dict-02
-`P1X-0326` ("Tipo da entidade afetada", `1..1 Core`).
-
-**Deferred under the absorption rule's exception 4, with the specific
-conflict named:** the full backend regression is in flight against this
-exact tree and the Docker gate is queued behind it; editing
-`audit.middleware.js` now invalidates both. **That deferral expires the
-moment the gates land** — if this sitting continues past them, #1115 is
-due, not optional.
-
-## Fixture lesson that generalises past these two issues
-
-**Every pre-existing fixture in this identity family is pre-#575-shaped** —
-the Patient still carries `patientName`/`birthDate`/`identityDocument`.
-That is why #1111's 5 green parity tests and #1113's 13 green service tests
-both missed live defects, and the two were found independently. Assume it
-of any other test touching `patients` + `participantIdentities` before
-trusting a green run there.
+**Every pre-existing fixture in the identity family is pre-#575-shaped** —
+the Patient still carries `patientName`/`birthDate`/`identityDocument`. That
+is why #1111's 5 green parity tests and #1113's 13 green service tests both
+missed live defects. Assume it of any test touching `patients` +
+`participantIdentities` before trusting a green run there.
 
 ## The judgment a query cannot carry
 
-- **The root `npm test` is blocked by `full-suite-guard`**, even though it
-  is the repo's own full-suite script. The sanctioned pre-handoff form is
-  `npx vitest run tests/unit tests/integration tests/compliance
-  --reporter=dot` from `api/backend`, and the frontend equivalent names the
-  seven directories under `src/`. The conventions skill cites this run's
-  *duration* but not its *command*, so you learn the command by being
-  blocked once.
-- **`git ls-files` emits repo-root-relative paths and the runner's cwd is
-  the package dir.** `sed 's|^api/backend/||'` or the sweep names N files
-  and executes zero. Already documented; it bit again in the shape of a
-  consumer-list regex that matched `participant-identity` but not
-  `patient-identity`, which the "read the derived list" habit caught.
-- **A patch script's anchor must be EOL-converted per file.** All six files
-  touched this sitting are CRLF. The same trap then reappeared *inside* a
-  probe that sliced source text with an `\n`-containing marker and found
-  nothing — the conversion rule is usually stated for anchors, and a marker
-  is the same thing wearing a different name.
-- **`node --check` is valid for these patch scripts** because
-  `api/backend/package.json` declares `"type": "commonjs"` explicitly and
-  the scripts are `.cjs` — the #823 false-positive does not apply to a CJS
-  payload.
+- **A detector's can-it-fail probe must not stash the whole file.** `[ran it]`
+  stashing `audit.middleware.js` removed the new *exports*, so all five reds
+  were `determineEntity is not a function` — assertions never evaluated, and
+  a very convincing 5/7 failure that proved nothing. Revert only the
+  behaviour sites. The valid probe gave 2 fail / 5 pass with every control
+  green, and **42 real offenders caught when disabled versus 0 when
+  enabled**, which is the population delta a detector owes on top of the
+  probe.
+- **A single-segment mount pattern is blind to `/api/v1/patients`.** My first
+  draft of that arch test could not see a live instance of the very defect it
+  was written for. A pattern that cannot match the shape it hunts returns a
+  confident, wrong number — the widened pattern is now itself pinned by a
+  test.
+- **The root `npm test` is blocked by `full-suite-guard`**, though it is the
+  repo's own full-suite script. The sanctioned forms are in the guard's block
+  message; the conventions skill cites this run's *duration* but not its
+  *command*, so you learn the command by being blocked once.
+- **`--wait` lies in both directions, confirmed again.** It reported exit 1
+  for `admin-bootstrap-test` which had `Exited (0)`, and exit 0 for a
+  12-service bring-up. `docker ps -a` per container is the only signal.
+- **Patch-script anchors need per-file EOL conversion** — all files touched
+  here are CRLF — and the same trap reappears *inside* a probe that slices
+  source text with an `\n`-containing marker, where it does not read as an
+  "anchor" at all.
 - **Two concurrent native runs contend for CPU on this machine**, not just
-  two runs against one stack. That is why the Docker gate was not started
-  alongside the backend regression.
+  two runs against one stack. The Docker gate was held until the backend
+  regression finished for this reason.
