@@ -9,6 +9,13 @@ module.exports = {
   // NODE_ENV was simply left unset). Only the real Docker dev stack's
   // compose file sets this.
   AUTH_RATE_LIMIT_RELAXED: process.env.AUTH_RATE_LIMIT_RELAXED === 'true' || process.env.AUTH_RATE_LIMIT_RELAXED === '1',
+  // #832 / RNF008.6: same isolated-opt-in shape as AUTH_RATE_LIMIT_RELAXED
+  // above, for consentLimiter's budget on the unauthenticated e-consent
+  // token routes. Deliberately a SEPARATE flag rather than reusing that one:
+  // the two relax different controls (authentication vs. the participant
+  // consent surface), and a stack that needs headroom on one does not
+  // thereby need it on the other.
+  CONSENT_RATE_LIMIT_RELAXED: process.env.CONSENT_RATE_LIMIT_RELAXED === 'true' || process.env.CONSENT_RATE_LIMIT_RELAXED === '1',
   PORT: process.env.PORT || 3000,
 
   // Mongo

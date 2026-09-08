@@ -223,9 +223,34 @@ const authLimiter = rateLimit({
   skipSuccessfulRequests: false,
 });
 
+// #823/#832: six routes on the e-consent router carry no `authenticate` --
+// the emailed token IS the credential, so they are unauthenticated by design
+// and verify a secret on every call. That is authLimiter's shape exactly, and
+// until now they had only globalLimiter's shared 1000-per-15-min budget, which
+// is a weak ceiling for walking an 8-digit participantId space. Same
+// strict-by-default posture, on its own isolated flag (see env.js) rather than
+// reusing AUTH_RATE_LIMIT_RELAXED: the two relax different controls, and a
+// stack needing headroom on one does not thereby need it on the other.
+const consentLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: (env.CONSENT_RATE_LIMIT_RELAXED && env.NODE_ENV !== "production") ? 100 : 10,
+  message: "Muitas requisições. Tente novamente mais tarde.",
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: false,
+});
+
 if (!isTest) {
   app.use(globalLimiter);
   app.use("/api/auth", authLimiter);
+  // Scoped to the token-credential paths ONLY. The rest of /api/e-consent is
+  // authenticate-gated operator surface (template and policy CRUD, the
+  // pending-patients list) and must not share a participant-facing budget --
+  // a coordinator doing bulk consent work would 429 on it.
+  app.use("/api/e-consent/validate", consentLimiter);
+  app.use("/api/e-consent/update", consentLimiter);
+  app.use("/api/e-consent/consent-tokens", consentLimiter);
+  app.use("/api/e-consent/import/fhir/consent", consentLimiter);
 }
 
 app.use("/api/auth", require("./src/interface/routes/auth.routes"));
