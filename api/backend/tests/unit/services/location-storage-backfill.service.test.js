@@ -1,8 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const { backfillLocationsToStorage } = require('../../../src/services/location-storage-backfill.service');
+
+// #1126: this service destructures ensureStorageContainerIndexes at require
+// time, so a spy installed after load is never seen. Spy first, then reload.
+const BACKFILL_SERVICE_PATH = require.resolve('../../../src/services/location-storage-backfill.service');
+const storageIndexes = require('../../../src/utils/storageIndexes');
+
+function reloadBackfillService() {
+  delete require.cache[BACKFILL_SERVICE_PATH];
+  return require(BACKFILL_SERVICE_PATH);
+}
 
 /**
  * Real query-matching fake — exact-match on scalar fields, per build-loop's
@@ -214,6 +224,32 @@ describe('location-storage-backfill.service', () => {
   //
   // Whether an API should be able to create a container at all is a
   // separate and larger question -- #1124.
+  // #1126: the sibling half of the sensor.service.test.js case. Nothing
+  // asserted this helper was ever CALLED, so deleting the call site left the
+  // suite green -- #941's defect one level up, where a written and tested fix
+  // is never reached. backfillLocationsToStorage is the only production path
+  // to it, which is what makes one assertion sufficient here.
+  it('#1126: ensures the storageContainers indexes on the write path', async () => {
+    const ensureSpy = vi
+      .spyOn(storageIndexes, 'ensureStorageContainerIndexes')
+      .mockImplementation(() => {});
+    const { backfillLocationsToStorage: freshBackfill } = reloadBackfillService();
+
+    const db = createFakeDb({
+      locations: [
+        { locationID: 701, equipmentID: 5, block: 1, rack: 2, drawer: null, box: 3, wellPosition: 'A1' },
+      ],
+      samples: [],
+    });
+
+    await freshBackfill(db);
+
+    expect(ensureSpy).toHaveBeenCalledTimes(1);
+    expect(ensureSpy.mock.calls[0][0]).toBe(db.collections.storageContainers);
+
+    ensureSpy.mockRestore();
+  });
+
   it('#1070: is wired as an npm script pointing at its CLI wrapper (#933: unwired scripts never effectively run)', () => {
     const pkg = require('../../../package.json');
 

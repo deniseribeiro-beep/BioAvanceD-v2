@@ -4,6 +4,16 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const sensorService = require('../../src/services/sensor.service');
 
+// #1126: sensor.service.js destructures ensureSensorMetadataIndexes at require
+// time, so a spy installed after load is never seen. Spy first, then reload.
+const SENSOR_SERVICE_PATH = require.resolve('../../src/services/sensor.service');
+const storageIndexes = require('../../src/utils/storageIndexes');
+
+function reloadSensorService() {
+  delete require.cache[SENSOR_SERVICE_PATH];
+  return require(SENSOR_SERVICE_PATH);
+}
+
 function makeDb(collectionOverrides = {}) {
   const collection = {
     insertOne: vi.fn(),
@@ -93,6 +103,38 @@ describe('sensor.service (non-quarantine paths)', () => {
       const result = await sensorService.createSensor(db, { sensorId: 'S-1', sensorType: 'temperature' });
 
       expect(result.organizationId).toBeNull();
+    });
+
+    // #1126: utils/storageIndexes.js's two helpers had their own behaviour
+    // pinned by storageIndexes.unit.test.js and NOTHING asserted either was
+    // ever CALLED -- so deleting this call site left the whole suite green.
+    // That is #941's own defect one level up: a fix that is written, tested,
+    // and never reached is indistinguishable from an unbuilt Schema.index()
+    // declaration, which is the thing #941 exists to close.
+    //
+    // createSensor -> linkSensorMetadata is the ONLY production path to this
+    // helper, so this assertion is the whole wiring guarantee.
+    it('#1126: ensures the sensorMetadata indexes on the write path', async () => {
+      const ensureSpy = vi
+        .spyOn(storageIndexes, 'ensureSensorMetadataIndexes')
+        .mockImplementation(() => {});
+      const freshSensorService = reloadSensorService();
+
+      const { db, collection } = makeDb();
+      collection.insertOne.mockResolvedValue({ insertedId: 'abc123' });
+      collection.updateOne.mockResolvedValue({ acknowledged: true });
+
+      await freshSensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        macAddress: 'AA:BB:CC:DD:EE:FF'
+      });
+
+      expect(ensureSpy).toHaveBeenCalledTimes(1);
+      // The sensorMetadata collection handle, not the sensors one.
+      expect(ensureSpy.mock.calls[0][0]).toBe(collection);
+
+      ensureSpy.mockRestore();
     });
 
     it('does not touch sensorMetadata when no macAddress is provided (back-compat)', async () => {
