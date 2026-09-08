@@ -87,6 +87,11 @@ class RetentionSweepService {
         message: `Sweep de retenção executado (política ${policy.version})`,
         payload: result,
         module: 'Segurança',
+        // #1105: runSweep is invoked from scheduler.service.js:202's
+        // cron.schedule, never from a request, so dict-02 P1X-0331's
+        // 'scheduler' is the correct origin -- not the 'api' it landed on via
+        // Log.js:124's default.
+        source: 'scheduler',
       });
     } catch (error) {
       logger.error('Erro ao registrar AuditEvent do sweep de retenção:', error.message);

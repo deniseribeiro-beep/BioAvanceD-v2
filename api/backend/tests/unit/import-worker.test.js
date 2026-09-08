@@ -587,7 +587,9 @@ describe('workers/import-worker', () => {
         10,
         8,
         0,
-        expect.objectContaining({ jobID: 'j7' })
+        expect.objectContaining({ jobID: 'j7' }),
+        // #1105: the worker declares its own dict-02 P1X-0331 origin.
+        { source: 'worker' }
       );
       expect(fakeNotificationService.notifyJobCompleted).toHaveBeenCalledWith(
         'u7',
@@ -856,7 +858,9 @@ describe('workers/import-worker', () => {
         1,
         0,
         1,
-        expect.objectContaining({ jobID: 'j7b' })
+        expect.objectContaining({ jobID: 'j7b' }),
+        // #1105: the worker declares its own dict-02 P1X-0331 origin.
+        { source: 'worker' }
       );
     });
 
@@ -927,7 +931,9 @@ describe('workers/import-worker', () => {
         null,
         'Patient',
         boom,
-        expect.objectContaining({ jobID: 'j8', dataType: 'patients' })
+        expect.objectContaining({ jobID: 'j8', dataType: 'patients' }),
+        // #1105: the worker declares its own dict-02 P1X-0331 origin.
+        { source: 'worker' }
       );
       expect(fakeNotificationService.notifyJobFailed).toHaveBeenCalledWith(
         'u8',

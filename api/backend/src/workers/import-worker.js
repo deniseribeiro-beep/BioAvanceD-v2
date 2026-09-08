@@ -295,7 +295,13 @@ async function initWorker() {
               fhirResourcesCreated: result.fhirResourcesCreated || 0,
               fhirResourcesUpdated: result.fhirResourcesUpdated || 0,
               processingTime: result.processingTime || 0,
-            }
+            },
+            // #1105: this is the import WORKER process, not an HTTP request.
+            // Before this it landed on 'api' via Log.js:124's default -- a
+            // canonical dict-02 P1X-0331 value that is simply wrong, and the
+            // reason "show me everything the import worker did" was a guess
+            // rather than a query.
+            { source: 'worker' }
           );
 
           // Envia notificação assíncrona
@@ -361,7 +367,10 @@ async function initWorker() {
             null,
             entityFailName,
             error,
-            { action: 'IMPORT', jobID, dataType: dataTypeNormalized, fileName }
+            { action: 'IMPORT', jobID, dataType: dataTypeNormalized, fileName },
+            // #1105: worker process, not an HTTP request -- same as the
+            // logImport site above.
+            { source: 'worker' }
           );
 
           // #900: only notify once, on the terminal attempt. The audit entry

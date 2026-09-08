@@ -353,6 +353,81 @@ describe('auditLogger', () => {
       expect(logData.metadata.request.origin).toBe('https://app.example.com');
     });
 
+    // #1105: #1094 hardcoded source:'api' because every caller reaching it
+    // WITH a req is an API request. The non-request-driven callers -- the
+    // import worker and the cron-scheduled retention sweep -- were landing on
+    // 'api' too, via Log.js:124's default, which is a canonical value that is
+    // simply WRONG. dict-02 P1X-0331's six values are what make "show me
+    // everything the import worker did" a query rather than a guess, and
+    // mqtt-ingestion-audit.service.js already declares 'mqtt', so the MQTT
+    // path was distinguishable and the worker path was not.
+    it("#1105: stamps a caller-declared 'worker' source", async () => {
+      auditLogger.init({});
+
+      await auditLogger.log({ action: 'X', resourceType: 'Y', source: 'worker' });
+
+      const [, logData] = logService.createLog.mock.calls[0];
+      expect(logData.source).toBe('worker');
+    });
+
+    it("#1105: stamps a caller-declared 'scheduler' source", async () => {
+      auditLogger.init({});
+
+      await auditLogger.log({ action: 'X', resourceType: 'Y', source: 'scheduler' });
+
+      const [, logData] = logService.createLog.mock.calls[0];
+      expect(logData.source).toBe('scheduler');
+    });
+
+    // The validation is the part worth insisting on: without it this
+    // reintroduces #1094's defect through a different door, since a caller
+    // typo would write a non-vocabulary value with no gate anywhere between
+    // auditLogger and the Merkle hash. Fail SAFE to a canonical value rather
+    // than writing an invalid one.
+    it("#1105: falls back to 'api' for a source outside the dict-02 vocabulary", async () => {
+      auditLogger.init({});
+
+      await auditLogger.log({ action: 'X', resourceType: 'Y', source: 'wokrer' });
+
+      const [, logData] = logService.createLog.mock.calls[0];
+      expect(logData.source).toBe('api');
+    });
+
+    // CONTROL (#695): a call declaring no source is unchanged by this fix --
+    // 'api' before and after, so a red here is the setup, not the bug.
+    it("#1105: still stamps 'api' when the caller declares nothing", async () => {
+      auditLogger.init({});
+
+      await auditLogger.log({ action: 'X', resourceType: 'Y', req: { ip: '1.1.1.1', headers: {} } });
+
+      const [, logData] = logService.createLog.mock.calls[0];
+      expect(logData.source).toBe('api');
+    });
+
+    // The two import-worker sites reach log() through these wrappers, so the
+    // option has to be plumbed or it cannot be declared at all from there.
+    it('#1105: logImport plumbs a declared source through to the row', async () => {
+      auditLogger.init({});
+
+      await auditLogger.logImport(null, 'Patient', 'completed', 3, 3, 0, { jobID: 'j1' }, { source: 'worker' });
+
+      const [, logData] = logService.createLog.mock.calls[0];
+      expect(logData.source).toBe('worker');
+      // and the payload is untouched by the new option
+      expect(logData.payload).toMatchObject({ total: 3, success: 3, jobID: 'j1' });
+      expect(logData.payload).not.toHaveProperty('source');
+    });
+
+    it('#1105: logError plumbs a declared source through to the row', async () => {
+      auditLogger.init({});
+
+      await auditLogger.logError(null, 'Import', new Error('boom'), { jobID: 'j1' }, { source: 'worker' });
+
+      const [, logData] = logService.createLog.mock.calls[0];
+      expect(logData.source).toBe('worker');
+      expect(logData.payload).not.toHaveProperty('source');
+    });
+
     it('uses the provided module over the auto-determined one', async () => {
       auditLogger.init({});
       await auditLogger.log({ action: 'X', resourceType: 'Y', module: 'Custom', req: { headers: {} } });

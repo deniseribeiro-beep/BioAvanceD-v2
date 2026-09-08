@@ -117,6 +117,9 @@ describe('retentionSweep.service', () => {
     expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
       action: 'RETENTION_SWEEP',
       severity: 'critical',
+      // #1105: runSweep is cron-driven (scheduler.service.js:202), so it
+      // declares 'scheduler' rather than inheriting Log.js:124's 'api'.
+      source: 'scheduler',
     }));
   });
 

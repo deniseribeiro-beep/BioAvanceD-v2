@@ -5,6 +5,22 @@ const { getUserAnonId, anonymizeLogUser } = require('./userAnonymization');
 const { getActiveRoleCodes } = require('../services/rbac-assignment.service');
 const securityAlertsService = require('../services/securityAlerts.service');
 
+// #1105: dict-02 P1X-0331 gives AuditEvent.source a CLOSED six-value
+// vocabulary. Declared here as the single gate between a caller and the
+// Merkle hash -- integrityCheckService.js:60's buildHashPayload includes
+// `source` and rows are immutable, so an invalid value is sealed into the
+// daily root rather than correctable later. Anything not in this set falls
+// back to 'api': failing SAFE to a canonical value beats writing one that is
+// outside the vocabulary, which is exactly the defect #1094 fixed.
+const AUDIT_SOURCE_VOCABULARY = Object.freeze(['api', 'frontend', 'worker', 'mqtt', 'scheduler', 'system']);
+const DEFAULT_AUDIT_SOURCE = 'api';
+
+function resolveAuditSource(declared) {
+  if (declared === undefined || declared === null) return DEFAULT_AUDIT_SOURCE;
+  const normalized = String(declared).trim().toLowerCase();
+  return AUDIT_SOURCE_VOCABULARY.includes(normalized) ? normalized : DEFAULT_AUDIT_SOURCE;
+}
+
 const ROLE_LABEL_BY_CODE = {
   administrator: 'Administrador',
   coordinator: 'Coordenador',
@@ -236,7 +252,8 @@ class AuditLogger {
       payload,          // Payload relevante (sanitizado)
       error,            // Objeto de erro (opcional)
       req,              // Requisição HTTP (opcional)
-      module            // Módulo de origem (opcional, será determinado automaticamente)
+      module,           // Módulo de origem (opcional, será determinado automaticamente)
+      source            // #1105: origem dict-02 P1X-0331 (opcional, default 'api')
     } = options;
     const entity = resourceType;
     const entityID = resourceId;
@@ -287,7 +304,7 @@ class AuditLogger {
         // should declare 'worker'/'scheduler' instead, which is #1105 -- they
         // already land on 'api' today via Log.js's default, so this changes
         // nothing for them.
-        source: 'api',
+        source: resolveAuditSource(source),
         module: moduleName,
         message: message || `${action} em ${entity}`,
         payload: sanitizedPayload,
@@ -464,7 +481,11 @@ class AuditLogger {
     });
   }
 
-  async logImport(req, entity, result, total, success, errors, context = {}) {
+  // #1105: `options.source` rides in its own bag rather than on `context`,
+  // because `context` for logError IS the payload -- keeping them separate
+  // means a declared source never leaks into the audited payload on either
+  // wrapper.
+  async logImport(req, entity, result, total, success, errors, context = {}, options = {}) {
     // Conforme fluxograma: registra após processamento com métricas consolidadas
     const payload = {
       total,
@@ -493,11 +514,12 @@ class AuditLogger {
       message: `Importação de ${entity}: ${success}/${total} registros importados${errors > 0 ? ` com ${errors} erro(s)` : ''}${context.jobID ? ` (Job: ${context.jobID})` : ''}`,
       payload: payload,
       req: req,
-      module: 'Importação'
+      module: 'Importação',
+      source: options.source
     });
   }
 
-  async logError(req, entity, error, context = null) {
+  async logError(req, entity, error, context = null, options = {}) {
     await this.log({
       action: 'ERROR',
       resourceType: entity || 'Sistema',
@@ -506,7 +528,8 @@ class AuditLogger {
       message: `Erro: ${error?.message || 'Erro desconhecido'}`,
       error: error,
       payload: context,
-      req: req
+      req: req,
+      source: options.source
     });
   }
 
