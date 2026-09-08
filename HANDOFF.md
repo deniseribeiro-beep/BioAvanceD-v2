@@ -1,10 +1,12 @@
 # HANDOFF
 
-**Written 2026-09-08, twenty-eighth queue sitting. INTERIM — no end signal
-was given, so treat the session as CONTINUING.** Dennis asked to read the
-handoff and pick the next *group* of issues, and said Docker was on but had
-been off between sessions. I took the **reachability group** — code that
-cannot take effect on a running stack: **#941, #1125, #1124**.
+**Written 2026-09-08, twenty-ninth queue sitting. INTERIM — Dennis gave no
+end signal, so treat the session as CONTINUING.** He asked to read the
+handoff, pick the next *group* of issues, and said Docker is on. I took the
+**unauthenticated e-consent attack surface**: **#823** and **#832**, which
+cross-reference each other and share one root — six routes on
+`src/routes/eConsent.js` that carry no `authenticate`, because the emailed
+token *is* the credential.
 
 ## What shipped
 
@@ -13,114 +15,111 @@ origin. `main` untouched and still frozen.
 
 | commit | issue | what |
 |---|---|---|
-| `524592a5` | Refs **#941** | `stagingImports.jobId` built natively by `utils/stagingImportIndexes.js`, wired at `createStagingImport` |
-| `4d9c220d` | Refs **#1125** | `migrate:user-role-assignments` exposes `backfillUserRoleAssignments.js` |
-| `26d36ba3` | **Fixes #1126** | both `utils/storageIndexes.js` helpers now pinned as actually CALLED |
+| `c52254dc` | **Fixes #823** | both consent-token handlers answer every failure with one opaque 400, no `message` |
+| `308e09d2` | Refs **#832** | `consentLimiter` on all six unauthenticated e-consent routes, with its own isolated opt-in |
 
-**Filed: #1126** (project, and closed same sitting), **pack #852**, plus
-recurrence comments on closed pack #648 and #653. **Closed: #1126.**
-Query the tracker for state — `gh issue list --state open`.
+**Closed: #823.** **Filed: #1127** (project), pack **#856**, **#857**,
+**#858**, plus recurrence/instance comments on pack **#648** and project
+**#1060**. Query the tracker for state — `gh issue list --state open`.
 
 ## Gates
 
-- **Targeted native only, per the end-loaded gate order.** `[ran it]`
-  6-file consumer set 120/120; 21-file consumer set 551/551; 10-file
-  consumer set 227/227; `npm run test:architecture` **131/131** three
-  times. All exit 0.
-- **Cross-file smoke check: GREEN.** `[ran it]`
-  `node scripts/test-smoke.js a66b5a9c` from `api/backend` — **9 affected
-  files / 299 tests**, exit 0, covering every commit this sitting. This is
-  the `unit-test-loop` overlay's mandated between-gates check and it is
-  cheap; run it after any shared-module change rather than waiting for the
-  ship gate.
-- **NOT run this sitting: the full backend suite, the frontend suite, and
-  the Docker e2e gate.** The last known-green figures are the previous
-  sitting's — backend 467/8818, frontend 32/264, Docker e2e 223/223 — and
-  **five commits have landed since that backend run** (`d96ae079`,
-  `da6346a0`, `a66b5a9c`, and this sitting's two). Whoever gates next
-  should not treat those numbers as covering the current tree.
-- **Docker: Desktop is ON, no stack up, no volumes, bootstrap NONE.** The
-  previous sitting tore down with `down --volumes`. The next gate starts
-  cold, and `--build` is not optional after any `api/backend/src` change —
-  `backend-app-test` is build-not-mount.
+- **Targeted native, per iteration.** `[ran it]` #823: 12 consumer files /
+  466 tests. #832: **76 consumer files / 1187 tests**. `npm run
+  test:architecture` **131/131**, twice. All exit 0.
+- **Full native backend suite: LAUNCHED THIS SITTING, still running when
+  this file was written.** Read the result before trusting anything above
+  as a whole-tree signal:
+  `<scratchpad>/run-full-backend.txt`, the sanctioned form
+  `npx vitest run tests/unit tests/integration tests/compliance
+  --reporter=dot` from `api/backend`. It had passed ~900 KB of output with
+  no summary line at write time — longer than the 569-615s the conventions
+  record, plausibly because the new `consent-rate-limiter.test.js`
+  deliberately exhausts a rate-limit budget nine times.
+- **Frontend suite NOT run** — this sitting touched no frontend file.
+- **Docker e2e NOT run.** Docker Desktop is ON; no stack up, no volumes,
+  bootstrap NONE.
+- **`node scripts/test-smoke.js` does NOT apply to this sitting's second
+  commit** — `[ran it]` it refuses at **260 affected files**, because
+  `app.js`/`env.js` are imported by nearly everything. That is the correct
+  answer for a central module, not a stale base ref. Its refusal message
+  tells you to run `npm run test:unit`, which is a bare `vitest run` that
+  `full-suite-guard` blocks — filed as pack #858.
 
-## The correction that matters most
+## Read this before the next Docker gate
 
-**#941's own most recent comment (2026-09-04) says "BOTH call sites are
-currently unreachable", and `[ran it]` both halves are false at
-`a66b5a9c`.** `linkSensorMetadata` is called from `sensor.service.js:57`,
-wired into `POST /api/sensors` by `be435d6c` on 2026-07-28 — five weeks
-*before* that comment; the sweep that reported one hit appears to have
-counted only a code comment. And `backfillLocationStorage.js` gained its
-npm script in `a66b5a9c`.
+**`308e09d2` adds a new env var, and your existing `.env.docker` did not
+have it.** `[ran it]` `CONSENT_RATE_LIMIT_RELAXED` is in
+`.env.docker.example`; the live gitignored `.env.docker` on this machine
+(dated Aug 20) carried only `AUTH_RATE_LIMIT_RELAXED`. **I appended the line
+to the local file** — that is machine-local state only, `git status` stayed
+clean, and it is a workaround rather than a fix.
 
-So **both indexes from `9c190b1b` are on live paths**, and the
-`sensorMetadata.sensorId` upsert race that comment calls "load-bearing" is
-live on `POST /api/sensors` today. **The severity is higher than #941's
-latest word on it, not lower.** Corrected on #941; #1070 already carried
-the other half on the closed side.
-
-The reusable part: **a "zero callers" sweep that returns only comment lines
-has not established anything.** Read what the hits actually are.
+Without it `consentLimiter` runs at 10/min instead of 100/min and
+`participant-e-consent-page.spec.ts` can **429 partway through a Docker e2e
+run** — the exact symptom #350 recorded for `authLimiter`. `[not
+established]` whether that spec actually exceeds 10/min; no gate has run.
+This is a fresh instance of open **#1060**, commented there.
 
 ## Things a next session must not undo
 
-1. **`stagingImports.jobId` is built UNIQUE deliberately, against #941's own
-   wording.** That thread says the unique half "guards nothing worth
-   guarding" and only the lookup index is wanted. It is built unique anyway
-   because `StagingImport.js` *declares* `unique: true`, and an index built
-   non-unique would leave the declaration reading as a guarantee while
-   enforcing nothing — #941's own trap one level down. Pinned by value.
-2. **`sensorMetadata.macAddress` stays UNBUILT.** The upsert filter is on
-   `sensorId`, so two sensors may already legitimately share a MAC; building
-   it converts a tolerated state into a hard `E11000`.
-3. **`backfillUserRoleAssignments.js` is npm-only on purpose** — a one-shot
-   legacy migration, not a seed, so placement 3 of the conventions' "Where a
-   new seed belongs". Don't promote it to a boot path or compose service.
+1. **The four `patient.service.js` throws stay distinct on purpose.**
+   #823's fix is at the *controller*, which is the disclosure boundary; the
+   service's distinct messages are useful to authenticated callers and to
+   the log, and four `patient.service.*` tests pin them. Do not "finish the
+   job" by collapsing them in the service.
+2. **`consentLimiter` is mounted on four path PREFIXES, not on
+   `/api/e-consent`.** The rest of that router is `authenticate`-gated
+   operator surface; putting it behind a participant budget would 429 a
+   coordinator doing bulk consent work. A CONTROL case pins this.
+3. **`CONSENT_RATE_LIMIT_RELAXED` is deliberately separate from
+   `AUTH_RATE_LIMIT_RELAXED`**, per the repo's own thrice-stated
+   isolated-opt-in doctrine (RNF008.6/#359). A test pins that the auth flag
+   does *not* relax it — without that pin, wiring them together passes
+   everything else.
 
 ## The judgment a query cannot carry
 
-- **#941 is now down to its non-unique half.** All four unique specs are
-  resolved (three built, `macAddress` deliberately not). What remains is the
-  performance declarations at `Facility.js:48`, `Room.js:52`,
-  `StorageBox.js:97/98`, `StorageContainer.js:100/101/102` — still never
-  built, nothing *incorrect* without them. The title's "nine unique
-  constraints across 10 models" is still the wrong number for that
-  remainder.
-- **#1125 is 11 of 19 now, and the eleven are two populations, not one.**
-  `[ran it]` **six already have a unit test** (`migrateClinicalUnitOrganizations`,
-  `migrateRoleAssignmentScopes`, `migrateUserAnonIds`, `migrateUserOrganizations`,
-  `seedDiseaseValidationRules`, `testEnvironment`) and five do not. A
-  dedicated test is a *consumer*, so the six are not deletion candidates
-  under `fix-bugs`' dead-code default — their question is "wire it or invoke
-  it", and only the other five carry a keep-or-delete question.
-  `[not established]` whether those six tests exercise the CLI wrapper or
-  only the service beneath it; that decides whether the test would even
-  notice the script being deleted, and it should be checked per script.
-- **#1124 was NOT worked** — it is the group's third member and its core is
-  a capability decision (should the API create a StorageContainer at all?),
-  which is Denise's. Its premise was established fresh by `a66b5a9c` last
-  sitting; it does not need re-deriving, it needs an answer.
-- **#1126 was filed AND closed this sitting** — `26d36ba3` pins both
-  `utils/storageIndexes.js` call sites. `[ran it]` the probe: reverting both
-  reds exactly 2 of 44; before the commit the same deletion was green.
-- **Do NOT re-open the "do the sibling helpers pin their wiring" question.**
-  `[ran it]` they do: `sampleIndexes.unit.test.js:81` and
-  `participantIdentityIndexes.unit.test.js:109` both carry a
-  `collectionResolver wiring` describe using the same spy-then-reload
-  helper, and `MongoAuditRepository.test.js:359` pins
-  `ensureSampleMovementIndexes`. `storageIndexes.js` was the lone outlier
-  across four helper families — settled on #1126 and worth not re-deriving.
+- **#832 stays open for its items 2 and 3, which are genuinely Denise's.**
+  Item 2, token reuse: `[read it]` `POST /update` never invalidates the JWT,
+  so a link is replayable for its full lifetime — **two hours**,
+  `CONSENT_EXPIRATION` at `eConsent.js:13` — and `[read it]` each replay
+  runs `consent.service.js:839-843`'s
+  `updateMany({participantId, status:'ACTIVE'}, {status:'REVOKED'})`, so it
+  revokes the prior manifestation and writes a new one. Whether that is the
+  feature or a defect is a question about what a Consent *means*. Item 3 is
+  `CONSENT_SECRET`'s production posture, unestablishable from the repo
+  (no deployment, #362/#682).
+- **#1074 and #1089 are NOT fresh work, whatever a backlog scan suggests.**
+  Both were worked to their owner-decision boundary before this sitting —
+  #1074's shippable half shipped in `58779c2c`; #1089 carries a complete
+  pre-deferral analysis ending in four dictionary-level questions. The
+  previous handoff recommended #1089 as needing someone and cost me a full
+  re-derivation cycle; filed as pack #857. **Read an issue's comments before
+  picking it up.**
+- **#823's body claim "no rate limiting anywhere in the backend" was false
+  when written**, and the reason generalises: its sweep was scoped to
+  `api/backend/src`, and the limiters live in `api/backend/app.js`, which is
+  **not** under `src/`. Corrected on the issue.
+- **#1127 is the one finding I filed and did not work.** An infrastructure
+  failure inside the consent-token check (a Mongo outage under
+  `getPatientsCollection`) reaches the same opaque 400 and tells the
+  participant their link is invalid — while the controller three lines away
+  *deliberately* 503s the analogous template-lookup failure, with a comment
+  saying why. Pre-existing; `c52254dc` removed the last accidental signal of
+  it. Direction 1 in its body (a marked error class) is the faithful fix and
+  is a small change.
 
 ## Recommended next
 
 **None queued by name.** Dennis named no specific issue.
 
-1. **#1125 direction 1** — triage the other eleven scripts, now split into
-   the two populations above. Small, direction settled.
-2. **`ship-integration-branch`** — still Dennis's call, never yours, and
-   note the gate caveat above: the full backend/frontend suites have not run
-   against the last six commits, though the smoke check is green.
-3. **#1089 / #1118 / #1120 / #1123 / #1124** all still need someone; the
-   first has four unanswered questions on it and should not be started
-   without them.
+1. **Read the full-suite result** named under Gates before anything else.
+2. **#1127** — small, direction settled, and it is this sitting's own debt.
+3. **`ship-integration-branch`** — still Dennis's call, never yours. Note
+   the frontend suite has not run since before the previous sitting either.
+4. **#1118** remains the live member of the temperature-policy cluster —
+   zero comments, two `[not established]` items that look answerable
+   natively (whether any consumer needs `sourceEventId` unique per
+   notification; whether `docs/docs-7-27-2026/extracted/` states a
+   notification cadence).
