@@ -6,9 +6,8 @@ handoff and pick the next *group* of issues, and said Docker was on. I took
 the previous note's recommended list — **#1107, #1104, #1105** — and shipped
 four commits.
 
-**The gates have NOT finished.** The full native suite was running at the time
-of writing and the Docker e2e gate had not started. Do not read this note as a
-green gate; re-run both.
+**The FULL end-loaded gate ran and is GREEN, Docker included** — native
+466/8783 and Docker e2e 223/223, both against these four commits.
 
 ## What shipped
 
@@ -94,20 +93,41 @@ Query it — `gh issue list --state open`. What a query cannot carry:
 - **Can-it-fail probes on every slice, executed count checked against the
   green baseline both runs (#804):** #1107 4 red / 54; #1104 3 red / 75 then
   5 red / 79; #1105 8 red / 131.
-- **Full native suite: NOT COMPLETE at rotation.** Sanctioned form is
-  `npx vitest run tests/unit tests/integration tests/compliance --reporter=dot`
-  from `api/backend`, backgrounded — the bare form is blocked by
-  `full-suite-guard` and the run exceeds the 600s foreground ceiling.
-- **Docker e2e gate: NOT RUN.** `--build` is mandatory — four commits touched
-  `api/backend/src` and `backend-app-test` is build-not-mount. `[ran it]`
-  engine 28.5.1 up; `compose.test.yml` currently declares **34 services**, of
-  which **17** are the bootstrap chain (`foundation-bootstrap-test` plus 16
-  `reference-data-bootstrap-*`). Recipe as the `docker-workflow` overlay
-  documents it, `--workers=1`.
+- **Full native suite: `[ran it]` 466 files / 8783 tests, 0 failures, exit 0**,
+  600.32s of which **373s was `import`**. Supersedes the previous note's
+  466/8773; the +10 is exactly this sitting's net test delta. Sanctioned form
+  is `npx vitest run tests/unit tests/integration tests/compliance
+  --reporter=dot` from `api/backend`, backgrounded — the bare form is blocked
+  by `full-suite-guard` and the run sits right on the 600s foreground ceiling.
+- **Docker e2e: `[ran it]` 223/223 passed, `--workers=1`, 2.1 minutes, zero
+  failures, exit 0.** Built with `--build` (mandatory — four commits touched
+  `api/backend/src` and `backend-app-test` is build-not-mount). `[ran it]`
+  engine 28.5.1; `compose.test.yml` declares **34 services**, of which **17**
+  are the bootstrap chain (`foundation-bootstrap-test` plus 16
+  `reference-data-bootstrap-*`). All 12 core services healthy and **none
+  restarting** (#664), and all **18 one-shots `Exited (0)`** — verified as a
+  count of non-zero-or-still-running, not by eye. `admin-bootstrap-test`
+  reported compose exit 1, gotcha 3's known false negative, while the
+  container itself was `Exited (0)`.
+  - **`playwright-runner` was stopped before the host-side run**, per the
+    overlay's contention gotcha.
 
-**Stack state: DOWN.** No containers were started this sitting; only
-`docker version` and `docker compose config --services` were run, neither of
-which starts anything. **Bootstrap: NONE has run against the current volumes.**
+**Stack is DOWN and cleaned.** `[ran it]` at rotation: **zero containers**,
+33 images / 8.697GB, 40 volumes / 952MB, **build cache 0**. `builder prune
+-af` reclaimed **1.048GB** while `system df` had reported only 433.3MB of
+build cache — the #829 under-reporting gap, third sitting running, and the
+same 1.048GB figure as the last one. The 33 images are kept deliberately:
+they share layers, and removing them buys 8.697GB at the cost of rebuilding
+a 12-service stack plus a 17-service bootstrap chain on the next gate, while
+the component that actually bloats is already at zero. `test-results/` and
+every scratchpad script and redirect target were removed.
+
+**Not done, needs Dennis:** **35 anonymous Docker volumes** remain (28 at the
+previous rotation, so ~7 are this sitting's). `docker volume prune` would
+take the other 28 too, so it was left alone rather than guessed at —
+unchanged in kind from the previous note, just larger. **Also flagged, not
+deleted: `api/backend/coverage/` (33MB), mtime 2026-09-04** — it predates
+this session, so it is not this sitting's to remove.
 
 ## The judgment a query cannot carry
 
@@ -141,13 +161,11 @@ which starts anything. **Bootstrap: NONE has run against the current volumes.**
 Dennis named a group and the group is finished apart from #1104's held-back
 cutover; **nothing further is queued by name.** In rough order of value:
 
-1. **Finish the gates** — the native suite and the Docker e2e gate, in that
-   order, one at a time. Nothing else should land until they are green.
-2. **#1109** — the live duplicate-participant bug, and the thing blocking
+1. **#1109** — the live duplicate-participant bug, and the thing blocking
    #1104's `identityDocument` half. Its direction 2 is contained to the
    hashing helper.
-3. **#1104's `birthDate`-only cutover** — unblocked, and it makes half of
+2. **#1104's `birthDate`-only cutover** — unblocked, and it makes half of
    #1102's hash indexes start paying.
-4. **#1110** — clear docs answer; do the dict-02 check first.
-5. **#1108** — the largest of the three filed, and the one most likely to
+3. **#1110** — clear docs answer; do the dict-02 check first.
+4. **#1108** — the largest of the three filed, and the one most likely to
    need Denise rather than Dennis.
