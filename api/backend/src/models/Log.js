@@ -3,26 +3,32 @@
  * RNF009 - Auditoria e Rastreabilidade
  */
 
-// Lista de entidades válidas do sistema
-const VALID_ENTITIES = [
-  'Access',
-  'Authentication',
-  'Equipment',
-  'Export',
-  'Import',
-  'Location',
-  'Log',
-  'Patient',
-  'Policy',
-  'Report',
-  'Result',
-  'Sample',
-  'SampleFile',
-  'Sensor',
-  'Sistema',
-  'Temperature',
-  'User'
-];
+// #1114: a 17-entry VALID_ENTITIES allowlist used to sit here. It gated
+// nothing -- both places that consulted it were `else if` branches with an
+// empty body, because abb04202 replaced their console.warn with a comment
+// and left the branch behind -- so LogModel.validate accepted any
+// resourceType and always had.
+//
+// It is removed rather than enforced, and that is deliberate. Production
+// code emits 54 distinct resourceType literals and 42 of them were outside
+// the list: Settings, ConsentTemplate, ParticipantIdentity, Session,
+// LegalHold, RetentionPolicy, Specimen and so on -- Settings from
+// auditLogger#logLanguageChange, i.e. this module's own caller. Rejecting
+// those would fail the audit write; coercing them to 'Sistema' would
+// silently rewrite the resourceType on a trail that #1094/#1105 made
+// immutable and hash-chained. dict-02 P1X-0326 types the field as a code
+// with value set 'Vocabulário interno BioAvanceD' and never enumerates it.
+//
+// The near-identical list in infrastructure/middleware/audit.middleware.js
+// is NOT dead and must stay: determineEntity uses it to decide whether a
+// capitalized URL segment is a usable entity name or should fall back to
+// 'Sistema'. That input is a URL path and is bounded by design; this one
+// was a caller-supplied resourceType and never was. The two lists were
+// never the same contract -- which is the trap that made #1110's removal
+// look behavioural in a place it was not.
+//
+// The ID-shaped guard below stays. That is the check that was always doing
+// the work.
 
 // resourceType/resourceId are the canonical fields (dict-02_DICIONARIO.md
 // P1X-0326/P1X-0327: "Substitui o alias entity"/"Substitui entityID").
@@ -56,8 +62,6 @@ class LogModel {
       
       if (isObjectId || isLongNumericId) {
         errors.push(`entity não pode ser um ID (${entity}). Use um nome de entidade válido.`);
-      } else if (!VALID_ENTITIES.includes(entity) && entity !== 'Sistema') {
-        // Mantém a entidade sem ruído adicional no teste/evidência
       }
     }
 
@@ -90,8 +94,6 @@ class LogModel {
       if (isObjectId || isLongNumericId) {
         console.warn(`Entidade inválida detectada (ID): ${entity}. Corrigindo para 'Sistema'.`);
         entity = 'Sistema';
-      } else if (!VALID_ENTITIES.includes(entity) && entity !== 'Sistema') {
-        // Mantém a entidade sem ruído adicional no teste/evidência
       }
     }
     

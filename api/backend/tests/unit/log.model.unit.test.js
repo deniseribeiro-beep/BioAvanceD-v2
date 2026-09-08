@@ -42,6 +42,37 @@ describe('LogModel.validate', () => {
     expect(result.errors).toHaveLength(0);
   });
 
+  // #1114: the resourceType vocabulary is deliberately OPEN here. An
+  // allowlist used to sit in this model and gate nothing (both branches
+  // consulting it had empty bodies), and it must not come back as an
+  // enforced one: production emits 54 distinct resourceType literals and 42
+  // were outside that list, including Settings, which auditLogger emits
+  // itself. Rejecting them would fail audit writes; coercing them to
+  // 'Sistema' would rewrite the resourceType on a hash-chained, immutable
+  // audit trail. The bounded list in audit.middleware.js is a different
+  // contract -- its input is a URL segment, not a caller-supplied type.
+  it.each(['Settings', 'ConsentTemplate', 'ParticipantIdentity', 'LegalHold'])(
+    'accepts %s, a real production resourceType outside the retired allowlist',
+    (resourceType) => {
+      const result = LogModel.validate({ userID: 'user-1', action: 'CREATE', entity: resourceType });
+      expect(result.isValid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    }
+  );
+
+  it('preserves an unlisted resourceType verbatim rather than coercing it', () => {
+    const log = LogModel.create({ userID: 'user-1', action: 'CONFIG', entity: 'Settings' });
+    expect(log.resourceType).toBe('Settings');
+    expect(log.entity).toBe('Settings');
+  });
+
+  // The guard that was always doing the work, and stays: an ID-shaped
+  // entity is rejected by validate and coerced by create.
+  it('still coerces an ID-shaped entity to Sistema on create', () => {
+    const log = LogModel.create({ userID: 'user-1', action: 'CREATE', entity: '507f1f77bcf86cd799439011' });
+    expect(log.resourceType).toBe('Sistema');
+  });
+
   it('requires userID', () => {
     const result = LogModel.validate({ action: 'CREATE', entity: 'Sample' });
     expect(result.isValid).toBe(false);
