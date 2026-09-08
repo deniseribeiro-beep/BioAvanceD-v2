@@ -1,11 +1,17 @@
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { enforceAppendOnlyCollection, ensureSampleMovementIndexes } = require('./sampleMovementLedger');
 const { ensureSampleIndexes } = require('./sampleIndexes');
+const { ensureParticipantIdentityIndexes } = require('./participantIdentityIndexes');
 
 // #936: collection names whose indexes have already been ensured this
 // process. Keyed by resolved name, so a COLL_SAMPLES override gets its own
 // entry rather than being shadowed by the default.
 const samplesIndexed = new Set();
+
+// #1102: same latch, for participantIdentities -- a collection that had no
+// declared index of any kind (absent from create-db.js, no model file), so
+// every identity query was a collection scan.
+const participantIdentitiesIndexed = new Set();
 
 function resolveCollectionName(db, key) {
   const preferred = CANONICAL_COLLECTIONS[key];
@@ -46,6 +52,17 @@ function getCollection(db, key, requiredMethod) {
   if (key === 'samples' && !samplesIndexed.has(name)) {
     samplesIndexed.add(name);
     ensureSampleIndexes(collection);
+  }
+
+  // #1102: the participantIdentities indexes, on the same terms and for the
+  // same reason the comment above gives. Staying synchronous is load-bearing
+  // here too, and more sharply than for `samples`: import.service.js:319 and
+  // import-lgpd.service.js:847/2463 all do `const c = getCollection(db,
+  // 'participantIdentities')` with NO await and then call `c.findOne(...)`,
+  // so returning a thenable would break them outright.
+  if (key === 'participantIdentities' && !participantIdentitiesIndexed.has(name)) {
+    participantIdentitiesIndexed.add(name);
+    ensureParticipantIdentityIndexes(collection);
   }
 
   return collection;
