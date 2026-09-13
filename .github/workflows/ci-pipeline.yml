@@ -41,7 +41,9 @@ jobs:
         run: npm --prefix api/backend ci
 
       - name: Install frontend dependencies
-        run: npm --prefix frontend ci
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend install --no-save @rollup/rollup-linux-x64-gnu
 
       - name: Validate Git diff
         run: git diff --check
