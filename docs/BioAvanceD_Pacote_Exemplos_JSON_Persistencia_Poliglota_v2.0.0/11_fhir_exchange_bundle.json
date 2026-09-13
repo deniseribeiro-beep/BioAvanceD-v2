@@ -1,0 +1,25 @@
+{
+  "resourceType": "Bundle",
+  "type": "collection",
+  "meta": {
+    "source": "https://bioadvanced.dev/fhir/ImplementationGuide/bioadvanced"
+  },
+  "entry": [
+    {
+      "resource": {
+        "resourceType": "Specimen",
+        "id": "specimen-synthetic-001",
+        "identifier": [
+          {
+            "system": "https://bioadvanced.dev/fhir/NamingSystem/specimen-id",
+            "value": "specimen-synthetic-001"
+          }
+        ],
+        "subject": {
+          "reference": "Patient/participant-synthetic-001"
+        }
+      }
+    }
+  ],
+  "persistenceNotice": "Exchange representation only; not an operational store."
+}

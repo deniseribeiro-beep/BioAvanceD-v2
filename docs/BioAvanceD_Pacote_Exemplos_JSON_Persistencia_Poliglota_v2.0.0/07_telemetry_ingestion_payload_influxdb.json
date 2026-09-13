@@ -1,0 +1,23 @@
+{
+  "telemetryReadingId": "telemetry-reading-001",
+  "datastreamId": "datastream-temperature-001",
+  "sensorId": "sensor-001",
+  "equipmentId": "freezer-001",
+  "storageLocationId": "storage-location-freezer-001",
+  "observedAt": "2026-09-09T12:00:00Z",
+  "receivedAt": "2026-09-09T12:00:02Z",
+  "persistedAt": "2026-09-09T12:00:03Z",
+  "observedProperty": "temperature",
+  "value": -79.8,
+  "unit": {
+    "system": "http://unitsofmeasure.org",
+    "code": "Cel"
+  },
+  "sourceEventId": "evt-device-000123",
+  "idempotencyKey": "sensor-001:evt-device-000123",
+  "payloadHash": "sha256:synthetic-telemetry",
+  "clockStatus": "synchronized",
+  "schemaVersion": "2.0.0",
+  "canonicalModelReleaseId": "release-2.0.0",
+  "traceId": "trace-telemetry-001"
+}

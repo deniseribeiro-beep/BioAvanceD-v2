@@ -1,0 +1,62 @@
+{
+  "canonicalModelVersion": "2.0.0",
+  "canonicalModelReleaseStatus": "approved",
+  "documentaryState": "final",
+  "releaseFinalizedOn": "2026-09-12",
+  "syntheticOnly": true,
+  "physicalIdentificationProtocol": {
+    "version": "1.0.0",
+    "status": "approved_for_execution",
+    "executionStatus": "not_executed"
+  },
+  "files": [
+    {
+      "file": "01_participant_mongodb.json",
+      "purpose": "participant_mongodb"
+    },
+    {
+      "file": "02_consent_governance_mongodb.json",
+      "purpose": "consent_governance_mongodb"
+    },
+    {
+      "file": "03_specimen_mongodb.json",
+      "purpose": "specimen_mongodb"
+    },
+    {
+      "file": "04_container_rack_position_mongodb.json",
+      "purpose": "container_rack_position_mongodb"
+    },
+    {
+      "file": "05_temporal_occupancy_mongodb.json",
+      "purpose": "temporal_occupancy_mongodb"
+    },
+    {
+      "file": "06_custody_append_only_mongodb.json",
+      "purpose": "custody_append_only_mongodb"
+    },
+    {
+      "file": "07_telemetry_ingestion_payload_influxdb.json",
+      "purpose": "telemetry_ingestion_payload_influxdb"
+    },
+    {
+      "file": "08_exposure_summary_mongodb.json",
+      "purpose": "exposure_summary_mongodb"
+    },
+    {
+      "file": "09_object_storage_metadata_mongodb.json",
+      "purpose": "object_storage_metadata_mongodb"
+    },
+    {
+      "file": "10_graph_projection_outbox_mongodb.json",
+      "purpose": "graph_projection_outbox_mongodb"
+    },
+    {
+      "file": "11_fhir_exchange_bundle.json",
+      "purpose": "fhir_exchange_bundle"
+    },
+    {
+      "file": "12_redis_transient_example.json",
+      "purpose": "redis_transient_example"
+    }
+  ]
+}

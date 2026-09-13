@@ -1,0 +1,39 @@
+{
+  "container": {
+    "containerId": "container-cryovial-synthetic-001",
+    "containerType": "cryogenic_vial",
+    "status": "occupied"
+  },
+  "storageRack": {
+    "storageRackId": "rack-synthetic-001",
+    "rackType": "cryovial_rack",
+    "rowCount": 8,
+    "columnCount": 12,
+    "capacity": 96
+  },
+  "storagePosition": {
+    "storagePositionId": "position-synthetic-A01",
+    "storageRackId": "rack-synthetic-001",
+    "positionCode": "A01",
+    "rowIndex": 1,
+    "columnIndex": 1
+  },
+  "labelIdentifier": {
+    "labelIdentifierId": "label-id-001",
+    "encodedValue": "BVA2:SYN:8K3M",
+    "symbology": "data_matrix",
+    "targetType": "container",
+    "targetId": "container-cryovial-synthetic-001",
+    "identifierOrigin": "manufacturer_applied",
+    "carrierPlacement": "container_base",
+    "status": "active",
+    "immutableAtSource": true
+  },
+  "rackLocationAssignment": {
+    "rackLocationAssignmentId": "rack-location-001",
+    "storageRackId": "rack-synthetic-001",
+    "storageLocationId": "storage-location-freezer-001",
+    "placedAt": "2026-09-01T00:00:00Z",
+    "removedAt": null
+  }
+}
