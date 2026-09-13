@@ -1,0 +1,23 @@
+{
+  "specimenContainerAssignment": {
+    "specimenContainerAssignmentId": "specimen-container-001",
+    "specimenId": "specimen-synthetic-001",
+    "containerId": "container-cryovial-synthetic-001",
+    "assignedAt": "2026-09-07T00:00:00Z",
+    "releasedAt": null
+  },
+  "containerPositionAssignment": {
+    "containerPositionAssignmentId": "container-position-001",
+    "containerId": "container-cryovial-synthetic-001",
+    "storagePositionId": "position-synthetic-A01",
+    "placedAt": "2026-09-07T00:00:00Z",
+    "removedAt": null
+  },
+  "rackLocationAssignment": {
+    "rackLocationAssignmentId": "rack-location-001",
+    "storageRackId": "rack-synthetic-001",
+    "storageLocationId": "storage-location-freezer-001",
+    "placedAt": "2026-09-01T00:00:00Z",
+    "removedAt": null
+  }
+}

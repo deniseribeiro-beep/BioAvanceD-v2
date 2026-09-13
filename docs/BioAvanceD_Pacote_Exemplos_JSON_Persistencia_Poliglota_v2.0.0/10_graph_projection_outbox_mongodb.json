@@ -1,0 +1,107 @@
+{
+  "eventId": "outbox-001",
+  "aggregateType": "PhysicalAssignmentPath",
+  "aggregateId": "specimen-container-001",
+  "aggregateVersion": 4,
+  "projectionSchemaVersion": "2.0.0",
+  "operation": "upsert_temporal_relationships",
+  "relationships": [
+    {
+      "type": "CONTAINED_IN",
+      "from": {
+        "label": "Specimen",
+        "id": "specimen-synthetic-001"
+      },
+      "to": {
+        "label": "Container",
+        "id": "container-cryovial-synthetic-001"
+      },
+      "validTime": {
+        "from": "2026-09-07T00:00:00Z",
+        "to": null
+      },
+      "transactionTime": {
+        "from": "2026-09-09T12:00:04Z",
+        "to": null
+      }
+    },
+    {
+      "type": "POSITIONED_AT",
+      "from": {
+        "label": "Container",
+        "id": "container-cryovial-synthetic-001"
+      },
+      "to": {
+        "label": "StoragePosition",
+        "id": "position-synthetic-A01"
+      },
+      "validTime": {
+        "from": "2026-09-07T00:00:00Z",
+        "to": null
+      },
+      "transactionTime": {
+        "from": "2026-09-09T12:00:04Z",
+        "to": null
+      }
+    },
+    {
+      "type": "PART_OF",
+      "from": {
+        "label": "StoragePosition",
+        "id": "position-synthetic-A01"
+      },
+      "to": {
+        "label": "StorageRack",
+        "id": "rack-synthetic-001"
+      },
+      "validTime": {
+        "from": "2026-01-01T00:00:00Z",
+        "to": null
+      },
+      "transactionTime": {
+        "from": "2026-09-09T12:00:04Z",
+        "to": null
+      }
+    },
+    {
+      "type": "STORED_AT",
+      "from": {
+        "label": "StorageRack",
+        "id": "rack-synthetic-001"
+      },
+      "to": {
+        "label": "StorageLocation",
+        "id": "storage-location-freezer-001"
+      },
+      "validTime": {
+        "from": "2026-09-01T00:00:00Z",
+        "to": null
+      },
+      "transactionTime": {
+        "from": "2026-09-09T12:00:04Z",
+        "to": null
+      }
+    },
+    {
+      "type": "MONITORED_BY",
+      "from": {
+        "label": "StorageLocation",
+        "id": "storage-location-freezer-001"
+      },
+      "to": {
+        "label": "Device",
+        "id": "sensor-001"
+      },
+      "validTime": {
+        "from": "2026-01-01T00:00:00Z",
+        "to": null
+      },
+      "transactionTime": {
+        "from": "2026-09-09T12:00:04Z",
+        "to": null
+      }
+    }
+  ],
+  "payloadHash": "sha256:synthetic-graph-event",
+  "idempotencyKey": "PhysicalAssignmentPath:specimen-container-001:4"
+}

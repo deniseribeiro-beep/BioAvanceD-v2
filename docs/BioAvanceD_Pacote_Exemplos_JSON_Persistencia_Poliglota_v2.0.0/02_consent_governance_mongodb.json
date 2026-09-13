@@ -1,0 +1,46 @@
+{
+  "collection": {
+    "collectionId": "collection-biobank-synthetic-001",
+    "governanceRegime": "biobank",
+    "governanceContext": {
+      "biobankGovernanceContextId": "biobank-context-001",
+      "broadPurpose": {
+        "code": "health-research"
+      },
+      "governancePolicyId": "policy-synthetic-001",
+      "accessCommitteeId": "committee-synthetic-001",
+      "institutionalCustodianId": "org-synthetic-001",
+      "futureUseConditions": [
+        "compatible_consent",
+        "ethics_review_when_required"
+      ]
+    }
+  },
+  "consent": {
+    "consentId": "consent-synthetic-001",
+    "consentModel": "broad",
+    "templateVersionId": "consent-template-001",
+    "currentStateDerived": "active",
+    "effectivePeriod": {
+      "start": "2026-09-07"
+    },
+    "permissions": [
+      {
+        "permissionCode": "commercial_use",
+        "purpose": {
+          "code": "commercial-research"
+        },
+        "decision": "deny",
+        "policyVersion": "1.0.0"
+      }
+    ]
+  },
+  "custodianship": {
+    "custodianshipAssignmentId": "custody-assignment-001",
+    "custodianOrganizationId": "org-synthetic-001",
+    "effectivePeriod": {
+      "start": "2026-09-07"
+    },
+    "assignmentStatus": "active"
+  }
+}

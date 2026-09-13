@@ -1,0 +1,11 @@
+{
+  "dataFileVersionId": "file-version-001",
+  "objectUri": "object://evidence/synthetic-scan-001.png",
+  "sha256": "sha256:synthetic-object",
+  "sizeBytes": 12345,
+  "mediaType": "image/png",
+  "versionId": "object-version-001",
+  "evidenceType": "scan_evidence",
+  "createdAt": "2026-09-12T20:00:00Z",
+  "binaryAuthoritativeStore": "Object Storage"
+}
