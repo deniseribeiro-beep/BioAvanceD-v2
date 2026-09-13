@@ -55,7 +55,7 @@ const DISEASE_RULES = {
 };
 
 function normalizeOrpha(value) {
-  return String(value || '').replace(/^ORPHA:/i, '').trim();
+  return String(value || '').trim().replace(/^ORPHA:/i, '').trim();
 }
 
 function categoryFromRecord(record = {}) {

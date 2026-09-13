@@ -4,6 +4,7 @@ import { patientService } from '../services/api';
 import { extractResponseItems } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 interface ApiLikeError {
   message?: string;
@@ -75,6 +76,9 @@ export function usePatients() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when loadPatients is called again
+  // before a previous in-flight call resolves.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadPatients();
@@ -89,13 +93,16 @@ export function usePatients() {
   }, []);
 
   const loadPatients = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       setError(null);
       const response = await patientService.getAll();
+      if (!requestSeq.isCurrent(seq)) return;
       const patientsData = extractPatients(response.data);
       setPatients(patientsData);
     } catch (err: unknown) {
+      if (!requestSeq.isCurrent(seq)) return;
       if (isSilentAuthAbort(err)) {
         return;
       }
@@ -103,7 +110,7 @@ export function usePatients() {
       setError(extractErrorMessage(err, 'Erro ao carregar pacientes'));
       setPatients([]); // Garante que a lista seja limpa em caso de erro
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 

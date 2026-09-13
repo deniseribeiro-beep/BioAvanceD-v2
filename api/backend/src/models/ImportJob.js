@@ -11,12 +11,14 @@ class ImportJob {
     this.filePath = data.filePath || null;
     this.fileName = data.fileName || null;
     this.fileSize = data.fileSize || null;
-    this.status = data.status || 'pending'; // 'pending', 'processing', 'completed', 'failed', 'cancelled'
+    this.status = data.status || 'pending'; // 'pending', 'processing', 'completed', 'completed_no_data' (#890: terminal, wrote nothing -- every processed entry hit an unimplemented/unsupported format stub), 'failed', 'cancelled'
     this.progress = data.progress || 0; // 0-100
     this.totalRecords = data.totalRecords || 0;
     this.successCount = data.successCount || 0;
     this.errorCount = data.errorCount || 0;
-    this.importErrors = data.importErrors || [];
+    // #905: importErrors removed -- the worker writes `errors`, and this
+    // constructor was the last writer, stamping an always-empty
+    // importErrors: [] onto every new job document via toJSON().
     this.metadata = data.metadata || {};
     this.createdAt = data.createdAt || new Date();
     this.updatedAt = data.updatedAt || new Date();
@@ -60,7 +62,6 @@ class ImportJob {
       totalRecords: this.totalRecords,
       successCount: this.successCount,
       errorCount: this.errorCount,
-      importErrors: this.importErrors,
       metadata: this.metadata,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,

@@ -9,8 +9,10 @@ const { validateParticipantId } = require('../utils/patientAnonymization');
 const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
 const { GraphProjectionService } = require('./graphProjection.service');
+const participantIdentityService = require('./participantIdentity.service');
+const notificationDispatchService = require('./notificationDispatch.service');
 
-const ajv = new Ajv({ allErrors: true, strict: false, removeAdditional: false });
+const ajv = new Ajv({ allErrors: true, strict: false, removeAdditional: 'failing' });
 addFormats(ajv);
 
 const consentTemplateSchema = {
@@ -68,6 +70,16 @@ const consentPolicySchema = {
   },
   additionalProperties: true
 };
+
+// #820: the four fields normalizeSignaturePayload owns. Listed once so the
+// normalizer's output cannot be silently merged alongside a caller's raw copy
+// of the same key.
+const SIGNATURE_FIELDS = [
+  'signatureName',
+  'signatureImageBase64',
+  'signatureMimeType',
+  'signatureHash',
+];
 
 const patientConsentSchema = {
   type: 'object',
@@ -128,12 +140,24 @@ class ConsentService {
       : 'image/png';
 
     if (!signatureImageBase64) {
-      return {
-        signatureName,
-        signatureImageBase64: '',
-        signatureMimeType,
-        signatureHash: null,
-      };
+      // #820: omit the keys rather than emptying them. They are optional in
+      // patientConsentSchema (absent from its `required` list) but declared
+      // `minLength: 1`, so a present-and-empty value is rejected -- which made
+      // a signature-less manifestation unreachable even though the schema says
+      // it is legal. That is the only production path the participant
+      // e-consent page takes (POST /api/e-consent/update sends no signature at
+      // all), so every acceptance through it 422'd.
+      //
+      // Optional is the intended reading, not a leniency call: dict-02
+      // P1X-0372 `signerDisplayName` is 0..1 Condicional, and RF010 AC#4's
+      // "signatário" is ELM-0107 `signerRole` (a role code), not a captured
+      // signature. PatientConsentModel.validate type-checks these only when
+      // truthy, and PatientConsentModel.create defaults all four to null --
+      // three layers already treat a signature-less consent as legal.
+      //
+      // signatureMimeType is omitted too: declaring 'image/png' for an image
+      // that does not exist records a fact that is not true.
+      return signatureName ? { signatureName } : {};
     }
 
     const maxSignatureLength = 6 * 1024 * 1024;
@@ -184,7 +208,9 @@ class ConsentService {
     const valid = validatePatientConsentSchema(payload);
     if (!valid) {
       const errors = (validatePatientConsentSchema.errors || []).map(err => `${err.instancePath || 'consent'} ${err.message}`);
-      throw new Error(errors.join(', '));
+      const error = new Error(errors.join(', '));
+      error.statusCode = 422;
+      throw error;
     }
   }
 
@@ -250,7 +276,7 @@ class ConsentService {
         versionGroupId: typeof payload.versionGroupId === 'string' && payload.versionGroupId.trim().length > 0
           ? payload.versionGroupId.trim()
           : crypto.randomUUID(),
-        caae: typeof payload.caae === 'string' ? payload.caae.trim() : '',
+        caae: typeof payload.caae === 'string' ? payload.caae.trim() : undefined,
         active: payload.active === undefined ? true : Boolean(payload.active),
         permissions
       };
@@ -346,7 +372,7 @@ class ConsentService {
         content: htmlContent,
         version: `v${nextVersionNumber}`,
         versionGroupId,
-        previousconsentTemplateId: String(objectId),
+        previousTemplateId: String(objectId),
         caae: typeof existingTemplate.caae === 'string' ? existingTemplate.caae.trim() : '',
         active,
         permissions
@@ -477,39 +503,129 @@ class ConsentService {
 
       const result = await templatesCollection.insertOne(document);
       // --- Notify all patients with PENDING_CONSENT for this TCLE ---
+      const consentNotifications = { total: 0, notified: 0, failed: 0 };
       try {
         const patientsCollection = await getCollection(db, 'patients');
-        // Find all patients with PENDING_CONSENT and consentTemplateId matching this policy _id
-        const pendingPatients = await patientsCollection.find({
-          status: 'PENDING_CONSENT',
-          consentTemplateId: result.insertedId.toString()
-        }).toArray();
+
+        // #835: this used to filter on `result.insertedId` -- the id of the
+        // template inserted one line above -- so it could never match anyone.
+        // Patient.consentTemplateId is assigned at patient creation and is
+        // required (models/Patient.js:27), so a pending participant always
+        // points at a template that already existed. The two sets were
+        // disjoint by construction, and the sweep issued zero invitations on
+        // every publication. #810's hardening of this loop was correct and
+        // simply never had an iteration to run on.
+        //
+        // The cohort to invite is everyone still pending on an *earlier*
+        // version of this same term: the immediate predecessor, plus any other
+        // template sharing the version lineage, so someone enrolled on v1 who
+        // never answered is still invited when v3 publishes.
+        const lineageTemplateIds = new Set();
+        if (previousPolicyId) {
+          lineageTemplateIds.add(previousPolicyId);
+        }
+        // Guard: `find({ versionGroupId: undefined })` matches every document
+        // missing the field, which would sweep unrelated participants. Older
+        // templates predate versionGroupId, so this is reachable.
+        if (versionGroupId) {
+          const lineage = await templatesCollection
+            .find(
+              { versionGroupId, _id: { $ne: result.insertedId } },
+              { projection: { _id: 1 } }
+            )
+            .toArray();
+          for (const template of lineage) {
+            lineageTemplateIds.add(String(template._id));
+          }
+        }
+
+        // A brand-new term with no predecessor genuinely has no cohort --
+        // nobody can be pending on a term that did not exist. Skip explicitly
+        // rather than issuing a query that matches nothing by accident.
+        const pendingPatients = lineageTemplateIds.size === 0
+          ? []
+          : await patientsCollection.find({
+            status: 'PENDING_CONSENT',
+            consentTemplateId: { $in: [...lineageTemplateIds] }
+          }).toArray();
         const notificationService = require('./notification.service');
+        const identityCollection = await getCollection(db, 'participantIdentities');
+        consentNotifications.total = pendingPatients.length;
         for (const patient of pendingPatients) {
-          // Generate new consent token for each patient
-          const consentMetadata = notificationService.buildConsentMetadata();
-          const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
-          await notificationService.enqueueConsentNotification(patient, consentLink);
-          await patientsCollection.updateOne(
-            { _id: patient._id },
-            {
-              $set: {
-                consentToken: consentMetadata.token,
-                consentTokenCreatedAt: consentMetadata.createdAt,
-                consentTokenExpiresAt: consentMetadata.expiresAt,
-                consentNotifiedAt: new Date(),
-                updatedAt: new Date()
+          // #810: this try is per patient, deliberately. It used to wrap the
+          // whole loop, so the first participant who threw ended the entire
+          // sweep -- everyone after them got no invitation and no
+          // consentToken, while the publication still reported success. The
+          // loop body has several reachable throws: enqueueConsentNotification
+          // (queue unavailable, or sendConsentEmail's own
+          // CONSENT_RECIPIENT_REQUIRED for a participant with no e-mail, which
+          // in a bulk import cohort is not exotic), the identity lookup,
+          // decryptIdentity on a malformed record, and the writes themselves.
+          try {
+            // RF005/RNF007 (#561/#564/#574): patientName resolved via
+            // ParticipantIdentity instead of read directly off the Patient
+            // document. decryptIdentity falls back to the ciphertext sibling
+            // once the plaintext field is dropped (#566).
+            const rawIdentity = await identityCollection.findOne({ participantId: patient.participantId });
+            const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
+            const patientWithIdentity = identity ? { ...patient, patientName: identity.patientName } : patient;
+
+            // Generate new consent token for each patient
+            const consentMetadata = notificationService.buildConsentMetadata();
+            const consentLink = notificationService.buildConsentLink(patientWithIdentity, consentMetadata.token);
+
+            // #810: persist the token *before* attempting delivery. The link
+            // being emailed is only usable if the database already holds the
+            // token it carries, so this ordering makes the failure mode
+            // "invitation not sent" rather than "invitation sent, token
+            // missing" -- the latter is unrecoverable for the participant,
+            // who holds a link that can never validate.
+            await patientsCollection.updateOne(
+              { _id: patient._id },
+              {
+                $set: {
+                  consentToken: consentMetadata.token,
+                  consentTokenCreatedAt: consentMetadata.createdAt,
+                  consentTokenExpiresAt: consentMetadata.expiresAt,
+                  updatedAt: new Date()
+                }
               }
-            }
+            );
+
+            await notificationService.enqueueConsentNotification(patientWithIdentity, consentLink);
+
+            // Only now is the participant actually notified.
+            await patientsCollection.updateOne(
+              { _id: patient._id },
+              { $set: { consentNotifiedAt: new Date(), updatedAt: new Date() } }
+            );
+            consentNotifications.notified += 1;
+          } catch (patientError) {
+            consentNotifications.failed += 1;
+            logger.error(
+              `Falha ao notificar o participante ${patient.participantId} sobre o novo TCLE:`,
+              patientError.message
+            );
+          }
+        }
+
+        if (consentNotifications.failed > 0) {
+          // #810: a partial sweep used to be silent. Whoever published the
+          // term needs to know it did not reach everyone.
+          logger.error(
+            `Notificacao do novo TCLE parcial: ${consentNotifications.notified}/${consentNotifications.total} participantes notificados, ${consentNotifications.failed} falha(s).`
           );
         }
       } catch (notifyError) {
+        // Still needed for a failure of the sweep's own setup (resolving the
+        // collections, the find itself) -- not for a single patient.
         logger.error('Erro ao notificar pacientes do novo TCLE:', notifyError.message);
       }
       // --- End notification logic ---
       return {
         _id: result.insertedId,
-        ...document
+        ...document,
+        consentNotifications
       };
     } catch (error) {
       logger.error('Erro ao criar política de consentimento:', error.message);
@@ -644,16 +760,25 @@ class ConsentService {
       }
 
       const normalizedSignature = this.normalizeSignaturePayload(patchedPayload);
-      const normalizedPayload = {
-        ...patchedPayload,
-        ...normalizedSignature,
-      };
+      // #820: normalizeSignaturePayload is the single source of truth for these
+      // four fields, so drop the caller's raw copies before merging its result.
+      // Spreading over them was enough while the normalizer always returned all
+      // four; now that it omits them for a signature-less consent, a caller who
+      // sent an explicit `signatureImageBase64: ''` would otherwise keep it and
+      // hit the same minLength rejection the omission exists to avoid.
+      const normalizedPayload = { ...patchedPayload };
+      for (const field of SIGNATURE_FIELDS) {
+        delete normalizedPayload[field];
+      }
+      Object.assign(normalizedPayload, normalizedSignature);
 
       this.validatePatientConsentPayload(normalizedPayload);
 
       const validation = PatientConsentModel.validate(normalizedPayload);
       if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
+        const error = new Error(validation.errors.join(', '));
+        error.statusCode = 422;
+        throw error;
       }
 
       const participantId = normalizedPayload.participantId;
@@ -692,6 +817,24 @@ class ConsentService {
       }
 
       this.validateResponsesAgainstTemplate(template, normalizedPayload.responses || {});
+
+      // RF021 AC#4 (#593): studyId is optional — not every consent is tied
+      // to a research study — but when provided, it must resolve to a real
+      // Study, same referential-integrity pattern as
+      // sample.service.js:187-192 for Sample.studyId.
+      if (normalizedPayload.studyId !== undefined && normalizedPayload.studyId !== null && normalizedPayload.studyId !== '') {
+        const study = await db.collection('studies').findOne({ studyId: String(normalizedPayload.studyId) });
+        if (!study) {
+          throw new Error(`studyId ${normalizedPayload.studyId} não encontrado`);
+        }
+        // RF021 AC#5 (#596): same status gate #591 added for Sample.studyId
+        // — a consent can't be linked to a study that isn't active.
+        if (study.studyStatus !== 'active') {
+          const error = new Error(`Estudo ${normalizedPayload.studyId} não está ativo (status: ${study.studyStatus})`);
+          error.statusCode = 422;
+          throw error;
+        }
+      }
 
       const consentsCollection = await getCollection(db, 'consents');
       await consentsCollection.updateMany(
@@ -759,6 +902,24 @@ class ConsentService {
       consentId: objectId.toString(),
       status: 'REVOKED',
       signedAt: consent.signedAt || consent.createdAt || new Date(),
+    });
+
+    // #650 (RF015, consentimento domain) - fire-and-forget, same shape as
+    // auth.service.js's mfa_brute_force_lockout call: a missing/
+    // misconfigured NotificationRule must never block or delay the
+    // revocation itself. #685: explicit .catch() -- this repo has no
+    // global unhandledRejection handler, so a bare `void` here would
+    // crash the process on a transient notification-engine failure.
+    void notificationDispatchService.dispatchNotification(db, {
+      eventType: 'consent_revoked',
+      sourceEventType: 'PatientConsent',
+      sourceEventId: objectId,
+      payload: {
+        participantId: consent.participantId || null,
+        consentId: objectId.toString()
+      }
+    }).catch((dispatchError) => {
+      logger.error('[NOTIFICATION_DISPATCH] Falha ao disparar notificação de revogação de consentimento:', dispatchError.message || dispatchError);
     });
 
     const revokedConsent = {

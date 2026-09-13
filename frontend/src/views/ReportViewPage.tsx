@@ -8,6 +8,9 @@ import { reportsService } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { getPatientDisplayName } from '../utils/patientAnonymization';
 import { getReportTypeDefinition } from '../config/constants/report.constants';
+import { getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
+import { resolveSpecimenStatus, translateSpecimenStatus } from '../utils/sampleHelpers';
+import { selectTemperatureRows, selectAccessLogRows, rowKey } from './ReportViewPage.helpers';
 import './ReportViewPage.css';
 
 export default function ReportViewPage() {
@@ -222,7 +225,10 @@ export default function ReportViewPage() {
         )}
 
         {/* Listas Detalhadas */}
-        {(reportData.patients || reportData.samples || reportData.equipment || reportData.results || reportData.sensors || reportData.recentReadings || reportData.recentLogs) && (
+        {/* #949: `temperatures` and `logs` are the keys handleTemperature and
+            handleAccessLogs actually return; this gate read `recentReadings`/
+            `recentLogs`, which no handler has ever emitted. */}
+        {(reportData.patients || reportData.samples || reportData.equipment || reportData.results || reportData.sensors || selectTemperatureRows(reportData).length > 0 || selectAccessLogRows(reportData).length > 0) && (
           <div className="report-details">
             {reportData.patients && reportData.patients.length > 0 && (
               <Card className="details-card">
@@ -273,7 +279,7 @@ export default function ReportViewPage() {
                         <tr key={s.sampleID}>
                           <td>{s.sampleID}</td>
                           <td>{s.sampleType}</td>
-                          <td>{s.currentStatus}</td>
+                          <td>{translateSpecimenStatus(resolveSpecimenStatus(s))}</td>
                           <td>{formatDate(s.registrationDate)}</td>
                         </tr>
                       ))}
@@ -355,23 +361,26 @@ export default function ReportViewPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {reportData.sensors.map((s: any) => (
-                        <tr key={s.sensorID}>
-                          <td>{s.sensorID}</td>
-                          <td>{s.sensorType}</td>
-                          <td>{s.maintenanceStatus}</td>
-                          <td>{formatDate(s.lastCalibration)}</td>
-                        </tr>
-                      ))}
+                      {reportData.sensors.map((s: any, idx: number) => {
+                        const sensorId = s.sensorId || s.sensorID || s._id || 'N/A';
+                        return (
+                          <tr key={s._id || sensorId || idx}>
+                            <td>{sensorId}</td>
+                            <td>{s.sensorType}</td>
+                            <td>{getMaintenanceStatusLabel(s.maintenanceStatus)}</td>
+                            <td>{formatDate(s.lastCalibration)}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
               </Card>
             )}
 
-            {reportData.recentReadings && reportData.recentReadings.length > 0 && (
+            {selectTemperatureRows(reportData).length > 0 && (
               <Card className="details-card">
-                <h3 className="details-title">Leituras Recentes de Temperatura ({reportData.recentReadings.length})</h3>
+                <h3 className="details-title">Leituras Recentes de Temperatura ({selectTemperatureRows(reportData).length})</h3>
                 <div className="details-table">
                   <table>
                     <thead>
@@ -383,12 +392,12 @@ export default function ReportViewPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {reportData.recentReadings.map((r: any) => (
-                        <tr key={r.logID}>
+                      {selectTemperatureRows(reportData).map((r, i) => (
+                        <tr key={rowKey(r, i)}>
                           <td>{formatDate(r.timestamp)}</td>
                           <td>{r.temperatureValue} {r.temperatureUnit}</td>
                           <td>{r.readingStatus}</td>
-                          <td>{r.sensorID}</td>
+                          <td>{r.sensorId || r.sensorID || 'N/A'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -397,9 +406,9 @@ export default function ReportViewPage() {
               </Card>
             )}
 
-            {reportData.recentLogs && reportData.recentLogs.length > 0 && (
+            {selectAccessLogRows(reportData).length > 0 && (
               <Card className="details-card">
-                <h3 className="details-title">Logs Recentes ({reportData.recentLogs.length})</h3>
+                <h3 className="details-title">Logs Recentes ({selectAccessLogRows(reportData).length})</h3>
                 <div className="details-table">
                   <table>
                     <thead>
@@ -413,8 +422,8 @@ export default function ReportViewPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {reportData.recentLogs.map((l: any) => (
-                        <tr key={l.logID}>
+                      {selectAccessLogRows(reportData).map((l, i) => (
+                        <tr key={rowKey(l, i)}>
                           <td>{formatDate(l.timestamp)}</td>
                           <td>{l.userName}</td>
                           <td>{l.action}</td>

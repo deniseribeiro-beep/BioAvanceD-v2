@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../../controllers/auth.controller');
+const authService = require('../../services/auth.service');
 const { authenticate } = require('../../infrastructure/middleware/auth');
+const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
 const auditLogger = require('../../utils/auditLogger');
 const jwt = require('jsonwebtoken');
@@ -63,7 +65,79 @@ router.post('/login', async (req, res, next) => {
 });
 
 // RF003 - Cadastro de usuário (pode ser público ou protegido dependendo da regra)
-router.post('/register', authController.register.bind(authController));
+//
+// #1037: esta rota NÃO tem `authenticate` -- diferente de todas as suas
+// vizinhas -- e auth.controller.js entrega `req.body` inteiro a
+// registerUser, que respeita `userData.accessType || 2`. accessType 4 mapeia
+// para 'administrator' em ROLE_CODE_BY_ACCESS_TYPE, e resolveScopeForRole
+// atalha hierarchyLevel 4 para escopo GLOBAL sem validar organizationId --
+// ou seja, a concessão não pode falhar. O mesmo pedido ainda cai no ramo que
+// zera mfaEnabled/mfaSecretCiphertext por padrão. Resultado medido: um POST anônimo
+// devolvia 201 e gravava uma atribuição de administrador global, ativa, com
+// MFA desligado.
+//
+// A rota irmã POST /api/users/register carrega o piso de hierarquia do #998,
+// cujo próprio comentário descreve exatamente esta escalada um nível abaixo.
+// As duas chegam ao MESMO serviço; o piso vivia só numa delas. Este guard é
+// o piso equivalente para a rota pública, e é a única parte do #1037 que não
+// depende de uma decisão de produto: se esta rota deve existir, ser
+// autenticada ou ser removida continua em aberto lá.
+//
+// Falha FECHADA em vez de rebaixar em silêncio. Um rebaixamento silencioso
+// deixaria o chamador acreditando que escolheu o nível que pediu, e quem
+// legitimamente precisa escolher um nível tem a rota autenticada para isso.
+// Um pedido sem accessType/roleName segue inalterado e recebe o padrão 2.
+function rejectCallerSuppliedPrivilege(req, res, next) {
+  const body = req.body || {};
+  const supplied = ['accessType', 'roleName'].filter((k) => body[k] !== undefined && body[k] !== null);
+  if (supplied.length === 0) {
+    return next();
+  }
+
+  logger.warn(
+    `#1037: registro público recusado -- nível de acesso fornecido pelo chamador: ${supplied.join(", ")}`
+  );
+  return res.status(403).json({
+    success: false,
+    error: (req.t && req.t("errors.forbidden")) || "Acesso negado",
+    message: "Este endpoint não aceita accessType nem roleName. Use a rota autenticada de criação de usuários para definir o nível de acesso."
+  });
+}
+
+// #1037: this route was UNAUTHENTICATED. rejectCallerSuppliedPrivilege above
+// closed the escalation half -- an anonymous caller could no longer ASK for
+// accessType 4 -- but an anonymous caller could still create a default-level
+// account, with a caller-supplied organizationId, attributed to `system` and
+// with no audit row naming an actor, because there was no actor to name.
+//
+// The specification settles this; it is not a taste call:
+//   - RF003 ("Gestão de usuários") has `Ator primário: Administrador` and
+//     owns the whole account lifecycle. RF001 (authentication) creates
+//     SESSIONS, not accounts -- its acceptance criteria have no
+//     account-creation clause at all. This route lives on the RF001 surface
+//     while performing an RF003 action.
+//   - RF003 AC#6 requires auditing account creation.
+//   - RF012 AC#1 and RNF009 AC#2 (Crítica) both make the ACTOR a mandatory
+//     element of every audit event. An anonymous creation cannot supply one.
+//   - No requirement anywhere in docs-7-27-2026 or the 7-31 amendment asks
+//     for unauthenticated self-registration, and UserAccount carries no
+//     pending-approval state, no self-registered flag and no activation step
+//     that such a flow would need. UserRoleAssignment.grantedBy is 1..1 Core.
+//
+// Gated to match the authenticated twin (POST /api/users/register), which is
+// what the frontend actually calls. rejectCallerSuppliedPrivilege STAYS: the
+// twin is where a caller who legitimately needs to choose a level does so,
+// under #998's hierarchy floor. That makes this route a strictly weaker
+// duplicate of the twin, which is an argument for deleting it outright --
+// tracked separately rather than done here, because whether an out-of-repo
+// consumer posts to it cannot be answered from inside this repo.
+router.post(
+  '/register',
+  authenticate,
+  requirePermission('createUser'),
+  rejectCallerSuppliedPrivilege,
+  authController.register.bind(authController)
+);
 
 // Troca de senha autenticada
 router.post('/change-password', authenticate, authController.changePassword.bind(authController));
@@ -83,12 +157,6 @@ router.post('/two-factor/disable', authenticate, (req, res) => {
 router.get('/two-factor/status', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-      });
-    }
 
     const usersCollection = db.collection('users');
     const { ObjectId } = require('mongodb');
@@ -140,8 +208,8 @@ router.post('/keepalive', authenticate, async (req, res) => {
           auditLogger.init(db);
           await auditLogger.log({
             action: 'SESSION_EXPIRED',
-            entity: 'Authentication',
-            result: 'error',
+            resourceType: 'Authentication',
+            status: 'error',
             severity: 'warning',
             message: (req.t && req.t('auth.sessionExpiredMessage')) || 'Sessão expirada durante keepalive',
             req: req,
@@ -168,7 +236,7 @@ router.post('/keepalive', authenticate, async (req, res) => {
     //     await auditLogger.log({
     //       action: 'KEEPALIVE',
     //       entity: 'Session',
-    //       result: 'success',
+    //       status: 'success',
     //       severity: 'info',
     //       message: (req.t && req.t('auth.sessionRenewed')) || 'Sessão renovada',
     //       req: req,
@@ -208,7 +276,16 @@ router.post('/logout', authenticate, async (req, res) => {
       const sessionCheck = await sessionService.verifySession(db, token);
       
       if (sessionCheck.valid && sessionCheck.session?.sessionID) {
-        await sessionService.invalidateSession(db, sessionCheck.session.sessionID);
+        // #974: an explicit logout is 'user_request' by the session's own
+        // owner. req.user is not relied on here because this route reaches
+        // the revoke through verifySession rather than the authenticate
+        // middleware, so the session document is the authoritative actor.
+        await sessionService.invalidateSession(
+          db,
+          sessionCheck.session.sessionID,
+          'user_request',
+          sessionCheck.session.userID
+        );
       }
     }
 
@@ -242,12 +319,6 @@ router.post('/logout', authenticate, async (req, res) => {
 router.get('/verify', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-      });
-    }
 
     // Busca dados completos do usuário
     const usersCollection = db.collection('users');
@@ -259,8 +330,8 @@ router.get('/verify', authenticate, async (req, res) => {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'TOKEN_VERIFY_FAILED',
-        entity: 'Authentication',
-        result: 'error',
+        resourceType: 'Authentication',
+        status: 'error',
         severity: 'warning',
         message: (req.t && req.t('auth.tokenVerifyFailed')) || 'Token verificado mas usuário não encontrado',
         req: req,
@@ -273,16 +344,14 @@ router.get('/verify', authenticate, async (req, res) => {
       });
     }
 
-    // Mapeia accessType para roleName usando traduções
-    const roleNameMap = {
-      1: (req.t && req.t('roles.externalUser')) || 'Usuário Externo',
-      2: (req.t && req.t('roles.technician')) || 'Técnico',
-      3: (req.t && req.t('roles.coordinator')) || 'Coordenador',
-      4: (req.t && req.t('roles.administrator')) || 'Administrador'
-    };
-
-    // Usa roleName do banco se existir, senão mapeia do accessType
-    const roleName = user.roleName || roleNameMap[user.accessType] || ((req.t && req.t('roles.technician')) || 'Técnico');
+    // #428: accessType/roleName no longer persisted on the User document
+    // (#427) — resolve both display values from the active RBAC assignment,
+    // same pattern as user.routes.js's resolveRoleDisplayName since #427.
+    const { resolveRoleDisplayName, resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
+    const [roleName, accessType] = await Promise.all([
+      resolveRoleDisplayName(db, req.user.userID),
+      resolveUserHierarchyLevel(db, req.user.userID)
+    ]);
 
     return res.status(200).json({
       success: true,
@@ -292,8 +361,8 @@ router.get('/verify', authenticate, async (req, res) => {
           userID: req.user.userID,
           email: user.email,
           username: user.username,
-          accessType: user.accessType,
-          roleName: roleName,
+          accessType,
+          roleName,
           name: user.name,
           mfaEnabled: user.mfaEnabled || false
         },
@@ -314,12 +383,6 @@ router.get('/verify', authenticate, async (req, res) => {
 router.get('/sessions', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-      });
-    }
 
     const token = req.headers.authorization?.substring(7);
     const sessionService = require('../../services/session.service');
@@ -343,12 +406,6 @@ router.get('/sessions', authenticate, async (req, res) => {
 router.delete('/sessions/all-others', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-      });
-    }
 
     const token = req.headers.authorization?.substring(7);
     const sessionService = require('../../services/session.service');
@@ -372,12 +429,6 @@ router.delete('/sessions/all-others', authenticate, async (req, res) => {
 router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-      });
-    }
 
     const { sessionId } = req.params;
     const sessionService = require('../../services/session.service');
@@ -388,7 +439,7 @@ router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
       clearRefreshCookie(res);
     }
 
-    const revoked = await sessionService.revokeSessionById(db, req.user.userID, sessionId);
+    const revoked = await sessionService.revokeSessionById(db, req.user.userID, sessionId, 'user_request', req.user.userID);
 
     if (!revoked) {
       return res.status(404).json({
@@ -470,18 +521,10 @@ router.post('/refresh', async (req, res) => {
       });
     }
 
-    const accessToken = jwt.sign(
-      {
-        userID: user._id.toString(),
-        email: user.email,
-        username: user.username,
-        accessType: user.accessType,
-        name: user.name,
-        mfaVerified: true
-      },
-      env.JWT_SECRET,
-      { expiresIn: '15m' }
-    );
+    // #431: accessType resolved fresh from the RBAC assignment via
+    // authService.issueAccessToken, not read off the (no-longer-populated,
+    // since #427) User document field.
+    const accessToken = await authService.issueAccessToken(db, user);
 
     const newRefreshToken = jwt.sign(
       {

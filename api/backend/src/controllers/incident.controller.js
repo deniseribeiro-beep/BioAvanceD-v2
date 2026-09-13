@@ -1,8 +1,12 @@
+const mongoose = require('mongoose');
 const logger = require('../utils/logger');
 const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
 const { sendIncidentAlertEmail } = require('../services/sendIncidentAlertEmail');
 const coldChainQuarantineService = require('../services/equipment-sensor-quarantine.service');
+const { findUserAccountIdsByRoleCodes } = require('../services/rbac-assignment.service');
+
+const NOTIFIABLE_ROLE_CODES = ['technician', 'coordinator', 'administrator'];
 
 let TemperatureIncidentCollection = null;
 let UserCollection = null;
@@ -20,10 +24,19 @@ async function getCollections() {
 
 async function getAlertRecipients() {
   try {
-    const { UserCollection } = await getCollections();
+    const { db, UserCollection } = await getCollections();
+    // #426: resolve via UserRoleAssignment -> Role, não accessType direto.
+    const userAccountIds = await findUserAccountIdsByRoleCodes(db, NOTIFIABLE_ROLE_CODES);
+    if (!userAccountIds.length) return [];
+    // #651: same fix as the other four ObjectId sites in this file -- db
+    // here is the mongoose connection, and mongoose bundles its own bson
+    // (major-version-diverged from the top-level `mongodb` package's
+    // bson), so ObjectId must come from mongoose.Types, not `require('mongodb')`.
+    const { ObjectId } = mongoose.Types;
+    const objectIds = userAccountIds.filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id));
     const recipients = await UserCollection
-      .find({ accessType: { $in: [2, 3, 4] }, status: 'active' })
-      .project({ email: 1, username: 1, accessType: 1 })
+      .find({ _id: { $in: objectIds }, status: 'active' })
+      .project({ email: 1, username: 1 })
       .toArray();
     return recipients.map(u => u.email).filter(e => e);
   } catch (error) {
@@ -41,6 +54,35 @@ async function applyColdChainQuarantine(db, incident) {
   }
 }
 
+// #301: TemperatureIncident and EnvironmentalExcursion are opened together
+// (iot.controller.js's upsertTemperatureIncidentAndQuarantine/
+// upsertEnvironmentalExcursion, keyed by sensorKey and equipmentId
+// respectively) but nothing closed the excursion when its incident resolved.
+async function closeEnvironmentalExcursion(db, sensorKey, closedAt) {
+  const SensorMetadataCollection = db.collection('sensorMetadata');
+  const DeviceCollection = db.collection('devices');
+  const sensorMetadata = await SensorMetadataCollection.findOne({ sensorId: sensorKey });
+  if (!sensorMetadata?.device) return null;
+
+  const device = await DeviceCollection.findOne({ _id: sensorMetadata.device });
+  const deviceId = device?.deviceId || null;
+  if (!deviceId) return null;
+
+  const ExcursionCollection = db.collection('environmentalExcursions');
+  const openExcursion = await ExcursionCollection.findOne({
+    equipmentId: deviceId,
+    excursionStatus: { $in: ['open', 'under_assessment'] }
+  });
+  if (!openExcursion) return null;
+
+  const duration = closedAt.getTime() - new Date(openExcursion.startDateTime).getTime();
+  await ExcursionCollection.updateOne(
+    { _id: openExcursion._id },
+    { $set: { endDateTime: closedAt, excursionStatus: 'resolved', duration, updatedAt: closedAt } }
+  );
+  return { ...openExcursion, endDateTime: closedAt, excursionStatus: 'resolved', duration };
+}
+
 async function markColdChainReview(db, incident) {
   try {
     return await coldChainQuarantineService.markColdChainIncidentSamplesForReview(db, incident);
@@ -56,7 +98,7 @@ async function createOrUpdateIncident(req, res) {
     const validation = TemperatureIncidentModel.validate({ sensorKey, sensorName, openedAt: new Date(), currentTemperature, maxTemperature, minTemperature, samplesOutOfRange });
 
     if (!validation.isValid) {
-      return res.status(400).json({ success: false, error: 'Validação falhou', details: validation.errors });
+      return res.status(422).json({ success: false, error: 'Validação falhou', details: validation.errors });
     }
 
     const { db, TemperatureIncidentCollection } = await getCollections();
@@ -112,7 +154,7 @@ async function acknowledgeIncident(req, res) {
     const { incidentId } = req.params;
     const { userId, notes } = req.body;
     const { TemperatureIncidentCollection } = await getCollections();
-    const { ObjectId } = require('mongodb');
+    const { ObjectId } = mongoose.Types;
     const result = await TemperatureIncidentCollection.updateOne(
       { _id: new ObjectId(incidentId) },
       { $set: { status: 'acknowledged', acknowledgedAt: new Date(), acknowledgedBy: userId, updatedAt: new Date() }, $push: { notes: { timestamp: new Date(), userId, action: 'acknowledged', message: notes || 'Incidente reconhecido' } } }
@@ -130,7 +172,7 @@ async function resolveIncident(req, res) {
     const { incidentId } = req.params;
     const { userId, notes } = req.body;
     const { db, TemperatureIncidentCollection } = await getCollections();
-    const { ObjectId } = require('mongodb');
+    const { ObjectId } = mongoose.Types;
     const objectId = new ObjectId(incidentId);
     const incident = await TemperatureIncidentCollection.findOne({ _id: objectId });
     if (!incident) return res.status(404).json({ success: false, error: 'Incidente não encontrado' });
@@ -141,7 +183,11 @@ async function resolveIncident(req, res) {
     );
     if (result.matchedCount === 0) return res.status(404).json({ success: false, error: 'Incidente não encontrado' });
     const postIncidentReview = await markColdChainReview(db, { ...incident, status: 'resolved', closedAt });
-    return res.status(200).json({ success: true, message: 'Incidente resolvido; amostras afetadas permanecem bloqueadas para revisão pós-incidente.', postIncidentReview });
+    const environmentalExcursion = await closeEnvironmentalExcursion(db, incident.sensorKey, closedAt).catch((error) => {
+      logger.error('[INCIDENT] Falha ao encerrar excursão ambiental:', error.message || error);
+      return null;
+    });
+    return res.status(200).json({ success: true, message: 'Incidente resolvido; amostras afetadas permanecem bloqueadas para revisão pós-incidente.', postIncidentReview, environmentalExcursion });
   } catch (error) {
     logger.error('[INCIDENT] Erro ao resolver incidente:', error);
     return res.status(500).json({ success: false, error: 'Erro ao resolver incidente', details: error.message });
@@ -153,7 +199,7 @@ async function escalateIncident(req, res) {
     const { incidentId } = req.params;
     const { userId, notes } = req.body;
     const { TemperatureIncidentCollection } = await getCollections();
-    const { ObjectId } = require('mongodb');
+    const { ObjectId } = mongoose.Types;
     const incident = await TemperatureIncidentCollection.findOne({ _id: new ObjectId(incidentId) });
     if (!incident) return res.status(404).json({ success: false, error: 'Incidente não encontrado' });
     const newEscalationLevel = Math.min(incident.escalationLevel + 1, 2);
@@ -178,7 +224,7 @@ async function addNoteToIncident(req, res) {
     const { userId, message } = req.body;
     const { TemperatureIncidentCollection } = await getCollections();
     if (!message || typeof message !== 'string') return res.status(400).json({ success: false, error: 'message é obrigatório' });
-    const { ObjectId } = require('mongodb');
+    const { ObjectId } = mongoose.Types;
     const result = await TemperatureIncidentCollection.updateOne(
       { _id: new ObjectId(incidentId) },
       { $push: { notes: { timestamp: new Date(), userId, action: 'note', message } }, $set: { updatedAt: new Date() } }

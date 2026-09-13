@@ -1,13 +1,18 @@
 import { useState, useEffect } from 'react';
 import { Sensor, Temperature } from '../types/models';
 import { sensorService } from '../services/api';
+import { extractResponseItems } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 export function useSensors() {
   const [sensors, setSensors] = useState<Sensor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when loadSensors is called again
+  // before a previous in-flight call resolves.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadSensors();
@@ -22,23 +27,21 @@ export function useSensors() {
   }, []);
 
   const loadSensors = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       const response = await sensorService.getAll();
-      const responseData: any = response.data;
+      if (!requestSeq.isCurrent(seq)) return;
       // Backend retorna { success: true, data: [...] }
-      const sensorsData = Array.isArray(responseData) 
-        ? responseData 
-        : (Array.isArray(responseData?.data) 
-          ? responseData.data 
-          : []);
+      const sensorsData = extractResponseItems<Sensor>(response);
       setSensors(sensorsData);
       setError(null);
     } catch (err: any) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(err.message || 'Erro ao carregar sensores');
       setSensors([]); // Garante array vazio em caso de erro
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 

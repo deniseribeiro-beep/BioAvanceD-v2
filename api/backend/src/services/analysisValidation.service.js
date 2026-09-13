@@ -1,6 +1,7 @@
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
 const { getCollection } = require('../utils/collectionResolver');
+const { SampleModel } = require('../models/Sample');
 
 /**
  * Service para validar amostras e consentimento de pacientes antes de upload de análise
@@ -21,7 +22,22 @@ class AnalysisValidationService {
       // Tenta buscar por ObjectId
       if (ObjectId.isValid(sampleIdentifier)) {
         sample = await samplesCollection.findOne({ _id: new ObjectId(sampleIdentifier) });
-        if (sample) return { success: true, sample };
+        if (sample) {
+          // Um sampleID/barcode que coincide (por acaso ou de forma maliciosa) com o
+          // formato de ObjectId de OUTRA amostra não deve vencer silenciosamente: falha
+          // fechado em vez de anexar o upload à amostra errada (issue #34).
+          const collision = await samplesCollection.findOne({
+            _id: { $ne: sample._id },
+            $or: [{ specimenId: sampleIdentifier }, { sampleID: sampleIdentifier }, { barcode: sampleIdentifier }]
+          });
+          if (collision) {
+            return {
+              success: false,
+              error: `Identificador "${sampleIdentifier}" é ambíguo: corresponde ao ID interno de uma amostra e ao sampleID/barcode de outra. Contate o suporte.`
+            };
+          }
+          return { success: true, sample };
+        }
       }
 
       // Tenta buscar por specimenId
@@ -134,7 +150,7 @@ class AnalysisValidationService {
           barcode: sample.barcode,
           participantId: sample.participantId,
           sampleType: sample.sampleType,
-          lifecycleStatus: sample.lifecycleStatus
+          specimenStatus: SampleModel.resolveSpecimenStatus(sample)
         },
         patient: consentValidation.patient
       };

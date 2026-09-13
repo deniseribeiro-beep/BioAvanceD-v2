@@ -3,6 +3,15 @@ set -eu
 
 mkdir -p /etc/tsa/certs /etc/tsa/secrets /var/lib/tsa /run/secrets
 
+# #954: openssl-ts.cnf:5 points "serial" here and "openssl ts -reply" both
+# reads and increments it. The Dockerfile COPYs a seed, but compose.prod.yml
+# mounts a named volume over /var/lib/tsa -- Docker only seeds a volume that
+# is EMPTY on first use, so a volume created before that COPY existed would
+# mask it. Guard rather than assume.
+if [ ! -f /var/lib/tsa/serial ]; then
+  echo 01 > /var/lib/tsa/serial
+fi
+
 if [ ! -f /etc/tsa/certs/ca.crt.pem ] || [ ! -f /etc/tsa/certs/tsa.crt.pem ] || [ ! -f /run/secrets/tsa_key.pem ]; then
   if [ ! -f /run/secrets/tsa_key.pem ]; then
     openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /run/secrets/tsa_key.pem

@@ -1,0 +1,115 @@
+import { describe, it, expect } from 'vitest';
+const LogModel = require('../../src/models/Log');
+
+describe('LogModel.validateResult', () => {
+  it('returns true for success', () => {
+    expect(LogModel.validateResult('success')).toBe(true);
+  });
+
+  it('returns true for failure', () => {
+    expect(LogModel.validateResult('failure')).toBe(true);
+  });
+
+  it('returns false for unknown result', () => {
+    expect(LogModel.validateResult('error')).toBe(false);
+    expect(LogModel.validateResult(null)).toBe(false);
+  });
+});
+
+describe('LogModel.validateSeverity', () => {
+  it('returns true for valid severities', () => {
+    ['info', 'warning', 'error', 'critical'].forEach(s => {
+      expect(LogModel.validateSeverity(s)).toBe(true);
+    });
+  });
+
+  it('returns false for unknown severity', () => {
+    expect(LogModel.validateSeverity('debug')).toBe(false);
+    expect(LogModel.validateSeverity(null)).toBe(false);
+  });
+});
+
+describe('LogModel.validate', () => {
+  const validData = {
+    userID: 'user-123',
+    action: 'CREATE',
+    entity: 'Sample',
+  };
+
+  it('returns no errors for valid data', () => {
+    const result = LogModel.validate(validData);
+    expect(result.isValid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  // #1114: the resourceType vocabulary is deliberately OPEN here. An
+  // allowlist used to sit in this model and gate nothing (both branches
+  // consulting it had empty bodies), and it must not come back as an
+  // enforced one: production emits 54 distinct resourceType literals and 42
+  // were outside that list, including Settings, which auditLogger emits
+  // itself. Rejecting them would fail audit writes; coercing them to
+  // 'Sistema' would rewrite the resourceType on a hash-chained, immutable
+  // audit trail. The bounded list in audit.middleware.js is a different
+  // contract -- its input is a URL segment, not a caller-supplied type.
+  it.each(['Settings', 'ConsentTemplate', 'ParticipantIdentity', 'LegalHold'])(
+    'accepts %s, a real production resourceType outside the retired allowlist',
+    (resourceType) => {
+      const result = LogModel.validate({ userID: 'user-1', action: 'CREATE', entity: resourceType });
+      expect(result.isValid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    }
+  );
+
+  it('preserves an unlisted resourceType verbatim rather than coercing it', () => {
+    const log = LogModel.create({ userID: 'user-1', action: 'CONFIG', entity: 'Settings' });
+    expect(log.resourceType).toBe('Settings');
+    expect(log.entity).toBe('Settings');
+  });
+
+  // The guard that was always doing the work, and stays: an ID-shaped
+  // entity is rejected by validate and coerced by create.
+  it('still coerces an ID-shaped entity to Sistema on create', () => {
+    const log = LogModel.create({ userID: 'user-1', action: 'CREATE', entity: '507f1f77bcf86cd799439011' });
+    expect(log.resourceType).toBe('Sistema');
+  });
+
+  it('requires userID', () => {
+    const result = LogModel.validate({ action: 'CREATE', entity: 'Sample' });
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some(e => e.includes('userID'))).toBe(true);
+  });
+
+  it('requires action', () => {
+    const result = LogModel.validate({ userID: 'user-1', entity: 'Sample' });
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some(e => e.includes('action'))).toBe(true);
+  });
+
+  it('requires entity/resourceType', () => {
+    const result = LogModel.validate({ userID: 'user-1', action: 'CREATE' });
+    expect(result.isValid).toBe(false);
+  });
+
+  it('rejects ObjectId as entity', () => {
+    const result = LogModel.validate({ userID: 'user-1', action: 'CREATE', entity: '507f1f77bcf86cd799439011' });
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some(e => e.includes('entity'))).toBe(true);
+  });
+
+  it('rejects long numeric ID as entity', () => {
+    const result = LogModel.validate({ userID: 'user-1', action: 'CREATE', entity: '12345678' });
+    expect(result.isValid).toBe(false);
+  });
+
+  it('rejects invalid severity', () => {
+    const result = LogModel.validate({ ...validData, severity: 'verbose' });
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some(e => e.includes('severity'))).toBe(true);
+  });
+
+  it('accepts userId as alias for userID', () => {
+    const result = LogModel.validate({ userId: 'user-1', action: 'CREATE', entity: 'Sample' });
+    expect(result.isValid).toBe(true);
+  });
+
+});

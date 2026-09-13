@@ -4,18 +4,48 @@ import { ArrowLeft, Download, CheckCircle2, XCircle } from 'lucide-react';
 import Button from '../components/UI/Button';
 import Card from '../components/UI/Card';
 import Input from '../components/UI/Input';
-import Select from '../components/UI/Select';
 import Table from '../components/UI/Table';
 import { useSamples } from '../hooks/useSamples';
-import { useLocations } from '../hooks/useLocations';
 import { useResults } from '../hooks/useResults';
 import { useEquipment } from '../hooks/useEquipment';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import AnalysisUploadModal from '../components/AnalysisUploadModal';
-import { Sample } from '../types/models';
+import SampleFilesSection from '../components/SampleFilesSection';
+import InlineStorageMovementPanel from '../components/samples/InlineStorageMovementPanel';
+import { buildSprecAxisSummary, buildSprecSummary } from '../components/samples/sampleListFormatters';
+import { Sample, SampleStorageLocationDTO } from '../types/models';
 import { resultService, sampleService } from '../services/api';
+import { storageApi } from '../services/storageApi';
+import { resolveLegacySampleStatus } from '../foundation/contracts';
 import './SamplesPage.css';
+
+type SampleEditForm = {
+  linkedProject: string;
+  currentQuantity: string;
+  sampleOrigin: string;
+  extractionProtocol: string;
+  participantId: string;
+};
+
+// #545: currentStatus/status are retired legacy fields — sample.service.js
+// strips them from every write since #540 (specimenStatus is the sole
+// source of truth) — so the update payload must never include them.
+export function buildSampleUpdatePayload(form: SampleEditForm, parsedAvailable: number | null): Partial<Sample> {
+  const payload: Partial<Sample> = {
+    linkedProject: form.linkedProject?.trim() || undefined,
+    sampleOrigin: form.sampleOrigin?.trim() || undefined,
+    extractionProtocol: form.extractionProtocol?.trim() || undefined,
+    participantId: form.participantId?.trim() || undefined,
+  };
+
+  if (parsedAvailable !== null) {
+    payload.currentQuantity = parsedAvailable;
+    payload.volumeCurrent = parsedAvailable;
+  }
+
+  return payload;
+}
 
 type ComplianceNode = {
   valid: boolean;
@@ -40,10 +70,9 @@ export default function SampleDetailsPage() {
   const { t, language } = useLanguage();
   const locale = language;
   const { user, hasRole } = useAuth();
-  const { samples, loading, error, updateSample } = useSamples();
+  const { samples, loading, error, updateSample, loadSamples } = useSamples();
   const { results, loadResults } = useResults();
   const { equipment } = useEquipment();
-  const { locations = [], loadLocations } = useLocations();
   const [sample, setSample] = useState<Sample | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -52,11 +81,11 @@ export default function SampleDetailsPage() {
   const [complianceLoading, setComplianceLoading] = useState(false);
   const [complianceError, setComplianceError] = useState<string | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [showStoragePanel, setShowStoragePanel] = useState(false);
+  const [storageLocation, setStorageLocation] = useState<SampleStorageLocationDTO | null>(null);
   const [form, setForm] = useState({
-    locationID: '',
     linkedProject: '',
-    availableQuantity: '',
-    currentStatus: '',
+    currentQuantity: '',
     sampleOrigin: '',
     extractionProtocol: '',
     participantId: '',
@@ -65,8 +94,8 @@ export default function SampleDetailsPage() {
   const canEdit = hasRole(['Administrador', 'Coordenador']) || user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
 
   const computeAvailability = (s: Sample | null | undefined) => {
-    const initial = s?.volumeInitial ?? s?.originalQuantity ?? s?.quantity ?? 0;
-    const current = s?.volumeCurrent ?? s?.availableQuantity ?? s?.quantity ?? 0;
+    const initial = s?.volumeInitial ?? s?.initialQuantity ?? s?.quantity ?? 0;
+    const current = s?.volumeCurrent ?? s?.currentQuantity ?? s?.quantity ?? 0;
 
     if (current <= 0) {
       return {
@@ -94,15 +123,6 @@ export default function SampleDetailsPage() {
     };
   };
 
-  // Carrega localizações ao montar
-  useEffect(() => {
-    if (loadLocations) {
-      loadLocations().catch(err => {
-        console.error('Erro ao carregar localizações:', err);
-      });
-    }
-  }, [loadLocations]);
-
   // Busca a amostra quando os dados são carregados
   useEffect(() => {
     if (!loading && id && samples !== undefined) {
@@ -127,10 +147,8 @@ export default function SampleDetailsPage() {
       if (foundSample) {
         setSample(foundSample);
         setForm({
-          locationID: foundSample.locationID ? String(foundSample.locationID) : '',
           linkedProject: foundSample.linkedProject || '',
-          availableQuantity: (foundSample.volumeCurrent ?? foundSample.availableQuantity ?? foundSample.quantity ?? '').toString(),
-          currentStatus: (foundSample as any).lifecycleStatus || foundSample.currentStatus || 'Available',
+          currentQuantity: (foundSample.volumeCurrent ?? foundSample.currentQuantity ?? foundSample.quantity ?? '').toString(),
           sampleOrigin: foundSample.sampleOrigin || '',
           extractionProtocol: foundSample.extractionProtocol || '',
           participantId: (foundSample as any).participantId ? String((foundSample as any).participantId) : String((foundSample as any).patientID || ''),
@@ -182,123 +200,89 @@ export default function SampleDetailsPage() {
     };
   }, [sample?._id, sample?.sampleID, id]);
 
-  const getLocationInfo = (locationID?: number): { summary: string; details: string } => {
-    if (locationID === undefined || locationID === null) {
+  const getStorageInfo = (location: SampleStorageLocationDTO | null): { summary: string; details: string } => {
+    const boxName = location?.box?.boxName ? String(location.box.boxName) : '';
+    const position = location?.box?.position ? String(location.box.position) : '';
+    const path = location?.path ? String(location.path) : '';
+
+    if (!boxName && !path && !position) {
       return {
         summary: t('samples.detail.storage.awaiting', 'Aguardando Armazenagem'),
         details: t('samples.detail.storage.awaitingDescription', 'A amostra já foi recebida e aguarda atribuição de localização física.'),
       };
     }
 
-    if (!locations || !Array.isArray(locations) || locations.length === 0) {
-      return { summary: t('samples.detail.storage.idLabel', 'ID: {id}').replace('{id}', String(locationID)), details: t('samples.detail.storage.unavailable', 'Informações de localização não disponíveis') };
-    }
-
-    const location = locations.find(loc => loc.locationID === locationID);
-    if (!location) {
-      return { summary: t('samples.detail.storage.idLabel', 'ID: {id}').replace('{id}', String(locationID)), details: t('samples.detail.storage.notFound', 'Localização não encontrada') };
-    }
-
-    const parts: string[] = [];
-    if (location.block) parts.push(`${t('samples.detail.storage.block', 'Bloco')}: ${location.block}`);
-    if (location.rack) parts.push(`${t('samples.detail.storage.rack', 'Prateleira')}: ${location.rack}`);
-    if (location.drawer) parts.push(`${t('samples.detail.storage.drawer', 'Gaveta')}: ${location.drawer}`);
-    if (location.box) parts.push(`${t('samples.detail.storage.box', 'Caixa')}: ${location.box}`);
-    if (location.wellPosition || location.eppendorfWell) {
-      parts.push(`${t('samples.detail.storage.well', 'Poço')}: ${location.wellPosition || location.eppendorfWell}`);
-    }
-
-    const summary = parts.length > 0 
-      ? parts.slice(0, 2).join(' | ') 
-      : t('samples.detail.storage.idLabel', 'ID: {id}').replace('{id}', String(locationID));
-
-    const details = parts.length > 0 
-      ? parts.join(' • ') 
-      : t('samples.detail.storage.locationId', 'Localização ID: {id}').replace('{id}', String(locationID));
-
-    return { summary, details };
+    const readable = path || boxName;
+    const summary = position ? `${readable} / ${t('samples.detail.storage.well', 'Poço')} ${position}` : readable;
+    return { summary, details: summary };
   };
+
+  // dict-02 StorageAssignment (ELM-0167-0178, #495) — GET /samples/:id doesn't
+  // resolve this, so it's fetched separately via GET /storage/sample/:sampleId.
+  const loadStorageLocation = async (sampleId: string) => {
+    const response = await storageApi.getSampleLocation(sampleId);
+    setStorageLocation(response.success && response.data ? (response.data as SampleStorageLocationDTO) : null);
+  };
+
+  useEffect(() => {
+    const targetId = sample?._id || (sample as any)?.specimenId || id;
+    if (!targetId) {
+      setStorageLocation(null);
+      return;
+    }
+    void loadStorageLocation(String(targetId));
+  }, [sample?._id, sample?.sampleID, id]);
 
   const effectiveSample = useMemo(() => {
     if (!isEditing) return sample;
-    const parsedAvailable = Number(form.availableQuantity);
-    const parsedLocation = form.locationID ? Number(form.locationID) : undefined;
+    const parsedAvailable = Number(form.currentQuantity);
     return {
       ...sample,
-      availableQuantity: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.availableQuantity,
+      currentQuantity: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.currentQuantity,
       volumeCurrent: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.volumeCurrent,
-      locationID: parsedLocation ?? sample?.locationID,
       linkedProject: form.linkedProject || sample?.linkedProject,
-      currentStatus: (form.currentStatus as Sample['currentStatus']) || (sample as any)?.lifecycleStatus || sample?.currentStatus,
     } as Sample;
-  }, [isEditing, sample, form.availableQuantity, form.locationID, form.linkedProject, form.currentStatus]);
+  }, [isEditing, sample, form.currentQuantity, form.linkedProject]);
 
   const availabilityPreview = computeAvailability(effectiveSample);
-  const sprecSummary = useMemo(() => {
-    const sprec = (effectiveSample as any)?.sprec || {};
-    const matrixType = String((effectiveSample as any)?.matrix_type || sprec.matrixType || '').trim().toLowerCase();
-    const parts = matrixType === 'solid'
-      ? [sprec.sampleType, sprec.primaryContainer, sprec.warmIschemia, sprec.coldIschemia, sprec.fixationType, sprec.fixationTime, sprec.longTermStorage]
-      : [sprec.sampleType, sprec.primaryContainer, sprec.preCentrifugation, sprec.centrifugation, sprec.secondCentrifugation, sprec.postCentrifugationDelay, sprec.longTermStorage];
-    const code = String((effectiveSample as any)?.sprec_code || (effectiveSample as any)?.sprecCode || parts.map((part) => String(part || '').trim()).filter(Boolean).join('-')).trim();
-    return code ? `${t('samples.detail.sprec.prefix', 'SPREC')} ${code}` : t('samples.detail.sprec.na', 'SPREC: N/A');
-  }, [effectiveSample]);
-  const sprecAxisSummary = useMemo(() => {
-    const sprec = (effectiveSample as any)?.sprec || {};
-    const matrixType = String((effectiveSample as any)?.matrix_type || sprec.matrixType || '').trim().toLowerCase();
-    const axes = matrixType === 'solid'
-      ? [
-        [t('samples.detail.sprec.axes.Pwarm', 'Pwarm'), sprec.warmIschemia],
-        [t('samples.detail.sprec.axes.Pcold', 'Pcold'), sprec.coldIschemia],
-        [t('samples.detail.sprec.axes.Pfix', 'Pfix'), sprec.fixationType],
-        [t('samples.detail.sprec.axes.PfixTime', 'PfixTime'), sprec.fixationTime],
-        [t('samples.detail.sprec.axes.Pstore', 'Pstore'), sprec.longTermStorage],
-      ]
-      : [
-        [t('samples.detail.sprec.axes.Ppre', 'Ppre'), sprec.preCentrifugation],
-        [t('samples.detail.sprec.axes.Pcent1', 'Pcent1'), sprec.centrifugation],
-        [t('samples.detail.sprec.axes.Pcent2', 'Pcent2'), sprec.secondCentrifugation],
-        [t('samples.detail.sprec.axes.Ppost', 'Ppost'), sprec.postCentrifugationDelay],
-        [t('samples.detail.sprec.axes.Pstore', 'Pstore'), sprec.longTermStorage],
-      ];
-
-    return axes
-      .map(([label, value]) => `${label}:${String(value || '').trim() || t('common.notAvailable', 'N/A')}`)
-      .join(' | ');
-  }, [effectiveSample]);
-
-  const locationOptions = useMemo(() => {
-    if (!locations || locations.length === 0) {
-      return [{ value: '', label: t('samples.detail.storage.awaiting', 'Aguardando Armazenagem') }];
-    }
-    return [
-      { value: '', label: t('samples.detail.storage.unassigned', 'Sem armazenagem atribuída') },
-      ...locations
-        .filter(loc => loc.locationID != null)
-        .map(loc => ({
-          value: String(loc.locationID),
-          label: `${loc.locationID} - ${t('samples.detail.storage.block', 'Bloco')} ${loc.block} / ${t('samples.detail.storage.shelfAbbr', 'Prat.')} ${loc.rack} / ${t('samples.detail.storage.drawerAbbr', 'Gav.')} ${loc.drawer} / ${t('samples.detail.storage.box', 'Caixa')} ${loc.box}`,
-        })),
-    ];
-  }, [locations, t]);
+  // #518: reads currentSpecimenPreanalytics (resolved server-side by GET
+  // /samples, sealed-pinned if set else newest — see #517) instead of the
+  // legacy embedded effectiveSample.sprec object. Shared with
+  // SamplesPageView's list-row summary via sampleListFormatters.ts.
+  const sprecSummary = useMemo(
+    () => buildSprecSummary(effectiveSample || {} as Sample, t),
+    [effectiveSample, t],
+  );
+  const sprecAxisSummary = useMemo(
+    () => buildSprecAxisSummary(effectiveSample || {} as Sample, t),
+    [effectiveSample, t],
+  );
 
   const statusOptions = useMemo(() => ([
     { value: 'Available', label: t('samples.status.available', 'Disponível') },
     { value: 'PartiallyWithdrawn', label: t('samples.status.partiallyWithdrawn', 'Parcialmente Retirada') },
     { value: 'TotallyWithdrawn', label: t('samples.status.totallyWithdrawn', 'Totalmente Retirada') },
     { value: 'Withdrawn', label: t('samples.status.withdrawn', 'Retirada') },
-    { value: 'Expired', label: t('samples.status.expired', 'Expirada') },
     { value: 'Destroyed', label: t('samples.status.destroyed', 'Destruída') },
     { value: 'Unusable', label: t('samples.status.unusable', 'Inutilizada') },
   ]), [t]);
 
+  // #545: specimenStatus is the sole persisted source of truth (sample.service.js
+  // strips currentStatus/status from every write since #540) — "Status Atual"
+  // is a read-only derived display, not an editable field.
+  const derivedStatusLabel = useMemo(() => {
+    const derived = resolveLegacySampleStatus(sample?.specimenStatus);
+    return statusOptions.find((option) => option.value === derived)?.label || derived;
+  }, [sample?.specimenStatus, statusOptions]);
+
+  // #628: Result.specimenId is now the sole canonical shape (every write
+  // path writes it, existing documents backfilled) — a direct match, not
+  // the multi-key Set this used while the field was still stale.
   const sampleResults = useMemo(() => {
     if (!sample) return [];
-    const sampleKeys = new Set([
-      String(sample._id || ''),
-    String((sample as any).specimenId || sample.sampleID || '')
-    ]);
-    return results.filter(result => sampleKeys.has(String(result.sampleID)));
+    const specimenId = String((sample as any).specimenId || '');
+    if (!specimenId) return [];
+    return results.filter(result => String((result as any).specimenId) === specimenId);
   }, [results, sample]);
 
   const getResultEquipmentLabel = (equipmentID?: number, equipmentName?: string) => {
@@ -394,10 +378,8 @@ export default function SampleDetailsPage() {
   const handleCancel = () => {
     if (sample) {
       setForm({
-        locationID: sample.locationID ? String(sample.locationID) : '',
         linkedProject: sample.linkedProject || '',
-        availableQuantity: (sample.volumeCurrent ?? sample.availableQuantity ?? sample.quantity ?? '').toString(),
-      currentStatus: (sample as any).lifecycleStatus || sample.currentStatus || 'Available',
+        currentQuantity: (sample.volumeCurrent ?? sample.currentQuantity ?? sample.quantity ?? '').toString(),
         sampleOrigin: sample.sampleOrigin || '',
         extractionProtocol: sample.extractionProtocol || '',
         participantId: sample.participantId ? String(sample.participantId) : '',
@@ -412,27 +394,14 @@ export default function SampleDetailsPage() {
     setSaving(true);
     setSaveError(null);
 
-    const parsedAvailable = form.availableQuantity === '' ? null : Number(form.availableQuantity);
+    const parsedAvailable = form.currentQuantity === '' ? null : Number(form.currentQuantity);
     if (parsedAvailable !== null && (!Number.isFinite(parsedAvailable) || parsedAvailable < 0)) {
       setSaveError('Quantidade disponível inválida');
       setSaving(false);
       return;
     }
 
-    const locationIdNum = form.locationID && form.locationID !== '' ? Number(form.locationID) : undefined;
-    const payload: Partial<Sample> = {
-      linkedProject: form.linkedProject?.trim() || undefined,
-      locationID: Number.isFinite(locationIdNum) ? locationIdNum : undefined,
-      currentStatus: (form.currentStatus as Sample['currentStatus']) || undefined,
-      sampleOrigin: form.sampleOrigin?.trim() || undefined,
-      extractionProtocol: form.extractionProtocol?.trim() || undefined,
-      participantId: form.participantId?.trim() || undefined,
-    };
-
-    if (parsedAvailable !== null) {
-      payload.availableQuantity = parsedAvailable;
-      payload.volumeCurrent = parsedAvailable;
-    }
+    const payload = buildSampleUpdatePayload(form, parsedAvailable);
 
     try {
       const targetId = sample._id || (sample as any).specimenId || id || '';
@@ -441,7 +410,7 @@ export default function SampleDetailsPage() {
       setSample(prev => ({
         ...prev!,
         ...payload,
-        availableQuantity: payload.availableQuantity ?? prev?.availableQuantity,
+        currentQuantity: payload.currentQuantity ?? prev?.currentQuantity,
         volumeCurrent: payload.volumeCurrent ?? prev?.volumeCurrent,
       }));
       // Se backend retornou amostra, sincroniza
@@ -484,6 +453,9 @@ export default function SampleDetailsPage() {
                 )}
                 <Button variant="secondary" onClick={() => navigate(`/samples/${id}/chain`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }} data-testid="sample-detail-chain-button">
                   {t('samples.chain') || 'Cadeia de Custódia'}
+                </Button>
+                <Button variant="secondary" onClick={() => navigate(`/samples/${id}/label`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }} data-testid="sample-detail-label-button">
+                  {t('samples.printLabels') || 'Imprimir Etiquetas'}
                 </Button>
                 <Button
                   variant="secondary"
@@ -680,15 +652,15 @@ export default function SampleDetailsPage() {
               </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.availableQuantity', 'Quantidade Disponível')}:</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.currentQuantity', 'Quantidade Disponível')}:</span>
               {isEditing ? (
                 <div style={{ width: '180px' }}>
                   <Input
                     type="number"
                     step="0.1"
                     min="0"
-                    value={form.availableQuantity}
-                    onChange={(e) => handleChange('availableQuantity', e.target.value)}
+                    value={form.currentQuantity}
+                    onChange={(e) => handleChange('currentQuantity', e.target.value)}
                     placeholder={t('samples.quantity', 'Quantidade') || 'Quantidade'}
                   />
                 </div>
@@ -700,19 +672,7 @@ export default function SampleDetailsPage() {
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.currentStatus', 'Status Atual')}:</span>
-              {isEditing ? (
-                <div style={{ minWidth: '220px' }}>
-                  <Select
-                    value={form.currentStatus}
-                    onChange={(e) => handleChange('currentStatus', e.target.value)}
-                    options={statusOptions}
-                  />
-                </div>
-              ) : (
-                <span className={`availability-badge ${availabilityPreview.className}`}>
-                  {availabilityPreview.label}
-                </span>
-              )}
+              <span style={{ color: 'var(--text)' }}>{derivedStatusLabel}</span>
             </div>
           </div>
         </Card>
@@ -722,7 +682,7 @@ export default function SampleDetailsPage() {
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>
             {t('samples.detail.storage.storageProjectTitle', 'Armazenagem e Projeto')}
           </h3>
-          {sample?.locationID == null && (
+          {!storageLocation?.box?.boxId && (
             <div style={{ marginBottom: '0.75rem', padding: '0.75rem 1rem', borderRadius: '8px', backgroundColor: 'rgba(37, 99, 235, 0.08)', color: 'var(--text)' }}>
               <strong>{t('samples.detail.storage.awaiting', 'Aguardando Armazenagem')}.</strong> {t('samples.detail.storage.storageAwaitingMessage', 'A amostra está registrada, mas ainda não foi atribuída a uma posição física.')}
             </div>
@@ -731,42 +691,44 @@ export default function SampleDetailsPage() {
             <div style={{ padding: '0.75rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                 <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.storage.storageLabel', 'Armazenagem')}:</span>
-                {isEditing ? (
-                  <div style={{ minWidth: '260px' }}>
-                    <Select
-                      value={form.locationID}
-                      onChange={(e) => handleChange('locationID', e.target.value)}
-                      options={locationOptions}
-                    />
-                    <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-light)' }}>
-                      {t('samples.detail.storage.storageOptional', 'Opcional. A amostra pode permanecer sem localização até ser armazenada.')}
-                    </div>
-                  </div>
-                ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <span style={{
                     display: 'inline-flex',
                     alignItems: 'center',
                     padding: '0.35rem 0.75rem',
                     borderRadius: '999px',
-                    backgroundColor: effectiveSample?.locationID == null ? 'rgba(37, 99, 235, 0.10)' : 'rgba(16, 185, 129, 0.10)',
-                    color: effectiveSample?.locationID == null ? 'var(--primary)' : 'var(--text)',
+                    backgroundColor: !storageLocation?.box?.boxId ? 'rgba(37, 99, 235, 0.10)' : 'rgba(16, 185, 129, 0.10)',
+                    color: !storageLocation?.box?.boxId ? 'var(--primary)' : 'var(--text)',
                     fontWeight: 600,
                     fontSize: '0.875rem'
                   }}>
-                    {getLocationInfo(effectiveSample?.locationID).summary}
+                    {getStorageInfo(storageLocation).summary}
                   </span>
-                )}
-              </div>
-              <div style={{ 
-                fontSize: '0.8125rem', 
-                color: 'var(--text)', 
-                lineHeight: '1.6',
-                paddingTop: '0.5rem',
-                borderTop: '1px solid var(--border)'
-              }}>
-                {getLocationInfo(effectiveSample?.locationID).details}
+                  {canEdit && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => setShowStoragePanel((prev) => !prev)}
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                    >
+                      {t('samples.detail.storage.manage', 'Gerenciar Armazenagem')}
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
+            {showStoragePanel && sample && (
+              <InlineStorageMovementPanel
+                sample={{ ...sample, id: String(sample._id || (sample as any).specimenId || id || '') }}
+                t={(key: string) => t(key) || key}
+                onCancel={() => setShowStoragePanel(false)}
+                onCompleted={() => {
+                  setShowStoragePanel(false);
+                  loadSamples();
+                  const targetId = sample?._id || (sample as any)?.specimenId || id;
+                  if (targetId) void loadStorageLocation(String(targetId));
+                }}
+              />
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.linkedProject', 'Projeto Vinculado')}:</span>
               {isEditing ? (
@@ -876,6 +838,17 @@ export default function SampleDetailsPage() {
                 </Table>
               </div>
             )}
+          </Card>
+        )}
+
+        {/* #647: RF007 scientific-file upload/checksum/encryption/audit --
+            a distinct capability and backend collection (sample_files) from
+            the "Resultados"/AnalysisUploadModal card above (/api/results) --
+            previously unreachable, this component existed but was never
+            mounted anywhere. */}
+        {sample && (
+          <Card>
+            <SampleFilesSection sampleID={String(sample._id || (sample as any).specimenId || id || '')} />
           </Card>
         )}
       </div>

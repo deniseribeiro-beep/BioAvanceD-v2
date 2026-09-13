@@ -1,0 +1,10 @@
+{"id":"1","lbl":"root","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"131567","lbl":"cellular organisms","is_a":["1"],"synonyms":[],"obsolete":false}
+{"id":"10239","lbl":"Viruses","is_a":["1"],"synonyms":[],"obsolete":false}
+{"id":"28384","lbl":"other sequences","is_a":["1"],"synonyms":[],"obsolete":false}
+{"id":"12908","lbl":"unclassified sequences","is_a":["1"],"synonyms":[],"obsolete":false}
+{"id":"2759","lbl":"Eukaryota","is_a":["131567"],"synonyms":["eucaryotes","eukaryotes"],"obsolete":false}
+{"id":"9000001","lbl":"unclassified biological agent","is_a":["1"],"synonyms":[],"obsolete":false}
+{"id":"9000002","lbl":"environmental sample cluster","is_a":["1"],"synonyms":[],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"9000099","lbl":"","is_a":[],"synonyms":[],"obsolete":false}

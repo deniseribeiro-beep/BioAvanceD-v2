@@ -58,6 +58,12 @@ class Neo4jCanonicalProjectionService {
     if (type === 'TELEMETRY_INCIDENT_RECORDED') {
       return this.applyTelemetryProjection(session, event);
     }
+    if (type === 'TERMINOLOGY_CONCEPT_PROMOTED') {
+      return this.applyTerminologyConceptProjection(session, event);
+    }
+    if (type === 'TERMINOLOGY_RELATION_PROMOTED') {
+      return this.applyTerminologyRelationProjection(session, event);
+    }
 
     return {
       skipped: true,
@@ -241,6 +247,90 @@ class Neo4jCanonicalProjectionService {
       occurredAt: normalizeIso(payload.occurredAt || event.occurredAt) || new Date().toISOString(),
     });
     return { projected: true, eventType: event.eventType, specimenId };
+  }
+
+  // RF028 AC9. Keyed by terminologyConceptId (not systemUri+code+version)
+  // to match RF023's id-based MERGE pattern — code/systemUri/version/display
+  // are projected as properties, queryable without knowing the Mongo id
+  // ahead of time (see tests/e2e/pipeline-continuity.spec.ts's AC9 block).
+  async applyTerminologyConceptProjection(session, event) {
+    const payload = event.payload || {};
+    const conceptId = normalizeText(payload.terminologyConceptId || event.aggregateId);
+
+    const cypher = `
+      MERGE (concept:TerminologyConcept {id: $conceptId})
+      ON CREATE SET concept.createdAt = datetime(), concept.source = $sourceService
+      SET concept.updatedAt = datetime(),
+          concept.systemUri = $systemUri,
+          concept.code = $code,
+          concept.version = $version,
+          concept.display = $display,
+          concept.conceptStatus = $conceptStatus,
+          concept.schemaVersion = $schemaVersion,
+          concept.lastProjectionEventId = $eventId,
+          concept.lastProjectionAt = datetime()
+
+      RETURN concept.id AS conceptId
+    `;
+
+    await session.run(cypher, {
+      conceptId,
+      systemUri: normalizeText(payload.systemUri),
+      code: normalizeText(payload.code),
+      version: normalizeText(payload.version),
+      display: normalizeText(payload.display),
+      conceptStatus: normalizeText(payload.conceptStatus || 'active'),
+      schemaVersion: Number(event.schemaVersion || 1),
+      sourceService: normalizeText(event.sourceService) || 'unknown',
+      eventId: normalizeText(event.eventId),
+    });
+
+    return { projected: true, eventType: event.eventType, conceptId };
+  }
+
+  // RF028 AC9. Endpoints are MERGEd by id in case this event is projected
+  // before its own endpoints' TERMINOLOGY_CONCEPT_PROMOTED events land —
+  // same eventual-consistency shape applyConsentProjection/
+  // applyLineageProjection already rely on for their own endpoint nodes.
+  async applyTerminologyRelationProjection(session, event) {
+    const payload = event.payload || {};
+    const relationId = normalizeText(payload.terminologyRelationId || event.aggregateId);
+    const sourceConceptId = normalizeText(payload.sourceConceptId);
+    const targetConceptId = normalizeText(payload.targetConceptId);
+
+    const cypher = `
+      MERGE (source:TerminologyConcept {id: $sourceConceptId})
+      ON CREATE SET source.createdAt = datetime(), source.source = $sourceService
+      SET source.updatedAt = datetime()
+
+      MERGE (target:TerminologyConcept {id: $targetConceptId})
+      ON CREATE SET target.createdAt = datetime(), target.source = $sourceService
+      SET target.updatedAt = datetime()
+
+      MERGE (source)-[r:TERMINOLOGY_RELATION {id: $relationId}]->(target)
+      ON CREATE SET r.createdAt = datetime(), r.source = $sourceService
+      SET r.updatedAt = datetime(),
+          r.relationType = $relationType,
+          r.relationVersion = $relationVersion,
+          r.schemaVersion = $schemaVersion,
+          r.lastProjectionEventId = $eventId,
+          r.lastProjectionAt = datetime()
+
+      RETURN source.id AS sourceConceptId, target.id AS targetConceptId
+    `;
+
+    await session.run(cypher, {
+      sourceConceptId,
+      targetConceptId,
+      relationId,
+      relationType: normalizeText(payload.relationType),
+      relationVersion: normalizeText(payload.relationVersion),
+      schemaVersion: Number(event.schemaVersion || 1),
+      sourceService: normalizeText(event.sourceService) || 'unknown',
+      eventId: normalizeText(event.eventId),
+    });
+
+    return { projected: true, eventType: event.eventType, sourceConceptId, targetConceptId };
   }
 }
 

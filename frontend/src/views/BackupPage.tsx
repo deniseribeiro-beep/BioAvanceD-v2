@@ -2,20 +2,94 @@ import { useState, useEffect } from 'react';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
-import { Database, Download, RotateCcw, AlertCircle, CheckCircle, Clock } from 'lucide-react';
+import { Database, Download, RotateCcw, AlertCircle, CheckCircle, Clock, Save, Shield } from 'lucide-react';
 import { useBackup, Backup } from '../hooks/useBackup';
+import { useBackupPolicy, BackupPolicy } from '../hooks/useBackupPolicy';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import './BackupPage.css';
+
+const CRON_FIELD_PATTERN = /^(\S+\s+){4}\S+$/;
+
+// #728 (RF013 AC#5/AC#6): mirrors backup-policy.service.js's validatePolicy
+// so the form can surface a field error before submitting, instead of only
+// after a round-trip 422. Exported for BackupPage.test.tsx.
+export function validateBackupPolicyDraft(draft: Partial<BackupPolicy>): string[] {
+  const errors: string[] = [];
+
+  if (draft.cronExpression !== undefined && !CRON_FIELD_PATTERN.test(String(draft.cronExpression || ''))) {
+    errors.push('cronExpression deve ser uma expressão cron de 5 campos');
+  }
+
+  if (draft.retentionDays !== undefined) {
+    const retentionDays = Number(draft.retentionDays);
+    if (!Number.isFinite(retentionDays) || retentionDays < 30) {
+      errors.push('retentionDays deve ser um número >= 30 (RNF010 AC#4)');
+    }
+  }
+
+  if (draft.rpoHours !== undefined) {
+    const rpoHours = Number(draft.rpoHours);
+    if (!Number.isFinite(rpoHours) || rpoHours <= 0 || rpoHours > 24) {
+      errors.push('rpoHours deve ser um número entre 1 e 24 (RNF010 AC#2)');
+    }
+  }
+
+  if (draft.rtoHours !== undefined) {
+    const rtoHours = Number(draft.rtoHours);
+    if (!Number.isFinite(rtoHours) || rtoHours <= 0 || rtoHours > 12) {
+      errors.push('rtoHours deve ser um número entre 1 e 12 (RNF010 AC#3)');
+    }
+  }
+
+  return errors;
+}
+
+// #740 (RF013 AC#1 "Exibir estado, data e resultado das execuções"): the
+// run status is rendered as a badge, so it needs an i18n key rather than
+// the raw backend value. Anything the backend doesn't emit -- including the
+// null a directory with no history row carries -- resolves to the unknown
+// key rather than being echoed verbatim into the UI. Exported for
+// BackupPage.test.tsx.
+const BACKUP_STATUS_KEYS: Record<string, string> = {
+  success: 'backup.statusSuccess',
+  error: 'backup.statusError',
+  skipped: 'backup.statusSkipped',
+};
+
+export function resolveBackupStatusKey(status?: string | null): string {
+  return BACKUP_STATUS_KEYS[String(status || '')] || 'backup.statusUnknown';
+}
+
+// #740 (RF013 AC#3 "Registrar checksum e evidência de conclusão"): a sha256
+// digest is 64 characters and would blow the column out, so the cell shows a
+// prefix and carries the full value in its `title`.
+const CHECKSUM_PREFIX_LENGTH = 12;
+
+export function formatChecksum(checksum?: string | null): string {
+  const value = String(checksum || '');
+  if (!value) return '—';
+  return value.length > CHECKSUM_PREFIX_LENGTH ? `${value.slice(0, CHECKSUM_PREFIX_LENGTH)}…` : value;
+}
 
 export default function BackupPage() {
   const { t } = useLanguage();
   const { user } = useAuth();
   const { performBackup, listBackups, restoreBackup, loading, error } = useBackup();
+  const { policy, loading: policyLoading, error: policyError, saving: policySaving, updatePolicy } = useBackupPolicy();
   const [backups, setBackups] = useState<Backup[]>([]);
   const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
   const [selectedBackup, setSelectedBackup] = useState<Backup | null>(null);
   const [backupStatus, setBackupStatus] = useState<'idle' | 'creating' | 'success' | 'error'>('idle');
+  const [policyDraft, setPolicyDraft] = useState<BackupPolicy | null>(null);
+  const [policyValidationErrors, setPolicyValidationErrors] = useState<string[]>([]);
+  const [policySaveStatus, setPolicySaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  useEffect(() => {
+    if (policy) {
+      setPolicyDraft(policy);
+    }
+  }, [policy]);
 
   useEffect(() => {
     loadBackups();
@@ -27,6 +101,30 @@ export default function BackupPage() {
       setBackups(backupsList);
     } catch (err) {
       console.error('Erro ao carregar backups:', err);
+    }
+  };
+
+  const handlePolicyFieldChange = (field: keyof BackupPolicy, value: string | number | boolean) => {
+    if (!policyDraft) return;
+    setPolicyDraft({ ...policyDraft, [field]: value });
+  };
+
+  const handleSavePolicy = async () => {
+    if (!policyDraft) return;
+
+    const validationErrors = validateBackupPolicyDraft(policyDraft);
+    setPolicyValidationErrors(validationErrors);
+    if (validationErrors.length > 0) {
+      return;
+    }
+
+    try {
+      await updatePolicy(policyDraft);
+      setPolicySaveStatus('success');
+      setTimeout(() => setPolicySaveStatus('idle'), 3000);
+    } catch (err) {
+      setPolicySaveStatus('error');
+      setTimeout(() => setPolicySaveStatus('idle'), 3000);
     }
   };
 
@@ -146,6 +244,8 @@ export default function BackupPage() {
                     <th>{t('backup.fileName')}</th>
                     <th>{t('backup.size')}</th>
                     <th>{t('backup.createdAt')}</th>
+                    <th>{t('backup.status')}</th>
+                    <th>{t('backup.checksum')}</th>
                     <th>{t('backup.actions')}</th>
                   </tr>
                 </thead>
@@ -155,6 +255,14 @@ export default function BackupPage() {
                       <td>{backup.fileName}</td>
                       <td>{formatFileSize(backup.size)}</td>
                       <td>{formatDate(backup.createdAt)}</td>
+                      <td>
+                        <span className="backup-status-badge" data-status={backup.status || 'unknown'}>
+                          {t(resolveBackupStatusKey(backup.status))}
+                        </span>
+                      </td>
+                      <td className="backup-checksum" title={backup.checksum || undefined}>
+                        {formatChecksum(backup.checksum)}
+                      </td>
                       <td>
                         <Button
                           variant="secondary"
@@ -183,6 +291,112 @@ export default function BackupPage() {
           </Button>
         </Card>
       </div>
+
+      <Card className="backup-policy">
+        <h2>
+          <Shield size={20} /> {t('backup.policy.title')}
+        </h2>
+        <p>{t('backup.policy.description')}</p>
+
+        {policyError && (
+          <div className="error-message">
+            <AlertCircle /> {policyError}
+          </div>
+        )}
+
+        {policyValidationErrors.length > 0 && (
+          <div className="error-message">
+            <AlertCircle /> {policyValidationErrors.join('; ')}
+          </div>
+        )}
+
+        {policySaveStatus === 'success' && (
+          <div className="status-message success">
+            <CheckCircle /> {t('backup.policy.saveSuccess')}
+          </div>
+        )}
+
+        {policySaveStatus === 'error' && (
+          <div className="status-message error">
+            <AlertCircle /> {t('backup.policy.saveError')}
+          </div>
+        )}
+
+        {policyLoading || !policyDraft ? (
+          <p className="empty-message">{t('backup.policy.loadError')}</p>
+        ) : (
+          <div className="policy-form">
+            <div className="policy-field">
+              <label htmlFor="backup-policy-cron">{t('backup.policy.cronExpression')}</label>
+              <input
+                id="backup-policy-cron"
+                type="text"
+                value={policyDraft.cronExpression}
+                onChange={(e) => handlePolicyFieldChange('cronExpression', e.target.value)}
+              />
+              <span className="policy-help">{t('backup.policy.cronExpressionHelp')}</span>
+            </div>
+
+            <div className="policy-field">
+              <label htmlFor="backup-policy-retention">{t('backup.policy.retentionDays')}</label>
+              <input
+                id="backup-policy-retention"
+                type="number"
+                min="30"
+                value={policyDraft.retentionDays}
+                onChange={(e) => handlePolicyFieldChange('retentionDays', parseInt(e.target.value, 10))}
+              />
+              <span className="policy-help">{t('backup.policy.retentionDaysHelp')}</span>
+            </div>
+
+            <label className="policy-switch">
+              <input
+                type="checkbox"
+                checked={policyDraft.encryptionEnabled}
+                onChange={(e) => handlePolicyFieldChange('encryptionEnabled', e.target.checked)}
+              />
+              <span>{t('backup.policy.encryptionEnabled')}</span>
+            </label>
+
+            <div className="policy-field">
+              <label htmlFor="backup-policy-rpo">{t('backup.policy.rpoHours')}</label>
+              <input
+                id="backup-policy-rpo"
+                type="number"
+                min="1"
+                max="24"
+                value={policyDraft.rpoHours}
+                onChange={(e) => handlePolicyFieldChange('rpoHours', parseInt(e.target.value, 10))}
+              />
+              <span className="policy-help">{t('backup.policy.rpoHoursHelp')}</span>
+            </div>
+
+            <div className="policy-field">
+              <label htmlFor="backup-policy-rto">{t('backup.policy.rtoHours')}</label>
+              <input
+                id="backup-policy-rto"
+                type="number"
+                min="1"
+                max="12"
+                value={policyDraft.rtoHours}
+                onChange={(e) => handlePolicyFieldChange('rtoHours', parseInt(e.target.value, 10))}
+              />
+              <span className="policy-help">{t('backup.policy.rtoHoursHelp')}</span>
+            </div>
+
+            <p className="policy-last-updated">
+              {t('backup.policy.lastUpdated')}:{' '}
+              {policyDraft.updatedAt ? formatDate(policyDraft.updatedAt) : t('backup.policy.neverUpdated')}
+            </p>
+
+            <div className="policy-actions">
+              <Button onClick={handleSavePolicy} disabled={policySaving}>
+                <Save size={16} /> {t('backup.policy.save')}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Card>
 
       {isRestoreModalOpen && selectedBackup && (
         <Modal

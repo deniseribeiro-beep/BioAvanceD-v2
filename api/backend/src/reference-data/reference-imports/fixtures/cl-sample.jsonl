@@ -1,0 +1,10 @@
+{"id":"CL:0000000","lbl":"cell","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"CL:0000255","lbl":"eukaryotic cell","is_a":["CL:0000000"],"synonyms":[],"obsolete":false}
+{"id":"CL:0000003","lbl":"native cell","is_a":["CL:0000000"],"synonyms":[],"obsolete":false}
+{"id":"CL:0000738","lbl":"leukocyte","is_a":["CL:0000000"],"synonyms":["white blood cell"],"obsolete":false}
+{"id":"CL:0000842","lbl":"mononuclear cell","is_a":["CL:0000000"],"synonyms":[],"obsolete":false}
+{"id":"CL:0000542","lbl":"lymphocyte","is_a":["CL:0000738"],"synonyms":[],"obsolete":false}
+{"id":"CL:9001","lbl":"accessory cell subtype","is_a":["CL:0000000"],"synonyms":[],"obsolete":false}
+{"id":"CL:9002","lbl":"regional cell subdivision","is_a":["CL:0000000"],"synonyms":[],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"CL:9999","lbl":"","is_a":[],"synonyms":[],"obsolete":false}

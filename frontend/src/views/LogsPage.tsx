@@ -525,7 +525,6 @@ export default function LogsPage() {
     if (moduleLower.includes('importação') || moduleLower.includes('import')) return '#f59e0b';
     if (moduleLower.includes('configuração') || moduleLower.includes('config')) return '#6366f1';
     if (moduleLower.includes('segurança') || moduleLower.includes('security')) return '#ef4444';
-    if (moduleLower.includes('assistente') || moduleLower.includes('ia')) return '#ec4899';
     return 'var(--text-light)';
   };
 
@@ -709,11 +708,9 @@ export default function LogsPage() {
   const VALID_ENTITIES = [
     'Access',
     'Authentication',
-    'Assistant',
     'Equipment',
     'Export',
     'Import',
-    'IntelligentAssistant',
     'Location',
     'Log',
     'Patient',

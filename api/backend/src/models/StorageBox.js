@@ -5,8 +5,6 @@ const StorageBoxSchema = new mongoose.Schema(
     // Identificação
     boxID: {
       type: Number,
-      unique: true,
-      sparse: true,
     },
     name: {
       type: String,
@@ -22,7 +20,7 @@ const StorageBoxSchema = new mongoose.Schema(
     // Referência ao Rack pai
     parent_id: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "StorageContainer", // Deve ser um RACK
+      ref: "StorageContainer", // Deve ser um RACK ou, quando presente, um DRAWER
       required: true,
     },
 
@@ -97,9 +95,12 @@ const StorageBoxSchema = new mongoose.Schema(
 
 // ==================== ÍNDICES ====================
 StorageBoxSchema.index({ parent_id: 1, status: 1 });
-StorageBoxSchema.index({ boxID: 1 }, { unique: true, sparse: true });
 StorageBoxSchema.index({ name: 1 });
-StorageBoxSchema.index({ status: 1 });
+// #941: `index({ status: 1 })` deleted here. Not merely unbuilt -- unused:
+// every storageBoxes query in the tree filters on _id or parent_id, and the
+// only whole-collection reads sort on { name, boxID, _id }. Nothing anywhere
+// filters or sorts these documents on `status`, so the declaration described
+// an index no query would have used even if it had been built.
 
 // ==================== VIRTUAL: capacity ====================
 StorageBoxSchema.virtual("capacityTotal").get(function () {
@@ -121,14 +122,14 @@ StorageBoxSchema.pre("save", async function (next) {
     throw new Error("cols deve estar entre 1 e 100");
   }
 
-  // Validar parent_id (deve existir e ser um RACK)
+  // Validar parent_id (deve existir e ser um RACK ou, quando presente, um DRAWER)
   const StorageContainer = mongoose.model("StorageContainer");
   const parent = await StorageContainer.findById(this.parent_id);
   if (!parent) {
     throw new Error("Rack pai não encontrado");
   }
-  if (parent.containerType !== "RACK") {
-    throw new Error("parent_id deve referenciar um RACK");
+  if (!["RACK", "DRAWER"].includes(parent.containerType)) {
+    throw new Error("parent_id deve referenciar um RACK ou DRAWER");
   }
 
   // Sincronizar currentOccupancy

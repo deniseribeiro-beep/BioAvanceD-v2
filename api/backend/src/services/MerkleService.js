@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const rcsAssessmentService = require('./rcs-assessment.service');
+const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 
 function deepSort(value) {
   if (Array.isArray(value)) return value.map(deepSort);
@@ -21,7 +23,9 @@ function normalizeString(value) {
 }
 
 function normalizePharmacologyData(raw = {}) {
+  const source = raw && typeof raw === 'object' ? { ...raw } : {};
   return {
+    ...source,
     treatmentStatus: normalizeString(raw.treatmentStatus || raw.treatment_status).toUpperCase(),
     medicationName: normalizeString(raw.medicationName || raw.medication_name || raw.drug_name),
     atcCode: normalizeString(raw.atcCode || raw.atc_code || raw.medication_code).toUpperCase().replace(/^ATC:/i, ''),
@@ -61,4 +65,82 @@ function buildClinicalPharmacologyHash(sample = {}) {
   return generateSampleHash(sample);
 }
 
-module.exports = { deepSort, stableSerialize, generateSampleHash, buildClinicalPharmacologyHash };
+/** Maps a persisted RcsAssessment snapshot onto the sample's embedded RCS field shape. */
+function rcsFieldsFromAssessment(record) {
+  return {
+    rcsScore: record.rcsScore ?? null,
+    finalGrade: record.finalGrade ?? null,
+    calculationTrace: record.calculationTrace ?? null,
+    axisPenalties: record.axisPenalties ?? null,
+  };
+}
+
+/** Maps a persisted SpecimenPreanalytics snapshot onto the sample's embedded `sprec` field shape. */
+function sprecFromProfile(record) {
+  return {
+    matrixType: record.matrixType ?? null,
+    sampleType: record.sampleType ?? null,
+    primaryContainer: record.primaryContainer ?? null,
+    preCentrifugation: record.preCentrifugation ?? null,
+    centrifugation: record.centrifugation ?? null,
+    secondCentrifugation: record.secondCentrifugation ?? null,
+    postCentrifugationDelay: record.postCentrifugationDelay ?? null,
+    longTermStorage: record.longTermStorage ?? null,
+    sprecCode: record.sprecCode ?? null,
+    sprecVersion: record.sprecVersion ?? null,
+  };
+}
+
+/**
+ * Same contract as generateSampleHash, but for an already-persisted sample:
+ * resolves the referenced RcsAssessment (#383) and SpecimenPreanalytics
+ * (#388) snapshots for the sample's specimenId and hashes those in place of
+ * the legacy embedded rcsScore/sprec fields when present. Falls back to the
+ * legacy embedded-field read for samples that don't have a recorded snapshot
+ * yet, so the hash stays equivalent for already-migrated samples (#497/#493).
+ *
+ * Snapshot resolution is pinned to whichever RcsAssessment/SpecimenPreanalytics
+ * record the sample was *sealed* against (`sealedRcsAssessmentId`/
+ * `sealedSpecimenPreanalyticsId`, set at write time — see
+ * import.service.js/import-lgpd.service.js), not "whatever is newest right
+ * now" (#502): resolving the newest snapshot false-positives a tamper report
+ * if a later re-assessment/re-import records a new snapshot for the same
+ * specimenId after the merkleRoot was already sealed. Samples written before
+ * this pin existed (no `sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId`
+ * own-property on the document at all) keep the pre-#502 "resolve newest"
+ * behavior for backward compatibility.
+ */
+async function generateSampleHashFromSample(db, sample = {}) {
+  const specimenId = String(sample?.specimenId || '').trim();
+  let effectiveSample = sample;
+
+  if (db && specimenId) {
+    const hasPinnedRcs = Object.prototype.hasOwnProperty.call(sample, 'sealedRcsAssessmentId');
+    const hasPinnedSprec = Object.prototype.hasOwnProperty.call(sample, 'sealedSpecimenPreanalyticsId');
+
+    const latestRcs = hasPinnedRcs
+      ? await rcsAssessmentService.getAssessmentById(db, sample.sealedRcsAssessmentId)
+      : (await rcsAssessmentService.getAssessmentsForSpecimen(db, specimenId))[0];
+    const latestSprec = hasPinnedSprec
+      ? await specimenPreanalyticsService.getProfileById(db, sample.sealedSpecimenPreanalyticsId)
+      : (await specimenPreanalyticsService.getProfilesForSpecimen(db, specimenId))[0];
+
+    if (latestRcs || latestSprec) {
+      effectiveSample = {
+        ...sample,
+        ...(latestRcs ? rcsFieldsFromAssessment(latestRcs) : {}),
+        ...(latestSprec ? { sprec: sprecFromProfile(latestSprec) } : {}),
+      };
+    }
+  }
+
+  return generateSampleHash(effectiveSample);
+}
+
+module.exports = {
+  deepSort,
+  stableSerialize,
+  generateSampleHash,
+  generateSampleHashFromSample,
+  buildClinicalPharmacologyHash,
+};

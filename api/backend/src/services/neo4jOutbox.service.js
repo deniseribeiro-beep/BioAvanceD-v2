@@ -1,8 +1,22 @@
 const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const env = require('../config/env');
+const logger = require('../utils/logger');
 
 const COLLECTION_NAME = 'graph_projection_outbox';
+
+// #941: `ensureIndexes` (including the `eventId` unique index that makes
+// outbox delivery idempotent) was previously only ever called from
+// `scripts/neo4j-canonical-rebuild.js:83` -- a manual script, not the
+// normal `appendEvent` write path, so on a regular boot or worker run the
+// unique index was never built. Latched per collection name here, the same
+// "once per process" shape `cid.service.js`'s `ensureIndexes` uses, so a
+// hot append path doesn't re-issue `createIndex` on every call. Failure
+// posture is unchanged from `ensureIndexes` itself: it still throws rather
+// than logs (no internal try/catch), so this wiring does not swallow an
+// index-build failure -- it just avoids retrying it after the first
+// attempt in this process.
+const ensuredOutboxIndexCollections = new Set();
 
 function stableValue(value) {
   if (Array.isArray(value)) {
@@ -83,15 +97,45 @@ class Neo4jOutboxService {
 
   async appendEvent(db, event, options = {}) {
     const collection = this.getCollection(db);
+
+    // #941: the outbox eventId unique index is what makes delivery idempotent,
+    // and until now it was built ONLY by scripts/neo4j-canonical-rebuild.js --
+    // so on a normal boot or worker run it never existed. Built here instead,
+    // once per collection name per process.
+    //
+    // Logged, not thrown, and that differs deliberately from ensureIndexes own
+    // posture. The two callers want opposite things from a failed build: the
+    // manual rebuild script is ASKING for the indexes, so a failure is its
+    // result; appendEvent is asking to append, and the index is a backstop
+    // rather than the mechanism -- the same argument utils/sampleIndexes.js
+    // makes for samples.barcode. Letting a build failure take down every
+    // outbox append would trade a missing index for a broken projection
+    // pipeline.
+    //
+    // Latched BEFORE the await so a persistent failure cannot retry per
+    // append; that matches utils/collectionResolver.js:46-48.
+    if (!ensuredOutboxIndexCollections.has(this.collectionName)) {
+      ensuredOutboxIndexCollections.add(this.collectionName);
+      try {
+        await this.ensureIndexes(db);
+      } catch (error) {
+        logger.warn(
+          `[NEO4J_OUTBOX] Falha ao criar indices de ${this.collectionName}: ${error.message}. ` +
+          ('A entrega continua, mas sem a garantia de idempotencia do indice unico em eventId (#941).')
+        );
+      }
+    }
+
     const doc = this.buildEvent({
       ...event,
       projectionState: event.projectionState || options.projectionState || {},
     });
+    const { updatedAt, ...docWithoutUpdatedAt } = doc;
 
     await collection.updateOne(
       { eventId: doc.eventId },
       {
-        $setOnInsert: doc,
+        $setOnInsert: docWithoutUpdatedAt,
         $set: {
           updatedAt: new Date(),
         },

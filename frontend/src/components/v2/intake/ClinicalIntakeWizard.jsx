@@ -25,6 +25,7 @@ import { consentService } from '../../../services/api';
 import { LIMITS } from '../../../config/constants/limits.constants';
 import { VALIDATION_MESSAGES, VALIDATION_RULES } from '../../../config/constants/validation.constants';
 import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../../../constants/sprecDictionary';
+import { SPECIMEN_TYPES, SAMPLE_ORIGINS, EXTRACTION_PROTOCOLS } from '../../../config/constants/specimen.constants';
 import { buildSampleMerkleRoot } from '../../../utils/sampleMerkleIntegrity';
 import './ClinicalIntakeWizard.css';
 
@@ -363,6 +364,11 @@ const initialState = {
   diseaseBiomarkers: [],
   biomarkers_values: {},
   phenotypes: [], // [{ hpoId, label }]
+  allergies: [], // [{ allergenName, allergenCode, reaction }]
+  familyHistories: [], // [{ relationship, conditionName, orphaCode, onset }]
+  procedures: [], // [{ procedureName, procedureCode, performed, bodySite }]
+  observationRecords: [], // [{ testName, loincCode, value, unit, effectiveDate }]
+  clinicalOutcomes: [], // [{ outcomeType, outcomeDate }]
   treatmentStatus: '',
   medicationName: '',
   medicationCode: '',
@@ -991,6 +997,8 @@ function getQualityTheme(finalGrade, t) {
 
 function createSampleStepSchema(t) {
   return z.object({
+    sampleType: z.string().trim().min(1, t('wizard.validation.sampleType', 'Select the MIABIS sample type')),
+    sampleOrigin: z.string().trim().min(1, t('wizard.validation.sampleOrigin', 'Select the MIABIS sample origin')),
     sprecSampleType: z.string().trim().min(1, t('wizard.validation.sprecSampleType', 'Select the SPREC sample type')),
     sprecPrimaryContainer: z.string().trim().min(1, t('wizard.validation.sprecPrimaryContainer', 'Select the SPREC primary container')),
     sprecPreCentrifugation: z.string().trim().min(1, t('wizard.validation.sprecPreCentrifugation', 'Select SPREC pre-centrifugation')),
@@ -1004,10 +1012,7 @@ function createSampleStepSchema(t) {
       .min(2, t('wizard.validation.collectionInstitution', 'Enter the source clinic / hospital'))
       .max(LIMITS.GENERIC_TEXT_MAX_LENGTH, t('wizard.validation.collectionInstitutionTooLong', 'Source clinic / hospital is too long')),
     collectionInstitutionAcronym: z.string().trim().optional().or(z.literal('')),
-    extractionProtocol: z
-      .string()
-      .optional()
-      .or(z.literal('')),
+    extractionProtocol: z.string().trim().min(1, t('wizard.validation.extractionProtocol', 'Select the MIABIS extraction protocol')),
     quantity: z
       .string()
       .trim()
@@ -1058,6 +1063,11 @@ function createClinicalStepSchema(t, clinicalItems = []) {
     selectedConsentTemplateId: z.string().trim().optional().or(z.literal('')),
     diseasePhenotypes: z.array(z.any()).optional(),
     diseaseBiomarkers: z.array(z.any()).optional(),
+    allergies: z.array(z.any()).optional(),
+    familyHistories: z.array(z.any()).optional(),
+    procedures: z.array(z.any()).optional(),
+    observationRecords: z.array(z.any()).optional(),
+    clinicalOutcomes: z.array(z.any()).optional(),
     biomarkers_values: z.record(z.string()).optional(),
     treatmentStatus: z.string().trim().optional().or(z.literal('')),
     medicationName: z.string().trim().max(180, t('wizard.validation.medicationNameTooLong', 'Medication name is too long')).optional().or(z.literal('')),
@@ -1175,7 +1185,9 @@ function normalizeBirthDateForPayload(value) {
   const day = digits.slice(0, 2);
   const month = digits.slice(2, 4);
   const year = digits.slice(4, 8);
-  return `${year}-${month}-${day}T00:00:00.000Z`;
+  // canonical.v1.participant's birthDate is format:'date' (bare YYYY-MM-DD,
+  // #699) -- no time component, unlike a full ISO datetime.
+  return `${year}-${month}-${day}`;
 }
 
 function buildPenaltyLog(qualityAssessment) {
@@ -1246,6 +1258,39 @@ function buildCanonicalSprecPayload(formData, matrixType, dictionary) {
   };
 }
 
+// dict-02 ELM-0146 -- SPREC standard version used to encode this profile.
+// Mirrors api/backend/src/services/rcs-reference-data.js's SPREC_VERSION;
+// no shared constant exists across the frontend/backend split.
+const SPREC_VERSION = 'SPREC-2.0';
+
+// canonical.v1.specimen's sprec (#699) is flat strings with required
+// top-level code/version -- buildCanonicalSprecPayload's {code, label,
+// ...extra} objects (shared with the quality-preview and sample-integrity
+// callers below, which need the fuller shape) don't match it. This
+// flattens to just the axis codes, dropping the extra applicable/required
+// flags and axis-object nesting the AJV schema doesn't allow.
+function buildIntakeSprecPayload(formData, matrixType, dictionary) {
+  const canonical = buildCanonicalSprecPayload(formData, matrixType, dictionary);
+  const axisFields = matrixType === 'solid'
+    ? ['sampleType', 'collectionType', 'warmIschemia', 'coldIschemia', 'fixationType', 'fixationTime', 'longTermStorage']
+    : ['sampleType', 'primaryContainer', 'preCentrifugation', 'centrifugation', 'secondCentrifugation', 'postCentrifugationDelay', 'longTermStorage'];
+
+  const flat = { matrixType };
+  for (const key of axisFields) {
+    const axisValue = canonical[key];
+    const code = axisValue && typeof axisValue === 'object' ? axisValue.code : axisValue;
+    if (code) {
+      flat[key] = code;
+    }
+  }
+
+  return {
+    code: String(formData.sprecCode || '').trim() || 'UNKNOWN',
+    version: SPREC_VERSION,
+    ...flat,
+  };
+}
+
 function buildQualityPreviewPayload(formData, matrixType) {
   const dictionary = matrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
   return {
@@ -1255,26 +1300,39 @@ function buildQualityPreviewPayload(formData, matrixType) {
   };
 }
 
-function buildSampleIntegrityInput(formData) {
+// Array-of-checked-slugs shape buildClinicalData expects for charlsonComorbidities
+// (api/backend/src/routes/intakeWizard.js#116), read from clinical.charlsonConditions.
+function buildCharlsonConditions(formData, clinicalComorbidityDefinitions = []) {
+  return (Array.isArray(clinicalComorbidityDefinitions) ? clinicalComorbidityDefinitions : [])
+    .map((option) => getDictionarySlug(option))
+    .filter((slug) => slug && Boolean(formData[slug]));
+}
+
+function buildSampleIntegrityInput(formData, clinicalComorbidityDefinitions = []) {
   const matrixType = String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
   const dictionary = matrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
+  const charlsonComorbidities = buildCharlsonConditions(formData, clinicalComorbidityDefinitions);
   return {
-    patient_identity: {
-      patient_id: String(formData.patientID || '').trim(),
-      patient_name: String(formData.patientName || '').trim(),
+    // Same field shape as MerkleService.generateSampleHash on the backend (#519) — rcsScore/
+    // finalGrade/calculationTrace/axisPenalties are omitted (default to null) since RCS hasn't
+    // been computed yet at intake-wizard submission time.
+    participant_identity: {
+      participantId: String(formData.patientID || '').trim(),
+      participantName: String(formData.patientName || '').trim(),
     },
-    clinical_data: {
+    clinicalData: {
       orphaCode: String(formData.diagnosisOrphaCode || '').trim(),
       omimCode: String(formData.diagnosisOmimCode || '').trim(),
       cid: String(formData.diagnosisCidCode || '').trim(),
       phenotypes: Array.isArray(formData.diseasePhenotypes) ? formData.diseasePhenotypes : [],
-      biomarkers_values: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
+      charlsonComorbidities,
+      biomarkerValues: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
     },
     sprec: {
       ...buildCanonicalSprecPayload(formData, matrixType, dictionary),
       matrix_type: matrixType,
     },
-    pharmacology_data: {
+    pharmacologyData: {
       treatment_status: String(formData.treatmentStatus || '').trim(),
       drug_name: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
       atc_code: String(formData.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
@@ -1356,18 +1414,22 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
   const now = new Date().toISOString();
   const sprecMatrixType = String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
   const sprecDictionary = sprecMatrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
-  const canonicalSprec = buildCanonicalSprecPayload(formData, sprecMatrixType, sprecDictionary);
+  const canonicalSprec = buildIntakeSprecPayload(formData, sprecMatrixType, sprecDictionary);
+  // canonical.v1.participant/specimen both require a non-empty
+  // participantId (#699) even though the server always discards and
+  // regenerates it for a new patient (intakeWizard.js's resolvePatientID
+  // only accepts an existing 8-digit id) -- same "required by validation,
+  // regenerated server-side" precedent tests/e2e/helpers/seedParticipant.ts's
+  // createRealParticipant already documents for POST /api/patients.
+  const participantId = String(formData.patientID || '').trim() || 'placeholder';
   const sampleUnit = getSampleQuantityUnit(formData.sprecSampleType, SPREC_FLUID_DICTIONARY.sampleType.options);
   const patientDocument = normalizeDocumentForPayload(formData.documento);
   const diagnosis = formData.isHealthyControl ? null : {
-    diagnosis_name: String(formData.diagnosisCidDescription || formData.diagnosisDefinition || '').trim() || null,
-    icd_code: String(formData.diagnosisCidCode || '').trim() || null,
-    orpha_code: String(formData.diagnosisOrphaCode || '').trim() || null,
-    omim_code: String(formData.diagnosisOmimCode || '').trim() || null,
-    definition: String(formData.diagnosisDefinition || '').trim() || null,
+    diagnosisName: String(formData.diagnosisCidDescription || formData.diagnosisDefinition || '').trim() || null,
     icdCode: String(formData.diagnosisCidCode || '').trim() || null,
     orphaCode: String(formData.diagnosisOrphaCode || '').trim() || null,
     omimCode: String(formData.diagnosisOmimCode || '').trim() || null,
+    definition: String(formData.diagnosisDefinition || '').trim() || null,
   };
   const biomarkers = (Array.isArray(biomarkerItems) ? biomarkerItems : []).flatMap((biomarker) => {
     const biomarkerSlug = getDictionarySlug(biomarker);
@@ -1424,17 +1486,18 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
   });
 
   const clinical = {
-    comorbidities: (Array.isArray(clinicalComorbidityItems) ? clinicalComorbidityItems : []).reduce((accumulator, option) => {
-      const field = getDictionarySlug(option);
-      accumulator[field] = Boolean(formData[field]);
-      return accumulator;
-    }, {}),
+    charlsonConditions: buildCharlsonConditions(formData, clinicalComorbidityItems),
     bloodPressure: String(formData.bloodPressure || '').trim(),
     clinicalObservations: String(formData.clinicalObservations || '').trim(),
     diseasePhenotypes: Array.isArray(formData.diseasePhenotypes) ? formData.diseasePhenotypes : [],
     diseaseBiomarkers: Array.isArray(formData.diseaseBiomarkers) ? formData.diseaseBiomarkers : [],
     biomarkersValues: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
     diagnosisDefinition: String(formData.diagnosisDefinition || '').trim(),
+    allergies: Array.isArray(formData.allergies) ? formData.allergies : [],
+    familyHistories: Array.isArray(formData.familyHistories) ? formData.familyHistories : [],
+    procedures: Array.isArray(formData.procedures) ? formData.procedures : [],
+    observationRecords: Array.isArray(formData.observationRecords) ? formData.observationRecords : [],
+    clinicalOutcomes: Array.isArray(formData.clinicalOutcomes) ? formData.clinicalOutcomes : [],
     pharmacologyData: {
       treatmentStatus: String(formData.treatmentStatus || '').trim(),
       medicationName: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
@@ -1448,14 +1511,14 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
 
   return {
     participant: {
-      participantId: String(formData.patientID || '').trim(),
+      participantId,
       patientName: formData.patientName.trim(),
       birthDate: normalizeBirthDateForPayload(formData.birthDate),
       email: normalizeEmailInput(formData.email),
       isDeceased: Boolean(formData.isDeceased),
       phone: digitsOnly(formData.phone),
       identityDocument: patientDocument,
-      prontuario: String(formData.prontuario || '').trim(),
+      recordNumber: String(formData.prontuario || '').trim(),
     },
     diagnosis,
     legalRepresentative: formData.isDeceased ? {
@@ -1465,18 +1528,30 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       phone: digitsOnly(formData.representativePhone || ''),
     } : null,
     specimen: {
-      specimenId: String(formData.specimenId || formData.sampleId || formData.sampleID || '').trim() || undefined,
-      participantId: String(formData.patientID || '').trim(),
-      sampleType: formData.sprecSampleType || formData.sampleType,
-      sampleOrigin: String(formData.sampleOrigin || formData.sprecSampleType || '').trim(),
-      collectionInstitution: formData.collectionInstitution.trim(),
-      collectionInstitutionAcronym: formData.collectionInstitutionAcronym.trim() || generateAcronym(formData.collectionInstitution),
-      extractionProtocol: String(formData.extractionProtocol || formData.sprecPrimaryContainer || '').trim(),
+      // Same "required by validation, regenerated server-side" precedent as
+      // participantId above -- a new specimen has no id yet at submission
+      // time, but canonical.v1.specimen requires a non-empty specimenId (#699).
+      specimenId: String(formData.specimenId || formData.sampleId || formData.sampleID || '').trim() || 'placeholder',
+      participantId,
+      // Real MIABIS-coded selections (#701) -- a different, smaller
+      // vocabulary than the SPREC axis fields under sprec.* below; never
+      // derived from them (SPREC's ~30-value axis has no 1:1 mapping onto
+      // MIABIS's closed enum, per SampleModel.validate()).
+      sampleType: String(formData.sampleType || '').trim(),
+      sampleOrigin: String(formData.sampleOrigin || '').trim(),
+      // collectionInstitution/collectionInstitutionAcronym have no
+      // equivalent in canonical.v1.specimen (#699) -- the schema's real
+      // field, collectionSite, is an Organization reference the wizard has
+      // no picker for; not sent here, still shown/edited in the UI as
+      // formData.collectionInstitution(Acronym) for now.
+      extractionProtocol: String(formData.extractionProtocol || '').trim(),
       barcode: undefined,
       quantity: Number(formData.quantity),
       unit: sampleUnit,
       registeredAt: now,
-      lifecycleStatus: 'AVAILABLE',
+      // Creation default — intakeWizard.js's buildSampleDocumentFromIntake
+      // reads this directly as of #415 to decide available vs quarantined.
+      specimenStatus: 'available',
       linkedProject: formData.linkedProject.trim(),
       sprec: canonicalSprec,
       merkleRoot: sampleMerkleRoot,
@@ -1490,6 +1565,8 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
     biomarkers: biomarkers.concat(diseaseBiomarkers),
   };
 }
+
+export const _test = { buildSubmissionPayload };
 
 export default function ClinicalIntakeWizard(props) {
   const { t } = useLanguage();
@@ -1523,6 +1600,11 @@ export default function ClinicalIntakeWizard(props) {
   const [medicationResults, setMedicationResults] = useState([]);
   const [medicationLoading, setMedicationLoading] = useState(false);
   const [medicationError, setMedicationError] = useState('');
+  const [allergyDraft, setAllergyDraft] = useState({ allergenName: '', allergenCode: '', reaction: '' });
+  const [familyHistoryDraft, setFamilyHistoryDraft] = useState({ relationship: '', conditionName: '', orphaCode: '', onset: '' });
+  const [procedureDraft, setProcedureDraft] = useState({ procedureName: '', procedureCode: '', performed: '', bodySite: '' });
+  const [observationDraft, setObservationDraft] = useState({ testName: '', loincCode: '', value: '', unit: '', effectiveDate: '' });
+  const [outcomeDraft, setOutcomeDraft] = useState({ outcomeType: '', outcomeDate: '' });
   const [isConsentPreviewOpen, setIsConsentPreviewOpen] = useState(false);
   const [isBiomarkerRequestOpen, setIsBiomarkerRequestOpen] = useState(false);
   const [isBiomarkerRequestSubmitting, setIsBiomarkerRequestSubmitting] = useState(false);
@@ -1534,6 +1616,7 @@ export default function ClinicalIntakeWizard(props) {
   const [biomarkerRequestError, setBiomarkerRequestError] = useState('');
   const [sampleMerkleRoot, setSampleMerkleRoot] = useState('');
   const [sampleLabel, setSampleLabel] = useState(null);
+  const [failedClinicalEntities, setFailedClinicalEntities] = useState([]);
   const preAnalyticalUnknownBackupRef = React.useRef(null);
 
   const stepMeta = useMemo(() => ([
@@ -1557,15 +1640,20 @@ export default function ClinicalIntakeWizard(props) {
     },
   ]), [t]);
 
-  const sampleTypeDefinitions = useMemo(() => (Array.isArray(dictionaries.sampleTypes) ? dictionaries.sampleTypes : []), [dictionaries.sampleTypes]);
-  const anatomicalOriginDefinitions = useMemo(() => (Array.isArray(dictionaries.anatomicalOrigins) ? dictionaries.anatomicalOrigins : []), [dictionaries.anatomicalOrigins]);
-  const extractionProtocolDefinitions = useMemo(() => (Array.isArray(dictionaries.extractionProtocols) ? dictionaries.extractionProtocols : []), [dictionaries.extractionProtocols]);
   const clinicalComorbidityDefinitions = useMemo(() => (Array.isArray(dictionaries.clinicalComorbidities) ? dictionaries.clinicalComorbidities : []), [dictionaries.clinicalComorbidities]);
   const biomarkerDefinitions = useMemo(() => (Array.isArray(dictionaries.biomarkers) ? dictionaries.biomarkers : []), [dictionaries.biomarkers]);
 
-  const sampleTypeOptions = useMemo(() => mapDictionaryOptions(sampleTypeDefinitions), [sampleTypeDefinitions]);
-  const sampleOriginOptions = useMemo(() => mapDictionaryOptions(anatomicalOriginDefinitions), [anatomicalOriginDefinitions]);
-  const extractionProtocolOptions = useMemo(() => mapDictionaryOptions(extractionProtocolDefinitions), [extractionProtocolDefinitions]);
+  // Real MIABIS-coded selections (#701) -- sourced from the same fixed
+  // id/label list SampleModel.validate() checks against server-side
+  // (mirrored at api/backend/src/config/constants/specimen.constants.js),
+  // not from `dictionaries.*` (fed by GET /api/terminologies, which never
+  // actually serves MIABIS data -- the essential seed writes it into
+  // separate sampleTypes/sampleOrigins/extractionProtocols collections
+  // that route never reads). Same source `SampleWithdrawalReturnPage.tsx`
+  // already uses.
+  const sampleTypeOptions = useMemo(() => SPECIMEN_TYPES.map((type) => ({ value: type.id, label: type.label })), []);
+  const sampleOriginOptions = useMemo(() => SAMPLE_ORIGINS.map((origin) => ({ value: origin.id, label: origin.label })), []);
+  const extractionProtocolOptions = useMemo(() => EXTRACTION_PROTOCOLS.map((protocol) => ({ value: protocol.id, label: protocol.label })), []);
   const clinicalComorbidityOptions = useMemo(() => mapDictionaryOptions(clinicalComorbidityDefinitions), [clinicalComorbidityDefinitions]);
   const sprecMatrixType = useMemo(
     () => (String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid'),
@@ -1852,12 +1940,6 @@ export default function ClinicalIntakeWizard(props) {
         });
       }
 
-      const syncedSampleType = String(previous.sprecSampleType || '').trim();
-      if (previous.sampleType !== syncedSampleType) {
-        next.sampleType = syncedSampleType;
-        hasChanges = true;
-      }
-
       if (previous.sprecCode !== sprecCode) {
         next.sprecCode = sprecCode;
         hasChanges = true;
@@ -1869,7 +1951,7 @@ export default function ClinicalIntakeWizard(props) {
 
       return next;
     });
-  }, [formData.preAnalyticalUnknown, formData.sprecSampleType, sprecCode, sprecPreCentrifugationOptions, sprecCentrifugationOptions, sprecSecondCentrifugationOptions, sprecPostCentrifugationDelayOptions]);
+  }, [formData.preAnalyticalUnknown, sprecCode, sprecPreCentrifugationOptions, sprecCentrifugationOptions, sprecSecondCentrifugationOptions, sprecPostCentrifugationDelayOptions]);
 
   useEffect(() => {
     setFormData((previous) => {
@@ -1900,7 +1982,7 @@ export default function ClinicalIntakeWizard(props) {
 
     const recalculateMerkle = async () => {
       try {
-        const integrityInput = buildSampleIntegrityInput(formData);
+        const integrityInput = buildSampleIntegrityInput(formData, clinicalComorbidityDefinitions);
         const result = await buildSampleMerkleRoot(integrityInput);
         if (!active) {
           return;
@@ -1921,6 +2003,7 @@ export default function ClinicalIntakeWizard(props) {
     };
   }, [
     formData,
+    clinicalComorbidityDefinitions,
   ]);
 
   useEffect(() => {
@@ -1931,7 +2014,11 @@ export default function ClinicalIntakeWizard(props) {
       setConsentTemplatesError('');
 
       try {
-        const response = await consentService.getTemplates();
+        // Prefetched here (mount) so it's ready by the consent step later in
+        // the wizard, while the user is still on an earlier step — a failure
+        // of this background call must not force-logout the user out from
+        // under them (#395), so it opts out of the global 401 session-kill.
+        const response = await consentService.getTemplates({ suppressAuthRedirect: true });
         const nextTemplates = extractResponseItems(response, ['templates']);
 
         if (!active) {
@@ -2052,6 +2139,149 @@ export default function ClinicalIntakeWizard(props) {
     setFormData((previous) => ({
       ...previous,
       [field]: value,
+    }));
+  };
+
+  const handleAllergyDraftChange = (field) => (event) => {
+    const value = event.target.value;
+    setAllergyDraft((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const handleAddAllergy = () => {
+    const allergenName = String(allergyDraft.allergenName || '').trim();
+    const allergenCode = String(allergyDraft.allergenCode || '').trim();
+    const reaction = String(allergyDraft.reaction || '').trim();
+    if (!allergenName || !allergenCode) {
+      return;
+    }
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      allergies: [...(Array.isArray(previous.allergies) ? previous.allergies : []), { allergenName, allergenCode, reaction }],
+    }));
+    setAllergyDraft({ allergenName: '', allergenCode: '', reaction: '' });
+  };
+
+  const handleRemoveAllergy = (index) => {
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      allergies: (Array.isArray(previous.allergies) ? previous.allergies : []).filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
+
+  const handleFamilyHistoryDraftChange = (field) => (event) => {
+    const value = event.target.value;
+    setFamilyHistoryDraft((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const handleAddFamilyHistory = () => {
+    const relationship = String(familyHistoryDraft.relationship || '').trim();
+    const conditionName = String(familyHistoryDraft.conditionName || '').trim();
+    const orphaCode = String(familyHistoryDraft.orphaCode || '').trim();
+    const onset = String(familyHistoryDraft.onset || '').trim();
+    if (!relationship) {
+      return;
+    }
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      familyHistories: [...(Array.isArray(previous.familyHistories) ? previous.familyHistories : []), { relationship, conditionName, orphaCode, onset }],
+    }));
+    setFamilyHistoryDraft({ relationship: '', conditionName: '', orphaCode: '', onset: '' });
+  };
+
+  const handleRemoveFamilyHistory = (index) => {
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      familyHistories: (Array.isArray(previous.familyHistories) ? previous.familyHistories : []).filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
+
+  const handleProcedureDraftChange = (field) => (event) => {
+    const value = event.target.value;
+    setProcedureDraft((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const handleAddProcedure = () => {
+    const procedureName = String(procedureDraft.procedureName || '').trim();
+    const procedureCode = String(procedureDraft.procedureCode || '').trim();
+    const performed = String(procedureDraft.performed || '').trim();
+    const bodySite = String(procedureDraft.bodySite || '').trim();
+    if (!procedureCode || !performed) {
+      return;
+    }
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      procedures: [...(Array.isArray(previous.procedures) ? previous.procedures : []), { procedureName, procedureCode, performed, bodySite }],
+    }));
+    setProcedureDraft({ procedureName: '', procedureCode: '', performed: '', bodySite: '' });
+  };
+
+  const handleRemoveProcedure = (index) => {
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      procedures: (Array.isArray(previous.procedures) ? previous.procedures : []).filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
+
+  const handleObservationDraftChange = (field) => (event) => {
+    const value = event.target.value;
+    setObservationDraft((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const handleAddObservation = () => {
+    const testName = String(observationDraft.testName || '').trim();
+    const loincCode = String(observationDraft.loincCode || '').trim();
+    const value = String(observationDraft.value || '').trim();
+    const unit = String(observationDraft.unit || '').trim();
+    const effectiveDate = String(observationDraft.effectiveDate || '').trim();
+    if (!loincCode || !effectiveDate) {
+      return;
+    }
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      observationRecords: [...(Array.isArray(previous.observationRecords) ? previous.observationRecords : []), { testName, loincCode, value, unit, effectiveDate }],
+    }));
+    setObservationDraft({ testName: '', loincCode: '', value: '', unit: '', effectiveDate: '' });
+  };
+
+  const handleRemoveObservation = (index) => {
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      observationRecords: (Array.isArray(previous.observationRecords) ? previous.observationRecords : []).filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
+
+  const handleOutcomeDraftChange = (field) => (event) => {
+    const value = event.target.value;
+    setOutcomeDraft((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const handleAddOutcome = () => {
+    const outcomeType = String(outcomeDraft.outcomeType || '').trim();
+    const outcomeDate = String(outcomeDraft.outcomeDate || '').trim();
+    if (!outcomeType || !outcomeDate) {
+      return;
+    }
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      clinicalOutcomes: [...(Array.isArray(previous.clinicalOutcomes) ? previous.clinicalOutcomes : []), { outcomeType, outcomeDate }],
+    }));
+    setOutcomeDraft({ outcomeType: '', outcomeDate: '' });
+  };
+
+  const handleRemoveOutcome = (index) => {
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      clinicalOutcomes: (Array.isArray(previous.clinicalOutcomes) ? previous.clinicalOutcomes : []).filter((_, itemIndex) => itemIndex !== index),
     }));
   };
 
@@ -2396,6 +2626,7 @@ export default function ClinicalIntakeWizard(props) {
     setTouched(true);
     setStep1Attempted(true);
     setSubmitError('');
+    setFailedClinicalEntities([]);
 
     if (!isStep1Valid || !isStep2Valid || !isStep3Valid) {
       const errors = {
@@ -2437,14 +2668,30 @@ export default function ClinicalIntakeWizard(props) {
       setSampleLabel({
         ...buildSampleLabelData(createdSample, payload, formData, new Date()),
         ...(response?.data?.label || {}),
+        // dict-02 StorageAssignment (#495) — POST /intake-wizard already
+        // resolves this additively (see intakeWizard.js), prefer it over the
+        // legacy embedded storageLocation shape.
+        storageAssignment: response?.data?.storageAssignment || createdSample?.storageAssignment || null,
         storageLocation: response?.data?.storageLocation || createdSample?.storageLocation || null,
       });
 
-      notifyApiToast({
-        message,
-        type: 'success',
-        duration: 4500,
-      });
+      const clinicalEntitiesFailedRaw = response?.data?.clinicalEntities?.failed;
+      const clinicalEntitiesFailed = Array.isArray(clinicalEntitiesFailedRaw) ? clinicalEntitiesFailedRaw : [];
+      setFailedClinicalEntities(clinicalEntitiesFailed);
+
+      if (clinicalEntitiesFailed.length > 0) {
+        notifyApiToast({
+          message: t('wizard.clinicalEntitiesWarning.toastMessage', 'Amostra salva com sucesso, mas alguns registros clínicos não foram salvos.'),
+          type: 'warning',
+          duration: 4500,
+        });
+      } else {
+        notifyApiToast({
+          message,
+          type: 'success',
+          duration: 4500,
+        });
+      }
 
       setFormData({
         ...initialState,
@@ -2595,6 +2842,42 @@ export default function ClinicalIntakeWizard(props) {
                 { value: 'fluid', label: t('wizard.matrix.fluid', 'Fluidos (SPREC 2.0)') },
                 { value: 'solid', label: t('wizard.matrix.solid', 'Sólidos (SPREC 2.0)') },
               ]}
+            />
+            <div className="wizard-span-2 md:col-span-2 text-sm font-semibold text-gray-700 -mb-2">
+              {t('wizard.sections.miabisClassification', 'Classificação MIABIS')}
+            </div>
+            <Select
+              id="sampleType"
+              name="sampleType"
+              data-testid="wizard-sample-type"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500"
+              label={t('wizard.fields.sampleType', 'Tipo de Amostra (MIABIS)')}
+              value={formData.sampleType}
+              onChange={handleFieldChange('sampleType')}
+              required
+              options={[{ value: '', label: t('wizard.placeholders.selectSampleType', 'Selecione o tipo de amostra') }, ...sampleTypeOptions]}
+            />
+            <Select
+              id="sampleOrigin"
+              name="sampleOrigin"
+              data-testid="wizard-sample-origin"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500"
+              label={t('wizard.fields.sampleOrigin', 'Origem da Amostra (MIABIS)')}
+              value={formData.sampleOrigin}
+              onChange={handleFieldChange('sampleOrigin')}
+              required
+              options={[{ value: '', label: t('wizard.placeholders.selectSampleOrigin', 'Selecione a origem da amostra') }, ...sampleOriginOptions]}
+            />
+            <Select
+              id="extractionProtocol"
+              name="extractionProtocol"
+              data-testid="wizard-extraction-protocol"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500"
+              label={t('wizard.fields.extractionProtocol', 'Protocolo de Extração (MIABIS)')}
+              value={formData.extractionProtocol}
+              onChange={handleFieldChange('extractionProtocol')}
+              required
+              options={[{ value: '', label: t('wizard.placeholders.selectExtractionProtocol', 'Selecione o protocolo de extração') }, ...extractionProtocolOptions]}
             />
             <Select
               id="sprecAxis1"
@@ -2965,10 +3248,451 @@ export default function ClinicalIntakeWizard(props) {
               )}
             </div>
 
+            <div className="clinical-subsection space-y-4" data-testid="wizard-allergies-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.allergiesIntolerances', 'Alergias e Intolerâncias')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Input
+                  id="allergyName"
+                  name="allergyName"
+                  data-testid="wizard-allergy-name"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.allergyName', 'Substância/Agente causador')}
+                  value={allergyDraft.allergenName}
+                  onChange={handleAllergyDraftChange('allergenName')}
+                  placeholder={t('wizard.placeholders.allergyName', 'Ex.: Dipirona')}
+                />
+                <Input
+                  id="allergyCode"
+                  name="allergyCode"
+                  data-testid="wizard-allergy-code"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.allergyCode', 'Código DCB')}
+                  value={allergyDraft.allergenCode}
+                  onChange={handleAllergyDraftChange('allergenCode')}
+                  placeholder={t('wizard.placeholders.allergyCode', 'Ex.: 03730')}
+                />
+                <Input
+                  id="allergyReaction"
+                  name="allergyReaction"
+                  data-testid="wizard-allergy-reaction"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.allergyReaction', 'Reação/manifestação')}
+                  value={allergyDraft.reaction}
+                  onChange={handleAllergyDraftChange('reaction')}
+                  placeholder={t('wizard.placeholders.allergyReaction', 'Ex.: Urticária')}
+                />
+              </div>
+              <Button
+                type="button"
+                data-testid="wizard-add-allergy"
+                variant="secondary"
+                onClick={handleAddAllergy}
+                disabled={!String(allergyDraft.allergenName || '').trim() || !String(allergyDraft.allergenCode || '').trim()}
+              >
+                {t('wizard.actions.addAllergy', 'Adicionar alergia')}
+              </Button>
+              {Array.isArray(formData.allergies) && formData.allergies.length > 0 && (
+                <ul className="allergy-list space-y-2" data-testid="wizard-allergy-list">
+                  {formData.allergies.map((allergy, index) => (
+                    <li
+                      key={`${allergy.allergenCode}-${index}`}
+                      data-testid={`wizard-allergy-item-${index}`}
+                      className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2"
+                    >
+                      <span>
+                        <span className="font-semibold text-gray-800">{allergy.allergenName}</span>
+                        <span className="ml-2 text-sm text-gray-500">DCB: {allergy.allergenCode}</span>
+                        {allergy.reaction && <span className="ml-2 text-sm text-gray-500">— {allergy.reaction}</span>}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid={`wizard-remove-allergy-${index}`}
+                        className="text-red-600 hover:text-red-800 text-sm"
+                        onClick={() => handleRemoveAllergy(index)}
+                      >
+                        {t('wizard.actions.removeAllergy', 'Remover')}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="clinical-subsection space-y-4" data-testid="wizard-family-history-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.familyHistory', 'Histórico Familiar')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <Select
+                  id="familyHistoryRelationship"
+                  name="familyHistoryRelationship"
+                  data-testid="wizard-family-relationship"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                  label={t('wizard.fields.familyRelationship', 'Grau de parentesco')}
+                  value={familyHistoryDraft.relationship}
+                  onChange={handleFamilyHistoryDraftChange('relationship')}
+                  options={[
+                    { value: '', label: t('wizard.fields.selectRelationship', 'Selecione o parentesco') },
+                    { value: 'mother', label: t('wizard.fields.relationshipMother', 'Mãe') },
+                    { value: 'father', label: t('wizard.fields.relationshipFather', 'Pai') },
+                    { value: 'sibling', label: t('wizard.fields.relationshipSibling', 'Irmão/Irmã') },
+                    { value: 'child', label: t('wizard.fields.relationshipChild', 'Filho/Filha') },
+                    { value: 'grandparent', label: t('wizard.fields.relationshipGrandparent', 'Avô/Avó') },
+                    { value: 'other', label: t('wizard.fields.relationshipOther', 'Outro') },
+                  ]}
+                />
+                <Input
+                  id="familyConditionName"
+                  name="familyConditionName"
+                  data-testid="wizard-family-condition-name"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.familyConditionName', 'Condição/doença')}
+                  value={familyHistoryDraft.conditionName}
+                  onChange={handleFamilyHistoryDraftChange('conditionName')}
+                  placeholder={t('wizard.placeholders.familyConditionName', 'Ex.: Síndrome de Marfan')}
+                />
+                <Input
+                  id="familyConditionOrpha"
+                  name="familyConditionOrpha"
+                  data-testid="wizard-family-condition-orpha"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.familyConditionOrpha', 'Código ORPHA')}
+                  value={familyHistoryDraft.orphaCode}
+                  onChange={handleFamilyHistoryDraftChange('orphaCode')}
+                  placeholder={t('wizard.placeholders.familyConditionOrpha', 'Ex.: ORPHA:558')}
+                />
+                <Input
+                  id="familyConditionOnset"
+                  name="familyConditionOnset"
+                  data-testid="wizard-family-condition-onset"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.familyConditionOnset', 'Idade/período de início')}
+                  value={familyHistoryDraft.onset}
+                  onChange={handleFamilyHistoryDraftChange('onset')}
+                  placeholder={t('wizard.placeholders.familyConditionOnset', 'Ex.: 30 anos')}
+                />
+              </div>
+              <Button
+                type="button"
+                data-testid="wizard-add-family-history"
+                variant="secondary"
+                onClick={handleAddFamilyHistory}
+                disabled={!String(familyHistoryDraft.relationship || '').trim()}
+              >
+                {t('wizard.actions.addFamilyHistory', 'Adicionar histórico familiar')}
+              </Button>
+              {Array.isArray(formData.familyHistories) && formData.familyHistories.length > 0 && (
+                <ul className="family-history-list space-y-2" data-testid="wizard-family-history-list">
+                  {formData.familyHistories.map((entry, index) => (
+                    <li
+                      key={`${entry.relationship}-${index}`}
+                      data-testid={`wizard-family-history-item-${index}`}
+                      className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2"
+                    >
+                      <span>
+                        <span className="font-semibold text-gray-800">{entry.relationship}</span>
+                        {entry.conditionName && <span className="ml-2 text-sm text-gray-500">— {entry.conditionName}</span>}
+                        {entry.orphaCode && <span className="ml-2 text-sm text-gray-500">({entry.orphaCode})</span>}
+                        {entry.onset && <span className="ml-2 text-sm text-gray-500">· {entry.onset}</span>}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid={`wizard-remove-family-history-${index}`}
+                        className="text-red-600 hover:text-red-800 text-sm"
+                        onClick={() => handleRemoveFamilyHistory(index)}
+                      >
+                        {t('wizard.actions.removeFamilyHistory', 'Remover')}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="clinical-subsection space-y-4" data-testid="wizard-procedures-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.procedures', 'Procedimentos')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <Input
+                  id="procedureName"
+                  name="procedureName"
+                  data-testid="wizard-procedure-name"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.procedureName', 'Procedimento')}
+                  value={procedureDraft.procedureName}
+                  onChange={handleProcedureDraftChange('procedureName')}
+                  placeholder={t('wizard.placeholders.procedureName', 'Ex.: Biópsia hepática')}
+                />
+                <Input
+                  id="procedureCode"
+                  name="procedureCode"
+                  data-testid="wizard-procedure-code"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.procedureCode', 'Código')}
+                  value={procedureDraft.procedureCode}
+                  onChange={handleProcedureDraftChange('procedureCode')}
+                  placeholder={t('wizard.placeholders.procedureCode', 'Código institucional')}
+                />
+                <Input
+                  id="procedurePerformed"
+                  name="procedurePerformed"
+                  data-testid="wizard-procedure-performed"
+                  type="date"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.procedurePerformed', 'Data de realização')}
+                  value={procedureDraft.performed}
+                  onChange={handleProcedureDraftChange('performed')}
+                />
+                <Input
+                  id="procedureBodySite"
+                  name="procedureBodySite"
+                  data-testid="wizard-procedure-body-site"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.procedureBodySite', 'Sítio anatômico')}
+                  value={procedureDraft.bodySite}
+                  onChange={handleProcedureDraftChange('bodySite')}
+                  placeholder={t('wizard.placeholders.procedureBodySite', 'Ex.: Fígado')}
+                />
+              </div>
+              <Button
+                type="button"
+                data-testid="wizard-add-procedure"
+                variant="secondary"
+                onClick={handleAddProcedure}
+                disabled={!String(procedureDraft.procedureCode || '').trim() || !String(procedureDraft.performed || '').trim()}
+              >
+                {t('wizard.actions.addProcedure', 'Adicionar procedimento')}
+              </Button>
+              {Array.isArray(formData.procedures) && formData.procedures.length > 0 && (
+                <ul className="procedure-list space-y-2" data-testid="wizard-procedure-list">
+                  {formData.procedures.map((entry, index) => (
+                    <li
+                      key={`${entry.procedureCode}-${index}`}
+                      data-testid={`wizard-procedure-item-${index}`}
+                      className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2"
+                    >
+                      <span>
+                        <span className="font-semibold text-gray-800">{entry.procedureName || entry.procedureCode}</span>
+                        <span className="ml-2 text-sm text-gray-500">{entry.procedureCode}</span>
+                        {entry.performed && <span className="ml-2 text-sm text-gray-500">· {entry.performed}</span>}
+                        {entry.bodySite && <span className="ml-2 text-sm text-gray-500">({entry.bodySite})</span>}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid={`wizard-remove-procedure-${index}`}
+                        className="text-red-600 hover:text-red-800 text-sm"
+                        onClick={() => handleRemoveProcedure(index)}
+                      >
+                        {t('wizard.actions.removeProcedure', 'Remover')}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="clinical-subsection space-y-4" data-testid="wizard-observations-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.labObservations', 'Resultados Laboratoriais')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                <Input
+                  id="observationTestName"
+                  name="observationTestName"
+                  data-testid="wizard-observation-test-name"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.observationTestName', 'Exame')}
+                  value={observationDraft.testName}
+                  onChange={handleObservationDraftChange('testName')}
+                  placeholder={t('wizard.placeholders.observationTestName', 'Ex.: Hemoglobina')}
+                />
+                <Input
+                  id="observationLoinc"
+                  name="observationLoinc"
+                  data-testid="wizard-observation-loinc"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.observationLoinc', 'Código LOINC')}
+                  value={observationDraft.loincCode}
+                  onChange={handleObservationDraftChange('loincCode')}
+                  placeholder={t('wizard.placeholders.observationLoinc', 'Ex.: 718-7')}
+                />
+                <Input
+                  id="observationValue"
+                  name="observationValue"
+                  data-testid="wizard-observation-value"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.observationValue', 'Valor')}
+                  value={observationDraft.value}
+                  onChange={handleObservationDraftChange('value')}
+                  placeholder={t('wizard.placeholders.observationValue', 'Ex.: 13.2')}
+                />
+                <Input
+                  id="observationUnit"
+                  name="observationUnit"
+                  data-testid="wizard-observation-unit"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.observationUnit', 'Unidade')}
+                  value={observationDraft.unit}
+                  onChange={handleObservationDraftChange('unit')}
+                  placeholder={t('wizard.placeholders.observationUnit', 'Ex.: g/dL')}
+                />
+                <Input
+                  id="observationEffectiveDate"
+                  name="observationEffectiveDate"
+                  data-testid="wizard-observation-effective-date"
+                  type="date"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.observationEffectiveDate', 'Data do resultado')}
+                  value={observationDraft.effectiveDate}
+                  onChange={handleObservationDraftChange('effectiveDate')}
+                />
+              </div>
+              <Button
+                type="button"
+                data-testid="wizard-add-observation"
+                variant="secondary"
+                onClick={handleAddObservation}
+                disabled={!String(observationDraft.loincCode || '').trim() || !String(observationDraft.effectiveDate || '').trim()}
+              >
+                {t('wizard.actions.addObservation', 'Adicionar resultado')}
+              </Button>
+              {Array.isArray(formData.observationRecords) && formData.observationRecords.length > 0 && (
+                <ul className="observation-list space-y-2" data-testid="wizard-observation-list">
+                  {formData.observationRecords.map((entry, index) => (
+                    <li
+                      key={`${entry.loincCode}-${index}`}
+                      data-testid={`wizard-observation-item-${index}`}
+                      className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2"
+                    >
+                      <span>
+                        <span className="font-semibold text-gray-800">{entry.testName || entry.loincCode}</span>
+                        <span className="ml-2 text-sm text-gray-500">{entry.loincCode}</span>
+                        {entry.value && <span className="ml-2 text-sm text-gray-500">= {entry.value} {entry.unit}</span>}
+                        {entry.effectiveDate && <span className="ml-2 text-sm text-gray-500">· {entry.effectiveDate}</span>}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid={`wizard-remove-observation-${index}`}
+                        className="text-red-600 hover:text-red-800 text-sm"
+                        onClick={() => handleRemoveObservation(index)}
+                      >
+                        {t('wizard.actions.removeObservation', 'Remover')}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="clinical-subsection space-y-4" data-testid="wizard-outcomes-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.clinicalOutcomes', 'Desfechos Longitudinais')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Select
+                  id="outcomeType"
+                  name="outcomeType"
+                  data-testid="wizard-outcome-type"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                  label={t('wizard.fields.outcomeType', 'Tipo de desfecho')}
+                  value={outcomeDraft.outcomeType}
+                  onChange={handleOutcomeDraftChange('outcomeType')}
+                  options={[
+                    { value: '', label: t('wizard.fields.selectOutcomeType', 'Selecione o tipo de desfecho') },
+                    { value: 'progression', label: t('wizard.fields.outcomeProgression', 'Progressão') },
+                    { value: 'remission', label: t('wizard.fields.outcomeRemission', 'Remissão') },
+                    { value: 'relapse', label: t('wizard.fields.outcomeRelapse', 'Recidiva') },
+                    { value: 'response', label: t('wizard.fields.outcomeResponse', 'Resposta') },
+                    { value: 'toxicity', label: t('wizard.fields.outcomeToxicity', 'Toxicidade') },
+                    { value: 'hospitalization', label: t('wizard.fields.outcomeHospitalization', 'Hospitalização') },
+                    { value: 'death', label: t('wizard.fields.outcomeDeath', 'Óbito') },
+                  ]}
+                />
+                <Input
+                  id="outcomeDate"
+                  name="outcomeDate"
+                  data-testid="wizard-outcome-date"
+                  type="date"
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.outcomeDate', 'Data do desfecho')}
+                  value={outcomeDraft.outcomeDate}
+                  onChange={handleOutcomeDraftChange('outcomeDate')}
+                />
+              </div>
+              <Button
+                type="button"
+                data-testid="wizard-add-outcome"
+                variant="secondary"
+                onClick={handleAddOutcome}
+                disabled={!String(outcomeDraft.outcomeType || '').trim() || !String(outcomeDraft.outcomeDate || '').trim()}
+              >
+                {t('wizard.actions.addOutcome', 'Adicionar desfecho')}
+              </Button>
+              {Array.isArray(formData.clinicalOutcomes) && formData.clinicalOutcomes.length > 0 && (
+                <ul className="outcome-list space-y-2" data-testid="wizard-outcome-list">
+                  {formData.clinicalOutcomes.map((entry, index) => (
+                    <li
+                      key={`${entry.outcomeType}-${index}`}
+                      data-testid={`wizard-outcome-item-${index}`}
+                      className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2"
+                    >
+                      <span>
+                        <span className="font-semibold text-gray-800">{entry.outcomeType}</span>
+                        {entry.outcomeDate && <span className="ml-2 text-sm text-gray-500">· {entry.outcomeDate}</span>}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid={`wizard-remove-outcome-${index}`}
+                        className="text-red-600 hover:text-red-800 text-sm"
+                        onClick={() => handleRemoveOutcome(index)}
+                      >
+                        {t('wizard.actions.removeOutcome', 'Remover')}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
             <div className="wizard-grid grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5">
               <Input className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.bloodPressure', 'Pressão arterial')} helperText={t('wizard.helpers.bloodPressureNumbersOnly', 'Aceita somente números; o campo formata como 120/80.')} value={formData.bloodPressure} onChange={handleFieldChange('bloodPressure')} placeholder={t('wizard.placeholders.bloodPressure', 'Digite apenas números, ex.: 12080')} inputMode="numeric" pattern="[0-9/]*" maxLength={7} />
               <div className="wizard-span-2 md:col-span-2">
                 <Textarea className="w-full rounded-lg border border-slate-400 bg-white px-3 py-2 shadow-sm" label={t('wizard.fields.clinicalNotes', 'Observações clínicas')} value={formData.clinicalObservations} onChange={handleFieldChange('clinicalObservations')} rows={4} placeholder={t('wizard.placeholders.clinicalNotes', 'Registre observações clínicas relevantes para a amostra.')} />
+              </div>
+            </div>
+
+            {/* #713: comorbidity/risk-factor checklist -- formData already had
+                a boolean field per item (and buildCharlsonConditions/
+                buildSubmissionPayload's charlsonConditions mapping already
+                had its own unit test, #522) but no checkbox ever rendered
+                to let a user actually check one; charlsonConditions was
+                therefore always empty from a real submission. This closes
+                that gap so the real CCI algorithm (#713) has real input to
+                score from a live submission, not just from a hand-built
+                unit-test payload. */}
+            <div className="clinical-subsection space-y-4" data-testid="wizard-comorbidities-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.comorbidities', 'Comorbidades e fatores de risco')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {clinicalComorbidityDefinitions.map((item) => {
+                  const slug = getDictionarySlug(item);
+                  if (!slug) return null;
+                  return (
+                    <label key={slug} className="flex items-center gap-2 text-sm text-gray-700">
+                      <input
+                        type="checkbox"
+                        data-testid={`wizard-comorbidity-${slug}`}
+                        checked={Boolean(formData[slug])}
+                        onChange={handleFieldChange(slug)}
+                      />
+                      {getDictionaryLabel(item)}
+                    </label>
+                  );
+                })}
               </div>
             </div>
 
@@ -3085,7 +3809,7 @@ export default function ClinicalIntakeWizard(props) {
                   <span data-testid="sample-label-sample-id">{t('wizard.sampleLabel.sampleId', 'Amostra')}: {sampleLabel.specimenId || 'N/A'}</span>
                   <span data-testid="sample-label-type">{t('wizard.sampleLabel.type', 'Tipo')}: {sampleLabel.sampleType || 'N/A'}</span>
                   <span data-testid="sample-label-date">{t('wizard.sampleLabel.date', 'Data')}: {sampleLabel.collectionDate || 'N/A'}</span>
-                  <span>{t('wizard.sampleLabel.location', 'Localização')}: {sampleLabel.storageLocation?.readable || sampleLabel.storageLocation?.position || 'N/A'}</span>
+                  <span>{t('wizard.sampleLabel.location', 'Localização')}: {sampleLabel.storageAssignment?.positionCode || sampleLabel.storageLocation?.readable || sampleLabel.storageLocation?.position || 'N/A'}</span>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="secondary" className="sample-label-print-button" data-testid="sample-label-print-button" onClick={handlePrintSampleLabel}>
@@ -3096,6 +3820,23 @@ export default function ClinicalIntakeWizard(props) {
                   </a>
                 </div>
               </div>
+            </div>
+          </Card>
+        )}
+        {failedClinicalEntities.length > 0 && (
+          <Card className="rounded-2xl border border-amber-200 bg-amber-50">
+            <div data-testid="clinical-entities-warning">
+              <div className="text-sm font-semibold text-amber-900">
+                {t('wizard.clinicalEntitiesWarning.title', 'Alguns registros clínicos não foram salvos')}
+                {(sampleLabel?.specimenId || sampleLabel?.code) ? ` — ${t('wizard.clinicalEntitiesWarning.specimen', 'Amostra')}: ${sampleLabel.specimenId || sampleLabel.code}` : ''}
+              </div>
+              <ul className="mt-2 text-sm text-amber-800 list-disc list-inside">
+                {failedClinicalEntities.map((failure, index) => (
+                  <li key={`${failure?.entity || 'entity'}-${index}`} data-testid="clinical-entities-warning-item">
+                    {failure?.entity}{failure?.reference ? ` (${failure.reference})` : ''} {t('wizard.clinicalEntitiesWarning.notRecorded', 'não registrado')}
+                  </li>
+                ))}
+              </ul>
             </div>
           </Card>
         )}

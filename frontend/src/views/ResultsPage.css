@@ -105,6 +105,13 @@
 	color: var(--info);
 }
 
+/* #890: terminal status for a result-import run that wrote nothing because
+   every processed entry hit an unimplemented/unsupported format stub. Not a
+   plain success, so it does not share .completed's success color. */
+.results-table-card .status-badge.completed_no_data {
+	color: var(--warning);
+}
+
 .job-metrics,
 .report-metrics,
 .metrics-grid {

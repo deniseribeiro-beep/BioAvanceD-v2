@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
 const bcrypt = require('bcryptjs');
 const passwordService = require('../services/password.service');
+const sessionService = require('../services/session.service');
 
 const REFRESH_COOKIE_NAME = 'refresh_token';
 
@@ -47,7 +48,36 @@ class AuthController {
         });
       }
 
-      const user = await authService.registerUser(db, req.body);
+      // #1037: attribute the grant. registerUser's third parameter defaults
+      // to the string 'system', which is what UserRoleAssignment.grantedBy
+      // carried for every account created through this route while it was
+      // unauthenticated. The route now requires authenticate +
+      // requirePermission('createUser'), so there is always a real actor.
+      const user = await authService.registerUser(db, req.body, req.user?.userID);
+
+      // #1037: RF003 AC#6 requires auditing account creation, and RF012 AC#1
+      // / RNF009 AC#2 (Crítica) both make the actor a mandatory element of
+      // the event. This route previously wrote no audit row at all. Mirrors
+      // the block in user.routes.js's sibling register handler.
+      //
+      // Audit failure must not fail a successful creation -- auditLogger.log
+      // swallows its own errors, and this try/catch is belt-and-braces so a
+      // logging fault cannot turn a 201 into a 400 via the outer catch.
+      try {
+        auditLogger.init(db);
+        await auditLogger.log({
+          action: 'CREATE',
+          resourceType: 'User',
+          resourceId: user._id?.toString() || user.id,
+          status: 'success',
+          severity: 'info',
+          message: 'Usuário registrado com sucesso',
+          req: req,
+          module: 'Usuários'
+        });
+      } catch (auditError) {
+        logger.error('Falha ao auditar criação de usuário:', auditError.message);
+      }
 
       return res.status(201).json({
         success: true,
@@ -100,6 +130,19 @@ class AuthController {
         });
       }
 
+      // RF014 AC#4 (#648): admin forçou redefinição de senha e a nova senha
+      // ainda não foi enviada -- mesmo padrão de "flag no nível raiz" que
+      // requiresMFASetup/requiresMFA acima, não aninhado em `data`
+      // (AuthContext.tsx's frontend só lê responseData.requiresPasswordChange
+      // no nível raiz; aninhado em `data`, cai no fallback genérico de 2FA).
+      if (result.requiresPasswordChange) {
+        return res.status(200).json({
+          success: true,
+          requiresPasswordChange: true,
+          message: (req.t && req.t('auth.passwordChangeRequired')) || result.message
+        });
+      }
+
       // Log de login bem-sucedido (assíncrono para não bloquear resposta)
       if (result.user) {
         req.user = result.user; // Define req.user para o auditLogger
@@ -126,6 +169,14 @@ class AuthController {
           logger.error('Erro ao registrar auditoria de login:', logError.message);
         });
       });
+      if (error.code === 'MFA_LOCKED') {
+        return res.status(401).json({
+          success: false,
+          code: 'MFA_LOCKED',
+          error: (req.t && req.t('auth.mfaLocked')) || 'MFA bloqueado devido a muitas tentativas falhas',
+          message: error.message
+        });
+      }
       return res.status(401).json({
         success: false,
         error: (req.t && req.t('auth.loginError')) || 'Erro ao fazer login. Verifique suas credenciais.',
@@ -321,8 +372,38 @@ class AuthController {
         });
       }
 
+      // #995 (RF001 AC#2): this route verifies a body-supplied password with its
+      // own bcrypt.compare and, until now, counted nothing and consulted nothing
+      // -- so 3029dc83's per-account lockout did not apply here. RF001 AC#2 says
+      // to lock "a conta"; it does not say "on the login route". Same three
+      // helpers 490077f4 gave the two first-login endpoints, so the five sites
+      // cannot drift.
+      //
+      // The gate runs BEFORE the compare, as it does at the other four sites:
+      // after it, a lock denies only the eventual correct guess while every
+      // wrong one still burns a bcrypt round.
+      //
+      // Unlike the other four this route is AUTHENTICATED and takes its subject
+      // from req.user.userID, never from the body -- so a caller can only reach
+      // their own account and there is no enumeration oracle to protect. The
+      // refusal therefore reuses this route's own 'Senha atual incorreta' rather
+      // than the generic 'Credenciais inválidas' the unauthenticated sites must
+      // use: telling the caller nothing they do not already know, while keeping
+      // a locked account's two outcomes indistinguishable from each other.
+      if (authService.isAccountLocked(user)) {
+        return res.status(400).json({
+          success: false,
+          error: (req.t && req.t('auth.invalidCurrentPassword')) || 'Senha atual incorreta'
+        });
+      }
+
       const oldMatches = await bcrypt.compare(oldPassword, user.password);
       if (!oldMatches) {
+        // #995: count it. Without this, a caller holding a hijacked session
+        // could guess the victim's current password here indefinitely -- useful
+        // for testing that password's reuse elsewhere -- without ever moving
+        // failedLoginAttempts.
+        await authService.recordFailedPasswordAttempt(db, usersCollection, user);
         return res.status(400).json({
           success: false,
           error: (req.t && req.t('auth.invalidCurrentPassword')) || 'Senha atual incorreta'
@@ -344,12 +425,33 @@ class AuthController {
             passwordHistory: updatedHistory,
             lastPasswordChange: new Date(),
             forceReset: false,
-            failedLoginAttempts: 0,
+            // #995: this was the literal `failedLoginAttempts: 0` alone. The
+            // lockout gate (auth.service.js) reads accountLockedUntil and never
+            // the counter, so zeroing one and leaving the other in the future
+            // accomplished nothing for a locked user -- and left the document
+            // internally inconsistent: zero recorded failures, an active lock.
+            // clearedLockoutFields() is the same helper processLogin's own
+            // success path uses, so the clearing has one definition.
+            ...authService.clearedLockoutFields(),
             updatedAt: new Date()
           }
         }
       );
 
+      // #958 / RNF021 AC#2: "Logout, inativação, troca de senha ou alteração
+      // crítica de papel revogam as sessões afetadas." All-but-current, because
+      // the session making this request just proved knowledge of BOTH the old
+      // and the new password -- it is not an affected session. Every other live
+      // session was authenticated with a password that no longer exists.
+      //
+      // A missing Authorization header fails CLOSED for free: hashToken(undefined)
+      // hashes '' and matches no stored tokenHash, so nothing is excluded and all
+      // sessions die.
+      const currentToken = (req.headers && req.headers.authorization || '').replace('Bearer ', '');
+      await sessionService.revokeAllOtherSessions(
+        db, req.user.userID, currentToken, 'password_change', req.user.userID
+      );
+      
       return res.status(200).json({
         success: true,
         message: (req.t && req.t('auth.passwordChangeSuccess')) || 'Senha alterada com sucesso'

@@ -3,11 +3,13 @@ const path = require('path');
 const fs = require('fs');
 const importAsyncService = require('../services/import-async.service');
 const logger = require('../utils/logger');
+const { parseGroupFields } = require('../utils/importGroupFields');
+const { UPLOADS_BASE } = require('../config/uploadConfig');
 
 // Configuração do multer para upload
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadsDir = path.join(__dirname, '../../uploads/temp');
+    const uploadsDir = path.join(UPLOADS_BASE, 'temp');
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }
@@ -145,7 +147,7 @@ class ImportAsyncController {
         });
       }
 
-      const { dataType, startLocationID, autoIncrement } = req.body;
+      const { dataType, startBoxId, autoIncrement } = req.body;
       let parsedGroupFields = {};
       const file = req.file;
 
@@ -165,18 +167,16 @@ class ImportAsyncController {
       }
 
       if (req.body.groupFields) {
-        try {
-          parsedGroupFields = typeof req.body.groupFields === 'string'
-            ? JSON.parse(req.body.groupFields)
-            : req.body.groupFields;
-        } catch (groupFieldsError) {
+        const parsed = parseGroupFields(req.body.groupFields);
+        if (!parsed.ok) {
           importAsyncService.cleanupFile(file.path);
           return res.status(400).json({
             success: false,
             error: 'Formato inválido para groupFields. Use JSON válido.',
-            message: groupFieldsError.message
+            message: `groupFields ${parsed.reason}`
           });
         }
+        parsedGroupFields = parsed.value;
       }
 
       const userID = req.user?.userID || req.user?._id?.toString() || null;
@@ -188,7 +188,7 @@ class ImportAsyncController {
         file,
         dataType,
         {
-          startLocationID: startLocationID ? parseInt(startLocationID) : null,
+          startBoxId: startBoxId || null,
           autoIncrement: autoIncrement === 'true' || autoIncrement === true,
           groupFields: parsedGroupFields,
           fileName: file.originalname,

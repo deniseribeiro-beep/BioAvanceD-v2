@@ -3,11 +3,15 @@ import { SampleWithQualityDescription } from '../types/models';
 import { qualityDescriptionService } from '../services/api';
 import { extractResponseEntity, extractResponseItems, normalizeMasterDataItem } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 export function useQualityDescriptions() {
   const [qualities, setQualities] = useState<SampleWithQualityDescription[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when loadQualities is called again
+  // before a previous in-flight call resolves.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadQualities();
@@ -22,18 +26,21 @@ export function useQualityDescriptions() {
   }, []);
 
   const loadQualities = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       const response = await qualityDescriptionService.getAll();
+      if (!requestSeq.isCurrent(seq)) return;
       const qualitiesData = extractResponseItems<SampleWithQualityDescription>(response)
         .map((item) => normalizeMasterDataItem<SampleWithQualityDescription>(item, ['qualityID']));
       setQualities(qualitiesData);
       setError(null);
     } catch (err: any) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(err.message || 'Erro ao carregar qualidades');
       setQualities([]);
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 
@@ -48,7 +55,7 @@ export function useQualityDescriptions() {
     }
   };
 
-  const updateQuality = async (id: number, data: Partial<SampleWithQualityDescription>) => {
+  const updateQuality = async (id: string, data: Partial<SampleWithQualityDescription>) => {
     try {
       const response = await qualityDescriptionService.update(id, data);
       await loadQualities();
@@ -58,7 +65,7 @@ export function useQualityDescriptions() {
     }
   };
 
-  const deleteQuality = async (id: number) => {
+  const deleteQuality = async (id: string) => {
     try {
       await qualityDescriptionService.delete(id);
       await loadQualities();

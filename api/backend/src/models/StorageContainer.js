@@ -5,6 +5,13 @@ const StorageContainerSchema = new mongoose.Schema(
     // Identificação
     containerID: {
       type: Number,
+      // #941: INERT. mongoose connects with autoIndex:false
+      // (infrastructure/database/mongodb/connection.js) and nothing calls
+      // syncIndexes()/createIndexes(), so this declaration is never built on any
+      // stack. The constraint below is a real requirement with live writers -- it
+      // is not decorative -- but it is NOT enforced today. Do not read it as a
+      // guarantee. Building it means a native ensureIndexes helper on the
+      // utils/sampleIndexes.js precedent, wired into the write path.
       unique: true,
       sparse: true,
     },
@@ -22,7 +29,7 @@ const StorageContainerSchema = new mongoose.Schema(
     // Tipo de container na hierarquia ISO 20387
     containerType: {
       type: String,
-      enum: ["FREEZER", "SHELF", "RACK"],
+      enum: ["FREEZER", "SHELF", "RACK", "DRAWER"],
       required: true,
     },
 
@@ -32,6 +39,14 @@ const StorageContainerSchema = new mongoose.Schema(
       ref: "StorageContainer",
       default: null,
       comment: "null para FREEZER, SHELF_ID para RACK, FREEZER_ID para SHELF",
+    },
+
+    // dict-02 StorageAssignment.roomId (ELM-0169): sala controlada onde o
+    // equipamento está instalado. Aplicável apenas a FREEZER.
+    roomId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Room",
+      default: null,
     },
 
     // Apenas Freezers
@@ -85,7 +100,9 @@ const StorageContainerSchema = new mongoose.Schema(
 StorageContainerSchema.index({ containerType: 1, status: 1 });
 StorageContainerSchema.index({ parent_id: 1, containerType: 1 });
 StorageContainerSchema.index({ name: 1 });
-StorageContainerSchema.index({ containerID: 1 }, { sparse: true, unique: true });
+// #941: this line declared the SAME {containerID} unique+sparse spec already
+// declared field-level at the top of this schema. One of the two was pure
+// noise; the field-level one survives, marked there.
 
 // ==================== VALIDAÇÕES CUSTOMIZADAS ====================
 StorageContainerSchema.pre("save", async function (next) {
@@ -94,14 +111,19 @@ StorageContainerSchema.pre("save", async function (next) {
     throw new Error("FREEZER não pode ter pai (parent_id deve ser null)");
   }
 
-  // Validação: SHELF e RACK devem ter parent_id
-  if (["SHELF", "RACK"].includes(this.containerType) && !this.parent_id) {
+  // Validação: SHELF, RACK e DRAWER devem ter parent_id
+  if (["SHELF", "RACK", "DRAWER"].includes(this.containerType) && !this.parent_id) {
     throw new Error(`${this.containerType} deve ter um parent_id`);
   }
 
   // Validação: temperatura apenas para FREEZER
   if (this.containerType !== "FREEZER" && this.temperature !== null) {
     throw new Error("Apenas FREEZER pode ter temperatura");
+  }
+
+  // Validação: roomId apenas para FREEZER
+  if (this.containerType !== "FREEZER" && this.roomId) {
+    throw new Error("Apenas FREEZER pode ter roomId");
   }
 
   // Verificar hierarquia correta (SHELF pai de RACK)
@@ -122,6 +144,16 @@ StorageContainerSchema.pre("save", async function (next) {
     }
     if (parent.containerType !== "FREEZER") {
       throw new Error("SHELF só pode ter FREEZER como pai");
+    }
+  }
+
+  if (this.containerType === "DRAWER" && this.parent_id) {
+    const parent = await mongoose.model("StorageContainer").findById(this.parent_id);
+    if (!parent) {
+      throw new Error("Container pai não encontrado");
+    }
+    if (parent.containerType !== "RACK") {
+      throw new Error("DRAWER só pode ter RACK como pai");
     }
   }
 
@@ -164,6 +196,16 @@ StorageContainerSchema.methods.getChildren = async function () {
   }
 
   if (this.containerType === "RACK") {
+    // Buscar DRAWERs e Boxes (DRAWER é um nível opcional entre RACK e BOX)
+    const drawers = await mongoose.model("StorageContainer").find({
+      parent_id: this._id,
+      containerType: "DRAWER",
+    });
+    const boxes = await StorageBox.find({ parent_id: this._id });
+    return [...drawers, ...boxes];
+  }
+
+  if (this.containerType === "DRAWER") {
     // Buscar Boxes
     return await StorageBox.find({ parent_id: this._id });
   }
@@ -179,7 +221,7 @@ StorageContainerSchema.statics.validate = function (data) {
 
   if (!data.name) errors.push("name é obrigatório");
   if (!data.containerType) errors.push("containerType é obrigatório");
-  if (!["FREEZER", "SHELF", "RACK"].includes(data.containerType)) {
+  if (!["FREEZER", "SHELF", "RACK", "DRAWER"].includes(data.containerType)) {
     errors.push("containerType inválido");
   }
 

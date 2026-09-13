@@ -1,0 +1,10 @@
+{"id":"MONDO:0000001","lbl":"disease or disorder","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"MONDO:0003847","lbl":"genetic disease","is_a":["MONDO:0000001"],"synonyms":[],"obsolete":false}
+{"id":"MONDO:0002025","lbl":"metabolic disease","is_a":["MONDO:0000001"],"synonyms":[],"obsolete":false}
+{"id":"MONDO:0005066","lbl":"obesity disorder","is_a":["MONDO:0002025"],"synonyms":[],"obsolete":false}
+{"id":"MONDO:0005148","lbl":"type 2 diabetes mellitus","is_a":["MONDO:0002025"],"synonyms":["T2D","non-insulin-dependent diabetes mellitus"],"obsolete":false}
+{"id":"MONDO:0007739","lbl":"Huntington disease","is_a":["MONDO:0003847"],"synonyms":["Huntington's chorea"],"obsolete":false}
+{"id":"MONDO:0004992","lbl":"cancer or benign tumor","is_a":["MONDO:0000001"],"synonyms":[],"obsolete":false}
+{"id":"MONDO:0007254","lbl":"breast cancer","is_a":["MONDO:0004992"],"synonyms":[],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"MONDO:9999999","lbl":"","is_a":[],"synonyms":[],"obsolete":false}

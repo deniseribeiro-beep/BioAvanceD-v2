@@ -4,11 +4,17 @@ const fs = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
 const PatientModel = require('../models/Patient');
+const ParticipantIdentityModel = require('../models/ParticipantIdentity');
+// Named distinctly from participantIdentityService below (that name is
+// already taken in this file by ./PatientIdentityService.js, the
+// import-time name+DOB matching service — a different entity concern).
+const participantIdentityEncryptionService = require('./participantIdentity.service');
 const { SampleModel } = require('../models/Sample');
 const patientService = require('./patient.service');
 const notificationService = require('./notification.service');
-const { generateUniquePatientID } = require('../utils/patientAnonymization');
+const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
+const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
 const {
   SPECIMEN_TYPES,
   SAMPLE_ORIGINS,
@@ -19,6 +25,76 @@ const DrugService = require('./DrugService');
 const participantIdentityService = require('./PatientIdentityService');
 const { generateSampleHash } = require('./MerkleService');
 const qualityDomain = require('./quality-domain.service');
+const rcsAssessmentService = require('./rcs-assessment.service');
+const specimenPreanalyticsService = require('./specimen-preanalytics.service');
+const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
+const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
+const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
+const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
+
+const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
+
+/**
+ * Os dois tipos de lote de quarentena que a importacao LGPD escreve em
+ * `import_batches` (#787 para amostras, #814 para participantes).
+ *
+ * A colecao e compartilhada com a importacao FHIR (`FHIR_BUNDLE`) e com o
+ * motor assincrono (`ASYNC_BATCH_IMPORT`), que tem outras permissoes -- por
+ * isso os leitores filtram por tipo em vez de so por `_id` (#799 foi
+ * exatamente esse vazamento no sentido oposto).
+ */
+const QUARANTINE_BATCH_TYPES = Object.freeze({
+  SAMPLE: 'LGPD_SAMPLE_CSV',
+  PATIENT: 'LGPD_PATIENT_CSV',
+});
+
+const READABLE_QUARANTINE_TYPES = Object.freeze(Object.values(QUARANTINE_BATCH_TYPES));
+
+/**
+ * #915: normaliza o conjunto de tipos que um leitor de quarentena pode ver.
+ *
+ * Descarta o que nao for um tipo LGPD conhecido -- um `type` vindo de query
+ * string nunca deve alargar o filtro para `FHIR_BUNDLE`/`ASYNC_BATCH_IMPORT`
+ * -- e cai no padrao so-amostras quando sobra vazio, para que um conjunto
+ * vazio nunca vire um `$in: []` (que nao casa nada) nem um filtro ausente
+ * (que casaria tudo).
+ */
+function normalizeQuarantineTypes(types) {
+  const requested = Array.isArray(types) ? types : [types];
+  const allowed = READABLE_QUARANTINE_TYPES.filter((t) => requested.includes(t));
+  return allowed.length > 0 ? allowed : [QUARANTINE_BATCH_TYPES.SAMPLE];
+}
+
+function buildIdVariants(...ids) {
+  const variants = [];
+  const seen = new Set();
+  const add = (value) => {
+    if (value === undefined || value === null || value === '') return;
+    const key = `${typeof value}:${String(value)}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      variants.push(value);
+    }
+  };
+
+  for (const id of ids) {
+    if (id === undefined || id === null || id === '') continue;
+    add(id);
+    add(String(id));
+
+    const numeric = Number(id);
+    if (Number.isFinite(numeric)) {
+      add(numeric);
+    }
+  }
+
+  return variants;
+}
+
+function isOperationalSensor(sensor) {
+  const status = String(sensor?.status || sensor?.maintenanceStatus || sensor?.operationalStatus || '').trim().toLowerCase();
+  return !status || !CRITICAL_SENSOR_STATUSES.includes(status);
+}
 
 /**
  * Service de Importação LGPD
@@ -128,7 +204,8 @@ class ImportLGPDService {
         return reject(new Error('Arquivo não encontrado'));
       }
 
-      const fileContent = fs.readFileSync(filePath, 'utf8');
+      const fileBuffer = fs.readFileSync(filePath);
+      const fileContent = fileBuffer.toString('utf8');
       const firstNonEmptyLine = fileContent
         .split(/\r?\n/)
         .find((line) => String(line || '').trim().length > 0) || '';
@@ -145,23 +222,99 @@ class ImportLGPDService {
       }
       
       const rows = [];
+      // #1012: `skipEmptyLines`/`skipLinesWithError` abaixo NAO sao opcoes do
+      // csv-parser 3.2.0 -- o `defaults` do pacote instalado
+      // (node_modules/csv-parser/index.js) so reconhece escape, headers,
+      // mapHeaders, mapValues, newline, quote, raw, separator, skipComments,
+      // skipLines, maxRowBytes, strict, outputByteOffset; o construtor faz
+      // `Object.assign({}, defaults, opts)`, entao as duas chaves abaixo sao
+      // absorvidas e ficam inertes. Elas continuam no objeto de opcoes como
+      // declaracao de intencao, nao como filtro que funciona hoje -- se um
+      // upgrade futuro do csv-parser passar a reconhecer alguma delas, o
+      // comportamento muda silenciosamente, entao removê-las agora seria
+      // comportamento-neutro mas perderia esse aviso.
+      //
+      // Uma linha fisica em branco chega normalmente ao parser: `parseLine`
+      // produz uma lista de celulas vazia, `writeRow` emite `{}`, e esse `{}`
+      // e o que o handler 'data' abaixo recebe -- e' o proprio check
+      // `hasData` do handler que rejeita e conta essa linha, nao o parser.
+      // Ou seja: a contagem abaixo sempre esteve correta; o que estava errado
+      // era este comentario atribuir o descarte a `skipEmptyLines`.
+      let skippedByHasData = 0;
+      // #1035: a linha FISICA no arquivo que o operador enviou, derivada do
+      // `byteOffset` que o csv-parser 3.2.0 reporta por registro quando
+      // `outputByteOffset: true` (ver node_modules/csv-parser/index.js --
+      // `writeRow` empacota `{ row, byteOffset }` nesse modo, e o offset
+      // aponta para o primeiro byte do registro). `newlineByteOffsets` e' a
+      // posicao de cada 0x0A no arquivo, calculada uma unica vez sobre
+      // `fileBuffer` (O(n)); a linha fisica de um registro e' quantas dessas
+      // posicoes ficam estritamente antes do seu `byteOffset`, mais 1 --
+      // resolvido por busca binaria por registro (O(log n)), nao por
+      // varredura.
+      //
+      // Byte, nao caractere: `fileBuffer` e' lido como Buffer (nao
+      // `.toString('utf8')`) exatamente para isto -- o texto e' portugues
+      // acentuado, e um indice de string diverge de um indice de byte a
+      // partir do primeiro caractere multibyte.
+      //
+      // Substitui o contador antigo (`physicalLine += 1` por evento 'data'),
+      // que era exato so' enquanto o csv-parser emitia um evento por linha
+      // fisica -- falso para um registro com quebra de linha dentro de um
+      // campo entre aspas, que ocupa varias linhas fisicas mas produz um
+      // unico evento. A partir desse registro o contador antigo desliza para
+      // todo registro seguinte; a busca por byteOffset nao depende de quantas
+      // linhas fisicas um registro ocupou.
+      const newlineByteOffsets = [];
+      for (let i = 0; i < fileBuffer.length; i += 1) {
+        if (fileBuffer[i] === 0x0a) newlineByteOffsets.push(i);
+      }
+      const physicalLineForByteOffset = (byteOffset) => {
+        let lo = 0;
+        let hi = newlineByteOffsets.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (newlineByteOffsets[mid] < byteOffset) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo + 1;
+      };
+      const sourceLines = [];
       fs.createReadStream(filePath)
         .pipe(csv({
           separator,
           skipEmptyLines: true,
-          skipLinesWithError: false
+          skipLinesWithError: false,
+          outputByteOffset: true
         }))
-        .on('data', (row) => {
+        .on('data', ({ row, byteOffset }) => {
+          const physicalLine = physicalLineForByteOffset(byteOffset);
           // Filtra linhas vazias
           const hasData = Object.values(row).some(val => val && String(val).trim());
           if (hasData) {
             rows.push(row);
+            sourceLines.push(physicalLine);
+          } else {
+            skippedByHasData += 1;
           }
         })
         .on('end', () => {
           if (rows.length === 0) {
             return reject(new Error('Arquivo CSV está vazio ou não contém dados válidos'));
           }
+          // #1001: non-enumerable so the array's own `toEqual` shape (used by
+          // the existing readers tests) is unaffected -- readFile/the
+          // importers read it explicitly via `rows.skippedCount`.
+          Object.defineProperty(rows, 'skippedCount', {
+            value: skippedByHasData,
+            enumerable: false,
+          });
+          // #1023: index-aligned com `rows`. Nao-enumeravel pela mesma razao
+          // que `skippedCount` (#1001): os testes dos readers comparam o array
+          // com `toEqual`.
+          Object.defineProperty(rows, 'sourceLines', {
+            value: sourceLines,
+            enumerable: false,
+          });
           resolve(rows);
         })
         .on('error', (error) => {
@@ -245,7 +398,12 @@ class ImportLGPDService {
 
       // Lê todas as linhas primeiro
       const allRows = [];
-      worksheet.eachRow({ includeEmpty: true }, (row) => {
+      // #1023: o numero da linha na planilha ja' vinha e estava sendo
+      // descartado -- ExcelJS passa o rowNumber como SEGUNDO argumento do
+      // callback. E' o numero que o operador ve' aberto no Excel.
+      const allRowNumbers = [];
+      worksheet.eachRow({ includeEmpty: true }, (row, sheetRowNumber) => {
+        allRowNumbers.push(sheetRowNumber);
         const values = [];
         for (let cellIndex = 1; cellIndex <= row.cellCount; cellIndex += 1) {
           const cell = row.getCell(cellIndex);
@@ -307,13 +465,24 @@ class ImportLGPDService {
 
       // Converte linhas seguintes para objetos usando os headers limpos
       const dataRows = [];
+      // #1023: index-aligned com `dataRows` -- a linha da planilha de cada
+      // linha efetivamente mantida. Mesma finalidade que o sourceLines do
+      // readCSV.
+      const sourceLines = [];
+      // #1001: counts rows dropped by either filter below, without
+      // double-counting a row rejected by the first (the `continue` means a
+      // row can only ever hit one of the two `skippedRows += 1` sites).
+      let skippedRows = 0;
       for (let i = headerRowIndex + 1; i < allRows.length; i++) {
         const row = allRows[i];
         if (!Array.isArray(row)) continue;
 
         // Verifica se a linha está vazia (todos os valores são null/empty)
         const isEmpty = row.every(cell => !cell || String(cell).trim() === '');
-        if (isEmpty) continue;
+        if (isEmpty) {
+          skippedRows += 1;
+          continue;
+        }
 
         // Cria objeto usando headers limpos
         const rowObj = {};
@@ -328,12 +497,27 @@ class ImportLGPDService {
         // Só adiciona se tiver pelo menos um campo preenchido
         if (Object.values(rowObj).some(v => v !== null && v !== '')) {
           dataRows.push(rowObj);
+          sourceLines.push(allRowNumbers[i]);
+        } else {
+          skippedRows += 1;
         }
       }
 
       if (dataRows.length === 0) {
         throw new Error('Nenhum dado válido encontrado na planilha. Certifique-se de que há dados além dos cabeçalhos.');
       }
+
+      // #1001: non-enumerable, same rationale as readCSV above -- keeps the
+      // array's `toEqual` shape used by the existing readers tests intact.
+      Object.defineProperty(dataRows, 'skippedCount', {
+        value: skippedRows,
+        enumerable: false,
+      });
+      // #1023: mesmo par que o readCSV attacha, mesma razao nao-enumeravel.
+      Object.defineProperty(dataRows, 'sourceLines', {
+        value: sourceLines,
+        enumerable: false,
+      });
 
       return dataRows;
     } catch (error) {
@@ -350,7 +534,22 @@ class ImportLGPDService {
    */
   async readFile(filePath, originalName, dataType = 'patients') {
     const ext = path.extname(originalName).toLowerCase();
-    
+
+    // #1001: both branches resolve to the same array object readCSV/readExcel
+    // return, so the non-enumerable `skippedCount` either of them attaches
+    // (blank rows discarded before this array is built) rides along
+    // unchanged -- callers read it as `rows.skippedCount`.
+    //
+    // WARNING for anyone adding a caller: the property is on the array
+    // INSTANCE, so it does not survive any transform that builds a new array.
+    // `rows.filter(...)`, `rows.map(...)`, `[...rows]` and `rows.slice()` all
+    // return a plain Array and `skippedCount` becomes undefined, which the
+    // importers' `|| 0` then reads as "nothing was skipped" -- silently, with
+    // no error. Read `skippedCount` off the value readFile returned, before
+    // any such transform. It is attached this way rather than returned as
+    // `{ rows, skipped }` because the existing readers tests assert the return
+    // value with `toEqual([...])` on the array itself; changing the shape means
+    // changing them and every caller.
     if (ext === '.csv' || ext === '.txt') {
       return await this.readCSV(filePath);
     } else if (ext === '.xlsx') {
@@ -365,15 +564,30 @@ class ImportLGPDService {
    */
   async importPatients(db, file, options = {}) {
     const groupFields = options?.groupFields || {};
+    const actor = options?.actor || {};
     const results = {
       total: 0,
       success: 0,
       errors: [],
+      skipped: 0, // #798: linhas em branco ignoradas, fora de total (#1012: quem as detecta e conta e readCSV/readExcel, nao este loop)
+      // #931: SUBCONJUNTO ROTULADO de `errors`, nao um balde separado. Uma
+      // linha duplicada ja entra em `errors` e faz `continue`; este contador
+      // apenas diz quantos desses erros foram duplicidade. Somar
+      // success + errors + duplicates ultrapassaria o total -- ver o
+      // comentario em getJobReport.
+      duplicates: 0,
       generatedIDs: [] // Não será exposto na resposta final
     };
 
     try {
       const rows = await this.readFile(file.path, file.originalname, 'patients');
+      // #1001: readCSV/readExcel already drop blank rows before this array
+      // exists (hasData / isEmpty+all-null-values checks), so results.skipped
+      // would stay 0 forever without seeding it from what the reader
+      // discarded. #1012: the per-row isEmptyRow backstop that used to sit in
+      // the loop below was unreachable for exactly this reason and is gone --
+      // the readers are now the only place a blank row is detected or counted.
+      results.skipped = rows.skippedCount || 0;
       const patientsCollection = await getCollection(db, 'patients');
 
       // Verifica se o arquivo está vazio
@@ -383,25 +597,15 @@ class ImportLGPDService {
 
       // Campos obrigatórios para pacientes (sem participantId, pois será gerado)
       const requiredFields = ['patientName', 'birthDate', 'sex', 'email'];
-      
-      // Valida headers - verifica se há dados válidos
-      if (rows.length === 0) {
-        throw new Error('Arquivo está vazio ou não contém dados válidos');
-      }
-      
+
       // Pega headers da primeira linha válida
       const firstRow = rows.find(r => r && Object.keys(r).length > 0);
       if (!firstRow) {
         throw new Error('Arquivo não contém dados válidos');
       }
-      
+
       const headers = Object.keys(firstRow);
-      
-      // Verifica se há headers válidos
-      if (headers.length === 0) {
-        throw new Error('Arquivo não contém colunas válidas');
-      }
-      
+
       // Normaliza headers (remove espaços, converte para lowercase para comparação)
       const normalizedHeaders = headers.map(h => h.trim().toLowerCase());
       const normalizedRequired = requiredFields.map(f => f.toLowerCase());
@@ -425,20 +629,20 @@ class ImportLGPDService {
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const rowNumber = i + 2; // +2 porque linha 1 é header e arrays começam em 0
+        // #1023: a linha FISICA no arquivo, vinda do reader via `sourceLines`
+        // (index-aligned com `rows`). O fallback `i + 2` cobre chamadores que
+        // mockam readFile com um array simples -- nesse caso a propriedade
+        // nao-enumeravel nao existe e o comportamento antigo vale.
+        const rowNumber = rows.sourceLines?.[i] ?? (i + 2);
 
         try {
-          // Ignora linhas vazias
-          if (!row || Object.keys(row).length === 0) {
-            continue;
-          }
-          
-          // Verifica se a linha tem dados válidos (pelo menos um campo não vazio)
-          const hasData = Object.values(row).some(v => v !== null && v !== undefined && String(v).trim() !== '');
-          if (!hasData) {
-            continue;
-          }
-          
+          // #1012: o guard isEmptyRow que existia aqui era inalcancavel --
+          // readCSV/readExcel ja descartam qualquer linha em branco antes
+          // deste array existir (ver readFile acima), entao nenhuma `row`
+          // aqui pode satisfazer isEmptyRow. Removido; results.skipped
+          // continua vindo de rows.skippedCount, seedado acima.
+          results.total++;
+
           // Parse dos dados do CSV/Excel
           const patientData = this.parsePatientRow(row);
 
@@ -450,7 +654,7 @@ class ImportLGPDService {
           delete patientData.participantId;
                     if (!patientData.email || !PatientModel.isValidEmail(patientData.email)) {
                       const receivedValue = row.email || 'não informado';
-                      results.errors.push({
+                      results.errors.push({ index: i,
                         row: rowNumber,
                         errors: [`Linha ${rowNumber}: Email (email) é obrigatório e deve ser válido. Valor recebido: "${receivedValue}"`],
                         data: this.sanitizeRowForError(row)
@@ -459,7 +663,7 @@ class ImportLGPDService {
                     }
 
                     if (!patientData.consentTemplateId) {
-                      results.errors.push({
+                      results.errors.push({ index: i,
                         row: rowNumber,
                         errors: [`Linha ${rowNumber}: Template de consentimento (consentTemplateId) é obrigatório para importação em lote`],
                         data: this.sanitizeRowForError(row)
@@ -469,7 +673,7 @@ class ImportLGPDService {
 
                     const { ObjectId } = require('mongodb');
                     if (!ObjectId.isValid(patientData.consentTemplateId)) {
-                      results.errors.push({
+                      results.errors.push({ index: i,
                         row: rowNumber,
                         errors: [`Linha ${rowNumber}: consentTemplateId inválido`],
                         data: this.sanitizeRowForError(row)
@@ -480,7 +684,7 @@ class ImportLGPDService {
                     const consentTemplatesCollection = await getCollection(db, 'consentTemplates');
                     const consentTemplateExists = await consentTemplatesCollection.findOne({ _id: new ObjectId(patientData.consentTemplateId) });
                     if (!consentTemplateExists) {
-                      results.errors.push({
+                      results.errors.push({ index: i,
                         row: rowNumber,
                         errors: [`Linha ${rowNumber}: Template de consentimento não encontrado para consentTemplateId informado`],
                         data: this.sanitizeRowForError(row)
@@ -489,12 +693,34 @@ class ImportLGPDService {
                     }
 
           
-          // Remove campo height se existir (não deve ser salvo no banco)
+          // Remove campos clínicos legados que parsePatientRow ainda gera mas
+          // que ParticipantModel não aceita mais como top-level (decisão de
+          // #142: o fluxo de criação de paciente é disease-agnostic; dados
+          // clínicos/biomarcadores devem ser vinculados via diagnóstico
+          // canônico depois, não aceitos aqui como campos soltos).
           delete patientData.height;
+          delete patientData.weight;
+          delete patientData.heightCm;
+          delete patientData.diagnosticHypothesis;
+          delete patientData.icdCode;
+          delete patientData.hypertension;
+          delete patientData.obesity;
+          delete patientData.diabetesType1;
+          delete patientData.diabetesType2;
+          delete patientData.copd;
+          delete patientData.ckd;
+          delete patientData.smoking;
+          delete patientData.alcoholUse;
+          delete patientData.asthma;
+          delete patientData.antibioticUse;
+          delete patientData.insulinUse;
+          delete patientData.antiviralUse;
+          delete patientData.geneticVariant;
+          delete patientData.notes;
 
           // Valida dados básicos antes da validação do modelo
           if (!patientData.patientName || (typeof patientData.patientName === 'string' && patientData.patientName.trim().length === 0)) {
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: [`Linha ${rowNumber}: Nome do paciente (patientName) é obrigatório e não pode estar vazio`],
               data: this.sanitizeRowForError(row)
@@ -504,7 +730,7 @@ class ImportLGPDService {
           
           if (!patientData.birthDate || !(patientData.birthDate instanceof Date) || isNaN(patientData.birthDate.getTime())) {
             const receivedValue = row.birthDate || 'não informado';
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: [`Linha ${rowNumber}: Data de nascimento (birthDate) é obrigatória e deve ser uma data válida no formato DD/MM/YYYY ou YYYY-MM-DD. Valor recebido: "${receivedValue}"`],
               data: this.sanitizeRowForError(row)
@@ -514,7 +740,7 @@ class ImportLGPDService {
           
           if (!patientData.sex || !['M', 'F', 'O'].includes(patientData.sex)) {
             const receivedValue = row.sex || 'não informado';
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: [`Linha ${rowNumber}: Sexo (sex) é obrigatório e deve ser M (Masculino), F (Feminino) ou O (Outro). Valor recebido: "${receivedValue}"`],
               data: this.sanitizeRowForError(row)
@@ -541,22 +767,23 @@ class ImportLGPDService {
             patientData.recordNumber = null;
           }
           
+          // GERA ID ÚNICO DE 8 DÍGITOS AUTOMATICAMENTE (LGPD) - antes da
+          // validação, pois PatientModel.validate() exige participantId
+          const participantId = await generateUniqueParticipantId(db, 'pacientes');
+          patientData.participantId = participantId;
+
           // Valida dados
-          const validation = PatientModel.validate(patientData);
+          const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
           if (!validation.isValid) {
             // Adiciona número da linha em cada erro para melhor rastreabilidade
             const detailedErrors = validation.errors.map(err => `Linha ${rowNumber}: ${err}`);
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: detailedErrors,
               data: this.sanitizeRowForError(row) // Remove dados sensíveis do erro
             });
             continue;
           }
-
-          // GERA ID ÚNICO DE 8 DÍGITOS AUTOMATICAMENTE (LGPD)
-          const participantId = await generateUniquePatientID(db, 'pacientes');
-          patientData.participantId = participantId;
 
           const consentMetadata = notificationService.buildConsentMetadata();
           patientData.status = 'PENDING_CONSENT';
@@ -566,7 +793,7 @@ class ImportLGPDService {
 
           // Valida unidade clínica se fornecida
           if (patientData.clinicalUnit && !PatientModel.validateUnit(patientData.clinicalUnit)) {
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: ['Unidade clínica inválida'],
               data: this.sanitizeRowForError(row)
@@ -579,28 +806,49 @@ class ImportLGPDService {
             patientData.unitAcronym = PatientModel.fillAcronym(patientData.clinicalUnit);
           }
 
-          // Verifica duplicidade antes de inserir
+          // Verifica duplicidade antes de inserir.
+          //
+          // #942: esta checagem consulta o BANCO (participantIdentities, via
+          // checkDuplicatePatient) -- não há conjunto em memória das chaves já
+          // vistas NESTE arquivo. Duas linhas idênticas no mesmo CSV mesmo
+          // assim são pegas, mas SÓ porque o insert da linha N (:709) é
+          // aguardado antes da checagem da linha N+1: quando a linha B chega,
+          // a linha A já está no banco. A correção é consequência da ordem do
+          // laço, não do desenho.
+          //
+          // Portanto: NÃO transforme este laço em lote (insertMany, Promise.all,
+          // buffer) sem antes adicionar o conjunto em memória. O sintoma seria
+          // silencioso -- dois Participants para uma pessoa, diferindo apenas
+          // pelo participantId gerado.
           const duplicate = await patientService.checkDuplicatePatient(db, patientData);
           if (duplicate) {
-            let birthDateStr = 'N/A';
-            if (patientData.birthDate instanceof Date) {
-              birthDateStr = patientData.birthDate.toLocaleDateString('pt-BR');
-            } else if (typeof patientData.birthDate === 'string') {
-              birthDateStr = patientData.birthDate;
-            }
-            results.errors.push({
+            // patientData.birthDate is guaranteed a valid Date here (row 529's guard `continue`s otherwise)
+            const birthDateStr = patientData.birthDate.toLocaleDateString('pt-BR');
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: [`Paciente duplicado: já existe um paciente com o nome "${patientData.patientName}" e data de nascimento "${birthDateStr}" cadastrado no sistema`],
               data: this.sanitizeRowForError(row)
             });
+            // #931: chave de duplicidade deste caminho = nome + data de nascimento.
+            results.duplicates += 1;
             continue;
           }
 
           // Cria paciente
-          const patient = PatientModel.create(patientData);
-          
+          const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
+
           // Insere no banco
           const insertResult = await patientsCollection.insertOne(patient);
+
+          // RF005/RNF007 (#575): patientName/birthDate/identityDocument are
+          // civil identity — they never land on Patient. ParticipantIdentity
+          // is the sole write target; patientData (not the stripped
+          // `patient`) still carries them here for that write.
+          const identityCollection = getCollection(db, 'participantIdentities');
+          const identityDoc = participantIdentityEncryptionService.encryptIdentityFields(
+            ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
+          );
+          await identityCollection.insertOne(identityDoc);
 
           try {
             const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
@@ -618,15 +866,29 @@ class ImportLGPDService {
           
         } catch (error) {
           logger.error(`Erro ao processar linha ${rowNumber}:`, error);
-          results.errors.push({
+          results.errors.push({ index: i,
             row: rowNumber,
             errors: [error.message || 'Erro desconhecido ao processar linha'],
             data: this.sanitizeRowForError(row)
           });
         }
-
-        results.total++;
       }
+
+      // RNF011 AC#4 / RF029 AC#5-6 (#814): quarantines rejected patient rows
+      // the same way #787 already does for samples -- reuses
+      // quarantineRejectedSampleRows with a distinct batch `type` so a
+      // patient batch and a sample batch never collide in the shared
+      // import_batches collection. #915 then made both readers type-scoped,
+      // so this batch is readable by a caller holding `createPatient` -- the
+      // same permission this import itself requires.
+      const stagingBatchId = await this.quarantineRejectedSampleRows(db, {
+        type: QUARANTINE_BATCH_TYPES.PATIENT,
+        importOptions: { groupFields },
+        fileName: file?.originalname || null,
+        rows,
+        results,
+        actor,
+      });
 
       // Log sanitizado (sem dados sensíveis)
       logger.info(`Importação de pacientes concluída: ${results.success}/${results.total} registros importados com sucesso`);
@@ -635,6 +897,14 @@ class ImportLGPDService {
         total: results.total,
         success: results.success,
         errors: results.errors,
+        skipped: results.skipped,
+        // #969: `results.duplicates` é incrementado acima (linha ~691) mas
+        // faltava aqui, então patient-worker lia `undefined`. Continua
+        // obrigatório depois de #1007: import-worker agora OMITE o campo
+        // quando o resultado não o traz, então uma ausência aqui apagaria
+        // o tile "Duplicados" da importação LGPD em vez de gravar 0.
+        duplicates: results.duplicates,
+        stagingBatchId,
         // NÃO retorna IDs gerados (LGPD)
       };
 
@@ -645,42 +915,141 @@ class ImportLGPDService {
   }
 
   /**
-   * Encontra a próxima localização disponível baseada na localização inicial
+   * #462/#463: walks the StorageContainer chain up from a StorageBox's
+   * `parent_id` (RACK, optionally through a DRAWER) to SHELF then FREEZER —
+   * mirrors `intakeWizard.js`'s helper of the same name (duplicated here
+   * rather than imported, matching #464's precedent of mirroring the shape
+   * rather than sharing a cross-service module).
    */
-  async getNextAvailableLocation(db, startLocationID, index) {
+  async resolveStorageHierarchyForBox(db, box) {
+    const storageContainersCollection = db.collection('storageContainers');
+
+    let rack = box.parent_id ? await storageContainersCollection.findOne({ _id: box.parent_id }) : null;
+    if (rack && rack.containerType === 'DRAWER') {
+      rack = rack.parent_id ? await storageContainersCollection.findOne({ _id: rack.parent_id }) : null;
+    }
+
+    const shelf = rack?.parent_id ? await storageContainersCollection.findOne({ _id: rack.parent_id }) : null;
+    const freezer = shelf?.parent_id ? await storageContainersCollection.findOne({ _id: shelf.parent_id }) : null;
+
+    return { rack, shelf, freezer };
+  }
+
+  findFirstAvailablePositionInBox(box) {
+    const rows = Number(box?.dimension?.rows || 0);
+    const cols = Number(box?.dimension?.cols || 0);
+    if (rows < 1 || cols < 1) return null;
+
+    const occupancyGrid = box?.occupancyGrid || {};
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 1; col <= cols; col += 1) {
+        const position = `${String.fromCharCode(65 + row)}${col}`;
+        const occupied = typeof occupancyGrid.has === 'function'
+          ? occupancyGrid.has(position) && occupancyGrid.get(position)
+          : occupancyGrid[position];
+        if (!occupied) return position;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * #467: RF004 operational-sensor/equipment-readiness gate, mirrored from
+   * `sample.service.js`'s `createSample` / `intakeWizard.js`'s
+   * `isEquipmentReadyForContainer`+`hasOperationalSensorForContainer`
+   * (equipment-level granularity, per #465). Bulk LGPD import bypasses
+   * `createSample` and previously placed samples without this check at all.
+   */
+  async isPlacementReady(db, freezer) {
+    if (!freezer?.containerID) return false;
+
+    const equipmentVariants = buildIdVariants(freezer.containerID);
+    const equipmentCollection = db.collection('equipment');
+    const equipment = await equipmentCollection.findOne({
+      equipmentID: { $in: equipmentVariants }
+    });
+    if (!equipment) return false;
+
+    const equipmentStatus = String(equipment.status || equipment.maintenanceStatus || equipment.operationalStatus || '').trim().toLowerCase();
+    if (isEquipmentBlocked(equipmentStatus)) return false;
+
+    const sensorsCollection = db.collection('sensors');
+    const sensors = await sensorsCollection.find({
+      $or: [
+        { locationId: { $in: equipmentVariants } },
+        { locationID: { $in: equipmentVariants } }
+      ]
+    }).limit(20).toArray();
+
+    return sensors.some(isOperationalSensor);
+  }
+
+  isBoxAvailable(box) {
+    const status = String(box?.status || '').trim().toUpperCase();
+    if (status && ['FULL', 'RETIRED', 'INACTIVE'].includes(status)) return false;
+    const capacity = Number(box?.dimension?.rows || 0) * Number(box?.dimension?.cols || 0);
+    if (capacity < 1) return false;
+    if (Number(box?.currentOccupancy || 0) >= capacity) return false;
+    return Boolean(this.findFirstAvailablePositionInBox(box));
+  }
+
+  /**
+   * #459: replaces the legacy `locations`-collection scan
+   * (`getNextAvailableLocation`). Enumerates `storageBoxes` sorted by
+   * `name`/`boxID`/`_id` — the same deterministic order
+   * `intakeWizard.js`'s `resolveAutomaticLocation` scans in — resolving
+   * each candidate's FREEZER/SHELF/RACK/[DRAWER] chain via
+   * `resolveStorageHierarchyForBox`. Legacy `getNextAvailableLocation`
+   * advanced by `index` full *location* documents (one per box —
+   * `wellPosition` was descriptive metadata, not itself a sort key in the
+   * legacy sort). The canonical equivalent advances by `index` *available*
+   * (non-full, active) boxes in that same order, returning that box's own
+   * first free position rather than a legacy `wellPosition` value that no
+   * longer exists.
+   */
+  async getNextAvailableStorageSlot(db, startBoxId, index) {
     try {
-      const locationsCollection = db.collection('locations');
-      
-      // Encontra a localização inicial
-      const startLocation = await locationsCollection.findOne({ locationID: startLocationID });
-      if (!startLocation) {
+      const { ObjectId } = require('mongodb');
+      if (!startBoxId || !ObjectId.isValid(String(startBoxId))) {
         return null;
       }
 
-      // Busca todas as localizações e ordena por block, rack, drawer, box
-      const allLocations = await locationsCollection.find({}).toArray();
-      const sortedLocations = allLocations.sort((a, b) => {
-        if (a.block !== b.block) return (a.block || 0) - (b.block || 0);
-        if (a.rack !== b.rack) return (a.rack || 0) - (b.rack || 0);
-        if (a.drawer !== b.drawer) return (a.drawer || 0) - (b.drawer || 0);
-        return (a.box || 0) - (b.box || 0);
-      });
+      const boxesCollection = db.collection('storageBoxes');
+      const boxes = await boxesCollection.find({}).sort({ name: 1, boxID: 1, _id: 1 }).toArray();
 
-      // Encontra o índice da localização inicial
-      const startIndex = sortedLocations.findIndex(loc => loc.locationID === startLocationID);
+      const startIndex = boxes.findIndex((box) => String(box._id) === String(startBoxId));
       if (startIndex === -1) {
         return null;
       }
 
-      // Retorna a localização no índice startIndex + index (ou null se não existir)
-      const nextIndex = startIndex + index;
-      if (nextIndex < sortedLocations.length) {
-        return sortedLocations[nextIndex].locationID;
+      const boxCandidates = boxes
+        .slice(startIndex)
+        .filter((box) => this.isBoxAvailable(box));
+
+      // #471: skip candidates whose freezer fails the RF004 readiness gate
+      // and keep advancing, matching `intakeWizard.js`'s
+      // `resolveAutomaticLocation` — a single non-ready freezer shouldn't
+      // fail rows that could be placed in a later box in the same sequence.
+      const readyBoxes = [];
+      for (const box of boxCandidates) {
+        const { freezer } = await this.resolveStorageHierarchyForBox(db, box);
+        if (!freezer) continue;
+        if (!(await this.isPlacementReady(db, freezer))) continue;
+        readyBoxes.push(box);
       }
 
-      return null;
+      const target = readyBoxes[index];
+      if (!target) {
+        return null;
+      }
+
+      return {
+        boxId: target._id,
+        position: this.findFirstAvailablePositionInBox(target),
+      };
     } catch (error) {
-      logger.error('Erro ao buscar próxima localização:', error.message);
+      logger.error('Erro ao buscar próxima localização de armazenamento:', error.message);
       return null;
     }
   }
@@ -689,23 +1058,340 @@ class ImportLGPDService {
    * Importa amostras com validação de ID de paciente (LGPD)
    * @param {Object} db - Instância do banco de dados
    * @param {Object} file - Arquivo a ser importado
-   * @param {Object} options - Opções de importação { startLocationID, autoIncrement }
+   * @param {Object} options - Opções de importação { startBoxId, autoIncrement }
    */
+
+  /**
+   * #787 (RNF011 AC#4, Crítica): "Importações inválidas são colocadas em
+   * staging ou quarentena, sem correção silenciosa."
+   *
+   * Deliberately mirrors the FHIR import path, which already satisfies this
+   * same acceptance criterion (`fhir-import-staging.service.js`, proven
+   * end-to-end by `interop-monitoring.spec.ts`): the same two collections,
+   * `import_batches` and `import_staging_records`, and the same
+   * batch-plus-per-row shape. The FHIR batch document already discriminates
+   * itself with `type: 'FHIR_BUNDLE'` / `source: 'FHIR'`, so that schema was
+   * built to hold more than one import path -- this is the second.
+   *
+   * Like that service, this reaches for `db.collection(...)` directly rather
+   * than `getCollection`: neither collection is registered in
+   * `CANONICAL_COLLECTIONS`, and the FHIR path set the precedent.
+   *
+   * Best-effort by design. If quarantining fails, the import still returns
+   * whatever it accomplished -- losing the review copy must not also lose
+   * the rows that did import. The failure is logged and `stagingBatchId`
+   * comes back null, so a caller can tell the difference between "nothing
+   * was rejected" and "rejections were not preserved".
+   *
+   * Returns the batch id, or null when there was nothing to quarantine.
+   */
+  /**
+   * Le um lote de quarentena LGPD e as linhas rejeitadas dele (#794, RNF011
+   * AC#4 -- "sem correcao silenciosa").
+   *
+   * O #787 fez as linhas rejeitadas sobreviverem; nada conseguia le-las de
+   * volta, entao a quarentena so era acessivel consultando o Mongo direto.
+   * Espelha o `getBatch` do caminho FHIR (`fhir-import-staging.service.js`):
+   * mesmas duas colecoes, mesma forma lote-mais-linhas, mesmo 404 via
+   * `error.statusCode`, mesma ordenacao por rowNumber.
+   *
+   * Diferenca deliberada em relacao ao original: filtra tambem por `type`.
+   * As rotas de importacao compartilham `import_batches`, e um leitor que
+   * filtra so por `_id` entrega o lote de outra rota a quem tem a permissao
+   * errada -- as linhas em quarentena carregam identificadores civis. O
+   * leitor FHIR ainda tem esse vazamento; esta rastreado no #799 e nao e
+   * reproduzido aqui.
+   *
+   * #915: `types` diz *quais* tipos LGPD este chamador pode ler. O #814
+   * passou a escrever lotes de participantes com `LGPD_PATIENT_CSV`, e
+   * enquanto este filtro era fixo em `LGPD_SAMPLE_CSV` esses lotes eram
+   * gravados e ficavam ilegiveis -- 404 ate com o id correto. O padrao
+   * continua so-amostras: quem chama e que decide alargar, aplicando a regra
+   * que `import-lgpd.routes.js` ja enunciava para o lote de amostras -- a
+   * mesma permissao da importacao que produziu o lote.
+   *
+   * Um id malformado e 400, nao um cast de BSON estourando como 500.
+   */
+  async getQuarantineBatch(db, batchIdRaw, { types } = {}) {
+    // ObjectId e exigido inline neste arquivo (ver linhas 503/803), nao no topo.
+    const { ObjectId } = require('mongodb');
+    const raw = String(batchIdRaw || '').trim();
+
+    if (!ObjectId.isValid(raw)) {
+      const error = new Error('Identificador de lote de importacao invalido.');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const batchId = new ObjectId(raw);
+
+    const batch = await db.collection('import_batches').findOne({
+      _id: batchId,
+      type: { $in: normalizeQuarantineTypes(types) },
+    });
+
+    if (!batch) {
+      const error = new Error('Lote de quarentena LGPD nao encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const records = await db
+      .collection('import_staging_records')
+      .find({ batchId })
+      .sort({ rowNumber: 1 })
+      .toArray();
+
+    return { batch, records };
+  }
+
+  /**
+   * Lista os lotes de quarentena LGPD, do mais recente para o mais antigo
+   * (#794 item 2, RNF011 AC#4).
+   *
+   * O #794 slice 1 tornou um lote legivel *se voce ja souber o id dele*. Nada
+   * entrega esse id a um operador: `stagingBatchId` volta na resposta da API,
+   * mas a importacao LGPD nao tem nenhum consumidor no frontend (#808), entao
+   * ele nunca chegou a uma tela. Sem listagem nao existe ponto de entrada
+   * navegavel, e uma tela de revisao seria codigo inalcancavel.
+   *
+   * Filtra por `type` pelo mesmo motivo que `getQuarantineBatch`:
+   * `import_batches` e compartilhada com a importacao FHIR e as rotas tem
+   * permissoes diferentes (#799 foi exatamente esse defeito no sentido
+   * oposto). `types` (#915) recebe o conjunto que este chamador pode ler; o
+   * padrao e so-amostras.
+   *
+   * Devolve **so o resumo do lote** -- deliberadamente nao le
+   * `import_staging_records`. As linhas carregam `row`, a linha original da
+   * planilha, com identificadores civis (#807); uma listagem nao precisa
+   * deles, e transformar "um lote" em "todos os lotes" seria ampliar a
+   * exposicao na direcao errada.
+   */
+  async listQuarantineBatches(db, { limit = 20, page = 1, types } = {}) {
+    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const safePage = Math.max(parseInt(page, 10) || 1, 1);
+    const skip = (safePage - 1) * safeLimit;
+
+    const filter = { type: { $in: normalizeQuarantineTypes(types) } };
+    const collection = db.collection('import_batches');
+
+    const [batches, total] = await Promise.all([
+      collection.find(filter).sort({ createdAt: -1 }).skip(skip).limit(safeLimit).toArray(),
+      collection.countDocuments(filter),
+    ]);
+
+    return {
+      batches,
+      total,
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.max(Math.ceil(total / safeLimit), 1),
+    };
+  }
+
+  /**
+   * Normaliza as opcoes de importacao para gravacao no lote (#794 item 3).
+   *
+   * `groupFields` vem do caller e acaba num documento que um reenvio le de
+   * volta para montar uma query -- so escalares planos entram, para que nao
+   * seja possivel contrabandear um operador (`{$ne: null}`) para dentro do
+   * lote e ve-lo reaparecer num filtro depois.
+   */
+  sanitizeImportOptions(importOptions = {}) {
+    const groupFields = {};
+    const raw = importOptions?.groupFields;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const [key, value] of Object.entries(raw)) {
+        if (key.startsWith('$') || key.includes('.')) continue;
+        if (value === null) continue;
+        const type = typeof value;
+        if (type === 'string' || type === 'number' || type === 'boolean') {
+          groupFields[key] = value;
+        }
+      }
+    }
+
+    return {
+      startBoxId: importOptions?.startBoxId ? String(importOptions.startBoxId) : null,
+      autoIncrement: Boolean(importOptions?.autoIncrement),
+      groupFields,
+    };
+  }
+
+  async quarantineRejectedSampleRows(
+    db,
+    { fileName = null, rows = [], results, actor = {}, importOptions = {}, type = 'LGPD_SAMPLE_CSV' } = {}
+  ) {
+    const rejected = Array.isArray(results?.errors) ? results.errors : [];
+    if (rejected.length === 0) return null;
+
+    try {
+      const now = new Date();
+
+      const batchDoc = {
+        type,
+        source: 'LGPD',
+        status: 'QUARANTINED',
+        fileName: fileName ? String(fileName) : null,
+        counts: {
+          total: results.total,
+          success: results.success,
+          errors: rejected.length,
+        },
+        // #794 item 3: the options the rejected rows were imported under.
+        // importSamples places each row with
+        // getNextAvailableStorageSlot(db, startBoxId, results.success) -- the
+        // running success count within this batch is the slot index -- and
+        // reads startBoxId/autoIncrement/groupFields from the caller. Without
+        // them persisted, a corrected row cannot be resubmitted through the
+        // same path that rejected it, because the placement intent no longer
+        // exists anywhere once the request ends. `counts.success` above is
+        // the matching cursor.
+        importOptions: this.sanitizeImportOptions(importOptions),
+        createdBy: actor?.userID || actor?.userId || null,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      const batchResult = await db.collection('import_batches').insertOne(batchDoc);
+      const batchId = batchResult.insertedId;
+
+      const stagedRecords = rejected.map((rejection) => ({
+        batchId,
+        // #1023: rowNumber e' a linha FISICA do arquivo -- o que o operador
+        // ve' ao abrir a planilha -- e nao mais o indice do array filtrado
+        // mais um header. Os dois divergem em uma unidade por linha em branco
+        // anterior a esta.
+        //
+        // Por isso a linha de origem e' resolvida por `rejection.index` (o
+        // indice no array `rows`, carregado separadamente em cada entrada de
+        // results.errors) e NAO derivando-o de volta de `rowNumber - 2`. A
+        // derivacao era correta so' enquanto os dois numeros coincidiam; com a
+        // linha fisica ela aponta para a linha errada, ou para fora do array,
+        // e o `|| null` transformava isso num registro em quarentena
+        // impossivel de corrigir -- silenciosamente, que e' pior do que o bug
+        // de numeracao que #1023 comecou por corrigir.
+        //
+        // Deliberadamente sem fallback para `rowNumber - 2`: aplicado a uma
+        // linha fisica ele calcula um indice ERRADO em silencio, o que e' pior
+        // do que o undefined que um chamador sem `index` produziria.
+        rowNumber: rejection.row,
+        status: 'ERROR',
+        errors: rejection.errors || [],
+        validationErrors: rejection.errors || [],
+        // The original row as read from the file. Without it a quarantined
+        // record can be reviewed but not corrected and re-submitted, which
+        // is the whole reason to quarantine rather than log.
+        row: rows[rejection.index] ?? null,
+        normalized: rejection.data || null,
+        createdAt: now,
+        updatedAt: now,
+      }));
+
+      await db.collection('import_staging_records').insertMany(stagedRecords);
+
+      logger.warn(
+        `[IMPORT_LGPD] ${stagedRecords.length} linha(s) rejeitada(s) colocadas em quarentena (batch ${batchId})`
+      );
+
+      return batchId;
+    } catch (stagingError) {
+      logger.error(
+        'Falha ao colocar linhas rejeitadas em quarentena (RNF011 AC#4):',
+        stagingError.message || stagingError
+      );
+      return null;
+    }
+  }
+  /**
+   * Grava um lote FAILED quando a importacao de amostras lanca a nivel de
+   * cabecalho (#806, RNF011 AC#4).
+   *
+   * `quarantineRejectedSampleRows` acima so entra em jogo depois que pelo
+   * menos uma linha foi processada e rejeitada -- um throw de cabecalho
+   * (campos obrigatorios ausentes, identificacao do paciente ausente)
+   * acontece ANTES do loop de linhas (ver o guard `rows.length > 0` em
+   * `importSamples`), entao nenhuma linha e encaminhada e nenhum lote
+   * existe para `retainSourceFileForBatch` reter o arquivo contra ele --
+   * essa funcao exige um `_id` de lote ja gravado. Sem este lote o catch do
+   * controller so podia apagar o arquivo, exatamente o modo de falha em que
+   * o proprio arquivo e o suspeito mais provavel.
+   *
+   * Usa o mesmo `type` que `quarantineRejectedSampleRows` grava para lotes
+   * de amostras ('LGPD_SAMPLE_CSV'), para que `listQuarantineBatches` (que
+   * filtra so por `type`) e `getQuarantineBatch` (que tolera um lote sem
+   * `import_staging_records`) enxerguem este lote sem mudanca nenhuma.
+   *
+   * Ao contrario de `quarantineRejectedSampleRows` e
+   * `retainSourceFileForBatch`, esta funcao NAO e best-effort: se a gravacao
+   * falhar, o erro sobe para o controller decidir o fallback (apagar o
+   * arquivo como antes) em vez de mascarar silenciosamente a perda do lote.
+   */
+  async recordFailedImportBatch(db, { fileName = null, error, actor = {}, importOptions = {}, type = 'LGPD_SAMPLE_CSV' } = {}) {
+    const now = new Date();
+    const errorMessage = (error && error.message) ? error.message : String(error || 'Erro desconhecido');
+
+    const batchDoc = {
+      type,
+      source: 'LGPD',
+      status: 'FAILED',
+      fileName: fileName ? String(fileName) : null,
+      counts: {
+        total: 0,
+        success: 0,
+        errors: 0,
+      },
+      error: errorMessage,
+      importOptions: this.sanitizeImportOptions(importOptions),
+      createdBy: actor?.userID || actor?.userId || null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const batchResult = await db.collection('import_batches').insertOne(batchDoc);
+    const batchId = batchResult.insertedId;
+
+    logger.warn(
+      `[IMPORT_LGPD] Importacao de amostras falhou a nivel de cabecalho, lote FAILED aberto (batch ${batchId}): ${errorMessage}`
+    );
+
+    return batchId;
+  }
+
   async importSamples(db, file, options = {}) {
-    const { startLocationID = null, autoIncrement = false, groupFields = {} } = options;
+    const { startBoxId = null, autoIncrement = false, groupFields = {}, neo4jDriver = null, actor = {} } = options;
     const results = {
       total: 0,
       success: 0,
       errors: [],
+      skipped: 0, // #798: linhas em branco ignoradas, fora de total (#1012: quem as detecta e conta e readCSV/readExcel, nao este loop)
+      duplicates: 0, // #931: subconjunto rotulado de `errors` (ver importPatients)
       importedSampleIds: []
     };
 
     try {
       const rows = await this.readFile(file.path, file.originalname, 'samples');
+      // #1001: same seeding as importPatients -- readCSV/readExcel already
+      // drop blank rows before this array exists. #1012: the unreachable
+      // per-row backstop below is gone for that same reason.
+      results.skipped = rows.skippedCount || 0;
       const samplesCollection = await getCollection(db, 'samples');
       const patientsCollection = await getCollection(db, 'patients');
       const validator = new SampleGraphValidator(db);
       const drugService = new DrugService(db);
+      // #477: samples are inserted unallocated, then AllocateSampleUseCase
+      // performs the atomic occupancyGrid write, storageLocation update,
+      // StorageAssignment record and audit/lineage trail — same use case
+      // sample.service.js's createSample reuses (#474). Replaces this
+      // loop's old direct storageLocation write + manual StorageAssignment
+      // insert, which never updated the box's occupancyGrid, so a fixed
+      // (non-auto-increment) target box silently double-booked its first
+      // free position across every row.
+      const allocateUseCase = new AllocateSampleUseCase({
+        storageRepository: new MongoStorageRepository(db),
+        auditRepository: new MongoAuditRepository(db),
+        lineageRepository: new LineageRepository(neo4jDriver)
+      });
 
       // Campos obrigatórios para amostras.
       const requiredFields = ['sampleType', 'sampleOrigin'];
@@ -727,12 +1413,36 @@ class ImportLGPDService {
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const rowNumber = i + 2; // +2 porque linha 1 é header e arrays começam em 0
+        // #1023: a linha FISICA no arquivo, vinda do reader via `sourceLines`
+        // (index-aligned com `rows`). O fallback `i + 2` cobre chamadores que
+        // mockam readFile com um array simples -- nesse caso a propriedade
+        // nao-enumeravel nao existe e o comportamento antigo vale.
+        const rowNumber = rows.sourceLines?.[i] ?? (i + 2);
         let sampleData = null;
+
+        // #1012: o guard isEmptyRow que existia aqui era inalcancavel -- pela
+        // mesma razao do loop de importPatients (readCSV/readExcel ja
+        // descartam a linha em branco antes deste array existir). Removido;
+        // results.skipped continua vindo de rows.skippedCount, seedado acima.
+
+        // #786: counted here, at the top of the loop body, rather than at the
+        // bottom. Every rejected row leaves via a `continue`, so a
+        // bottom-of-loop increment skipped it entirely and a partially-failed
+        // import reported total < success + errors -- numbers that
+        // import-lgpd.controller.js passes straight to auditLogger.logImport.
+        // importPatientsSmart already counts in this position; importPatients
+        // counts just after its empty-row guard. importSamples has no
+        // empty-row guard, so before the try is the equivalent spot.
+        results.total++;
 
         try {
           // Parse dos dados do CSV/Excel
           sampleData = this.parseSampleRow(row);
+
+          if (!sampleData.specimenId) {
+            const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
+            sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
+          }
 
           if (!sampleData.sampleType && groupFields?.sampleType) {
             sampleData.sampleType = String(groupFields.sampleType).trim();
@@ -748,14 +1458,7 @@ class ImportLGPDService {
             participantId: sampleData.participantId,
             patientName: sampleData.patientName,
             birthDate: sampleData.patientBirthDate,
-            email: sampleData.patientEmail,
-            sex: sampleData.patientSex,
-            cpf: sampleData.patientCpf,
-            isDeceased: sampleData.patientIsDeceased,
-            representativeName: sampleData.representativeName,
-            representativeEmail: sampleData.representativeEmail,
-            representativeCpf: sampleData.representativeCpf,
-            status: 'ACTIVE',
+            identityDocument: sampleData.identityDocument,
           });
 
           sampleData.participantId = String(matchedPatient?.patient?.participantId || '').trim();
@@ -763,7 +1466,7 @@ class ImportLGPDService {
           sampleData.patientName = sampleData.patientName || matchedPatient?.patient?.patientName || null;
 
           if (!sampleData.participantId) {
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: ['Nao foi possivel resolver a identidade do paciente para a amostra'],
               data: { participantId: null }
@@ -774,7 +1477,7 @@ class ImportLGPDService {
           // Valida formato do ID (8 dígitos)
           const participantIdStr = String(sampleData.participantId).trim();
           if (participantIdStr.length !== 8 || !/^\d{8}$/.test(participantIdStr)) {
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: [`ID de paciente inválido: deve ter exatamente 8 dígitos numéricos`],
               data: { participantId: participantIdStr }
@@ -792,7 +1495,7 @@ class ImportLGPDService {
           const currentDrugName = String(pharmacology.medicationName || '').trim();
 
           if (currentAtcCode && !/^[A-Z]\d{2}[A-Z]{0,2}\d{0,2}$/.test(currentAtcCode)) {
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: [`atcCode inválido: ${currentAtcCode}`],
               data: { participantId: participantIdStr }
@@ -808,32 +1511,16 @@ class ImportLGPDService {
                 ...pharmacology,
                 medicationName: String(selectedDrug.generic_name || selectedDrug.name || currentDrugName).trim(),
                 atcCode: String(selectedDrug.atcCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
-                atcClass: String(selectedDrug.atcClass || '').trim().toUpperCase(),
-                medicationName: String(selectedDrug.generic_name || selectedDrug.name || currentDrugName).trim(),
-                atcCode: String(selectedDrug.atcCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
                 atcClass: String(selectedDrug.drug_class || selectedDrug.atcClass || '').trim(),
                 drug_class: String(selectedDrug.drug_class || '').trim(),
               };
             }
           }
 
-          // Valida quality MIABIS antes da validação geral
-          const { validateQualityMIABIS } = require('../utils/qualityMIABISValidator');
-          if (sampleData.quality !== undefined && sampleData.quality !== null) {
-            if (!validateQualityMIABIS(sampleData.quality)) {
-              results.errors.push({
-                row: rowNumber,
-                errors: [`quality deve estar no conjunto MIABIS canônico: GOOD, COMPROMISED ou UNKNOWN. Valor recebido: ${sampleData.quality}`],
-                data: { participantId: participantIdStr } // Apenas ID, sem dados sensíveis
-              });
-              continue;
-            }
-          }
-
           // Valida dados da amostra
           const validation = SampleModel.validate(sampleData);
           if (!validation.isValid) {
-            results.errors.push({
+            results.errors.push({ index: i,
               row: rowNumber,
               errors: validation.errors,
               data: { participantId: participantIdStr } // Apenas ID, sem dados sensíveis
@@ -841,12 +1528,17 @@ class ImportLGPDService {
             continue;
           }
 
-          // Validações específicas - verifica se os valores existem no banco
+          // Validações específicas - verifica se os valores existem no banco.
+          // (SampleModel.validate() above already confirmed sampleType/sampleOrigin/extractionProtocol
+          // are valid per SampleModel.validateXxx, so only the findOne lookup can fail here)
+          // #702: consultado por `id`. Estes campos carregam o id MIABIS
+          // ("PLASMA"), enquanto `description` guarda o rótulo humano
+          // ("Plasma") -- consultar por description com um id nunca casava.
           if (sampleData.sampleType) {
             const sampleTypesCollection = db.collection('sampleTypes');
-            const validSampleType = await sampleTypesCollection.findOne({ description: sampleData.sampleType });
-            if (!validSampleType && !SampleModel.validateSampleType(sampleData.sampleType)) {
-              results.errors.push({
+            const validSampleType = await sampleTypesCollection.findOne({ id: sampleData.sampleType });
+            if (!validSampleType) {
+              results.errors.push({ index: i,
                 row: rowNumber,
                 errors: [`Tipo de amostra "${sampleData.sampleType}" não encontrado no banco de dados. Use um valor cadastrado.`],
                 data: { participantId: participantIdStr }
@@ -854,12 +1546,12 @@ class ImportLGPDService {
               continue;
             }
           }
-          
+
           if (sampleData.sampleOrigin) {
             const sampleOriginsCollection = db.collection('sampleOrigins');
-            const validOrigin = await sampleOriginsCollection.findOne({ description: sampleData.sampleOrigin });
-            if (!validOrigin && !SampleModel.validateSampleOrigin(sampleData.sampleOrigin)) {
-              results.errors.push({
+            const validOrigin = await sampleOriginsCollection.findOne({ id: sampleData.sampleOrigin });
+            if (!validOrigin) {
+              results.errors.push({ index: i,
                 row: rowNumber,
                 errors: [`Origem "${sampleData.sampleOrigin}" não encontrada no banco de dados. Use um valor cadastrado.`],
                 data: { participantId: participantIdStr }
@@ -867,12 +1559,12 @@ class ImportLGPDService {
               continue;
             }
           }
-          
+
           if (sampleData.extractionProtocol) {
             const extractionProtocolsCollection = db.collection('extractionProtocols');
-            const validProtocol = await extractionProtocolsCollection.findOne({ description: sampleData.extractionProtocol });
-            if (!validProtocol && !SampleModel.validateExtractionType(sampleData.extractionProtocol)) {
-              results.errors.push({
+            const validProtocol = await extractionProtocolsCollection.findOne({ id: sampleData.extractionProtocol });
+            if (!validProtocol) {
+              results.errors.push({ index: i,
                 row: rowNumber,
                 errors: [`Protocolo de extração "${sampleData.extractionProtocol}" não encontrado no banco de dados. Use um valor cadastrado.`],
                 data: { participantId: participantIdStr }
@@ -881,45 +1573,121 @@ class ImportLGPDService {
             }
           }
 
-          // RF004 - Verifica duplicidade por barcode (se fornecido)
+          // #944: era "RF004". Nenhum criterio do RF004 menciona barcode --
+          // AC#2 e sobre specimenId, outro identificador com outro gerador.
+          // O requisito que esta checagem serve e dict-02 ELM-0116
+          // (Specimen.barcodeValue), coluna Unicidade = `Unico`.
+          // #936 item 2: esta checagem roda ANTES da geracao (~linha 1507), entao so
+          // cobre barcodes VINDOS DO CSV, nunca um gerado. Foi avaliado e MANTIDO de
+          // proposito (2026-09-02), nao e descuido:
+          //   1. desde #932 o retry de generateUniqueBarcode consulta a colecao
+          //      certa, entao uma colisao gerada ja e detectada e re-tentada ali;
+          //   2. desde #936 item 1 existe indice unico real samples_barcode_unique_v1
+          //      (utils/sampleIndexes.js, montado em utils/collectionResolver.js:46-48),
+          //      entao uma colisao que escape ao retry falha alto com E11000 em vez de
+          //      corromper em silencio -- que e a protecao esperada desta guarda;
+          //   3. mover a guarda para depois da geracao transformaria uma colisao
+          //      gerada em REJEICAO da linha em vez de nova tentativa: pior para o
+          //      operador, e ELM-0116 nao pede isso.
+          // O ganho restante seria simetria; o custo e mudar o comportamento do
+          // import. INFERENCIA da preferencia do repositorio por mudancas estreitas,
+          // NAO citacao -- nenhum doc fala de ordem de guarda. Barato de reverter.
+          // Verifica duplicidade por barcode (se fornecido)
+          // #942: mesma propriedade de importPatients -- esta checagem consulta
+          // o BANCO, e duas linhas com o mesmo barcode no mesmo arquivo só são
+          // pegas porque o insert da linha N (:1537) é aguardado antes da
+          // checagem da linha N+1. Não há conjunto em memória dos barcodes já
+          // vistos neste arquivo. Não transforme o laço em lote sem adicionar um.
           if (sampleData.barcode) {
             const existingSample = await samplesCollection.findOne({ barcode: sampleData.barcode });
             if (existingSample) {
-              results.errors.push({
+              results.errors.push({ index: i,
                 row: rowNumber,
                 errors: [`Já existe uma amostra com o código de barras ${sampleData.barcode}`],
                 data: { participantId: participantIdStr, barcode: sampleData.barcode }
+              });
+              // #931: chave de duplicidade deste caminho = barcode (RF004).
+              // Diferente da chave usada em importPatients, de proposito: sao
+              // entidades diferentes. Por isso `duplicatesFound` conta "linhas
+              // rejeitadas por duplicidade", nao "duplicidade por <uma> chave".
+              results.duplicates += 1;
+              continue;
+            }
+          }
+
+          // #459/#477: resolve a candidate storageLocation (boxId/positionCode)
+          // for this row — CSV-provided boxId first, then auto-increment
+          // from the StorageBox sequence, then a single fixed startBoxId
+          // applied to every location-less row — same precedence the legacy
+          // `getNextAvailableLocation`/`startLocationID` path used. Kept as a
+          // local candidate (not written onto sampleData) — the sample is
+          // inserted unallocated below, then AllocateSampleUseCase performs
+          // the actual atomic occupancyGrid reservation for this candidate.
+          let candidateLocation = null;
+          if (sampleData.boxId) {
+            const { ObjectId } = require('mongodb');
+            const boxesCollection = db.collection('storageBoxes');
+            const providedBoxId = ObjectId.isValid(String(sampleData.boxId))
+              ? new ObjectId(String(sampleData.boxId))
+              : null;
+            const providedBox = providedBoxId ? await boxesCollection.findOne({ _id: providedBoxId }) : null;
+            if (providedBox) {
+              candidateLocation = {
+                boxId: providedBox._id,
+                position: sampleData.positionCode || this.findFirstAvailablePositionInBox(providedBox),
+              };
+            }
+          }
+
+          if (!candidateLocation && autoIncrement && startBoxId) {
+            const nextSlot = await this.getNextAvailableStorageSlot(db, startBoxId, results.success);
+            if (nextSlot && nextSlot.position) {
+              candidateLocation = { boxId: nextSlot.boxId, position: nextSlot.position };
+              logger.debug(`Localização automática atribuída: caixa ${nextSlot.boxId} posição ${nextSlot.position} para linha ${rowNumber}`);
+            } else {
+              results.errors.push({ index: i,
+                row: rowNumber,
+                errors: ['Não há mais localizações de armazenamento disponíveis para incremento automático'],
+                data: { participantId: participantIdStr }
+              });
+              continue;
+            }
+          } else if (!candidateLocation && !autoIncrement && startBoxId) {
+            const { ObjectId } = require('mongodb');
+            const boxesCollection = db.collection('storageBoxes');
+            const startBoxObjectId = ObjectId.isValid(String(startBoxId)) ? new ObjectId(String(startBoxId)) : null;
+            const startBox = startBoxObjectId ? await boxesCollection.findOne({ _id: startBoxObjectId }) : null;
+            const position = startBox ? this.findFirstAvailablePositionInBox(startBox) : null;
+            if (startBox && position) {
+              candidateLocation = { boxId: startBox._id, position };
+            }
+          }
+
+          // #467: RF004 operational-sensor/equipment-readiness gate —
+          // `createSample`/`intakeWizard.js` both refuse to place a
+          // specimen in a freezer that isn't equipment-ready or has no
+          // operational sensor; bulk LGPD import bypasses `createSample`
+          // entirely and previously never checked this at all.
+          if (candidateLocation?.boxId) {
+            const storageBoxesCollection = db.collection('storageBoxes');
+            const placementBox = await storageBoxesCollection.findOne({ _id: candidateLocation.boxId });
+            const { freezer: placementFreezer } = placementBox
+              ? await this.resolveStorageHierarchyForBox(db, placementBox)
+              : {};
+            if (!placementFreezer || !(await this.isPlacementReady(db, placementFreezer))) {
+              results.errors.push({ index: i,
+                row: rowNumber,
+                errors: ['Localização física sem equipamento pronto ou sensor operacional associado.'],
+                data: { participantId: participantIdStr }
               });
               continue;
             }
           }
 
-          // Processa localização: se autoIncrement estiver ativo e startLocationID fornecido
-          if (autoIncrement && startLocationID) {
-            // Se a linha não tem locationID ou está vazia, usa incremento automático
-            if (!sampleData.locationID || sampleData.locationID === null || sampleData.locationID === '') {
-              const nextLocationID = await this.getNextAvailableLocation(db, startLocationID, results.success);
-              if (nextLocationID) {
-                sampleData.locationID = nextLocationID;
-                logger.debug(`Localização automática atribuída: ${nextLocationID} para linha ${rowNumber}`);
-              } else {
-                results.errors.push({
-                  row: rowNumber,
-                  errors: ['Não há mais localizações disponíveis para incremento automático'],
-                  data: { participantId: participantIdStr }
-                });
-                continue;
-              }
-            }
-          } else if (startLocationID && (!sampleData.locationID || sampleData.locationID === null || sampleData.locationID === '')) {
-            // Se não for autoIncrement mas startLocationID foi fornecido, usa ele para todas as amostras sem locationID
-            sampleData.locationID = startLocationID;
-          }
-
           // Gera código de barras automaticamente se não fornecido
           if (!sampleData.barcode || (typeof sampleData.barcode === 'string' && sampleData.barcode.trim() === '')) {
             const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
-            sampleData.barcode = await generateUniqueBarcode(db, 'amostras');
+            sampleData.barcode = await generateUniqueBarcode(db);
             logger.info(`Código de barras gerado automaticamente para linha ${rowNumber}: ${sampleData.barcode}`);
           } else {
             // Converte para string se necessário
@@ -933,14 +1701,71 @@ class ImportLGPDService {
           sample.patientObjectId = sampleData.patientObjectId || null;
           sample.merkleRoot = generateSampleHash(sample);
           
-          // Insere no banco
+          // Insere no banco (sem storageLocation — a amostra entra não alocada)
           const insertResult = await samplesCollection.insertOne(sample);
           results.importedSampleIds.push(insertResult.insertedId);
 
-          const hasMissingEthicsOrSprec = !sampleData.consentTemplateId
-            || !sampleData.sprec
-            || !sampleData.sprec.sampleType
-            || !sampleData.sprec.primaryContainer;
+          // #499: mirrors import.service.js's CSV/XLSX branch — records the
+          // canonical, referenced RcsAssessment snapshot alongside the
+          // embedded copy this parser already computes.
+          if (sample.rcsEvaluation) {
+            try {
+              const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
+              // #502: pins integrity verification to this snapshot, the one
+              // in effect when merkleRoot was sealed above, so a later
+              // re-assessment for the same specimenId can't false-positive
+              // a tamper report.
+              await samplesCollection.updateOne(
+                { _id: insertResult.insertedId },
+                { $set: { sealedRcsAssessmentId: assessment._id } }
+              );
+            } catch (assessmentError) {
+              logger.warn('[IMPORT_LGPD] Falha ao registrar snapshot RcsAssessment referenciado, amostra mantém cópia embutida', {
+                specimenId: sample.specimenId,
+                error: assessmentError?.message || String(assessmentError),
+              });
+            }
+          }
+
+          // #503: mirrors the RCS pin above and import.service.js's
+          // CSV/XLSX branch — records the canonical, referenced
+          // SpecimenPreanalytics snapshot alongside the embedded sprec copy.
+          if (sample.sprec) {
+            try {
+              const profile = await specimenPreanalyticsService.recordProfile(db, sample.specimenId, sample.sprec);
+              await samplesCollection.updateOne(
+                { _id: insertResult.insertedId },
+                { $set: { sealedSpecimenPreanalyticsId: profile._id } }
+              );
+            } catch (profileError) {
+              logger.warn('[IMPORT_LGPD] Falha ao registrar snapshot SpecimenPreanalytics referenciado, amostra mantém cópia embutida', {
+                specimenId: sample.specimenId,
+                error: profileError?.message || String(profileError),
+              });
+            }
+          }
+
+          // #477: AllocateSampleUseCase performs the atomic occupancyGrid
+          // write, storageLocation update, StorageAssignment record
+          // (dict-02 ELM-0167-0178) and audit/lineage trail for the
+          // candidate resolved above — replaces the old manual
+          // StorageAssignment insert, which never touched the box's
+          // occupancyGrid.
+          if (candidateLocation?.boxId) {
+            await allocateUseCase.execute({
+              specimenId: insertResult.insertedId,
+              boxId: String(candidateLocation.boxId),
+              position: candidateLocation.position,
+              actor: {
+                userId: actor?.userId || null,
+                userName: actor?.userName || 'IMPORT_LGPD',
+                userRole: actor?.userRole || null,
+                ipAddress: actor?.ipAddress || null,
+                userAgent: actor?.userAgent || null
+              }
+            });
+            sample.storageLocation = { boxId: candidateLocation.boxId, position: candidateLocation.position };
+          }
 
           try {
             await validator.validateSampleCompliance(String(insertResult.insertedId));
@@ -952,18 +1777,12 @@ class ImportLGPDService {
             });
           }
 
-          if (hasMissingEthicsOrSprec) {
-            await samplesCollection.updateOne(
-              { _id: insertResult.insertedId },
-              { $set: { releaseStatus: 'QUARANTINE', updatedAt: new Date() } }
-            );
-          }
-
+          // RF005/RNF007 (#575): patientName is civil identity — never
+          // written to Patient (was a bare patientName $set here before).
           await patientsCollection.updateOne(
             { _id: matchedPatient.patient._id },
             {
               $set: {
-                patientName: sample.patientName || matchedPatient.patient.patientName,
                 updatedAt: new Date(),
                 lastClinicalData: sample.clinicalData || {},
               },
@@ -976,15 +1795,28 @@ class ImportLGPDService {
           results.success++;
           
         } catch (error) {
-          results.errors.push({
+          results.errors.push({ index: i,
             row: rowNumber,
             errors: [error.message],
             data: { participantId: sampleData?.participantId || null }
           });
         }
-
-        results.total++;
       }
+
+      // #787 (RNF011 AC#4, Crítica): "Importações inválidas são colocadas em
+      // staging ou quarentena, sem correção silenciosa." Until now a rejected
+      // row lived only in the HTTP response, and the controller deletes the
+      // uploaded file immediately afterwards -- so an operator who imported
+      // 500 rows, got 40 rejections and closed the tab had lost both the rows
+      // and the file, while the half that did import was already canonically
+      // persisted.
+      const stagingBatchId = await this.quarantineRejectedSampleRows(db, {
+        importOptions: { startBoxId, autoIncrement, groupFields },
+        fileName: file?.originalname || null,
+        rows,
+        results,
+        actor,
+      });
 
       // Log sanitizado (sem dados sensíveis)
       logger.info(`Importação de amostras concluída: ${results.success}/${results.total} registros importados com sucesso`);
@@ -993,7 +1825,12 @@ class ImportLGPDService {
         total: results.total,
         success: results.success,
         errors: results.errors,
-        importedSampleIds: results.importedSampleIds
+        skipped: results.skipped,
+        // #969: mesmo defeito de importPatients — incrementado (~1445) e
+        // descartado aqui, tornando duplicatesFound sempre 0 em sample-worker.
+        duplicates: results.duplicates,
+        importedSampleIds: results.importedSampleIds,
+        stagingBatchId
       };
 
     } catch (error) {
@@ -1055,12 +1892,8 @@ class ImportLGPDService {
       }
     }
     
-    // Tenta formato padrão do JavaScript (ISO, etc)
-    const date = new Date(str);
-    if (!isNaN(date.getTime()) && date.getFullYear() > 1900 && date.getFullYear() < 2100) {
-      return date;
-    }
-    
+    // Nenhum dos formatos documentados (DD/MM/YYYY, YYYY-MM-DD, DD-MM-YYYY) confere -
+    // rejeita em vez de aceitar via parsing nativo ambíguo (issue #37)
     return null;
   }
 
@@ -1094,6 +1927,7 @@ class ImportLGPDService {
     
     return null;
   }
+
 
   /**
    * Parse linha CSV/Excel para Patient
@@ -1178,10 +2012,12 @@ class ImportLGPDService {
   parseSampleRow(row) {
     const { parseQualityMIABIS } = require('../utils/qualityMIABISValidator');
     // Parse de data de registro
+    // #758: this was a two-alias fallback (row.registerDate, then
+    // row.registrationDate) until e2549bee renamed both arms to the same
+    // canonical name, leaving an else-if whose condition could never differ
+    // from the if. The producer side of that collision is #767.
     let registeredAt = null;
     if (row.registeredAt) {
-      registeredAt = this.parseBirthDate(row.registeredAt);
-    } else if (row.registeredAt) {
       registeredAt = this.parseBirthDate(row.registeredAt);
     }
     if (!registeredAt) {
@@ -1233,10 +2069,6 @@ class ImportLGPDService {
       canonical: false,
     };
     const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec });
-    const releaseStatus = canonicalQualityAssessment?.governance_status === 1
-      && ['A', 'B', 'C', 'D'].includes(String(canonicalQualityAssessment?.final_grade || '').toUpperCase())
-      ? 'AVAILABLE'
-      : 'QUARANTINE';
 
     return {
       participantId: row.participantId?.trim() || null, // Aceita participantId, participantId ou patient_id
@@ -1252,8 +2084,7 @@ class ImportLGPDService {
       sampleType: row.sampleType?.trim() || null,
       sampleOrigin: this.normalizeCatalogValue(row.sampleOrigin, SAMPLE_ORIGINS),
       extractionProtocol: this.normalizeCatalogValue(row.extractionProtocol, EXTRACTION_PROTOCOLS),
-      barcode: row.barcode ? String(row.barcode).trim() : null, // RF004 - barcode como string
-      registeredAt: registeredAt,
+      barcode: row.barcode ? String(row.barcode).trim() : null, // dict-02 ELM-0116 -- barcode como string (#944)
       registeredAt: registeredAt,
       quantity: row.quantity ? parseFloat(row.quantity) : null,
       quality: parseQualityMIABIS(row.quality), // Valida e converte para id MIABIS canônico
@@ -1270,17 +2101,25 @@ class ImportLGPDService {
       axis_penalties: canonicalQualityAssessment.axis_penalties || [],
       calculation_trace: canonicalQualityAssessment.calculation_trace || {},
       rcs_evaluation: canonicalQualityAssessment,
+      // #499: camelCase alias SampleModel.create actually reads
+      // (`data.rcsEvaluation`) — the snake_case `rcs_evaluation` above is
+      // dropped by SampleModel.create and was never wired to
+      // rcsAssessmentService.recordAssessment below.
+      rcsEvaluation: canonicalQualityAssessment,
       canonical: {
         rcsScore: externalQualityAssessment.score,
         scoreBasedGrade: externalQualityAssessment.category || '',
         axisPenalties: [],
       },
-      external_quality_assessment: externalQualityAssessment,
-      releaseStatus: releaseStatus,
-      locationID: row.locationID || row.locationId ? parseInt(row.locationID || row.locationId) : null,
+      externalQualityAssessment: externalQualityAssessment,
+      // #459: CSV rows carry the canonical boxId/positionCode pair directly —
+      // no compatibility field for the legacy numeric locationID, matching
+      // #462's createSample input-contract change (`no legacy field aliases
+      // in runtime persistence`, canonical-data-cleanup.md rule 2).
+      boxId: row.boxId || row.boxID || null,
+      positionCode: row.positionCode || row.position || row.wellPosition || null,
       linkedProject: row.linkedProject?.trim() || null,
-      lifecycleStatus: row.lifecycleStatus?.trim() || 'Available',
-      consentTemplateId: tcleId ? String(tcleId).trim() : null,
+      specimenStatus: SampleModel.mapLegacyLifecycleStatusToSpecimenStatus(row.specimenStatus?.trim() || row.lifecycleStatus?.trim()),
       consentTemplateId: tcleId ? String(tcleId).trim() : null,
       merkleRoot: row.merkleRoot ? String(row.merkleRoot).trim() : null,
       sprec,
@@ -1463,6 +2302,7 @@ class ImportLGPDService {
   async importPatientsSmart(db, file, options = {}) {
     const groupFields = options?.groupFields || {};
     const mapping = options?.mapping || {};
+    const actor = options?.actor || {};
 
     if (!mapping || Object.keys(mapping).length === 0) {
       throw new Error('Mapeamento inteligente é obrigatório para importação em lote');
@@ -1471,16 +2311,27 @@ class ImportLGPDService {
     const results = {
       total: 0,
       success: 0,
-      errors: []
+      errors: [],
+      skipped: 0, // #798: linhas em branco ignoradas, fora de total (#1012: quem as detecta e conta e readCSV/readExcel, nao este loop)
+      duplicates: 0 // #931: subconjunto rotulado de `errors` (ver importPatients)
     };
 
     const rows = await this.readFile(file.path, file.originalname, 'patients');
+    // #1001: same seeding as importPatients/importSamples -- readCSV/readExcel
+    // already drop blank rows before this array exists.
+    results.skipped = rows.skippedCount || 0;
     const patientsCollection = await getCollection(db, 'patients');
     const { ObjectId } = require('mongodb');
 
     for (let i = 0; i < rows.length; i += 1) {
       const rawRow = rows[i];
-      const rowNumber = i + 2;
+      // #1023: idem os outros dois importadores.
+      const rowNumber = rows.sourceLines?.[i] ?? (i + 2);
+
+      // #1012: o guard isEmptyRow que existia aqui era inalcancavel -- pela
+      // mesma razao dos outros dois loops (readCSV/readExcel ja descartam a
+      // linha em branco antes deste array existir). Removido; results.skipped
+      // continua vindo de rows.skippedCount, seedado acima.
       results.total += 1;
 
       try {
@@ -1503,67 +2354,98 @@ class ImportLGPDService {
         }
 
         if (!patientData.patientName) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Nome do paciente é obrigatório`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Nome do paciente é obrigatório`] });
           continue;
         }
 
         if (!patientData.email || !PatientModel.isValidEmail(patientData.email)) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Email inválido`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Email inválido`] });
           continue;
         }
 
         if (patientData.cpf && !this.isValidCpf(patientData.cpf)) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: CPF inválido`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: CPF inválido`] });
           continue;
         }
 
         if (!patientData.birthDate || !(patientData.birthDate instanceof Date) || Number.isNaN(patientData.birthDate.getTime())) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Data de nascimento inválida`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Data de nascimento inválida`] });
           continue;
         }
 
         if (this.isFutureDate(patientData.birthDate)) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Data de nascimento futura não é permitida`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Data de nascimento futura não é permitida`] });
           continue;
         }
 
         if (!patientData.consentTemplateId || !ObjectId.isValid(patientData.consentTemplateId)) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: consentTemplateId inválido ou ausente`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: consentTemplateId inválido ou ausente`] });
           continue;
         }
 
         const consentTemplatesCollection = await getCollection(db, 'consentTemplates');
         const consentTemplateExists = await consentTemplatesCollection.findOne({ _id: new ObjectId(patientData.consentTemplateId) });
         if (!consentTemplateExists) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Template de consentimento não encontrado`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Template de consentimento não encontrado`] });
           continue;
         }
 
         if (patientData.isDeceased) {
           if (!patientData.representativeName || !patientData.representativeEmail) {
-            results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Para paciente falecido, responsável (nome e email) é obrigatório`] });
+            results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Para paciente falecido, responsável (nome e email) é obrigatório`] });
             continue;
           }
           if (!PatientModel.isValidEmail(patientData.representativeEmail)) {
-            results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Email do responsável inválido`] });
+            results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Email do responsável inválido`] });
             continue;
           }
         }
 
-        const validation = PatientModel.validate(patientData);
-        if (!validation.isValid) {
-          results.errors.push({ row: rowNumber, errors: validation.errors.map((error) => `Linha ${rowNumber}: ${error}`) });
-          continue;
-        }
-
+        // #942: terceiro dos três sites -- ver a nota longa em importPatients
+        // (~:680). Também depende do insert aguardado (:2314) para pegar
+        // duplicatas dentro do mesmo arquivo; não há conjunto em memória.
         const duplicate = await patientService.checkDuplicatePatient(db, patientData);
         if (duplicate) {
-          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Paciente duplicado detectado`] });
+          results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Paciente duplicado detectado`] });
+          // #931: mesma chave que importPatients (nome + data de nascimento) --
+          // ambos chamam patientService.checkDuplicatePatient.
+          results.duplicates += 1;
           continue;
         }
 
-        const participantId = await generateUniquePatientID(db, 'pacientes');
+        // GERA ID ÚNICO ANTES DA VALIDAÇÃO (PatientModel.validate() exige
+        // participantId) e remove campos clínicos legados/CPF que
+        // parsePatientRow/esta função ainda geram mas que ParticipantModel
+        // não aceita mais como top-level (decisão de #142: fluxo de
+        // criação de paciente é disease-agnostic).
+        const participantId = await generateUniqueParticipantId(db, 'pacientes');
         patientData.participantId = participantId;
+        delete patientData.cpf;
+        delete patientData.height;
+        delete patientData.weight;
+        delete patientData.heightCm;
+        delete patientData.diagnosticHypothesis;
+        delete patientData.icdCode;
+        delete patientData.hypertension;
+        delete patientData.obesity;
+        delete patientData.diabetesType1;
+        delete patientData.diabetesType2;
+        delete patientData.copd;
+        delete patientData.ckd;
+        delete patientData.smoking;
+        delete patientData.alcoholUse;
+        delete patientData.asthma;
+        delete patientData.antibioticUse;
+        delete patientData.insulinUse;
+        delete patientData.antiviralUse;
+        delete patientData.geneticVariant;
+        delete patientData.notes;
+
+        const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
+        if (!validation.isValid) {
+          results.errors.push({ index: i, row: rowNumber, errors: validation.errors.map((error) => `Linha ${rowNumber}: ${error}`) });
+          continue;
+        }
 
         const consentMetadata = notificationService.buildConsentMetadata();
         patientData.status = 'PENDING_CONSENT';
@@ -1571,8 +2453,18 @@ class ImportLGPDService {
         patientData.consentTokenCreatedAt = consentMetadata.createdAt;
         patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
-        const patient = PatientModel.create(patientData);
+        const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
         const insertResult = await patientsCollection.insertOne(patient);
+
+        // RF005/RNF007 (#575): patientName/birthDate/identityDocument are
+        // civil identity — they never land on Patient. ParticipantIdentity
+        // is the sole write target; patientData (not the stripped
+        // `patient`) still carries them here for that write.
+        const identityCollection = getCollection(db, 'participantIdentities');
+        const identityDoc = participantIdentityEncryptionService.encryptIdentityFields(
+          ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
+        );
+        await identityCollection.insertOne(identityDoc);
 
         try {
           const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
@@ -1588,9 +2480,20 @@ class ImportLGPDService {
         results.success += 1;
       } catch (error) {
         logger.error(`Erro ao processar linha ${rowNumber} (smart import):`, error);
-        results.errors.push({ row: rowNumber, errors: [error.message || 'Erro desconhecido ao processar linha'] });
+        results.errors.push({ index: i, row: rowNumber, errors: [error.message || 'Erro desconhecido ao processar linha'] });
       }
     }
+
+    // RNF011 AC#4 / RF029 AC#5-6 (#814): same quarantine reuse as
+    // importPatients above, with the same distinct 'LGPD_PATIENT_CSV' type.
+    results.stagingBatchId = await this.quarantineRejectedSampleRows(db, {
+      type: 'LGPD_PATIENT_CSV',
+      importOptions: { groupFields },
+      fileName: file?.originalname || null,
+      rows,
+      results,
+      actor,
+    });
 
     logger.info(`Smart import de pacientes concluído: ${results.success}/${results.total}`);
     return results;
@@ -1634,6 +2537,71 @@ class ImportLGPDService {
   }
 
   /**
+   * Retem o arquivo enviado quando linhas foram para a quarentena (#792,
+   * RNF011 AC#4 -- "sem correcao silenciosa").
+   *
+   * O #787 fez as linhas rejeitadas sobreviverem; o arquivo de origem
+   * continuava sendo apagado incondicionalmente pelo controller. Os dois nao
+   * se substituem: a linha em quarentena e a visao *interpretada* pelo
+   * sistema, entao ela nao serve justamente para o caso em que o proprio
+   * arquivo e o culpado (delimitador errado, encoding, coluna deslocada) --
+   * ali o registro em staging documenta o erro de leitura, nao a entrada. E
+   * tambem nao e o artefato que um revisor de conformidade pede ao
+   * reconstruir o que o operador enviou.
+   *
+   * O arquivo sai de `uploads/temp/` (que qualquer rotina de limpeza pode
+   * legitimamente esvaziar) para `uploads/quarantine/`, e o nome no disco e o
+   * id do lote -- **nunca** o `originalname`, que vem do cliente e serviria
+   * de vetor de path traversal. O nome original fica so como metadado.
+   *
+   * Best-effort, igual a `quarantineRejectedSampleRows`: perder a copia de
+   * revisao nao pode derrubar uma importacao que ja gravou linhas. Devolve
+   * null em qualquer falha, sempre com log.
+   *
+   * Por quanto tempo esses arquivos ficam retidos e questao aberta no #793,
+   * junto com a retencao das proprias linhas em quarentena.
+   */
+  async retainSourceFileForBatch(db, file, batchId) {
+    try {
+      if (!file?.path || !fs.existsSync(file.path)) return null;
+
+      const originalName = path.basename(String(file.originalname || '')) || 'upload';
+      const extension = path.extname(originalName) || '.dat';
+      const size = fs.statSync(file.path).size;
+
+      const quarantineDir = path.join(path.dirname(file.path), '..', 'quarantine');
+      fs.mkdirSync(quarantineDir, { recursive: true });
+
+      const storedPath = path.join(quarantineDir, `${String(batchId)}${extension}`);
+      fs.renameSync(file.path, storedPath);
+
+      const sourceFile = {
+        storedPath,
+        originalName,
+        size,
+        retainedAt: new Date(),
+      };
+
+      await db.collection('import_batches').updateOne(
+        { _id: batchId },
+        { $set: { sourceFile, updatedAt: sourceFile.retainedAt } }
+      );
+
+      logger.warn(
+        `[IMPORT_LGPD] Arquivo de origem retido para revisao (batch ${batchId}): ${storedPath}`
+      );
+
+      return sourceFile;
+    } catch (retainError) {
+      logger.error(
+        'Falha ao reter arquivo de origem da importacao (RNF011 AC#4):',
+        retainError.message || retainError
+      );
+      return null;
+    }
+  }
+
+  /**
    * Limpa arquivo temporário
    */
   cleanupFile(filePath) {
@@ -1648,4 +2616,7 @@ class ImportLGPDService {
 }
 
 module.exports = new ImportLGPDService();
+// #915: os leitores de quarentena recebem o conjunto de tipos legiveis, e
+// quem monta esse conjunto (o controller) precisa dos nomes.
+module.exports.QUARANTINE_BATCH_TYPES = QUARANTINE_BATCH_TYPES;
 

@@ -20,9 +20,24 @@ function generateAnonId(userID, salt = null) {
     return 'USR-SYSTEM';
   }
 
-  // Usa salt do ambiente ou gera um fixo baseado no userID
-  const systemSalt = salt || process.env.USER_ANON_SALT || 'BioAdvanceD-LGPD-2024';
-  
+  // #972: falha fechada. Isto costumava cair no literal
+  // 'BioAdvanceD-LGPD-2024', que está COMMITADO neste repositório -- e com um
+  // salt conhecido USR-XXXX deixa de ser um pseudônimo: sha256(userId + salt)
+  // truncado a 8 hex é calculável para qualquer id candidato, então a
+  // de-identificação passa a ser reversível por quem tiver o repo. O
+  // pseudônimo alcança a trilha de auditoria (log.service.js) e a proveniência
+  // de arquivos, que é onde ele faz trabalho de LGPD de verdade.
+  //
+  // Mesma postura de neo4jCanonicalProjection.service.js:36, que lê a mesma
+  // família de variáveis sem literal de fallback.
+  const systemSalt = salt || process.env.USER_ANON_SALT;
+  if (!systemSalt) {
+    throw new Error(
+      'USER_ANON_SALT não configurado. A pseudonimização de usuários (RNF007/LGPD) ' +
+      'não pode usar um salt padrão: gere um valor secreto por ambiente.'
+    );
+  }
+
   // Cria hash SHA-256 do userID + salt
   const hash = crypto
     .createHash('sha256')
@@ -148,7 +163,12 @@ function sanitizePayload(payload) {
     'name', 'nome', 'userName', 'username', 'email', 'e-mail',
     'cpf', 'document', 'documento', 'phone', 'telefone',
     'address', 'endereco', 'birthDate', 'dataNascimento',
-    'password', 'passwordHash', 'mfaSecret', 'token', 'secret'
+    // #1072: both the pre-rename plaintext name and the live ciphertext field.
+    'password', 'passwordHash', 'mfaSecret', 'mfaSecretCiphertext', 'token', 'secret',
+    // RF005/RNF007 (#363/#564): the canonical ParticipantIdentity field
+    // names — 'name'/'document' above predate them and don't cover the
+    // fields by their actual names.
+    'patientName', 'identityDocument'
   ];
 
   sensitiveFields.forEach(field => {

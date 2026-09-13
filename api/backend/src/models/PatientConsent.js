@@ -1,6 +1,8 @@
 /**
  * Modelo de validação e estrutura para PatientConsent
  */
+const crypto = require('crypto');
+
 class PatientConsentModel {
   static validate(data) {
     const errors = [];
@@ -45,6 +47,10 @@ class PatientConsentModel {
       errors.push('signatureHash deve ser string');
     }
 
+    if (data.studyId !== undefined && data.studyId !== null && typeof data.studyId !== 'string') {
+      errors.push('studyId deve ser string');
+    }
+
     return {
       isValid: errors.length === 0,
       errors
@@ -53,6 +59,7 @@ class PatientConsentModel {
 
   static create(data) {
     return {
+      consentId: data.consentId || crypto.randomUUID(),
       participantId: data.participantId,
       consentTemplateId: data.consentTemplateId,
       signedAt: data.signedAt ? new Date(data.signedAt) : new Date(),
@@ -65,6 +72,7 @@ class PatientConsentModel {
       signatureMimeType: data.signatureMimeType || null,
       signatureHash: data.signatureHash || null,
       responses: data.responses || {},
+      studyId: data.studyId || null,
       createdAt: new Date(),
       updatedAt: new Date()
     };

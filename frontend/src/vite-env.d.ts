@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+/// <reference types="@testing-library/jest-dom/vitest" />
 
 declare module '*.jsx' {
 	import type { ComponentType } from 'react';

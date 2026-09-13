@@ -38,13 +38,15 @@ export async function registerClinicalIntake(payload = {}, options = {}) {
       quantity: payload.specimen?.quantity,
       unit: text(payload.specimen?.unit),
       registeredAt: text(payload.specimen?.registeredAt) || nowIso(),
-      lifecycleStatus: text(payload.specimen?.lifecycleStatus),
+      // Pass-through of ClinicalIntakeWizard.jsx's creation default — see
+      // that file's comment (#415).
+      specimenStatus: text(payload.specimen?.specimenStatus),
       linkedProject: text(payload.specimen?.linkedProject),
       sprec: payload.specimen?.sprec || {},
       merkleRoot: text(payload.specimen?.merkleRoot),
     },
     diagnosis: payload.diagnosis || null,
-    clinical: payload.clinical || { comorbidities: [], bloodPressure: '', clinicalObservations: '', diseasePhenotypes: [], diseaseBiomarkers: [], biomarkerValues: [], pharmacologyData: {} },
+    clinical: payload.clinical || { charlsonConditions: [], bloodPressure: '', clinicalObservations: '', diseasePhenotypes: [], diseaseBiomarkers: [], biomarkerValues: [], pharmacologyData: {} },
     biomarkers: Array.isArray(payload.biomarkers) ? payload.biomarkers : [],
   };
 

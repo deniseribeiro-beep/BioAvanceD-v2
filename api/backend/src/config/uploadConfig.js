@@ -2,8 +2,16 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
+const env = require('./env');
 
-const UPLOAD_ROOT = path.join(__dirname, '../../uploads/analysis');
+// #893: read_only:true containers in compose.prod.yml have no writable
+// mount under /app, so a root anchored on __dirname (inside the install
+// directory) fails EROFS on the first upload. UPLOAD_DIR/STORAGE_DIR let
+// prod point these at a volume mounted outside /app while every other
+// caller keeps today's default byte for byte.
+const UPLOADS_BASE = env.UPLOAD_DIR || path.join(__dirname, '../../uploads');
+const STORAGE_BASE = env.STORAGE_DIR || path.join(__dirname, '../../storage');
+const UPLOAD_ROOT = path.join(UPLOADS_BASE, 'analysis');
 
 const ensureDir = (dirPath) => {
   if (!fs.existsSync(dirPath)) {
@@ -88,5 +96,7 @@ module.exports = {
   upload,
   storage,
   fileFilter,
-  UPLOAD_ROOT
+  UPLOAD_ROOT,
+  UPLOADS_BASE,
+  STORAGE_BASE
 };

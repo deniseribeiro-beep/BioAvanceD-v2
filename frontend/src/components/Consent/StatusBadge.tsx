@@ -1,6 +1,6 @@
 import React from 'react';
 
-export type ConsentStatus = 'GRANTED' | 'REVOKED' | 'PENDING' | 'EXPIRED';
+export type ConsentStatus = 'GRANTED' | 'REVOKED' | 'PENDING' | 'EXPIRED' | 'UNKNOWN';
 
 interface StatusBadgeProps {
   status: ConsentStatus;
@@ -10,7 +10,8 @@ const statusMap: Record<ConsentStatus, { label: string; color: string }> = {
   GRANTED: { label: 'Assinado', color: '#22c55e' },
   REVOKED: { label: 'Recusado', color: '#ef4444' },
   PENDING: { label: 'Pendente', color: '#f59e42' },
-  EXPIRED: { label: 'Expirado', color: '#6b7280' }
+  EXPIRED: { label: 'Expirado', color: '#6b7280' },
+  UNKNOWN: { label: 'Desconhecido', color: '#9ca3af' }
 };
 
 export default function StatusBadge({ status }: StatusBadgeProps) {

@@ -5,6 +5,14 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
+# Defensive fallback for a known npm bug (npm/cli#4828): npm ci can skip
+# installing a platform-specific optionalDependency (rollup's musl binary)
+# when the lockfile's resolved-package tree was generated on a different
+# platform (this one was generated on Windows). No-op if already present —
+# confirmed needed under Docker Desktop for Windows even though CI (native
+# Linux) doesn't hit it with the same lockfile.
+RUN node -e "require('@rollup/rollup-linux-x64-musl')" 2>/dev/null || npm install @rollup/rollup-linux-x64-musl --no-save --no-audit --no-fund
+
 COPY . .
 
 EXPOSE 5173

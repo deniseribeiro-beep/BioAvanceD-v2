@@ -21,11 +21,13 @@ function initRedis() {
   }
 
   try {
-    // Valida variáveis de ambiente
+    // Valida variáveis de ambiente. validateRedisOnly(allowDevelopment=NODE_ENV==='development', true)
+    // only ever returns false in development (any other NODE_ENV with an invalid
+    // config throws instead) — so the check below only needs !isValid, not a
+    // redundant NODE_ENV re-check for a branch that can't otherwise occur.
     const isValid = validateRedisOnly(process.env.NODE_ENV === 'development', true);
-    
-    // Se não for válido e estiver em desenvolvimento, retorna null
-    if (!isValid && process.env.NODE_ENV === 'development') {
+
+    if (!isValid) {
       logger.warn('[WARN] Redis não será inicializado devido a configuração faltante');
       return null;
     }

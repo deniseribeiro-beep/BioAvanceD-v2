@@ -155,6 +155,74 @@
 	margin-top: 1rem;
 }
 
+.backup-policy {
+	border: 1px solid var(--border);
+	border-radius: var(--radius-card);
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
+}
+
+.backup-policy h2 {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	margin: 0 0 0.5rem;
+	color: var(--color-navy);
+	letter-spacing: 0;
+}
+
+.backup-policy > p {
+	margin: 0 0 0.85rem;
+	color: var(--text-secondary);
+	line-height: 1.55;
+}
+
+.policy-form {
+	display: grid;
+	gap: 1rem;
+	max-width: 480px;
+}
+
+.policy-field {
+	display: grid;
+	gap: 0.3rem;
+}
+
+.policy-field label {
+	font-weight: 600;
+	color: var(--text);
+}
+
+.policy-field input {
+	border: 1px solid var(--border);
+	border-radius: var(--radius-control);
+	padding: 0.5rem 0.65rem;
+}
+
+.policy-help {
+	color: var(--text-secondary);
+	font-size: 0.8rem;
+}
+
+.policy-switch {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.policy-last-updated {
+	margin: 0;
+	color: var(--text-secondary);
+	font-size: 0.85rem;
+}
+
+.policy-actions {
+	display: flex;
+	justify-content: flex-start;
+}
+
 .access-denied {
 	display: grid;
 	justify-items: center;
@@ -213,6 +281,41 @@
 	justify-content: flex-end;
 	gap: 0.5rem;
 	flex-wrap: wrap;
+}
+
+/* #740 (RF013 AC#1/AC#3): the run status and checksum columns. Status is a
+   badge keyed off the persisted run result; `unknown` covers a backup
+   directory with no matching backupHistory row. */
+.backup-status-badge {
+	display: inline-block;
+	padding: 0.15rem 0.55rem;
+	border-radius: var(--radius-control);
+	font-size: 0.78rem;
+	font-weight: 600;
+	border: 1px solid var(--border);
+	color: var(--text-secondary);
+}
+
+.backup-status-badge[data-status="success"] {
+	color: var(--success);
+	border-color: var(--success);
+}
+
+.backup-status-badge[data-status="error"] {
+	color: var(--danger);
+	border-color: var(--danger);
+}
+
+.backup-status-badge[data-status="skipped"] {
+	color: var(--info);
+	border-color: var(--info);
+}
+
+.backup-checksum {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 0.8rem;
+	color: var(--text-secondary);
+	white-space: nowrap;
 }
 
 @media (max-width: 960px) {

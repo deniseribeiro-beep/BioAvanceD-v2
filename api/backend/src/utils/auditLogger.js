@@ -1,6 +1,32 @@
+const net = require('net');
 const logService = require('../services/log.service');
 const { sanitizePatientForLogs } = require('./patientAnonymization');
 const { getUserAnonId, anonymizeLogUser } = require('./userAnonymization');
+const { getActiveRoleCodes } = require('../services/rbac-assignment.service');
+const securityAlertsService = require('../services/securityAlerts.service');
+
+// #1105: dict-02 P1X-0331 gives AuditEvent.source a CLOSED six-value
+// vocabulary. Declared here as the single gate between a caller and the
+// Merkle hash -- integrityCheckService.js:60's buildHashPayload includes
+// `source` and rows are immutable, so an invalid value is sealed into the
+// daily root rather than correctable later. Anything not in this set falls
+// back to 'api': failing SAFE to a canonical value beats writing one that is
+// outside the vocabulary, which is exactly the defect #1094 fixed.
+const AUDIT_SOURCE_VOCABULARY = Object.freeze(['api', 'frontend', 'worker', 'mqtt', 'scheduler', 'system']);
+const DEFAULT_AUDIT_SOURCE = 'api';
+
+function resolveAuditSource(declared) {
+  if (declared === undefined || declared === null) return DEFAULT_AUDIT_SOURCE;
+  const normalized = String(declared).trim().toLowerCase();
+  return AUDIT_SOURCE_VOCABULARY.includes(normalized) ? normalized : DEFAULT_AUDIT_SOURCE;
+}
+
+const ROLE_LABEL_BY_CODE = {
+  administrator: 'Administrador',
+  coordinator: 'Coordenador',
+  technician: 'Técnico',
+  external_user: 'Usuário Externo',
+};
 
 /**
  * Logger Central de Auditoria
@@ -44,15 +70,15 @@ class AuditLogger {
       ip = req.socket.remoteAddress;
     }
 
-    // Remove porta do IP se presente (ex: ::ffff:192.168.1.1:12345 -> ::ffff:192.168.1.1)
-    if (ip && ip.includes(':')) {
-      const parts = ip.split(':');
-      if (parts.length > 2) {
-        // IPv6 com porta
-        ip = parts.slice(0, -1).join(':');
-      } else if (parts.length === 2 && !parts[0].includes('.')) {
-        // IPv4 com porta
-        ip = parts[0];
+    // Remove porta do IP se presente (ex: ::ffff:192.168.1.1:12345 -> ::ffff:192.168.1.1,
+    // 192.168.1.1:12345 -> 192.168.1.1). Não mexe em endereços IPv6 "nus" (sem porta),
+    // já que net.isIP() os reconhece como válidos por inteiro (ex: "::1").
+    if (ip && ip.includes(':') && net.isIP(ip) === 0) {
+      const lastColon = ip.lastIndexOf(':');
+      const host = ip.slice(0, lastColon);
+      const port = ip.slice(lastColon + 1);
+      if (/^\d{1,5}$/.test(port) && (net.isIP(host) !== 0 || !host.includes(':'))) {
+        ip = host;
       }
     }
 
@@ -85,16 +111,33 @@ class AuditLogger {
     if (!req || !req.user) return {};
 
     const userID = req.user.userID || req.user._id?.toString() || null;
-    
+
     // Obtém identificador anonimizado
     const anonId = await getUserAnonId(req.user, db);
+
+    // #426: resolve o rótulo de papel via UserRoleAssignment -> Role quando
+    // possível; accessType/roleName do req.user ficam como fallback quando
+    // db não está disponível (ex.: chamadores que nunca chamaram init(db)).
+    let userRole = req.user.roleName;
+    if (!userRole && db && userID) {
+      try {
+        const roleCodes = await getActiveRoleCodes(db, userID);
+        userRole = roleCodes.map((code) => ROLE_LABEL_BY_CODE[code]).find(Boolean);
+      } catch (error) {
+        // db não totalmente configurado (ex.: mock parcial em teste) -- cai
+        // para a heurística de accessType abaixo.
+      }
+    }
+    if (!userRole) {
+      userRole = req.user.accessType === 4 ? 'Administrador' :
+        req.user.accessType === 3 ? 'Coordenador' :
+        req.user.accessType === 2 ? 'Técnico' : 'Usuário Externo';
+    }
 
     return {
       userID: anonId, // Usa identificador anonimizado
       userName: anonId, // Usa identificador anonimizado em vez de nome
-      userRole: req.user.roleName || (req.user.accessType === 4 ? 'Administrador' : 
-              req.user.accessType === 3 ? 'Coordenador' : 
-              req.user.accessType === 2 ? 'Técnico' : 'Usuário Externo')
+      userRole
     };
   }
 
@@ -108,9 +151,16 @@ class AuditLogger {
 
     // Remove campos sensíveis
     const sensitiveFields = [
-      'password', 'passwordHash', 'mfaSecret', 'token', 'secret',
+      // #1072: both the pre-rename plaintext name and the live ciphertext
+      // field -- a redaction list is the one place where over-inclusion costs
+      // nothing and under-inclusion leaks a credential.
+      'password', 'passwordHash', 'mfaSecret', 'mfaSecretCiphertext', 'token', 'secret',
       'patientName', 'name', 'email', 'cpf', 'document', 'address',
-      'phone', 'telefone', 'birthDate', 'dataNascimento'
+      'phone', 'telefone', 'birthDate', 'dataNascimento',
+      // RF005/RNF007 (#363/#564): identityDocument is the canonical
+      // civil-identity field ParticipantIdentity introduced — 'document'
+      // above predates it and doesn't cover the field by its actual name.
+      'identityDocument'
     ];
 
     sensitiveFields.forEach(field => {
@@ -120,7 +170,7 @@ class AuditLogger {
     });
 
     // Se for entidade Patient, sanitiza usando utilitário específico
-    if (entity === 'Patient' && sanitized.patientID) {
+    if (entity === 'Patient' && sanitized.participantId) {
       return sanitizePatientForLogs(sanitized);
     }
 
@@ -163,9 +213,6 @@ class AuditLogger {
     if (pathLower.includes('/config') || pathLower.includes('/settings')) {
       return 'Configurações';
     }
-    if (pathLower.includes('/ia')) {
-      return 'Sistema';
-    }
     if (pathLower.includes('/security') || pathLower.includes('/mfa')) {
       return 'Segurança';
     }
@@ -190,19 +237,21 @@ class AuditLogger {
 
     const {
       action,           // Tipo de ação (LOGIN, CREATE, UPDATE, etc.)
-      entity,           // Entidade afetada (Patient, Sample, User, etc.)
-      entityID,         // ID da entidade (sem dados sensíveis)
-      resourceType,     // Tipo canônico de recurso
-      resourceId,       // Identificador canônico de recurso
-      status,           // Status canônico (success, warning, failure, started)
-      result,           // 'success', 'error', 'warning'
+      resourceType,     // Entidade afetada, nome canônico (Patient, Sample, User, etc.)
+      resourceId,       // Identificador canônico da entidade (sem dados sensíveis)
+      status,           // 'success', 'error', 'warning'
+      occurredAt,       // Momento canônico do evento (opcional, default: agora)
       severity,         // 'info', 'warning', 'error', 'critical'
       message,          // Mensagem detalhada
       payload,          // Payload relevante (sanitizado)
       error,            // Objeto de erro (opcional)
       req,              // Requisição HTTP (opcional)
-      module            // Módulo de origem (opcional, será determinado automaticamente)
+      module,           // Módulo de origem (opcional, será determinado automaticamente)
+      source            // #1105: origem dict-02 P1X-0331 (opcional, default 'api')
     } = options;
+    const entity = resourceType;
+    const entityID = resourceId;
+    const result = status;
 
     try {
       const requestInfo = this.extractRequestInfo(req);
@@ -215,26 +264,47 @@ class AuditLogger {
       // Extrai stack de erro se houver
       const errorStack = error ? this.extractErrorStack(error) : null;
 
+      const eventTime = occurredAt ? new Date(occurredAt) : new Date();
+
       const logData = {
         userID: userInfo.userID || 'USR-SYSTEM',
         userName: userInfo.userName || 'USR-SYSTEM', // Já anonimizado pelo extractUserInfo
         action: (action || 'LOG').toString().toUpperCase(),
-        resourceType: resourceType || formatEntity(entity),
-        resourceId: resourceId || entityID || null,
-        status: status || result || 'success',
+        resourceType: formatEntity(entity),
+        resourceId: entityID || null,
+        status: result || 'success',
         entity: formatEntity(entity),
         entityID: entityID || null,
-        result: status || result || 'success',
+        result: result || 'success',
         severity: severity || 'info',
         sourceIP: requestInfo.ip, // IP principal para compatibilidade
         ipSource: requestInfo.ip, // Alias para compatibilidade
-        source: requestInfo.origin,
+        // #1094: dict-02 P1X-0331 makes AuditEvent.source a 1..1 Core field
+        // with a CLOSED vocabulary -- api, frontend, worker, mqtt, scheduler,
+        // system. This used to be `requestInfo.origin`, the HTTP Origin header,
+        // which is never one of those: a browser row got a URL and a
+        // machine-ingest row got the literal "N/A" (truthy, so it suppressed
+        // Log.js:124's own canonical `|| 'api'` fallback rather than merely
+        // being odd). The field is hashed into the daily Merkle root
+        // (integrityCheckService.js:60) on immutable rows, so a wrong value is
+        // sealed into the integrity chain, not correctable later.
+        //
+        // The raw header is NOT lost -- metadata.request.origin below still
+        // carries it verbatim.
+        //
+        // Hardcoded rather than caller-declared on purpose: every caller that
+        // reaches this with a req IS an API request. The non-API callers
+        // (import-worker.js, retentionSweep.service.js, backup-policy.service.js)
+        // should declare 'worker'/'scheduler' instead, which is #1105 -- they
+        // already land on 'api' today via Log.js's default, so this changes
+        // nothing for them.
+        source: resolveAuditSource(source),
         module: moduleName,
         message: message || `${action} em ${entity}`,
         payload: sanitizedPayload,
         errorStack: errorStack,
-        timestamp: new Date(),
-        dateTime: new Date(),
+        timestamp: eventTime,
+        dateTime: eventTime,
         metadata: {
           // Dados de rastreamento completos
           tracking: {
@@ -270,6 +340,70 @@ class AuditLogger {
       await logService.createLog(this.db, anonymizedLogData, req);
     } catch (error) {
       console.error('Erro ao registrar log de auditoria:', error.message);
+
+      // #1096: escalate, exactly as log.service.js:124-140 already does for
+      // the audit_events MIRROR. createLog rethrows deliberately -- covering
+      // validation, LogModel.create, computeAuditHash and the primary
+      // logsCollection.insertOne, i.e. the audit row not being written AT ALL
+      // -- and this catch used to throw that away, leaving one console.error
+      // while the request continued as though it had been audited.
+      //
+      // The escalation guarded the copy and not the original: a failed mirror
+      // raised a critical alert, while a failed primary insert produced output
+      // strictly QUIETER than the logger.warn that case was judged insufficient
+      // by (#369/#394 -- "A warn-level log line alone was proven to hide that
+      // for ~4 weeks"). And a row that was never written is not a gap the
+      // Merkle check can find: integrityCheckService#buildMerkleForDate builds
+      // the daily root over rows that EXIST, so a missing leaf is
+      // indistinguishable from a quiet day. This alert is the only record.
+      //
+      // No recursion guard is needed: securityAlerts.service.js requires
+      // neither log.service nor this module, writes to its own
+      // `security_alerts` collection, returns early when it has no db, and
+      // wraps its own body in a catch -- so logSecurityAlert cannot re-enter
+      // the audit path and cannot throw. The try below is belt-and-braces so a
+      // future change there can never turn a failed audit into a failed
+      // request.
+      //
+      // Deliberately no userID: the anonymized one is built inside the try and
+      // is out of scope here, and reaching for `req.user` instead would write a
+      // RAW user identifier into security_alerts -- the exact leak
+      // anonymizeLogUser exists to prevent.
+      // #1106 direction 3: say WHICH kind of failure this was.
+      // log.service.js tags a validation failure at its throw site; anything
+      // untagged got past validation and failed at the insert.
+      //
+      // Both stay CRITICAL, deliberately. The tempting move is to downgrade
+      // the validation case to `error` because it is "only" a caller defect,
+      // but the audit row is unwritten either way and that is the entire
+      // #369/#394 lesson -- a quieter signal for a missing audit row is what
+      // hid the last one for ~4 weeks. The KIND changes the diagnosis (page
+      // an operator vs. file a bug), not the urgency.
+      const failureKind = error?.code === 'LOG_VALIDATION_FAILED' ? 'validation' : 'infrastructure';
+
+      try {
+        securityAlertsService.init(this.db);
+        await securityAlertsService.logSecurityAlert({
+          type: 'AUDIT_TRAIL_WRITE_FAILURE',
+          severity: 'critical',
+          action: 'AUDIT_LOG_WRITE_FAILED',
+          reason: failureKind === 'validation'
+            ? 'Log de auditoria rejeitado na validação (defeito do chamador): a linha não foi gravada'
+            : 'Falha ao gravar o log de auditoria primário (coleção logs)',
+          details: {
+            failureKind,
+            entity: formatEntity(entity),
+            entityID: entityID || null,
+            attemptedAction: (action || 'LOG').toString().toUpperCase(),
+            error: error.message || String(error)
+          }
+        });
+      } catch (alertError) {
+        console.error(
+          'Erro ao emitir alerta AUDIT_TRAIL_WRITE_FAILURE:',
+          alertError.message || alertError
+        );
+      }
     }
   }
 
@@ -279,8 +413,8 @@ class AuditLogger {
   async logLogin(req, success, error = null) {
     await this.log({
       action: 'LOGIN',
-      entity: 'Authentication',
-      result: success ? 'success' : 'error',
+      resourceType: 'Authentication',
+      status: success ? 'success' : 'error',
       severity: success ? 'info' : 'warning',
       message: success 
         ? `Login realizado com sucesso`
@@ -294,8 +428,8 @@ class AuditLogger {
   async logLogout(req) {
     await this.log({
       action: 'LOGOUT',
-      entity: 'Authentication',
-      result: 'success',
+      resourceType: 'Authentication',
+      status: 'success',
       severity: 'info',
       message: 'Logout realizado',
       req: req,
@@ -306,9 +440,9 @@ class AuditLogger {
   async logCreate(req, entity, entityID, payload = null) {
     await this.log({
       action: 'CREATE',
-      entity: entity,
-      entityID: entityID,
-      result: 'success',
+      resourceType: entity,
+      resourceId: entityID,
+      status: 'success',
       severity: 'info',
       message: `${entity} criado com sucesso`,
       payload: payload,
@@ -319,9 +453,9 @@ class AuditLogger {
   async logUpdate(req, entity, entityID, payload = null) {
     await this.log({
       action: 'UPDATE',
-      entity: entity,
-      entityID: entityID,
-      result: 'success',
+      resourceType: entity,
+      resourceId: entityID,
+      status: 'success',
       severity: 'info',
       message: `${entity} atualizado com sucesso`,
       payload: payload,
@@ -332,21 +466,32 @@ class AuditLogger {
   async logDelete(req, entity, entityID) {
     await this.log({
       action: 'DELETE',
-      entity: entity,
-      entityID: entityID,
-      result: 'success',
+      resourceType: entity,
+      resourceId: entityID,
+      status: 'success',
       severity: 'warning',
       message: `${entity} deletado`,
       req: req
     });
   }
 
-  async logImport(req, entity, result, total, success, errors, context = {}) {
+  // #1105: `options.source` rides in its own bag rather than on `context`,
+  // because `context` for logError IS the payload -- keeping them separate
+  // means a declared source never leaks into the audited payload on either
+  // wrapper.
+  async logImport(req, entity, result, total, success, errors, context = {}, options = {}) {
     // Conforme fluxograma: registra após processamento com métricas consolidadas
     const payload = {
       total,
       success,
       errors,
+      // #798: blank rows are skipped and deliberately stay out
+      // of `total`, so without this the audit record cannot distinguish a
+      // clean 9-row file from a 12-row file whose last three rows were blank
+      // -- which is the one case where an operator most needs to notice.
+      // This payload hand-picks known keys off `context`, so a caller passing
+      // `skipped` has no effect until it is read here by name.
+      skipped: context.skipped || 0,
       jobID: context.jobID || null,
       dataType: context.dataType || entity.toLowerCase(),
       fhirResourcesCreated: context.fhirResourcesCreated || 0,
@@ -357,34 +502,36 @@ class AuditLogger {
 
     await this.log({
       action: 'IMPORT',
-      entity: entity,
-      result: errors > 0 ? 'warning' : (result === 'pending' ? 'info' : 'success'),
+      resourceType: entity,
+      status: errors > 0 ? 'warning' : (result === 'pending' ? 'info' : 'success'),
       severity: errors > 0 ? 'warning' : (result === 'pending' ? 'info' : 'info'),
       message: `Importação de ${entity}: ${success}/${total} registros importados${errors > 0 ? ` com ${errors} erro(s)` : ''}${context.jobID ? ` (Job: ${context.jobID})` : ''}`,
       payload: payload,
       req: req,
-      module: 'Importação'
+      module: 'Importação',
+      source: options.source
     });
   }
 
-  async logError(req, entity, error, context = null) {
+  async logError(req, entity, error, context = null, options = {}) {
     await this.log({
       action: 'ERROR',
-      entity: entity || 'Sistema',
-      result: 'error',
+      resourceType: entity || 'Sistema',
+      status: 'error',
       severity: 'error',
       message: `Erro: ${error?.message || 'Erro desconhecido'}`,
       error: error,
       payload: context,
-      req: req
+      req: req,
+      source: options.source
     });
   }
 
   async logLanguageChange(req, language) {
     await this.log({
       action: 'CONFIG',
-      entity: 'Settings',
-      result: 'success',
+      resourceType: 'Settings',
+      status: 'success',
       severity: 'info',
       message: `Idioma alterado para ${language}`,
       payload: { language },
@@ -396,9 +543,9 @@ class AuditLogger {
   async logPermissionChange(req, targetUser, changes) {
     await this.log({
       action: 'UPDATE',
-      entity: 'User',
-      entityID: targetUser,
-      result: 'success',
+      resourceType: 'User',
+      resourceId: targetUser,
+      status: 'success',
       severity: 'info',
       message: 'Permissões ou cargo alterados',
       payload: changes,
@@ -407,18 +554,6 @@ class AuditLogger {
     });
   }
 
-  async logAssistant(req, question, response) {
-    await this.log({
-      action: 'QUERY',
-      entity: 'Assistant',
-      result: 'success',
-      severity: 'info',
-      message: 'Consulta ao sistema',
-      payload: { questionLength: question?.length || 0, responseLength: response?.length || 0 },
-      req: req,
-      module: 'Sistema'
-    });
-  }
 }
 
 function formatEntity(entity) {

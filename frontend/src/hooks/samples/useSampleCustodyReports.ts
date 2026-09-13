@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { sampleChainApi } from '@/services/sampleChainApi';
 import { Sample } from '@/types/models';
 import { useSamples } from '../useSamples';
 import { normalizeMovementList, parseComplianceError, SampleMovementItem } from './sampleMovements.shared';
+import { createRequestSequence, RequestSequence } from '../useRequestSequence';
 
 export type SampleMovement = SampleMovementItem;
 
@@ -35,6 +36,21 @@ export function resolveParticipantId(sample: SampleRecord): string {
 export function useSampleCustodyReports() {
   const { samples, loading } = useSamples();
   const [movementBySampleId, setMovementBySampleId] = useState<Record<string, SampleMovementState>>({});
+  // #901: state here is keyed by sampleId, so cross-row writes are already
+  // safe -- but two toggles for the *same* row can still race. Keep one
+  // RequestSequence per sampleId (rather than a single shared sequence)
+  // so a same-row race is caught without one row's calls staling another
+  // row's in-flight request.
+  const sequencesRef = useRef<Map<string, RequestSequence>>(new Map());
+
+  const getSequenceFor = (sampleId: string): RequestSequence => {
+    let seq = sequencesRef.current.get(sampleId);
+    if (!seq) {
+      seq = createRequestSequence();
+      sequencesRef.current.set(sampleId, seq);
+    }
+    return seq;
+  };
 
   const rows = useMemo<SampleCustodyRow[]>(() => (samples || []) as SampleCustodyRow[], [samples]);
 
@@ -64,8 +80,12 @@ export function useSampleCustodyReports() {
       },
     }));
 
+    const seq = getSequenceFor(sampleId);
+    const stamp = seq.next();
+
     try {
       const response = await sampleChainApi.getMovements(sampleId);
+      if (!seq.isCurrent(stamp)) return;
       const normalized = normalizeMovementList(response?.data);
       setMovementBySampleId((previous) => ({
         ...previous,
@@ -78,6 +98,7 @@ export function useSampleCustodyReports() {
         },
       }));
     } catch (error: unknown) {
+      if (!seq.isCurrent(stamp)) return;
       const parsed = parseComplianceError(error);
       setMovementBySampleId((previous) => ({
         ...previous,

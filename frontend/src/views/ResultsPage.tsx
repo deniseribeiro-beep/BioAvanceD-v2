@@ -10,9 +10,46 @@ import { useResults } from '../hooks/useResults';
 import { useEquipment } from '../hooks/useEquipment';
 import { useLanguage } from '../contexts/LanguageContext';
 import { resultService, importService } from '../services/api';
+import { extractResponseEntity } from '../api/response.adapters';
 import AnalysisUploadModal from '../components/AnalysisUploadModal';
 import AnalysisUpload from '../components/AnalysisUpload.jsx';
 import './ResultsPage.css';
+
+// #905: the jobs-list endpoint returns the worker's flat counts
+// (totalRecords/successCount/errorCount) verbatim -- there is no nested
+// `metrics` object on listed jobs, so the strip that read job.metrics
+// never rendered for any job. Derive the display shape from the flat
+// fields instead. Exported for the co-located unit test.
+export function deriveJobMetrics(job: ImportJob): { totalRecords: number; successfulRecords: number; failedRecords: number } | null {
+  if (typeof job.totalRecords !== 'number') {
+    return null;
+  }
+  return {
+    totalRecords: job.totalRecords,
+    successfulRecords: typeof job.successCount === 'number' ? job.successCount : 0,
+    failedRecords: typeof job.errorCount === 'number' ? job.errorCount : 0,
+  };
+}
+
+// #905: the report modal read `validationErrors`/`processingErrors`, fields
+// no backend path has ever returned (getJobReport returns `errors`, see
+// import-async.service.js:595). The worker writes the human-readable text
+// under the `error` key (result-worker.js:90,111,147,316,329,343), not
+// `message` -- reading `message` here would render every row blank.
+// Exported for the co-located unit test.
+export function formatImportErrorRow(item: NonNullable<ImportJob['errors']>[number]): {
+  row: number | undefined;
+  code: string | undefined;
+  file: string | undefined;
+  message: string;
+} {
+  return {
+    row: item.row,
+    code: item.code,
+    file: item.fileName ?? item.filePath,
+    message: item.error,
+  };
+}
 
 export default function ResultsPage() {
   const { t, language } = useLanguage();
@@ -48,21 +85,35 @@ export default function ResultsPage() {
   const loadImportJobs = async () => {
     try {
       const response = await importService.listJobs({ limit: 20 });
-      // Backend retorna { success: true, data: [] }
-      // Axios já extrai o body, então response.data é { success: true, data: [] }
+      // #895: GET /api/import/jobs returns { success, data: { jobs, total, limit,
+      // skip } } -- see import-async.controller.js. Axios unwraps the HTTP body,
+      // so the array lives at response.data.data.jobs.
+      //
+      // The three fallbacks below are kept for older/other response shapes, but
+      // the canonical one MUST come first: response.data.data is a non-array
+      // object here, so the old `Array.isArray(response.data.data)` branch fell
+      // through to `jobs = []` on every single call. The page therefore rendered
+      // "no imports yet" unconditionally and the per-job "Ver" button -- the only
+      // entry point to the importJobID flow (#861, #889) -- could never appear.
       let jobs: ImportJob[] = [];
       if (response.data) {
-        if (Array.isArray(response.data)) {
-          // Se response.data já é um array (caso direto)
+        if (response.data.data?.jobs && Array.isArray(response.data.data.jobs)) {
+          // Canonical: { success, data: { jobs: [] } }
+          jobs = response.data.data.jobs;
+        } else if (Array.isArray(response.data)) {
           jobs = response.data;
         } else if (response.data.data && Array.isArray(response.data.data)) {
-          // Se response.data é { success: true, data: [] }
           jobs = response.data.data;
         } else if (response.data.jobs && Array.isArray(response.data.jobs)) {
-          // Se response.data é { jobs: [] }
           jobs = response.data.jobs;
         } else {
-          // Se não for array, assume que é um objeto vazio ou estrutura diferente
+          // #895: never fail silently again. An unrecognised shape is a bug, and
+          // an empty list is indistinguishable from "no imports yet" to a user.
+          console.error(
+            '[ResultsPage] Unrecognised /api/import/jobs response shape; ' +
+            'import history will render empty. Received keys:',
+            Object.keys(response.data ?? {})
+          );
           jobs = [];
         }
       }
@@ -79,7 +130,10 @@ export default function ResultsPage() {
   const handleViewReport = async (job: ImportJob) => {
     try {
       const response = await importService.getImportReport(job.jobID);
-      setSelectedJob(response.data);
+      // #905: the controller wraps the report in { success, data } -- setting
+      // response.data directly made selectedJob the envelope, so every
+      // modal field (fileName, status, metrics) read undefined.
+      setSelectedJob(extractResponseEntity<ImportJob>(response, job));
       setShowReportModal(true);
     } catch (err: any) {
       setImportError(t('results.reportLoadError', 'Erro ao carregar relatório'));
@@ -91,6 +145,12 @@ export default function ResultsPage() {
     switch (status) {
       case 'completed':
         return <CheckCircle className="status-icon completed" />;
+      // #890: a run that finished normally but wrote nothing (every
+      // processed entry hit an unimplemented/unsupported format stub) is
+      // not a plain success -- flag it visually like failed/pending states
+      // rather than the green completed checkmark.
+      case 'completed_no_data':
+        return <AlertCircle className="status-icon completed_no_data" />;
       case 'failed':
         return <XCircle className="status-icon failed" />;
       case 'processing':
@@ -106,6 +166,7 @@ export default function ResultsPage() {
       pending: t('results.status.pending', 'Pendente'),
       processing: t('results.status.processing', 'Processando'),
       completed: t('results.status.completed', 'Concluído'),
+      completed_no_data: t('results.status.completed_no_data', 'Concluído sem dados'),
       failed: t('results.status.failed', 'Falhou'),
       cancelled: t('results.status.cancelled', 'Cancelado')
     };
@@ -183,7 +244,12 @@ export default function ResultsPage() {
                           <ExternalLink size={16} /> {t('results.view', 'Ver')}
                         </Button>
                       )}
-                      {(job.status === 'completed' || job.status === 'failed') && (
+                      {/* #890: completed_no_data is a terminal status whose
+                          only user-facing route to the underlying error text
+                          is the report -- there is nothing to "Ver" (no
+                          results were written), but the report must remain
+                          reachable. */}
+                      {(job.status === 'completed' || job.status === 'completed_no_data' || job.status === 'failed') && (
                         <Button
                           variant="secondary"
                           onClick={() => handleViewReport(job)}
@@ -193,15 +259,20 @@ export default function ResultsPage() {
                       )}
                     </div>
                   </div>
-                  {job.metrics && (
-                    <div className="job-metrics">
-                      <span>{t('results.metrics.total', 'Total')}: {job.metrics.totalRecords}</span>
-                      <span className="metric-success">{t('results.metrics.success', 'Sucesso')}: {job.metrics.successfulRecords}</span>
-                      {job.metrics.failedRecords > 0 && (
-                        <span className="metric-failure">{t('results.metrics.failures', 'Falhas')}: {job.metrics.failedRecords}</span>
-                      )}
-                    </div>
-                  )}
+                  {(() => {
+                    // #905: derived from the flat fields the API actually
+                    // returns; job.metrics never existed on listed jobs.
+                    const jobMetrics = deriveJobMetrics(job);
+                    return jobMetrics && (
+                      <div className="job-metrics">
+                        <span>{t('results.metrics.total', 'Total')}: {jobMetrics.totalRecords}</span>
+                        <span className="metric-success">{t('results.metrics.success', 'Sucesso')}: {jobMetrics.successfulRecords}</span>
+                        {jobMetrics.failedRecords > 0 && (
+                          <span className="metric-failure">{t('results.metrics.failures', 'Falhas')}: {jobMetrics.failedRecords}</span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               ))}
             </div>
@@ -242,7 +313,7 @@ export default function ResultsPage() {
                     : result.equipmentName || t('results.notLinked', 'Não vinculado')}
                 </td>
                 <td>
-                  <span className="sample-tag">{t('results.sampleFallback', 'Amostra #{id}').replace('{id}', String(result.sampleID))}</span>
+                  <span className="sample-tag">{t('results.sampleFallback', 'Amostra #{id}').replace('{id}', String(result.specimenId))}</span>
                 </td>
                 <td>
                   <div className="table-actions">
@@ -298,10 +369,41 @@ export default function ResultsPage() {
                     <label className="metric-label">{t('results.metrics.failureLabel', 'Falhas')}</label>
                     <span className="metric-value metric-failure">{selectedJob.metrics.failedRecords}</span>
                   </div>
-                  <div className="metric-item">
-                    <label className="metric-label">{t('results.metrics.duplicates', 'Duplicados')}</label>
-                    <span className="metric-value">{selectedJob.metrics.duplicatesFound}</span>
-                  </div>
+                  {/* #925 made this conditional: nothing wrote duplicatesFound,
+                      so a `?? 0` default was turning "nobody counted" into
+                      "there were none". #931 gave it a writer, and the
+                      condition stays for jobs that completed before that --
+                      they still have no field and must still omit the tile.
+
+                      #931: the label says "dos quais" because this is a
+                      LABELLED SUBSET of Falhas, not a sibling of it. A
+                      duplicate row is pushed onto `errors` at all three
+                      detection sites, so it is already inside failedRecords;
+                      without the qualifier the grid reads as
+                      success + failures + duplicates = total, which it is
+                      deliberately not. */}
+                  {selectedJob.metrics.duplicatesFound !== undefined && (
+                    <div className="metric-item" data-testid="results-metric-duplicates">
+                      <label className="metric-label">
+                        {t('results.metrics.duplicates', 'Duplicados (dos quais)')}
+                      </label>
+                      <span className="metric-value">{selectedJob.metrics.duplicatesFound}</span>
+                    </div>
+                  )}
+                  {/* #991: skippedRecords is written by import-worker.js and
+                      carried through import-async.service.js's report metrics,
+                      but nothing rendered it until now. Gated the same way as
+                      duplicatesFound above: older jobs never had this field
+                      written, and an absent count must stay absent rather than
+                      being shown as a false zero. */}
+                  {selectedJob.metrics.skippedRecords !== undefined && (
+                    <div className="metric-item" data-testid="results-metric-skipped">
+                      <label className="metric-label">
+                        {t('results.metrics.skipped', 'Ignorados')}
+                      </label>
+                      <span className="metric-value">{selectedJob.metrics.skippedRecords}</span>
+                    </div>
+                  )}
                   {selectedJob.metrics.processingTime && (
                     <div className="metric-item">
                       <label className="metric-label">{t('results.metrics.processingTime', 'Tempo de Processamento')}</label>
@@ -312,31 +414,24 @@ export default function ResultsPage() {
               </div>
             )}
 
-            {selectedJob.validationErrors && selectedJob.validationErrors.length > 0 && (
+            {selectedJob.errors && selectedJob.errors.length > 0 && (
               <div className="report-errors">
-                <h4 className="report-subtitle">{t('results.validationErrorsTitle', 'Erros de Validação')}</h4>
+                <h4 className="report-subtitle">{t('results.errorsTitle', 'Erros')}</h4>
                 <div className="errors-list">
-                  {selectedJob.validationErrors.slice(0, 10).map((error, index) => (
-                    <div key={index} className="error-item">
-                      {error.row && <span>{t('results.rowLabel', 'Linha')} {error.row}: </span>}
-                      {error.field && <span>{error.field}: </span>}
-                      {error.message}
-                    </div>
-                  ))}
-                  {selectedJob.validationErrors.length > 10 && (
-                <p className="errors-more">{t('results.moreErrors', '... e mais {count} erros').replace('{count}', String(selectedJob.validationErrors.length - 10))}</p>
+                  {selectedJob.errors.slice(0, 10).map((error, index) => {
+                    const row = formatImportErrorRow(error);
+                    return (
+                      <div key={index} className="error-item">
+                        {row.row !== undefined && <span>{t('results.rowLabel', 'Linha')} {row.row}: </span>}
+                        {row.code && <span>{row.code}: </span>}
+                        {row.file && <span>{row.file}: </span>}
+                        {row.message}
+                      </div>
+                    );
+                  })}
+                  {selectedJob.errors.length > 10 && (
+                <p className="errors-more">{t('results.moreErrors', '... e mais {count} erros').replace('{count}', String(selectedJob.errors.length - 10))}</p>
                   )}
-                </div>
-              </div>
-            )}
-
-            {selectedJob.processingErrors && selectedJob.processingErrors.length > 0 && (
-              <div className="report-errors">
-                <h4 className="report-subtitle">{t('results.processingErrorsTitle', 'Erros de Processamento')}</h4>
-                <div className="errors-list">
-                  {selectedJob.processingErrors.map((error, index) => (
-                    <div key={index} className="error-item">{error}</div>
-                  ))}
                 </div>
               </div>
             )}

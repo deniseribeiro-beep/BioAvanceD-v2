@@ -13,6 +13,13 @@ const logger = require('../utils/logger');
 
 const CHUNK_SIZE = 100;
 
+// #939: o discriminador proprio deste importador em import_batches /
+// import_staging_records. Hard-coded, nao parametrizado -- mesma forma que
+// FHIR_BATCH_TYPE em fhir-import-staging.service.js (findFhirBatch), pelo
+// mesmo motivo: o endpoint deste importador nao deve confirmar a existencia
+// de um lote de outro caminho de importacao (#799).
+const ASYNC_BATCH_IMPORT_TYPE = 'ASYNC_BATCH_IMPORT';
+
 class BatchValidationEngine {
   normalizeHeader(header) {
     return String(header || '')
@@ -194,16 +201,49 @@ class BatchValidationEngine {
   async readCsvRows(filePath) {
     return new Promise((resolve, reject) => {
       const rows = [];
+      // #1041: ORDER MATTERS -- line tracking first, filter second.
+      //
+      // csv-parser emits an interior blank line as `{}`, and the old guard
+      // (`typeof row === 'object'`) kept it. That empty object occupied an
+      // array slot, was counted in totalRows, classified INVALID, and
+      // persisted as a durable quarantine record whose `row` was `{}` -- a
+      // rejected row an operator can neither correct nor resubmit, for a line
+      // carrying no data.
+      //
+      // Dropping it ALONE would have introduced a defect this reader did not
+      // have: the old `index + rowBaseNumber` arithmetic stayed aligned
+      // precisely BECAUSE the `{}` held a slot. So the counter below is
+      // incremented on EVERY data event and pushed only for rows we keep --
+      // the same shape as import-lgpd.service.js's #1023 reader.
+      //
+      // The residual is #1035's and is unchanged here: csv-parser emits one
+      // data event per RECORD, so a quoted embedded newline still spans
+      // physical lines this counter cannot see.
+      let physicalLine = 1;
+      const sourceLines = [];
       const separator = this.detectCsvSeparator(filePath);
 
       fs.createReadStream(filePath)
         .pipe(csvParser({ separator }))
         .on('data', (row) => {
           if (row && typeof row === 'object') {
-            rows.push(row);
+            physicalLine += 1;
+            const hasData = Object.values(row).some((value) => value && String(value).trim());
+            if (hasData) {
+              rows.push(row);
+              sourceLines.push(physicalLine);
+            }
           }
         })
-        .on('end', () => resolve(rows))
+        .on('end', () => {
+          // Non-enumerable for the same reason as readXlsxRows' pair: the
+          // readers' tests compare the array itself with `toEqual`.
+          Object.defineProperty(rows, 'sourceLines', {
+            value: sourceLines,
+            enumerable: false,
+          });
+          resolve(rows);
+        })
         .on('error', reject);
     });
   }
@@ -213,6 +253,15 @@ class BatchValidationEngine {
     await workbook.xlsx.readFile(filePath);
 
     const rows = [];
+    // #1041: both index-aligned with `rows`, same pairing convention as
+    // import-lgpd.service.js's readCSV/readExcel `sourceLines` (#1023).
+    // `sourceLines` stays NUMERIC -- it becomes import_staging_records
+    // .rowNumber, which getQuarantineBatch sorts with `.sort({rowNumber: 1})`,
+    // so a `<sheet>!<row>` string would silently order lexically. This reader
+    // flattens every worksheet into one array, so the sheet name is carried
+    // beside the number rather than folded into it.
+    const sourceLines = [];
+    const sourceSheets = [];
 
     for (const worksheet of workbook.worksheets) {
       const headerRow = worksheet.getRow(1);
@@ -249,9 +298,23 @@ class BatchValidationEngine {
 
         if (Object.keys(mapped).length > 0) {
           rows.push(mapped);
+          sourceLines.push(rowNumber);
+          sourceSheets.push(worksheet.name);
         }
       }
     }
+
+    // #1041: non-enumerable so the array's own `toEqual` shape (used by the
+    // existing readers tests) is unaffected -- same rationale as #1023's
+    // sourceLines in import-lgpd.service.js.
+    Object.defineProperty(rows, 'sourceLines', {
+      value: sourceLines,
+      enumerable: false,
+    });
+    Object.defineProperty(rows, 'sourceSheets', {
+      value: sourceSheets,
+      enumerable: false,
+    });
 
     return rows;
   }
@@ -295,11 +358,27 @@ class BatchValidationEngine {
       origemdadadacoleta: 'sampleOrigin',
       extractionprotocol: 'extractionProtocol',
       protocolodeextracao: 'extractionProtocol',
-      registerdate: 'registrationDate',
-      registrationdate: 'registrationDate',
-      datacoleta: 'registrationDate',
-      locationid: 'locationID',
-      idlocalizacao: 'locationID',
+      // #767: these three used to target 'registrationDate'. e2549bee
+      // renamed parseSampleRow's registerDate/registrationDate fallback to
+      // the canonical registeredAt, and import-lgpd.service.js has contained
+      // zero occurrences of 'registrationDate' ever since -- so the mapped
+      // value was never read and every batch-imported sample fell through to
+      // `registeredAt = new Date()`. Same failure mode as the #525 note
+      // below, on the date column. The header keys stay as they are: those
+      // are the user-facing CSV column names and remain correct. Only the
+      // target changes, to the name canonical-fields.arch.test.js and
+      // sample.routes.js both already treat as the canonical one.
+      registerdate: 'registeredAt',
+      registrationdate: 'registeredAt',
+      datacoleta: 'registeredAt',
+      // #525: no target field on purpose. import-lgpd.service.js#parseSampleRow
+      // never reads a `locationID` key (#459/#462: CSV rows carry the
+      // canonical boxId/positionCode pair directly, "no legacy field aliases
+      // in runtime persistence") — mapping these legacy headers onto
+      // `locationID` produced a value persistSample() silently discarded.
+      // Recognizing the header names is still useful for detectDataType()'s
+      // sample-vs-patient heuristic below, so they stay out of that list;
+      // they just no longer feed a dead target field here.
       linkedproject: 'linkedProject',
       projetovinculado: 'linkedProject',
       currentstatus: 'currentStatus',
@@ -379,7 +458,11 @@ class BatchValidationEngine {
       patientData.patientID || rawRow.patientID || rawRow.patientId || rawRow.patient_id
     );
     if (patientID) {
-      criteria.push({ patientID });
+      // #853: `patients` never persists a `patientID` key (Patient.js's
+      // CANONICAL_FIELDS declares `participantId`); an 8-digit patientID
+      // column is exactly that canonical participantId, so the filter must
+      // be keyed on `participantId` or this criterion never matches.
+      criteria.push({ participantId: patientID });
     }
 
     const cpf = this.normalizeCpf(patientData.cpf || rawRow.cpf || rawRow.representativeCpf);
@@ -442,14 +525,27 @@ class BatchValidationEngine {
     const specimenObjectId = specimen?._id ? String(specimen._id).trim() : null;
     const patientIdentifier = String(patient?.patientID || rawRow.patientID || '').trim();
     const patientObjectId = patient?._id ? String(patient._id).trim() : null;
+    // #768: the specimen legs used to read `registrationDate`/`registerDate`,
+    // names e2549bee canonicalized away. Sample.js:38 declares `registeredAt`
+    // as the only (required) date field and Sample.create() always populates
+    // it, so neither old leg could ever fire -- a biomarker row with no date
+    // column skipped straight past the specimen to `new Date()` and the
+    // observation was stamped with import time instead of the specimen's
+    // registration date. Both dead legs are dropped rather than kept
+    // alongside the fix: unlike the rawRow legs below they are unreachable
+    // under any input, since `specimen` is createSample()'s return value.
+    //
+    // The rawRow legs stay. persistSample passes the *un-canonicalized* CSV
+    // row here (buildSampleRow is what maps headers), so a file whose column
+    // is literally spelled `registrationDate` still reaches them -- those are
+    // real user input, not a dead internal name.
     const collectedAt = this.parseDateValue(
       rawRow.collectedAt
       || rawRow.effectiveDateTime
       || rawRow.issuedAt
       || rawRow.registrationDate
       || rawRow.registerDate
-      || specimen?.registrationDate
-      || specimen?.registerDate
+      || specimen?.registeredAt
       || new Date()
     ) || new Date();
 
@@ -801,6 +897,181 @@ class BatchValidationEngine {
     );
   }
 
+  /**
+   * Records a single failed processing attempt (#900). bullmq's Worker runs
+   * the processor's catch once per attempt, not once per job -- moveToFailed()
+   * is called on every attempt and the retry-vs-fail decision happens inside
+   * it, after the processor has already rejected. updateProgress() is
+   * $set-only and would clobber importErrors already accumulated by earlier
+   * rows/attempts, so this is a separate method rather than a new argument to
+   * that one.
+   *
+   * Only marks the document `failed` when this was the last allowed attempt;
+   * otherwise the status is left as `processing`, since bullmq may still
+   * retry and the run may yet complete. The schema enum only allows
+   * ['staged','queued','processing','completed','failed'], so there is no
+   * "retrying" status to set instead.
+   *
+   * The pushed entry's shape mirrors what staging-import.service.js already
+   * pushes onto importErrors on its own failure path, so the two writers
+   * stay consistent.
+   */
+  async recordAttemptFailure(jobId, { attemptNumber, attemptsAllowed, message } = {}) {
+    const isFinalAttempt = attemptNumber >= attemptsAllowed;
+
+    await StagingImport.updateOne(
+      { jobId },
+      {
+        $set: {
+          status: isFinalAttempt ? 'failed' : 'processing',
+          updatedAt: new Date(),
+        },
+        $push: {
+          importErrors: {
+            message: `Tentativa ${attemptNumber}/${attemptsAllowed} falhou: ${message || 'erro desconhecido'}`,
+            occurredAt: new Date(),
+          },
+        },
+      }
+    );
+  }
+
+  /**
+   * Coloca as linhas rejeitadas em quarentena (#813, RNF011 AC#4 / RF029 AC#6).
+   *
+   * Este e o importador que o operador realmente alcanca (/import ->
+   * POST /api/import/batch). Ate aqui ele classificava as linhas
+   * VALID/PARTIAL/INVALID e empilhava `{row: <numero da linha>, errors}` em
+   * StagingImport.importErrors -- o campo se chama `row` mas guarda um inteiro,
+   * entao o *dado* da linha rejeitada nunca era persistido. Dava para ler o
+   * que estava errado, nunca para corrigir e reenviar.
+   *
+   * Escreve na mesma dupla de colecoes que a importacao LGPD
+   * (`import_batches` + `import_staging_records`, #787) para que exista uma
+   * so representacao de quarentena, com `type` proprio: os leitores da LGPD
+   * e do FHIR filtram por `type` e nao podem passar a listar lotes deste
+   * importador por acidente (#799 foi exatamente esse defeito).
+   */
+  async quarantineRejectedRows(db, { jobId, dataType, fileName = null, rejected = [], counts = {} } = {}) {
+    if (!Array.isArray(rejected) || rejected.length === 0) return null;
+    if (!db) return null;
+
+    // #807/#814: uma linha de paciente carrega patientName/birthDate/email --
+    // identificadores civis, cifrados em repouso em todo o resto do sistema
+    // (#566). Persistir isso aqui ampliaria um problema conhecido de texto
+    // claro para o caminho mais sensivel, que e justamente o que #814 manda
+    // resolver (via #807) antes de colocar um caminho de pacientes em
+    // quarentena. Amostras sao pseudonimizadas (participantId), e por isso
+    // #787 pode coloca-las em quarentena.
+    if (dataType !== 'samples') {
+      logger.warn(
+        `[BATCH_IMPORT] ${rejected.length} linha(s) de '${dataType}' rejeitadas NAO foram para quarentena: ` +
+        'linhas de paciente carregam identificadores civis e #807 (texto claro em repouso) ainda esta aberto. Ver #814.'
+      );
+      return null;
+    }
+
+    try {
+      const now = new Date();
+
+      const batchResult = await db.collection('import_batches').insertOne({
+        type: 'ASYNC_BATCH_IMPORT',
+        source: 'ASYNC_BATCH',
+        status: 'QUARANTINED',
+        jobId: jobId ? String(jobId) : null,
+        fileName: fileName ? String(fileName) : null,
+        dataType,
+        counts: {
+          total: counts.total ?? null,
+          success: counts.success ?? null,
+          errors: rejected.length,
+        },
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const batchId = batchResult.insertedId;
+
+      await db.collection('import_staging_records').insertMany(
+        rejected.map((rejection) => ({
+          batchId,
+          rowNumber: rejection.rowNumber,
+          // #1041: additive and .xlsx-only. rowNumber stays numeric so the
+          // `.sort({rowNumber: 1})` in getQuarantineBatch keeps ordering
+          // numerically.
+          sheet: rejection.sheet ?? null,
+          status: 'ERROR',
+          errors: rejection.errors || [],
+          validationErrors: rejection.errors || [],
+          // A linha original como foi lida do arquivo. Sem ela o registro em
+          // quarentena pode ser revisado mas nao corrigido e reenviado, que e
+          // a razao de existir quarentena em vez de log.
+          row: rejection.row ?? null,
+          createdAt: now,
+          updatedAt: now,
+        }))
+      );
+
+      logger.warn(
+        `[BATCH_IMPORT] ${rejected.length} linha(s) rejeitada(s) colocadas em quarentena (batch ${batchId})`
+      );
+
+      return batchId;
+    } catch (stagingError) {
+      // A quarentena e um registro anexado a uma importacao que ja rodou;
+      // falhar aqui nao pode transformar uma importacao parcial em falha.
+      logger.error(
+        'Falha ao colocar linhas rejeitadas em quarentena (RNF011 AC#4):',
+        stagingError.message || stagingError
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Resolve um lote deste importador, ou 404 (#939, precedente em #799).
+   *
+   * 404 em vez de 403 deliberadamente: o endpoint deste importador nao deve
+   * confirmar a existencia de um lote pertencente a outro caminho de
+   * importacao (LGPD/FHIR) que compartilha as mesmas colecoes -- mesmo
+   * raciocinio de `findFhirBatch` em fhir-import-staging.service.js.
+   */
+  async findAsyncBatchImport(db, batchId) {
+    const batch = await db.collection('import_batches').findOne({ _id: batchId, type: ASYNC_BATCH_IMPORT_TYPE });
+    if (!batch) {
+      const error = new Error('Lote de importação em lote não encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+    return batch;
+  }
+
+  /**
+   * Le de volta um lote de quarentena que `quarantineRejectedRows` escreveu,
+   * mais suas linhas em `import_staging_records` (#939). Ate aqui nada lia
+   * esses lotes de volta -- os leitores da LGPD e do FHIR filtram para os
+   * proprios tipos e descartam (LGPD) ou nunca souberam (FHIR) de
+   * `ASYNC_BATCH_IMPORT`.
+   */
+  async getQuarantineBatch(db, batchIdRaw) {
+    const raw = String(batchIdRaw || '').trim();
+    if (!ObjectId.isValid(raw)) {
+      const error = new Error('Identificador de lote de importação inválido.');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const batchId = new ObjectId(raw);
+    const batch = await this.findAsyncBatchImport(db, batchId);
+    const records = await db
+      .collection('import_staging_records')
+      .find({ batchId })
+      .sort({ rowNumber: 1 })
+      .toArray();
+
+    return { batch, records };
+  }
+
   async processBatchImport(db, stagingImportId, job = null) {
     const stagingImport = await StagingImport.findOne({ jobId: stagingImportId });
 
@@ -819,7 +1090,7 @@ class BatchValidationEngine {
       status: 'processing',
       processedRows: 0,
       totalRows: 0,
-      errors: [],
+      importErrors: [],
     });
 
     const rows = await this.readRowsFromFile(storagePath, fileName);
@@ -851,6 +1122,9 @@ class BatchValidationEngine {
       },
     });
 
+    // #813: rejected rows, kept with their original data for quarantine.
+    const rejectedRows = [];
+
     const totalChunks = Math.max(1, Math.ceil(rows.length / CHUNK_SIZE));
 
     for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
@@ -859,19 +1133,20 @@ class BatchValidationEngine {
 
       for (let offset = 0; offset < chunk.length; offset += 1) {
         const rawRow = chunk[offset];
-        const rowNumber = start + offset + rowBaseNumber;
+        // #1041: readXlsxRows carries the TRUE sheet row on
+        // `rows.sourceLines`, index-aligned with `rows`, and the worksheet it
+        // came from on `rows.sourceSheets`. Prefer them when present; the
+        // CSV/JSON readers attach neither, so this falls back to the original
+        // arithmetic for them, unchanged. `rowNumber` stays a number -- see
+        // the reader's comment for why the sheet is not folded into it.
+        const absoluteIndex = start + offset;
+        const sourceLine = rows.sourceLines ? rows.sourceLines[absoluteIndex] : undefined;
+        const sourceSheet = rows.sourceSheets ? rows.sourceSheets[absoluteIndex] : undefined;
+        const rowNumber = sourceLine !== undefined ? sourceLine : absoluteIndex + rowBaseNumber;
 
         const rowResult = dataType === 'samples'
           ? await this.persistSample(db, rawRow, rowNumber)
-          : await this.persistPatient(
-            db,
-            rawRow,
-            rowNumber,
-            {},
-            patientPrediction?.suggestedMapping
-              ? importLGPDService.buildMappedPatientRow(rawRow, patientPrediction.suggestedMapping)
-              : rawRow
-          );
+          : await this.persistPatient(db, rawRow, rowNumber);
 
         result.processedRows += 1;
 
@@ -886,6 +1161,7 @@ class BatchValidationEngine {
         if (rowResult.warnings?.length) {
           result.warnings.push({
             row: rowNumber,
+            ...(sourceSheet !== undefined ? { sheet: sourceSheet } : {}),
             classification: rowResult.classification,
             warnings: rowResult.warnings,
           });
@@ -894,13 +1170,26 @@ class BatchValidationEngine {
         if (rowResult.errors?.length) {
           const errorEntry = {
             row: rowNumber,
+            // #1041: only present for .xlsx, where one flat array spans every
+            // worksheet and the number alone names no unique cell.
+            ...(sourceSheet !== undefined ? { sheet: sourceSheet } : {}),
             classification: rowResult.classification,
             errors: rowResult.errors,
           };
           result.errors.push(errorEntry);
+          // #813: `errorEntry.row` is the line *number*. Keep the row itself
+          // too, so the quarantine below can persist something an operator
+          // can actually correct and resubmit.
+          rejectedRows.push({
+            rowNumber,
+            ...(sourceSheet !== undefined ? { sheet: sourceSheet } : {}),
+            row: rawRow,
+            errors: rowResult.errors,
+            classification: rowResult.classification,
+          });
           await StagingImport.updateOne(
             { jobId: stagingImportId },
-            { $push: { errors: errorEntry } }
+            { $push: { importErrors: errorEntry } }
           );
         }
 
@@ -919,6 +1208,19 @@ class BatchValidationEngine {
       });
     }
 
+    // #813 (RNF011 AC#4 / RF029 AC#6): rejected rows go to staging/quarantine
+    // rather than being discarded once the job document ages out.
+    const quarantineBatchId = await this.quarantineRejectedRows(db, {
+      jobId: stagingImportId,
+      dataType,
+      fileName,
+      rejected: rejectedRows,
+      counts: { total: result.totalRows, success: result.validRows },
+    });
+    if (quarantineBatchId) {
+      result.quarantineBatchId = String(quarantineBatchId);
+    }
+
     const finalStatus = result.invalidRows > 0 && result.validRows === 0 && result.partialRows === 0
       ? 'failed'
       : 'completed';
@@ -934,6 +1236,9 @@ class BatchValidationEngine {
           validRows: result.validRows,
           partialRows: result.partialRows,
           invalidRows: result.invalidRows,
+          // #813: where the rejected rows went, so the job document points at
+          // its own quarantine instead of leaving it orphaned.
+          quarantineBatchId: quarantineBatchId ? String(quarantineBatchId) : null,
         },
       },
     });

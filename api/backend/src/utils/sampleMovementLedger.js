@@ -1,5 +1,26 @@
 const crypto = require('crypto');
 
+// #1024: keyed by OBJECT IDENTITY, not by collection name. As a name-keyed
+// Set this was one-shot per process: the first call claimed the key and every
+// later call -- with any object, however unguarded -- hit the early return and
+// was handed back untouched. MongoAuditRepository.appendImmutableAudit builds
+// a fresh isolated view on EVERY invocation, so from its second call onward
+// nothing was guarded, and whichever of the two callers ran first decided
+// whether the real driver Collection was ever wrapped at all.
+// A WeakSet also lets entries be collected with the objects they describe.
+const PROTECTED_COLLECTIONS = new WeakSet();
+
+const MUTATING_METHODS = [
+  'updateOne',
+  'updateMany',
+  'replaceOne',
+  'deleteOne',
+  'deleteMany',
+  'findOneAndUpdate',
+  'findOneAndDelete',
+  'findOneAndReplace'
+];
+
 function buildChainPayload(movement, previousHash) {
   return {
     movementId: movement.movementId || movement.movementID || null,
@@ -43,6 +64,61 @@ async function appendMovementWithHashChain(collection, movement, options = {}) {
   return { movementId: ledgerMovement.movementId || null, hash, previousHash };
 }
 
+function guardBulkWrite(operationList = []) {
+  const hasMutation = operationList.some((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+
+    return Boolean(
+      entry.updateOne ||
+      entry.updateMany ||
+      entry.replaceOne ||
+      entry.deleteOne ||
+      entry.deleteMany
+    );
+  });
+
+  if (hasMutation) {
+    const error = new Error('POLICY_APPEND_ONLY: sample_movements é append-only e não permite update/delete/replace em bulkWrite');
+    error.statusCode = 409;
+    throw error;
+  }
+}
+
+function enforceAppendOnlyCollection(collection, collectionName = 'sample_movements') {
+  if (!collection || typeof collection !== 'object') {
+    return collection;
+  }
+
+  // Idempotent per object: re-guarding the same collection is a no-op, which
+  // is what the name key used to provide by accident.
+  if (PROTECTED_COLLECTIONS.has(collection)) {
+    return collection;
+  }
+
+  MUTATING_METHODS.forEach((methodName) => {
+    if (typeof collection[methodName] !== 'function') {
+      return;
+    }
+
+    collection[methodName] = async () => {
+      const error = new Error(`POLICY_APPEND_ONLY: coleção ${collectionName} é append-only e não permite ${methodName}`);
+      error.statusCode = 409;
+      throw error;
+    };
+  });
+
+  if (typeof collection.bulkWrite === 'function') {
+    const originalBulkWrite = collection.bulkWrite.bind(collection);
+    collection.bulkWrite = async (operations = [], options = {}) => {
+      guardBulkWrite(operations);
+      return originalBulkWrite(operations, options);
+    };
+  }
+
+  PROTECTED_COLLECTIONS.add(collection);
+  return collection;
+}
+
 async function ensureSampleMovementIndexes(collection) {
   if (!collection) return;
   await collection.createIndex({ movementId: 1 }, { name: 'sample_movements_movement_id_unique_v1', unique: true, partialFilterExpression: { movementId: { $exists: true } } }).catch(() => {});
@@ -51,4 +127,9 @@ async function ensureSampleMovementIndexes(collection) {
   await collection.createIndex({ hash: 1 }, { name: 'sample_movements_hash_unique_v1', unique: true, partialFilterExpression: { hash: { $exists: true } } }).catch(() => {});
 }
 
-module.exports = { appendMovementWithHashChain, ensureSampleMovementIndexes, computeMovementChainHash };
+module.exports = {
+  appendMovementWithHashChain,
+  enforceAppendOnlyCollection,
+  ensureSampleMovementIndexes,
+  computeMovementChainHash
+};

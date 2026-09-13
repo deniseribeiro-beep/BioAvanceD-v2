@@ -23,12 +23,12 @@ const ValidationRequirementSchema = new mongoose.Schema(
 
 const DiseaseSchema = new mongoose.Schema(
   {
-    orpha_code: { type: String, required: true, trim: true, unique: true, index: true },
+    orpha_code: { type: String, required: true, trim: true },
     name: { type: String, required: true, trim: true },
     disease_category: { type: String, trim: true, default: 'Outras Doencas Raras' },
     validation_requirements: { type: ValidationRequirementSchema, default: () => ({}) },
     drug_classes: { type: [String], default: [] },
-    active: { type: Boolean, default: true, index: true },
+    active: { type: Boolean, default: true },
   },
   {
     collection: 'disease_dictionary',

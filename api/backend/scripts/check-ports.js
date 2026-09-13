@@ -30,7 +30,7 @@ async function main() {
   }
   
   console.log('\n💡 Para encerrar processo em uma porta:');
-  console.log('   npm run kill-port [porta]');
+  console.log('   npm run kill-port <porta>');
   console.log('\n💡 Para encontrar porta disponível:');
   console.log('   npm run find-port [porta_inicial]');
 }

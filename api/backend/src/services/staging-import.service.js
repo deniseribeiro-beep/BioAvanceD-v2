@@ -6,10 +6,12 @@ const StagingImport = require('../models/StagingImport');
 const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
 const { getQueue } = require('../config/queue');
 const logger = require('../utils/logger');
+const { UPLOADS_BASE } = require('../config/uploadConfig');
+const { ensureStagingImportIndexes } = require('../utils/stagingImportIndexes');
 
 class StagingImportService {
   getStagingDirectory() {
-    return path.join(__dirname, '../../uploads/staging-imports');
+    return path.join(UPLOADS_BASE, 'staging-imports');
   }
 
   sanitizeFileName(fileName) {
@@ -50,6 +52,16 @@ class StagingImportService {
   async createStagingImport(file) {
     await connectMongoDB();
 
+    // #941: build the jobId index the schema has always declared. Mongoose
+    // connects with autoIndex:false and nothing calls syncIndexes(), so
+    // `unique: true` on StagingImport.js never reaches Mongo on its own.
+    // Un-awaited and best-effort, the same terms collectionResolver.js uses
+    // for ensureSampleIndexes: the helper never rejects, index creation is
+    // idempotent and latched, and a first insert racing the build is
+    // harmless -- jobId is a uuidv4 from this single writer, so the index is
+    // the lookup path these rows are read by, not the uniqueness mechanism.
+    ensureStagingImportIndexes(StagingImport.collection);
+
     const jobId = uuidv4();
     const rawData = await this.persistRawFile(file, jobId);
 
@@ -59,7 +71,7 @@ class StagingImportService {
       status: 'staged',
       totalRows: 0,
       processedRows: 0,
-      errors: [],
+      importErrors: [],
       rawData,
     });
 
@@ -83,7 +95,17 @@ class StagingImportService {
       {
         jobId: stagingImport.jobId,
         removeOnComplete: true,
-        removeOnFail: false,
+        // #900: removeOnFail was `false`, which bullmq reads as keep-forever
+        // ({count: -1}) and which overrode config/queue.js's 7-day retention.
+        // Nothing consumed it: no bull-board/arena is installed and nothing in
+        // src/ reads failed jobs -- the only failed-job reference is a
+        // getJobCounts health probe. The sibling NotificationService queue
+        // chose bounded retention for itself, the option carried no comment or
+        // issue number in a file that annotates every deliberate option
+        // choice, and the durable failure record now lives on
+        // StagingImport.importErrors (which only started working in 058bbd39).
+        // Omitting the key restores the queue default: failures are retained
+        // 7 days, which still covers manual redis-cli inspection.
       }
     );
 
@@ -124,7 +146,7 @@ class StagingImportService {
               updatedAt: new Date(),
             },
             $push: {
-              errors: {
+              importErrors: {
                 message: error.message,
                 occurredAt: new Date(),
               },

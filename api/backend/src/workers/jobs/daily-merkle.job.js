@@ -3,6 +3,7 @@ const integrityService = require('../../services/integrityCheckService');
 const auditRootService = require('../../services/auditRoot.service');
 const auditV2Service = require('../../services/audit-v2.service');
 const logger = require('../../utils/logger');
+const env = require('../../config/env');
 
 /**
  * Daily Merkle Job
@@ -15,6 +16,31 @@ const logger = require('../../utils/logger');
 const RUN_HOUR_UTC = 2; // 02:30 UTC
 const RUN_MINUTE_UTC = 30;
 const BACKFILL_DAYS = 7;
+
+// #989: runOnce's catch below swallows everything, and that swallow is deliberate --
+// scheduleNextRun() documents that runOnce() never rejects, so a rethrow would both
+// become an unhandled rejection in a detached setTimeout AND skip the reschedule,
+// permanently stopping the nightly job. But a signing key that cannot be loaded is a
+// CONFIGURATION error, not a transient one: it never clears on its own, it stops every
+// audit_roots root and every audit_tree_heads tree head from ever being sealed, and the
+// worker's heartbeat healthcheck keeps the container green throughout. It gets its own
+// log shape so an operator can tell it apart from "Mongo blipped".
+const SIGNING_CONFIG_MARKERS = [
+  'AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE',
+  'AUDIT_MERKLE_SIGN_KEY_ID',
+  'Audit signing key must be provided',
+];
+
+function isSigningConfigError(error) {
+  if (!error) return false;
+  if (SIGNING_CONFIG_MARKERS.some((marker) => String(error.message || error).includes(marker))) return true;
+  // Both loaders readFile() the configured path, so an absent or unreadable key file
+  // surfaces as a bare ENOENT/EACCES with nothing tying it to audit signing. Match it
+  // only against the path actually configured, so an unrelated file error stays generic.
+  const keyFile = String(env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE || '').trim();
+  if (!keyFile) return false;
+  return (error.code === 'ENOENT' || error.code === 'EACCES') && String(error.path || '') === keyFile;
+}
 
 function isValidMerkleResult(result) {
   return Boolean(result && result.root && Array.isArray(result.leaves));
@@ -75,17 +101,23 @@ async function runOnce() {
     await auditRootService.processTimestampBacklog({ externalDb: db });
     logger.info(`[daily-merkle] Root salva para ${targetDate} -> ${result.root}`);
   } catch (error) {
-    logger.error('[daily-merkle] Erro ao executar job diário de Merkle:', error.message || error);
+    if (isSigningConfigError(error)) {
+      logger.error(
+        '[daily-merkle] ERRO DE CONFIGURACAO: a chave de assinatura de auditoria nao pode ser carregada. '
+        + 'Nenhuma raiz diaria (audit_roots) nem tree head (audit_tree_heads) sera selada enquanto isso durar. '
+        + 'Verifique AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE, AUDIT_MERKLE_SIGN_KEY_ID e '
+        + 'AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON:',
+        error.message || error
+      );
+    } else {
+      logger.error('[daily-merkle] Erro ao executar job diário de Merkle:', error.message || error);
+    }
   } finally {
     if (db) await closeConnection();
   }
 }
 
 async function anchorV2ForDate(db, date, result) {
-  if (!isValidMerkleResult(result)) {
-    throw new Error(`[daily-merkle] Resultado Merkle inválido para ancoragem v2 em ${date}`);
-  }
-
   const logId = `audit-${date}`;
   const previous = await db.collection('audit_tree_heads').find({ logId }).sort({ treeSize: -1 }).limit(1).toArray();
   const previousTreeHeadHash = previous[0]?.rootHash || null;
@@ -98,22 +130,37 @@ async function anchorV2ForDate(db, date, result) {
     periodEnd: `${date}T23:59:59.999Z`,
     createdAt: new Date().toISOString(),
   }, db);
-  logger.info(`[daily-merkle] Tree head v2 gerado para ${date} com status=${treeHead.status}`);
+  logger.info(`[daily-merkle] Tree head v2 gerado para ${date} com anchorStatus=${treeHead.anchorStatus}`);
   return treeHead;
+}
+
+// #959: the ONLY caller of createTreeHead used to be scheduleNextRun's bare
+// setTimeout to 02:30 UTC, inside the worker process. Nothing could reach the
+// sealing path on demand -- not a test, not an operator, not an e2e spec -- and
+// runOnce() seals YESTERDAY, so even firing it reaches a date the current run
+// has no events for. This is the reachable entry point: it takes an ALREADY-OPEN
+// db and an explicit date, so an HTTP handler can call it without runOnce's
+// connectDB/closeConnection lifecycle tearing down the shared app connection,
+// and without runOnce's catch-all swallowing the error the caller needs to see.
+//
+// Returns null (rather than throwing) when the date has no valid Merkle result;
+// callers log their own message, which is why the two warns below still differ.
+async function anchorDate(db, date) {
+  const result = await integrityService.buildMerkleForDate(date, db, { persistMissing: true });
+  if (!isValidMerkleResult(result)) return null;
+
+  await auditRootService.saveDailyRoot({ date, root: result.root, treeSize: result.leaves.length, db });
+  return anchorV2ForDate(db, date, result);
 }
 
 function scheduleNextRun() {
   const delay = msUntilNextRun();
   logger.info(`[daily-merkle] Próxima execução em ${Math.round(delay / 1000)}s`);
   setTimeout(async () => {
-    try {
-      await runOnce();
-    } catch (e) {
-      logger.error('[daily-merkle] Erro na execução:', e.message || e);
-    } finally {
-      // always reschedule
-      scheduleNextRun();
-    }
+    // runOnce() has its own internal try/catch and never rejects, so no
+    // outer catch is needed here — just always reschedule.
+    await runOnce();
+    scheduleNextRun();
   }, delay + 1000); // slight buffer
 }
 
@@ -122,4 +169,4 @@ if (require.main === module) {
   scheduleNextRun();
 }
 
-module.exports = { runOnce, scheduleNextRun };
+module.exports = { runOnce, scheduleNextRun, anchorDate };

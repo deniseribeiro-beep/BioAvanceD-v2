@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const speakeasy = require('speakeasy');
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
+const { hashToken } = require('../utils/tokenHash');
 
 /**
  * Service de Segurança do Usuário
@@ -314,11 +315,11 @@ class UserSecurityService {
     if (userAgent.includes('Mac OS X')) {
       return 'macOS';
     }
-    if (userAgent.includes('Linux')) {
-      return 'Linux';
-    }
     if (userAgent.includes('Android')) {
       return 'Android';
+    }
+    if (userAgent.includes('Linux')) {
+      return 'Linux';
     }
     if (userAgent.includes('iPhone') || userAgent.includes('iPad')) {
       return 'iOS';
@@ -429,13 +430,35 @@ class UserSecurityService {
       if (!user) {
         throw new Error('Usuário não encontrado');
       }
-      
+
+      // #995 (RF001 AC#2): the FIFTH site verifying a user-supplied password
+      // with its own bcrypt.compare. This one is a second, independent
+      // change-password implementation -- PUT /api/user-security/password,
+      // reached from UserSecurityPage -- and unlike auth.controller's it did not
+      // even zero failedLoginAttempts, so it neither counted up nor cleared.
+      //
+      // Required lazily, matching this file's own style for cross-service
+      // requires (sessionService below does the same); auth.service pulls in
+      // speakeasy/QRCode/jwt and there is no reason to load them at module load.
+      const authService = require('./auth.service');
+
+      // The gate runs before the compare, for the same reason as at the other
+      // four sites -- after it, a lock denies only the eventual correct guess
+      // while every wrong one still burns a bcrypt round. This route is
+      // authenticated and takes its subject from the caller's own userID, so the
+      // message stays this route's own rather than the generic one the two
+      // unauthenticated sites must use.
+      if (authService.isAccountLocked(user)) {
+        throw new Error('Senha atual incorreta');
+      }
+
       // Valida senha atual
       const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
       if (!isCurrentPasswordValid) {
+        await authService.recordFailedPasswordAttempt(db, usersCollection, user);
         throw new Error('Senha atual incorreta');
       }
-      
+
       // Valida complexidade da senha
       const PasswordValidator = require('../utils/passwordValidator');
       PasswordValidator.validateOrThrow(newPassword);
@@ -463,6 +486,10 @@ class UserSecurityService {
             password: newPasswordHash,
             passwordHistory: newPasswordHistory,
             passwordChangedAt: new Date(),
+            // #995: a successful change clears the counter AND the lock, the
+            // same pairing processLogin's success path uses. This site cleared
+            // neither, so it could only ever count up.
+            ...authService.clearedLockoutFields(),
             updatedAt: new Date()
           }
         }
@@ -551,7 +578,15 @@ class UserSecurityService {
         {
           $set: {
             isActive: false,
-            revokedAt: new Date()
+            isRevoked: true,
+            revokedAt: new Date(),
+            revocationReason: 'user_request',
+            revokedBy: String(userID),
+            // #974: every other session-revoke write in the tree sets this
+            // (session.service.js :217 :295 :331 :385 :438 :482 :523); this
+            // one did not, so a revocation through this route was invisible
+            // to any "when was this session document last touched" query.
+            updatedAt: new Date()
           }
         }
       );
@@ -580,34 +615,16 @@ class UserSecurityService {
 
   /**
    * Revoga todas as sessões do usuário (exceto a atual)
+   *
+   * Refs #920: delega para session.service.js#revokeAllOtherSessions em vez
+   * de reimplementar o write. As duas rotas de "encerrar outras sessões"
+   * (esta e DELETE /sessions/all-others) precisam produzir o mesmo formato
+   * de documento revogado -- delegar impede que voltem a divergir.
    */
   async revokeAllSessions(db, userID, currentToken) {
     try {
-      const sessionsCollection = db.collection('sessions');
-      
-      await sessionsCollection.updateMany(
-        {
-          userID: userID.toString(),
-          token: { $ne: currentToken }, // Não revoga a sessão atual
-          isActive: true
-        },
-        {
-          $set: {
-            isActive: false,
-            revokedAt: new Date()
-          }
-        }
-      );
-
-      // Limpa cache em memória do sessionService (exceto sessão atual)
       const sessionService = require('./session.service');
-      if (sessionService.sessions) {
-        for (const [sessionID, session] of sessionService.sessions.entries()) {
-          if (session.userID === userID.toString() && session.token !== currentToken) {
-            sessionService.sessions.delete(sessionID);
-          }
-        }
-      }
+      await sessionService.revokeAllOtherSessions(db, userID, currentToken);
     } catch (error) {
       logger.error('Erro ao revogar todas as sessões:', error.message);
       throw error;
@@ -621,7 +638,15 @@ class UserSecurityService {
     try {
       const usersCollection = db.collection('users');
       const jwt = require('jsonwebtoken');
-      const env = require('../../config/env');
+      // #873: this was '../../config/env', which resolves to the
+      // compatibility re-export under api/backend/config/ rather than to the
+      // canonical module under src/config/. Every other importer in
+      // src/services/ uses '../config/env'; this one line was the outlier.
+      // It worked, because the re-export hands back the same object -- but
+      // #863's guard resolves require paths exactly, so going through the
+      // re-export took this file out of the guard's collection entirely and
+      // left its reads unchecked.
+      const env = require('../config/env');
       
       const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
       
@@ -649,7 +674,11 @@ class UserSecurityService {
         { _id: new ObjectId(userID) },
         {
           $set: {
-            passwordResetToken: resetToken,
+            // #1078: same hash-at-rest rule as auth.service's writer. Note
+            // this path mints a token valid for up to 24h, so the window in
+            // which a raw stored value would have been readable was the
+            // longer of the two.
+            passwordResetTokenHash: hashToken(resetToken),
             passwordResetExpires: expiresAt,
             updatedAt: new Date()
           }

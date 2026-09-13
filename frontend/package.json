@@ -31,23 +31,24 @@
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^5.1.4",
+    "@vitest/coverage-v8": "^4.1.2",
     "autoprefixer": "^10.4.27",
     "jsdom": "^26.1.0",
     "postcss": "^8.5.8",
     "rollup": "^4.59.0",
     "typescript": "^5.3.3",
-    "vite": "^7.3.1"
+    "vite": "^7.3.1",
+    "vitest": "^4.0.7"
   },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "npm run typecheck:full",
-    "typecheck": "npm run typecheck:core",
-    "typecheck:core": "tsc --noEmit -p tsconfig.typecheck-core.json",
+    "typecheck": "npm run typecheck:full",
     "typecheck:full": "tsc --noEmit",
     "preview": "vite preview",
-    "cleanup": "node scripts/cleanup.js",
-    "clean": "node scripts/cleanup.js",
+    "test:unit": "vitest run",
+    "test:unit:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage",
     "clean:cache": "powershell -Command \"if (Test-Path node_modules\\.vite) { Remove-Item -Recurse -Force node_modules\\.vite; Write-Host 'Cache limpo' } else { Write-Host 'Cache nao existe' }\""
   }
 }

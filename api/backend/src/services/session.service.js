@@ -1,12 +1,45 @@
 const SessionModel = require('../models/Session');
 const logger = require('../utils/logger');
-const crypto = require('crypto');
+// #1078: moved to utils/tokenHash so the password-reset writers share one
+// implementation instead of adding a third copy. Byte-identical body; the
+// only crypto use in this file was inside it, so the require went with it.
+const { hashToken } = require('../utils/tokenHash');
 
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-function hashToken(token) {
-  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+// #914 / RF014 AC#1. session.timeoutMinutes was one of 43 SecurityConfiguration
+// keys that nothing read, so the admin UI wrote a policy and four hardcoded
+// 30-minute literals decided the actual behaviour.
+//
+// SNAPSHOT, not a live per-request read. dict-02 P1X-0262 defines
+// Session.inactiveTimeout as the EFFECTIVE limit and says it "deve derivar de
+// SecurityConfiguration" -- a materialised value. It is also what keeps RF014
+// AC#8 ("revogar sessões quando a alteração exigir") meaningful: under a live
+// read a tightened timeout would apply on the next request and AC#8 would have
+// nothing left to revoke on this path. Choosing live would have silently
+// deleted a Crítica requirement rather than implemented one.
+//
+// Reads the collection DIRECTLY rather than through securityService.getConfig,
+// which INSERTS a default document when none exists -- a write side effect has
+// no business firing inside a login.
+//
+// Fails OPEN to 30 minutes: an unreadable policy must not lock everyone out,
+// and 30 is both the previous literal and getDefaultConfig()'s own value, so
+// the fallback is the documented default rather than an invented one.
+const DEFAULT_INACTIVE_TIMEOUT_MS = 30 * 60 * 1000;
+
+async function resolveInactiveTimeoutMs(db) {
+  try {
+    const config = await db.collection('security_config').findOne({ _id: 'main' });
+    const minutes = Number(config && config.session && config.session.timeoutMinutes);
+    if (Number.isFinite(minutes) && minutes > 0) {
+      return minutes * 60 * 1000;
+    }
+  } catch (error) {
+    logger.warn('#914: política de sessão ilegível, usando 30 min:', error.message);
+  }
+  return DEFAULT_INACTIVE_TIMEOUT_MS;
 }
 
 /**
@@ -103,7 +136,7 @@ class SessionService {
         deviceInfo: clientInfo.deviceInfo,
         expiresAt,
         refreshExpiresAt,
-        inactiveTimeout: 30 * 60 * 1000 // 30 minutos
+        inactiveTimeout: await resolveInactiveTimeoutMs(db) // #914: from session.timeoutMinutes
       };
 
       const session = SessionModel.create(sessionData);
@@ -159,7 +192,12 @@ class SessionService {
 
       // Verifica se a sessão ainda está ativa
       if (!SessionModel.isSessionActive(session)) {
-        await this.invalidateSession(db, session.sessionID);
+        // #974: this is an inactivity/expiry eviction, not a revoke -- same
+        // event cleanupExpiredSessions records, so it carries the same
+        // 'expiration'/'system' pair. Without it, a session the clock killed
+        // was byte-identical to one an administrator killed, which is the
+        // whole subject of #974.
+        await this.invalidateSession(db, session.sessionID, 'expiration', 'system');
         return null;
       }
 
@@ -228,7 +266,8 @@ class SessionService {
 
       // Verifica se está ativa
       if (!SessionModel.isSessionActive(session)) {
-        await this.invalidateSession(db, session.sessionID);
+        // #974: same expiry eviction as updateActivity above.
+        await this.invalidateSession(db, session.sessionID, 'expiration', 'system');
         return { valid: false, reason: 'session_expired' };
       }
 
@@ -242,7 +281,7 @@ class SessionService {
   /**
    * Invalida uma sessão
    */
-  async invalidateSession(db, sessionID) {
+  async invalidateSession(db, sessionID, reason = null, revokedBy = null) {
     try {
       // Remove do cache
       this.sessions.delete(sessionID);
@@ -252,7 +291,7 @@ class SessionService {
         const sessionsCollection = db.collection('sessions');
         await sessionsCollection.updateOne(
           { sessionID },
-          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), updatedAt: new Date() } }
+          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy: revokedBy == null ? revokedBy : String(revokedBy), updatedAt: new Date() } }
         );
       } catch (dbError) {
         logger.warn('Erro ao invalidar sessão no banco:', dbError.message);
@@ -266,11 +305,19 @@ class SessionService {
   /**
    * Invalida todas as sessões de um usuário
    */
-  async invalidateUserSessions(db, userID) {
+  async invalidateUserSessions(db, userID, reason = null, revokedBy = null) {
     try {
+      // #963: coage como os irmãos (listUserSessions, revokeSessionById,
+      // revokeAllOtherSessions) já fazem. O campo gravado é sempre string
+      // -- Session.js faz String(data.userID), alimentado pelo
+      // user._id.toString() de auth.service.js -- então receber um ObjectId
+      // aqui não casava nada, não lançava nada, e deixava o chamador
+      // devolver 200 sobre uma revogação que não aconteceu.
+      const ownerID = String(userID);
+
       // Remove do cache
       for (const [sessionID, session] of this.sessions.entries()) {
-        if (session.userID === userID) {
+        if (String(session.userID) === ownerID) {
           this.sessions.delete(sessionID);
         }
       }
@@ -279,8 +326,8 @@ class SessionService {
       try {
         const sessionsCollection = db.collection('sessions');
         await sessionsCollection.updateMany(
-          { userID, isActive: true },
-          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), updatedAt: new Date() } }
+          { userID: ownerID, isActive: true },
+          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy: revokedBy == null ? revokedBy : String(revokedBy), updatedAt: new Date() } }
         );
       } catch (dbError) {
         logger.warn('Erro ao invalidar sessões do usuário no banco:', dbError.message);
@@ -314,11 +361,27 @@ class SessionService {
           {
             $or: [
               { expiresAt: { $lt: now } },
-              { lastActivity: { $lt: new Date(now.getTime() - 30 * 60 * 1000) } }
+              // #914: compare against each session's OWN inactiveTimeout. This was a
+              // global 30-minute literal, so the maintenance sweep contradicted any
+              // configured timeout -- a 45-minute policy still had its sessions evicted
+              // at 30. $ifNull covers documents written before the field existed.
+              {
+                $expr: {
+                  $lt: [
+                    '$lastActivity',
+                    {
+                      $subtract: [
+                        now,
+                        { $ifNull: ['$inactiveTimeout', DEFAULT_INACTIVE_TIMEOUT_MS] }
+                      ]
+                    }
+                  ]
+                }
+              }
             ],
             isActive: true
           },
-          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), updatedAt: new Date() } }
+          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: 'expiration', revokedBy: 'system', updatedAt: new Date() } }
         );
       } catch (dbError) {
         logger.warn('Erro ao limpar sessões expiradas no banco:', dbError.message);
@@ -359,7 +422,7 @@ class SessionService {
     }));
   }
 
-  async revokeSessionById(db, userID, sessionID) {
+  async revokeSessionById(db, userID, sessionID, reason = null, revokedBy = null) {
     const sessionsCollection = db.collection('sessions');
 
     const result = await sessionsCollection.updateOne(
@@ -369,6 +432,8 @@ class SessionService {
           isActive: false,
           isRevoked: true,
           revokedAt: new Date(),
+          revocationReason: reason,
+          revokedBy: revokedBy == null ? revokedBy : String(revokedBy),
           updatedAt: new Date()
         }
       }
@@ -382,7 +447,59 @@ class SessionService {
     return true;
   }
 
-  async revokeAllOtherSessions(db, userID, currentAccessToken) {
+  // #649 / RF014 AC#8. Every other revoke helper here is scoped to ONE userID;
+  // a policy change is global, so this is a new function rather than a new
+  // argument on an existing one.
+  //
+  // Keeps the acting administrator's own session. revokeAllOtherSessions
+  // established the keep-mine shape, and an admin who tightens session policy
+  // and logs themselves out mid-configuration is a foreseeable self-lockout on
+  // the only role that can undo it.
+  async revokeAllSessionsForPolicyChange(db, exceptAccessToken, revokedBy) {
+    const sessionsCollection = db.collection('sessions');
+    const exceptHash = hashToken(exceptAccessToken);
+
+    const result = await sessionsCollection.updateMany(
+      {
+        isActive: true,
+        $and: [
+          { tokenHash: { $ne: exceptHash } },
+          { token: { $ne: exceptAccessToken } }
+        ]
+      },
+      {
+        $set: {
+          isActive: false,
+          isRevoked: true,
+          revokedAt: new Date(),
+          // 'admin_action' rather than a new 'policy_change': P1X-0267 is a
+          // CLOSED vocabulary in the owner's canonical dictionary, and a policy
+          // change is an administrator acting. Extending that enum is a
+          // dictionary amendment, not an implementation choice.
+          revocationReason: 'admin_action',
+          revokedBy: String(revokedBy || 'system'),
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    for (const [sid, session] of this.sessions.entries()) {
+      if (session.tokenHash !== exceptHash && session.token !== exceptAccessToken) {
+        this.sessions.delete(sid);
+      }
+    }
+
+    return (result && result.modifiedCount) || 0;
+  }
+
+  // #958: reason/revokedBy are optional and default to what this helper
+  // hardcoded before, so its two existing callers (auth.routes DELETE
+  // /sessions/all-others and user-security.service, per #920) are unchanged
+  // byte for byte. The password-change paths pass 'password_change', which is
+  // in P1X-0267's closed vocabulary and was previously unwritable here.
+  // Refs #974, which added the same optional pair to the other three helpers
+  // and deliberately left this one alone.
+  async revokeAllOtherSessions(db, userID, currentAccessToken, reason = 'user_request', revokedBy = null) {
     const sessionsCollection = db.collection('sessions');
     const currentHash = hashToken(currentAccessToken);
 
@@ -400,6 +517,8 @@ class SessionService {
           isActive: false,
           isRevoked: true,
           revokedAt: new Date(),
+          revocationReason: reason,
+          revokedBy: revokedBy === null ? String(userID) : String(revokedBy),
           updatedAt: new Date()
         }
       }
@@ -441,7 +560,14 @@ class SessionService {
       refreshExpiresAt: new Date(now.getTime() + REFRESH_TOKEN_TTL_MS),
       isActive: true,
       isRevoked: false,
-      revokedAt: null
+      revokedAt: null,
+      // #974: 4d6807c8 added revocationReason/revokedBy but did not extend
+      // this reset, so a rotated session kept a stale reason beside
+      // isRevoked: false. Unreachable via the only caller --
+      // getSessionByRefreshToken filters isRevoked: { $ne: true } -- so this
+      // is closing the gap fail-closed, not fixing live behaviour.
+      revocationReason: null,
+      revokedBy: null
     };
 
     await sessionsCollection.updateOne({ sessionID }, { $set: update });

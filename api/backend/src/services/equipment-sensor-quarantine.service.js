@@ -1,7 +1,7 @@
-const { ObjectId } = require('mongodb');
 const SampleMovementModel = require('../models/SampleMovement');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
+const quarantineActionService = require('./quarantine-action.service');
 const logger = require('../utils/logger');
 
 const QUARANTINE_TRIGGER_STATUSES = new Set([
@@ -42,14 +42,6 @@ function buildColdChainIncidentReason(incident = {}) {
   return `Quarentena automática por incidente de cadeia fria (${sensorKey})${temperature}`;
 }
 
-function toObjectIdIfValid(value) {
-  const raw = normalizeString(value);
-  if (raw && ObjectId.isValid(raw)) {
-    return new ObjectId(raw);
-  }
-  return value;
-}
-
 function collectEquipmentIdentifiers(equipmentContext = {}) {
   const identifiers = new Set();
 
@@ -68,11 +60,11 @@ function collectEquipmentIdentifiers(equipmentContext = {}) {
   return [...identifiers];
 }
 
-function collectLocationIds(...values) {
+function collectIdentifierValues(...values) {
   const ids = [];
   values.forEach((value) => {
     if (Array.isArray(value)) {
-      ids.push(...collectLocationIds(...value));
+      ids.push(...collectIdentifierValues(...value));
       return;
     }
     if (value === undefined || value === null || normalizeString(value) === '') {
@@ -87,48 +79,163 @@ function collectLocationIds(...values) {
   });
 }
 
+/**
+ * #462/#463: `equipmentID`/`containerID` variants (string + numeric forms)
+ * for an `$in` match — same shape as the sibling helper in
+ * `sample.service.js`/`intakeWizard.js`.
+ */
+function buildIdVariants(...ids) {
+  const variants = [];
+  const seen = new Set();
+  const add = (value) => {
+    if (value === undefined || value === null || value === '') return;
+    const key = `${typeof value}:${String(value)}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      variants.push(value);
+    }
+  };
+
+  for (const id of ids) {
+    if (id === undefined || id === null || id === '') continue;
+    add(id);
+    add(String(id));
+
+    const numeric = Number(id);
+    if (Number.isFinite(numeric)) {
+      add(numeric);
+    }
+  }
+
+  return variants;
+}
+
+function dedupeIds(ids) {
+  const seen = new Set();
+  const result = [];
+  ids.forEach((id) => {
+    const key = String(id);
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(id);
+    }
+  });
+  return result;
+}
+
+/**
+ * #912: `_id` is compared via `$expr`/`$toString` rather than an `$in` of
+ * an ObjectId variant. This service is reached with both the mongoose
+ * connection (incident.controller.js, iot.controller.js) and the native
+ * mongodb connection (TelemetryMonitor.js), so no single ObjectId
+ * constructor is correct for every caller -- a top-level `mongodb`
+ * ObjectId instance handed to a query run through the mongoose connection
+ * throws "Unsupported BSON version, bson types must be from bson 7.x.x".
+ * `$expr`/`$toString` never constructs an ObjectId at all, so it is
+ * handle-agnostic by construction (see notificationDispatch.service.js's
+ * resolveRecipientEmails for the same pattern against the same problem).
+ */
+// #917: the `{ sensorID: { $in: variants } }` branch that used to sit second
+// here is gone, along with its five siblings in scheduler/sensor/temperature.
+// `sensorID` (capital ID) has NEVER been a persisted field: from the initial
+// commit onward every `SensorModel.create`/`TemperatureModel.create` writes
+// `sensorId: data.sensorId || data.sensorID`, coalescing the alias away on the
+// way in. So the filter branch could not match a document this codebase wrote
+// -- the #788/#843/#847 class, where a filter key nothing writes does not
+// match nothing but matches BSON null, and turns live the first time an
+// undefined variant reaches it.
+//
+// `sensorID` as an *input* alias is untouched and still live: the frontend's
+// Sensor type requires it, its create form binds it, and api.ts sends it as a
+// query param. Only the query-side branches went.
 function buildSensorLookup(sensorKey) {
   const raw = normalizeString(sensorKey);
   const variants = [raw];
-  if (ObjectId.isValid(raw)) variants.push(new ObjectId(raw));
   return {
     $or: [
       { sensorId: { $in: variants } },
-      { sensorID: { $in: variants } },
-      { _id: { $in: variants } },
+      { $expr: { $eq: [{ $toString: '$_id' }, raw] } },
       { macAddress: raw },
     ]
   };
 }
 
-async function findLocationIdsByEquipment(db, equipmentContext = {}, options = {}) {
+/**
+ * #464: resolves the FREEZER `StorageContainer`(s) whose `containerID`
+ * matches one of the given equipment identifiers — the same direct join
+ * (`freezer.containerID === Equipment.equipmentID`) #462/#463 already
+ * established, applied in reverse (equipment -> freezer instead of
+ * freezer -> equipment).
+ */
+async function resolveFreezersByEquipmentIdentifiers(db, identifiers = [], options = {}) {
+  const variants = buildIdVariants(...identifiers);
+  if (variants.length === 0) {
+    return [];
+  }
+
+  const storageContainersCollection = db.collection('storageContainers');
+  const sessionOptions = options.session ? { session: options.session } : undefined;
+
+  return storageContainersCollection.find(
+    {
+      containerType: 'FREEZER',
+      containerID: { $in: variants }
+    },
+    sessionOptions
+  ).toArray();
+}
+
+/**
+ * #464: walks a FREEZER `StorageContainer`'s children down to the
+ * `StorageBox` level (FREEZER -> SHELF -> RACK -> optional DRAWER -> BOX),
+ * the mirror image of #462's upward `resolveStorageHierarchyForBox` walk.
+ */
+async function findBoxIdsUnderFreezer(db, freezerId, options = {}) {
+  const storageContainersCollection = db.collection('storageContainers');
+  const storageBoxesCollection = db.collection('storageBoxes');
+  const sessionOptions = options.session ? { session: options.session } : undefined;
+
+  const shelves = await storageContainersCollection.find(
+    { parent_id: freezerId, containerType: 'SHELF' },
+    sessionOptions
+  ).toArray();
+  const shelfIds = shelves.map((shelf) => shelf._id);
+  if (shelfIds.length === 0) return [];
+
+  const racks = await storageContainersCollection.find(
+    { parent_id: { $in: shelfIds }, containerType: 'RACK' },
+    sessionOptions
+  ).toArray();
+  const rackIds = racks.map((rack) => rack._id);
+  if (rackIds.length === 0) return [];
+
+  const drawers = await storageContainersCollection.find(
+    { parent_id: { $in: rackIds }, containerType: 'DRAWER' },
+    sessionOptions
+  ).toArray();
+  const drawerIds = drawers.map((drawer) => drawer._id);
+
+  const boxes = await storageBoxesCollection.find(
+    { parent_id: { $in: [...rackIds, ...drawerIds] } },
+    sessionOptions
+  ).toArray();
+
+  return boxes.map((box) => box._id);
+}
+
+async function findBoxIdsByEquipment(db, equipmentContext = {}, options = {}) {
   const identifiers = collectEquipmentIdentifiers(equipmentContext);
   if (identifiers.length === 0) {
     return [];
   }
 
-  const locationsCollection = db.collection('locations');
-  const sessionOptions = options.session ? { session: options.session } : undefined;
+  const freezers = await resolveFreezersByEquipmentIdentifiers(db, identifiers, options);
+  const boxIds = [];
+  for (const freezer of freezers) {
+    boxIds.push(...await findBoxIdsUnderFreezer(db, freezer._id, options));
+  }
 
-  const numericIds = identifiers
-    .map((id) => Number(id))
-    .filter((value) => Number.isFinite(value));
-
-  const cursor = locationsCollection.find(
-    {
-      $or: [
-        { equipmentID: { $in: numericIds } },
-        { equipmentID: { $in: identifiers } }
-      ]
-    },
-    sessionOptions
-  );
-
-  const locations = await cursor.toArray();
-
-  return locations
-    .map((location) => location.locationID)
-    .filter((locationID) => locationID !== undefined && locationID !== null);
+  return dedupeIds(boxIds);
 }
 
 async function findEquipmentByMetadata(db, metadata = {}, options = {}) {
@@ -137,35 +244,58 @@ async function findEquipmentByMetadata(db, metadata = {}, options = {}) {
 
   const equipmentCollection = db.collection('equipment');
   const sessionOptions = options.session ? { session: options.session } : undefined;
-  const variants = [equipmentReference, normalizeString(equipmentReference)];
-  if (ObjectId.isValid(normalizeString(equipmentReference))) {
-    variants.push(new ObjectId(normalizeString(equipmentReference)));
-  }
+  const normalizedReference = normalizeString(equipmentReference);
+  const variants = [equipmentReference, normalizedReference];
   const numeric = Number(equipmentReference);
   if (Number.isFinite(numeric)) variants.push(numeric);
 
+  // #912: see buildSensorLookup's comment -- `_id` compared via
+  // `$expr`/`$toString` instead of an `$in` of an ObjectId variant, for the
+  // same handle-agnostic reason. The `equipmentID` numeric branch stays:
+  // Equipment.js validates `equipmentID` as a number, so it cannot stand in
+  // for `_id`.
+  //
+  // #917 item 4: the `{ id: { $in: variants } }` branch that used to sit third
+  // is gone, for the same reason as buildSensorLookup's `sensorID` branch.
+  // `EquipmentModel.create` writes no `id`, `equipment.routes.js` is the only
+  // insert path and it inserts that model's output, and no seed populates the
+  // collection -- so the key is never written and the branch never matched.
   return equipmentCollection.findOne({
     $or: [
-      { _id: { $in: variants } },
+      { $expr: { $eq: [{ $toString: '$_id' }, normalizedReference] } },
       { equipmentID: { $in: variants } },
-      { id: { $in: variants } },
     ]
   }, sessionOptions);
 }
 
-async function findLocationIdsBySensorKey(db, sensorKey, options = {}) {
+/**
+ * #464: `sensor.locationId`/`locationID` (and `sensorMetadata`'s mirror
+ * fields) carry the same equipment-level identifier #462/#463 already
+ * established for the RF004 sensor gate (`freezer.containerID ===
+ * Equipment.equipmentID`), not a pointer into the retiring `locations`
+ * collection — so resolution goes straight from that value to a matching
+ * FREEZER `StorageContainer`, no `locations` lookup involved. Per the
+ * coexistence rule, no compatibility shim reading both `Location` and the
+ * canonical model — the legacy `locations`-by-sensor reverse lookup this
+ * function used to fall back to is dropped, not kept alongside.
+ */
+async function findBoxIdsBySensorKey(db, sensorKey, options = {}) {
   const rawSensorKey = normalizeString(sensorKey);
   if (!rawSensorKey) return [];
 
   const sessionOptions = options.session ? { session: options.session } : undefined;
-  const locationIds = [];
+  const boxIds = [];
 
   try {
     const sensorsCollection = db.collection('sensors');
     const sensors = await sensorsCollection.find(buildSensorLookup(rawSensorKey), sessionOptions).toArray();
-    sensors.forEach((sensor) => {
-      locationIds.push(...collectLocationIds(sensor.locationId, sensor.locationID, sensor.storageLocation?.locationID));
-    });
+    for (const sensor of sensors) {
+      const equipmentIdentifiers = collectIdentifierValues(sensor.locationId, sensor.locationID, sensor.storageLocation?.locationID);
+      const freezers = await resolveFreezersByEquipmentIdentifiers(db, equipmentIdentifiers, options);
+      for (const freezer of freezers) {
+        boxIds.push(...await findBoxIdsUnderFreezer(db, freezer._id, options));
+      }
+    }
   } catch (error) {
     logger.warn('[QUARANTINE][COLD_CHAIN] Não foi possível consultar sensors para incidente', { sensorKey: rawSensorKey, error: error.message });
   }
@@ -175,48 +305,30 @@ async function findLocationIdsBySensorKey(db, sensorKey, options = {}) {
     const metadataDocs = await sensorMetadataCollection.find(buildSensorLookup(rawSensorKey), sessionOptions).toArray();
 
     for (const metadata of metadataDocs) {
-      locationIds.push(...collectLocationIds(metadata.locationId, metadata.locationID, metadata.storageLocation?.locationID));
+      const equipmentIdentifiers = collectIdentifierValues(metadata.locationId, metadata.locationID, metadata.storageLocation?.locationID);
+      const freezersFromMetadata = await resolveFreezersByEquipmentIdentifiers(db, equipmentIdentifiers, options);
+      for (const freezer of freezersFromMetadata) {
+        boxIds.push(...await findBoxIdsUnderFreezer(db, freezer._id, options));
+      }
+
       const equipment = await findEquipmentByMetadata(db, metadata, options);
       if (equipment) {
-        locationIds.push(...await findLocationIdsByEquipment(db, equipment, options));
+        boxIds.push(...await findBoxIdsByEquipment(db, equipment, options));
       }
     }
   } catch (error) {
     logger.warn('[QUARANTINE][COLD_CHAIN] Não foi possível consultar sensorMetadata para incidente', { sensorKey: rawSensorKey, error: error.message });
   }
 
-  try {
-    const locationsCollection = db.collection('locations');
-    const locations = await locationsCollection.find({
-      $or: [
-        { sensorId: rawSensorKey },
-        { sensorID: rawSensorKey },
-        { sensorKey: rawSensorKey },
-        { 'sensor.sensorId': rawSensorKey },
-        { 'sensor.sensorID': rawSensorKey },
-      ]
-    }, sessionOptions).toArray();
-    locationIds.push(...locations.map((location) => location.locationID));
-  } catch (error) {
-    logger.warn('[QUARANTINE][COLD_CHAIN] Não foi possível consultar locations por sensor', { sensorKey: rawSensorKey, error: error.message });
-  }
-
-  return collectLocationIds(locationIds);
+  return dedupeIds(boxIds);
 }
 
-function buildSampleFilterFromLocationIds(locationIds = []) {
-  if (!Array.isArray(locationIds) || locationIds.length === 0) {
+function buildSampleFilterFromBoxIds(boxIds = []) {
+  if (!Array.isArray(boxIds) || boxIds.length === 0) {
     return null;
   }
 
-  const normalizedIds = collectLocationIds(locationIds);
-
-  return {
-    $or: [
-      { locationID: { $in: normalizedIds } },
-      { 'location.locationID': { $in: normalizedIds } }
-    ]
-  };
+  return { 'storageLocation.boxId': { $in: dedupeIds(boxIds) } };
 }
 
 async function quarantineSamplesByFilter(db, filter, context = {}) {
@@ -229,18 +341,15 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
   const movementsCollection = await getCollection(db, 'sampleMovements');
   const queryOptions = context.session ? { session: context.session } : undefined;
 
+  // #540: the "not already quarantined" guard reads the canonical
+  // specimenStatus field, not the legacy status/currentStatus pair (no
+  // longer written below either).
   const samples = await samplesCollection
     .find(
       {
         $and: [
           filter,
-          {
-            $or: [
-              { status: { $ne: 'QUARANTINED' } },
-              { currentStatus: { $ne: 'QUARANTINED' } },
-              { release_status: { $ne: 'QUARANTINE' } }
-            ]
-          }
+          { specimenStatus: { $ne: 'quarantined' } }
         ]
       },
       queryOptions
@@ -256,12 +365,9 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
 
   for (const sample of samples) {
     const sampleId = String(sample._id);
+    const specimenStatus = 'quarantined';
     const updatePayload = {
-      status: 'QUARANTINED',
-      currentStatus: 'QUARANTINED',
-      release_status: 'QUARANTINE',
-      availabilityStatus: 'BLOCKED',
-      quarantineStatus: 'QUARANTINED',
+      specimenStatus,
       quarantineLocation: 'Quarentena',
       quarantineReason: context.reason || null,
       quarantineSource: context.source || null,
@@ -295,9 +401,14 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
       queryOptions
     );
 
+    await quarantineActionService.recordAction(db, {
+      specimenIds: [sampleId],
+      reasonCodes: [context.coldChainIncidentId ? 'COLD_CHAIN_INCIDENT' : (context.source || 'AUTOMATIC')],
+    }, context.session);
+
     quarantined += 1;
 
-    const quantitySnapshot = Number(sample.availableQuantity ?? sample.quantity ?? 0);
+    const quantitySnapshot = Number(sample.currentQuantity ?? sample.quantity ?? 0);
     const movementID = await SampleMovementModel.generateMovementID(db);
 
     await appendMovementWithHashChain(
@@ -340,8 +451,8 @@ async function quarantineByEquipmentStatus(db, equipmentContext, newStatus, opti
     return { triggered: false, matched: 0, quarantined: 0, movements: 0 };
   }
 
-  const locationIds = await findLocationIdsByEquipment(db, equipmentContext, options);
-  const filter = buildSampleFilterFromLocationIds(locationIds);
+  const boxIds = await findBoxIdsByEquipment(db, equipmentContext, options);
+  const filter = buildSampleFilterFromBoxIds(boxIds);
   const sourceId = equipmentContext?.equipmentID || equipmentContext?._id || equipmentContext?.id || null;
   const reason = buildStatusChangeReason('equipment', sourceId, newStatus);
 
@@ -364,23 +475,35 @@ async function quarantineByEquipmentStatus(db, equipmentContext, newStatus, opti
     triggered: true,
     ...result,
     reason,
-    locationIds
+    boxIds
   };
 }
 
+/**
+ * #464: `sensorContext.locationId`/`locationID` (and `options.updateData`'s
+ * mirror fields) are the same equipment-level identifier findBoxIdsBySensorKey
+ * resolves — not a `locations` document id.
+ */
 async function quarantineBySensorStatus(db, sensorContext, newStatus, options = {}) {
   if (!isQuarantineTriggerStatus(newStatus)) {
     return { triggered: false, matched: 0, quarantined: 0, movements: 0 };
   }
 
-  const locationCandidates = collectLocationIds(
+  const equipmentCandidates = collectIdentifierValues(
     sensorContext?.locationId,
     sensorContext?.locationID,
     options?.updateData?.locationId,
     options?.updateData?.locationID
   );
 
-  const filter = buildSampleFilterFromLocationIds(locationCandidates);
+  const freezers = await resolveFreezersByEquipmentIdentifiers(db, equipmentCandidates, options);
+  const boxIds = [];
+  for (const freezer of freezers) {
+    boxIds.push(...await findBoxIdsUnderFreezer(db, freezer._id, options));
+  }
+  const dedupedBoxIds = dedupeIds(boxIds);
+
+  const filter = buildSampleFilterFromBoxIds(dedupedBoxIds);
   const sourceId = sensorContext?.sensorId || sensorContext?.sensorID || sensorContext?._id || null;
   const reason = buildStatusChangeReason('sensor', sourceId, newStatus);
 
@@ -403,7 +526,7 @@ async function quarantineBySensorStatus(db, sensorContext, newStatus, options = 
     triggered: true,
     ...result,
     reason,
-    locationIds: locationCandidates
+    boxIds: dedupedBoxIds
   };
 }
 
@@ -418,8 +541,8 @@ async function quarantineByColdChainIncident(db, incident = {}, options = {}) {
     return { triggered: false, matched: 0, quarantined: 0, movements: 0, reason: 'incident-not-active' };
   }
 
-  const locationIds = await findLocationIdsBySensorKey(db, sensorKey, options);
-  const filter = buildSampleFilterFromLocationIds(locationIds);
+  const boxIds = await findBoxIdsBySensorKey(db, sensorKey, options);
+  const filter = buildSampleFilterFromBoxIds(boxIds);
   const incidentId = incident?._id ? String(incident._id) : sensorKey;
   const reason = buildColdChainIncidentReason(incident);
 
@@ -438,14 +561,14 @@ async function quarantineByColdChainIncident(db, incident = {}, options = {}) {
     matched: result.matched,
     quarantined: result.quarantined,
     movements: result.movements,
-    locationIds
+    boxIds
   });
 
   return {
     triggered: true,
     ...result,
     reason,
-    locationIds,
+    boxIds,
     incidentId,
     sensorKey
   };
@@ -460,16 +583,17 @@ async function markColdChainIncidentSamplesForReview(db, incident = {}, options 
   const samplesCollection = await getCollection(db, 'samples');
   const now = new Date();
   const queryOptions = options.session ? { session: options.session } : undefined;
+  const matchFilter = {
+    coldChainIncidentId: incidentId,
+    quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
+    specimenStatus: 'quarantined'
+  };
+  const matchedSamples = await samplesCollection.find(matchFilter, queryOptions).toArray();
+
   const result = await samplesCollection.updateMany(
-    {
-      coldChainIncidentId: incidentId,
-      quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
-      release_status: 'QUARANTINE'
-    },
+    matchFilter,
     {
       $set: {
-        availabilityStatus: 'PENDING_REVIEW',
-        quarantineStatus: 'PENDING_REVIEW',
         coldChainStatus: 'INCIDENT_RESOLVED_REVIEW_REQUIRED',
         coldChainReviewRequired: true,
         coldChainIncidentResolvedAt: now,
@@ -478,6 +602,10 @@ async function markColdChainIncidentSamplesForReview(db, incident = {}, options 
     },
     queryOptions
   );
+
+  for (const sample of matchedSamples) {
+    await quarantineActionService.markPendingReview(db, String(sample._id), options.session);
+  }
 
   logger.warn('[QUARANTINE][COLD_CHAIN] Incidente resolvido; amostras mantidas para revisão pós-incidente', {
     incidentId,
@@ -499,5 +627,5 @@ module.exports = {
   quarantineBySensorStatus,
   quarantineByColdChainIncident,
   markColdChainIncidentSamplesForReview,
-  findLocationIdsBySensorKey
+  findBoxIdsBySensorKey
 };

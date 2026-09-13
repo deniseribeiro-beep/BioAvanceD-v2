@@ -24,7 +24,4 @@ const CidSchema = new mongoose.Schema(
   }
 );
 
-CidSchema.index({ Codigo_Tabulacao: 1 }, { unique: true });
-CidSchema.index({ Descricao: 'text', Codigos_CID10: 'text', ORPHA: 'text', OMIM: 'text', aliases: 'text', namePt: 'text', nameEn: 'text', nameEs: 'text' });
-
 module.exports = mongoose.models.Cid || mongoose.model('Cid', CidSchema);

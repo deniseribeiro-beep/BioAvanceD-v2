@@ -6,10 +6,38 @@ RUN npm ci --omit=dev --no-audit --no-fund
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# #738: the backup runs inside this container, so mongodump/mongorestore
+# have to be here too -- otherwise a production deployment silently takes
+# the JSON fallback for every backup and restore. See Dockerfile.dev.
+# #948: openssl too. node:22-alpine ships NO openssl CLI -- verified with
+# `docker run --rm node:22-alpine sh -c "which openssl"` -> missing. 
+# audit-tsa.service.js:29 execFile()s `openssl ts -query`, and its caller
+# audit-v2.service.js:161-169 CATCHES the failure and records the event as
+# PENDING_TIMESTAMP with the error text -- so without this every audit event
+# in production would silently never be RFC3161-timestamped. Dockerfile.dev:8
+# already installs it; this stage was the only one that did not.
+RUN apk add --no-cache openssl mongodb-tools
 RUN addgroup -S app && adduser -S app -G app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# #947: the residual ~400K the shared .dockerignore has to keep in the context
+# because Dockerfile.dev's image genuinely needs it -- tests/architecture and
+# tests/compliance feed backend-unit-runner's current-state:ci. Nothing in
+# production reads any of it: the entrypoints are "node server.js" (below),
+# "node ./src/workers/worker.js" and "node src/workers/neo4jProjection.worker.js"
+# (compose.prod.yml). Docker layers are additive, so this is a whiteout rather
+# than a deletion -- the bytes stay in the layer stack. Acceptable here (no
+# privacy dimension), and exactly why the storage/.env half of #947 was fixed in
+# .dockerignore instead of with an rm.
+RUN rm -rf tests vitest.config.js
 RUN chown -R app:app /app
+# #893: pre-create the writable data roots and give them to the app user
+# BEFORE the volumes mount over them. Docker copies the image path's ownership
+# onto a fresh named volume, so without this the volumes arrive root-owned and
+# every mkdirSync under them fails EACCES -- swapping one permission error for
+# another. compose.prod.yml mounts uploads_data/storage_data/backups_data here
+# and .env.production.example points UPLOAD_DIR/STORAGE_DIR/BACKUP_DIR at them.
+RUN mkdir -p /data/uploads /data/storage /data/backups && chown -R app:app /data
 USER app
 EXPOSE 3000
 CMD ["node", "server.js"]

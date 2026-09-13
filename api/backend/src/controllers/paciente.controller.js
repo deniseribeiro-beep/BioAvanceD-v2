@@ -4,41 +4,22 @@ const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { revalidateSamplesByPatientID } = require('../services/sampleComplianceSync.service');
 const { getCollection } = require('../utils/collectionResolver');
+const PatientModel = require('../models/Patient');
+const { LEGACY_PATIENT_IDENTITY_FIELDS } = require('../utils/legacyPatientIdentityFields');
 
 /**
  * Controller para operações relacionadas a pacientes
  */
 class PacienteController {
   rejectCanonicalAliases(payload = {}) {
-    const allowed = new Set([
-      'participantId',
-      'patientName',
-      'birthDate',
-      'sex',
-      'email',
-      'phone',
-      'identityDocument',
-      'recordNumber',
-      'clinicalUnitId',
-      'clinicalUnit',
-      'unitAcronym',
-      'isDeceased',
-      'representativeName',
-      'representativeEmail',
-      'representativeIdentityDocument',
-      'representativePhone',
-      'consentTemplateId',
-      'status',
-      'consentToken',
-      'consentTokenCreatedAt',
-      'consentTokenExpiresAt',
-      'consentNotifiedAt',
-      'consentAcceptedAt',
-      'createdAt',
-      'updatedAt',
-      'anamneseGeral',
-      'dadosEspecificos'
-    ]);
+    // #345: built off PatientModel's own canonical field list (the
+    // Patient-document shape) plus the civil-identity fields the payload
+    // still legitimately carries but that never land on the Patient
+    // document itself (RF005/RNF007, #575) — they're routed to
+    // ParticipantIdentity instead, see patient.service.js#createPatient.
+    // A new Patient-document field only needs adding in Patient.js now;
+    // this list picks it up automatically.
+    const allowed = new Set([...PatientModel.CANONICAL_FIELDS, ...LEGACY_PATIENT_IDENTITY_FIELDS]);
     const fields = Object.keys(payload).filter((field) => !allowed.has(field));
     if (fields.length > 0) {
       const error = new Error('Payload contém campos não canônicos');
@@ -123,9 +104,9 @@ class PacienteController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'CREATE',
-          entity: 'Patient',
-          entityID: sanitizedPatient.participantId, // Apenas ID, sem dados sensíveis
-          result: 'success',
+          resourceType: 'Patient',
+          resourceId: sanitizedPatient.participantId, // Apenas ID, sem dados sensíveis
+          status: 'success',
           severity: 'info',
           message: `Paciente cadastrado - ID: ${sanitizedPatient.participantId}`, // Log sem dados sensíveis
           payload: sanitizedPatient, // Apenas ID sanitizado
@@ -193,10 +174,9 @@ class PacienteController {
 
       // MÓDULO OPERACIONAL vs MÓDULO DE CADASTRO (LGPD)
       // Verifica se usuário tem permissão de createPatient
-      const { permissions } = require('../infrastructure/middleware/rbac');
-      const userRole = req.user?.accessType || 1;
-      const hasCreatePatientPermission = permissions.createPatient?.includes(userRole) || false;
-      
+      const { userHasPermission } = require('../services/rbac-assignment.service');
+      const hasCreatePatientPermission = await userHasPermission(db, req.user?.userID, 'createPatient');
+
       if (!hasCreatePatientPermission) {
         // MÓDULO OPERACIONAL: retorna apenas IDs + status de consentimento, sem dados sensíveis
         const filters = {
@@ -204,22 +184,32 @@ class PacienteController {
           skip: parseInt(req.query.skip) || 0
         };
 
+        // #340 (RF003 AC#3): org-scoped caller sees only patients whose
+        // clinicalUnitId is one of their scoped organizations. This branch
+        // builds its own raw query (doesn't go through patientService), so
+        // the filter is applied here rather than inside listPatients.
+        const { applyOrganizationScopeFilter } = require('../services/rbac-assignment.service');
+        const scopeQuery = {};
+        if (req.organizationScope) {
+          applyOrganizationScopeFilter(scopeQuery, req.organizationScope, 'clinicalUnitId');
+        }
+
         const patientsCollection = await getCollection(db, 'patients');
         const patients = await patientsCollection
-          .find({}, { projection: { participantId: 1, status: 1, consentNotifiedAt: 1, consentTokenExpiresAt: 1, _id: 0 } })
+          .find(scopeQuery, { projection: { participantId: 1, status: 1, consentNotifiedAt: 1, consentTokenExpiresAt: 1, _id: 0 } })
           .limit(filters.limit)
           .skip(filters.skip)
           .toArray();
 
-        const total = await patientsCollection.countDocuments({});
+        const total = await patientsCollection.countDocuments(scopeQuery);
 
         // Registra log de consulta (módulo operacional - apenas IDs + status)
         const auditLogger = require('../utils/auditLogger');
         auditLogger.init(db);
         await auditLogger.log({
           action: 'QUERY',
-          entity: 'Patient',
-          result: 'success',
+          resourceType: 'Patient',
+          status: 'success',
           severity: 'info',
           message: `Consulta de pacientes (módulo operacional) - ${total} registros`,
           payload: { total, limit: filters.limit, skip: filters.skip },
@@ -242,7 +232,8 @@ class PacienteController {
           patientName: req.query.patientName,
           clinicalUnit: req.query.clinicalUnit,
           limit: parseInt(req.query.limit) || 50,
-          skip: parseInt(req.query.skip) || 0
+          skip: parseInt(req.query.skip) || 0,
+          organizationScope: req.organizationScope
         };
 
         const result = await patientService.listPatients(db, filters);
@@ -252,8 +243,8 @@ class PacienteController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'QUERY',
-          entity: 'Patient',
-          result: 'success',
+          resourceType: 'Patient',
+          status: 'success',
           severity: 'info',
           message: `Consulta de pacientes (módulo cadastro) - ${result.total || 0} registros`,
           payload: { total: result.total || 0, filters: { patientName: filters.patientName, clinicalUnit: filters.clinicalUnit } },
@@ -299,9 +290,9 @@ class PacienteController {
         const sanitizedID = id.length === 8 && /^\d{8}$/.test(id) ? id : 'N/A';
         await auditLogger.log({
           action: 'QUERY',
-          entity: 'Patient',
-          entityID: sanitizedID,
-          result: 'error',
+          resourceType: 'Patient',
+          resourceId: sanitizedID,
+          status: 'error',
           severity: 'warning',
           message: `Tentativa de buscar paciente inexistente: ID ${sanitizedID}`,
           req: req,
@@ -314,11 +305,24 @@ class PacienteController {
         });
       }
 
+      // #340: an existing patient outside the caller's organization scope
+      // 403s rather than 404s (out-of-scope direct access, not a
+      // discoverability leak via a different error code), matching
+      // sample-file.controller.js's existing precedent and this route's
+      // own sibling check in sample.routes.js.
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (!isRecordInOrganizationScope(patient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
       // Verifica permissões LGPD - módulo operacional vs cadastro
-      const { permissions } = require('../infrastructure/middleware/rbac');
-      const userRole = req.user?.accessType || 1;
-      const hasCreatePatientPermission = permissions.createPatient?.includes(userRole) || false;
-      
+      const { userHasPermission } = require('../services/rbac-assignment.service');
+      const hasCreatePatientPermission = await userHasPermission(db, req.user?.userID, 'createPatient');
+
       // Se não tem permissão de cadastro, retorna apenas ID (LGPD)
       if (!hasCreatePatientPermission) {
         const sanitizedPatient = sanitizePatientForLogs(patient);
@@ -326,9 +330,9 @@ class PacienteController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'QUERY',
-          entity: 'Patient',
-          entityID: sanitizedPatient.participantId,
-          result: 'success',
+          resourceType: 'Patient',
+          resourceId: sanitizedPatient.participantId,
+          status: 'success',
           severity: 'info',
           message: 'Consulta de paciente (módulo operacional) - apenas ID retornado',
           req: req,
@@ -352,21 +356,134 @@ class PacienteController {
       const sanitizedPatient = sanitizePatientForLogs(patient);
       await auditLogger.log({
         action: 'QUERY',
-        entity: 'Patient',
-        entityID: sanitizedPatient.participantId,
-        result: 'success',
+        resourceType: 'Patient',
+        resourceId: sanitizedPatient.participantId,
+        status: 'success',
         severity: 'info',
         message: 'Paciente consultado (módulo cadastro)',
         req: req,
         module: 'Cadastro'
       });
 
+      // RF005/RNF007 (#363): patientName/birthDate/identityDocument are civil
+      // identity — segregated into ParticipantIdentity, not returned as direct
+      // fields on the participant resource even to callers with createPatient
+      // permission. Re-identification is a separate authorized/audited flow
+      // (not yet built — tracked in the #363 follow-up).
+      // #1045: consentToken rode along in this rest-spread. It is the sole
+      // credential for the public consent-tokens/accept route, so it comes
+      // out here too -- not just on the list/search routes the issue named.
+      const { patientName, birthDate, identityDocument, ...rawParticipantResource } = patient;
+      const participantResource = PatientModel.stripConsentSecrets(rawParticipantResource);
+
       return res.status(200).json({
         success: true,
-        data: patient
+        data: participantResource
       });
     } catch (error) {
       logger.error('Erro ao buscar paciente:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro interno do servidor',
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * RF005/RNF007 AC#4/AC#5 (#560): resolve a identidade civil segregada em
+   * ParticipantIdentity — único ponto de reidentificação autorizado. Exige
+   * `reidentifyParticipant` (RBAC, gate de rota) e `reason` (finalidade
+   * legítima vinculada ao acesso), e audita cada chamada.
+   */
+  async reidentify(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const { id } = req.params;
+      const { reason } = req.body || {};
+
+      if (!reason || typeof reason !== 'string' || reason.trim().length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Finalidade obrigatória',
+          message: 'É necessário informar o motivo (reason) da reidentificação'
+        });
+      }
+
+      const patient = await patientService.getPatient(db, id);
+      if (!patient) {
+        return res.status(404).json({
+          success: false,
+          error: 'Paciente não encontrado'
+        });
+      }
+
+      // #626: same out-of-scope 403 pattern as buscar — reidentification
+      // is a mutation-adjacent, audited flow, so an out-of-scope caller
+      // is denied before any identity data is resolved.
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (!isRecordInOrganizationScope(patient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
+      const participantIdentityService = require('../services/participantIdentity.service');
+      const identity = await participantIdentityService.getIdentityByParticipantId(db, patient.participantId);
+
+      const auditLogger = require('../utils/auditLogger');
+      auditLogger.init(db);
+
+      if (!identity) {
+        await auditLogger.log({
+          action: 'REIDENTIFY',
+          resourceType: 'ParticipantIdentity',
+          resourceId: patient.participantId,
+          status: 'error',
+          severity: 'warning',
+          message: `Reidentificação sem registro de identidade: ${reason}`,
+          payload: { reason },
+          req: req,
+          module: 'Cadastro'
+        });
+        return res.status(404).json({
+          success: false,
+          error: 'Identidade não encontrada'
+        });
+      }
+
+      await auditLogger.log({
+        action: 'REIDENTIFY',
+        resourceType: 'ParticipantIdentity',
+        resourceId: patient.participantId,
+        status: 'success',
+        severity: 'warning',
+        message: `Reidentificação autorizada: ${reason}`,
+        payload: { reason },
+        req: req,
+        module: 'Cadastro'
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          participantId: identity.participantId,
+          patientName: identity.patientName,
+          birthDate: identity.birthDate,
+          identityDocument: identity.identityDocument
+        }
+      });
+    } catch (error) {
+      logger.error('Erro ao reidentificar participante:', error.message);
       return res.status(500).json({
         success: false,
         error: 'Erro interno do servidor',
@@ -391,6 +508,19 @@ class PacienteController {
         return res.status(400).json({
           success: false,
           error: 'participantId é obrigatório'
+        });
+      }
+
+      // #626: same post-fetch out-of-scope 403 pattern as buscar/reidentify
+      // — a nonexistent patient falls through to resendConsentNotification's
+      // own error handling below, unaffected.
+      const existingPatient = await patientService.getPatient(db, participantId);
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (existingPatient && !isRecordInOrganizationScope(existingPatient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
         });
       }
 
@@ -433,7 +563,20 @@ class PacienteController {
           message: 'O ID do paciente é imutável por questões de LGPD'
         });
       }
-      
+
+      // #626: mirrors sample.routes.js's PUT /:id out-of-scope 403
+      // pattern — the scope check runs before the mutation, not just
+      // before a read.
+      const existingPatient = await patientService.getPatient(db, id);
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (existingPatient && !isRecordInOrganizationScope(existingPatient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
       const updatePayload = this.sanitizePatientPayload(req.body);
       this.validateDeceasedRepresentative(updatePayload);
 
@@ -449,9 +592,9 @@ class PacienteController {
         const sanitizedID = id.length === 8 && /^\d{8}$/.test(id) ? id : 'N/A';
         await auditLogger.log({
           action: 'UPDATE',
-          entity: 'Patient',
-          entityID: sanitizedID,
-          result: 'success',
+          resourceType: 'Patient',
+          resourceId: sanitizedID,
+          status: 'success',
           severity: 'info',
           message: 'Paciente atualizado',
           payload: sanitizePatientForLogs({ participantId: sanitizedID }),
@@ -499,6 +642,20 @@ class PacienteController {
 
       const { id } = req.params;
       const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
+
+      // #626: mirrors sample.routes.js's DELETE /:id out-of-scope 403
+      // pattern — the scope check runs before the mutation, not just
+      // before a read.
+      const existingPatient = await patientService.getPatient(db, id);
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (existingPatient && !isRecordInOrganizationScope(existingPatient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
       const result = await patientService.deletePatient(db, id);
 
       if (!result) {
@@ -508,9 +665,9 @@ class PacienteController {
         const sanitizedID = id.length === 8 && /^\d{8}$/.test(id) ? id : 'N/A';
         await auditLogger.log({
           action: 'DELETE',
-          entity: 'Patient',
-          entityID: sanitizedID,
-          result: 'error',
+          resourceType: 'Patient',
+          resourceId: sanitizedID,
+          status: 'error',
           severity: 'warning',
           message: `Tentativa de deletar paciente inexistente: ID ${sanitizedID}`,
           req: req,
@@ -530,9 +687,9 @@ class PacienteController {
         const sanitizedID = id.length === 8 && /^\d{8}$/.test(id) ? id : 'N/A';
         await auditLogger.log({
           action: 'DELETE',
-          entity: 'Patient',
-          entityID: sanitizedID,
-          result: 'success',
+          resourceType: 'Patient',
+          resourceId: sanitizedID,
+          status: 'success',
           severity: 'warning',
           message: 'Paciente deletado',
           payload: sanitizePatientForLogs({ participantId: sanitizedID }),
@@ -604,8 +761,8 @@ class PacienteController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'VALIDATE',
-        entity: 'Patient',
-        result: exists ? 'success' : 'error',
+        resourceType: 'Patient',
+        status: exists ? 'success' : 'error',
         severity: exists ? 'info' : 'warning',
         message: `Validação de ID de paciente: ${participantId} - ${exists ? 'válido' : 'inválido'}`,
         payload: { participantId, exists },
@@ -643,16 +800,21 @@ class PacienteController {
       this.rejectCanonicalAliases(req.body || {});
 
       const { participantId } = req.body;
-      if (!participantId) {
+      // #887: a truthy check admits an object -- `{ $ne: null }` is truthy
+      // and would reach findOne below as a live operator, returning the
+      // first patient in natural order for editing. Coerced the way
+      // auth.service.js#login has always coerced its own lookup field.
+      if (!participantId || typeof participantId !== 'string' || !participantId.trim()) {
         return res.status(400).json({
           success: false,
           error: 'participantId é obrigatório'
         });
       }
+      const participantIdTerm = participantId.trim();
 
       const { getCollection } = require('../utils/collectionResolver');
       const patientsCollection = await getCollection(db, 'patients');
-      const patient = await patientsCollection.findOne({ participantId });
+      const patient = await patientsCollection.findOne({ participantId: participantIdTerm });
 
       if (!patient) {
         // Registra tentativa de busca para edição de paciente inexistente (sanitizado)
@@ -662,9 +824,9 @@ class PacienteController {
         const sanitizedID = participantId.length === 8 && /^\d{8}$/.test(participantId) ? participantId : 'N/A';
         await auditLogger.log({
           action: 'QUERY',
-          entity: 'Patient',
-          entityID: sanitizedID,
-          result: 'error',
+          resourceType: 'Patient',
+          resourceId: sanitizedID,
+          status: 'error',
           severity: 'warning',
           message: `Tentativa de buscar paciente para edição: ID ${sanitizedID} não encontrado`,
           payload: sanitizePatientForLogs({ participantId: sanitizedID }),
@@ -685,9 +847,9 @@ class PacienteController {
       const sanitizedPatient = sanitizePatientForLogs(patient);
       await auditLogger.log({
         action: 'QUERY',
-        entity: 'Patient',
-        entityID: sanitizedPatient.participantId,
-        result: 'success',
+        resourceType: 'Patient',
+        resourceId: sanitizedPatient.participantId,
+        status: 'success',
         severity: 'info',
         message: `Paciente buscado para edição: ID ${sanitizedPatient.participantId}`,
         payload: sanitizedPatient, // Apenas ID sanitizado
@@ -697,7 +859,9 @@ class PacienteController {
 
       return res.status(200).json({
         success: true,
-        data: patient
+        // #1045: this handler returned the RAW Mongo document with no shaping
+        // at all, consentToken included.
+        data: PatientModel.stripConsentSecrets(patient)
       });
     } catch (error) {
       logger.error('Erro ao buscar paciente para edição:', error.message);
@@ -728,15 +892,15 @@ class PacienteController {
         });
       }
 
-      const result = await patientService.searchPatients(db, searchTerm);
+      const result = await patientService.searchPatients(db, searchTerm, req.organizationScope);
 
       // Registra log de busca (sanitizado)
       const auditLogger = require('../utils/auditLogger');
       auditLogger.init(db);
       await auditLogger.log({
         action: 'SEARCH',
-        entity: 'Patient',
-        result: 'success',
+        resourceType: 'Patient',
+        status: 'success',
         severity: 'info',
         message: `Busca de pacientes: "${searchTerm}" - ${result.total} resultado(s) encontrado(s)`,
         payload: { searchTerm, total: result.total },
@@ -754,7 +918,7 @@ class PacienteController {
       // Log de erro
       if (req.user) {
         const auditLogger = require('../utils/auditLogger');
-        auditLogger.init(db);
+        auditLogger.init(req.app.locals.db);
         await auditLogger.logError(req, 'Patient', error, {
           action: 'SEARCH',
           searchTerm: req.query.q
@@ -787,6 +951,19 @@ class PacienteController {
         });
       }
 
+      // #626: mirrors buscar's out-of-scope 403 pattern. A nonexistent
+      // patient (getPatient resolves null) is left to whatever downstream
+      // 404/empty-result behavior listPatientObservations already has.
+      const existingPatient = await patientService.getPatient(db, participantId);
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (existingPatient && !isRecordInOrganizationScope(existingPatient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
       const filters = {
         biomarkerType: req.query.biomarkerType,
         status: req.query.status,
@@ -798,9 +975,8 @@ class PacienteController {
 
       const result = await biomarkerObservationService.listPatientObservations(db, participantId, filters);
 
-      const { permissions } = require('../infrastructure/middleware/rbac');
-      const userRole = req.user?.accessType || 1;
-      const hasCreatePatientPermission = permissions.createPatient?.includes(userRole) || false;
+      const { userHasPermission } = require('../services/rbac-assignment.service');
+      const hasCreatePatientPermission = await userHasPermission(db, req.user?.userID, 'createPatient');
 
       const observations = hasCreatePatientPermission
         ? result.observations
@@ -847,6 +1023,18 @@ class PacienteController {
         return res.status(400).json({
           success: false,
           error: 'participantId inválido. Deve ter 8 dígitos numéricos'
+        });
+      }
+
+      // #626: same out-of-scope 403 pattern as listBiomarkerObservations
+      // — a mutation, so checked before the write.
+      const existingPatient = await patientService.getPatient(db, participantId);
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (existingPatient && !isRecordInOrganizationScope(existingPatient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
         });
       }
 

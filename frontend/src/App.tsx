@@ -12,7 +12,9 @@ const LoginPage = lazy(() => import('./views/LoginPage'));
 const Dashboard = lazy(() => import('./views/Dashboard'));
 const PatientsPage = lazy(() => import('./views/PatientsPage'));
 const FhirImportPage = lazy(() => import('./views/FhirImportPage'));
-const ConsentPage = lazy(() => import('./pages/patient/EConsentPage'));
+const ImportQuarantinePage = lazy(() => import('./views/ImportQuarantinePage'));
+const ImportLGPDPage = lazy(() => import('./views/ImportLGPDPage'));
+const ConsentTokenPage = lazy(() => import('./pages/patient/ConsentTokenPage'));
 const SamplesPage = lazy(() => import('./views/SamplesPage'));
 const SampleDetailsPage = lazy(() => import('./views/SampleDetailsPage'));
 const ResultsPage = lazy(() => import('./views/ResultsPage'));
@@ -30,6 +32,7 @@ const SystemManagementPage = lazy(() => import('./views/SystemManagementPage'));
 const ReportsPage = lazy(() => import('./views/ReportsPage'));
 const ReportViewPage = lazy(() => import('./views/ReportViewPage'));
 const ReportQueryPage = lazy(() => import('./views/ReportQueryPage'));
+const ReportTemplatesPage = lazy(() => import('./views/ReportTemplatesPage'));
 const QualityDescriptionPage = lazy(() => import('./views/QualityDescriptionPage'));
 const ImportForm = lazy(() => import('./components/v2/ImportForm'));
 const BackupPage = lazy(() => import('./views/BackupPage'));
@@ -55,6 +58,14 @@ function App() {
           <Route path="/patient/e-consent" element={<EConsentLinkPanel />} />
           <Route path="/patient/e-consent/:token" element={<EConsentPage />} />
           <Route path="/patient/e-consent/import/:token" element={<EConsentImportPage />} />
+          {/* #809: the bulk consent-token link (buildConsentLink) lands here. The
+              64-char token in the query string IS the credential, exactly as the
+              JWT is for /patient/e-consent/:token above -- a participant following
+              an emailed invitation has no account to log into, so this route must
+              stay outside ProtectedRoute. It previously pointed at EConsentPage
+              (an alias import of the JWT page) behind ProtectedRoute, which read
+              its token from a route param this URL does not have. */}
+          <Route path="/patients/:id/consent" element={<ConsentTokenPage />} />
           <Route
             path="/next/intake"
             element={
@@ -90,7 +101,6 @@ function App() {
                   <Route path="/patients" element={<ProtectedRoute><PatientsPage /></ProtectedRoute>} />
                   <Route path="/patients/import-fhir" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><FhirImportPage /></ProtectedRoute>} />
                   <Route path="/import/fhir" element={<Navigate to="/patients/import-fhir" replace />} />
-                  <Route path="/patients/:id/consent" element={<ProtectedRoute><ConsentPage /></ProtectedRoute>} />
                   <Route path="samples/custody-reports" element={<ProtectedRoute><SampleCustodyReportsPage /></ProtectedRoute>} />
                   <Route path="samples/withdrawal-return" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><SampleWithdrawalReturnPage /></ProtectedRoute>} />
                   <Route path="samples/:id/label" element={<ProtectedRoute><SampleLabelPage /></ProtectedRoute>} />
@@ -115,9 +125,44 @@ function App() {
                   <Route path="/logs" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><LogsPage /></ProtectedRoute>} />
                   <Route path="/logs/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><LogDetailPage /></ProtectedRoute>} />
                   <Route path="/reports" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportsPage /></ProtectedRoute>} />
+                  {/* #726 (RF008 AC#6): template management is Coordenador+Administrador
+                      only (manageReportTemplates), narrower than /reports' own view-only gate. */}
+                  <Route path="/reports/templates" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ReportTemplatesPage /></ProtectedRoute>} />
                   <Route path="/reports/query/:type" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportQueryPage /></ProtectedRoute>} />
                   <Route path="/reports/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportViewPage /></ProtectedRoute>} />
                   <Route path="/quality-descriptions" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionPage /></ProtectedRoute>} />
+                  {/* #808: the LGPD import's own surface. `/import` posts to the
+                      *async* importer; #813 landed, so that importer now
+                      quarantines its rejected rows too, into
+                      import_staging_records with type ASYNC_BATCH_IMPORT. This
+                      posts to the LGPD importer, whose batches are the ones
+                      ImportQuarantinePage actually lists -- that page calls
+                      /import-lgpd/batches, which filters to LGPD quarantine
+                      types, so async batches are quarantined but not yet
+                      listable (#950). (RNF011 AC#4 / RF029 AC#6.) Same roles as
+                      /import and /import/quarantine -- the backend gates the two
+                      import routes on createPatient/createSample respectively,
+                      which these three roles hold. */}
+                  <Route
+                    path="/import/lgpd"
+                    element={
+                      <ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}>
+                        <ImportLGPDPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  {/* #794 item 2 (RNF011 AC#4): the quarantine review surface.
+                      Same roles as /import — the backend gates both the list
+                      and the batch read on createSample, which is the
+                      permission the import itself requires. */}
+                  <Route
+                    path="/import/quarantine"
+                    element={
+                      <ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}>
+                        <ImportQuarantinePage />
+                      </ProtectedRoute>
+                    }
+                  />
                   <Route
                     path="/import"
                     element={

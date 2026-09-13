@@ -15,6 +15,26 @@ const auditRequest = async (req, res, next) => {
   }
 
   const startTime = Date.now();
+
+  // #1119: capture the path NOW, not inside the res.send wrapper below.
+  // auditRequest is mounted at app level (app.js:194), so at this point
+  // req.path is the full '/api/iot/telemetry'. Express then strips the
+  // mount prefix off req.url for the duration of the mounted router, and
+  // the response is sent from INSIDE that router -- so by the time the
+  // wrapper runs, req.path reads '/telemetry'.
+  //
+  // determineEntity is keyed on the first segment after /api, so the
+  // stripped path missed the map entirely and fell through to the
+  // 'Sistema' catch-all: 57 of the 61 prefixes app.js mounts, i.e. exactly
+  // the defect #1115 built ENTITY_MAP to fix. determineModule and
+  // normalizeHttpMethodToAction match on substrings of the same path and
+  // were wrong for the same reason.
+  //
+  // The ignoredPaths check above is NOT affected and deliberately still
+  // reads req.path: it runs here, synchronously, while the path is still
+  // full.
+  const requestPath = req.path;
+
   const originalSend = res.send.bind(res);
   
   // Intercepta resposta para registrar status
@@ -30,7 +50,7 @@ const auditRequest = async (req, res, next) => {
           auditLogger.init(db);
           
           // Determina ação baseada no método HTTP e status
-          let action = normalizeHttpMethodToAction(req.method, req.path);
+          let action = normalizeHttpMethodToAction(req.method, requestPath);
           let result = 'success';
           let severity = 'info';
           
@@ -51,22 +71,22 @@ const auditRequest = async (req, res, next) => {
           }
           
           // Determina entidade baseada na rota
-          const entity = determineEntity(req.path);
+          const entity = determineEntity(requestPath);
           
           // Determina módulo
-          const module = determineModule(req.path);
+          const module = determineModule(requestPath);
           
           await auditLogger.log({
             action: action,
-            entity: entity,
-            result: result,
+            resourceType: entity,
+            status: result,
             severity: severity,
-            message: `${req.method} ${req.path} - ${statusCode} (${duration}ms)`,
+            message: `${req.method} ${requestPath} - ${statusCode} (${duration}ms)`,
             req: req,
             module: module,
             payload: {
               method: req.method,
-              path: req.path,
+              path: requestPath,
               statusCode: statusCode,
               duration: duration,
               query: Object.keys(req.query).length > 0 ? 'present' : null
@@ -86,28 +106,131 @@ const auditRequest = async (req, res, next) => {
 };
 
 /**
- * Lista de entidades válidas do sistema
+ * #1115: URL segment -> canonical resourceType (dict-02 P1X-0326, "Tipo da
+ * entidade afetada"). This map decides the resourceType on the AUTOMATIC
+ * audit row for every request, because app.js mounts auditRequest globally.
+ *
+ * It used to live inside determineEntity with 26 keys, beside a separate
+ * 15-entry VALID_ENTITIES list, and the two had already drifted apart. It
+ * covered 14 of the 59 /api prefixes app.js mounts, so 45 route families --
+ * security, legal-holds, retention-policies, e-consent, backup and audit
+ * among them -- recorded the catch-all Sistema on every automatic row.
+ *
+ * Hoisted to module scope with VALID_ENTITIES derived from it, so there is
+ * one vocabulary instead of two. Names are grounded, in this order: the
+ * literal the codebase already passes to auditLogger for that domain (that
+ * is where storage -> StorageContainer comes from), else dict-02's Entidade
+ * column (AuditEvent, Collection, Consent, RCSAssessment, RetentionPolicy,
+ * SecurityConfiguration, TerminologyConcept), else the singular of the
+ * resource. audit-entity-coverage.arch.test.js fails if a newly mounted
+ * prefix is missing from here and not declared entity-less below.
+ *
+ * HISTORICAL CUTOFF (#1117). This map was filled in a84eaa63. Audit rows
+ * written BEFORE that commit carry resourceType Sistema for the 41 route
+ * families it added, and cannot be corrected -- the trail is immutable and
+ * hash-chained (#1094/#1105). Only 4 of those 41 also audited explicitly
+ * via auditLogger (facilities, rooms, security, storage), so for the other
+ * 37 -- e-consent, legal-holds, retention-policies, access-requests and
+ * disposition-actions among them -- Sistema is the only type their
+ * historical rows ever recorded. A resourceType query over any of those
+ * families is incomplete before that commit, and Sistema does not look
+ * wrong the way a null would.
  */
-const VALID_ENTITIES = [
-  'Access',
-  'Authentication',
-  'Assistant',
-  'Equipment',
-  'Export',
-  'Import',
-  'IntelligentAssistant',
-  'Location',
-  'Log',
-  'Patient',
-  'Policy',
-  'Report',
-  'Result',
-  'Sample',
-  'Sensor',
-  'Sistema',
-  'Temperature',
-  'User'
+const ENTITY_MAP = {
+  'auth': 'Authentication',
+  'users': 'User',
+  'user': 'User',
+  'patients': 'Patient',
+  'pacientes': 'Patient',
+  'patient': 'Patient',
+  'samples': 'Sample',
+  'sample': 'Sample',
+  'Samples': 'Sample',
+  'amostras': 'Sample',
+  'temperature': 'Temperature',
+  'sensors': 'Sensor',
+  'sensor': 'Sensor',
+  'reports': 'Report',
+  'report': 'Report',
+  'import': 'Import',
+  'import-lgpd': 'Import',
+  'export': 'Export',
+  'logs': 'Log',
+  'log': 'Log',
+  'access': 'Access',
+  'equipment': 'Equipment',
+  'policies': 'Policy',
+  'policy': 'Policy',
+  'results': 'Result',
+  'result': 'Result',
+
+  // #1115: the 40 mounted prefixes that previously fell through to Sistema.
+  'access-requests': 'AccessRequest',
+  'analysis-files': 'AnalysisFile',
+  'analysis-types': 'AnalysisType',
+  'assays': 'Assay',
+  'audit': 'AuditEvent',
+  'backup': 'Backup',
+  'backup-policy': 'BackupPolicy',
+  'cids': 'Cid',
+  'collections': 'Collection',
+  'compliance': 'Compliance',
+  'datasets': 'Dataset',
+  'disposition-actions': 'DispositionAction',
+  'e-consent': 'Consent',
+  'extraction-protocols': 'ExtractionProtocol',
+  'facilities': 'Facility',
+  'hpo': 'TerminologyConcept',
+  'incidents': 'Incident',
+  'iot': 'TelemetryReading',
+  'legal-holds': 'LegalHold',
+  'measurement-units': 'MeasurementUnit',
+  'nonconformances': 'Nonconformance',
+  'notification-rules': 'NotificationRule',
+  'notifications': 'Notification',
+  'omics-qualifications': 'OmicsQualification',
+  'omics-runs': 'OmicsRun',
+  'organizations': 'Organization',
+  'orphanet': 'TerminologyConcept',
+  'protocols': 'Protocol',
+  'quality': 'RCSAssessment',
+  'quality-descriptions': 'QualityDescription',
+  'reagent-lots': 'ReagentLot',
+  'report-templates': 'ReportTemplate',
+  'retention-policies': 'RetentionPolicy',
+  'rooms': 'Room',
+  'sample-origins': 'SampleOrigin',
+  'sample-types': 'SampleType',
+  'security': 'SecurityConfiguration',
+  'storage': 'StorageContainer',
+  'studies': 'Study',
+  'terminologies': 'TerminologyConcept',
+  'workflow-runs': 'WorkflowRun'
+};
+
+/**
+ * #1115: prefixes that deliberately have NO affected entity, so Sistema is
+ * the correct resourceType rather than a gap. Declared explicitly so the
+ * architecture test can tell "decided" from "not yet mapped" -- that is the
+ * whole difference between this list and the silence it replaces.
+ *
+ *  health         liveness probe, not an operation on anything
+ *  dictionary     reads the canonical data dictionary itself
+ *  phone-codes    static reference lookup
+ *  intake-wizard  multi-entity workflow; its handlers audit explicitly
+ */
+const NO_ENTITY_ROUTES = [
+  'health',
+  'dictionary',
+  'phone-codes',
+  'intake-wizard'
 ];
+
+/**
+ * Lista de entidades válidas do sistema, derivada do mapa acima (#1115).
+ * Antes era uma segunda lista mantida à mão, que já havia divergido.
+ */
+const VALID_ENTITIES = [...new Set(Object.values(ENTITY_MAP)), 'Sistema'];
 
 /**
  * Determina entidade baseada no path
@@ -135,41 +258,19 @@ function determineEntity(path) {
     }
     return 'Sistema';
   }
+
+  // #1115: a version segment carries no entity either -- the affected
+  // entity is in the sub-path, exactly as with an id above. app.js mounts
+  // /api/v1/patients, which resolved to Sistema because v1 is not a
+  // resource name. Found by audit-entity-coverage.arch.test.js.
+  if (/^v\d+$/.test(resource) && pathParts.length > 1) {
+    return determineEntity('/' + pathParts.slice(1).join('/'));
+  }
   
-  const entityMap = {
-    'auth': 'Authentication',
-    'users': 'User',
-    'user': 'User',
-    'patients': 'Patient',
-    'pacientes': 'Patient',
-    'patient': 'Patient',
-    'samples': 'Sample',
-    'sample': 'Sample',
-    'Samples': 'Sample',
-    'amostras': 'Sample',
-    'temperature': 'Temperature',
-    'sensors': 'Sensor',
-    'sensor': 'Sensor',
-    'reports': 'Report',
-    'report': 'Report',
-    'import': 'Import',
-    'import-lgpd': 'Import',
-    'export': 'Export',
-    'logs': 'Log',
-    'log': 'Log',
-    'access': 'Access',
-    'equipment': 'Equipment',
-    'locations': 'Location',
-    'location': 'Location',
-    'policies': 'Policy',
-    'policy': 'Policy',
-    'results': 'Result',
-    'result': 'Result'
-  };
-  
-  // Se o recurso está no mapa, retorna a entidade correspondente
-  if (entityMap[resource]) {
-    return entityMap[resource];
+  // Se o recurso está no mapa, retorna a entidade correspondente (#1115:
+  // o mapa agora é ENTITY_MAP, no escopo do módulo).
+  if (ENTITY_MAP[resource]) {
+    return ENTITY_MAP[resource];
   }
   
   // Tenta criar uma entidade válida a partir do nome do recurso
@@ -238,6 +339,12 @@ function determineModule(path) {
 }
 
 module.exports = {
-  auditRequest
+  auditRequest,
+  // #1115: exported for audit-entity-coverage.arch.test.js, which asserts
+  // every prefix app.js mounts resolves to something other than 'Sistema'
+  // unless it is declared entity-less.
+  determineEntity,
+  ENTITY_MAP,
+  NO_ENTITY_ROUTES
 };
 

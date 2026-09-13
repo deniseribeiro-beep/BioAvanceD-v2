@@ -6,6 +6,12 @@ const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
 const SampleFileModel = require('../models/SampleFile');
 const { getUserAnonId } = require('../utils/userAnonymization');
+const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+// #643: extracted to a shared module so the Assay/Dataset scientific-file
+// linkage controllers reuse the exact same crypto path instead of a second
+// implementation -- see fileCrypto.js for the RF007/RNF029 rationale.
+const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
+const { STORAGE_BASE } = require('../config/uploadConfig');
 
 /**
  * Controller de Upload de Arquivos de Análise de Amostras
@@ -28,7 +34,7 @@ class SampleFileController {
           }
 
           // Cria diretório organizado por specimenId
-          const sampleDir = path.join(__dirname, '../../storage/samples', String(specimenId), 'files');
+          const sampleDir = path.join(STORAGE_BASE, 'samples', String(specimenId), 'files');
           if (!fs.existsSync(sampleDir)) {
             fs.mkdirSync(sampleDir, { recursive: true });
           }
@@ -73,10 +79,27 @@ class SampleFileController {
   }
 
   /**
-   * Middleware de upload
+   * Middleware de upload.
+   * multer's fileFilter/limits rejections call next(err) with no
+   * downstream error-handling middleware registered anywhere in the app
+   * (confirmed: no `(err, req, res, next)` handler exists) — left as-is,
+   * an invalid format or oversized file crashes to Express's default HTML
+   * 500 instead of RF007 AC#1/AC#2's intended clean rejection. Caught here,
+   * scoped to this route only, rather than adding a global handler.
    */
   uploadMiddleware() {
-    return this.upload.single('file');
+    const handler = this.upload.single('file');
+    return (req, res, next) => {
+      handler(req, res, (err) => {
+        if (err) {
+          return res.status(400).json({
+            success: false,
+            error: err.message || (req.t ? req.t('sampleFiles.uploadError') : 'Erro ao processar upload do arquivo')
+          });
+        }
+        next();
+      });
+    };
   }
 
   /**
@@ -105,7 +128,7 @@ class SampleFileController {
       }
 
       // Valida se a amostra existe
-      const samplesCollection = db.collection('amostras');
+      const samplesCollection = db.collection('samples');
       let sample;
       try {
         // Tenta buscar por ObjectId primeiro
@@ -130,6 +153,24 @@ class SampleFileController {
         });
       }
 
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
+      // req.organizationScope is only absent when requireOrganizationScope
+      // wasn't run ahead of this handler (never true in production).
+      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+        if (fs.existsSync(file.path)) {
+          try {
+            fs.unlinkSync(file.path);
+          } catch (unlinkError) {
+            logger.error('Erro ao remover arquivo após validação de escopo:', unlinkError.message);
+          }
+        }
+        return res.status(403).json({
+          success: false,
+          error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+          message: 'Esta amostra pertence a outra organização'
+        });
+      }
+
       // Obtém ID anonimizado do uploader (LGPD)
       const uploaderAnonId = await getUserAnonId(req.user, db);
 
@@ -146,14 +187,65 @@ class SampleFileController {
         });
       }
 
+      // dict-02 ELM-0317 (DataFile.fileRole) -- optional multipart field
+      // (multer puts non-file fields on req.body); an explicitly-supplied
+      // value must be a real pipeline-stage value, not defaulted away.
+      const fileRole = req.body && req.body.fileRole ? req.body.fileRole : undefined;
+      if (fileRole !== undefined && !SampleFileModel.FILE_ROLES.includes(fileRole)) {
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+        return res.status(400).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.invalidFileRole') : 'fileRole inválido',
+          details: [`fileRole deve ser um dos: ${SampleFileModel.FILE_ROLES.join(', ')}`]
+        });
+      }
+
+      // RF007 AC#3/AC#4/AC#5 - checksum do conteúdo original, cifra em
+      // repouso (RNF029) e URI estável de Object Storage. O conteúdo em
+      // disco é substituído pelo ciphertext; o checksum é sempre calculado
+      // sobre o plaintext, já que é isso que RNF029 usa para provar
+      // integridade do que o cliente enviou.
+      // #938: fail closed BEFORE the plaintext multer already wrote to disk
+      // can be left there. This used to read `if (encryption)` as
+      // "skip encryption when no key is configured", so a keyless
+      // deployment stored every upload in plaintext and still returned
+      // success. RNF029 AC#5 makes encryption follow the data's
+      // classification, and scientific files are classified encrypted at
+      // rest (#566) -- so a missing key is a refusal, not a downgrade.
+      // Same shape as #734's backup guard.
+      assertFileEncryptionConfigured();
+      const plaintext = fs.readFileSync(file.path);
+      const checksum = computeChecksum(plaintext);
+      const encryption = encryptFileBuffer(plaintext);
+      if (encryption) {
+        fs.writeFileSync(file.path, encryption.ciphertext);
+      }
+      const storageUri = `objstore://samples/${sample._id.toString()}/files/${path.basename(file.path)}`;
+
       // Cria registro na collection sample_files
       const sampleFilesCollection = db.collection('sample_files');
       const sampleFileData = {
+        sampleID: sample._id.toString(), // SampleFileModel.validate requires sampleID
         specimenId: sample._id.toString(), // Usa _id da amostra como referência principal
         fileName: file.originalname,
         fileType: fileType,
+        fileRole: fileRole || 'raw',
+        fileFormat: SampleFileModel.getFileFormatFromType(fileType),
         fileSize: file.size,
         storagePath: file.path,
+        storageUri,
+        checksum,
+        checksumAlgorithm: 'sha256',
+        encryptionAlgorithm: encryption ? encryption.algorithm : null,
+        encryptionKeyId: encryption ? encryption.keyId : null,
+        encryptionIv: encryption ? encryption.iv : null,
+        encryptionTag: encryption ? encryption.tag : null,
+        // Restrição de acesso vigente hoje (rbac.js/roles.min.json): leitura
+        // exige apenas autenticação, upload/exclusão exigem
+        // uploadSampleFiles/deleteSampleFiles (Admin/Coordenador).
+        accessPolicy: { view: 'authenticated', manage: ['admin', 'coordinator'] },
         uploaderAnonId: uploaderAnonId,
         uploadDate: new Date(),
         createdAt: new Date(),
@@ -166,7 +258,7 @@ class SampleFileController {
         if (fs.existsSync(file.path)) {
           fs.unlinkSync(file.path);
         }
-        return res.status(400).json({
+        return res.status(422).json({
           success: false,
           error: req.t ? req.t('sampleFiles.validationError') : 'Erro de validação',
           details: validation.errors
@@ -182,16 +274,18 @@ class SampleFileController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'file_upload',
-          entity: 'SampleFile',
-          entityID: insertResult.insertedId.toString(),
-          result: 'success',
+          resourceType: 'SampleFile',
+          resourceId: insertResult.insertedId.toString(),
+          status: 'success',
           severity: 'info',
           message: `Upload de arquivo de análise: ${file.originalname} (${(file.size / 1024).toFixed(2)} KB)`,
           payload: {
             fileName: file.originalname,
             fileSize: file.size,
             fileType: fileType,
-            specimenId: sample._id.toString()
+            specimenId: sample._id.toString(),
+            checksum,
+            checksumAlgorithm: 'sha256'
             // Não inclui dados sensíveis
           },
           req: req,
@@ -208,9 +302,19 @@ class SampleFileController {
           specimenId: sampleFile.specimenId,
           fileName: sampleFile.fileName,
           fileType: sampleFile.fileType,
+          fileRole: sampleFile.fileRole,
+          fileFormat: sampleFile.fileFormat,
           fileSize: sampleFile.fileSize,
           uploaderAnonId: sampleFile.uploaderAnonId,
-          uploadDate: sampleFile.uploadDate
+          uploadDate: sampleFile.uploadDate,
+          uri: sampleFile.storageUri,
+          checksum: sampleFile.checksum,
+          checksumAlgorithm: sampleFile.checksumAlgorithm,
+          encryption: {
+            encrypted: Boolean(sampleFile.encryptionAlgorithm),
+            algorithm: sampleFile.encryptionAlgorithm
+          },
+          accessPolicy: sampleFile.accessPolicy
           // storagePath não é retornado por segurança
         }
       });
@@ -226,7 +330,11 @@ class SampleFileController {
         }
       }
 
-      return res.status(400).json({
+      // #938: honour an explicit statusCode. The gate above throws 500 for a
+      // missing ENCRYPTION_KEY -- a server misconfiguration the uploader can
+      // do nothing about -- and answering the blanket 400 would blame the
+      // client for it. Everything else keeps the 400 it always had.
+      return res.status(error?.statusCode || 400).json({
         success: false,
         error: req.t ? req.t('sampleFiles.uploadError') : 'Erro ao fazer upload de arquivo',
         message: error.message
@@ -252,7 +360,7 @@ class SampleFileController {
       const { specimenId } = req.params;
 
       // Valida se a amostra existe
-      const samplesCollection = db.collection('amostras');
+      const samplesCollection = db.collection('samples');
       let sample;
       try {
         sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
@@ -267,6 +375,15 @@ class SampleFileController {
         });
       }
 
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
+      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+        return res.status(403).json({
+          success: false,
+          error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+          message: 'Esta amostra pertence a outra organização'
+        });
+      }
+
       // Busca arquivos da amostra
       const sampleFilesCollection = db.collection('sample_files');
       const specimenIdString = sample._id.toString();
@@ -278,7 +395,17 @@ class SampleFileController {
         specimenId: file.specimenId,
         fileName: file.fileName,
         fileType: file.fileType,
+        fileRole: file.fileRole,
+        fileFormat: file.fileFormat,
         fileSize: file.fileSize,
+        uri: file.storageUri,
+        checksum: file.checksum,
+        checksumAlgorithm: file.checksumAlgorithm,
+        encryption: {
+          encrypted: Boolean(file.encryptionAlgorithm),
+          algorithm: file.encryptionAlgorithm
+        },
+        accessPolicy: file.accessPolicy,
         uploaderAnonId: file.uploaderAnonId, // Apenas ID anonimizado
         uploadDate: file.uploadDate,
         createdAt: file.createdAt
@@ -291,8 +418,8 @@ class SampleFileController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'QUERY',
-          entity: 'SampleFile',
-          result: 'success',
+          resourceType: 'SampleFile',
+          status: 'success',
           severity: 'info',
           message: `Consulta de arquivos de análise - Amostra: ${specimenId}, Total: ${files.length}`,
           payload: {
@@ -366,6 +493,26 @@ class SampleFileController {
         });
       }
 
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
+      // downloadFile doesn't otherwise need the Sample document itself, so
+      // fetch it only for this check; a lookup failure (bad ObjectId, or
+      // the sample no longer exists) is treated as "can't determine
+      // scope" and doesn't block the download on its own.
+      if (req.organizationScope) {
+        const samplesCollection = db.collection('samples');
+        let sampleForScope = null;
+        try {
+          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
+        } catch (_) {}
+        if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+          return res.status(403).json({
+            success: false,
+            error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+            message: 'Esta amostra pertence a outra organização'
+          });
+        }
+      }
+
       // Verifica se o arquivo existe no sistema de arquivos
       if (!fs.existsSync(fileRecord.storagePath)) {
         logger.error(`Arquivo não encontrado no sistema de arquivos: ${fileRecord.storagePath}`);
@@ -381,9 +528,9 @@ class SampleFileController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'file_download',
-          entity: 'SampleFile',
-          entityID: fileID,
-          result: 'success',
+          resourceType: 'SampleFile',
+          resourceId: fileID,
+          status: 'success',
           severity: 'info',
           message: `Download de arquivo: ${fileRecord.fileName}`,
           payload: {
@@ -398,18 +545,27 @@ class SampleFileController {
         });
       }
 
-      // Faz download do arquivo
-      return res.download(fileRecord.storagePath, fileRecord.fileName, (err) => {
-        if (err) {
-          logger.error('Erro ao fazer download do arquivo:', err.message);
-          if (!res.headersSent) {
-            return res.status(500).json({
-              success: false,
-              error: req.t ? req.t('sampleFiles.downloadError') : 'Erro ao fazer download do arquivo'
-            });
-          }
+      // RNF029 - o conteúdo em disco é o ciphertext cifrado no upload;
+      // decifra antes de servir para que o download reproduza o
+      // plaintext original (round-trip prova a integridade do checksum).
+      let outputBuffer;
+      if (fileRecord.encryptionAlgorithm) {
+        const ciphertext = fs.readFileSync(fileRecord.storagePath);
+        try {
+          outputBuffer = decryptFileBuffer(ciphertext, fileRecord);
+        } catch (decryptError) {
+          logger.error('Erro ao decifrar arquivo:', decryptError.message);
+          return res.status(500).json({
+            success: false,
+            error: req.t ? req.t('sampleFiles.downloadError') : 'Erro ao fazer download do arquivo'
+          });
         }
-      });
+      } else {
+        outputBuffer = fs.readFileSync(fileRecord.storagePath);
+      }
+
+      res.setHeader('Content-Disposition', `attachment; filename="${fileRecord.fileName}"`);
+      return res.send(outputBuffer);
     } catch (error) {
       logger.error('Erro ao fazer download de arquivo:', error.message);
       return res.status(500).json({
@@ -468,6 +624,25 @@ class SampleFileController {
         });
       }
 
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern —
+      // checked before the mutation, not just before a read. See
+      // downloadFile's identical check for why the lookup is scoped to
+      // just this check and tolerant of a failed/missing lookup.
+      if (req.organizationScope) {
+        const samplesCollection = db.collection('samples');
+        let sampleForScope = null;
+        try {
+          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
+        } catch (_) {}
+        if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+          return res.status(403).json({
+            success: false,
+            error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+            message: 'Esta amostra pertence a outra organização'
+          });
+        }
+      }
+
       // Remove arquivo físico do sistema de arquivos
       if (fs.existsSync(fileRecord.storagePath)) {
         try {
@@ -488,9 +663,9 @@ class SampleFileController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'file_delete',
-          entity: 'SampleFile',
-          entityID: fileID,
-          result: 'success',
+          resourceType: 'SampleFile',
+          resourceId: fileID,
+          status: 'success',
           severity: 'critical', // Alta severidade para exclusão
           message: `Arquivo excluído: ${fileRecord.fileName}`,
           payload: {
@@ -514,6 +689,248 @@ class SampleFileController {
       return res.status(500).json({
         success: false,
         error: req.t ? req.t('sampleFiles.deleteError') : 'Erro ao deletar arquivo',
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * Substitui o conteúdo de um arquivo de análise existente.
+   * PUT /api/samples/:specimenId/files/:fileID/replace
+   * Permissão: Admin (4) ou Coordenador (3) apenas — mesma política de
+   * upload/delete.
+   * RF007 AC#7 - "substituição" é a auditoria que faltava ao lado de
+   * upload/acesso/remoção lógica (#334).
+   */
+  async replaceFile(req, res) {
+    const cleanupUploadedFile = () => {
+      if (req.file && fs.existsSync(req.file.path)) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (unlinkError) {
+          logger.error('Erro ao remover arquivo temporário:', unlinkError.message);
+        }
+      }
+    };
+
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: req.t ? req.t('errors.databaseUnavailable') : 'Banco de dados não disponível'
+        });
+      }
+
+      const { specimenId, fileID } = req.params;
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.fileRequired') : 'Arquivo não fornecido'
+        });
+      }
+
+      const sampleFilesCollection = db.collection('sample_files');
+      let fileRecord;
+      try {
+        fileRecord = await sampleFilesCollection.findOne({ _id: new ObjectId(fileID) });
+      } catch (idError) {
+        cleanupUploadedFile();
+        return res.status(400).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.invalidFileID') : 'ID de arquivo inválido'
+        });
+      }
+
+      if (!fileRecord) {
+        cleanupUploadedFile();
+        return res.status(404).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'
+        });
+      }
+
+      // Verifica se o arquivo pertence à amostra correta
+      const specimenIdString = typeof specimenId === 'string' && ObjectId.isValid(specimenId)
+        ? new ObjectId(specimenId).toString()
+        : String(specimenId);
+
+      if (fileRecord.specimenId !== specimenIdString) {
+        cleanupUploadedFile();
+        return res.status(403).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.fileNotBelongToSample') : 'Arquivo não pertence a esta amostra'
+        });
+      }
+
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern —
+      // checked before the mutation, same as deleteFile.
+      if (req.organizationScope) {
+        const samplesCollection = db.collection('samples');
+        let sampleForScope = null;
+        try {
+          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
+        } catch (_) {}
+        if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+          cleanupUploadedFile();
+          return res.status(403).json({
+            success: false,
+            error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+            message: 'Esta amostra pertence a outra organização'
+          });
+        }
+      }
+
+      const fileType = SampleFileModel.getFileTypeFromExtension(file.originalname);
+      if (!fileType) {
+        cleanupUploadedFile();
+        return res.status(400).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.invalidFileType') : 'Tipo de arquivo inválido'
+        });
+      }
+
+      // dict-02 ELM-0317 -- substituição pode opcionalmente atualizar o
+      // fileRole (ex.: um arquivo 'raw' substituído por sua versão
+      // 'processed'); sem valor novo, preserva o fileRole existente.
+      const fileRole = req.body && req.body.fileRole ? req.body.fileRole : undefined;
+      if (fileRole !== undefined && !SampleFileModel.FILE_ROLES.includes(fileRole)) {
+        cleanupUploadedFile();
+        return res.status(400).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.invalidFileRole') : 'fileRole inválido',
+          details: [`fileRole deve ser um dos: ${SampleFileModel.FILE_ROLES.join(', ')}`]
+        });
+      }
+
+      // Mesmo tratamento de checksum/cifra do upload (RF007 AC#3/AC#4,
+      // RNF029) aplicado ao novo conteúdo.
+      // #938: fail closed BEFORE the plaintext multer already wrote to disk
+      // can be left there. This used to read `if (encryption)` as
+      // "skip encryption when no key is configured", so a keyless
+      // deployment stored every upload in plaintext and still returned
+      // success. RNF029 AC#5 makes encryption follow the data's
+      // classification, and scientific files are classified encrypted at
+      // rest (#566) -- so a missing key is a refusal, not a downgrade.
+      // Same shape as #734's backup guard.
+      assertFileEncryptionConfigured();
+      const plaintext = fs.readFileSync(file.path);
+      const checksum = computeChecksum(plaintext);
+      const encryption = encryptFileBuffer(plaintext);
+      if (encryption) {
+        fs.writeFileSync(file.path, encryption.ciphertext);
+      }
+      const storageUri = `objstore://samples/${specimenIdString}/files/${path.basename(file.path)}`;
+
+      const updatedFields = {
+        fileName: file.originalname,
+        fileType,
+        fileFormat: SampleFileModel.getFileFormatFromType(fileType),
+        fileSize: file.size,
+        storagePath: file.path,
+        storageUri,
+        checksum,
+        checksumAlgorithm: 'sha256',
+        encryptionAlgorithm: encryption ? encryption.algorithm : null,
+        encryptionKeyId: encryption ? encryption.keyId : null,
+        encryptionIv: encryption ? encryption.iv : null,
+        encryptionTag: encryption ? encryption.tag : null,
+        updatedAt: new Date()
+      };
+      if (fileRole !== undefined) {
+        updatedFields.fileRole = fileRole;
+      }
+
+      const validation = SampleFileModel.validate({
+        ...fileRecord,
+        ...updatedFields,
+        sampleID: fileRecord.sampleID || fileRecord.specimenId
+      });
+      if (!validation.isValid) {
+        cleanupUploadedFile();
+        return res.status(422).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.validationError') : 'Erro de validação',
+          details: validation.errors
+        });
+      }
+
+      // Remove o arquivo físico anterior só depois que o novo já está
+      // validado e gravado em disco, para que uma falha na substituição
+      // nunca deixe zero cópias no sistema de arquivos.
+      const previousStoragePath = fileRecord.storagePath;
+      if (previousStoragePath && previousStoragePath !== file.path && fs.existsSync(previousStoragePath)) {
+        try {
+          fs.unlinkSync(previousStoragePath);
+        } catch (unlinkError) {
+          logger.error('Erro ao remover arquivo anterior após substituição:', unlinkError.message);
+        }
+      }
+
+      await sampleFilesCollection.updateOne({ _id: fileRecord._id }, { $set: updatedFields });
+
+      // RF007 AC#7 - substituição é auditada, ao lado de upload/acesso/
+      // remoção lógica.
+      if (req.user) {
+        const auditLogger = require('../utils/auditLogger');
+        auditLogger.init(db);
+        await auditLogger.log({
+          action: 'file_replace',
+          resourceType: 'SampleFile',
+          resourceId: fileRecord._id.toString(),
+          status: 'success',
+          severity: 'medium',
+          message: `Substituição de arquivo de análise: ${fileRecord.fileName} -> ${file.originalname}`,
+          payload: {
+            previousFileName: fileRecord.fileName,
+            previousChecksum: fileRecord.checksum,
+            fileName: file.originalname,
+            fileSize: file.size,
+            fileType,
+            specimenId: specimenIdString,
+            checksum,
+            checksumAlgorithm: 'sha256'
+            // Não inclui dados sensíveis
+          },
+          req: req,
+          module: 'Amostras'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: req.t ? req.t('sampleFiles.replaceSuccess') : 'Arquivo substituído com sucesso',
+        data: {
+          _id: fileRecord._id,
+          specimenId: specimenIdString,
+          fileName: updatedFields.fileName,
+          fileType: updatedFields.fileType,
+          fileRole: updatedFields.fileRole !== undefined ? updatedFields.fileRole : fileRecord.fileRole,
+          fileFormat: updatedFields.fileFormat,
+          fileSize: updatedFields.fileSize,
+          uploaderAnonId: fileRecord.uploaderAnonId,
+          uploadDate: fileRecord.uploadDate,
+          uri: updatedFields.storageUri,
+          checksum: updatedFields.checksum,
+          checksumAlgorithm: updatedFields.checksumAlgorithm,
+          encryption: {
+            encrypted: Boolean(updatedFields.encryptionAlgorithm),
+            algorithm: updatedFields.encryptionAlgorithm
+          },
+          accessPolicy: fileRecord.accessPolicy
+          // storagePath não é retornado por segurança
+        }
+      });
+    } catch (error) {
+      logger.error('Erro ao substituir arquivo:', error.message);
+      cleanupUploadedFile();
+      // #938: see the upload handler's catch -- a missing ENCRYPTION_KEY is
+      // a 500, not the client's fault.
+      return res.status(error?.statusCode || 400).json({
+        success: false,
+        error: req.t ? req.t('sampleFiles.replaceError') : 'Erro ao substituir arquivo',
         message: error.message
       });
     }
@@ -566,6 +983,15 @@ class SampleFileController {
         });
       }
 
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
+      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+        return res.status(403).json({
+          success: false,
+          error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+          message: 'Esta amostra pertence a outra organização'
+        });
+      }
+
       // LGPD: Usa apenas participantId anonimizado (8 dígitos)
       const participantId = String(sample.participantId || '');
 
@@ -580,9 +1006,9 @@ class SampleFileController {
         const userAnonId = await getUserAnonId(req.user, db);
         await auditLogger.log({
           action: 'file_export_hl7',
-          entity: 'SampleFile',
-          entityID: fileID,
-          result: 'success',
+          resourceType: 'SampleFile',
+          resourceId: fileID,
+          status: 'success',
           severity: 'medium',
           message: `Exportação HL7 v2.x do arquivo: ${fileRecord.fileName}`,
           payload: {
@@ -658,6 +1084,15 @@ class SampleFileController {
         });
       }
 
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
+      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+        return res.status(403).json({
+          success: false,
+          error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+          message: 'Esta amostra pertence a outra organização'
+        });
+      }
+
       // LGPD: Usa apenas participantId anonimizado (8 dígitos)
       const participantId = String(sample.participantId || '');
 
@@ -671,9 +1106,9 @@ class SampleFileController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'file_export_fhir',
-          entity: 'SampleFile',
-          entityID: fileID,
-          result: 'success',
+          resourceType: 'SampleFile',
+          resourceId: fileID,
+          status: 'success',
           severity: 'medium',
           message: `Exportação FHIR do arquivo: ${fileRecord.fileName}`,
           payload: {
@@ -749,6 +1184,15 @@ class SampleFileController {
         });
       }
 
+      // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
+      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+        return res.status(403).json({
+          success: false,
+          error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
+          message: 'Esta amostra pertence a outra organização'
+        });
+      }
+
       // LGPD: Usa apenas participantId anonimizado (8 dígitos)
       const participantId = String(sample.participantId || '');
 
@@ -762,9 +1206,9 @@ class SampleFileController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'file_export_cda',
-          entity: 'SampleFile',
-          entityID: fileID,
-          result: 'success',
+          resourceType: 'SampleFile',
+          resourceId: fileID,
+          status: 'success',
           severity: 'medium',
           message: `Exportação CDA do arquivo: ${fileRecord.fileName}`,
           payload: {

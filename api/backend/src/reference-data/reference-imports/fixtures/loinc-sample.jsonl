@@ -1,0 +1,10 @@
+{"id":"LOINC:0","lbl":"observation, unspecified","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"LOINC:CHEM","lbl":"chemistry class","is_a":["LOINC:0"],"synonyms":[],"obsolete":false}
+{"id":"LOINC:VITALS","lbl":"vital signs class","is_a":["LOINC:0"],"synonyms":[],"obsolete":false}
+{"id":"2160-0","lbl":"Creatinine [Mass/volume] in Serum or Plasma","is_a":["LOINC:CHEM"],"synonyms":[],"obsolete":false}
+{"id":"2345-7","lbl":"Glucose [Mass/volume] in Serum or Plasma","is_a":["LOINC:CHEM"],"synonyms":[],"obsolete":false}
+{"id":"718-7","lbl":"Hemoglobin [Mass/volume] in Blood","is_a":["LOINC:CHEM"],"synonyms":[],"obsolete":false}
+{"id":"8480-6","lbl":"Systolic blood pressure","is_a":["LOINC:VITALS"],"synonyms":[],"obsolete":false}
+{"id":"8462-4","lbl":"Diastolic blood pressure","is_a":["LOINC:VITALS"],"synonyms":[],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"9999-9","lbl":"","is_a":[],"synonyms":[],"obsolete":false}

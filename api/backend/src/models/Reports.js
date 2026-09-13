@@ -26,6 +26,13 @@ class ReportsModel {
       generatedBy: data.generatedBy || null,
       status: data.status || 'pending',
       filePath: data.filePath || null,
+      // #637: the requesting user's own resolved organization scope at
+      // generation time -- Organization.organizationId strings, not Mongo
+      // refs. [] for a global (Administrador) caller or an unstamped
+      // legacy report; either way, hidden from organization-scoped
+      // viewers per F3-G09 (there is no reliable way to backfill this
+      // for reports generated before this field existed).
+      organizationIds: Array.isArray(data.organizationIds) ? data.organizationIds : [],
       createdAt: new Date(),
       updatedAt: new Date()
     };

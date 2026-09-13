@@ -12,6 +12,44 @@ const portManager = require("./src/utils/portManager");
 const env = require("./src/config/env");
 const { initScheduler } = require("./src/services/scheduler.service");
 const { initializeSecuritySystem } = require("./src/infrastructure/middleware/integrationSecurityMiddleware");
+const { seedReportTemplates } = require("./src/services/report-template-seed.service");
+const { seedRolesAndPermissions } = require("./src/services/rbac-catalog-seed.service");
+const { validateEncryptionAndHalt } = require("./src/config/validateEnv");
+
+// #1040: Model.createIndexes() index-build errors (and unhandled rejections
+// generally) reach `Model.emit('error')` on a Mongoose Model with no default
+// 'error' listener, which throws outside any try/catch the caller's `await`
+// owns -- so before this handler existed the process died anonymously,
+// unattributed, on whatever this happened to interrupt.
+//
+// Observability-only: log with attribution, then still terminate exactly as
+// the rest of this file already does on a fatal startup error (see the
+// startServer() catch below). Do NOT turn this into a swallow/continue path
+// -- three call sites in this codebase deliberately rely on "an unhandled
+// rejection kills this process" staying true: src/services/auth.service.js:540,
+// src/services/consent.service.js:911 and src/utils/collectionResolver.js:23.
+//
+// Registered before any other startup work so a rejection during startup is
+// also caught. Guarded on `process` itself (not on this module) because this
+// file, src/workers/worker.js, src/workers/import-worker.js and
+// src/workers/neo4jProjection.worker.js each install the same pair of
+// handlers, and worker.js requires import-worker.js into the very same OS
+// process -- an unguarded second `process.on()` would just mean two log
+// lines and two process.exit() races on one real event, not a bug, but the
+// guard makes that explicit instead of accidental.
+if (!process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__) {
+  process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__ = true;
+
+  process.on('unhandledRejection', (reason) => {
+    logger.error('[#1040] unhandledRejection não tratada -- encerrando servidor:', reason);
+    process.exit(1);
+  });
+
+  process.on('uncaughtException', (err) => {
+    logger.error('[#1040] uncaughtException -- encerrando servidor:', err);
+    process.exit(1);
+  });
+}
 
 let httpServerInstance = null;
 
@@ -20,10 +58,36 @@ let httpServerInstance = null;
 // =======================
 async function startServer() {
   try {
-    if (!env.MONGO_URI || !env.JWT_SECRET) {
-      logger.error("Variáveis críticas ausentes: MONGO_URI e JWT_SECRET são obrigatórias.");
+    // #972: USER_ANON_SALT juntou-se às críticas. Sem ele a pseudonimização
+    // de usuários (RNF007/LGPD) não tem salt, e generateAnonId agora falha
+    // fechado em vez de cair num literal público -- mas o erro apareceria no
+    // primeiro registro de usuário, não no boot. Aqui ele é alto e imediato,
+    // como MONGO_URI e JWT_SECRET.
+    // #1097: CONSENT_SECRET joins the criticals. It was already mandatory --
+    // eConsent.js threw on it at MODULE LOAD, which fired during
+    // require("./app") on line 3, before the #1040 handlers were installed and
+    // before this guard ran. The refusal is unchanged; what changes is that it
+    // is now logged, attributed, and no longer masks its siblings by aborting
+    // the boot before they are evaluated.
+    if (!env.MONGO_URI || !env.JWT_SECRET || !env.USER_ANON_SALT || !String(env.CONSENT_SECRET || '').trim()) {
+      logger.error("Variáveis críticas ausentes: MONGO_URI, JWT_SECRET, USER_ANON_SALT e CONSENT_SECRET são obrigatórias.");
       process.exit(1);
     }
+
+    // #1085: até aqui NADA validava ENCRYPTION_KEY no boot e nada avisava
+    // quando ALLOW_UNENCRYPTED_FILE_STORAGE / ALLOW_UNENCRYPTED_FIELD_STORAGE
+    // estavam ligados -- validateAllEnv/validateAndHalt existem desde sempre e
+    // não têm um único chamador de produção, então "adicionar um aviso ao
+    // validateEnv.js" não produziria saída observável nenhuma. Este é o
+    // chamador que faltava. Aviso alto em todo ambiente, fatal em produção
+    // (direção 3); o throw cai no catch de startup abaixo, que já encerra com
+    // process.exit(1) do mesmo jeito que o bloco acima.
+    //
+    // Um stack de produção copiado de .env.production.example sobe hoje com
+    // ENCRYPTION_KEY em branco (#978, "sete chaves em branco"). A partir daqui
+    // ele recusa subir, ruidosamente, em vez de guardar identidade civil em
+    // texto claro em silêncio.
+    validateEncryptionAndHalt();
 
     const PORT = parseInt(process.env.PORT || "3000");
     const actualPort = await portManager.getAvailablePort(PORT);
@@ -54,6 +118,51 @@ async function startServer() {
     logger.info("🔐 Ativando sistema de segurança e conformidade LGPD...");
     await initializeSecuritySystem(app, db);
     logger.info("✅ Sistema de segurança ativado com sucesso");
+
+    // #916: the RBAC catalog reached a live database ONLY at first-admin
+    // bootstrap -- createFirstAdmin early-returns on `users_exist`, and the
+    // two standalone scripts have no npm entry and no compose service. So a
+    // permission code added after a deployment's first boot had no Permission
+    // document, and userHasPermission answers false for a missing document:
+    // every route using that code 403s for every user including Administrador,
+    // silently, with nothing failing loudly. (An unknown code is the LOUD
+    // failure -- requirePermission 500s on that. The missing-document case is
+    // the quiet one.)
+    //
+    // #737's comment below cites "the same self-sufficiency #437 gave the RBAC
+    // catalog" -- a property the catalog did not actually have. This is what
+    // makes that sentence true.
+    //
+    // Safe to run every boot: upsertPermission inserts a missing
+    // permissionCode and RECONCILES an already-seeded one's catalog-owned
+    // fields rather than skipping it (#1075), and upsertRole MERGES freshly
+    // computed permissionIds into an existing role rather than skipping it
+    // (#646) -- both test-pinned. The latter is exactly the "new permission
+    // granted to an existing role" case. Permitted on the boot
+    // path -- seed-boundary.arch.test.js fences off seed-essential-reference-
+    // data specifically, not this. Non-fatal, same shape as the seed below.
+    try {
+      const { roles, permissions } = await seedRolesAndPermissions(db);
+      logger.info(`🔑 Catálogo RBAC garantido: ${roles.length} papéis, ${permissions.length} permissões`);
+    } catch (rbacSeedError) {
+      logger.error("Erro ao semear catálogo RBAC:", rbacSeedError.message);
+    }
+
+    // #737: reports.routes.js's buildPreviewData (#726) dispatches only via a
+    // ReportTemplate lookup by code -- with the system rows missing, every
+    // report type returns the no-preview fallback and CSV export is empty.
+    // Guaranteed at boot (idempotent by code; a later hand-edit to a seeded
+    // row survives) instead of a script a human has to remember -- the same
+    // self-sufficiency #437 gave the RBAC catalog. Not the essential
+    // reference-data seed (seed-boundary.arch.test.js keeps that off the
+    // boot path by contract): 14 config rows, no manifest, no data files.
+    // Non-fatal: a seed failure is logged and the server still starts.
+    try {
+      const { templates } = await seedReportTemplates(db);
+      logger.info(`📄 Modelos de relatório do sistema garantidos: ${templates.length}`);
+    } catch (seedError) {
+      logger.error("Erro ao semear modelos de relatório:", seedError.message);
+    }
 
     // Iniciar scheduler (backup + monitoramento + sync de consentimento)
     try {
@@ -144,6 +253,17 @@ async function startServer() {
     require("./src/services/notification.service").initSocketIO(io);
     require("./src/services/iot-streaming.service").initSocketIO(io);
 
+    // #977: deliberate posture -- a Redis configuration or connectivity
+    // failure is NOT fatal for the backend. The synchronous HTTP routes do
+    // not depend on the queue; only import enqueueing degrades, and
+    // getQueue() retries on demand. Hence the catch below logs and falls
+    // through to listen(), leaving the container healthy.
+    //
+    // The worker process makes the OPPOSITE choice (src/workers/worker.js,
+    // process.exit(1)) over exactly the same three checks -- validateRedisOnly,
+    // initRedis and testRedisConnection. The divergence is intentional, not an
+    // oversight: read #977 before changing either end, and change both or
+    // neither.
     // Iniciar fila (Redis)
     try {
       const { initQueue, testConnection } = require("./src/config/queue");
@@ -207,12 +327,25 @@ async function gracefulShutdown(signal) {
   }
 }
 
-process.on('SIGINT', () => {
-  void gracefulShutdown('SIGINT');
-});
+// #1047: guarded on `process`, not on this module, for the same reason as
+// the #1040 pair above -- this file is deleted from require.cache and
+// re-required repeatedly within a single vitest process (see
+// tests/unit/process-fatal-handlers.1040.test.js), and without a guard each
+// reload adds another SIGINT/SIGTERM listener on the one real `process`
+// object underneath every reload. Production never sees the duplication
+// this guards against (server.js and src/workers/worker.js run in separate
+// containers and never share a process) -- this is a test-hygiene guard,
+// not a production double-registration fix.
+if (!process.__BIOAVANCE_1047_SERVER_SIGNAL_HANDLERS_INSTALLED__) {
+  process.__BIOAVANCE_1047_SERVER_SIGNAL_HANDLERS_INSTALLED__ = true;
 
-process.on('SIGTERM', () => {
-  void gracefulShutdown('SIGTERM');
-});
+  process.on('SIGINT', () => {
+    void gracefulShutdown('SIGINT');
+  });
+
+  process.on('SIGTERM', () => {
+    void gracefulShutdown('SIGTERM');
+  });
+}
 
 module.exports = { app, startServer };

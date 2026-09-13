@@ -1,0 +1,41 @@
+# Skills installed from dyeallpies-skills-pack. Re-run after a pack pull:
+#   .\install.ps1 -Target C:\path\to\BioAvanceD-v2
+# (run it from the pack clone; entries resolve against the pack root).
+#
+# This file did not exist until pack #70 — installs here had been done with
+# explicit -Skills lists, so the installed set lived only in whoever ran it
+# last. The entries below are that set, read back off .claude/skills/.
+# generic workflow skills
+work-issue
+resolve-issue
+github-issues
+issue-loop
+fix-bugs
+test-loop
+unit-test-loop
+e2e-test-loop
+build-loop
+ship-integration-branch
+docker-workflow
+ci-workflow
+parallel-test-agents
+playwright-specs
+vitest-specs
+agent-delegation
+merge-from-main
+verify-intent
+wrap-up
+handoff
+clean-up
+# Authoring law and scope-splitting, extracted out of 17 SKILL.md files by
+# pack #65/#66. Without these installed this repo lost the prose without
+# gaining the skills that replaced it (pack #70).
+skill-maintenance
+divide-and-conquer
+# project profile
+projects/bioavanced-v2/conventions
+projects/bioavanced-v2/testing-conventions
+projects/bioavanced-v2/legacy
+# machine profile
+machines/dennis-windows
+rabbit-hole

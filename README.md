@@ -82,13 +82,11 @@ Os comandos prioritários deste branch são:
 
 ```bash
 npm --prefix api/backend run lint
-npm --prefix api/backend run typecheck
 npm --prefix api/backend run test:architecture
 npm --prefix api/backend run seed:validate:essential
 npm --prefix api/backend run seed:essential:dry-run
 npm --prefix api/backend run current-state:ci
 
-npm --prefix frontend run lint
 npm --prefix frontend run typecheck
 npm --prefix frontend run build
 ```
@@ -96,6 +94,21 @@ npm --prefix frontend run build
 Notas:
 
 - `test:architecture` usa `node --test`.
+- **Stack de produção** (#965): `compose.prod.yml` lê `.env.production`, um
+  arquivo real e gitignorado — não o `.env.production.example` versionado,
+  que é o template. Os scripts `compose:prod:*` passam esse mesmo arquivo
+  como `--env-file`, porque nove variáveis do compose usam a forma
+  `${VAR:?}` e falham se o arquivo não existir. Um arquivo, os dois
+  mecanismos, como `compose:*` já faz com `.env.docker`.
+  **`compose:prod:down` NÃO usa `--volumes`**, deliberadamente ao contrário
+  do `compose:down` de desenvolvimento: apagar volumes de produção não pode
+  ser o comportamento padrão de um comando de rotina.
+- **Não há linter neste repositório** (#960). `api/backend`'s `lint` é
+  `scripts/lint.js`, uma passagem `node --check` de sintaxe sobre `src/` e
+  `scripts/`; o backend é JavaScript puro e não tem typecheck. O `typecheck`
+  do frontend é `tsc --noEmit`. Os aliases `api/backend run typecheck` e
+  `frontend run lint`, que apenas repetiam esses dois comandos sob um segundo
+  nome, foram removidos.
 - Vitest e Playwright legados permanecem fora do contrato atual.
 - As suítes reconstruídas no futuro deverão partir do estado canônico atual.
 
@@ -127,6 +140,16 @@ Depois:
 npm run compose:config
 npm run compose:up
 ```
+
+Uma stack recém-criada não tem nenhum usuário no Mongo. Crie o primeiro
+administrador (idempotente — não faz nada se `users` já tiver documentos):
+
+```bash
+npm run compose:seed-admin
+```
+
+As credenciais vêm de `BOOTSTRAP_ADMIN_*` em `.env.docker` (por padrão
+`admin` / `Admin@123`, o mesmo login que `npm run test:e2e:docker` espera).
 
 Serviços padrão:
 

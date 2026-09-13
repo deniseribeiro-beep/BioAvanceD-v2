@@ -1,0 +1,10 @@
+{"id":"MMS:XX00","lbl":"disease, unspecified","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"MMS:1A00","lbl":"certain infectious or parasitic diseases","is_a":["MMS:XX00"],"synonyms":[],"obsolete":false}
+{"id":"MMS:2A00","lbl":"neoplasms","is_a":["MMS:XX00"],"synonyms":[],"obsolete":false}
+{"id":"MMS:1A07","lbl":"typhoid fever","is_a":["MMS:1A00"],"synonyms":[],"obsolete":false}
+{"id":"MMS:1C62","lbl":"coronavirus disease 2019","is_a":["MMS:1A00"],"synonyms":["COVID-19"],"obsolete":false}
+{"id":"MMS:2C25","lbl":"malignant neoplasms of breast","is_a":["MMS:2A00"],"synonyms":["breast cancer"],"obsolete":false}
+{"id":"MMS:2B60","lbl":"malignant neoplasms of pancreas","is_a":["MMS:2A00"],"synonyms":[],"obsolete":false}
+{"id":"MMS:5A11","lbl":"type 2 diabetes mellitus","is_a":["MMS:XX00"],"synonyms":["T2D"],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"MMS:9999999","lbl":"","is_a":[],"synonyms":[],"obsolete":false}

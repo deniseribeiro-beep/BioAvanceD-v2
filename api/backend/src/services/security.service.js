@@ -1,10 +1,60 @@
 const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
+const sessionService = require('./session.service');
 
 /**
  * Service de Configurações de Segurança
  * Gerencia todas as configurações de segurança do sistema
  */
+// #953: server-owned, flat top-level fields (dict-02 P1X-0321/0322/0323).
+// detectChanges must not report them as user-visible policy changes -- they are
+// rewritten on every save by definition. Before the flattening these lived under
+// a `metadata` object and were skipped by the typeof-object branch instead.
+const SERVER_OWNED_KEYS = ['configVersion', 'lastUpdatedAt', 'lastUpdatedBy'];
+
+// #649 / RF014 AC#8: "Revogar sessoes quando a alteracao exigir." The
+// requirement is deliberately conditional -- "quando a alteracao exigir" -- and
+// neither RF014 nor dict-02 enumerates which changes require it. So the list is
+// built from one testable principle rather than guessed:
+//
+//   revoke when a TIGHTENING invalidates a guarantee an already-issued session
+//   is currently relying on.
+//
+// That yields exactly one entry today, and the shortness is the finding, not an
+// oversight. session.timeoutMinutes is the only SecurityConfiguration key any
+// code path actually enforces (#914 wired it; the session snapshots it at
+// creation, so an existing session keeps the OLD, more generous limit until it
+// is revoked -- which is precisely the gap AC#8 names).
+//
+// Deliberately NOT included, each for a stated reason:
+//  - authentication.requireMFA / enhancedSecurity.requireMFAForAll: still inert
+//    (#914 stays open on them). Revoking on a false->true flip would log every
+//    user out and readmit them WITHOUT MFA -- disruption with zero security
+//    delta, recorded as a critical audit action that changed nothing.
+//  - loginAttempts.* / authentication.maxLoginAttempts: pre-authentication. A
+//    live session never re-enters that gate, so revoking changes nothing.
+//  - privacy.autoPurge and the lgpd group: retention switches, not session
+//    guarantees.
+//
+// NOT reusing getSeverityForChange's criticalPaths: its only job is choosing an
+// audit severity, it matches by loose substring, and it is wrong in both
+// directions here -- it includes maxLoginAttempts and privacy.autoPurge and
+// omits maxSessionDurationHours. Coupling session lifecycle to audit-log
+// severity would mean a future logging tweak starts or stops logging people out.
+const SESSION_INVALIDATING_PATHS = ['session.timeoutMinutes'];
+
+function requiresSessionRevocation(changes) {
+  return changes.some((change) => {
+    if (!SESSION_INVALIDATING_PATHS.includes(change.path)) return false;
+    const oldValue = Number(change.oldValue);
+    const newValue = Number(change.newValue);
+    // Direction matters and detectChanges hands it to us for free. Relaxing a
+    // limit never invalidates an already-issued token; only tightening does.
+    if (!Number.isFinite(oldValue) || !Number.isFinite(newValue)) return false;
+    return newValue < oldValue;
+  });
+}
+
 class SecurityService {
   /**
    * Retorna configurações padrão do sistema
@@ -17,7 +67,7 @@ class SecurityService {
         mfaMethod: 'totp', // totp, sms, email
         allowPasswordReset: true,
         maxLoginAttempts: 5,
-        lockoutDuration: 30, // minutos
+        lockoutDurationMinutes: 30,
         requireStrongPassword: true
       },
       
@@ -36,7 +86,7 @@ class SecurityService {
       // Sessão
       session: {
         timeoutMinutes: 30, // timeout por inatividade
-        maxSessionDuration: 12, // horas
+        maxSessionDurationHours: 12,
         allowMultipleSessions: false,
         autoRenewal: true, // renovação automática enquanto usuário estiver ativo
         logExpiration: true // registrar logs quando sessão for expirada
@@ -45,7 +95,7 @@ class SecurityService {
       // Tentativas de Login
       loginAttempts: {
         maxAttempts: 5,
-        lockoutDuration: 30, // minutos
+        lockoutDurationMinutes: 30,
         trackIP: true,
         blockIPAfterAttempts: 10
       },
@@ -86,12 +136,12 @@ class SecurityService {
         consentExpirationDays: 365
       },
       
-      // Metadados
-      metadata: {
-        lastUpdated: new Date(),
-        lastUpdatedBy: null,
-        version: 1
-      }
+      // #953: dict-02 P1X-0321/0322/0323 declare these as FLAT top-level fields
+      // of SecurityConfiguration. The code had invented a `metadata` group that
+      // appears nowhere in the dictionary, and renamed two of its three members.
+      configVersion: 1,
+      lastUpdatedAt: new Date(),
+      lastUpdatedBy: null
     };
   }
 
@@ -137,17 +187,38 @@ class SecurityService {
       // Valida configurações
       this.validateConfig(newConfig);
       
-      // Mescla com configuração atual (mantém valores não fornecidos)
-      const mergedConfig = {
-        ...currentConfig,
-        ...newConfig,
-        metadata: {
-          ...currentConfig.metadata,
-          lastUpdated: new Date(),
-          lastUpdatedBy: req.user?.userID || 'SYSTEM',
-          version: (currentConfig.metadata?.version || 1) + 1
+      // Mescla com configuração atual, grupo a grupo (um nível de profundidade),
+      // para não apagar flags do grupo que o chamador não enviou (#904)
+      const knownGroups = [
+        'authentication',
+        'passwordRules',
+        'session',
+        'loginAttempts',
+        'logging',
+        'privacy',
+        'enhancedSecurity',
+        'lgpd'
+      ];
+
+      const mergedConfig = {};
+      for (const group of knownGroups) {
+        if (currentConfig[group] || newConfig[group]) {
+          mergedConfig[group] = {
+            ...currentConfig[group],
+            ...(newConfig[group] || {})
+          };
         }
-      };
+      }
+
+      // #953: flat, per dict-02 P1X-0321/0322/0323. Note these are assigned
+      // AFTER the knownGroups loop above, which copies only the eight group
+      // objects -- so a caller-supplied configVersion/lastUpdatedAt/lastUpdatedBy
+      // in newConfig is still ignored, exactly as the `...currentConfig.metadata`
+      // spread used to guarantee. The protection survives the flattening, but for
+      // a different reason, which is why it is stated here.
+      mergedConfig.configVersion = (currentConfig.configVersion || 1) + 1;
+      mergedConfig.lastUpdatedAt = new Date();
+      mergedConfig.lastUpdatedBy = req.user?.userID || 'SYSTEM';
 
       // Atualiza no banco
       await configCollection.updateOne(
@@ -167,9 +238,17 @@ class SecurityService {
         const severity = this.getSeverityForChange(change.path);
         await auditLogger.log({
           action: 'UPDATE',
-          entity: 'SecurityConfig',
-          entityID: 'main',
-          result: 'success',
+          // #1116: dict-02 Entidade is SecurityConfiguration (49 rows) and
+          // never SecurityConfig. This was the last writer emitting the short
+          // form, so the same entity was landing in the logs collection under
+          // two resourceType values -- #1115's ENTITY_MAP already resolves
+          // /api/security to the canonical name for the automatic rows.
+          // Rows written before this keep the old spelling: the trail is
+          // immutable and hash-chained (#1094/#1105), so a query over
+          // resourceType has to accept both regardless.
+          resourceType: 'SecurityConfiguration',
+          resourceId: 'main',
+          status: 'success',
           severity: severity,
           message: `Configuração de segurança alterada: ${change.path}`,
           payload: {
@@ -180,6 +259,22 @@ class SecurityService {
           req: req,
           module: 'Segurança'
         });
+      }
+
+      // #649: after the write and the audit rows, so a revocation failure cannot
+      // lose the policy change or its audit trail.
+      if (requiresSessionRevocation(changes)) {
+        try {
+          const actingToken = (req && req.headers && req.headers.authorization || '').replace('Bearer ', '');
+          const revoked = await sessionService.revokeAllSessionsForPolicyChange(
+            db,
+            actingToken,
+            req && req.user && req.user.userID || 'SYSTEM'
+          );
+          logger.info(`#649: política de sessão restringida, ${revoked} sessão(ões) revogada(s)`);
+        } catch (revokeError) {
+          logger.error('#649: falha ao revogar sessões após alteração de política:', revokeError.message);
+        }
       }
 
       return mergedConfig;
@@ -210,7 +305,7 @@ class SecurityService {
             });
           }
         } else {
-          if (oldObj[key] !== newObj[key] && key !== 'metadata') {
+          if (oldObj[key] !== newObj[key] && !SERVER_OWNED_KEYS.includes(key)) {
             changes.push({
               path: currentPath,
               oldValue: oldObj[key],
@@ -276,8 +371,8 @@ class SecurityService {
       if (config.session.timeoutMinutes && (config.session.timeoutMinutes < 5 || config.session.timeoutMinutes > 480)) {
         errors.push('timeoutMinutes deve estar entre 5 e 480');
       }
-      if (config.session.maxSessionDuration && (config.session.maxSessionDuration < 1 || config.session.maxSessionDuration > 24)) {
-        errors.push('maxSessionDuration deve estar entre 1 e 24 horas');
+      if (config.session.maxSessionDurationHours && (config.session.maxSessionDurationHours < 1 || config.session.maxSessionDurationHours > 24)) {
+        errors.push('maxSessionDurationHours deve estar entre 1 e 24 horas');
       }
     }
 
@@ -463,9 +558,9 @@ class SecurityService {
       for (const change of changes) {
         await auditLogger.log({
           action: 'UPDATE',
-          entity: 'Permissions',
-          entityID: change.profile,
-          result: 'success',
+          resourceType: 'Permissions',
+          resourceId: change.profile,
+          status: 'success',
           severity: 'critical',
           message: `Permissões alteradas para perfil: ${change.profile}`,
           payload: {

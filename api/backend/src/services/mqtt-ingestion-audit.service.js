@@ -41,7 +41,8 @@ class MqttIngestionAuditService {
       const chainPrevHash = previous?.chainHash || null;
 
       const timestamp = entry.timestamp ? new Date(entry.timestamp) : new Date();
-      const chainHash = sha256Hex(buildChainPayload({ ...entry, timestamp }, chainPrevHash));
+      const status = entry.status || 'processed';
+      const chainHash = sha256Hex(buildChainPayload({ ...entry, timestamp, status }, chainPrevHash));
 
       const document = {
         topic: entry.topic || null,
@@ -49,7 +50,7 @@ class MqttIngestionAuditService {
         payloadSignature: entry.payloadSignature || null,
         signatureVerified: Boolean(entry.signatureVerified),
         signatureRequired: Boolean(entry.signatureRequired),
-        status: entry.status || 'processed',
+        status,
         reason: entry.reason || null,
         sensorId: entry.sensorId || null,
         temperatureValue: Number.isFinite(Number(entry.temperatureValue)) ? Number(entry.temperatureValue) : null,

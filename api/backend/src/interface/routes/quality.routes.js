@@ -5,7 +5,7 @@ const qualityDomain = require('../../services/quality-domain.service');
 const router = express.Router();
 
 router.post('/preview', authenticate, (req, res) => {
-  const assessment = qualityDomain.evaluateQuality(req.body || {});
+  const assessment = qualityDomain.evaluateQuality(req.body);
   return res.json({
     success: true,
     data: assessment,

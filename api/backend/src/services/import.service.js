@@ -7,13 +7,19 @@ const PatientModel = require('../models/Patient');
 const SampleModule = require('../models/Sample');
 const SampleModel = SampleModule.SampleModel || SampleModule;
 const TemperatureModel = require('../models/Temperature');
-const LocationModel = require('../models/Location');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
+const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
+const ParticipantIdentityModel = require('../models/ParticipantIdentity');
+const participantIdentityService = require('./participantIdentity.service');
 const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
+const rcsAssessmentService = require('./rcs-assessment.service');
+const specimenPreanalyticsService = require('./specimen-preanalytics.service');
+const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
+const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 
 /**
  * Service de Importação de Dados
@@ -119,8 +125,12 @@ class ImportService {
    */
   async validateCSVStructure(file, dataType) {
     return new Promise((resolve, reject) => {
-      const errors = [];
       const requiredFields = this.getRequiredFields(dataType);
+      if (requiredFields.length === 0) {
+        return reject(new Error(`Tipo de dados desconhecido: ${dataType}`));
+      }
+
+      const errors = [];
       const rows = [];
       let headerRow = null;
 
@@ -238,14 +248,102 @@ class ImportService {
         return merged;
       }
 
-      async function upsertPatient(patientData) {
-        // Identificador único: CPF OU recordNumber
-        const query = {};
-        if (patientData.cpf) query.cpf = patientData.cpf;
-        else if (patientData.recordNumber) query.recordNumber = patientData.recordNumber;
-        else return { action: 'skip', reason: 'Sem identificador único (CPF ou Prontuário)' };
+      // Remove campos legados/clínicos que ParticipantModel não aceita mais
+      // como top-level (decisão de #142: fluxo de criação de paciente é
+      // disease-agnostic) e migra o identificador legado CPF para o campo
+      // canônico identityDocument.
+      function stripLegacyPatientFields(patientData) {
+        if (patientData.cpf && !patientData.identityDocument) {
+          patientData.identityDocument = patientData.cpf;
+        }
+        delete patientData.cpf;
+        delete patientData.weight;
+        delete patientData.heightCm;
+        delete patientData.diagnosticHypothesis;
+        delete patientData.icdCode;
+        delete patientData.hypertension;
+        delete patientData.obesity;
+        delete patientData.diabetesType1;
+        delete patientData.diabetesType2;
+        delete patientData.copd;
+        delete patientData.ckd;
+        delete patientData.smoking;
+        delete patientData.alcoholUse;
+        delete patientData.asthma;
+        delete patientData.antibioticUse;
+        delete patientData.insulinUse;
+        delete patientData.antiviralUse;
+        delete patientData.geneticVariant;
+        delete patientData.notes;
+        return patientData;
+      }
 
-        const existing = await patientsCollection.findOne(query);
+      // Encontra o paciente existente (por identityDocument OU recordNumber,
+      // já que ParticipantModel.validate() exige participantId e rejeita
+      // qualquer campo fora do allowlist canônico) e gera/preserva o
+      // participantId ANTES da validação, mesmo padrão adotado em
+      // import-lgpd.service.js para #199/#226.
+      //
+      // RF005/RNF007 (#563): identityDocument is civil identity — resolved
+      // via ParticipantIdentity, same as patient.service.js#checkIdentifierConflict
+      // (#561). recordNumber is a hospital record number, not civil
+      // identity, so it stays checked against Patient directly.
+      // RF005/RNF007 (#575): patientName/birthDate were previously enforced
+      // as required by PatientModel.validate() (they were in its
+      // requiredText list). Now that they're civil identity — segregated to
+      // ParticipantIdentity, never a Patient field — validate() no longer
+      // checks them, so this import path needs its own explicit check
+      // (import-lgpd.service.js's importPatients/importPatientsSmart already
+      // do this independently) or a row with no name/birthdate would import
+      // silently with an empty ParticipantIdentity.
+      function validateIdentityFieldsPresent(patientData) {
+        const errors = [];
+        if (!patientData.patientName || (typeof patientData.patientName === 'string' && patientData.patientName.trim() === '')) {
+          errors.push('patientName é obrigatório');
+        }
+        // Mirrors PatientModel.validate()'s old birthDate check: a Date
+        // instance or a non-empty string are both accepted here (parsing
+        // into an actual Date happens later, in ParticipantIdentityModel.create()).
+        const isValidBirthDate = patientData.birthDate instanceof Date
+          ? !Number.isNaN(patientData.birthDate.getTime())
+          : typeof patientData.birthDate === 'string' && patientData.birthDate.trim() !== '';
+        if (!isValidBirthDate) {
+          errors.push('birthDate é obrigatório');
+        }
+        return errors;
+      }
+
+      async function prepareParticipantId(db, patientData) {
+        let existing = null;
+        if (patientData.identityDocument) {
+          const identityCollection = getCollection(db, 'participantIdentities');
+          // RF005/RNF007 (#574): identityDocumentHash lets this dedup match
+          // without querying the plaintext field once it's eventually
+          // dropped; the plaintext branch stays as a fallback for records
+          // written before the hash sibling existed.
+          // #1099: match under EVERY registered key, not just the active
+          // one -- a hash written before a rotation is otherwise
+          // unmatchable, and a missed dedup here creates a DUPLICATE
+          // participant rather than raising an error.
+          const identityDocumentHashes = participantIdentityService.computeBlindIndexCandidates('identityDocument', patientData.identityDocument);
+          const orConditions = identityDocumentHashes.length
+            ? [{ identityDocumentHash: { $in: identityDocumentHashes } }, { identityDocument: patientData.identityDocument }]
+            : [{ identityDocument: patientData.identityDocument }];
+          const existingIdentity = await identityCollection.findOne({ $or: orConditions });
+          if (existingIdentity) {
+            existing = await patientsCollection.findOne({ participantId: existingIdentity.participantId });
+          }
+        } else if (patientData.recordNumber) {
+          existing = await patientsCollection.findOne({ recordNumber: patientData.recordNumber });
+        } else {
+          return { existing: null, error: 'Sem identificador único (Documento de identidade ou Prontuário)' };
+        }
+
+        patientData.participantId = existing ? existing.participantId : await generateUniqueParticipantId(db);
+        return { existing };
+      }
+
+      async function upsertPatient(db, patientData, existing) {
         if (!existing) {
           // Novo cadastro
           const consentMetadata = notificationService.buildConsentMetadata();
@@ -253,8 +351,19 @@ class ImportService {
           patientData.consentToken = consentMetadata.token;
           patientData.consentTokenCreatedAt = consentMetadata.createdAt;
           patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
-          const patient = PatientModel.create(patientData);
+          const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
           const insertResult = await patientsCollection.insertOne(patient);
+
+          // RF005/RNF007 (#575): patientName/birthDate/identityDocument are
+          // civil identity — they never land on Patient. ParticipantIdentity
+          // is the sole write target; patientData (not the stripped
+          // `patient`) still carries them here for that write.
+          const identityCollection = getCollection(db, 'participantIdentities');
+          const identityDoc = participantIdentityService.encryptIdentityFields(
+            ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
+          );
+          await identityCollection.insertOne(identityDoc);
+
           if (patient.participantId) {
             try {
               const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
@@ -277,7 +386,33 @@ class ImportService {
             return { action: 'error', error: mergeError.message };
           }
           merged.updatedAt = new Date();
-          await patientsCollection.updateOne({ _id: existing._id }, { $set: merged });
+          // RF005/RNF007 (#575): patientName/birthDate/identityDocument
+          // never land on Patient — `merged` (used below, un-stripped, for
+          // the ParticipantIdentity sync) may still carry them from
+          // `existing` (pre-#575 data) even when `patientData` doesn't.
+          await patientsCollection.updateOne({ _id: existing._id }, { $set: omitLegacyIdentityFields(merged) });
+
+          // RF005/RNF007 (#561/#563): keep ParticipantIdentity in sync on
+          // update, same as patient.service.js#updatePatient — an import
+          // merge that touches civil identity fields must not drift the
+          // two records apart.
+          if (merged.participantId && (
+            Object.prototype.hasOwnProperty.call(merged, 'patientName') ||
+            Object.prototype.hasOwnProperty.call(merged, 'birthDate') ||
+            Object.prototype.hasOwnProperty.call(merged, 'identityDocument')
+          )) {
+            const identityUpdate = { updatedAt: merged.updatedAt };
+            if (Object.prototype.hasOwnProperty.call(merged, 'patientName')) identityUpdate.patientName = merged.patientName;
+            if (Object.prototype.hasOwnProperty.call(merged, 'birthDate')) identityUpdate.birthDate = merged.birthDate ? new Date(merged.birthDate) : null;
+            if (Object.prototype.hasOwnProperty.call(merged, 'identityDocument')) identityUpdate.identityDocument = merged.identityDocument;
+
+            const identityCollection = getCollection(db, 'participantIdentities');
+            await identityCollection.updateOne(
+              { participantId: merged.participantId },
+              { $set: participantIdentityService.encryptIdentityFields(identityUpdate) },
+              { upsert: true }
+            );
+          }
           return { action: 'merge' };
         }
       }
@@ -286,37 +421,40 @@ class ImportService {
         const data = JSON.parse(fs.readFileSync(file.path, 'utf8'));
         const patients = Array.isArray(data) ? data : [data];
 
-        for (const patientData of patients) {
+        for (const rawPatientData of patients) {
+          results.total++;
           try {
-            const validation = PatientModel.validate(patientData);
-            if (!validation.isValid) {
+            const patientData = stripLegacyPatientFields({ ...rawPatientData });
+            const { existing, error: idError } = await prepareParticipantId(db, patientData);
+            if (idError) {
+              results.errors.push({ row: results.total, error: idError });
+              continue;
+            }
+            const identityErrors = validateIdentityFieldsPresent(patientData);
+            const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
+            const errors = [...identityErrors, ...validation.errors];
+            if (errors.length > 0) {
               results.errors.push({
-                row: results.total + 1,
-                errors: validation.errors
+                row: results.total,
+                errors
               });
               continue;
             }
-            const upsertResult = await upsertPatient(patientData);
+            const upsertResult = await upsertPatient(db, patientData, existing);
             if (upsertResult.action === 'error') {
               results.errors.push({
-                row: results.total + 1,
+                row: results.total,
                 error: upsertResult.error
-              });
-            } else if (upsertResult.action === 'skip') {
-              results.errors.push({
-                row: results.total + 1,
-                error: upsertResult.reason
               });
             } else {
               results.success++;
             }
           } catch (error) {
             results.errors.push({
-              row: results.total + 1,
+              row: results.total,
               error: error.message
             });
           }
-          results.total++;
         }
       } else if (ext === '.csv') {
         const rows = [];
@@ -329,37 +467,39 @@ class ImportService {
         });
 
         for (const row of rows) {
+          results.total++;
           try {
-            const patientData = this.parsePatientCSV(row);
-            const validation = PatientModel.validate(patientData);
-            if (!validation.isValid) {
+            const patientData = stripLegacyPatientFields(this.parsePatientCSV(row));
+            const { existing, error: idError } = await prepareParticipantId(db, patientData);
+            if (idError) {
+              results.errors.push({ row: results.total, error: idError });
+              continue;
+            }
+            const identityErrors = validateIdentityFieldsPresent(patientData);
+            const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
+            const errors = [...identityErrors, ...validation.errors];
+            if (errors.length > 0) {
               results.errors.push({
-                row: results.total + 1,
-                errors: validation.errors
+                row: results.total,
+                errors
               });
               continue;
             }
-            const upsertResult = await upsertPatient(patientData);
+            const upsertResult = await upsertPatient(db, patientData, existing);
             if (upsertResult.action === 'error') {
               results.errors.push({
-                row: results.total + 1,
+                row: results.total,
                 error: upsertResult.error
-              });
-            } else if (upsertResult.action === 'skip') {
-              results.errors.push({
-                row: results.total + 1,
-                error: upsertResult.reason
               });
             } else {
               results.success++;
             }
           } catch (error) {
             results.errors.push({
-              row: results.total + 1,
+              row: results.total,
               error: error.message
             });
           }
-          results.total++;
         }
       }
 
@@ -388,41 +528,60 @@ class ImportService {
           try {
             // Normalize legacy quality fields to canonical names (non-destructive)
             const sampleData = qualityCompatibility.normalizeSample(sampleDataRaw || {});
+            if (!sampleData.specimenId) {
+              sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
+            }
             const validation = SampleModel.validate(sampleData);
             if (!validation.isValid) {
               results.errors.push({
                 row: results.total + 1,
                 errors: validation.errors
               });
+              results.total++;
               continue;
             }
 
             const sample = SampleModel.create(sampleData);
             const insertResult = await samplesCollection.insertOne(sample);
-            try {
-              const report = await validator.validateSampleCompliance(String(insertResult.insertedId));
-              const missingEthicsOrSprec = !sampleData.consentTemplateId
-                || !sampleData.sprec
-                || !sampleData.sprec.sampleType
-                || !sampleData.sprec.primaryContainer;
-              const resolvedStatus = missingEthicsOrSprec
-                ? 'QUARANTINE'
-                : String(report?.suggestedStatus || sample.releaseStatus || 'QUARANTINE').toUpperCase();
-              if (resolvedStatus !== String(sample.releaseStatus || 'QUARANTINE').toUpperCase()) {
+            if (sample.rcsEvaluation) {
+              try {
+                const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
+                // #502: pins integrity verification to this snapshot so a
+                // later re-assessment for the same specimenId can't
+                // false-positive a tamper report.
                 await samplesCollection.updateOne(
                   { _id: insertResult.insertedId },
-                  { $set: { releaseStatus: resolvedStatus, updatedAt: new Date() } }
+                  { $set: { sealedRcsAssessmentId: assessment._id } }
                 );
+              } catch (assessmentError) {
+                logger.warn('[IMPORT_SERVICE] Falha ao registrar snapshot RcsAssessment referenciado, amostra mantém cópia embutida', {
+                  specimenId: sample.specimenId,
+                  error: assessmentError?.message || String(assessmentError),
+                });
               }
+            }
+            if (sample.sprec) {
+              try {
+                const profile = await specimenPreanalyticsService.recordProfile(db, sample.specimenId, sample.sprec);
+                // #502: same pin as above, for the SpecimenPreanalytics half.
+                await samplesCollection.updateOne(
+                  { _id: insertResult.insertedId },
+                  { $set: { sealedSpecimenPreanalyticsId: profile._id } }
+                );
+              } catch (profileError) {
+                logger.warn('[IMPORT_SERVICE] Falha ao registrar snapshot SpecimenPreanalytics referenciado, amostra mantém cópia embutida', {
+                  specimenId: sample.specimenId,
+                  error: profileError?.message || String(profileError),
+                });
+              }
+            }
+            try {
+              await validator.validateSampleCompliance(String(insertResult.insertedId));
             } catch (validationError) {
               logger.warn('[IMPORT_SERVICE] Falha ao validar compliance após importação JSON, mantendo em quarentena', {
                 specimenId: String(insertResult.insertedId),
                 error: validationError?.message || String(validationError),
               });
-              await samplesCollection.updateOne(
-                { _id: insertResult.insertedId },
-                { $set: { releaseStatus: 'QUARANTINE', updatedAt: new Date() } }
-              );
             }
             results.success++;
           } catch (error) {
@@ -469,8 +628,12 @@ class ImportService {
               continue;
             }
 
+            if (!sampleData.specimenId) {
+              sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
+            }
+
             const validation = SampleModel.validate(sampleData);
-            
+
             if (!validation.isValid) {
               results.errors.push({
                 row: results.total + 1,
@@ -482,30 +645,45 @@ class ImportService {
 
             const sample = SampleModel.create(sampleData);
             const insertResult = await samplesCollection.insertOne(sample);
-            try {
-              const report = await validator.validateSampleCompliance(String(insertResult.insertedId));
-              const missingEthicsOrSprec = !sampleData.consentTemplateId
-                || !sampleData.sprec
-                || !sampleData.sprec.sampleType
-                || !sampleData.sprec.primaryContainer;
-              const resolvedStatus = missingEthicsOrSprec
-                ? 'QUARANTINE'
-                : String(report?.suggestedStatus || sample.releaseStatus || 'QUARANTINE').toUpperCase();
-              if (resolvedStatus !== String(sample.releaseStatus || 'QUARANTINE').toUpperCase()) {
+            if (sample.rcsEvaluation) {
+              try {
+                const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
+                // #502: pins integrity verification to this snapshot so a
+                // later re-assessment for the same specimenId can't
+                // false-positive a tamper report.
                 await samplesCollection.updateOne(
                   { _id: insertResult.insertedId },
-                  { $set: { releaseStatus: resolvedStatus, updatedAt: new Date() } }
+                  { $set: { sealedRcsAssessmentId: assessment._id } }
                 );
+              } catch (assessmentError) {
+                logger.warn('[IMPORT_SERVICE] Falha ao registrar snapshot RcsAssessment referenciado, amostra mantém cópia embutida', {
+                  specimenId: sample.specimenId,
+                  error: assessmentError?.message || String(assessmentError),
+                });
               }
+            }
+            if (sample.sprec) {
+              try {
+                const profile = await specimenPreanalyticsService.recordProfile(db, sample.specimenId, sample.sprec);
+                // #502: same pin as above, for the SpecimenPreanalytics half.
+                await samplesCollection.updateOne(
+                  { _id: insertResult.insertedId },
+                  { $set: { sealedSpecimenPreanalyticsId: profile._id } }
+                );
+              } catch (profileError) {
+                logger.warn('[IMPORT_SERVICE] Falha ao registrar snapshot SpecimenPreanalytics referenciado, amostra mantém cópia embutida', {
+                  specimenId: sample.specimenId,
+                  error: profileError?.message || String(profileError),
+                });
+              }
+            }
+            try {
+              await validator.validateSampleCompliance(String(insertResult.insertedId));
             } catch (validationError) {
               logger.warn('[IMPORT_SERVICE] Falha ao validar compliance após importação tabular, mantendo em quarentena', {
                 specimenId: String(insertResult.insertedId),
                 error: validationError?.message || String(validationError),
               });
-              await samplesCollection.updateOne(
-                { _id: insertResult.insertedId },
-                { $set: { releaseStatus: 'QUARANTINE', updatedAt: new Date() } }
-              );
             }
             results.success++;
           } catch (error) {
@@ -526,140 +704,13 @@ class ImportService {
   }
 
   /**
-   * Processa importação de localizações
+   * Desativado (#466): a coleção legada `locations` deve permanecer
+   * somente-leitura durante a transição (regra de coexistência do #457).
    */
-  async importLocations(db, file) {
-    try {
-      const ext = path.extname(file.originalname).toLowerCase();
-      const locationsCollection = db.collection('locations');
-      const results = { success: 0, errors: [], total: 0 };
-
-      if (ext === '.json') {
-        const data = JSON.parse(fs.readFileSync(file.path, 'utf8'));
-        const locations = Array.isArray(data) ? data : [data];
-
-        for (const locationDataRaw of locations) {
-          try {
-            const { data: locationData, parseErrors } = this.parseLocationData(locationDataRaw);
-
-            if (parseErrors.length > 0) {
-              results.errors.push({
-                row: results.total + 1,
-                errors: parseErrors
-              });
-              results.total++;
-              continue;
-            }
-
-            const validation = LocationModel.validate(locationData);
-            if (!validation.isValid) {
-              results.errors.push({
-                row: results.total + 1,
-                errors: validation.errors
-              });
-              results.total++;
-              continue;
-            }
-
-            if (locationData.locationID !== undefined && locationData.locationID !== null) {
-              const existing = await locationsCollection.findOne({ locationID: Number(locationData.locationID) });
-              if (existing) {
-                results.errors.push({
-                  row: results.total + 1,
-                  errors: [`locationID ${locationData.locationID} já existe`]
-                });
-                results.total++;
-                continue;
-              }
-            } else {
-              const { generateUniqueLocationID } = require('../utils/locationIDGenerator');
-              locationData.locationID = await generateUniqueLocationID(db, 'locations');
-            }
-
-            const location = LocationModel.create(locationData);
-            await locationsCollection.insertOne(location);
-            results.success++;
-          } catch (error) {
-            results.errors.push({
-              row: results.total + 1,
-              error: error.message
-            });
-          }
-          results.total++;
-        }
-      } else if (ext === '.csv') {
-        try {
-          await this.validateCSVStructure(file, 'locations');
-        } catch (structError) {
-          results.errors.push({ row: 0, error: structError.message });
-          return results;
-        }
-
-        const rows = [];
-        await new Promise((resolve, reject) => {
-          fs.createReadStream(file.path)
-            .pipe(csv())
-            .on('data', (row) => rows.push(row))
-            .on('end', resolve)
-            .on('error', reject);
-        });
-
-        for (const row of rows) {
-          try {
-            const { data: locationData, parseErrors } = this.parseLocationCSV(row);
-
-            if (parseErrors.length > 0) {
-              results.errors.push({
-                row: results.total + 1,
-                errors: parseErrors
-              });
-              results.total++;
-              continue;
-            }
-
-            const validation = LocationModel.validate(locationData);
-            if (!validation.isValid) {
-              results.errors.push({
-                row: results.total + 1,
-                errors: validation.errors
-              });
-              results.total++;
-              continue;
-            }
-
-            if (locationData.locationID !== undefined && locationData.locationID !== null) {
-              const existing = await locationsCollection.findOne({ locationID: Number(locationData.locationID) });
-              if (existing) {
-                results.errors.push({
-                  row: results.total + 1,
-                  errors: [`locationID ${locationData.locationID} já existe`]
-                });
-                results.total++;
-                continue;
-              }
-            } else {
-              const { generateUniqueLocationID } = require('../utils/locationIDGenerator');
-              locationData.locationID = await generateUniqueLocationID(db, 'locations');
-            }
-
-            const location = LocationModel.create(locationData);
-            await locationsCollection.insertOne(location);
-            results.success++;
-          } catch (error) {
-            results.errors.push({
-              row: results.total + 1,
-              error: error.message
-            });
-          }
-          results.total++;
-        }
-      }
-
-      return results;
-    } catch (error) {
-      logger.error('Erro ao importar localizações:', error.message);
-      throw error;
-    }
+  async importLocations() {
+    throw new Error(
+      "Importação de 'locations' está desativada: a coleção legada locations é somente-leitura durante a transição (#457/#466)."
+    );
   }
 
   /**
@@ -689,12 +740,11 @@ class ImportService {
               row: results.total + 1,
               errors: validation.errors
             });
-            continue;
+          } else {
+            const temperature = TemperatureModel.create(tempData);
+            await temperaturesCollection.insertOne(temperature);
+            results.success++;
           }
-
-          const temperature = TemperatureModel.create(tempData);
-          await temperaturesCollection.insertOne(temperature);
-          results.success++;
         } catch (error) {
           results.errors.push({
             row: results.total + 1,
@@ -719,6 +769,9 @@ class ImportService {
       patientName: row.patientName,
       birthDate: new Date(row.birthDate),
       sex: row.sex,
+      email: row.email || null,
+      consentTemplateId: row.consentTemplateId || null,
+      cpf: row.cpf || null,
       weight: row.weight ? parseFloat(row.weight) : null,
       heightCm: row.heightCm ? parseFloat(row.heightCm) : null,
       recordNumber: row.recordNumber ? parseInt(row.recordNumber) : null,
@@ -784,7 +837,7 @@ class ImportService {
       return parsed;
     };
 
-    const participantIdRaw = this.getRowValue(row, ['participantId', 'participantId', 'patient_id', 'idPaciente']);
+    const participantIdRaw = this.getRowValue(row, ['participantId', 'patient_id', 'idPaciente']);
     const sampleTypeRaw = this.getRowValue(row, ['sampleType', 'tipoAmostra']);
     const sampleOriginRaw = this.getRowValue(row, ['sampleOrigin', 'origemAmostra']);
     const extractionRaw = this.getRowValue(row, ['extractionProtocol', 'protocoloExtracao']);
@@ -792,11 +845,11 @@ class ImportService {
     const qualityRaw = this.getRowValue(row, ['quality', 'qualidade']);
     const qualityScoreRaw = this.getRowValue(row, ['rcsScore', 'qualityScore', 'scoreQualidade']);
     const qualityCategoryRaw = this.getRowValue(row, ['scoreBasedGrade', 'qualityCategory', 'categoriaQualidade']);
-    const registrationRaw = this.getRowValue(row, ['registeredAt', 'registeredAt', 'dataRegistro']);
+    const registrationRaw = this.getRowValue(row, ['registeredAt', 'dataRegistro']);
     const locationRaw = this.getRowValue(row, ['locationID', 'locationId']);
     const linkedProjectRaw = this.getRowValue(row, ['linkedProject', 'projeto']);
-    const tcleRaw = this.getRowValue(row, ['consentTemplateId', 'consentTemplateId', 'consentTemplateId']);
-    const merkleRaw = this.getRowValue(row, ['merkleRoot', 'merkleRoot']);
+    const tcleRaw = this.getRowValue(row, ['consentTemplateId']);
+    const merkleRaw = this.getRowValue(row, ['merkleRoot']);
 
     const sprec = {
       matrixType: normalizeString(this.getRowValue(row, ['sprec_matrix_type', 'sprecMatrixType'])),
@@ -807,6 +860,9 @@ class ImportService {
       secondCentrifugation: normalizeString(this.getRowValue(row, ['sprec_second_centrifugation', 'sprecSecondCentrifugation'])),
       postCentrifugationDelay: normalizeString(this.getRowValue(row, ['sprec_post_centrifugation_delay', 'sprecPostCentrifugationDelay'])),
       longTermStorage: normalizeString(this.getRowValue(row, ['sprec_long_term_storage', 'sprecLongTermStorage'])),
+      // dict-02 ELM-0145/0146 (#392) — preserved as given, not recomputed from the axis slots above.
+      sprecCode: normalizeString(this.getRowValue(row, ['sprec_code', 'sprecCode'])),
+      sprecVersion: normalizeString(this.getRowValue(row, ['sprec_version', 'sprecVersion'])),
     };
 
     const clinicalData = {
@@ -825,10 +881,6 @@ class ImportService {
       canonical: false,
     };
     const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec });
-    const releaseStatus = canonicalQualityAssessment?.governance_status === 1
-      && ['A', 'B', 'C', 'D'].includes(String(canonicalQualityAssessment?.final_grade || '').toUpperCase())
-      ? 'AVAILABLE'
-      : 'QUARANTINE';
 
     const sampleData = {
       participantId: normalizeString(participantIdRaw),
@@ -840,72 +892,47 @@ class ImportService {
       quantity: toFloat(this.getRowValue(row, ['quantity', 'volume']), 'quantity'),
       quality: normalizeString(qualityRaw),
       // Canonical RCS-GOV fields (do not rely on legacy `quality_*` for decisioning)
-      model_version: canonicalQualityAssessment.model_version,
-      matrix_type: canonicalQualityAssessment.matrix_type,
-      governance_status: canonicalQualityAssessment.governance_status,
-      governance_failure_reasons: canonicalQualityAssessment.governance_failure_reasons || [],
-      governance_rule_codes: canonicalQualityAssessment.governance_rule_codes || [],
-      p_bio: canonicalQualityAssessment.p_bio,
-      rcs_score: canonicalQualityAssessment.rcs_score,
-      score_based_grade: canonicalQualityAssessment.score_based_grade,
-      final_grade: canonicalQualityAssessment.final_grade || '',
-      grade_route: canonicalQualityAssessment.grade_route,
-      axis_penalties: canonicalQualityAssessment.axis_penalties || [],
-      calculation_trace: canonicalQualityAssessment.calculation_trace || {},
-      rcs_evaluation: canonicalQualityAssessment,
+      modelVersion: canonicalQualityAssessment.model_version,
+      matrixType: canonicalQualityAssessment.matrix_type,
+      governanceStatus: canonicalQualityAssessment.governance_status,
+      governanceFailureReasons: canonicalQualityAssessment.governance_failure_reasons || [],
+      governanceRuleCodes: canonicalQualityAssessment.governance_rule_codes || [],
+      rcsScore: canonicalQualityAssessment.rcs_score,
+      scoreBasedGrade: canonicalQualityAssessment.score_based_grade,
+      finalGrade: canonicalQualityAssessment.final_grade || '',
+      gradeRoute: canonicalQualityAssessment.grade_route,
+      axisPenalties: canonicalQualityAssessment.axis_penalties || [],
+      calculationTrace: canonicalQualityAssessment.calculation_trace || {},
+      rcsEvaluation: canonicalQualityAssessment,
       // Legacy compatibility bucket (non-decisional)
       canonical: {
         rcsScore: externalQualityAssessment.score,
         scoreBasedGrade: externalQualityAssessment.category || '',
         axisPenalties: [],
       },
-      external_quality_assessment: externalQualityAssessment,
+      externalQualityAssessment,
+      // #477 audit: `locationID` (capital ID) here is not a mismatch with
+      // Sample.js's Mongoose schema field `locationId` (line 58) — this
+      // service inserts via the raw MongoDB driver (bypasses that schema
+      // entirely) and `locationID` is the legacy numeric location field
+      // consistently read elsewhere (label.routes.js, sample.service.js's
+      // cleanup, location-storage-backfill.service.js's #461 backfill
+      // query). The Mongoose schema's `locationId` field is the actual
+      // outlier — appears unused for writes anywhere in the codebase —
+      // but that's a separate, non-blocking housekeeping question, not
+      // this write path.
       locationID: toInt(locationRaw, 'locationID'),
       linkedProject: normalizeString(linkedProjectRaw),
-      lifecycleStatus: normalizeString(this.getRowValue(row, ['lifecycleStatus', 'statusAtual'])) || 'Available',
-      releaseStatus: releaseStatus,
+      specimenStatus: SampleModel.mapLegacyLifecycleStatusToSpecimenStatus(
+        this.getRowValue(row, ['specimenStatus', 'lifecycleStatus', 'statusAtual'])
+      ),
       sprec,
       clinicalData,
-      consentTemplateId: normalizeString(tcleRaw),
       consentTemplateId: normalizeString(tcleRaw),
       merkleRoot: normalizeString(merkleRaw),
     };
 
     return { data: sampleData, parseErrors };
-  }
-
-  /**
-   * Parse CSV/JSON para Location
-   */
-  parseLocationData(data) {
-    const parseErrors = [];
-
-    const toNumber = (value, fieldName) => {
-      if (value === undefined || value === null || value === '') return null;
-      const parsed = Number(String(value).trim());
-      if (Number.isNaN(parsed)) {
-        parseErrors.push(`${fieldName} inválido`);
-        return null;
-      }
-      return parsed;
-    };
-
-    const locationData = {
-      locationID: toNumber(data.locationID, 'locationID'),
-      equipmentType: toNumber(data.equipmentType, 'equipmentType'),
-      equipmentID: toNumber(data.equipmentID, 'equipmentID'),
-      block: toNumber(data.block, 'block'),
-      rack: toNumber(data.rack, 'rack'),
-      drawer: toNumber(data.drawer, 'drawer'),
-      box: toNumber(data.box, 'box'),
-      wellPosition: data.wellPosition || data.eppendorfWell || null
-    };
-
-    return { data: locationData, parseErrors };
-  }
-
-  parseLocationCSV(row) {
-    return this.parseLocationData(row);
   }
 
   /**

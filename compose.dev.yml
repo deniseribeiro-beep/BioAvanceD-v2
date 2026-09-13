@@ -52,11 +52,22 @@ services:
       - backend_node_modules:/app/node_modules
       - ./orpha-data-raw:/workspace/orpha-data-raw:ro
       - ./artifacts:/workspace/artifacts
+      # #989: AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE is /run/secrets/merkle_signing_key.pem
+      # in .env.docker(.example), and generate-env-docker-secrets.sh writes the key
+      # here on the host. The backend needs it because POST /api/audit/anchor (#959)
+      # reaches the same signing chains as the nightly worker job.
+      - ./infra/audit/secrets:/run/secrets:ro
     env_file:
-      - .env.docker.example
+      - .env.docker
     environment:
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "300"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     depends_on:
       mongodb:
         condition: service_healthy
@@ -80,8 +91,390 @@ services:
       - ./api/backend:/app
       - backend_node_modules:/app/node_modules
       - ./artifacts:/workspace/artifacts
+      # #989: this is the container that runs daily-merkle.job -- without the signing
+      # key on disk here, every nightly run throws and seals nothing.
+      - ./infra/audit/secrets:/run/secrets:ro
     env_file:
-      - .env.docker.example
+      - .env.docker
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/worker-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+
+  foundation-bootstrap:
+    # RF022 (#366 slice 1): one-shot, idempotent essential-reference-data
+    # seed, coupled to build/startup instead of a script a human has to
+    # remember to run. Runs once per `up` after the backend is healthy;
+    # upsertDocs's $setOnInsert makes repeat runs no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run seed:essential
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  reference-data-bootstrap:
+    # RF028 (#367 slice 1): one-shot, idempotent HPO reference-data import —
+    # first of the 16 Fase 2 sources, runs after foundation-bootstrap so
+    # Fase 1 schemas/collections are ready first (Plano Integrado Fase 2
+    # dependency). Idempotent via the run's idempotencyKey lookup; repeat
+    # runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:hpo
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      foundation-bootstrap:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-mondo:
+    # RF028 (#548): one-shot, idempotent MONDO reference-data import — second
+    # of the 16 Fase 2 sources (Plano Integrado §7.4 step 3, right after
+    # HPO). Runs after reference-data-bootstrap completes, matching the
+    # documented recommended order. Idempotent via the run's idempotencyKey
+    # lookup; repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:mondo
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-orpha:
+    # RF028 (#549): one-shot, idempotent ORPHA reference-data import — third
+    # of the 16 Fase 2 sources (Plano Integrado §7.4 step 4, leading the
+    # "ORPHA, CID-11, CID-10 e OMIM" group right after MONDO). Runs after
+    # reference-data-bootstrap-mondo completes, matching the documented
+    # recommended order. Idempotent via the run's idempotencyKey lookup;
+    # repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:orpha
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-mondo:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-icd11:
+    # RF028 (#549): one-shot, idempotent ICD-11 reference-data import —
+    # fourth of the 16 Fase 2 sources (Plano Integrado §7.4 step 4, second
+    # member of the "ORPHA, CID-11, CID-10 e OMIM" group, right after
+    # ORPHA). Runs after reference-data-bootstrap-orpha completes, matching
+    # the documented recommended order. Idempotent via the run's
+    # idempotencyKey lookup; repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:icd11
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-orpha:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-icd10:
+    # RF028 (#549): one-shot, idempotent ICD-10 reference-data import —
+    # fifth of the 16 Fase 2 sources (Plano Integrado §7.4 step 4, third
+    # member of the "ORPHA, CID-11, CID-10 e OMIM" group, right after
+    # ICD-11). Runs after reference-data-bootstrap-icd11 completes, matching
+    # the documented recommended order. Idempotent via the run's
+    # idempotencyKey lookup; repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:icd10
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-icd11:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-omim:
+    # RF028 (#549): one-shot, idempotent OMIM reference-data import — sixth
+    # of the 16 Fase 2 sources (Plano Integrado §7.4 step 4, closing out the
+    # "ORPHA, CID-11, CID-10 e OMIM" group, right after ICD-10). Runs after
+    # reference-data-bootstrap-icd10 completes, matching the documented
+    # recommended order. Idempotent via the run's idempotencyKey lookup;
+    # repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:omim
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-icd10:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-hgnc:
+    # RF028 (#549): one-shot, idempotent HGNC reference-data import —
+    # seventh of the 16 Fase 2 sources (Plano Integrado §7.4 step 5,
+    # "Importar HGNC e relações gene-fenótipo/doença", right after the
+    # §7.4 step 4 group closes out with OMIM). Runs after
+    # reference-data-bootstrap-omim completes, matching the documented
+    # recommended order. Idempotent via the run's idempotencyKey lookup;
+    # repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:hgnc
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-omim:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-loinc:
+    # RF028 (#549): one-shot, idempotent LOINC reference-data import —
+    # eighth of the 16 Fase 2 sources (Plano Integrado §7.4 step 6,
+    # "Importar LOINC e UCUM", leading the pair right after HGNC). Runs
+    # after reference-data-bootstrap-hgnc completes, matching the
+    # documented recommended order. Idempotent via the run's
+    # idempotencyKey lookup; repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:loinc
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-hgnc:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-ucum:
+    # RF028 (#549): one-shot, idempotent UCUM reference-data import — ninth
+    # of the 16 Fase 2 sources (Plano Integrado §7.4 step 6, closing out
+    # the "LOINC e UCUM" pair right after LOINC). Runs after
+    # reference-data-bootstrap-loinc completes, matching the documented
+    # recommended order. Idempotent via the run's idempotencyKey lookup;
+    # repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:ucum
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-loinc:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-dcb:
+    # RF028 (#549): one-shot, idempotent DCB reference-data import — tenth
+    # of the 16 Fase 2 sources (Plano Integrado §7.4 step 7, "Importar DCB
+    # e ATC/DDD", leading the pair right after UCUM closes out step 6).
+    # Runs after reference-data-bootstrap-ucum completes, matching the
+    # documented recommended order. Idempotent via the run's
+    # idempotencyKey lookup; repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:dcb
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-ucum:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-atc:
+    # RF028 (#549): one-shot, idempotent ATC reference-data import —
+    # eleventh of the 16 Fase 2 sources (Plano Integrado §7.4 step 7,
+    # closing out the "DCB e ATC/DDD" pair right after DCB). Runs after
+    # reference-data-bootstrap-dcb completes, matching the documented
+    # recommended order. Idempotent via the run's idempotencyKey lookup;
+    # repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:atc
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-dcb:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-duo:
+    # RF028 (#549): one-shot, idempotent DUO reference-data import — twelfth
+    # of the Fase 2 sources (Plano Integrado §7.4 step 8, "Importar DUO,
+    # Uberon, NCBI Taxonomy, Cell Ontology e EDAM"), leading the final
+    # five-source group right after ATC closes out step 7. Runs after
+    # reference-data-bootstrap-atc completes, matching the documented
+    # recommended order. Idempotent via the run's idempotencyKey lookup;
+    # repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:duo
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-atc:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-uberon:
+    # RF028 (#549): one-shot, idempotent Uberon reference-data import —
+    # thirteenth of the Fase 2 sources (Plano Integrado §7.4 step 8,
+    # "Importar DUO, Uberon, NCBI Taxonomy, Cell Ontology e EDAM"), second
+    # of the final five-source group right after DUO. Runs after
+    # reference-data-bootstrap-duo completes, matching the documented
+    # recommended order. Idempotent via the run's idempotencyKey lookup;
+    # repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:uberon
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-duo:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-ncbitax:
+    # RF028 (#549): one-shot, idempotent NCBI Taxonomy reference-data import —
+    # fourteenth of the Fase 2 sources (Plano Integrado §7.4 step 8,
+    # "Importar DUO, Uberon, NCBI Taxonomy, Cell Ontology e EDAM"), third
+    # of the final five-source group right after Uberon. Runs after
+    # reference-data-bootstrap-uberon completes, matching the documented
+    # recommended order. Idempotent via the run's idempotencyKey lookup;
+    # repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:ncbitax
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-uberon:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-cl:
+    # RF028 (#549): one-shot, idempotent Cell Ontology reference-data import —
+    # fifteenth of the Fase 2 sources (Plano Integrado §7.4 step 8,
+    # "Importar DUO, Uberon, NCBI Taxonomy, Cell Ontology e EDAM"), fourth
+    # of the final five-source group right after NCBI Taxonomy. Runs after
+    # reference-data-bootstrap-ncbitax completes, matching the documented
+    # recommended order. Idempotent via the run's idempotencyKey lookup;
+    # repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:cl
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-ncbitax:
+        condition: service_completed_successfully
+
+  reference-data-bootstrap-edam:
+    # RF028 (#549): one-shot, idempotent EDAM reference-data import —
+    # sixteenth and final of the Fase 2 sources (Plano Integrado §7.4 step 8,
+    # "Importar DUO, Uberon, NCBI Taxonomy, Cell Ontology e EDAM"), closing
+    # out the final five-source group right after Cell Ontology and the
+    # entire 16-source Fase 2 chain. Runs after reference-data-bootstrap-cl
+    # completes, matching the documented recommended order. Idempotent via
+    # the run's idempotencyKey lookup; repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:edam
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-cl:
+        condition: service_completed_successfully
+
+  neo4j-projection-worker:
+    # Drains graph_projection_outbox into Neo4j (#309, follow-up from RF023/#292)
+    # — without this service, outbox rows written by consent.service.js
+    # (and future appendLineageEvent/appendQualityEvent/appendTelemetryEvent
+    # callers) sit PENDING forever and the graph projection never happens.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run neo4j:canonical:worker
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+      - ./artifacts:/workspace/artifacts
+    env_file:
+      - .env.docker
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/neo4j-projection-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
     depends_on:
       mongodb:
         condition: service_healthy
@@ -103,7 +496,7 @@ services:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
     env_file:
-      - .env.docker.example
+      - .env.docker
     environment:
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "300"

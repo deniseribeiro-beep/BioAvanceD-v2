@@ -25,14 +25,172 @@ This document defines the canonical v1 runtime contract for BioAvanceD.
 ### Participant
 
 - `participantId`
-- `patientName`
-- `birthDate`
 - `sex`
 - `email`
 - `phone`
-- `identityDocument`
 - `recordNumber`
+
+Civil identity (`patientName`, `birthDate`, `identityDocument`) is not a
+`Participant`/`Patient` field at all — it lives exclusively on
+`ParticipantIdentity` (see below), per RF005/RNF007 and dictionary
+ELM-0076–0087/P1X-0348–0364. Removed from `Patient`'s schema, allowlist,
+and every write path in #575.
 - `isDeceased`
+- `clinicalUnitId` (migrating to Reference(Organization), per dictionary
+  P1X-0356 — accepts an `organizationId` reference as of #351. A one-time
+  data migration, `migrateClinicalUnitOrganizations.js` (#352), resolves
+  existing free-text/ObjectId values to real `Organization` docs so
+  historical patient records aren't left behind. `patient.service.js`'s
+  `resolveClinicalUnitSnapshot` now resolves exclusively against
+  `organizations` (by `organizationId`, then by normalized name) — the
+  legacy `clinicalUnits`-collection ObjectId/name lookup was retired in
+  #353. `patient.service.js`'s free-text search/filter paths
+  (`listPatients`'s `filters.clinicalUnit` exact match, `searchPatients`'s
+  `clinicalUnit` regex clause) were decided (#355) to stay as-is: both
+  query `patients.clinicalUnit` directly, and that field is now reliably
+  populated from `Organization.officialName` by
+  `resolveClinicalUnitSnapshot`, so no Organization-based replacement
+  (e.g. filtering by `organizationId`) is needed — regression-covered by
+  `patient.service.clinicalUnitSearch.unit.test.js`. `paciente.controller.js`'s
+  `clinicalUnitId`/`clinicalUnit`/`unitAcronym` allowlist and
+  normalization were decided (#356) to stay as-is too: the allowlist
+  already accepts `clinicalUnitId` as an opaque `organizationId`
+  reference and forwards it unmangled (in particular, unlike
+  `clinicalUnit`/`unitAcronym`, it is never case-folded) into
+  `resolveClinicalUnitSnapshot` — regression-covered by
+  `paciente.controller.clinicalUnitAllowlist.unit.test.js`.
+  `clinical-unit.routes.js`'s CRUD/search surface (`/api/clinical-units`
+  and its `clinicalUnits` collection) was retired outright in #357: no
+  backend code has read/written that collection since #353, and the
+  frontend's `clinicalUnitService`/`useClinicalUnits` hook that called it
+  were themselves dead code (never imported by any component) — regression-
+  covered by `clinical-unit.routes.retirement.test.js` asserting the
+  routes now 404.
+
+### ParticipantIdentity
+
+RF005/RNF007, dict-07_ALINHAMENTO_CODIGO.md row 1 / migration table row 2
+("Segregar, cifrar e não projetar ao grafo"). Civil identity, segregated
+from the scientific `Participant` record behind reinforced access controls
+(`ParticipantIdentity.js`, `participantIdentities` collection):
+
+- `participantId` (foreign key back to `Participant`)
+- `patientName`
+- `birthDate`
+- `identityDocument`
+- `email`
+- `phone`
+- `representativeName`
+- `representativeEmail`
+- `representativeIdentityDocument`
+- `representativePhone`
+
+**Landed in #363:** the entity/collection exists and is dual-written
+alongside `Patient` at intake (`patient.service.js#createPatient`); the
+`GET /api/patients/:id` participant resource
+(`paciente.controller.js#buscar`) no longer returns `patientName`/
+`birthDate`/`identityDocument` as direct fields, for any caller regardless
+of `createPatient` permission (RNF007 AC#1/AC#2).
+
+**Landed in #560:** an authorized, audited re-identification flow
+(RNF007 AC#4/AC#5) — `POST /api/patients/:id/reidentify`
+(`paciente.controller.js#reidentify`, `participantIdentity.service.js`),
+gated by the `reidentifyParticipant` permission (Administrador-only,
+deliberately not granted alongside `createPatient` or any broader role —
+RNF007 AC#5 requires a legitimate, defined need, not a general-purpose
+lookup) and requiring a `reason` in the request body, which is recorded
+on every call via `auditLogger` (`action: 'REIDENTIFY'`, success and
+not-found cases both audited).
+
+**Landed in #561:** `patient.service.js`'s core/search paths
+(`checkIdentifierConflict`'s `identityDocument` clause,
+`checkDuplicatePatient`, `listPatients`'s `patientName` filter,
+`searchPatients`'s `birthDate` clause, `updatePatient`'s dual-write to
+`ParticipantIdentity`) and `PatientIdentityService.js`'s import-time
+name+birthDate matching now resolve civil identity via
+`ParticipantIdentity` instead of `Patient`'s own copy of the fields.
+
+**Landed in #565/#575:** the dual-write is gone. `Patient`'s schema,
+allowlist, and every write path (`createPatient`, `updatePatient`,
+`PatientIdentityService.js#matchOrUpsertParticipant`,
+`import.service.js#upsertPatient`, `import-lgpd.service.js`'s three
+patient/sample write paths) no longer accept or persist `patientName`/
+`birthDate`/`identityDocument` on `Patient` — `ParticipantIdentity` is
+the sole store. The two now-unused indexes
+(`patients_name_document_text_v1`, `patients_name_idx_v1`) are dropped.
+(`import.controller.js#importFhirBundle` — a dead synchronous FHIR
+import path with no live caller, and a direct violation of RF011 AC#7's
+"no direct writes to MongoDB/Neo4j from the FHIR conversion boundary" —
+was removed entirely in #570, rather than fixed in place.
+`fhir-import-staging.service.js#commitBatch`'s own bypass was fixed in
+#571/#575: its `Patient` upsert no longer writes `patientName`/`cpf`
+directly, deferring civil identity to the `ParticipantIdentity`
+dual-write below it.)
+
+**Landed in #562:** consent/intake paths now resolve civil identity via
+`ParticipantIdentity` instead of `Patient`: `consent.controller.js`'s
+pending-consent listing resolves `patientName` per participant;
+`eConsent.js`'s public `GET /validate/:token` (e-consent signing page)
+merges `patientName`/`birthDate`/`identityDocument` from
+`ParticipantIdentity` into the returned patient object instead of
+trusting `Patient`'s own copy; `intakeWizard.js`'s `GET /patient-match`
+heuristic-matching endpoint now matches via `ParticipantIdentity` (this
+also fixed a latent bug — the old query matched on a `patientID` field
+that doesn't exist on `Patient` documents, which use `participantId`).
+
+**Landed in #566:** `patientName`/`birthDate`/`identityDocument` are now
+encrypted at rest in `participantIdentities` (dict-07 row 1, "cifrar";
+dict-02 P1X-0350/P1X-0351/P1X-0354/P1X-0362), reusing the same AES-256-GCM
+utility (`utils/fieldEncryption.js`) and key-rotation convention
+(`ENCRYPTION_KEY`/`ENCRYPTION_KEY_ID`, `config/keyRegistry.js`) already
+established for `Patient.representativeIdentityDocument`. Every write path
+(`patient.service.js#createPatient`, `import.service.js`'s create/merge
+branches, `import-lgpd.service.js`'s two intake paths,
+`fhir-import-staging.service.js#commitBatch`) now calls
+`participantIdentity.service.js#encryptIdentityFields`, which adds
+`patientNameEncrypted`/`birthDateEncrypted`/`identityDocumentEncrypted`
+ciphertext siblings plus `encryptionKeyVersion` (dict-02 P1X-0362, the
+active key's `keyId`, for auditable rotation) alongside the existing
+plaintext fields — **additive dual-write, not a cutover**: per #566's own
+scope ("this... only touches how participantIdentities documents are
+stored, not who reads them"), the 10+ established consumers (#561-#564)
+that read `patientName`/`birthDate`/`identityDocument` directly off this
+collection's plaintext keep working unchanged. `participantIdentity.service.js#getIdentityByParticipantId`
+— the sole path behind #560's authorized `reidentify` flow — decrypts via
+`decryptIdentity`, preferring ciphertext when present and falling back to
+plaintext for pre-#566 records.
+
+**Landed in #574:** every remaining plaintext reader is repointed.
+Mechanical consumers (`consent.controller.js`, `eConsent.js`,
+`consent.service.js`, `sample.service.js`) now decrypt via
+`participantIdentity.service.js#decryptIdentity` instead of reading
+plaintext directly — a no-op today (plaintext still present) but correct
+once the plaintext is eventually dropped. The two consumers that query
+these fields at the MongoDB level (`import.service.js`'s exact-match
+`identityDocument` dedup; `intakeWizard.js`'s and
+`PatientIdentityService.js`'s `birthDate` day-range + `patientName`
+matching) now query deterministic `identityDocumentHash`/`birthDateHash`
+blind-index siblings first (HMAC-SHA256 via `fieldEncryption.js#hmacBlindIndex`,
+keyed with the active encryption key; written by `encryptIdentityFields`
+alongside the ciphertext), falling back to the original plaintext
+condition via `$or` for records written before the hash sibling existed
+— additive, no backfill migration required for this slice.
+`reports.routes.js`'s `patientName` `$regex` keyword search — which
+can't be blind-indexed (substring search isn't hashable) and would have
+needed a full-collection decrypt-and-scan RNF002 AC#2 forbids at the
+stated 100k-record reference scale — was removed entirely rather than
+redesigned: RF008's own reports filter list never included name search,
+and RNF007 AC#4 requires reports to omit/pseudonymize direct identifiers
+by default. The keyword filter still matches the pseudonymized
+`participantId` field directly, unaffected.
+
+**Not yet landed:** cutting the plaintext fields over to ciphertext-only
+(dropping `patientName`/`birthDate`/`identityDocument` as directly-stored
+values) needs a one-time backfill populating the hash/ciphertext siblings
+on every pre-#566/#574 record first — mirroring #565's precedent for
+`Patient`'s own legacy-field removal — since #574's decrypt/hash-fallback
+logic still depends on at least one of plaintext or ciphertext+hash being
+present on every record it reads. Not yet filed as its own issue.
 
 ### Specimen
 
@@ -45,13 +203,1190 @@ This document defines the canonical v1 runtime contract for BioAvanceD.
 - `quantity`
 - `unit`
 - `registeredAt`
-- `lifecycleStatus`
+- `specimenStatus`
 - `linkedProject`
+- `collectionSite` (Reference(Organization), per dictionary ELM-0128)
 - `merkleRoot`
 - `sprec`
 
+**Not yet landed (follow-up tracked separately):** dict-07/dict-08 call for
+`Specimen` + `SPREC` + `RCS` + storage/custody as four separate canonical
+entities, referenced (not duplicated) from each other — `Sample.js` still
+carries `sprec` and the storage/custody fields (`locationId`, `location`,
+`storageLocation`, ...) directly. `RcsAssessment` and
+`SpecimenPreanalytics` below are the first two of the three separations to
+land (#383, #388); storage/custody remains filed as its own follow-up
+(#389).
+
+**Landed in #507 (foundational return-shape slice, split from #494):**
+`MongoStorageRepository.findSampleById()` now attaches the current open
+`StorageAssignment` (dict-02 ELM-0167-0178) as a `storageAssignment` field
+on its return value, resolved via the new `findCurrentStorageAssignment()`
+method — additive, not a breaking change: the raw `storageLocation`
+snapshot stays on the returned object unchanged. Internal Mongo-level
+`storageLocation.*` reads/writes inside the repository itself are
+unaffected — they're the persistence-layer detail #507 explicitly left
+alone.
+
+**Landed in #508 (consumer migration, split from #494):**
+`AllocateSampleUseCase`/`MoveSampleUseCase`/`ReleaseSampleUseCase` now
+read the canonical `sample.storageAssignment.boxId`/`.positionCode`
+instead of `sample.storageLocation.boxId`/`.position` for their
+before/current-position checks. Each use-case's own audit-log payload
+still writes a `storageLocation: { boxId, position }` shape — that's the
+`appendImmutableAudit` schema's own field name, not a read of the
+snapshot's now-legacy `storageLocation`, so it was left alone.
+`storageService.js` (#509) is the remaining consumer not yet migrated
+onto `storageAssignment`.
+
+**Landed in #509 (consumer migration, split from #494):**
+`storageService.js`'s allocate/release orchestration
+(`allocateSampleToPosition`, `autoAssignSampleToBox`,
+`releaseSampleFromPosition`) now resolves a sample's current position via
+`MongoStorageRepository.findSampleById()`'s `storageAssignment.boxId`/
+`.positionCode` instead of reading `sample.storageLocation.boxId`/
+`.position` directly off the raw Mongo document. The service's own
+`appendImmutableAudit` payloads still write a `storageLocation: { boxId,
+position }` shape — that's the audit ledger's own field name, matching
+the precedent #508 set for the use-cases, left alone. Internal
+Mongo-level `storageLocation.*` reads/writes inside
+`MongoStorageRepository` itself (`allocateSamplePosition`,
+`autoAssignSamplePosition`, `releaseSamplePosition`, their in-transaction
+race re-checks) are unaffected — that's the persistence-layer detail
+#507 already left alone. `verifyBoxIntegrity` (an audit/consistency-check
+method, not orchestration) was also left alone, since it's explicitly
+comparing the box's `occupancyGrid` against the sample's own raw
+`storageLocation` snapshot for internal-consistency, not orchestrating a
+position change.
+
+**Landed in #510 (consumer migration, split from #494):** `sample.service.js`'s
+`createSample` no longer fabricates a `storageLocation` snapshot on the
+response object from local `boxId`/`positionCode` variables; the DB write at
+creation time was already routed through `AllocateSampleUseCase` (#474), so
+this slice was the response-shaping site, not a Mongo write. `createSample`
+now additionally resolves the just-opened record via
+`MongoStorageRepository.findCurrentStorageAssignment()` and exposes it as
+`sample.storageAssignment` on the returned object — additive, same precedent
+#507 set for `findSampleById()`. The legacy `sample.storageLocation = {
+boxId, position }` assignment stays, unchanged, for existing consumers of the
+create response.
+
+**Landed in #511 (consumer migration, split from #494):**
+`api/backend/src/routes/intakeWizard.js`'s POST handler fabricated its own
+`storageLocation` response object (lines ~579-609) from local
+`automaticLocation`/`allocation.sampleLocation` variables — same
+response-shaping shape #510 found in `sample.service.js`, not a raw Mongo
+write. Now that `createSample` (#510) additively exposes
+`sample.storageAssignment` on its return value, `intakeWizard.js` forwards it
+onto the intake response as `storageAssignment`, additive alongside the
+unchanged legacy `storageLocation` object built from the local variables.
+
+**`locationId`/`location`/`locationID` are legacy, not a second storage
+system (#453, resolved 2026-08-06):** #450's audit found these fields
+alongside `storageLocation` and initially treated them as an unresolved
+"maybe two systems" question. Settled against
+`docs/docs-7-31-2026/manuscript/2.2-Additional_file_2_Polyglot_Persistence_Data_Model.docx`
+(the current canonical data model, cited by
+`docs/docs-7-31-2026/CHANGELOG-2026-07-31.md` as the fix for this file's
+own staleness): the target model defines exactly one physical/inventory
+entity pair — `StorageLocation` (physical hierarchy) + `StorageAssignment`
+(specimen-to-position link), section 7.4. The legacy `Location` model
+(`api/backend/src/models/Location.js`) — numeric
+`equipmentType`/`equipmentID`/`block`/`rack`/`drawer`/`box`/`wellPosition`
+fields — is a pre-normalization encoding of that same hierarchy, not an
+independent system. Migration plan filed as #457 (mapping design,
+foundational) → #458/#459 (consumer migration) → #460 (retire the legacy
+API surface).
+
+**#457 field mapping resolved 2026-08-06:** see
+`docs/architecture/legacy-location-migration-mapping.md` for the
+field-by-field mapping (`equipmentType` dropped as redundant/undocumented,
+`equipmentID` joins directly to `Equipment.equipmentID` — no bridging table
+needed, `block`/`rack` map onto existing `SHELF`/`RACK` container types,
+`drawer` needs a new optional `DRAWER` container type with no current
+equivalent, `box`/`wellPosition` map onto the existing `StorageBox`/
+`positionCode`) and the one-time-backfill migration plan (not a read-time
+translation layer).
+
+**#512 resolved 2026-08-07 — `equipment-sensor-quarantine.service.js`'s
+`location`/`storageLocation` usage is out of #390/#494's custody-split
+scope:** this file's `sensor.locationId`/`locationID`/
+`storageLocation?.locationID` reads (equipment/freezer matching for
+cold-chain incidents) are the legacy pre-normalization `Location` model
+this section already covers, not custody-state consumption — they belong
+under #458/#459 (consumer migration) if/when that reaches this file, not
+#494. Its `storageLocation.boxId` read is a Mongo query filter key only
+(finds samples under an affected box), never consumed or re-exposed on a
+response the way #507-#511's fabricated `storageLocation` objects were.
+Its `sample.location` write (on quarantine) only stamps quarantine
+status/area onto whatever the sample already had — not a custody-state
+write either. No migration issue filed against #494/#390 for this file.
+
+**Status-field consolidation — decision recorded in #398, implementation
+tracked in #399 (storage/custody split, part 2/3 of #389):**
+`lifecycleStatus`/`availabilityStatus`/`quarantineStatus`/`quarantineReason`
+collapse onto dict-02's single `Specimen.specimenStatus` (ELM-0123) plus a
+new `QuarantineAction` referenced entity (P1X-0113–0119, section below) —
+not a straight field rename. Reasoning, traced against the current code
+(not just the issue's own scoping pass) and against both `dict-02` and
+`requisitos-index.md` (RF006):
+
+1. **`lifecycleStatus` → `specimenStatus`, case-folded, with two value-set
+   gaps:**
+   - 6 of 8 current values case-fold directly onto dict-02's enum:
+     `AVAILABLE`/`PARTIAL`/`DEPLETED`/`UNAVAILABLE`/`DESTROYED`/
+     `QUARANTINED` → `available`/`partial`/`depleted`/`unavailable`/
+     `destroyed`/`quarantined`.
+   - `REGISTERED` (current-only — `SampleModel.create()`'s pre-transaction
+     default) has no dict-02 equivalent; dict-02's own example value for a
+     newly-created specimen is `available`. Fold `REGISTERED` into
+     `available` — `SampleModel.computeStatus()`'s sticky-status list never
+     includes it, so nothing treats it as a distinct blockable state and no
+     behavior changes.
+   - `DISPOSED` (current-only) **cannot** fold into `destroyed`: RF006 AC#4
+     (`requisitos-index.md`) names both as separately-blocking states
+     ("Bloquear movimentação de espécime UNAVAILABLE, DESTROYED, DISPOSED
+     ou QUARANTINED"), and dict-02's ELM-0123 enum has no `disposed` value.
+     This is a real gap between the two Fase-1-authoritative docs
+     (dictionary vs. requirements), not a naming quibble. Resolve it as a
+     documented local extension of the `specimenStatus` domain (add
+     `disposed` alongside the ELM-0123 baseline) — the same
+     "extension beyond baseline" mechanism dict-02's own P1X-prefixed rows
+     already use elsewhere in the dictionary. #399 carries this extension
+     note to wherever `specimenStatus`'s validator/enum lives.
+   - dict-02 additionally defines `reserved` and `checked_out`, which
+     nothing in the current codebase produces yet. Not a blocker for #399 —
+     carry them as valid-but-currently-unreachable values, the same way
+     #388 left `SpecimenPreanalytics`'s fuller field set unproduced until
+     #392 built the parsers.
+   - `computeStatus()`'s sticky-quantity logic (Q3) carries over unchanged
+     in shape: while `specimenStatus` is one of the terminal/blocked values
+     (`unavailable`/`destroyed`/`disposed`/`quarantined`), quantity changes
+     must not override it; only outside that set does quantity drive
+     `depleted`/`partial`/`available`. #399 renames the sticky list's
+     contents, not the algorithm.
+
+2. **`availabilityStatus` does not survive as its own field.** Every real
+   write site (`intakeWizard.js`, `intakeWizard.routes.js`,
+   `equipment-sensor-quarantine.service.js`, `fhir-import-staging.service.js`)
+   sets it in lockstep with `quarantineStatus` — `'BLOCKED'`+`'QUARANTINED'`,
+   `'AVAILABLE'`+`'RELEASED'`, or `'PENDING_REVIEW'`+`'PENDING_REVIEW'` —
+   never independently, and dict-02 has no parallel `Specimen` field for it
+   (only `specimenStatus` and the separate `availabilityReason`, ELM-0124,
+   a reason code, not a status). This corrects #398's own scoping-pass
+   note that `availabilityStatus` was "never recomputed anywhere found" —
+   it's actively read/written across four services, just never
+   *independently* of `quarantineStatus`, which is what actually settles
+   the question: it's a redundant coarse duplicate of the same signal, so
+   nothing is lost by dropping it in favor of `specimenStatus` alone.
+   `'BLOCKED'` collapses into whichever coarse `specimenStatus` value
+   (`unavailable`/`quarantined`) it always accompanied — it was never an
+   independent value.
+
+3. **`quarantineStatus`/`quarantineReason` split across two dict-02
+   entities, both needed:**
+   - The *current-state* bit folds into `specimenStatus`'s `quarantined`
+     value — the same single field as everything else, not a parallel
+     status.
+   - The *event history* — why, when it started, when it was released, who
+     authorized it — has no home in the current flat two-field shape, and
+     real code already wants more than two fields:
+     `equipment-sensor-quarantine.service.js` also tracks `quarantinedAt`,
+     `quarantineSource`/`quarantineSourceId`, and a separate
+     `quarantineReasonCode`, none of which exist on `Sample.js`'s schema
+     (written via the native driver, so nothing validates them). This is
+     exactly what dict-02's `QuarantineAction` entity (P1X-0113–0119,
+     below) models: `specimenIds` (1..*, so one action can cover a batch —
+     matches the equipment-quarantine flow's batch-quarantine of every
+     specimen tied to one sensor incident), `reasonCodes`
+     (`CodeableConcept[]`, richer than today's single string),
+     `startedAt`/`releasedAt`, `authorizedBy`. Follow the
+     `RcsAssessment`/`SpecimenPreanalytics` pattern (#383/#388): a
+     referenced, append-only entity, not embedded fields —
+     `availabilityReason` (ELM-0124) stays the FHIR-boundary-facing coarse
+     reason on `Specimen` itself, `QuarantineAction` is the operational
+     quality/governance audit trail.
+   - Gap acknowledged, not resolved here: dict-02's own `actionStatus`
+     (P1X-0118) domain is under-specified in the dictionary (only `active`
+     is listed; no released/completed counterpart), less complete than the
+     current code's own `quarantineStatus` vocabulary
+     (`QUARANTINED`/`RELEASED`/`PENDING_REVIEW`). #399 will need its own
+     local extension of `actionStatus`'s domain to carry today's three
+     states — flag it to Dennis/Denise as a dict-02 completeness gap if
+     #399 hits it, rather than silently inventing values.
+
+**Found while researching this decision, filed separately (#404, not part
+of #398's own scope):** `intakeWizard.routes.js` and
+`equipment-sensor-quarantine.service.js` already fail to keep
+`lifecycleStatus` in sync with `quarantineStatus`/`availabilityStatus` on
+write, so `sample.service.js`'s movement-blocking gate silently doesn't
+fire for consent-revoked or cold-chain-quarantined samples today. That bug
+is independent of this decision, but it's a concrete argument for #399
+landing soon — a single `specimenStatus` write path eliminates this whole
+class of drift. (Not yet fixed by #405 — that lands once every quarantine
+write site funnels through `specimenStatus` in #406.)
+
+**Landed in #405 (part 3a of #389 — `Sample.js`/`sample.service.js` core
+status computation only):** `Sample.js`'s schema gained `specimenStatus`
+(dict-02 ELM-0123's enum plus the local `disposed` extension);
+`SampleModel.computeStatus()` now computes case-folded `specimenStatus`
+values (same sticky-status algorithm shape, lowercase vocabulary,
+`disposed` added to the sticky/blocked list); `SampleModel.create()` folds
+`REGISTERED` into `available` and derives `lifecycleStatus`/
+`availabilityStatus` from `specimenStatus` via the new
+`SampleModel.deriveLegacyStatuses()` — a pure 1:1 derivation, not
+independently maintained. `sample.service.js`'s `withdrawSample`/
+`returnSample`/`updateSample` now compute and gate on `specimenStatus` as
+the source of truth, using a single shared `BLOCKED_SPECIMEN_STATUSES`
+constant (replacing the two duplicated `blockedLifecycleStatuses` arrays)
+and writing the derived legacy fields alongside it on every write
+(the dual-write bridge). `SampleModel.resolveSpecimenStatus()` falls back
+to a legacy sample document's `lifecycleStatus` (case-folded) when
+`specimenStatus` hasn't been written yet, so pre-#405 documents keep
+working until their next write. **Not in this phase:** `QuarantineAction`
+and the other ~10 quarantine write sites (part B/#406), frontend/e2e
+(part C/#407), removing the legacy fields (part D/#408) — every current
+reader of `lifecycleStatus`/`availabilityStatus` (routes, frontend, e2e)
+keeps working unchanged.
+
+**Landed in #408 (part D/#389 closeout — final phase, after #412-#415
+migrated every remaining reader/writer onto `specimenStatus`):**
+`lifecycleStatus`/`availabilityStatus`/`quarantineStatus` and
+`SampleModel.deriveLegacyStatuses()`/`validateLifecycleStatus()` are
+removed from `Sample.js`'s schema and every write site
+(`sample.service.js`, `intakeWizard.js`/`.routes.js`, `eConsent.js`,
+`equipment-sensor-quarantine.service.js`, `fhir-import-staging.service.js`'s
+`samples` writes) — `specimenStatus` is now the sole persisted status
+field. **Deliberate exception, not part of this removal:**
+`quarantineReason` — the free-text quarantine reason has no
+`specimenStatus` equivalent (dict-02's `QuarantineAction.reasonCodes` is
+`CodeableConcept[]`, coded, not free text; confirmed against
+`dict-02_DICIONARIO.md` and `requisitos-index.md` RF006 while picking up
+#408 — no primary doc authorizes a `reasonCodes`/CodeableConcept redesign
+to carry it instead), so it stays on `Sample.js`'s schema exactly as
+#407/#415 already decided. `fhir-import-staging.service.js`'s
+`import_staging_records` writes (a pre-commit workflow snapshot, a
+different collection from `samples`) are unchanged, per #409's own
+scoping. `eConsent.js`'s own `quarantineStatus`/`availabilityStatus`
+response fields (`POST /import/fhir/consent/:token/accept`) read off
+that same `import_staging_records` snapshot via
+`acceptImportConsentToken`, not `Sample` directly — also out of #408's
+scope, confirmed while picking up #451.
+
+**#451 (status-field audit, closed as confirmed-resolved by the above):**
+re-verified against current code that every `lifecycleStatus`/
+`availabilityStatus`/`quarantineStatus` write site listed here really is
+gone from the `samples` collection (no live write path sets
+`lifecycleStatus` anymore — only import/FHIR readers map it as a legacy
+*input* alias into `specimenStatus` via
+`mapLegacyLifecycleStatusToSpecimenStatus`). `SampleModel.
+resolveSpecimenStatus()`'s `lifecycleStatus` fallback (for documents
+predating #405) was confirmed dead in production and removed — it now
+defaults straight to `'available'` when `specimenStatus` is absent,
+same as `SampleModel.create()`'s handling of an unrecognized/blank
+legacy value.
+
+### QuarantineAction
+
+- `quarantineActionId`
+- `specimenIds` (`Reference[]`, 1..* — one action may cover a batch, e.g.
+  every specimen tied to one cold-chain sensor incident)
+- `reasonCodes` (`CodeableConcept[]`)
+- `startedAt`
+- `releasedAt` (0..1, present only once released)
+- `actionStatus`
+- `authorizedBy` (Reference to Actor)
+
+Per dict-02 P1X-0113–0119 ("Gestão da qualidade" domain), decided in #398
+as the destination for `Sample.js`'s current
+`quarantineStatus`/`quarantineReason` pair (storage/custody split, part of
+#389); implementation tracked in #399. See the `Specimen` section above
+for the full reasoning and the two acknowledged gaps (dict-02's
+`actionStatus` domain is under-specified; RF006's `DISPOSED` state has no
+`specimenStatus` equivalent and needs a local extension).
+
+**Landed in #406 (entity + read path only — foundational slice, chunked
+per `divide-and-conquer`):** the `quarantineActions` collection/entity
+exists (`api/backend/src/models/QuarantineAction.js`,
+`api/backend/src/services/quarantine-action.service.js`), mirroring the
+`RcsAssessment`/`SpecimenPreanalytics` referenced-and-versioned pattern
+(#383/#388) — `specimenIds` (1..*, batch-capable),
+`reasonCodes`/`startedAt`/`releasedAt`/`authorizedBy` per dict-02, and
+`actionStatus`'s documented local extension (`active`/`released`/
+`pending_review`, carrying today's three-state vocabulary; dict-02's own
+domain only lists `active`). `GET /api/samples/:id/quarantine-actions`
+resolves the versioned history for a specimen, mirroring
+`GET /:id/rcs-assessments`. **Not in this slice:** none of the ~25
+existing quarantine write sites
+(`equipment-sensor-quarantine.service.js`, `intakeWizard.js`/
+`.routes.js`, `eConsent.js`, `fhir-import-staging.service.js`) write to
+this entity yet — they still write the old
+`quarantineStatus`/`quarantineReason`/`availabilityStatus` trio directly,
+unchanged. That migration (and the #404 fix it enables) is carried by a
+follow-up issue referencing #406.
+
+**Landed in #408:** every quarantine write site above now records a
+`QuarantineAction` via `quarantineActionService.recordAction`/
+`releaseActiveAction` alongside setting `specimenStatus` directly
+(no more `quarantineStatus`/`availabilityStatus` dual-write). The #404
+drift bug this enabled a fix for is resolved as a side effect —
+`specimenStatus` is the single write path now, so it cannot desync from
+itself.
+
+**Decision recorded 2026-08-11 (#531): `release_status`/`releaseStatus`
+was never part of the #389/#398/#399/#404/#405/#406/#408 consolidation
+above, despite representing the same physical/consent quarantine state
+`specimenStatus` already covers.** #531 was filed against
+`reports.routes.js` querying `release_status` (snake_case) while
+`SampleModel.create` only ever writes `releaseStatus` (camelCase) —
+tracing every writer of both spellings turned up more than a casing bug:
+
+- `equipment-sensor-quarantine.service.js`'s `release_status: 'QUARANTINE'`
+  write (and its matching `$ne` read guard) was a pure leftover — the
+  same `updateOne` call already sets `specimenStatus: 'quarantined'` via
+  #408, so `release_status` added nothing. Removed, not migrated (#531).
+- `frontend/src/views/SamplesPage.tsx`'s `handleAttachExternalDocument`
+  sent `release_status: 'AVAILABLE'` alongside the `specimenStatus:
+  'available'` it explicitly documents as the one that actually matters
+  (sticky-status comment, same file). Same leftover shape. Removed (#531).
+- `frontend/src/components/samples/SamplesPageView.tsx`'s `mapStatus`
+  (feeds the per-row status badge) was the one real consumer with no
+  `specimenStatus` fallback at all — unlike this same file's
+  `isQuarantined`/`renderSampleBadges`, which already treat
+  `specimenStatus` as primary. Fixed to match that existing pattern
+  (#531) — `models.ts`'s own field comment already named `specimenStatus`
+  as "the canonical status ... derive quarantine/availability UI state
+  from this", `mapStatus` just hadn't been updated to follow it.
+- `reports.routes.js`'s `buildSampleQuery` release/quarantine filter now
+  queries `specimenStatus` directly (AVAILABLE→`available`,
+  QUARANTINE→`quarantined`, BLOCKED→`unavailable` — the same collapse
+  this doc already used for the old `availabilityStatus` field, above).
+
+**Not resolved by #531, filed as #532:** `SampleGraphValidator.js#validateSampleCompliance`
+also writes `release_status` — but computes a genuinely different thing,
+an ethics+quality+clinical+pharmacology+integrity graph check
+(`AVAILABLE`/`QUARANTINE`/`BLOCKED`), not physical/consent quarantine
+state. It's called from 4 sites (`sample.routes.js`'s
+`GET /:id/compliance-graph`, both import services,
+`sampleComplianceSync.service.js`'s consent-triggered revalidation) and
+can drift from `releaseStatus`/`specimenStatus` independently of the
+casing bug (`sampleComplianceSync.service.js` updates `release_status`
+but never `releaseStatus`). Whether this becomes a new `specimenStatus`
+local extension, a new `QuarantineAction` reason code, or a genuinely
+separate canonical field is an open design question, same shape as the
+`actionStatus` gap above — #532 tracks it.
+
+**Decision recorded 2026-08-11 (#532): folds into `specimenStatus`/
+`QuarantineAction`, consolidating rather than adding a separate field —
+same direction as #531 and the #389/#398/#399/#404/#405/#406/#408
+consolidation above.** `validateSampleCompliance` now writes
+`specimenStatus` directly (`AVAILABLE`→`available`, `QUARANTINE`→
+`quarantined`, `BLOCKED`→`unavailable` — the same 3-way collapse
+`releaseStatusToSpecimenStatus` above already used for the casing-bug
+case) instead of the cosmetic `release_status` field, which is dropped.
+`resolveSuggestedStatus` also now gates on the `pharmacology` node (folded
+into `BLOCKED` alongside `ethics`/`clinical`/`integrity`) — before this
+fix it was computed into `graphPath` and included in `isReleasable`, but
+silently ignored by `resolveSuggestedStatus`, so a pharmacology-invalid
+sample (e.g. ATC drug-class incoherent with the ORPHA disease) could get
+`suggestedStatus: 'AVAILABLE'` despite `isReleasable: false`. Harmless
+while `suggestedStatus` only drove the cosmetic field; load-bearing once
+it drives `specimenStatus`, so fixed as part of this same change.
+
+Two real risks this design has to solve, since a compliance-graph
+re-evaluation can run on every `GET /:id/compliance-graph` fetch (not
+just on import/consent-update), and must not silently override a block
+from an unrelated source:
+
+- **Never downgrade a stronger active block.** An `AVAILABLE`
+  compliance-graph result must not clear a `specimenStatus` that's
+  `quarantined`/`unavailable` for an unrelated reason (a cold-chain
+  incident, equipment fault, manual action) — the write only escalates
+  (`available` → `quarantined` → `unavailable`, by
+  `SPECIMEN_STATUS_ORDER`) unconditionally; a *downgrade* (the reverse
+  direction) only applies when the specimen's most recent active
+  `QuarantineAction` was itself opened by this same validator —
+  identified by a `COMPLIANCE_GRAPH_*`-prefixed `reasonCodes` entry
+  (`COMPLIANCE_GRAPH_ETHICS`/`_CLINICAL`/`_PHARMACOLOGY`/`_INTEGRITY`/
+  `_QUALITY`, one per failing node) — in which case it releases that
+  action (`quarantineActionService.releaseActiveAction`) and downgrades.
+  An escalation over an unrelated source's active action leaves that
+  action alone and records its own `QuarantineAction` alongside it,
+  rather than releasing something it doesn't own.
+- **Never touch a terminal `specimenStatus`.** `destroyed`/`disposed`
+  are final (`Sample.js`'s `BLOCKED_SPECIMEN_STATUSES` comment: "write
+  sites treat them as non-movable") — a re-evaluation on a disposed
+  specimen still computes and persists `complianceGraph` for the audit
+  trail, but never sets `specimenStatus`.
+
+`sample-graph-validator.service.test.js`'s `#532` describe block covers
+both rules plus the pharmacology-gating fix. The side-effecting
+`GET /:id/compliance-graph` endpoint itself (every fetch re-runs and
+persists the graph) is unchanged by this fix — now that the write lands
+on the canonical `specimenStatus`/`QuarantineAction` model instead of a
+cosmetic field, that side effect has a larger blast radius than before;
+tracked as its own question, filed as #537.
+
+**Decision recorded 2026-08-12 (#537): `GET /:id/compliance-graph` stays
+a revalidate-and-persist endpoint — no split into a separate read/revalidate
+API.** The two rules above (never downgrade a stronger unrelated block;
+no duplicate `QuarantineAction` for a re-evaluation that lands on the same
+`specimenStatus`) already bound the blast radius this issue raised, and a
+GET/POST split would touch `sample.routes.js`, `SampleDetailsPage.tsx`
+(the only caller), and this route's tests for a behavior change judged
+not worth the API-contract churn. No code change; closing as confirmed,
+no change needed.
+
+**Also found while tracing #532** (not part of it — a separate legacy
+field with its own writers, unrelated to `release_status`): `Sample.js`'s
+`releaseStatus` (camelCase, schema default `'QUARANTINE'`) is a *third*
+status field, written by `SampleModel.create`, `import.service.js` (its
+own reconciliation against the same compliance report, independent of
+`specimenStatus`), `import-lgpd.service.js`, and
+`fhir-import-staging.service.js`/`import.controller.js` — never folded
+into `specimenStatus` either, and no live consumer found in
+`api/backend/src` or `frontend/src`. Filed as #536.
+
+**Also noted, filed separately as #533, not investigated:**
+`equipment-sensor-quarantine.service.js` also sets `status`/
+`currentStatus` in the same `updateOne` payload as `specimenStatus` —
+the same class of pre-#389 leftover duplicate `release_status` turned
+out to be, but unconfirmed (unlike `release_status`, no consumer has
+been traced yet).
+
+**#533 confirmed and landed as #538 (readers traced, phased) → #539
+(readers migrated) → #540 (writers removed).** `status`/`currentStatus`
+were the same class of pre-#389 leftover duplicate `release_status`
+turned out to be: written alongside `specimenStatus` by
+`equipment-sensor-quarantine.service.js`, `intakeWizard.routes.js`'s
+`enforcePersistedGovernanceStatus`, and `eConsent.js`'s consent-driven
+quarantine/release, plus `sample.service.js#updateSample` (found while
+resolving #539 — a 4th writer, reachable via `PUT /samples/:id`, that
+`#538`'s original trace missed because it went through the raw MongoDB
+driver rather than Mongoose). #539 migrated every remaining reader
+(`SampleDetailsPage.tsx`, `ReportViewPage.tsx`, `reports.routes.js`'s
+`sampleanalysis` endpoint, `userMethods.ts`) onto `specimenStatus`; #540
+then removed the write in all four writer sites — `status` is added to
+the Legacy Fields Prohibited list above alongside `currentStatus`.
+**Not fully zero-producer yet:** a 5th writer, `status: 'AVAILABLE'` in
+`MongoStorageRepository.js`'s `allocateSamplePosition`/
+`autoAssignSamplePosition` (storage allocation, not governance/
+quarantine — a different subsystem #538's original trace never
+covered), was found during #540's own closeout grep and filed
+separately as #544 rather than folded in, per the same "don't chain
+fixes into the picked issue" reasoning #532's `releaseStatus` split
+(#536) already used.
+
+### RcsAssessment
+
+- `specimenId` (reference to `Specimen`, not a duplicate — dict-07 row 38:
+  "Não duplicar fonte canônica")
+- `modelVersion`
+- `matrixType`
+- `governanceStatus`
+- `governanceFailureReasons`
+- `governanceRuleCodes`
+- `rcsScore`
+- `scoreBasedGrade`
+- `finalGrade`
+- `gradeRoute`
+- `axisPenalties`
+- `calculationTrace`
+- `assessedAt` (each `certify()` run is its own versioned snapshot, per
+  dict-07's "usar referências e snapshots versionados" — multiple
+  documents may exist per `specimenId`, newest first)
+
+**Landed in #383:** the entity/collection (`rcsAssessments`) exists;
+`import.service.js`'s CSV/XLSX sample-import path records a snapshot
+alongside every RCS certification it computes, referenced by
+`specimenId`; `GET /api/samples/:id/rcs-assessments` resolves the
+versioned history for a specimen (mirrors the existing
+`SampleMovement`/`GET /:id/movements` pattern).
+
+**Not yet landed (follow-up tracked separately):** `Sample.js` still
+carries its own embedded copy of the same RCS fields (`rcsScore`,
+`rcsEvaluation`, `calculationTrace`, `axisPenalties`, ...) — removing
+that duplication requires migrating every consumer that reads RCS data
+directly off `Sample` (MerkleService, neo4j canonical projection,
+frontend types). Also outstanding: the JSON-import branch of
+`importSamples` doesn't compute or record RCS either (only the
+CSV/XLSX branch does).
+
+**Live registration RCS computation — landed #492:** the live
+`POST /api/samples` registration path (`sample.service.js#createSample`
+via `RegisterSampleUseCase.js`) previously didn't compute or record RCS
+at all — confirmed by #492's own audit, zero `rcs`/`sprec` references.
+Design decision: compute server-side, reusing the same pattern
+`import.service.js`'s CSV/XLSX branch already uses (#383/#499), rather
+than trusting a client-precomputed score — `intakeWizard.js` already
+established the "compute `qualityDomain.resolveMethodologicalQuality`
+server-side from a client-supplied `sprec` payload" half of this pattern
+(though it stops short of recording an `RcsAssessment`, see the caveat
+below). `createSample` now: when the request body includes a non-empty
+`sprec`, calls `qualityDomain.resolveMethodologicalQuality({ sprec })`
+and maps the canonical RCS-GOV fields (`rcsScore`, `scoreBasedGrade`,
+`finalGrade`, `governanceStatus`, `axisPenalties`, `calculationTrace`,
+`rcsEvaluation`, ...) onto the sample before insert — same field mapping
+`import.service.js` uses. Once the sample has fully landed (ledger
+append and storage allocation both succeeded), records a referenced
+`RcsAssessment` snapshot via `rcsAssessmentService.recordAssessment` and
+pins `sealedRcsAssessmentId` per #502's convention. A request with no
+`sprec` behaves exactly as before (no RCS computed, no assessment
+recorded) — this only activates the path when the payload actually
+carries SPREC data. `intakeWizard.js` was unaffected by this change (it
+computes `qualidade` from `data.specimen` directly, not from a `sprec`
+field on the sample document, so `createSample`'s `sprec`-triggered
+branch never fires for it) — its own recording gap is closed separately
+below by #505.
+
+**`intakeWizard.js` RcsAssessment recording — landed #505:** confirmed
+`intakeWizard.js` already computed RCS via
+`qualityDomain.resolveMethodologicalQuality(data?.specimen || {})` and
+set it on the created sample as `qualityAssessment`, but never recorded
+a referenced `RcsAssessment` snapshot or pinned `sealedRcsAssessmentId`
+— `GET /:id/rcs-assessments` returned nothing for intake-wizard samples.
+Fixed by calling `rcsAssessmentService.recordAssessment(db,
+specimenId, qualidade)` once the sample has fully landed (create +
+allocation both already succeeded by that point in the handler) and
+pinning `sealedRcsAssessmentId`, same best-effort (caught, logged,
+doesn't fail the intake) error handling `sample.service.js#createSample`
+uses (#492). No new computation — `qualidade` is already the exact
+`certify()`-shaped result `recordAssessment` expects, computed earlier
+in the same handler.
+
+**Audited and confirmed clean (#500):** `rcs-certification.service.js`
+does *not* belong on the still-outstanding-consumers list above.
+`certify()` is a stateless calculator over an `sprec`/`matrixType`
+payload — `rcsScore`, `calculationTrace`, and `axisPenalties` are its
+own locally computed output, never a read off a `Sample` document. Its
+only backend consumer, `quality-domain.service.js`, already has the
+correct split: `resolveMethodologicalQuality`/`validateQualityForRelease`
+compute fresh from an `sprec` payload (not a persisted-field read —
+legitimate), and `validateQualityForReleaseFromSample` already resolves
+through `RcsAssessment` (#383). The actual outstanding consumers remain
+exactly the ones named above (MerkleService, neo4j projection, frontend
+types, the live registration path) — #500 named the wrong file.
+
+**Sample seal-time snapshot pin — landed #502:** `MerkleService`'s
+resolved-snapshot integrity hash (#497) originally resolved the *newest*
+`RcsAssessment`/`SpecimenPreanalytics` snapshot for a sample's
+`specimenId`. That drifts if a later snapshot is ever recorded for the
+same `specimenId` after the sample's `merkleRoot` was sealed (e.g. a
+future re-assessment/correction/re-import flow) — verification would
+resolve the newer snapshot and report tampering for a sample that was
+only re-assessed. Fixed by pinning: `Sample.js` gained
+`sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` (implementation
+detail, not a dict-02 entity — dict-02's own `MerkleRoot`
+P1X-0162..0167 is a separate, not-yet-built stub entity), set by
+`import.service.js`/`import-lgpd.service.js` to the `_id` of whichever
+snapshot was just recorded (or left `null` when no snapshot exists at
+seal time, e.g. `intakeWizard.js`, which doesn't record a snapshot at
+all). `MerkleService.generateSampleHashFromSample` now resolves the
+pinned snapshot by `_id` when the field is present on the sample
+document, falling back to the pre-#502 "resolve newest" behavior only
+for samples written before this pin existed (no
+`sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` own-property at
+all). `intakeWizard.js` samples fell into this "no snapshot at all" case
+until #505 landed (see the `intakeWizard.js` RcsAssessment recording
+note above) — the #504 backfill script's own scope note calling out
+"samples with no recorded snapshot at all" was describing exactly this
+population.
+
+**Backfill for pre-#502 samples — landed #504:**
+`sealed-snapshot-backfill.service.js` (`backfillSealedSnapshotPins`, run
+via `src/scripts/backfillSealedSnapshotPins.js`) closes the fallback
+above: for each sample missing the `sealedRcsAssessmentId`/
+`sealedSpecimenPreanalyticsId` own-property, it resolves the newest
+`RcsAssessment`/`SpecimenPreanalytics` snapshot for that sample's
+`specimenId` (the one-and-only snapshot these pre-#502 samples have, in
+practice, since no re-assessment flow existed yet to record a second
+one) and sets the pin to that snapshot's `_id`. Idempotent — already-pinned
+samples and samples with no recorded snapshot are left untouched, so it's
+safe to re-run. Once run, `generateSampleHashFromSample`'s "resolve
+newest" fallback only ever applies to a sample with no snapshot recorded
+at all, closing the exposure window #504 described.
+
+**#496 re-audit (2026-08-11) — the outstanding "neo4j canonical
+projection" consumer, precisely identified:** this section's own "Not
+yet landed" note above names "neo4j canonical projection" as one of the
+three outstanding `rcsScore` consumers alongside `MerkleService` and the
+frontend types. #496's own body already confirmed
+`neo4jCanonicalProjection.service.js` (the live projection service) is
+reference-based/clean — no migration needed there. The actual
+outstanding file is `api/backend/scripts/neo4j-canonical-rebuild.js`
+(the one-time outbox-rebuild script, `~line 60`, reads `sample.rcsScore`
+directly for its `QUALITY_ASSESSED` event payload) — a different file
+`#491`'s own consumer list never named. Also found in the same pass and
+not on `#491`'s list: `label.routes.js`'s `sprec` read and
+`reports.routes.js`'s `sprec.*`/`final_grade` query filters. All three
+tracked together as `#525`, alongside a fourth, storage/custody-only
+finding (`batch-validation-engine.service.js`'s legacy `locationID`
+column mapping). `import.controller.js#importFhirBundle`'s own
+direct `rcs_score`/`final_grade`/`sprec` writes were also found in this
+pass, but that whole endpoint's "is this dead code" question (`#336`)
+resolved as yes — no live caller, and a direct RF011 AC#7 violation
+(direct MongoDB writes from the FHIR conversion boundary) — so it was
+removed entirely in #570/#336 rather than migrated.
+
+### SpecimenPreanalytics
+
+- `specimenId` (reference to `Specimen`, not a duplicate — dict-07 row 38:
+  "Não duplicar fonte canônica"; dict-02 P1X-0058)
+- `matrixType`
+- `sampleType`
+- `primaryContainer`
+- `preCentrifugation`
+- `centrifugation`
+- `secondCentrifugation`
+- `postCentrifugationDelay`
+- `longTermStorage`
+- `recordedAt` (each import is its own versioned snapshot, per dict-07's
+  "usar referências e snapshots versionados" — row 38 groups SPREC with
+  RCS under the same directive `RcsAssessment` above uses — multiple
+  documents may exist per `specimenId`, newest first)
+- `sprecCode` (ELM-0145, compact original SPREC code — preserved as given
+  from `sprec_code`/`sprecCode`, never recomputed from the fields below)
+- `sprecVersion` (ELM-0146, SPREC standard version used to encode it)
+- `sprecProfileId` (P1X-0057, immutable UUID identifying this profile
+  *version* — generated per snapshot via `crypto.randomUUID()`, same
+  pattern as `PatientConsentModel`'s `consentId`, #364)
+- `profileStatus` (P1X-0059, `draft` | `validado` | `substituído` |
+  `inválido` — defaults to `draft`; nothing in the codebase confirms/
+  validates a profile yet)
+- `sprecSpecimenType` (ELM-0147, fluid/solid axis element 1 — derived
+  from `sampleType`, applies to both matrix types)
+- `sprecPrimaryContainer` (ELM-0148, fluid axis element 2 — derived from
+  `primaryContainer` when `matrixType` is `fluid`, else `null`)
+- `sprecCollectionType` (ELM-0149, solid axis element 2 — derived from
+  `primaryContainer` when `matrixType` is `solid`, else `null`)
+- `warmIschemiaTime` / `coldIschemiaTime` / `fixationStabilizationType` /
+  `fixationTime` (ELM-0154–0157, solids only — derived from
+  `preCentrifugation`/`centrifugation`/`secondCentrifugation`/
+  `postCentrifugationDelay` when `matrixType` is `solid`, else `null`)
+- `preCentrifugationDelay` / `firstCentrifugation` (ELM-0150/0151, fluids
+  only — derived from `preCentrifugation`/`centrifugation` when
+  `matrixType` is `fluid`, else `null`)
+
+Named after dict-02's canonical entity (`SpecimenPreanalytics`,
+ELM-0145–ELM-0166/P1X-0057–P1X-0059), not the "SPREC" shorthand
+dict-07/dict-08 and issue #388 itself use — the same substitution #383
+made for "RCS" → `RcsAssessment`.
+
+**Landed in #388:** the entity/collection (`specimenPreanalytics`) exists;
+`import.service.js`'s CSV/XLSX sample-import path records a snapshot
+alongside every SPREC profile it already parses from `sprec_*` columns,
+referenced by `specimenId`; `GET /api/samples/:id/sprec-profiles` resolves
+the versioned history for a specimen (mirrors `RcsAssessment`/
+`GET /:id/rcs-assessments`, #383).
+
+**Landed in #392:** dict-02's fuller field set above. `matrixType`/
+`sampleType`/`primaryContainer`/`preCentrifugation`/`centrifugation`/
+`secondCentrifugation`/`postCentrifugationDelay`/`longTermStorage` (#388)
+are generic axis-position slots (axis 1–7) populated straight from CSV
+columns regardless of matrix type — mirroring
+`frontend/src/constants/sprecDictionary.js`'s `SPREC_FLUID_DICTIONARY`
+vs `SPREC_SOLID_DICTIONARY`, which relabel the same axis 2–6 slots per
+matrix type. The new canonical fields are *derived* from those same
+slots in `SpecimenPreanalyticsModel.fieldsOf()` based on `matrixType` —
+`import.service.js`'s CSV parsing of the axis slots themselves is
+unchanged, except for `sprecCode`/`sprecVersion`, which are genuinely new
+pass-through values with no prior source. `preCentrifugationDelay`
+(ELM-0150) and `firstCentrifugation` (ELM-0151) — the fluid-specific
+canonical names for the `preCentrifugation`/`centrifugation` slots — were
+out of scope for #392 (it only added the fields explicitly missing, not
+a full rename of the fluid axis to its canonical names) and landed
+separately below.
+
+**Landed in #396:** `preCentrifugationDelay`/`firstCentrifugation` above,
+the fluid-axis counterpart to #392's solid-axis derivation — same
+pattern, same `SpecimenPreanalyticsModel.fieldsOf()`, no
+`import.service.js` change needed since `preCentrifugation`/
+`centrifugation` were already parsed by #388.
+
+**Not yet landed (follow-up tracked separately):** `Sample.js` still
+carries its own embedded `sprec` copy (only the axis slots +
+`sprecCode`/`sprecVersion`, not the derived fields) — removing that
+duplication requires migrating every consumer that reads it directly off
+`Sample` (tracked in #390, alongside the equivalent RCS migration).
+
+**JSON-import branch landed in #493:** `import.service.js`'s JSON-import
+branch of `importSamples` now also calls
+`specimenPreanalyticsService.recordProfile` and pins
+`sealedSpecimenPreanalyticsId` when the imported sample carries `sprec`,
+same best-effort pattern (logs a warning, doesn't fail the row) the
+CSV/XLSX branch already used — closing the gap #383 left for RCS on the
+same branch (that RCS half of #493's JSON-import parity work landed
+separately, tracked as #501). `import.service.js`'s own
+`sealedSpecimenPreanalyticsId` pin (both branches) sets it to
+`profile._id`, which `SpecimenPreanalyticsModel` doesn't populate (the
+model's own identifier field is `sprecProfileId`) — the pin silently
+resolves to `undefined` on every call, a pre-existing defect predating
+this issue and out of #493's "wire JSON up to CSV/XLSX parity" scope;
+tracked separately as #506.
+
+**Landed in #503:** `import-lgpd.service.js`'s `importSamples` now also
+calls `specimenPreanalyticsService.recordProfile` after inserting the
+sample (best-effort — logs a warning and continues on failure), the
+SPREC counterpart to #499's RCS fix for the same file. Before this, the
+LGPD import path persisted `sample.sprec` embedded only, with no
+canonical `SpecimenPreanalytics` snapshot recorded at all.
+
+**Live registration SpecimenPreanalytics recording — landed #524:**
+`sample.service.js#createSample` (the live `POST /api/samples`
+registration path) computes RCS server-side (#492 above) but, until this
+fix, never called `specimenPreanalyticsService.recordProfile` for the
+same `sprec` payload — the one remaining creation path without this
+wiring; `import.service.js` (#502), `import-lgpd.service.js` (#503), and
+`intakeWizard.js` (#505) all already had it. `#493` (the SPREC-consumer
+migration umbrella) never scoped this file. Fixed by mirroring #492's own
+`RcsAssessment` block in the same function: once the sample has fully
+landed (ledger append and storage allocation both succeeded), calls
+`specimenPreanalyticsService.recordProfile(db, sample.specimenId,
+sample.sprec)` and pins `sealedSpecimenPreanalyticsId`, same best-effort
+(caught, logged, doesn't fail sample creation) error handling the RCS
+block uses. A request with no `sprec` behaves exactly as before (no
+snapshot recorded).
+
+**#496 re-audit (2026-08-11) — one more creation path found missing this
+wiring:** re-checking every file named in #390's original "Known
+Residual Legacy Surfaces" list plus the additional files #496 itself
+named, `fhir-import-staging.service.js`'s staged-sample commit path
+(`~lines 894-954`) turned out to be a fifth live sample-creation path
+that writes the legacy embedded `sprec`/`rcs_score`/`final_grade`/... fields
+directly onto the new `samples` document but never calls
+`rcsAssessmentService.recordAssessment`/`specimenPreanalyticsService.recordProfile`
+or pins `sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` — the same
+gap #492/#502/#503/#505/#524 already closed for `sample.service.js`,
+`import.service.js`, `import-lgpd.service.js`, and `intakeWizard.js`.
+Never in scope for `#491`/`#493`'s consumer-migration umbrellas. Filed as
+`#526`. The rest of that file's other RCS/SPREC reads/writes (the
+staging-preview object on `import_staging_records`, a different
+collection from `samples`) were already covered by the "out of #408's
+scope" note above and remain unaffected.
+
+**Landed in #526 (2026-08-11):** `commitBatch`'s upsert into `samples`
+now records both snapshots — but only on a genuine insert (the upsert's
+`upsertedId`, i.e. the `$setOnInsert` branch actually fired), not on a
+commit that only matches an already-existing `specimenId`, since the
+latter doesn't write fresh `rcsPreview`/`sprec` data via `$setOnInsert`
+either; recording on every match would grow duplicate versioned
+snapshots for no reason. Same best-effort semantics as
+#492/#502/#503/#505/#524 (caught, logged, doesn't fail the commit).
+**Incidental fix bundled into the same slice:** `calculateRcsPreview`
+computed a real per-axis `sprec` object (via `buildRcsPayload`) but
+discarded it before returning — `rcs-certification.service.js`'s own
+`calculation_trace` never echoed it back, so the pre-existing
+`sprec: normalized.rcsPreview?.calculation_trace?.sprec || {}` write at
+the `$setOnInsert` site had *always* evaluated to `{}` for every
+FHIR-imported sample, predating #526. Fixed by having
+`calculateRcsPreview` return `{ ...result, sprec: payload.sprec }` and
+threading that onto `normalized.rcsPreview.sprec`; both the embedded
+`sample.sprec` copy and the new `SpecimenPreanalytics` snapshot now
+carry real data for fluid-matrix specimens. **Not fixed in this slice,
+filed as `#527`:** `parseSprecRaw`'s solid-matrix branch names its axis
+fields `collectionType`/`warmIschemia`/`coldIschemia`/`fixationType`/
+`fixationTime`, while `SpecimenPreanalyticsModel.fieldsOf` (and the
+fluid branch) expect `primaryContainer`/`preCentrifugation`/
+`centrifugation`/`secondCentrifugation`/`postCentrifugationDelay`
+regardless of matrix type — so a solid-matrix FHIR import still records
+a `SpecimenPreanalytics` snapshot with null axis fields even after this
+fix. Same shape as #392's already-resolved fluid/solid relabeling gap;
+`frontend/src/constants/sprecDictionary.js`'s dictionaries are the
+likely fix per that precedent, not new parsing.
+
+### Encounter
+
+- `encounterId` (internal identity, dict-02 ELM-0194; assigned at creation
+  via `crypto.randomUUID()` in `EncounterModel.create`, #689 — same
+  pattern as `PatientConsentModel.consentId`)
+- `participantId` (reference to `Participant`/`ParticipantIdentity`, dict-02
+  ELM-0195)
+- `encounterType` (CodeableConcept, dict-02 ELM-0196 — stored as given,
+  string or coded object, same "not forced into one shape" precedent
+  `QuarantineAction.reasonCodes` uses for its own CodeableConcept[])
+- `encounterPeriod` (`{ start, end }`, dict-02 ELM-0197 — `end: null` means
+  open-ended, same convention `TemperaturePolicy.effectivePeriod` uses)
+- `serviceProvider` (0..1, reference to `Organization`, dict-02 ELM-0198)
+- `encounterLocation` (0..*, references to `Location`, dict-02 ELM-0199)
+
+**Landed in #689 (RF005 clinical-data slice 1/5, tracked under #677):** the
+entity/collection (`encounters`) exists (`EncounterModel`,
+`encounter.service.js#createEncounter`/`getEncountersForParticipant`/
+`getEncounterById`) — the foundational "visit/interaction context" entity
+the domain's other slices (Condition/PhenotypeObservation/
+ClinicalObservation, #690/#691) optionally reference via `encounterId`
+(0..1, joinable-but-not-enforced, same pattern as `equipmentId`/
+`thresholdProfileId` elsewhere in this contract). No hard schema-level
+dependency in either direction.
+
+**Wired in #693 (RF005 clinical-data slice 5/5):** `intakeWizard.js`'s
+`recordClinicalEntities` additively creates a real `Encounter` per intake
+submission (`encounterType: 'collection'`, `encounterPeriod.start` from
+the specimen's `registeredAt`) — best-effort, same non-fatal precedent
+#505's `RcsAssessment` recording already established for this handler.
+Proven so far by `tests/unit/intakeWizard.clinicalEntities.test.js`
+(native-only, real-semantics fakes). **The literal real-backend
+Playwright e2e proof is tracked separately as #696**, not yet built.
+
+### Condition
+
+- `conditionId` (internal identity, dict-02 ELM-0200; assigned via
+  `crypto.randomUUID()` in `ConditionModel.create`, #690)
+- `participantId` (reference to `Participant`, dict-02 ELM-0201)
+- `conditionCoding` (`Coding[]`, 1..*, dict-02 ELM-0202 — AC4-6's own
+  requirement text: ORPHA/ICD-11/ICD-10/SNOMED/MONDO/OMIM, "preservando a
+  fonte." Each entry is `{ systemUri, code, version, display }`, matching
+  `TerminologyConceptModel`'s own field names rather than FHIR's plain
+  `system`, so entries pass straight into
+  `activeCodeValidator.checkActiveCode` with no reshaping)
+- `clinicalStatus` / `verificationStatus` (dict-02 ELM-0203/0204, FHIR
+  ConditionClinicalStatus/ConditionVerificationStatus vocab, stored as
+  given)
+- `onset` / `abatement` (dict-02 ELM-0205/0206, FHIR onset[x]/abatement[x]
+  choice types, stored as given)
+- `severity` (CodeableConcept, dict-02 ELM-0207)
+- `stage` (BackboneElement, dict-02 ELM-0208, stored as given)
+- `diagnosisEvidence` (0..*, references to `DiagnosticReport` — stays
+  unenforced, no `DiagnosticReport` entity exists in this repo, dict-02
+  ELM-0209)
+- `recordedDate` (dict-02 ELM-0210)
+
+**Landed in #690 (RF005 clinical-data slice 2/5, tracked under #677):**
+the entity/collection (`conditions`) exists (`ConditionModel`,
+`condition.service.js#createCondition`/`getConditionsForParticipant`/
+`getConditionById`). RF005 AC#4 ("permitir codificação... somente quando
+houver ReferenceDatasetRelease ativa e validada") is enforced at create
+time by reusing `activeCodeValidator.validateActiveCodes` (RF029 AC#4's
+own machinery, #669) against every `conditionCoding[]` entry — a coding
+whose `TerminologyConcept`/`ReferenceDatasetRelease` doesn't resolve to
+`releaseStatus: 'active'` fails the create outright, no controlled-review
+escape hatch (unlike `ingestionGateway.js`'s `allowControlledReview`,
+which is RF029's own AC, not RF005's). This deliberately does not go
+through `ingestionGateway.js`'s broader envelope (provenance/idempotency/
+quarantine) — wiring an entity type into that gateway is RF029's own
+scope (#670-673), a distinct concern from RF005's AC#4 code check.
+
+### PhenotypeObservation
+
+- `phenotypeObservationId` (internal identity, dict-02 ELM-0211; assigned
+  via `crypto.randomUUID()` in `PhenotypeObservationModel.create`, #690)
+- `participantId` (reference to `Participant`, dict-02 P1X-0074)
+- `hpoCoding` (`Coding`, 1..1, dict-02 ELM-0212 — HPO-coded, "presente ou
+  explicitamente ausente." Same `{ systemUri, code, version, display }`
+  shape as `Condition.conditionCoding`, same
+  `activeCodeValidator.checkActiveCode` reuse)
+- `presenceStatus` (dict-02 ELM-0213, one of `present|absent|unknown|
+  not_assessed` — dict-02's own note: "ausente não equivale a não
+  preenchido." `PhenotypeObservationModel` enforces this literally: an
+  omitted `presenceStatus` fails validation outright rather than
+  defaulting to any of the four real states, so "not filled in" can never
+  be silently read back as "absent")
+- `phenotypeOnset` (dict-02 ELM-0214, choice type, stored as given)
+- `phenotypeSeverity` / `phenotypeFrequency` / `observationMethod`
+  (CodeableConcept, dict-02 ELM-0215/0216/0217)
+- `phenotypeEvidence` (0..*, references to `DiagnosticReport` — stays
+  unenforced, same pattern as `Condition.diagnosisEvidence`, dict-02
+  ELM-0218)
+- `encounterId` (0..1, reference to `Encounter`/#689, dict-02 P1X-0075 —
+  joinable-but-not-enforced, same pattern as `equipmentId`/
+  `thresholdProfileId` elsewhere in this contract)
+- `effectiveDateTime` (1..1, dict-02 P1X-0076)
+
+**Landed in #690 (RF005 clinical-data slice 2/5, tracked under #677):**
+the entity/collection (`phenotypeObservations`) exists
+(`PhenotypeObservationModel`,
+`phenotype-observation.service.js#createPhenotypeObservation`/
+`getPhenotypeObservationsForParticipant`/
+`getPhenotypeObservationsForEncounter`). Same RF005 AC#4 active-code
+enforcement on `hpoCoding` as `Condition.conditionCoding` above.
+
+**Wired in #693 (RF005 clinical-data slice 5/5):** `intakeWizard.js`'s
+`recordClinicalEntities` additively creates a real `Condition` (from
+`diagnosis.orphaCode`/`omimCode`/`icdCode`) and one `PhenotypeObservation`
+per `clinical.diseasePhenotypes[]` entry (HPO-coded, `presenceStatus:
+'present'`, joined to the same submission's `Encounter` via
+`encounterId`) — both best-effort, and both go through RF005 AC#4's
+active-code gate for real: a code that doesn't resolve to an active
+`ReferenceDatasetRelease` is silently skipped rather than persisted or
+failing the whole submission (this wizard already allows manually-entered
+codes with no reference-catalog match today; making that a hard failure
+would be a materially bigger behavioral change than this additive slice
+intends). Proven so far by `tests/unit/intakeWizard.clinicalEntities.
+test.js` (native-only, real-semantics fakes, including a case asserting
+an inactive/unknown code is skipped without failing the intake). **The
+literal real-backend Playwright e2e proof is tracked separately as
+#696**, not yet built.
+
+### ClinicalObservation
+
+- `observationId` (internal identity, dict-02 ELM-0219; assigned via
+  `crypto.randomUUID()` in `ClinicalObservationModel.create`, #691)
+- `participantId` (reference to `Participant`, dict-02 P1X-0077)
+- `observationCoding` (`Coding`, 1..1, dict-02 ELM-0220 — LOINC. Same
+  `{ systemUri, code, version, display }` shape as `Condition.
+  conditionCoding`/`PhenotypeObservation.hpoCoding`)
+- `value` / `unit` (dict-02 ELM-0221/0222, choice/Coding — "preservar
+  valor original," stored as given)
+- `normalizedValue` (Quantity, dict-02 ELM-0223 — "não sobrescrever o
+  original": a distinct field from `value`, never derived by overwriting
+  it)
+- `referenceRange` (`BackboneElement[]`, dict-02 ELM-0224 — "não assumir
+  universalidade," stored as given)
+- `interpretation` (`CodeableConcept[]`, dict-02 ELM-0225)
+- `effectiveDateTime` / `issuedDateTime` (dict-02 ELM-0226/0227)
+- `observationStatus` (dict-02 ELM-0228, FHIR ObservationStatus vocab,
+  stored as given)
+- `method` (CodeableConcept, dict-02 ELM-0229)
+- `deviceId` (0..1, reference to `Device` — dict-02 ELM-0230. Unlike
+  `diagnosticReportId` below, a real `devices` collection exists
+  (`Device.schema.js`), so `clinical-observation.service.js#
+  createClinicalObservation` hard-checks this reference when supplied,
+  via `assertReferencesExist` — RF029 AC#2's own machinery, #669)
+- `specimenId` (0..1, reference to `Specimen`/`samples` — dict-02
+  ELM-0231, same hard-check treatment as `deviceId`)
+- `diagnosticReportId` (0..1, reference to `DiagnosticReport` — stays
+  unenforced, no `DiagnosticReport` entity exists in this repo, dict-02
+  ELM-0232)
+- `encounterId` (0..1, reference to `Encounter`/#689, dict-02 P1X-0078 —
+  joinable-but-not-enforced)
+
+**Landed in #691 (RF005 clinical-data slice 3/5, tracked under #677):**
+the entity/collection (`clinicalObservations`) exists
+(`ClinicalObservationModel`, `clinical-observation.service.js#
+createClinicalObservation`/`getClinicalObservationsForParticipant`/
+`getClinicalObservationById`). `specimenId`/`deviceId` are hard-checked
+against the real `samples`/`devices` collections at create time — the
+first entity in this domain to enforce a reference rather than leave it
+joinable-but-unenforced, per #691's own scope.
+
+**Wired in #711 (RF005 clinical-UI slice, tracker #707):** the intake
+wizard now has a real, manual-entry lab-result field (test name + LOINC
+code + value + unit + a required effective date) --
+`observationCoding` is coded against the real `http://loinc.org`
+systemUri (this repo has a genuine RF028 LOINC importer, unlike DCB/
+local-procedure-terminology's manual-coding precedent in #708/#710).
+`observationStatus` is hardcoded `'final'` (no status picker in this
+minimal UI); `specimenId`/`deviceId` are never supplied from the
+wizard, so the hard reference-check above is never exercised by this
+path. The wizard payload's new `clinical.observationRecords` key is
+deliberately distinct from the pre-existing `clinical.
+clinicalObservations` (a free-text clinical-notes string, unrelated to
+this entity) to avoid a naming collision -- see
+`contracts/canonical/v1/index.js`'s own comment on the schema.
+
+### ClinicalOutcome
+
+- `outcomeId` (internal identity, dict-02 ELM-0252; assigned via
+  `crypto.randomUUID()` in `ClinicalOutcomeModel.create`, #691)
+- `outcomeType` (CodeableConcept, dict-02 ELM-0253 — progressão/remissão/
+  recidiva/resposta/toxicidade/hospitalização/óbito, stored as given)
+- `outcomeDate` (dict-02 ELM-0254)
+
+**Landed in #691:** the entity/collection (`clinicalOutcomes`) exists
+(`ClinicalOutcomeModel`, `clinical-outcome.service.js`). **Note:**
+dict-02's own row set for this entity has no `participantId` field
+(unlike every other entity in this domain) — not invented here, matches
+#691's own issue scope exactly. A future slice adding subject linkage
+would be a design call beyond what the dictionary defines today, not an
+oversight in this one.
+
+**Wired in #712 (RF005 clinical-UI slice, tracker #707):** unlike the
+other 5 clinical-UI slices, no longitudinal-outcome UI existed in the
+intake wizard at all before this — `ClinicalIntakeWizard.jsx` now has a
+real manual-entry outcome field (a `Select` over the 7 dict-02 outcome
+categories, mapped to English slugs — `progression`/`remission`/
+`relapse`/`response`/`toxicity`/`hospitalization`/`death` — plus a
+required outcome date). `recordClinicalEntities` (`intakeWizard.js`)
+additively creates one `ClinicalOutcome` per wizard-collected outcome
+entry, `outcomeType` stored as `{ code: <slug> }` (CodeableConcept,
+stored as given, matching the model's own precedent).
+
+### DerivedScore
+
+- `derivedScoreId` (internal identity; assigned via `crypto.randomUUID()`
+  in `DerivedScoreModel.create`, #691 — dict-02 has no explicit ID field
+  for this entity, same generated-identity convention as every other
+  entity in this contract)
+- `scoreType` (CodeableConcept, dict-02 ELM-0255 — e.g. Charlson
+  Comorbidity Index)
+- `scoreValue` (decimal, dict-02 ELM-0256)
+- `algorithmVersion` (dict-02 ELM-0257)
+- `lookbackPeriod` (0..1, Duration/Period, dict-02 ELM-0258, stored as
+  given)
+- `scoreComponents` (`BackboneElement[]`, 1..*, dict-02 ELM-0259 —
+  "nunca armazenar somente o escore final": `DerivedScoreModel` rejects
+  an empty array even when every other field is present, same
+  required-non-empty-array enforcement as `Condition.conditionCoding`)
+
+**Landed in #691:** the entity/collection (`derivedScores`) exists
+(`DerivedScoreModel`, `derived-score.service.js`). Same "dict-02 has no
+`participantId` row for this entity" note as `ClinicalOutcome` above.
+
+**Wired in #713 (RF005 clinical-UI slice, tracker #707 — final of the 6
+sub-slices):** a real original-1987 Charlson Comorbidity Index
+implementation (`charlsonComorbidityIndex.js`), computed from the
+intake wizard's already-existing `charlsonConditions` checklist. That
+checklist (`CLINICAL_COMORBIDITIES` in
+`intake-dictionaries.constants.ts`) predates this slice and was never
+the real 19-category Charlson set — it's a general comorbidity/risk-
+factor checklist (hypertension, obesity, smoking, alcohol/antibiotic/
+insulin/antiviral use, etc.) that only partially overlaps real Charlson
+categories. Rather than inventing weights for non-Charlson items —
+which would misrepresent `algorithmVersion: 'CCI-original'` — only the
+checklist slugs that genuinely map to a real 1987 Charlson category are
+scored: `diabetesType1`/`diabetesType2` (collapsed into one `diabetes`
+category, weight 1 — the original index counts diabetes once, not once
+per type), `copd` (`chronicPulmonaryDisease`, weight 1), `ckd`
+(`renalDisease`, weight 2). The rest of the checklist stays in
+`clinicalData.charlsonComorbidities` as before but doesn't participate
+in the index — matching dict-05_REFERENCIAS.md REF-033's own caution to
+use CCI "somente se... permanecer no escopo clínico associado."
+`recordClinicalEntities` (`intakeWizard.js`) creates one `DerivedScore`
+per submission when at least one reported condition maps to a real
+category (skipped entirely, not created with a zero score, when none
+do — dict-02 ELM-0259 requires `scoreComponents` non-empty).
+
+All 6 of #707's clinical-UI sub-slices (#708-713) are now landed.
+
+### AllergyIntolerance
+
+- `allergyId` (internal identity; assigned via `crypto.randomUUID()` in
+  `AllergyIntoleranceModel.create`, #692 — dict-02 ELM-0246)
+- `allergenCoding` (`Coding`, 1..1, dict-02 ELM-0247 — DCB/SNOMED subset,
+  same `{ systemUri, code, version, display }` shape as elsewhere in this
+  domain)
+- `reaction` (`BackboneElement[]`, 0..*, dict-02 ELM-0248 —
+  "manifestação, severidade e período," stored as given)
+
+**Landed in #692 (RF005 clinical-data slice 4/5, tracked under #677):**
+the entity/collection (`allergyIntolerances`) exists
+(`AllergyIntoleranceModel`, `allergy-intolerance.service.js`). Same
+"dict-02 has no `participantId` row for this entity" note as
+`ClinicalOutcome`/`DerivedScore` above.
+
+**Wired in #708 (RF005 clinical-UI slice, tracker #707):** the intake
+wizard now has a real, manual-entry allergen field (no DCB dictionary
+picker exists in this repo, same "accept manual entry" precedent the
+wizard's diagnosis codes already use) — `recordClinicalEntities`
+(`intakeWizard.js`) additively creates one `AllergyIntolerance` per
+wizard-collected allergy entry, coded against DCB only (`allergenCoding.
+systemUri`), since no SNOMED reference importer exists in this repo
+despite dict-02 allowing "DCB/SNOMED subset". Unlike `Condition`/
+`PhenotypeObservation`, `allergy-intolerance.service.js` does not gate on
+`activeCodeValidator` (RF005 AC#4) — a known, deliberately-scoped-out gap
+flagged during #708, not fixed here.
+
+### FamilyHistory
+
+- `familyHistoryId` (internal identity; assigned via
+  `crypto.randomUUID()` in `FamilyHistoryModel.create`, #692 — dict-02
+  ELM-0249, whose own field description calls it a "registro familiar
+  pseudonimizado," the same civil-identity discipline as
+  `ParticipantIdentity` even though this entity has no `participantId`
+  field of its own)
+- `relationship` (CodeableConcept, 1..1, dict-02 ELM-0250 — degree of
+  kinship, stored as given)
+- `familyCondition` (`BackboneElement[]`, 0..*, dict-02 ELM-0251 —
+  ORPHA|ICD-11|MONDO coded disease + age/period of onset in the family
+  member, stored as given)
+
+**Landed in #692:** the entity/collection (`familyHistories`) exists
+(`FamilyHistoryModel`, `family-history.service.js`).
+
+**Wired in #709 (RF005 clinical-UI slice, tracker #707):** the intake
+wizard now has a real, manual-entry family-history field (relationship
+select + free-text condition name/onset + an ORPHA code field) --
+`relationship` has no dict-specified coding system, so it stays a plain
+kinship value; `familyCondition` is coded against ORPHA only (this
+wizard's existing, working disease-search infrastructure is ORPHA-based
+-- no ICD-11/MONDO picker exists here), same "code what's actually
+searchable" precedent as `AllergyIntolerance`'s DCB-only coding (#708).
+
+### MedicationExposure
+
+- `medicationRecordId` (internal identity; assigned via
+  `crypto.randomUUID()` in `MedicationExposureModel.create`, #692 —
+  dict-02 ELM-0233)
+- `medicationCoding` (`Coding[]`, 1..*, dict-02 ELM-0234 — DCB|ATC|SNOMED
+  subset)
+- `recordType` (dict-02 ELM-0235 — prescribed/dispensed/administered/
+  reported, stored as given)
+- `medicationStatus` (dict-02 ELM-0236, FHIR status vocab, stored as
+  given)
+- `dose` (Quantity, 0..1, dict-02 ELM-0237)
+- `route` (CodeableConcept, 0..1, dict-02 ELM-0238)
+- `frequency` (Timing, 0..1, dict-02 ELM-0239, stored as given)
+- `medicationPeriod` (`{ start, end }`, 0..1, dict-02 ELM-0240 — same
+  Period shape `Encounter.encounterPeriod` uses)
+- `indication` (0..*, references to `Condition`/#690, dict-02 ELM-0241 —
+  joinable-but-not-enforced. Unlike `ClinicalObservation.specimenId`/
+  `deviceId` (#691), #692's own scope didn't call for a hard
+  reference-check here, so this stays the default unenforced pattern
+  most other Reference fields in this domain use)
+
+**Landed in #692:** the entity/collection (`medicationExposures`) exists
+(`MedicationExposureModel`, `medication-exposure.service.js`).
+
+### Procedure
+
+- `procedureId` (internal identity; assigned via `crypto.randomUUID()`
+  in `ProcedureModel.create`, #692 — dict-02 ELM-0242)
+- `procedureCoding` (`Coding[]`, 1..*, dict-02 ELM-0243 — SNOMED/
+  institutional terminology)
+- `performed` (choice, 1..1, dict-02 ELM-0244 — date or Period, stored
+  as given)
+- `bodySite` (`CodeableConcept[]`, 0..*, dict-02 ELM-0245 — Uberon/SNOMED
+  subset. This repo already imports Uberon as a RF028 reference dataset,
+  but resolving/validating `bodySite` against it is a distinct
+  ingestion-pipeline concern this slice didn't take on — stored as
+  given, same as every other CodeableConcept field in this domain)
+
+**Landed in #692:** the entity/collection (`procedures`) exists
+(`ProcedureModel`, `procedure.service.js`).
+
+**Wired in #710 (RF005 clinical-UI slice, tracker #707):** the intake
+wizard now has a real, manual-entry procedure field (name + code + a
+required performed date + optional body-site text) --
+`procedureCoding` is coded against a local/institutional system URI
+(`urn:biobank:local-procedure-terminology`), the explicit
+"terminologia institucional" alternative dict-02 itself names, since no
+SNOMED importer exists in this repo (same "code what's actually
+importable" precedent as `AllergyIntolerance`'s DCB-only coding, #708).
+`bodySite` stays free text, not Uberon-coded, per this section's own
+existing note above.
+
+**`MedicationExposure` wired in #693 (RF005 clinical-data slice 5/5):**
+`intakeWizard.js`'s `recordClinicalEntities` additively creates a real
+`MedicationExposure` from `pharmacologyData` when both `medicationName`
+and `atcCode` are present (no `atcCode` means no valid `Coding` to
+satisfy `medicationCoding`'s 1..* requirement, so the entity is skipped
+rather than persisted with an empty coding array) — `recordType:
+'reported'` (patient-reported at intake, not prescribed/dispensed/
+administered), `medicationStatus` mapped from `treatmentStatus`
+(`TREATED`/`ON_TREATMENT` → `active`, `WASHOUT` → `stopped`, else
+`unknown`). Proven by `tests/unit/intakeWizard.clinicalEntities.test.js`.
+**The literal real-backend Playwright e2e proof is tracked separately as
+#696**, not yet built.
+
+**`AllergyIntolerance`/`FamilyHistory`/`Procedure` landed in #708/#709/
+#710; #697 is closed.** This paragraph previously said the opposite —
+that none had a live caller and #697 was an unpicked-up marker — while
+the same file already documented all three as wired. Corrected #929's
+sitting.
+
+`src/routes/intakeWizard.js` creates all three today. Note the *coding*
+gates differ: `FamilyHistory.familyCondition` is validated against an
+active `ReferenceDatasetRelease` (#714), because ORPHA/ICD-11/MONDO are
+all inside RF005 AC#4's enumeration. `AllergyIntolerance.allergenCoding`
+(DCB/SNOMED) and `Procedure.procedureCoding` (SNOMED/institutional) are
+**not** enumerated by AC#4 and are deliberately ungated pending the
+interpretation question open on #714.
+
 ### Consent
 
+- `consentId` (internal identity of the consent instance, distinct from
+  the storage-layer `_id` — dict-02 ELM-0088; assigned at creation via
+  `crypto.randomUUID()` in `PatientConsentModel.create`, #364)
 - `consentTemplateId`
 - `consentGranted`
 - `consentAcceptedAt`
@@ -75,7 +1410,12 @@ This document defines the canonical v1 runtime contract for BioAvanceD.
 - `sampleId`
 - `registerDate`
 - `registrationDate`
+- `status` (Sample-level; not to be confused with other collections'
+  legitimate `status` fields — #540)
 - `currentStatus`
+- `lifecycleStatus`
+- `availabilityStatus`
+- `quarantineStatus`
 - `selected_tcle`
 - `tcle_id`
 - `tcle_template_id`
@@ -153,10 +1493,48 @@ The following files still contain residual aliases or transitional naming and ar
 - `api/backend/src/services/quality-compatibility.service.js`
 - `api/backend/src/core/use-cases/*`
 
+**#496 re-audit (2026-08-11) — this list predates #491-#495 and is now
+stale; treat it as historical, not current.** #390's own pickup already
+superseded it once with a corrected 14-file list (`#496`'s own issue
+body); re-checking that corrected list against current code found:
+
+- **Confirmed already clean / no migration needed:** `sample.routes.js`
+  (fully migrated onto `MongoStorageRepository`/`specimenPreanalyticsService`
+  per `#517`), `analysisValidation.service.js` (uses
+  `SampleModel.resolveSpecimenStatus`, the canonical accessor, not a raw
+  field read), `consent.validator.js`, `hl7.service.js`,
+  `sampleComplianceSync.service.js`, `fhir-validator.service.js`,
+  `fhir.service.js` (all four touch only already-canonical fields —
+  `specimenId`/`sampleType`/`participantId`/`specimenStatus` — no
+  RCS/SPREC/storage legacy field at all).
+- **Already tracked elsewhere, no new issue needed:**
+  `intakeWizard.routes.js` (storage/status fields — listed under `#494`'s
+  own consumer scope), `import.controller.js` (its direct RCS/SPREC
+  writes are moot pending `#336`'s open "is this endpoint dead code"
+  question).
+- **Newly found, not on any prior list — filed as `#525`:**
+  `label.routes.js`, `reports.routes.js`,
+  `api/backend/scripts/neo4j-canonical-rebuild.js`,
+  `batch-validation-engine.service.js` — see the `RcsAssessment` section's
+  own `#496` note above for detail.
+- **Newly found, a missing-wiring gap rather than a read-migration item —
+  filed as `#526`:** `fhir-import-staging.service.js`'s staged-sample
+  commit path — see the `SpecimenPreanalytics` section's own `#496` note
+  above.
+
+`storageService.js`, `import.service.js`, `import-lgpd.service.js`,
+`quality-compatibility.service.js`, and `core/use-cases/*` were not
+re-verified in this pass (out of `#496`'s 14-file scope, which only
+covered the files `#390`'s follow-up audit had newly named) — see
+`#494`/`#491`/`#493`'s own closed-issue history for their migration
+status instead of this stale list.
+
 ## Deferred Cleanup Plan
 
 - PR 100 - Canonicalize participant flow
-- PR 101 - Canonicalize specimen, custody and storage flow
+- PR 101 - Canonicalize specimen, custody and storage flow (RCS entity
+  separation landed in #383; SPREC and storage/custody separation still
+  outstanding, see `### RcsAssessment`'s "Not yet landed" note)
 - PR 102 - Canonicalize frontend intake and active views
 - PR 103 - Remove inactive legacy runtime files
 - PR 104 - Build aggregate/domain matrix

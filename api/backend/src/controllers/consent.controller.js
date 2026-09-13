@@ -1,5 +1,6 @@
 const consentService = require('../services/consent.service');
 const patientService = require('../services/patient.service');
+const participantIdentityService = require('../services/participantIdentity.service');
 const logger = require('../utils/logger');
 
 class ConsentController {
@@ -23,11 +24,33 @@ class ConsentController {
         const patientsCollection = db.collection('patients');
         const pendingPatients = await patientsCollection.find({
           status: 'PENDING_CONSENT',
-          consentconsentTemplateId: policyId
-        }).project({ participantId: 1, patientName: 1, email: 1, clinicalUnit: 1, consentNotifiedAt: 1 }).toArray();
+          consentTemplateId: policyId
+        }).project({ participantId: 1, email: 1, clinicalUnit: 1, consentNotifiedAt: 1 }).toArray();
+
+        // RF005/RNF007 (#562/#574): patientName is civil identity — resolved via
+        // ParticipantIdentity, not read directly off Patient. Decrypted via
+        // decryptIdentity so this keeps working once the plaintext field is
+        // dropped in favor of the ciphertext-only sibling (#566).
+        const identitiesCollection = db.collection('participantIdentities');
+        const participantIds = pendingPatients.map((patient) => patient.participantId).filter(Boolean);
+        const identities = participantIds.length > 0
+          ? await identitiesCollection.find({ participantId: { $in: participantIds } })
+            .project({ participantId: 1, patientName: 1, patientNameEncrypted: 1 }).toArray()
+          : [];
+        const nameByParticipantId = new Map(
+          identities.map((identity) => {
+            const decrypted = participantIdentityService.decryptIdentity(identity);
+            return [decrypted.participantId, decrypted.patientName];
+          })
+        );
+        const patientsWithNames = pendingPatients.map((patient) => ({
+          ...patient,
+          patientName: nameByParticipantId.get(patient.participantId) || null,
+        }));
+
         return res.status(200).json({
           success: true,
-          data: pendingPatients
+          data: patientsWithNames
         });
       } catch (error) {
         logger.error('Erro ao listar pacientes aguardando aprovação do TCLE:', error.message);
@@ -55,9 +78,9 @@ class ConsentController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'CREATE',
-          entity: 'ConsentPolicy',
-          entityID: policy._id.toString(),
-          result: 'success',
+          resourceType: 'ConsentPolicy',
+          resourceId: policy._id.toString(),
+          status: 'success',
           severity: 'info',
           message: `Política de consentimento criada (${policy.version})`,
           payload: {
@@ -191,9 +214,9 @@ class ConsentController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'UPDATE',
-          entity: 'ConsentPolicy',
-          entityID: policy._id.toString(),
-          result: 'success',
+          resourceType: 'ConsentPolicy',
+          resourceId: policy._id.toString(),
+          status: 'success',
           severity: 'info',
           message: `Política de consentimento atualizada (${policy.version})`,
           payload: {
@@ -264,9 +287,9 @@ class ConsentController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'CREATE',
-          entity: 'ConsentTemplate',
-          entityID: template._id.toString(),
-          result: 'success',
+          resourceType: 'ConsentTemplate',
+          resourceId: template._id.toString(),
+          status: 'success',
           severity: 'info',
           message: `Template de consentimento criado (${template.version})`,
           payload: {
@@ -344,9 +367,9 @@ class ConsentController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'UPDATE',
-          entity: 'ConsentTemplate',
-          entityID: template._id.toString(),
-          result: 'success',
+          resourceType: 'ConsentTemplate',
+          resourceId: template._id.toString(),
+          status: 'success',
           severity: 'info',
           message: `Template de consentimento atualizado (${template.version})`,
           payload: {
@@ -482,7 +505,7 @@ class ConsentController {
 
       const payload = {
         ...req.body,
-        participantId: req.body.participantId || req.body.participantId,
+        patientId: req.body.patientId || req.body.patientID,
         ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
         userAgent: req.headers['user-agent']
       };
@@ -494,9 +517,9 @@ class ConsentController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'SIGN',
-          entity: 'PatientConsent',
-          entityID: consent._id.toString(),
-          result: 'success',
+          resourceType: 'PatientConsent',
+          resourceId: consent._id.toString(),
+          status: 'success',
           severity: 'info',
           message: `Consentimento assinado para paciente ${consent.participantId}`,
           payload: {
@@ -516,7 +539,7 @@ class ConsentController {
       });
     } catch (error) {
       logger.error('Erro ao registrar consentimento:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode || 400).json({
         success: false,
         error: 'Erro ao registrar consentimento',
         message: error.message
@@ -547,9 +570,9 @@ class ConsentController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'REVOKE',
-          entity: 'PatientConsent',
-          entityID: req.params.id,
-          result: 'success',
+          resourceType: 'PatientConsent',
+          resourceId: req.params.id,
+          status: 'success',
           severity: 'warning',
           message: `Consentimento revogado para paciente ${consent.participantId}`,
           payload: {
@@ -619,21 +642,60 @@ class ConsentController {
         });
       }
 
-      const participantId = req.body.participantId || req.body.participantId || req.query.participantId || req.query.participantId;
+      const patientId = req.body.patientId || req.body.patientID || req.query.patientId || req.query.patientID;
       const token = req.body.token || req.query.token;
 
-      const result = await patientService.validateConsentToken(db, String(participantId), String(token));
+      const result = await patientService.validateConsentToken(db, String(patientId), String(token));
+
+      // #809: the page behind this token's link (/patients/:id/consent?token=)
+      // is unauthenticated -- it is emailed to a participant, not to a user of
+      // the system -- so this response is its only source for the term it asks
+      // them to accept. Every other route exposing a ConsentTemplate or an
+      // active policy sits behind `authenticate`.
+      let template = null;
+      try {
+        template = await consentService.getActiveTemplate(db);
+      } catch (templateError) {
+        // A template-lookup failure is not an invalid token: reporting it as
+        // one would tell the participant their link is bad and send them to
+        // request another, which would not help.
+        logger.error('Erro ao carregar termo ativo do link de consentimento:', templateError.message);
+        return res.status(503).json({
+          success: false,
+          error: 'Termo de consentimento indisponível',
+          message: templateError.message
+        });
+      }
 
       return res.status(200).json({
         success: true,
-        data: result
+        data: {
+          ...result,
+          template: template
+            ? {
+              id: String(template._id),
+              title: template.title,
+              content: template.content,
+              version: template.version || null,
+              permissions: Array.isArray(template.permissions) ? template.permissions : []
+            }
+            : null
+        }
       });
     } catch (error) {
+      // #823: this route is unauthenticated by design -- the emailed token is
+      // the only credential -- so this response IS the disclosure boundary.
+      // patientService.validateConsentToken throws four distinguishable
+      // messages (participant unknown / not awaiting consent / wrong token /
+      // expired), and echoing them let an unauthenticated caller walk the
+      // 8-digit participantId space and read biobank membership and consent
+      // state straight off the reply. One opaque answer for every failure; the
+      // detail stays in the log line above. Deliberately no `message` key --
+      // the frontend maps this by status alone (mapConsentTokenError).
       logger.error('Erro ao validar token de consentimento:', error.message);
       return res.status(400).json({
         success: false,
-        error: 'Token inválido',
-        message: error.message
+        error: 'Link inválido ou expirado'
       });
     }
   }
@@ -648,10 +710,10 @@ class ConsentController {
         });
       }
 
-      const participantId = req.body.participantId || req.body.participantId || req.query.participantId || req.query.participantId;
+      const patientId = req.body.patientId || req.body.patientID || req.query.patientId || req.query.patientID;
       const token = req.body.token || req.query.token;
 
-      const result = await patientService.acceptConsentToken(db, String(participantId), String(token));
+      const result = await patientService.acceptConsentToken(db, String(patientId), String(token));
 
       return res.status(200).json({
         success: true,
@@ -659,11 +721,15 @@ class ConsentController {
         data: result
       });
     } catch (error) {
+      // #823: same oracle as validateConsentToken above, and reached through
+      // the same four throws -- acceptConsentToken delegates to
+      // validateConsentToken before it writes anything. The issue named only
+      // the validate route; both leak, so both answer identically, which also
+      // stops the PAIR of endpoints from distinguishing each other.
       logger.error('Erro ao aceitar consentimento:', error.message);
       return res.status(400).json({
         success: false,
-        error: 'Erro ao aceitar consentimento',
-        message: error.message
+        error: 'Link inválido ou expirado'
       });
     }
   }

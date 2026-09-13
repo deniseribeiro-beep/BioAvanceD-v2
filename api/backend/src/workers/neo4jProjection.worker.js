@@ -1,9 +1,44 @@
+const fs = require('fs');
 const { connectDB } = require('../database/mongo');
 const { connectNeo4j } = require('../infrastructure/database/neo4j/connection');
 const logger = require('../utils/logger');
 const env = require('../config/env');
 const { Neo4jOutboxService } = require('../services/neo4jOutbox.service');
 const { Neo4jCanonicalProjectionService } = require('../services/neo4jCanonicalProjection.service');
+
+// #992: heartbeat file probed by the container healthcheck (mtime-based).
+// Not a new env var -- a module-level constant, per #992's decision to avoid
+// tripping the env-declaration architecture test. Distinct path from
+// worker.js's heartbeat since both containers share the /tmp filesystem
+// convention but not a container.
+const HEARTBEAT_PATH = '/tmp/neo4j-projection-heartbeat';
+
+// #1040: observability-only, matching this file's own fatal-error style
+// (logger.error + process.exit(1), same as the require.main block's
+// runProjectionWorker().catch() below). The process must still die -- do NOT
+// turn this into a swallow/continue path. Three call sites deliberately
+// depend on "an unhandled rejection kills the process" staying true:
+// src/services/auth.service.js:540, src/services/consent.service.js:911 and
+// src/utils/collectionResolver.js:23.
+//
+// Registered before any other startup work in this module. Guarded on
+// `process`, not on this module, since server.js and the other two worker
+// entrypoints register the same pair of handlers -- the guard keeps a single
+// registration if any of them ever end up sharing a process (as worker.js
+// and import-worker.js already do).
+if (!process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__) {
+  process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__ = true;
+
+  process.on('unhandledRejection', (reason) => {
+    logger.error('[GRAPH_OUTBOX] [#1040] unhandledRejection não tratada -- encerrando worker:', reason?.message || reason);
+    process.exit(1);
+  });
+
+  process.on('uncaughtException', (err) => {
+    logger.error('[GRAPH_OUTBOX] [#1040] uncaughtException -- encerrando worker:', err?.message || err);
+    process.exit(1);
+  });
+}
 
 async function runProjectionOnce(options = {}) {
   const db = options.db || await connectDB();
@@ -66,20 +101,36 @@ async function runProjectionOnce(options = {}) {
 async function runProjectionWorker(options = {}) {
   const intervalMs = Number(options.intervalMs || env.GRAPH_OUTBOX_RETRY_BACKOFF_MS || 1000);
   const stopAfterOne = options.once === true;
+  const shouldStop = typeof options.shouldStop === 'function' ? options.shouldStop : () => false;
 
   do {
     const result = await runProjectionOnce(options);
-    if (stopAfterOne) {
+    if (options.heartbeatPath) {
+      try {
+        fs.writeFileSync(options.heartbeatPath, String(Date.now()));
+      } catch (heartbeatError) {
+        logger.warn('[GRAPH_OUTBOX] Falha ao gravar heartbeat', { error: heartbeatError.message || heartbeatError });
+      }
+    }
+    if (stopAfterOne || shouldStop()) {
       return result;
     }
     if (!result.processed) {
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
-  } while (!stopAfterOne);
+  } while (!stopAfterOne && !shouldStop());
 }
 
 if (require.main === module) {
-  runProjectionWorker()
+  let stopRequested = false;
+  const requestStop = (signal) => {
+    logger.info(`[GRAPH_OUTBOX] ${signal} recebido, encerrando worker...`);
+    stopRequested = true;
+  };
+  process.on('SIGTERM', () => requestStop('SIGTERM'));
+  process.on('SIGINT', () => requestStop('SIGINT'));
+
+  runProjectionWorker({ shouldStop: () => stopRequested, heartbeatPath: HEARTBEAT_PATH })
     .then(() => {
       logger.info('[GRAPH_OUTBOX] Worker finalizado');
       process.exit(0);

@@ -1,8 +1,4 @@
 // backend/src/services/hpoService.js
-const { MongoClient } = require('mongodb');
-
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/bioavanced?retryWrites=true&w=majority&tls=false';
-const DB_NAME = process.env.MONGO_DB || process.env.DB_NAME || 'bioavanced';
 const COLLECTION = 'hpo_terms';
 const HPO_API_URL = process.env.HPO_API_URL || '';
 
@@ -11,13 +7,14 @@ function isExternalHpoLookupEnabled() {
   return raw === 'true' || raw === '1';
 }
 
-async function searchHpoLocal(query) {
-  const client = new MongoClient(MONGO_URI);
-  await client.connect();
-  const db = client.db(DB_NAME);
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function searchHpoLocal(query, db) {
   const col = db.collection(COLLECTION);
-  const regex = new RegExp(query, 'i');
-  const results = await col.find({
+  const regex = new RegExp(escapeRegExp(query), 'i');
+  return col.find({
     $or: [
       { label: regex },
       { hpoId: regex },
@@ -25,8 +22,6 @@ async function searchHpoLocal(query) {
     ],
     isObsolete: { $ne: true }
   }).limit(20).toArray();
-  await client.close();
-  return results;
 }
 
 async function searchHpoExternal(query) {

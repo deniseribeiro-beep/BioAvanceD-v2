@@ -4,13 +4,26 @@ import Card from '../components/UI/Card';
 import { apiClient } from '../api/client';
 import '../components/UI/Button.css';
 
+type SymbologyAsset = {
+  payload: string;
+  scannerPrefix: string;
+  renderer: string;
+  imagePng: { mimeType: string; base64: string | null };
+};
+
 type LabelData = {
   sampleId: string;
   barcode: string;
-  location: string;
-  sprecCode?: string;
-  svg?: string;
+  code128: SymbologyAsset;
+  dataMatrix: SymbologyAsset;
+  qr: SymbologyAsset;
 };
+
+const SYMBOLOGY_ROWS: Array<{ key: 'code128' | 'dataMatrix' | 'qr'; testSlug: string; title: string }> = [
+  { key: 'code128', testSlug: 'code128', title: 'Code128' },
+  { key: 'dataMatrix', testSlug: 'data-matrix', title: 'DataMatrix' },
+  { key: 'qr', testSlug: 'qr', title: 'QR' },
+];
 
 export default function SampleLabelPage() {
   const { id } = useParams<{ id: string }>();
@@ -18,7 +31,7 @@ export default function SampleLabelPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
-  const [busyFormat, setBusyFormat] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -34,9 +47,26 @@ export default function SampleLabelPage() {
       setError('');
 
       try {
-        const response = await apiClient.get(`/labels/samples/${encodeURIComponent(id)}`);
+        const sampleResponse = await apiClient.get(`/samples/${encodeURIComponent(id)}`);
+        const sample = sampleResponse?.data?.data;
+        if (!sample?.barcode) {
+          throw new Error('Amostra sem código de barras gerado.');
+        }
+
+        const symbologyResponse = await apiClient.get(
+          `/samples/by-barcode/${encodeURIComponent(sample.barcode)}/symbology-assets`,
+          { params: { includePayload: true } },
+        );
+        const assets = symbologyResponse?.data?.data;
+
         if (active) {
-          setLabel(response?.data?.data || null);
+          setLabel({
+            sampleId: String(sample.sampleID ?? sample._id ?? id),
+            barcode: assets.barcode,
+            code128: assets.code128,
+            dataMatrix: assets.dataMatrix,
+            qr: assets.qr,
+          });
         }
       } catch (err: any) {
         if (active) {
@@ -56,70 +86,36 @@ export default function SampleLabelPage() {
     };
   }, [id]);
 
-  const downloadOrOpenLabel = async (format: 'json' | 'zpl' | 'svg' | 'html' | 'print-job') => {
+  const downloadPrintJob = async () => {
     if (!id) {
       return;
     }
 
     setActionError('');
-    setBusyFormat(format);
+    setBusyAction('print-job');
 
     try {
-      const endpoint = format === 'print-job'
-        ? `/labels/samples/${encodeURIComponent(id)}/print-job`
-        : `/labels/samples/${encodeURIComponent(id)}`;
-      const response = await apiClient.get(endpoint, {
-        params: format === 'print-job' ? undefined : { format },
-        responseType: format === 'json' || format === 'print-job' ? 'json' : 'text',
+      const response = await apiClient.get(`/samples/${encodeURIComponent(id)}/label/print-job`, {
         suppressErrorToast: true,
       } as any);
-
-      if (format === 'json' || format === 'print-job') {
-        const payload = format === 'print-job' ? response?.data?.data || response?.data || {} : response?.data?.data || response?.data || {};
-        const fileName = format === 'print-job' ? `label-${id}-print-job.json` : `label-${id}.json`;
-        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = fileName;
-        link.click();
-        URL.revokeObjectURL(url);
-        return;
-      }
-
-      const text = String(response?.data || '');
-      const mimeType = format === 'svg'
-        ? 'image/svg+xml;charset=utf-8'
-        : format === 'html'
-          ? 'text/html;charset=utf-8'
-          : 'text/plain;charset=utf-8';
-      const blob = new Blob([text], { type: mimeType });
+      const payload = response?.data?.data || {};
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
       const url = URL.createObjectURL(blob);
-
-      if (format === 'html' || format === 'svg') {
-        window.open(url, '_blank', 'noopener,noreferrer');
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-        return;
-      }
-
       const link = document.createElement('a');
       link.href = url;
-      link.download = format === 'zpl' ? `label-${id}.zpl` : `label-${id}.txt`;
+      link.download = `label-${id}-print-job.json`;
       link.click();
       URL.revokeObjectURL(url);
     } catch (err: any) {
-      setActionError(err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Falha ao gerar etiqueta.');
+      setActionError(err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Falha ao gerar job de impressão.');
     } finally {
-      setBusyFormat(null);
+      setBusyAction(null);
     }
   };
 
-  const sampleId = label?.sampleId || id || '';
-  const encodedSampleId = encodeURIComponent(sampleId);
-
   if (loading) {
     return (
-      <div className="page">
+      <div className="page" data-testid="sample-label-loading">
         <p>Carregando...</p>
       </div>
     );
@@ -127,53 +123,55 @@ export default function SampleLabelPage() {
 
   if (error || !label) {
     return (
-      <div className="page">
+      <div className="page" data-testid="sample-label-error">
         <p>{error || 'Amostra não encontrada.'}</p>
       </div>
     );
   }
 
   return (
-    <div className="page">
+    <div className="page" data-testid="sample-label-page">
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h1 className="page-title">Etiqueta</h1>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <button className="btn btn-secondary" type="button" disabled={busyFormat === 'json'} onClick={() => void downloadOrOpenLabel('json')}>
-            {busyFormat === 'json' ? 'Gerando...' : 'JSON'}
-          </button>
-          <button className="btn btn-secondary" type="button" disabled={busyFormat === 'zpl'} onClick={() => void downloadOrOpenLabel('zpl')}>
-            {busyFormat === 'zpl' ? 'Gerando...' : 'ZPL'}
-          </button>
-          <button className="btn btn-secondary" type="button" disabled={busyFormat === 'svg'} onClick={() => void downloadOrOpenLabel('svg')}>
-            {busyFormat === 'svg' ? 'Abrindo...' : 'SVG'}
-          </button>
-          <button className="btn btn-secondary" type="button" disabled={busyFormat === 'html'} onClick={() => void downloadOrOpenLabel('html')}>
-            {busyFormat === 'html' ? 'Abrindo...' : 'HTML'}
-          </button>
-          <button className="btn btn-primary" type="button" disabled={busyFormat === 'print-job'} onClick={() => void downloadOrOpenLabel('print-job')}>
-            {busyFormat === 'print-job' ? 'Gerando...' : 'Print job'}
-          </button>
-        </div>
+        <button
+          className="btn btn-primary"
+          type="button"
+          data-testid="sample-label-print-job-button"
+          disabled={busyAction === 'print-job'}
+          onClick={() => void downloadPrintJob()}
+        >
+          {busyAction === 'print-job' ? 'Gerando...' : 'Print job (ZPL)'}
+        </button>
       </div>
 
       {actionError && (
         <Card>
-          <p style={{ color: 'var(--danger)' }}>{actionError}</p>
+          <p style={{ color: 'var(--danger)' }} data-testid="sample-label-action-error">{actionError}</p>
         </Card>
       )}
 
       <Card>
-        <div style={{ display: 'grid', gap: '1rem', justifyItems: 'center', padding: '2rem' }}>
-          {label.svg ? (
-            <div dangerouslySetInnerHTML={{ __html: label.svg }} />
-          ) : (
-            <div style={{ padding: '1rem', border: '1px solid #d1d5db', borderRadius: 8 }}>
-              <strong>{label.sampleId}</strong>
-              <p>{label.barcode}</p>
-              <p>{label.location}</p>
-              <p>{label.sprecCode || 'SPREC N/A'}</p>
-            </div>
-          )}
+        <div style={{ display: 'grid', gap: '1.5rem', justifyItems: 'center', padding: '2rem' }} data-testid="sample-label-symbology">
+          <p style={{ fontWeight: 600 }} data-testid="sample-label-barcode">{label.barcode}</p>
+          <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+            {SYMBOLOGY_ROWS.map(({ key, testSlug, title }) => {
+              const asset = label[key];
+              return (
+                <div key={key} data-testid={`sample-label-${testSlug}`} style={{ textAlign: 'center' }}>
+                  <p>{title}</p>
+                  {asset.imagePng.base64 ? (
+                    <img
+                      src={`data:${asset.imagePng.mimeType};base64,${asset.imagePng.base64}`}
+                      alt={`${title} ${label.barcode}`}
+                      data-testid={`sample-label-${testSlug}-image`}
+                    />
+                  ) : (
+                    <p data-testid={`sample-label-${testSlug}-pending`}>Gerando imagem...</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </Card>
     </div>

@@ -12,10 +12,15 @@ async function generateUniqueEquipmentID(db, collectionName = 'equipment') {
   try {
     const equipmentCollection = db.collection(collectionName);
     
-    // Busca o último equipmentID
+    // Busca o último equipmentID.
+    // #736: restrito a equipmentID numérico. Na ordenação BSON do MongoDB
+    // toda string vem depois de qualquer número, então um equipmentID
+    // string (fixtures de e2e gravam o containerID nesse campo) era
+    // devolvido primeiro por sort: { equipmentID: -1 } e o incremento
+    // virava concatenação de string em vez de soma.
     const lastEquipment = await equipmentCollection
       .findOne(
-        {},
+        { equipmentID: { $type: 'number' } },
         { 
           sort: { equipmentID: -1 },
           projection: { equipmentID: 1 }

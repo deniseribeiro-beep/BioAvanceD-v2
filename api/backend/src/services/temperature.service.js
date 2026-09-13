@@ -3,6 +3,33 @@ const PolicyModel = require('../models/Policy');
 const logger = require('../utils/logger');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
 const notificationServiceV2 = require('./NotificationService');
+const notificationDispatchService = require('./notificationDispatch.service');
+const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
+
+// #1079: scheduler.service.js's resolveActiveAlert/ensureActiveAlert both
+// filter on { sensorId, type, status }, so every alert writer has to emit a
+// `type` for those two lifecycle helpers to reach it. The scheduler owns
+// 'missing_reading' and 'stale_reading'; this module owns the threshold
+// breach.
+const THRESHOLD_BREACH_ALERT_TYPE = 'threshold_breach';
+
+function createTemperatureValidationError(message, statusCode = 422) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+// #636: mirrors sample.service.js's/sensor.service.js's own organizationId
+// validation -- when provided, it must resolve to a real Organization.
+async function assertOrganizationIdResolves(db, organizationId) {
+  if (organizationId === undefined || organizationId === null || organizationId === '') {
+    return;
+  }
+  const organization = await db.collection('organizations').findOne({ organizationId: String(organizationId) });
+  if (!organization) {
+    throw createTemperatureValidationError(`organizationId ${organizationId} não encontrado`, 404);
+  }
+}
 
 /**
  * Service de Temperatura
@@ -15,6 +42,7 @@ class TemperatureService {
       if (!validation.isValid) {
         throw new Error(validation.errors.join(', '));
       }
+      await assertOrganizationIdResolves(db, temperatureData.organizationId);
 
       const temperaturesCollection = db.collection('temperatures');
       const temperature = TemperatureModel.create(temperatureData);
@@ -49,11 +77,13 @@ class TemperatureService {
     try {
       const policiesCollection = db.collection('policies');
       const policyId = temperature.policyId || temperature.policyID;
-      
+
+      if (!policyId) {
+        return;
+      }
+
       // Busca por policyId (String) ou _id
-      const policy = await policiesCollection.findOne(
-        policyId ? { $or: [{ policyId }, { _id: policyId }] } : {}
-      );
+      const policy = await policiesCollection.findOne({ $or: [{ policyId }, { _id: policyId }] });
 
       if (!policy) {
         return;
@@ -72,8 +102,22 @@ class TemperatureService {
       if (!isValid) {
         // Gera alerta
         const alertsCollection = db.collection('alerts');
-        await alertsCollection.insertOne({
+        const alertInsert = await alertsCollection.insertOne({
           sensorId: temperature.sensorId || temperature.sensorID,
+          // #1062: an alert carried no organizationId at all, so
+          // GET /alerts could not be scoped by adding middleware -- the
+          // filter would have matched nothing. Stamped from the reading,
+          // whose own organizationId is server-resolved as of #1071 rather
+          // than taken from the request body. Same treatment #634/#635/#636
+          // gave Sensor, Equipment and Temperature: stamp new rows, null on
+          // anything that predates it, no backfill.
+          organizationId: temperature.organizationId || null,
+          // #1079: written without a `type` this document could never be
+          // matched by the scheduler's resolveActiveAlert, so a threshold
+          // breach stayed `active` forever -- one permanent document per
+          // out-of-range reading, with nothing in the repo setting
+          // status: 'resolved' on it.
+          type: THRESHOLD_BREACH_ALERT_TYPE,
           policyId: policyId,
           temperatureValue: temperature.temperatureValue,
           threshold: {
@@ -97,6 +141,42 @@ class TemperatureService {
         ).catch((error) => {
           logger.error('[NOTIFICATION] Falha ao disparar alerta crítico:', error.message || error);
         });
+
+        // #646 Wave 3 (RF015/RNF026): fire-and-forget, same shape as the
+        // legacy sendCriticalTempAlert call above -- a missing/misconfigured
+        // NotificationRule (or a downed email provider) must never block or
+        // delay the alert being recorded. No-ops cleanly when no active
+        // NotificationRule exists for 'environmental_excursion' yet.
+        void notificationDispatchService.dispatchNotification(db, {
+          eventType: 'environmental_excursion',
+          sourceEventType: 'TemperatureAlert',
+          sourceEventId: alertInsert.insertedId,
+          payload: {
+            sensorId: temperature.sensorId || temperature.sensorID,
+            temperatureValue: temperature.temperatureValue,
+            minThreshold,
+            maxThreshold
+          }
+        }).catch((error) => {
+          logger.error('[NOTIFICATION_DISPATCH] Falha ao disparar notificação baseada em regra:', error.message || error);
+        });
+      } else {
+        // #1079: the mirror of the insert above. scheduler.service.js
+        // resolves its own two types the moment the good condition holds
+        // (checkStaleTemperatureReadings, the `else` beside its isStale
+        // branch), with no debounce or hysteresis; this matches that
+        // semantics deliberately rather than inventing a second one.
+        // Kept inline rather than importing scheduler.service, which would
+        // pull node-cron and three unrelated services into every caller of
+        // this module for one updateMany.
+        const sensorId = temperature.sensorId || temperature.sensorID;
+        if (sensorId) {
+          const alertsCollection = db.collection('alerts');
+          await alertsCollection.updateMany(
+            { sensorId, type: THRESHOLD_BREACH_ALERT_TYPE, status: 'active' },
+            { $set: { status: 'resolved', resolvedAt: new Date() } }
+          );
+        }
       }
     } catch (error) {
       logger.error('Erro ao verificar política:', error.message);
@@ -108,12 +188,14 @@ class TemperatureService {
       const temperaturesCollection = db.collection('temperatures');
       const query = {};
 
+      // #917: `filters.sensorID` is a live *input* alias (the frontend's
+      // api.ts sends `sensorID` as a query param), so the coalesce stays. What
+      // went is the `{ sensorID: sensorIdValue }` query branch this used to
+      // pair it with: `TemperatureModel.create` writes `sensorId` only, and
+      // always has, so no stored reading ever carried the capitalised key.
       const sensorIdValue = filters.sensorId || filters.sensorID;
       if (sensorIdValue) {
-        query.$or = [
-          { sensorId: sensorIdValue },
-          { sensorID: sensorIdValue }
-        ];
+        query.sensorId = sensorIdValue;
       }
 
       if (filters.startDate || filters.endDate) {
@@ -125,20 +207,27 @@ class TemperatureService {
           dateQuery.$lte = new Date(filters.endDate);
         }
         
-        // Busca tanto em timestamp quanto em dateTime (compatibilidade)
-        if (query.$or) {
-          // Se já existe $or, usa $and para combinar
-          query.$and = [
-            { $or: query.$or },
-            { $or: [{ timestamp: dateQuery }, { dateTime: dateQuery }] }
-          ];
-          delete query.$or;
-        } else {
-          query.$or = [
-            { timestamp: dateQuery },
-            { dateTime: dateQuery }
-          ];
-        }
+        // Busca tanto em timestamp quanto em dateTime (compatibilidade).
+        //
+        // #917: this used to branch on `query.$or` already existing and, when
+        // it did, wrap both into an `$and`. The only thing that ever set
+        // `query.$or` before this point was the sensorId/sensorID pair above;
+        // now that the sensor filter is a plain key the merge branch is
+        // unreachable, and the two conditions compose as sibling keys --
+        // `{ sensorId, $or: [...] }` is the same query the `$and` built, one
+        // wrapper shallower.
+        query.$or = [
+          { timestamp: dateQuery },
+          { dateTime: dateQuery }
+        ];
+      }
+
+      // #636 (F3-G09): org-scoped caller sees only readings whose
+      // organizationId is one of their scoped organizations. No-op for a
+      // 'global' (Administrador) scope. Caller must resolve+attach
+      // organizationScope via rbac.js's requireOrganizationScope first.
+      if (filters.organizationScope) {
+        applyOrganizationScopeFilter(query, filters.organizationScope, 'organizationId');
       }
 
       const limit = filters.limit || 1000;
@@ -180,16 +269,36 @@ class TemperatureService {
     }
   }
 
-  async getActiveAlerts(db) {
+  async getActiveAlerts(db, filters = {}) {
     try {
       if (!db) {
         // Se o banco não está disponível, retorna array vazio
         return [];
       }
       const alertsCollection = db.collection('alerts');
+      // #1062: this was the one read in temperature.routes.js without
+      // requireOrganizationScope, and it served every organization's active
+      // alerts -- sensorId, the breaching value and the configured
+      // thresholds -- to every viewTemperature holder.
+      // Fail CLOSED on a missing scope. The sibling getTemperatureHistory
+      // guards its own filter with `if (filters.organizationScope)`, which
+      // degrades OPEN -- drop the middleware from that route and it silently
+      // serves every organization again. #1062's body names that as the
+      // module's real weakness, so this one refuses instead of widening.
+      if (!filters.organizationScope) {
+        logger.error('getActiveAlerts chamado sem organizationScope; recusando (fail-closed)');
+        return [];
+      }
+      const query = applyOrganizationScopeFilter({ status: 'active' }, filters.organizationScope, 'organizationId');
+      // #1079: this read was unbounded -- no limit, no projection, a
+      // toArray() over a collection that (before the auto-resolve above)
+      // only ever grew. Mirrors getTemperatureHistory's own
+      // `filters.limit || 1000` convention rather than inventing a second.
+      const limit = filters.limit || 1000;
       const alerts = await alertsCollection
-        .find({ status: 'active' })
+        .find(query)
         .sort({ timestamp: -1 })
+        .limit(limit)
         .toArray();
 
       return alerts;

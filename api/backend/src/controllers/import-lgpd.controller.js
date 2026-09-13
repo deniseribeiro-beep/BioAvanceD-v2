@@ -8,17 +8,82 @@ const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
+const { parseGroupFields } = require('../utils/importGroupFields');
+const { parseImportMapping } = require('../utils/importMapping');
 const {
   SPECIMEN_TYPES,
   SAMPLE_ORIGINS,
   EXTRACTION_PROTOCOLS,
   MIABIS_QUALITY,
 } = require('../config/constants/specimen.constants');
+const { UPLOADS_BASE } = require('../config/uploadConfig');
+
+// #815: the patient template's columns and its example row, shared by the
+// xlsx builder (downloadPatientTemplateExcel) and the CSV builder
+// (downloadPatientTemplateCSV). The importer accepts one column set; the two
+// downloads must not be able to disagree about what it is.
+const PATIENT_TEMPLATE_HEADERS = [
+  'patientName',
+  'email',
+  'phone',
+  'birthDate',
+  'sex',
+  'weight',
+  'heightCm',
+  'recordNumber',
+  'clinicalUnit',
+  'unitAcronym',
+  'diagnosticHypothesis',
+  'icdCode',
+  'hypertension',
+  'obesity',
+  'diabetesType1',
+  'diabetesType2',
+  'copd',
+  'ckd',
+  'smoking',
+  'alcoholUse',
+  'asthma',
+  'antibioticUse',
+  'insulinUse',
+  'antiviralUse',
+  'geneticVariant',
+  'notes'
+];
+
+const PATIENT_TEMPLATE_EXAMPLE_ROW = [
+  'João Silva Santos',        // patientName
+  'joao.silva@email.com',     // email
+  '5511999999999',            // phone
+  '15/03/1985',               // birthDate
+  'M',                         // sex
+  '75.5',                      // weight
+  '175',                       // heightCm
+  '2024001',                   // recordNumber
+  'Hospital Universitário São Francisco de Assis', // clinicalUnit
+  'HUSF',                      // unitAcronym
+    'Doença lisossômica',        // diagnosticHypothesis
+  'E75.21',                    // icdCode
+  'false',                     // hypertension (boolean)
+  'false',                     // obesity (boolean)
+  'false',                     // diabetesType1 (boolean)
+  'true',                      // diabetesType2 (boolean)
+  'false',                     // copd (boolean)
+  'false',                     // ckd (boolean)
+  'false',                     // smoking (boolean)
+  'false',                     // alcoholUse (boolean)
+  'false',                     // asthma (boolean)
+  'false',                     // antibioticUse (boolean)
+  'true',                      // insulinUse (boolean)
+  'false',                     // antiviralUse (boolean)
+  'GLA337T>C, p.Ala143Thr',    // geneticVariant
+  'Paciente em acompanhamento regular' // notes
+];
 
 // Configuração do multer para upload
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadsDir = path.join(__dirname, '../../uploads/temp');
+    const uploadsDir = path.join(UPLOADS_BASE, 'temp');
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }
@@ -68,6 +133,20 @@ const upload = multer({
  * Implementa importação de pacientes e amostras via CSV/Excel
  * com total conformidade com anonimização LGPD
  */
+// #1023: `results.errors` entries now carry an internal `index` (the array
+// index into the reader's filtered rows) alongside the operator-facing `row`
+// (the physical line in the uploaded file). The index exists so
+// quarantineRejectedSampleRows can find the source row WITHOUT deriving it
+// back from the displayed line number -- deriving it is what a mid-file blank
+// row used to desync. It is a service-internal detail and must not reach the
+// wire: the two `errorsDetails` sites below pass `results.errors` verbatim,
+// while the other two already .map() to picked fields, so without this the
+// four import endpoints would answer with two different shapes -- the exact
+// class #840 is a decision record about.
+function stripInternalErrorFields(errors) {
+  return (Array.isArray(errors) ? errors : []).map(({ index, ...rest }) => rest);
+}
+
 class ImportLGPDController {
   async persistSmartImportSummary(db, payload) {
     const reportsCollection = db.collection('importSummaryReports');
@@ -81,6 +160,120 @@ class ImportLGPDController {
       ...document,
       _id: result.insertedId
     };
+  }
+
+  /**
+   * #915: quais tipos de lote de quarentena LGPD este chamador pode ler.
+   *
+   * A regra e a que `import-lgpd.routes.js` ja enunciava para os lotes de
+   * amostra -- **a mesma permissao da importacao que produziu o lote**. As
+   * duas rotas `/batches*` sao gatilhadas por `createSample`, entao um lote
+   * de amostra e sempre legivel aqui; um lote de participante (#814) so
+   * entra se o chamador tambem tiver `createPatient`, isto e, se ele mesmo
+   * pudesse te-lo produzido. Ninguem passa a ver linhas que ja nao pudesse
+   * gerar.
+   *
+   * Falha fechada: se a consulta de permissao estourar, devolve o conjunto
+   * estreito em vez de 500 ou de alargar.
+   *
+   * Nao substitui o #800 (nenhum dos dois leitores restringe por dono/
+   * organizacao) -- so evita que essa questao seja decidida duas vezes, uma
+   * por tipo de lote.
+   */
+  async resolveReadableQuarantineTypes(db, req) {
+    const { QUARANTINE_BATCH_TYPES } = importLGPDService;
+    const types = [QUARANTINE_BATCH_TYPES.SAMPLE];
+    try {
+      const { userHasPermission } = require('../services/rbac-assignment.service');
+      if (await userHasPermission(db, req.user?.userID, 'createPatient')) {
+        types.push(QUARANTINE_BATCH_TYPES.PATIENT);
+      }
+    } catch (error) {
+      logger.warn(
+        'Falha ao resolver permissao createPatient para a quarentena LGPD; mantendo apenas lotes de amostra:',
+        error.message || error
+      );
+    }
+    return types;
+  }
+
+  /**
+   * GET /api/import-lgpd/batches/:batchId (#794, RNF011 AC#4)
+   *
+   * Le de volta um lote de quarentena criado pelo #787. Sem isto as linhas
+   * rejeitadas sobrevivem mas ninguem consegue revisa-las -- o que e um log
+   * bem organizado, nao staging.
+   *
+   * #915: o conjunto de tipos legiveis vem de
+   * `resolveReadableQuarantineTypes`, nao mais fixo em amostras.
+   */
+  async getQuarantineBatch(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+
+      const types = await this.resolveReadableQuarantineTypes(db, req);
+      const { batch, records } = await importLGPDService.getQuarantineBatch(db, req.params.batchId, {
+        types,
+      });
+
+      return res.status(200).json({ success: true, batch, records });
+    } catch (error) {
+      const status = error?.statusCode || 500;
+      if (status >= 500) {
+        logger.error('Erro ao ler lote de quarentena LGPD:', error.message || error);
+      }
+      return res.status(status).json({
+        success: false,
+        error: status >= 500 ? 'Erro ao ler lote de quarentena' : error.message,
+      });
+    }
+  }
+
+  /**
+   * GET /api/import-lgpd/batches (#794 item 2, RNF011 AC#4)
+   *
+   * O ponto de entrada navegavel da quarentena. Sem ele so da para abrir um
+   * lote de quem ja conhece o id, e nada no frontend conhece (#808).
+   *
+   * #915: lista tambem os lotes de participante quando o chamador tem
+   * `createPatient`. `type` vai em cada documento de lote, entao a UI
+   * distingue um lote de participante de um de amostra sem campo novo.
+   */
+  async listQuarantineBatches(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+
+      const types = await this.resolveReadableQuarantineTypes(db, req);
+      const result = await importLGPDService.listQuarantineBatches(db, {
+        limit: req.query.limit,
+        page: req.query.page,
+        types,
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: result.batches,
+        pagination: {
+          page: result.page,
+          limit: result.limit,
+          total: result.total,
+          totalPages: result.totalPages,
+        },
+      });
+    } catch (error) {
+      logger.error('Erro ao listar lotes de quarentena LGPD:', error.message || error);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao listar lotes de quarentena',
+        message: error.message,
+      });
+    }
   }
 
   async listSmartImportReports(req, res) {
@@ -220,36 +413,46 @@ class ImportLGPDController {
         });
       }
 
-      let groupFields = {};
-      if (req.body?.groupFields) {
-        try {
-          groupFields = typeof req.body.groupFields === 'string'
-            ? JSON.parse(req.body.groupFields)
-            : req.body.groupFields;
-        } catch (error) {
-          importLGPDService.cleanupFile(file.path);
-          return res.status(400).json({
-            success: false,
-            error: 'groupFields inválido',
-            message: 'groupFields deve ser um JSON válido'
-          });
-        }
+      const parsedGroupFields = parseGroupFields(req.body?.groupFields);
+      if (!parsedGroupFields.ok) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(400).json({
+          success: false,
+          error: 'groupFields inválido',
+          message: 'groupFields deve ser um JSON válido'
+        });
       }
+      const groupFields = parsedGroupFields.value;
 
       // Processa importação
-      const results = await importLGPDService.importPatients(db, file, { groupFields });
+      // #814 (RNF011 AC#4 / RF029 AC#5-6): actor is required so a quarantine
+      // batch for a rejected row records a real createdBy -- same shape
+      // importSamples already resolves (#911: req.user.userID is the JWT's
+      // real key, not id/_id).
+      const results = await importLGPDService.importPatients(db, file, {
+        groupFields,
+        actor: {
+          userID: req.user?.userID || req.user?.id || req.user?._id || null,
+          userId: req.user?.userID || req.user?.id || req.user?._id || null,
+          userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
+          userRole: req.user?.role || null,
+          ipAddress: req.ip || null,
+          userAgent: req.get?.('user-agent') || null
+        }
+      });
 
       // Registra log sanitizado (anonimizado via auditLogger)
       if (req.user) {
         const auditLogger = require('../utils/auditLogger');
         auditLogger.init(db);
         await auditLogger.logImport(
-          req, 
-          'Patient', 
+          req,
+          'Patient',
           results.errors.length === 0 ? 'success' : 'partial',
-          results.total, 
-          results.success, 
-          results.errors.length
+          results.total,
+          results.success,
+          results.errors.length,
+          { skipped: results.skipped }
         );
       }
 
@@ -273,11 +476,24 @@ class ImportLGPDController {
           total: results.total,
           success: results.success,
           errors: results.errors.length,
+          // #980: the blank-row count the service already computes
+          // (results.skipped) was never put on the response `data`, so the
+          // frontend's `summary.skipped > 0` gate could never fire.
+          skipped: results.skipped,
+          // #970: the async job report already exposes this count
+          // (duplicatesFound); the sync response discarded the same
+          // results.duplicates the service already computed.
+          duplicatesFound: results.duplicates,
           errorsDetails: results.errors.map(err => ({
             row: err.row,
             errors: Array.isArray(err.errors) ? err.errors : [err.errors]
             // NÃO inclui dados sensíveis
-          }))
+          })),
+          // #814 (RNF011 AC#4): points at the import_batches document holding
+          // any rejected rows, the same field the samples path already
+          // returns. Null when nothing was rejected, or when quarantining
+          // itself failed (logged server-side, not fatal to the import).
+          stagingBatchId: results.stagingBatchId ? String(results.stagingBatchId) : null
         }
       });
 
@@ -338,15 +554,36 @@ class ImportLGPDController {
         });
       }
 
-      let groupFields = {};
-      if (req.body?.groupFields) {
-        groupFields = typeof req.body.groupFields === 'string' ? JSON.parse(req.body.groupFields) : req.body.groupFields;
+      const parsedGroupFields = parseGroupFields(req.body?.groupFields);
+      if (!parsedGroupFields.ok) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(400).json({
+          success: false,
+          error: 'groupFields inválido',
+          message: 'groupFields deve ser um JSON válido'
+        });
       }
+      const groupFields = parsedGroupFields.value;
 
-      let mapping = {};
-      if (req.body?.mapping) {
-        mapping = typeof req.body.mapping === 'string' ? JSON.parse(req.body.mapping) : req.body.mapping;
+      // #869: `mapping`'s values become document keys in
+      // ImportLGPDService#buildMappedPatientRow, so it gets the same
+      // boundary treatment #818 gave its groupFields sibling twelve lines
+      // up -- reject the whole payload here rather than relying on
+      // parsePatientRow's fixed return literal to drop stray keys further
+      // down. #837's 400-on-malformed behaviour is preserved: the reason
+      // codes differ, the response does not.
+      const parsedMapping = parseImportMapping(req.body?.mapping);
+      if (!parsedMapping.ok) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(400).json({
+          success: false,
+          error: 'mapping inválido',
+          message: parsedMapping.reason === 'malformed'
+            ? 'mapping deve ser um JSON válido'
+            : 'mapping deve ser um objeto de colunas para campos conhecidos'
+        });
       }
+      const mapping = parsedMapping.value;
 
       const fileBuffer = fs.readFileSync(file.path);
       const fileHashSHA256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
@@ -356,11 +593,9 @@ class ImportLGPDController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'SMART_IMPORT_EXECUTION',
-          entity: 'Import',
           resourceType: 'Import',
           resourceId: file.originalname || null,
-          status: 'started',
-          result: 'success',
+          status: 'success',
           severity: 'info',
           module: 'Importação',
           message: 'Execução de importação inteligente iniciada.',
@@ -375,7 +610,21 @@ class ImportLGPDController {
         });
       }
 
-      const results = await importLGPDService.importPatientsSmart(db, file, { mapping, groupFields });
+      // #814 (RNF011 AC#4 / RF029 AC#5-6): same actor plumbing as
+      // importPatients above, so a quarantine batch opened for a rejected
+      // smart-import row records a real createdBy.
+      const results = await importLGPDService.importPatientsSmart(db, file, {
+        mapping,
+        groupFields,
+        actor: {
+          userID: req.user?.userID || req.user?.id || req.user?._id || null,
+          userId: req.user?.userID || req.user?.id || req.user?._id || null,
+          userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
+          userRole: req.user?.role || null,
+          ipAddress: req.ip || null,
+          userAgent: req.get?.('user-agent') || null
+        }
+      });
 
       const summaryReport = {
         processedAt: new Date().toISOString(),
@@ -387,11 +636,16 @@ class ImportLGPDController {
       const persistedSummaryReport = await this.persistSmartImportSummary(db, {
         summaryReport,
         fileName: file.originalname,
-        userId: req.user?.id || req.user?._id || null,
+        // #911: the JWT carries `userID` (auth.service.js signs userID/email/
+        // username/accessType/name), and `authenticate` assigns req.user =
+        // decoded verbatim -- so `id`/`_id` are both undefined and this
+        // recorded null for every smart import ever run. Canonical key first,
+        // matching fhir-import-staging.controller.js's own actor resolution.
+        userId: req.user?.userID || req.user?.id || req.user?._id || null,
         userName: req.user?.name || req.user?.username || null,
         totalSucesso: results.success,
         totalFalhas: results.errors.length,
-        errorsDetails: (Array.isArray(results.errors) ? results.errors : []).slice(0, 200)
+        errorsDetails: stripInternalErrorFields(results.errors).slice(0, 200)
       });
 
       if (req.user) {
@@ -399,11 +653,9 @@ class ImportLGPDController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'SMART_IMPORT_EXECUTION',
-          entity: 'Import',
           resourceType: 'Import',
           resourceId: file.originalname || null,
           status: results.errors.length === 0 ? 'success' : 'warning',
-          result: results.errors.length === 0 ? 'success' : 'warning',
           severity: results.errors.length === 0 ? 'info' : 'warning',
           module: 'Importação',
           message: results.errors.length === 0
@@ -426,7 +678,8 @@ class ImportLGPDController {
           results.errors.length === 0 ? 'success' : 'partial',
           results.total,
           results.success,
-          results.errors.length
+          results.errors.length,
+          { skipped: results.skipped }
         );
       }
 
@@ -439,9 +692,16 @@ class ImportLGPDController {
           total: results.total,
           success: results.success,
           errors: results.errors.length,
-          errorsDetails: results.errors,
+          // #980: same missing-count fix as importPatients above.
+          skipped: results.skipped,
+          // #970: same missing-count fix as importPatients above.
+          duplicatesFound: results.duplicates,
+          errorsDetails: stripInternalErrorFields(results.errors),
           summaryReport,
-          summaryReportId: String(persistedSummaryReport._id)
+          summaryReportId: String(persistedSummaryReport._id),
+          // #814 (RNF011 AC#4): same stagingBatchId field as importPatients
+          // and importSamples above.
+          stagingBatchId: results.stagingBatchId ? String(results.stagingBatchId) : null
         }
       });
     } catch (error) {
@@ -453,11 +713,9 @@ class ImportLGPDController {
           auditLogger.init(db);
           await auditLogger.log({
             action: 'SMART_IMPORT_EXECUTION',
-            entity: 'Import',
             resourceType: 'Import',
             resourceId: req.file?.originalname || null,
-            status: 'failure',
-            result: 'error',
+            status: 'error',
             severity: 'error',
             module: 'Importação',
             message: 'Falha na execução de importação inteligente.',
@@ -519,32 +777,41 @@ class ImportLGPDController {
       }
 
       // Obtém parâmetros de localização e auto-incremento do FormData
-      const startLocationID = req.body.locationID ? parseInt(req.body.locationID) : null;
+      // #459: boxId (StorageBox _id) replaces the legacy numeric locationID
+      const startBoxId = req.body.boxId || null;
       const autoIncrement = req.body.autoIncrement === 'true' || req.body.autoIncrement === true || req.body.autoIncrement === '1';
 
-      let groupFields = {};
-      if (req.body?.groupFields) {
-        try {
-          groupFields = typeof req.body.groupFields === 'string'
-            ? JSON.parse(req.body.groupFields)
-            : req.body.groupFields;
-        } catch (error) {
-          importLGPDService.cleanupFile(file.path);
-          return res.status(400).json({
-            success: false,
-            error: 'groupFields inválido',
-            message: 'groupFields deve ser um JSON válido'
-          });
-        }
+      const parsedGroupFields = parseGroupFields(req.body?.groupFields);
+      if (!parsedGroupFields.ok) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(400).json({
+          success: false,
+          error: 'groupFields inválido',
+          message: 'groupFields deve ser um JSON válido'
+        });
       }
-      
-      logger.debug('Parâmetros de importação:', { startLocationID, autoIncrement });
+      const groupFields = parsedGroupFields.value;
+
+      logger.debug('Parâmetros de importação:', { startBoxId, autoIncrement });
 
       // Processa importação
       const results = await importLGPDService.importSamples(db, file, {
-        startLocationID,
+        startBoxId,
         autoIncrement,
-        groupFields
+        groupFields,
+        neo4jDriver: req.app.locals.neo4jDriver || null,
+        // #911: same null-actor bug as above. `userID` is emitted too because
+        // quarantineRejectedSampleRows reads `actor?.userID` first for the
+        // batch's createdBy, while the storage-allocation audit trail reads
+        // `actor?.userId` -- both spellings are live consumers.
+        actor: {
+          userID: req.user?.userID || req.user?.id || req.user?._id || null,
+          userId: req.user?.userID || req.user?.id || req.user?._id || null,
+          userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
+          userRole: req.user?.role || null,
+          ipAddress: req.ip || null,
+          userAgent: req.get?.('user-agent') || null
+        }
       });
 
       // Registra log sanitizado (anonimizado via auditLogger)
@@ -552,39 +819,96 @@ class ImportLGPDController {
         const auditLogger = require('../utils/auditLogger');
         auditLogger.init(db);
         await auditLogger.logImport(
-          req, 
-          'Sample', 
+          req,
+          'Sample',
           results.errors.length === 0 ? 'success' : 'partial',
-          results.total, 
-          results.success, 
-          results.errors.length
+          results.total,
+          results.success,
+          results.errors.length,
+          { skipped: results.skipped }
         );
       }
 
-      // Limpa arquivo temporário
-      importLGPDService.cleanupFile(file.path);
+      // #792 (RNF011 AC#4): keep the uploaded file when rows were
+      // quarantined. The staged rows are the system's parsed view, which is
+      // no help for the failure mode where the file itself is at fault, and
+      // is not the artifact a compliance reviewer would ask for. A fully
+      // clean import still deletes it, matching #787's own "no empty batch
+      // for a clean file" decision.
+      if (results.stagingBatchId) {
+        await importLGPDService.retainSourceFileForBatch(db, file, results.stagingBatchId);
+      } else {
+        importLGPDService.cleanupFile(file.path);
+      }
 
       return res.status(200).json({
-        success: true,
+        success: results.errors.length === 0,
         message: 'Importação concluída',
         data: {
           total: results.total,
           success: results.success,
           errors: results.errors.length,
+          // #980: same missing-count fix as importPatients above.
+          skipped: results.skipped,
+          // #970: same missing-count fix as importPatients above.
+          duplicatesFound: results.duplicates,
           errorsDetails: results.errors.map(err => ({
             row: err.row,
             errors: err.errors,
             participantId: err.data?.participantId || null // Apenas ID, sem dados sensíveis
-          }))
+          })),
+          // #787 (RNF011 AC#4): where the rejected rows were quarantined.
+          // The response is no longer the only copy -- this points at the
+          // import_batches document holding them. Null when nothing was
+          // rejected, and also null if quarantining itself failed, which is
+          // logged server-side.
+          stagingBatchId: results.stagingBatchId ? String(results.stagingBatchId) : null
         }
       });
 
     } catch (error) {
       logger.error('Erro ao importar amostras:', error.message);
-      
-      // Limpa arquivo em caso de erro
+
+      // #806 (RNF011 AC#4): a throw here is a header-level failure (campos
+      // obrigatórios ausentes, identificação do paciente ausente) -- the one
+      // failure mode where the uploaded file itself is the likeliest culprit.
+      // Deleting it unconditionally destroyed exactly the evidence a
+      // reviewer would need. #792 already retains the file when individual
+      // rows are quarantined; this closes the gap for the throw path the
+      // same way: open a FAILED batch carrying the error, then retain the
+      // file against it. If either step itself fails, fall back to the old
+      // cleanup rather than mask the original failure or leave the file
+      // orphaned in temp/ -- the response below always reports the ORIGINAL
+      // error, not a secondary one from this fallback.
       if (req.file) {
-        importLGPDService.cleanupFile(req.file.path);
+        const db = req.app.locals?.db;
+        if (db) {
+          try {
+            const rawAutoIncrement = req.body?.autoIncrement;
+            const batchId = await importLGPDService.recordFailedImportBatch(db, {
+              fileName: req.file.originalname,
+              error,
+              actor: {
+                userID: req.user?.userID || req.user?.id || req.user?._id || null,
+                userId: req.user?.userID || req.user?.id || req.user?._id || null,
+              },
+              importOptions: {
+                startBoxId: req.body?.boxId || null,
+                autoIncrement: rawAutoIncrement === 'true' || rawAutoIncrement === true || rawAutoIncrement === '1',
+                groupFields: parseGroupFields(req.body?.groupFields).value || {},
+              },
+            });
+            await importLGPDService.retainSourceFileForBatch(db, req.file, batchId);
+          } catch (failureBatchError) {
+            logger.error(
+              'Falha ao registrar lote FAILED / reter arquivo de importação de amostras (RNF011 AC#4):',
+              failureBatchError.message || failureBatchError
+            );
+            importLGPDService.cleanupFile(req.file.path);
+          }
+        } else {
+          importLGPDService.cleanupFile(req.file.path);
+        }
       }
 
       return res.status(500).json({
@@ -688,66 +1012,13 @@ class ImportLGPDController {
       instructionsSheet.getColumn(1).width = 80;
       
       // ========== ABA DE DADOS (TEMPLATE) ==========
-      // Headers limpos (sem asteriscos ou descrições - serão usados para importação)
-      const headers = [
-        'patientName',
-        'email',
-        'phone',
-        'birthDate',
-        'sex',
-        'weight',
-        'heightCm',
-        'recordNumber',
-        'clinicalUnit',
-        'unitAcronym',
-        'diagnosticHypothesis',
-        'icdCode',
-        'hypertension',
-        'obesity',
-        'diabetesType1',
-        'diabetesType2',
-        'copd',
-        'ckd',
-        'smoking',
-        'alcoholUse',
-        'asthma',
-        'antibioticUse',
-        'insulinUse',
-        'antiviralUse',
-        'geneticVariant',
-        'notes'
-      ];
-      
-      // Linha de exemplo (primeira linha de dados) - ordem deve corresponder exatamente aos headers
-      const exampleRow = [
-        'João Silva Santos',        // patientName
-        'joao.silva@email.com',     // email
-        '5511999999999',            // phone
-        '15/03/1985',               // birthDate
-        'M',                         // sex
-        '75.5',                      // weight
-        '175',                       // heightCm
-        '2024001',                   // recordNumber
-        'Hospital Universitário São Francisco de Assis', // clinicalUnit
-        'HUSF',                      // unitAcronym
-          'Doença lisossômica',        // diagnosticHypothesis
-        'E75.21',                    // icdCode
-        'false',                     // hypertension (boolean)
-        'false',                     // obesity (boolean)
-        'false',                     // diabetesType1 (boolean)
-        'true',                      // diabetesType2 (boolean)
-        'false',                     // copd (boolean)
-        'false',                     // ckd (boolean)
-        'false',                     // smoking (boolean)
-        'false',                     // alcoholUse (boolean)
-        'false',                     // asthma (boolean)
-        'false',                     // antibioticUse (boolean)
-        'true',                      // insulinUse (boolean)
-        'false',                     // antiviralUse (boolean)
-        'GLA337T>C, p.Ala143Thr',    // geneticVariant
-        'Paciente em acompanhamento regular' // notes
-      ];
-      
+      // #815: headers and the example row live at module scope
+      // (PATIENT_TEMPLATE_HEADERS / PATIENT_TEMPLATE_EXAMPLE_ROW) so the CSV
+      // builder below emits exactly the same columns. Two copies would drift,
+      // and an operator filling in the wrong one gets rejected rows.
+      const headers = PATIENT_TEMPLATE_HEADERS;
+      const exampleRow = PATIENT_TEMPLATE_EXAMPLE_ROW;
+
       // Cria planilha apenas com headers limpos e exemplo
       const dataSheet = workbook.addWorksheet('Pacientes');
       dataSheet.addRow(headers);
@@ -773,6 +1044,36 @@ class ImportLGPDController {
 
     } catch (error) {
       logger.error('Erro ao gerar template Excel de pacientes:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao gerar template',
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * Gera template CSV para pacientes (#815).
+   *
+   * O par pacientes/amostras oferecia xlsx+csv para amostras mas apenas xlsx
+   * para pacientes, enquanto o cliente do frontend montava a URL das quatro
+   * combinacoes -- entao downloadTemplate('patients', 'csv') pedia uma rota
+   * que nunca existiu. Colunas e linha de exemplo vem das mesmas constantes
+   * usadas pelo template xlsx.
+   */
+  async downloadPatientTemplateCSV(req, res) {
+    try {
+      const { stringify } = require('csv-stringify/sync');
+
+      const csv = stringify([PATIENT_TEMPLATE_HEADERS, PATIENT_TEMPLATE_EXAMPLE_ROW]);
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="pacientes_template.csv"');
+      // BOM: sem ele o Excel abre o arquivo em ANSI e quebra os acentos.
+      res.send('﻿' + csv);
+
+    } catch (error) {
+      logger.error('Erro ao gerar template CSV de pacientes:', error.message);
       return res.status(500).json({
         success: false,
         error: 'Erro ao gerar template',
@@ -823,7 +1124,7 @@ class ImportLGPDController {
         'quality', // MIABIS: GOOD, COMPROMISED ou UNKNOWN
         'locationID', // opcional - pode ser selecionado após upload
         'linkedProject',
-        'lifecycleStatus'
+        'specimenStatus'
       ];
 
       // Linha de exemplo com valores do banco ou padrão
@@ -838,7 +1139,7 @@ class ImportLGPDController {
         '1',
         '', // locationID deixado vazio (opcional - pode ser selecionado após upload)
         'Projeto Genoma',
-        'Available'
+        'available'
       ];
 
       // Adiciona comentários com valores válidos
@@ -940,7 +1241,7 @@ class ImportLGPDController {
         ['• quantity: Quantidade em microlitros (µL) - Número decimal maior que zero'],
         ['• quality: Qualidade conforme MIABIS (GOOD, COMPROMISED ou UNKNOWN)'],
         ['• linkedProject: Nome do projeto vinculado (Texto)'],
-        ['• lifecycleStatus: Status atual - Available, Withdrawn, Expired ou Destroyed'],
+        ['• specimenStatus: Estado operacional atual - available, reserved, checked_out, partial, depleted, quarantined, destroyed, unavailable ou disposed'],
         [],
         ['CAMPOS OPCIONAIS:'],
         ['• barcode: Código de barras único (Texto) - OPCIONAL. Se não fornecido, será gerado automaticamente no formato BR-YYYY-NNN'],
@@ -975,11 +1276,16 @@ class ImportLGPDController {
         ['• UNKNOWN - Desconhecida / Não Avaliada'],
         ['• IMPORTANTE: Apenas os ids canônicos são aceitos'],
         [],
-        ['VALORES ACEITOS PARA lifecycleStatus:'],
-        ['• Available (Disponível)'],
-        ['• Withdrawn (Retirada)'],
-        ['• Expired (Expirada)'],
-        ['• Destroyed (Destruída)'],
+        ['VALORES ACEITOS PARA specimenStatus:'],
+        ['• available (Disponível)'],
+        ['• reserved (Reservada)'],
+        ['• checked_out (Retirada)'],
+        ['• partial (Parcial)'],
+        ['• depleted (Esgotada)'],
+        ['• quarantined (Em quarentena)'],
+        ['• destroyed (Destruída)'],
+        ['• unavailable (Indisponível)'],
+        ['• disposed (Descartada)'],
         [],
         ['EXEMPLO DE PREENCHIMENTO:'],
         ['participantId: 12345678'],
@@ -992,7 +1298,7 @@ class ImportLGPDController {
         ['quality: GOOD'],
         ['locationID: (deixe vazio para selecionar após upload)'],
         ['linkedProject: Projeto Genoma'],
-        ['lifecycleStatus: Available'],
+        ['specimenStatus: available'],
         [],
         ['OBSERVAÇÕES IMPORTANTES:'],
         ['• O participantId deve ter exatamente 8 dígitos numéricos'],
@@ -1027,7 +1333,7 @@ class ImportLGPDController {
         'quality (MIABIS GOOD, COMPROMISED ou UNKNOWN)',
         'locationID (opcional - pode ser selecionado após upload)',
         'linkedProject',
-        'lifecycleStatus'
+        'specimenStatus'
       ];
       
       // Linha de exemplo (primeira linha de dados) - usa valores do banco
@@ -1042,7 +1348,7 @@ class ImportLGPDController {
         MIABIS_QUALITY[0].id,                     // quality (ID)
         '',                      // locationID (opcional - deixado vazio no exemplo)
         'Projeto Genoma',        // linkedProject
-        'Available'              // lifecycleStatus
+        'available'              // specimenStatus
       ];
       
       // Cria planilha apenas com headers e exemplo
@@ -1119,5 +1425,12 @@ class ImportLGPDController {
   }
 }
 
-module.exports = new ImportLGPDController();
+const importLGPDController = new ImportLGPDController();
+
+// #815: exported so a test can assert the CSV and xlsx templates ship the
+// same columns, rather than restating the list a third time.
+importLGPDController.PATIENT_TEMPLATE_HEADERS = PATIENT_TEMPLATE_HEADERS;
+importLGPDController.PATIENT_TEMPLATE_EXAMPLE_ROW = PATIENT_TEMPLATE_EXAMPLE_ROW;
+
+module.exports = importLGPDController;
 

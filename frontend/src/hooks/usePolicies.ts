@@ -1,13 +1,18 @@
 import { useState, useEffect } from 'react';
 import { Policy } from '../types/models';
 import { policyService } from '../services/api';
+import { extractResponseEntity, extractResponseItems } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 export function usePolicies() {
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: discards a stale response when loadPolicies is called again
+  // before a previous in-flight call resolves.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadPolicies();
@@ -22,21 +27,21 @@ export function usePolicies() {
   }, []);
 
   const loadPolicies = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       const response = await policyService.getAll();
-      const responseData: any = response.data;
+      if (!requestSeq.isCurrent(seq)) return;
       // Garante que seja um array
-      const policiesData = Array.isArray(responseData) 
-        ? responseData 
-        : (responseData?.data || []);
+      const policiesData = extractResponseItems<Policy>(response);
       setPolicies(policiesData);
       setError(null);
     } catch (err: any) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(err.message || 'Erro ao carregar políticas');
       setPolicies([]); // Garante array vazio em caso de erro
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 
@@ -52,9 +57,10 @@ export function usePolicies() {
   const createPolicy = async (data: Partial<Policy>) => {
     try {
       const response = await policyService.create(data);
-      setPolicies([...policies, response.data]);
+      const newPolicy = extractResponseEntity<Policy>(response, data as any);
+      setPolicies([...policies, newPolicy]);
       notifyDashboardDataChanged();
-      return response.data;
+      return newPolicy;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao criar política');
     }
@@ -63,7 +69,9 @@ export function usePolicies() {
   const updatePolicy = async (id: number, data: Partial<Policy>) => {
     try {
       const response = await policyService.update(id, data);
-      setPolicies(policies.map((p) => (p.policyID === id ? response.data : p)));
+      // PUT /policies/:id returns { success, message } with no data key --
+      // reload the list instead of writing the bare envelope into state.
+      await loadPolicies();
       notifyDashboardDataChanged();
       return response.data;
     } catch (err: any) {

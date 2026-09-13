@@ -5,18 +5,82 @@ import Input from '../components/UI/Input';
 import { ArrowLeft } from 'lucide-react';
 import { User } from '../types/models';
 import { useUsers } from '../hooks/useUsers';
+import { useOrganizations } from '../hooks/useOrganizations';
 import { getAccessTypeForRole, getRoleDescription, RoleName } from '../utils/rolePermissions';
 import { useLanguage } from '../contexts/LanguageContext';
 import { validatePassword } from '../utils/passwordValidator';
 import { getPasswordIssues } from '../utils/passwordRules';
 import './NewUserPage.css';
 
+/**
+ * Monta o payload a ser enviado ao backend a partir do formData bruto:
+ * remove campos que não devem ser (re)enviados, normaliza telefone e
+ * organizationId, e aplica as regras de MFA por papel/edição.
+ * Implementa: preparação de User para PUT/POST /api/users.
+ */
+export function buildUserSubmissionPayload(formData: Partial<User>, editingUser: User | null): any {
+  const dataToSave: any = { ...formData };
+
+  // Remove campos que não devem ser enviados para atualização
+  delete dataToSave._id;
+  delete dataToSave.id;
+  delete dataToSave.createdAt;
+  delete dataToSave.lastLogin;
+  // #1072: the backend field is mfaSecretCiphertext since the rename; both
+  // names are dropped so a stale client payload can never carry either.
+  delete dataToSave.mfaSecret;
+  delete dataToSave.mfaSecretCiphertext;
+  delete dataToSave.mfaActivationDate;
+  delete dataToSave.mfaFailedAttempts;
+  delete dataToSave.mfaLocked;
+  delete dataToSave.accessIDs; // Campo não é mais usado
+  delete dataToSave.modelVersion; // Remove modelVersion se existir
+
+  // Normaliza telefone: remove formatação antes de salvar (apenas números)
+  if (dataToSave.phone !== undefined) {
+    if (dataToSave.phone && typeof dataToSave.phone === 'string') {
+      const phoneNumbers = dataToSave.phone.replace(/\D/g, '');
+      dataToSave.phone = phoneNumbers.length > 0 ? phoneNumbers : null;
+    } else {
+      dataToSave.phone = null;
+    }
+  }
+
+  // Normaliza organizationId: string vazia (nenhuma organização selecionada) vira null
+  if (dataToSave.organizationId !== undefined) {
+    dataToSave.organizationId = dataToSave.organizationId || null;
+  }
+
+  // Remove senha se estiver vazia (não atualiza senha)
+  if (!dataToSave.password || dataToSave.password.trim() === '') {
+    delete dataToSave.password;
+  }
+
+  // Se for Administrador e não for edição, não envia campos MFA (será opcional e setado manualmente)
+  if (dataToSave.roleName === 'Administrador' || dataToSave.accessType === 4) {
+    // Para admin, MFA é opcional e pode ser setado manualmente
+    // Mantém mfaEnabled se estiver sendo editado e foi setado manualmente
+    if (!editingUser) {
+      // Novo admin - MFA desabilitado por padrão
+      delete dataToSave.mfaEnabled;
+    }
+    // Se for edição de admin, mantém mfaEnabled se foi fornecido
+  } else {
+    // Para não-admin, remove campos MFA (não podem ser editados manualmente)
+    delete dataToSave.mfaEnabled;
+  }
+
+  return dataToSave;
+}
+
 export default function NewUserPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { registerUser, updateUser, loadUsers } = useUsers();
+  const { organizations } = useOrganizations();
   const { t } = useLanguage();
   const roleSelectId = useId();
+  const organizationSelectId = useId();
   
   // Verifica se há usuário para edição (vindo da navegação)
   const editingUser = (location.state as any)?.user as User | null;
@@ -46,7 +110,7 @@ export default function NewUserPage() {
       name: '',
       email: '',
       phone: '',
-      institution: '',
+      organizationId: null,
       username: '',
       password: '',
       accessType: 1,
@@ -176,54 +240,7 @@ export default function NewUserPage() {
     setIsSubmitting(true);
     
     try {
-      // Remove campos MFA do formData (não podem ser editados manualmente, exceto para admin)
-      const dataToSave: any = { ...formData };
-      
-      // Remove campos que não devem ser enviados para atualização
-      delete dataToSave._id;
-      delete dataToSave.id;
-      delete dataToSave.createdAt;
-      delete dataToSave.lastLogin;
-      delete dataToSave.mfaSecret;
-      delete dataToSave.mfaActivationDate;
-      delete dataToSave.mfaFailedAttempts;
-      delete dataToSave.mfaLocked;
-      delete dataToSave.accessIDs; // Campo não é mais usado
-      delete dataToSave.modelVersion; // Remove modelVersion se existir
-      
-      // Normaliza telefone: remove formatação antes de salvar (apenas números)
-      if (dataToSave.phone !== undefined) {
-        if (dataToSave.phone && typeof dataToSave.phone === 'string') {
-          const phoneNumbers = dataToSave.phone.replace(/\D/g, '');
-          dataToSave.phone = phoneNumbers.length > 0 ? phoneNumbers : null;
-        } else {
-          dataToSave.phone = null;
-        }
-      }
-      
-      // Normaliza instituição: strings vazias viram null (opcionais)
-      if (dataToSave.institution !== undefined) {
-        dataToSave.institution = dataToSave.institution?.trim() || null;
-      }
-      
-      // Remove senha se estiver vazia (não atualiza senha)
-      if (!dataToSave.password || dataToSave.password.trim() === '') {
-        delete dataToSave.password;
-      }
-      
-      // Se for Administrador e não for edição, não envia campos MFA (será opcional e setado manualmente)
-      if (dataToSave.roleName === 'Administrador' || dataToSave.accessType === 4) {
-        // Para admin, MFA é opcional e pode ser setado manualmente
-        // Mantém mfaEnabled se estiver sendo editado e foi setado manualmente
-        if (!editingUser) {
-          // Novo admin - MFA desabilitado por padrão
-          delete dataToSave.mfaEnabled;
-        }
-        // Se for edição de admin, mantém mfaEnabled se foi fornecido
-      } else {
-        // Para não-admin, remove campos MFA (não podem ser editados manualmente)
-        delete dataToSave.mfaEnabled;
-      }
+      const dataToSave = buildUserSubmissionPayload(formData, editingUser);
 
       if (editingUser) {
         const userId = (editingUser as any)._id || editingUser.id;
@@ -325,14 +342,27 @@ export default function NewUserPage() {
             placeholder="(00) 00000-0000"
             maxLength={15}
           />
-          <Input
-            data-testid="new-user-institution-input"
-            label={t('users.institution')}
-            value={formData.institution || ''}
-            onChange={(e) =>
-              setFormData({ ...formData, institution: e.target.value })
-            }
-          />
+          <div>
+            <label htmlFor={organizationSelectId} className="form-label">{t('users.institution')}</label>
+            <select
+              data-testid="new-user-organization-select"
+              id={organizationSelectId}
+              name="organizationId"
+              value={formData.organizationId || ''}
+              onChange={(e) =>
+                setFormData({ ...formData, organizationId: e.target.value || null })
+              }
+              className="form-select"
+              title={t('users.institution')}
+            >
+              <option value="">{t('common.select')}</option>
+              {organizations.map((org) => (
+                <option key={org.organizationId} value={org.organizationId}>
+                  {org.officialName}
+                </option>
+              ))}
+            </select>
+          </div>
           <Input
             data-testid="new-user-username-input"
             label={t('users.username')}

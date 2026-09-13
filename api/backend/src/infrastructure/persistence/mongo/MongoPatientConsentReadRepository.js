@@ -2,6 +2,7 @@
  * Repositório de leitura Mongo para paciente/consentimento.
  */
 const { getCollection } = require('../../../utils/collectionResolver');
+const { SampleModel } = require('../../../models/Sample');
 
 class MongoPatientConsentReadRepository {
   /**
@@ -22,12 +23,18 @@ class MongoPatientConsentReadRepository {
       let consentValid = false;
       let consentMessage = '';
 
-      const patient = await patientsCollection.findOne({
-        $or: [
-          { participantId: sample.participantId },
-          { _id: sample.participantId }
-        ]
-      });
+      // #850: the `{ _id: participantId }` leg this $or used to carry was
+      // provably dead, not merely suspicious. Every patient insert path
+      // (patient.service, import.service, import-lgpd x2) goes through
+      // PatientModel.create, whose canonical field allow-list omits `_id`
+      // and throws 422 on any non-canonical field -- so every patient `_id`
+      // is a driver-generated ObjectId, and a string participantId can never
+      // equal one (Mongo does not coerce string to ObjectId in a filter).
+      // sample.routes.js:527 dropped the same leg for #788; this matches it.
+      const participantId = String(sample?.participantId ?? '').trim();
+      const patient = participantId
+        ? await patientsCollection.findOne({ participantId })
+        : null;
 
       if (patient) {
         const consent = await patientConsentsCollection.findOne({
@@ -57,7 +64,7 @@ class MongoPatientConsentReadRepository {
         participantId: sample.participantId,
         sampleType: sample.sampleType,
         sampleOrigin: sample.sampleOrigin,
-        lifecycleStatus: sample.lifecycleStatus,
+        specimenStatus: SampleModel.resolveSpecimenStatus(sample),
         quantity: sample.quantity,
         registeredAt: sample.registeredAt,
         consentValid,

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Log } from '../types/models';
 import { logService } from '../services/api';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 interface ApiLikeError {
   response?: {
@@ -78,6 +79,10 @@ export function useLogs() {
   const [logs, setLogs] = useState<Log[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: loadLogs and queryLogs both write `logs` state, so they share one
+  // sequence -- whichever call is issued last must be able to invalidate
+  // the other's in-flight response.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadLogs();
@@ -92,52 +97,54 @@ export function useLogs() {
   }, []);
 
   const loadLogs = async (filters?: Record<string, unknown>) => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       setError(null);
       const response = await logService.getLogs(filters);
+      if (!requestSeq.isCurrent(seq)) return;
       const logsData = extractLogsFromPayload(response.data);
-      
+
       setLogs(logsData);
       setError(null);
     } catch (err: unknown) {
       console.error('Erro ao carregar logs:', err);
+      if (!requestSeq.isCurrent(seq)) return;
       const errorMessage = extractErrorMessage(err, 'Erro ao carregar logs');
-      
+
       setError(errorMessage);
       setLogs([]); // Define array vazio em caso de erro
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 
   const queryLogs = async (filters: Record<string, unknown>) => {
+    const seq = requestSeq.next();
     try {
       const response = await logService.queryLogs(filters);
       const logsData = extractLogsFromPayload(response.data);
-      
-      setLogs(logsData);
+
+      if (requestSeq.isCurrent(seq)) {
+        setLogs(logsData);
+      }
       return logsData;
     } catch (err: unknown) {
       console.error('Erro ao consultar logs:', err);
-      setLogs([]); // Define array vazio em caso de erro
+      if (requestSeq.isCurrent(seq)) {
+        setLogs([]); // Define array vazio em caso de erro
+      }
 
       const errorMessage = extractErrorMessage(err, 'Erro ao consultar logs');
       throw new Error(errorMessage);
     }
   };
 
-  const registerEvent = async (data: Partial<Log>) => {
-    try {
-      const response = await logService.registerEvent(data);
-      const responseData = response.data as { data?: Log } | Log;
-      const newLog: Log = (responseData as { data?: Log })?.data || (responseData as Log);
-      setLogs([newLog, ...logs]);
-      return newLog;
-    } catch (err: unknown) {
-      throw new Error(extractErrorMessage(err, 'Erro ao registrar evento'));
-    }
-  };
+  // #1107: `registerEvent` was removed along with the POST /api/logs/register
+  // route it wrapped -- it had no consumer (LogsPage is the only caller of this
+  // hook and never destructured it), and the route was a forgery surface on the
+  // immutable audit trail. Audit rows are written server-side, not submitted by
+  // the client.
 
   return {
     logs,
@@ -145,7 +152,6 @@ export function useLogs() {
     error,
     loadLogs,
     queryLogs,
-    registerEvent,
   };
 }
 

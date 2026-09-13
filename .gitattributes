@@ -1,3 +1,7 @@
+*.sh text eol=lf
+*.jsonl text eol=lf
+api/backend/src/reference-data/**/*.json text eol=lf
+
 docs/inpi/archive/** export-ignore
 .env export-ignore
 .env.docker export-ignore

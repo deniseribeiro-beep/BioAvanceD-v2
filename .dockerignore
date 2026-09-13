@@ -1,0 +1,8 @@
+node_modules
+frontend/node_modules
+api/backend/node_modules
+.git
+playwright-report
+test-results
+coverage
+api/backend/coverage

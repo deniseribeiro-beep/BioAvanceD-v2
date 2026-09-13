@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { AxiosRequestConfig } from 'axios';
 import {
   Patient,
   Sample,
@@ -6,7 +6,6 @@ import {
   ConsentTemplate,
   PatientConsent,
   Equipment,
-  Location,
   Temperature,
   Sensor,
   Policy,
@@ -19,10 +18,43 @@ import {
   Withdrawal,
   Return,
   CidEntry,
-  ClinicalUnit,
   PhoneCodeEntry,
+  Organization,
+  Collection,
+  ReportTemplate,
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
+
+// Opt-out for background/speculative requests (e.g. a prefetch for a later
+// wizard step) whose failure must not force-logout the user out of an
+// unrelated in-progress flow. Default (unset) keeps the existing behavior:
+// any 401 attempts a refresh, then ends the session on failure.
+//
+// Security-reviewed (#397): only changes client-side redirect behavior for
+// requests that opt in — never touches the 401 itself or backend
+// authorization. Currently used by exactly one caller (ClinicalIntakeWizard's
+// consent-template prefetch); re-verify this same scope reasoning before a
+// second call site adopts it.
+export interface ApiRequestConfig extends AxiosRequestConfig {
+  suppressAuthRedirect?: boolean;
+}
+
+// #898: the shared envelope shape most JSON routes on this backend actually
+// answer with -- verified directly against policy.routes.js (GET/POST/PUT),
+// access.routes.js, result.routes.js, user.routes.js's /register, and
+// master-data.routes.js (the router factory behind measurement-units,
+// quality-descriptions, sample-types, sample-origins, extraction-protocols
+// and collections). `data` is optional because several PUT handlers
+// (policy.routes.js:220-223, access.routes.js:158-161,
+// result.routes.js:504-507 and :591-... for link-sample) return only
+// `{ success, message }` with no `data` key at all -- writing the raw
+// envelope into state instead of reloading was exactly the #898 bug class.
+// A single `ApiEnvelope<never>` reads as "success/message only" for those.
+export type ApiEnvelope<T> = {
+  success: boolean;
+  message?: string;
+  data?: T;
+};
 
 const NO_TOKEN_PROTECTED_REQUEST = 'NO_TOKEN_PROTECTED_REQUEST';
 const TOKEN_OPTIONAL_ROUTES = [
@@ -31,6 +63,25 @@ const TOKEN_OPTIONAL_ROUTES = [
   '/auth/password-reset/reset',
   '/auth/two-factor/qr-first-login',
   '/auth/two-factor/enable-first-login',
+  // #809: participant-facing consent-token endpoints. Whoever follows a bulk
+  // consent invitation has no account and no session -- the 64-char token in
+  // the emailed link is the credential. Without these entries the request
+  // interceptor below cancels the call and redirects to /login, which is the
+  // same auth wall #809 exists to remove, just relocated from ProtectedRoute
+  // into this client. Both routes are public on the backend too
+  // (routes/eConsent.js:246-247, no `authenticate`).
+  '/e-consent/consent-tokens/validate',
+  '/e-consent/consent-tokens/accept',
+  // #822: the other two participant-facing pages, on the JWT token system.
+  // Same reasoning as the pair above -- EConsentPage and EConsentImportPage
+  // are entered by emailed link, so the visitor has no session and the token
+  // in the URL is the credential. All four backend routes are public
+  // (routes/eConsent.js:38, 78, 187, 206 -- no `authenticate` middleware).
+  // The import pair is matched by prefix: `/import/fhir/consent/:token` and
+  // `.../accept` both contain this substring.
+  '/e-consent/validate',
+  '/e-consent/update',
+  '/e-consent/import/fhir/consent',
 ];
 
 let isRedirectingToLogin = false;
@@ -187,9 +238,12 @@ api.interceptors.response.use(
       const requestUrl = error.config?.url || '';
       const isRefreshEndpoint = requestUrl.includes('/auth/refresh');
       const isRetry = Boolean(error.config?._retry);
-      
-      // Rotas públicas de autenticação não devem forçar limpeza de sessão
-      if (isTokenOptionalRoute(requestUrl) || isRefreshEndpoint) {
+      const suppressAuthRedirect = Boolean((error.config as ApiRequestConfig | undefined)?.suppressAuthRedirect);
+
+      // Rotas públicas de autenticação, chamadas de refresh, e requisições
+      // que explicitamente optam por não encerrar a sessão (ex.: prefetch em
+      // segundo plano para uma etapa futura) não devem forçar limpeza de sessão
+      if (isTokenOptionalRoute(requestUrl) || isRefreshEndpoint || suppressAuthRedirect) {
         return Promise.reject(error);
       }
 
@@ -231,8 +285,12 @@ api.interceptors.response.use(
 
 // ========== PATIENT SERVICES ==========
 export const patientService = {
+  // paciente.controller.js's listar() nests the page inside `data`
+  // (`data: { patients, total, limit, skip }`), in both its "cadastro" and
+  // "operacional" branches (paciente.controller.js:220-228, :255-258) --
+  // `data` is never Patient[] directly.
   getAll: (params?: { limit?: number; skip?: number; patientName?: string; clinicalUnit?: string }) =>
-    api.get<Patient[]>('/patients', { params }),
+    api.get<ApiEnvelope<{ patients: Patient[]; total: number; limit: number; skip: number }>>('/patients', { params }),
   getById: (id: number | string) => api.get<Patient>(`/patients/${id}`),
   create: (data: Partial<Patient>) => api.post<Patient>('/patients', data),
   update: (id: number | string, data: Partial<Patient>) => api.put<Patient>(`/patients/${id}`, data),
@@ -257,11 +315,11 @@ export const phoneCodeService = {
 
 // ========== SAMPLE SERVICES ==========
 export const sampleService = {
-  getAll: () => api.get<Sample[]>('/samples'),
+  getAll: () => api.get<ApiEnvelope<Sample[]>>('/samples'),
   getById: (id: number) => api.get<Sample>(`/samples/${id}`),
   getComplianceGraph: (id: number | string) => api.get(`/samples/${id}/compliance-graph`),
   getByBarcode: (barcode: string) => api.get<{ sample: Sample; patient: { participantId: number; patientName: string; recordNumber: number } | null }>(`/samples/by-barcode/${encodeURIComponent(barcode)}`),
-  getResults: (id: number) => api.get<Result[]>(`/samples/${id}/results`), // Implementa Sample.getResults()
+  getResults: (id: number) => api.get<ApiEnvelope<Result[]>>(`/samples/${id}/results`), // Implementa Sample.getResults()
   getMovements: (id: string) => api.get<{ success: boolean; data: any[] }>(`/samples/${id}/movements`), // Histórico de movimentações
   create: (data: Partial<Sample>) => api.post<Sample>('/samples', data),
   update: (id: number | string, data: Partial<Sample>) => api.put<Sample>(`/samples/${id}`, data),
@@ -310,7 +368,7 @@ export const dataImportService = {
 // ========== RESULT SERVICES ==========
 export const resultService = {
   getAll: (importJobID?: string) => {
-    return api.get<Result[]>('/results', {
+    return api.get<ApiEnvelope<Result[]>>('/results', {
       params: importJobID ? { importJobID } : undefined
     });
   },
@@ -319,10 +377,12 @@ export const resultService = {
     api.post('/results/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     }),
-  create: (data: Partial<Result>) => api.post<Result>('/results', data),
-  linkSample: (id: number, sampleID: number) => 
-    api.put<Result>(`/results/${id}/link-sample`, { sampleID }), // Implementa Result.linkSample()
-  update: (id: number, data: Partial<Result>) => api.put<Result>(`/results/${id}`, data),
+  create: (data: Partial<Result>) => api.post<ApiEnvelope<Result>>('/results', data), // result.routes.js:426-430
+  // result.routes.js:504-507 and :591-... (link-sample) both answer
+  // { success, message } with no `data` key.
+  linkSample: (id: number, specimenId: string) =>
+    api.put<ApiEnvelope<never>>(`/results/${id}/link-sample`, { specimenId }), // Implementa Result.linkSample()
+  update: (id: number, data: Partial<Result>) => api.put<ApiEnvelope<never>>(`/results/${id}`, data),
   delete: (id: number) => api.delete(`/results/${id}`),
   download: async (id: number | string) => {
     try {
@@ -434,40 +494,20 @@ export const analysisFileService = {
 
 // ========== EQUIPMENT SERVICES ==========
 export const equipmentService = {
-  getAll: () => api.get<Equipment[]>('/equipment'),
+  getAll: () => api.get<ApiEnvelope<Equipment[]>>('/equipment'),
   getById: (id: number) => api.get<Equipment>(`/equipment/${id}`),
-  getAnalytical: () => api.get<Equipment[]>('/equipment/analytical'),
+  getAnalytical: () => api.get<ApiEnvelope<Equipment[]>>('/equipment/analytical'),
   create: (data: Partial<Equipment>) => api.post<Equipment>('/equipment', data),
   update: (id: number | string, data: Partial<Equipment>) => api.put<Equipment>(`/equipment/${id}`, data),
   delete: (id: number | string) => api.delete(`/equipment/${id}`),
 };
 
-// ========== LOCATION SERVICES ==========
-export const locationService = {
-  getAll: () => api.get<Location[]>('/locations'),
-  getById: (id: string) => api.get<Location>(`/locations/${id}`),
-  create: (data: Partial<Location>) => api.post<Location>('/locations', data),
-  update: (id: string, data: Partial<Location>) => api.put<Location>(`/locations/${id}`, data),
-  delete: (id: string) => api.delete(`/locations/${id}`),
-  fixMissingLocationIDs: () => api.patch<{ success: boolean; message: string; updated: number; total: number }>('/locations/fix-missing-locationids'),
-};
-
-export const clinicalUnitService = {
-  getAll: (limit = 100, includeInactive = false) =>
-    api.get<{ success: boolean; data: ClinicalUnit[] }>('/clinical-units', {
-      params: { limit, includeInactive }
-    }),
-  search: (term: string, limit = 10) =>
-    api.get<{ success: boolean; data: ClinicalUnit[] }>('/clinical-units/search', {
-      params: { q: term, limit }
-    }),
-  create: (data: Partial<ClinicalUnit>) =>
-    api.post<{ success: boolean; data: ClinicalUnit; message?: string }>('/clinical-units', data),
-};
-
 // ========== TEMPERATURE SERVICES ==========
 export const temperatureService = {
-  getAll: () => api.get<Temperature[]>('/temperature'),
+  // temperature.service.js's getTemperatureHistory nests the page inside
+  // `data` (`data: { temperatures, total, limit, skip }`, temperature.
+  // service.js:226) -- `data` is never Temperature[] directly.
+  getAll: () => api.get<ApiEnvelope<{ temperatures: Temperature[]; total: number; limit: number; skip: number }>>('/temperature'),
   getById: (id: string) => api.get<Temperature>(`/temperature/${id}`),
   viewControl: (sensorID?: string, policyID?: string) => 
     api.get<any>('/temperature/control', { 
@@ -478,7 +518,7 @@ export const temperatureService = {
 
 // ========== SENSOR SERVICES ==========
 export const sensorService = {
-  getAll: () => api.get<Sensor[]>('/sensors'),
+  getAll: () => api.get<ApiEnvelope<Sensor[]>>('/sensors'),
   getById: (id: string) => api.get<Sensor>(`/sensors/${id}`),
   collectReading: (id: string) => 
     api.post<Temperature>(`/sensors/${id}/collect-reading`), // Implementa Sensor.collectReading()
@@ -489,46 +529,81 @@ export const sensorService = {
 
 // ========== POLICY SERVICES ==========
 export const policyService = {
-  getAll: () => api.get<Policy[]>('/policies'),
+  getAll: () => api.get<ApiEnvelope<Policy[]>>('/policies'),
   getById: (id: number) => api.get<Policy>(`/policies/${id}`),
-  getActiveLimit: (id: number, isMax: boolean = true) => 
+  getActiveLimit: (id: number, isMax: boolean = true) =>
     api.get<{ limit: number; type: string; unit: string }>(`/policies/${id}/active-limit`, {
       params: { type: isMax ? 'max' : 'min' }
     }), // Implementa Policy.getActiveLimit()
-  create: (data: Partial<Policy>) => api.post<Policy>('/policies', data),
-  update: (id: number, data: Partial<Policy>) => api.put<Policy>(`/policies/${id}`, data),
+  create: (data: Partial<Policy>) => api.post<ApiEnvelope<Policy>>('/policies', data), // policy.routes.js:163-167
+  update: (id: number, data: Partial<Policy>) => api.put<ApiEnvelope<never>>(`/policies/${id}`, data), // policy.routes.js:220-223, no data key
   delete: (id: number) => api.delete(`/policies/${id}`),
 };
 
 // ========== USER SERVICES ==========
 export const userService = {
-  getAll: () => api.get<User[]>('/users'),
+  getAll: () => api.get<ApiEnvelope<User[]>>('/users'),
   getById: (id: number) => api.get<User>(`/users/${id}`),
-  register: (data: Partial<User>) => api.post<User>('/users/register', data), // Implementa User.registerUser()
+  register: (data: Partial<User>) => api.post<ApiEnvelope<User>>('/users/register', data), // user.routes.js:105-109
   validateStatus: (id: number) => api.get<{ status: string }>(`/users/${id}/validate-status`), // Implementa User.validateUserStatus()
   registerPatient: (data: Partial<Patient>) => api.post<Patient>('/users/register-patient', data), // Implementa User.registerPatient()
   registerSample: (data: Partial<Sample>) => api.post<Sample>('/users/register-sample', data), // Implementa User.registerSample()
   recordWithdrawal: (data: Partial<Withdrawal>) => api.post<Withdrawal>('/users/record-withdrawal', data), // Implementa User.recordSampleWithdrawal()
   generateReport: (reportType: string) => api.post<Reports>('/users/generate-report', { reportType }), // Implementa User.generateReports()
   registerSensor: (data: Partial<Sensor>) => api.post<Sensor>('/users/register-sensor', data), // Implementa User.registerSensor()
-  getLogs: (filters?: any) => api.get<Log[]>('/users/logs', { params: filters }), // Implementa User.getLogs()
+  // log.service.js's getLogs (also used by logService.getLogs below) nests
+  // the page inside `data` (`data: { logs, total, page, totalPages }`,
+  // log.service.js:352-359) -- `data` is never Log[] directly.
+  getLogs: (filters?: any) => api.get<ApiEnvelope<{ logs: Log[]; total: number; page: number; totalPages: number }>>('/users/logs', { params: filters }), // Implementa User.getLogs()
   update: (id: number | string, data: Partial<User>) => api.put<User>(`/users/${id}`, data),
   delete: (id: number | string) => api.delete(`/users/${id}`),
   resetMFA: (id: number | string) => api.post(`/users/${id}/reset-mfa`),
   disableMFA: (id: number | string) => api.post(`/users/${id}/disable-mfa`),
+  forcePasswordReset: (id: number | string) => api.post(`/users/${id}/force-password-reset`),
+};
+
+// ========== ORGANIZATION SERVICES ==========
+export const organizationService = {
+  getAll: () => api.get<ApiEnvelope<Organization[]>>('/organizations'),
+  create: (data: Partial<Organization>) => api.post<Organization>('/organizations', data),
+  update: (id: string, data: Partial<Organization>) => api.put<Organization>(`/organizations/${id}`, data),
+  delete: (id: string) => api.delete(`/organizations/${id}`),
+};
+
+// #726 (RF008 AC#6): admin-editable report templates, replacing
+// reports.routes.js's old fixed string-matching dispatch.
+export const reportTemplateService = {
+  getAll: () => api.get('/report-templates'),
+  getOne: (id: string) => api.get(`/report-templates/${id}`),
+  create: (data: Partial<ReportTemplate>) => api.post('/report-templates', data),
+  update: (id: string, data: Partial<ReportTemplate>) => api.put(`/report-templates/${id}`, data),
+  delete: (id: string) => api.delete(`/report-templates/${id}`),
+};
+
+// ========== COLLECTION SERVICES (RF020, MIABIS Collection) ==========
+export const collectionsService = {
+  getAll: () => api.get<ApiEnvelope<Collection[]>>('/collections'),
+  getById: (id: string) => api.get<Collection>(`/collections/${id}`),
+  create: (data: Partial<Collection>) => api.post<Collection>('/collections', data),
+  update: (id: string, data: Partial<Collection>) => api.put<Collection>(`/collections/${id}`, data),
+  delete: (id: string) => api.delete(`/collections/${id}`),
 };
 
 // ========== ACCESS SERVICES ==========
 export const accessService = {
-  getAll: () => api.get<Access[]>('/access'),
+  getAll: () => api.get<ApiEnvelope<Access[]>>('/access'),
   getById: (id: number) => api.get<Access>(`/access/${id}`),
-  create: (data: Partial<Access>) => api.post<Access>('/access', data),
-  update: (id: number, data: Partial<Access>) => api.put<Access>(`/access/${id}`, data),
+  create: (data: Partial<Access>) => api.post<ApiEnvelope<Access>>('/access', data), // access.routes.js:100-104
+  update: (id: number, data: Partial<Access>) => api.put<ApiEnvelope<never>>(`/access/${id}`, data), // access.routes.js:158-161, no data key
   delete: (id: number) => api.delete(`/access/${id}`),
 };
 
 // ========== REPORTS SERVICES ==========
 export const reportsService = {
+  // #898: the one exception among the api.get<X[]> sites -- reports.
+  // routes.js's GET / answers `res.status(200).json(reports.map(...))`
+  // (reports.routes.js:906, `#637` region), a bare array with no
+  // { success, data } envelope. Left as Reports[], not ApiEnvelope<Reports[]>.
   getAll: () => api.get<Reports[]>('/reports'),
   getById: (id: number) => api.get<Reports>(`/reports/${id}`),
   generate: (reportType: string) => api.post<Reports>('/reports/generate', { reportType }), // Implementa User.generateReports()
@@ -554,46 +629,57 @@ export const reportsService = {
 
 // ========== MEASUREMENT UNIT SERVICES ==========
 export const measurementUnitService = {
-  getAll: () => api.get<SampleWithMeasurementUnit[]>('/measurement-units'),
+  // master-data.routes.js (the router factory this mount uses) always
+  // answers { success, data } -- including PUT, unlike policy/access/result's
+  // updates (master-data.routes.js:77, :95, :140, :173).
+  getAll: () => api.get<ApiEnvelope<SampleWithMeasurementUnit[]>>('/measurement-units'),
   getById: (id: number) => api.get<SampleWithMeasurementUnit>(`/measurement-units/${id}`),
-  create: (data: Partial<SampleWithMeasurementUnit>) => api.post<SampleWithMeasurementUnit>('/measurement-units', data),
-  update: (id: number, data: Partial<SampleWithMeasurementUnit>) => api.put<SampleWithMeasurementUnit>(`/measurement-units/${id}`, data),
+  create: (data: Partial<SampleWithMeasurementUnit>) => api.post<ApiEnvelope<SampleWithMeasurementUnit>>('/measurement-units', data),
+  update: (id: number, data: Partial<SampleWithMeasurementUnit>) => api.put<ApiEnvelope<SampleWithMeasurementUnit>>(`/measurement-units/${id}`, data),
   delete: (id: number) => api.delete(`/measurement-units/${id}`),
 };
 
 // ========== QUALITY DESCRIPTION SERVICES ==========
+// #881: idField is now the string MIABIS `id` (settled by #902), not the
+// numeric qualityID this mount used to require.
 export const qualityDescriptionService = {
-  getAll: () => api.get<SampleWithQualityDescription[]>('/quality-descriptions'),
-  getById: (id: number) => api.get<SampleWithQualityDescription>(`/quality-descriptions/${id}`),
+  getAll: () => api.get<ApiEnvelope<SampleWithQualityDescription[]>>('/quality-descriptions'),
+  getById: (id: string) => api.get<SampleWithQualityDescription>(`/quality-descriptions/${id}`),
   create: (data: Partial<SampleWithQualityDescription>) => api.post<SampleWithQualityDescription>('/quality-descriptions', data),
-  update: (id: number, data: Partial<SampleWithQualityDescription>) => api.put<SampleWithQualityDescription>(`/quality-descriptions/${id}`, data),
-  delete: (id: number) => api.delete(`/quality-descriptions/${id}`),
+  update: (id: string, data: Partial<SampleWithQualityDescription>) => api.put<SampleWithQualityDescription>(`/quality-descriptions/${id}`, data),
+  delete: (id: string) => api.delete(`/quality-descriptions/${id}`),
 };
 
 // ========== SAMPLE TYPE SERVICES ==========
+// #881: idField is now the string MIABIS `id` (settled by #902), not the
+// numeric sampleTypeID this mount used to require.
 export const sampleTypeService = {
-  getAll: () => api.get<any[]>('/sample-types'),
-  getById: (id: number) => api.get<any>(`/sample-types/${id}`),
+  getAll: () => api.get<ApiEnvelope<any[]>>('/sample-types'),
+  getById: (id: string) => api.get<any>(`/sample-types/${id}`),
   create: (data: Partial<any>) => api.post<any>('/sample-types', data),
 };
 
 // ========== ANALYSIS TYPE SERVICES ==========
 export const analysisTypeService = {
-  getAll: () => api.get<any[]>('/analysis-types'),
+  getAll: () => api.get<ApiEnvelope<any[]>>('/analysis-types'),
   create: (data: { name: string; code?: string }) => api.post<any>('/analysis-types', data),
 };
 
 // ========== SAMPLE ORIGIN SERVICES ==========
+// #881: idField is now the string MIABIS `id` (settled by #902), not the
+// numeric originID this mount used to require.
 export const sampleOriginService = {
-  getAll: () => api.get<any[]>('/sample-origins'),
-  getById: (id: number) => api.get<any>(`/sample-origins/${id}`),
+  getAll: () => api.get<ApiEnvelope<any[]>>('/sample-origins'),
+  getById: (id: string) => api.get<any>(`/sample-origins/${id}`),
   create: (data: Partial<any>) => api.post<any>('/sample-origins', data),
 };
 
 // ========== EXTRACTION PROTOCOL SERVICES ==========
+// #881: idField is now the string MIABIS `id` (settled by #902), not the
+// numeric protocolID this mount used to require.
 export const extractionProtocolService = {
-  getAll: () => api.get<any[]>('/extraction-protocols'),
-  getById: (id: number) => api.get<any>(`/extraction-protocols/${id}`),
+  getAll: () => api.get<ApiEnvelope<any[]>>('/extraction-protocols'),
+  getById: (id: string) => api.get<any>(`/extraction-protocols/${id}`),
   create: (data: Partial<any>) => api.post<any>('/extraction-protocols', data),
 };
 
@@ -603,7 +689,6 @@ export const logService = {
   getById: (id: number | string) => api.get<{ success: boolean; data: Log }>(`/logs/${id}`),
   getLogs: (filters?: any) => api.get<{ success: boolean; data: { logs: Log[]; total: number; page: number; totalPages: number } }>('/logs', { params: filters }),
   queryLogs: (filters: any) => api.post<{ success: boolean; data: { logs: Log[]; total: number; page: number; totalPages: number } }>('/logs/query', filters),
-  registerEvent: (data: Partial<Log>) => api.post<{ success: boolean; data: Log }>('/logs/register', data),
   exportCSV: (filters?: any) => api.get('/logs/export/csv', { params: filters, responseType: 'blob' }),
   exportExcel: (filters?: any) => api.get('/logs/export/xlsx', { params: filters, responseType: 'blob' }),
 };
@@ -620,8 +705,8 @@ export const auditService = {
 
 // ========== AUTH SERVICES ==========
 export const authService = {
-  login: (username: string, password: string, twoFactorCode?: string) =>
-    api.post('/auth/login', { username, password, twoFactorCode }),
+  login: (username: string, password: string, twoFactorCode?: string, newPassword?: string) =>
+    api.post('/auth/login', { username, password, twoFactorCode, newPassword }),
   logout: () => api.post('/auth/logout'),
   getSessions: () => api.get('/auth/sessions'),
   revokeSession: (sessionId: string) => api.delete(`/auth/sessions/${sessionId}`),
@@ -689,49 +774,9 @@ export const importService = {
     });
   },
   
-  // Novos métodos assíncronos
-  validateFile: (file: File, dataType: string) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('dataType', dataType);
-    return api.post('/import/validate', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-  },
-  
-  createImportJob: (
-    file: File, 
-    dataType: string, 
-    options?: { startLocationID?: number; autoIncrement?: boolean; groupFields?: Record<string, any> }
-  ) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('dataType', dataType);
-    if (options?.startLocationID !== undefined) {
-      formData.append('startLocationID', options.startLocationID.toString());
-    }
-    if (options?.autoIncrement !== undefined) {
-      formData.append('autoIncrement', options.autoIncrement.toString());
-    }
-    if (options?.groupFields) {
-      formData.append('groupFields', JSON.stringify(options.groupFields));
-    }
-    return api.post('/import/import', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-  },
-  
-  getJobStatus: (jobID: string) => api.get(`/import/job/${jobID}`),
-  
-  listJobs: (params?: { status?: string; dataType?: string; limit?: number; skip?: number }) => 
+  listJobs: (params?: { status?: string; dataType?: string; limit?: number; skip?: number }) =>
     api.get('/import/jobs', { params }),
-  
-  cancelJob: (jobID: string) => api.post(`/import/job/${jobID}/cancel`),
-  
+
   getImportReport: (jobID: string) => api.get(`/import/job/${jobID}/report`),
 };
 
@@ -742,11 +787,19 @@ export const backupService = {
   restoreBackup: (fileName: string) => api.post(`/backup/restore/${fileName}`),
 };
 
+// #728 (RF013 AC#5/AC#6): admin-editable backup policy (retention/
+// frequency/encryption/RPO/RTO), distinct from the operational
+// perform/list/restore calls above.
+export const backupPolicyService = {
+  getPolicy: () => api.get('/backup-policy'),
+  updatePolicy: (data: any) => api.put('/backup-policy', data),
+};
+
 // ========== CONSENT SERVICES ==========
 // TCLE builder should use only ConsentTemplate endpoints for create/update/read
 export const consentService = {
   createTemplate: (data: Partial<ConsentTemplate>) => api.post<ConsentTemplate>('/e-consent/consent-templates', data),
-  getTemplates: () => api.get<{ success: boolean; data: ConsentTemplate[] }>('/e-consent/consent-templates'),
+  getTemplates: (config?: ApiRequestConfig) => api.get<{ success: boolean; data: ConsentTemplate[] }>('/e-consent/consent-templates', config),
   getActiveTemplate: () => api.get<{ success: boolean; data: ConsentTemplate | null; source?: string; message?: string }>('/e-consent/consent-templates/current'),
   getTemplateById: (id: string) => api.get<{ success: boolean; data: ConsentTemplate }>(`/e-consent/consent-templates/${id}`),
   updateTemplate: (id: string, data: Partial<ConsentTemplate>) => api.put<{ success: boolean; data: ConsentTemplate }>(`/e-consent/consent-templates/${id}`, data),
@@ -767,6 +820,73 @@ export const consentService = {
   }) => api.post<PatientConsent>('/e-consent/consents', data),
   revokeConsent: (consentId: string) => api.post(`/e-consent/consents/${consentId}/revoke`),
   getPatientConsent: (participantId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${participantId}/consent`)
+};
+
+// #809: the bulk consent-token pair, consumed by ConsentTokenPage. Unlike the
+// rest of consentService these are unauthenticated -- see
+// TOKEN_OPTIONAL_ROUTES above. They deliberately use the shared `api` client
+// rather than raw relative axios: nothing proxies /api on the frontend origin
+// in dev, test or prod, so a relative URL returns the SPA's index.html (#822).
+export type ConsentTokenTemplatePayload = {
+  id: string;
+  title: string;
+  content: string;
+  version: string | null;
+  permissions: Array<{ key: string; label: string; required?: boolean }>;
+};
+
+export const consentTokenService = {
+  validate: (participantId: string, token: string) =>
+    api.post<{ success: boolean; data: { valid: boolean; participantId: string; template: ConsentTokenTemplatePayload | null } }>(
+      '/e-consent/consent-tokens/validate',
+      { patientId: participantId, token }
+    ),
+  accept: (participantId: string, token: string) =>
+    api.post<{ success: boolean; message: string; data: { success: boolean; participantId: string } }>(
+      '/e-consent/consent-tokens/accept',
+      { patientId: participantId, token }
+    ),
+};
+
+// #822: the JWT consent-token pair behind EConsentPage, and the FHIR import
+// consent pair behind EConsentImportPage. Both pages previously called raw
+// axios with a relative `/api/...` URL, which resolves against the frontend
+// origin -- nothing proxies /api there in dev, test or prod, so every request
+// returned the SPA's index.html with a 200 and the pages rendered their
+// generic "link inválido" message. Like consentTokenService above, these are
+// unauthenticated and listed in TOKEN_OPTIONAL_ROUTES.
+export type EConsentValidatePayload = {
+  patient: { patientName?: string } | null;
+  template: {
+    id: string;
+    title?: string;
+    permissions: Array<{ key: string; label: string; required?: boolean }>;
+  } | null;
+  responses: Record<string, boolean>;
+};
+
+export type EConsentUpdateEntry = { key: string; status: 'ACCEPTED' | 'REVOKED' };
+
+export type ImportConsentPayload = {
+  success: boolean;
+  batchId?: string;
+  recordId?: string;
+  participantId?: string;
+  patientName?: string;
+  patientEmail?: string;
+  status?: string;
+  consentSigned?: boolean;
+};
+
+export const eConsentService = {
+  validate: (token: string) =>
+    api.get<EConsentValidatePayload>(`/e-consent/validate/${encodeURIComponent(token)}`),
+  update: (token: string, consents: EConsentUpdateEntry[]) =>
+    api.post('/e-consent/update', { token, consents }),
+  validateImportConsent: (token: string) =>
+    api.get<ImportConsentPayload>(`/e-consent/import/fhir/consent/${encodeURIComponent(token)}`),
+  acceptImportConsent: (token: string) =>
+    api.post<ImportConsentPayload>(`/e-consent/import/fhir/consent/${encodeURIComponent(token)}/accept`),
 };
 
 // ========== IMPORT LGPD SERVICES ==========
@@ -801,6 +921,15 @@ export const importLGPDService = {
   },
   getSmartImportPatientsMetadata: () => {
     return api.get('/import-lgpd/pacientes/smart-import/metadata');
+  },
+  // #794 (RNF011 AC#4): the quarantine surface. #787 made rejected rows
+  // survive and slice 1 made a batch readable by id; these are what let an
+  // operator actually reach one.
+  listQuarantineBatches: (params?: { page?: number; limit?: number }) => {
+    return api.get('/import-lgpd/batches', { params });
+  },
+  getQuarantineBatch: (batchId: string) => {
+    return api.get(`/import-lgpd/batches/${encodeURIComponent(batchId)}`);
   },
 };
 

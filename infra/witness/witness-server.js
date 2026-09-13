@@ -2,7 +2,11 @@ const http = require('http');
 const { readFileSync } = require('fs');
 const crypto = require('crypto');
 
-const PORT = Number(process.env.PORT || 8096);
+// #981: WITNESS_PORT first, for the reason spelled out in
+// infra/tsa/tsa-server.js -- compose sets WITNESS_PORT and this read was
+// PORT-only, so the knob was inert. Its sibling WITNESS_ID below IS read,
+// which is what made the whole block look correct by association.
+const PORT = Number(process.env.WITNESS_PORT || process.env.PORT || 8096);
 const WITNESS_ID = process.env.WITNESS_ID || 'bioavanced-local-witness';
 const PRIVATE_KEY_PEM_FILE = process.env.WITNESS_PRIVATE_KEY_PEM_FILE || '/run/secrets/witness_key.pem';
 

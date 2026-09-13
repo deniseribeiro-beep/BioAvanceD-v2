@@ -4,6 +4,13 @@ const jwt = require('jsonwebtoken');
 const notificationService = require('./NotificationService');
 const qualityDomain = require('./quality-domain.service');
 const logger = require('../utils/logger');
+const { SampleModel } = require('../models/Sample');
+const ParticipantIdentityModel = require('../models/ParticipantIdentity');
+const participantIdentityService = require('./participantIdentity.service');
+const quarantineActionService = require('./quarantine-action.service');
+const { withMongoTransaction, isTransactionCapable } = require('../utils/mongoTransaction');
+const rcsAssessmentService = require('./rcs-assessment.service');
+const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 
 const STATUS = Object.freeze({
   VALID: 'VALID',
@@ -16,6 +23,19 @@ const STATUS = Object.freeze({
   READY_TO_COMMIT: 'READY_TO_COMMIT',
   COMMITTED: 'COMMITTED',
 });
+
+/**
+ * The discriminator this service owns inside `import_batches` (#799).
+ *
+ * `import_batches` / `import_staging_records` are shared with the LGPD sample
+ * import, which writes `type: 'LGPD_SAMPLE_CSV'` since #787. The two paths are
+ * gated on different permissions -- these routes on `uploadFiles`, every LGPD
+ * route on `createPatient`/`createSample` -- so every query here has to carry
+ * the discriminator, or it serves (and mutates) the other path's data for a
+ * principal that holds neither of its permissions. `import-lgpd.service.js#
+ * getQuarantineBatch` carries the mirror-image filter for the same reason.
+ */
+const FHIR_BATCH_TYPE = 'FHIR_BUNDLE';
 
 function collection(db, name) {
   if (!db || typeof db.collection !== 'function') {
@@ -147,19 +167,17 @@ function parseSprecRaw(sprecsRaw = '', matrix = '') {
     ? 'solid'
     : 'fluid';
 
-  if (parts.length >= 7 && matrixType === 'solid') {
-    return {
-      matrixType,
-      sampleType: parts[0],
-      collectionType: parts[1],
-      warmIschemia: parts[2],
-      coldIschemia: parts[3],
-      fixationType: parts[4],
-      fixationTime: parts[5],
-      longTermStorage: parts[6],
-    };
-  }
-
+  // #527: axis 2-6 use the same generic axis-position field names
+  // (primaryContainer/preCentrifugation/centrifugation/secondCentrifugation/
+  // postCentrifugationDelay) for both matrix types — matching
+  // SPREC_SOLID_DICTIONARY's own axis 2-6 slots (frontend/src/constants/
+  // sprecDictionary.js, which relabels those same slots per matrixType
+  // rather than naming them differently) and import.service.js's CSV-driven
+  // parsing (also matrix-type-agnostic). SpecimenPreanalyticsModel.fieldsOf
+  // reads these generic names to derive its solid-specific dict-02 fields
+  // (sprecCollectionType/warmIschemiaTime/coldIschemiaTime/
+  // fixationStabilizationType/fixationTime); a solid-only field-name branch
+  // here left every one of those null.
   if (parts.length >= 7) {
     return {
       matrixType,
@@ -202,11 +220,15 @@ function buildRcsPayload({ sampleType, matrix, sprecsRaw, processingUnknown }) {
     const unknownSolid = {
       matrixType: 'solid',
       sampleType: sprec.sampleType || 'X',
-      collectionType: sprec.collectionType || 'X',
-      warmIschemia: 'X',
-      coldIschemia: 'X',
-      fixationType: 'X',
-      fixationTime: 'X',
+      // #527: generic axis-position names, same reasoning as parseSprecRaw's
+      // solid branch above — rcs-certification.service.js's AXES.solid still
+      // resolves these via its preCentrifugation/centrifugation/
+      // secondCentrifugation/postCentrifugationDelay aliases.
+      primaryContainer: sprec.primaryContainer || 'X',
+      preCentrifugation: 'X',
+      centrifugation: 'X',
+      secondCentrifugation: 'X',
+      postCentrifugationDelay: 'X',
       longTermStorage: 'X',
     };
     return { matrixType: sprec.matrixType === 'solid' ? 'solid' : 'fluid', sprec: sprec.matrixType === 'solid' ? unknownSolid : unknownFluid };
@@ -222,7 +244,13 @@ function buildRcsPayload({ sampleType, matrix, sprecsRaw, processingUnknown }) {
 
 function calculateRcsPreview({ sampleType, matrix, sprecsRaw, processingUnknown }) {
   const payload = buildRcsPayload({ sampleType, matrix, sprecsRaw, processingUnknown });
-  return qualityDomain.resolveMethodologicalQuality(payload);
+  const result = qualityDomain.resolveMethodologicalQuality(payload);
+  // #526: the per-axis sprec object computed above is the input the RCS
+  // certification ran against, but rcs-certification.service.js's own
+  // calculation_trace never echoes it back — pass it through separately so
+  // callers (the embedded sample.sprec copy, and the SpecimenPreanalytics
+  // snapshot recorded on commit) have real data instead of always `{}`.
+  return { ...result, sprec: payload.sprec };
 }
 
 function consentIsSigned(consent = {}) {
@@ -234,6 +262,12 @@ function isValidEmail(email = '') {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 }
 
+// quarantineStatus/quarantineReason/availabilityStatus on import_staging_records
+// (this fn, and every staging.updateOne site below) are a pre-commit workflow
+// snapshot on the FHIR import record itself, not Sample governance state —
+// intentionally left off the specimenStatus/QuarantineAction migration (#409).
+// Only commitBatch's and attachExternalDocument's `samples` collection writes
+// are real Sample write sites; those two are migrated.
 function buildWorkflowSnapshot(record = {}) {
   const normalized = record.normalized || {};
   const patientEmail = String(normalized.patientEmail || '').trim();
@@ -281,18 +315,6 @@ function buildWorkflowSnapshot(record = {}) {
     quarantineReason,
     availabilityStatus,
     displayStatus,
-  };
-}
-
-function decorateRecord(record = {}) {
-  const workflow = buildWorkflowSnapshot(record);
-  return {
-    ...record,
-    consentStatus: workflow.consentStatus,
-    quarantineStatus: workflow.quarantineStatus,
-    quarantineReason: workflow.quarantineReason,
-    availabilityStatus: workflow.availabilityStatus,
-    workflowStatus: workflow.displayStatus,
   };
 }
 
@@ -428,7 +450,7 @@ function normalizeSpecimen(specimen, index, bundleIndex) {
   const specimenId = String(specimen.id || extractIdentifier(specimen) || '').trim();
   const participantId = String(patient?.id || patientRef || extractIdentifier(patient || {}) || '').trim();
   const sampleType = String(specimen.type?.text || specimen.type?.coding?.[0]?.display || specimen.type?.coding?.[0]?.code || '').trim();
-  const collectionDate = specimen.collection?.collectedDateTime || specimen.collection?.collectedDate || specimen.receivedAt || null;
+  const collectionDate = specimen.collection?.collectedDateTime || specimen.collection?.collectedDate || specimen.receivedTime || null;
   const matrix = extensionValue(specimen, 'matrix');
   const storageTemperature = extensionValue(specimen, 'storage-temperature');
   const sprecsRaw = extensionValue(specimen, 'sprecs');
@@ -507,6 +529,7 @@ function normalizeSpecimen(specimen, index, bundleIndex) {
         grade_route: rcsPreview.grade_route,
         axis_penalties: rcsPreview.axis_penalties || [],
         calculation_trace: rcsPreview.calculation_trace || {},
+        sprec: rcsPreview.sprec || {},
       },
       consentSigned,
     },
@@ -561,7 +584,7 @@ async function refreshBatchCounts(db, batchId) {
           : 'VALIDATED';
 
   await collection(db, 'import_batches').updateOne(
-    { _id: batchId },
+    { _id: batchId, type: FHIR_BATCH_TYPE },
     { $set: { status, counts, updatedAt: new Date() } }
   );
 
@@ -588,7 +611,7 @@ async function stageBundle(db, payload, metadata = {}) {
 
   const now = new Date();
   const batchDoc = {
-    type: 'FHIR_BUNDLE',
+    type: FHIR_BATCH_TYPE,
     status: 'STAGED',
     fileName: String(metadata.fileName || 'fhir-bundle.json'),
     source: 'FHIR',
@@ -615,14 +638,25 @@ async function stageBundle(db, payload, metadata = {}) {
   };
 }
 
-async function getBatch(db, batchIdRaw) {
-  const batchId = toObjectId(batchIdRaw);
-  const batch = await collection(db, 'import_batches').findOne({ _id: batchId });
+/**
+ * Resolve a batch this service owns, or 404 (#799).
+ *
+ * 404 rather than 403 deliberately: a FHIR endpoint should not confirm the
+ * existence of a batch belonging to the LGPD import path.
+ */
+async function findFhirBatch(db, batchId) {
+  const batch = await collection(db, 'import_batches').findOne({ _id: batchId, type: FHIR_BATCH_TYPE });
   if (!batch) {
     const error = new Error('Lote de importação FHIR não encontrado.');
     error.statusCode = 404;
     throw error;
   }
+  return batch;
+}
+
+async function getBatch(db, batchIdRaw) {
+  const batchId = toObjectId(batchIdRaw);
+  const batch = await findFhirBatch(db, batchId);
   const records = await collection(db, 'import_staging_records').find({ batchId }).sort({ rowNumber: 1 }).toArray();
   return { batch, records };
 }
@@ -791,8 +825,24 @@ async function validateImportConsentToken(db, tokenRaw) {
   const token = String(tokenRaw || '').trim();
   const payload = parseConsentToken(token);
   const { batchId, recordId, participantId } = ensureImportConsentPayload(payload);
-  const batch = await collection(db, 'import_batches').findOne({ _id: toObjectId(batchId) });
-  const record = await collection(db, 'import_staging_records').findOne({ _id: toObjectId(recordId), batchId: toObjectId(batchId) });
+  const batchObjectId = toObjectId(batchId);
+
+  // #802: route the batch lookup through findFhirBatch so the `type:
+  // FHIR_BUNDLE` discriminator (#799) lives in exactly one place in this
+  // file. findFhirBatch throws (rather than returning null) on a miss --
+  // including a batchId that resolves to the *other* import path's
+  // `LGPD_SAMPLE_CSV` document -- so its 404 is folded into the combined
+  // not-found guard below instead of propagating findFhirBatch's own
+  // message, keeping this function's single external failure message.
+  let batch = null;
+  try {
+    batch = await findFhirBatch(db, batchObjectId);
+  } catch (error) {
+    if (error.statusCode !== 404) throw error;
+    batch = null;
+  }
+
+  const record = await collection(db, 'import_staging_records').findOne({ _id: toObjectId(recordId), batchId: batchObjectId });
 
   if (!batch || !record || String(record.normalized?.participantId || '') !== participantId) {
     const error = new Error('Registro FHIR de importação não encontrado.');
@@ -891,7 +941,15 @@ async function commitBatch(db, batchIdRaw) {
   const patients = collection(db, 'patients');
   const samples = collection(db, 'samples');
   const staging = collection(db, 'import_staging_records');
-  const batchInfo = await collection(db, 'import_batches').findOne({ _id: batchId });
+  // #838: route through findFhirBatch rather than a bare `{ _id: batchId }`
+  // findOne, so this file's `type: FHIR_BATCH_TYPE` discriminator (#799) does
+  // not depend on validateBatch's ordering above having already enforced it.
+  // findFhirBatch throws a 404 on a miss rather than tolerating null; that
+  // branch is unreachable here today (validateBatch already resolved batchId
+  // through the same discriminated lookup), so this is a latent behaviour
+  // change only, chosen to keep a single source for the discriminator
+  // instead of duplicating a local not-found guard for no live caller.
+  const batchInfo = await findFhirBatch(db, batchId);
 
   let committed = 0;
   for (const record of records) {
@@ -903,13 +961,21 @@ async function commitBatch(db, batchIdRaw) {
     const workflow = buildWorkflowSnapshot(record);
     const importedAt = new Date();
     const importedBy = String(batchInfo?.createdBy || record.createdBy || record.importedBy || '').trim() || null;
+    // #571: patientName/cpf used to be written here directly, but
+    // patientName/birthDate/identityDocument are civil identity — #575's
+    // atomic removal means they never land on Patient at all (PatientModel
+    // rejects them as non-canonical); the ParticipantIdentity dual-write
+    // right below is their sole write target. `sex` (FHIR Patient.gender,
+    // when present) is genuinely a canonical Patient field, unlike those
+    // two. `consentTemplateId`/`status` stay unset — a FHIR-committed
+    // Patient has no consent-template flow to draw them from (this import
+    // path gates on a signed FHIR Consent resource instead).
     await patients.updateOne(
       { participantId: normalized.participantId },
       {
         $setOnInsert: {
           participantId: normalized.participantId,
-          patientName: normalized.patientName,
-          cpf: normalized.patientDocument,
+          ...(normalized.patientSex ? { sex: normalized.patientSex } : {}),
           createdAt: new Date(),
         },
         $set: {
@@ -919,7 +985,33 @@ async function commitBatch(db, batchIdRaw) {
       { upsert: true }
     );
 
-    await samples.updateOne(
+    // RF005/RNF007 (#363/#563): mirror civil identity into the segregated
+    // ParticipantIdentity collection, same as patient.service.js#createPatient
+    // — kept as an upsert (rather than a plain insertOne) to match the
+    // Patient upsert above's own idempotent-on-participantId semantics.
+    const identities = collection(db, 'participantIdentities');
+    const identityFields = participantIdentityService.encryptIdentityFields(
+      ParticipantIdentityModel.fieldsOf({
+        participantId: normalized.participantId,
+        patientName: normalized.patientName,
+        birthDate: normalized.patientBirthDate,
+        identityDocument: normalized.patientDocument,
+      })
+    );
+    await identities.updateOne(
+      { participantId: normalized.participantId },
+      {
+        $setOnInsert: { ...identityFields, createdAt: new Date() },
+        $set: { updatedAt: new Date() },
+      },
+      { upsert: true }
+    );
+
+    const specimenStatus = workflow.quarantineStatus === 'RELEASED' ? 'available' : 'quarantined';
+    const existingSample = await samples.findOne({ specimenId: normalized.specimenId });
+    const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
+
+    const upsertResult = await samples.updateOne(
       { specimenId: normalized.specimenId },
       {
         $setOnInsert: {
@@ -927,7 +1019,7 @@ async function commitBatch(db, batchIdRaw) {
           participantId: normalized.participantId,
           sampleType: normalized.sampleType,
           collectionDate: normalized.collectionDate,
-          sprec: normalized.rcsPreview?.calculation_trace?.sprec || {},
+          sprec: normalized.rcsPreview?.sprec || {},
           rcs_score: normalized.rcsPreview?.rcs_score ?? null,
           final_grade: normalized.rcsPreview?.final_grade || '',
           p_bio: normalized.rcsPreview?.p_bio ?? null,
@@ -937,30 +1029,69 @@ async function commitBatch(db, batchIdRaw) {
           axis_penalties: normalized.rcsPreview?.axis_penalties || [],
           calculation_trace: normalized.rcsPreview?.calculation_trace || {},
           fhir: record.fhir?.specimen || null,
-          consentStatus: workflow.consentStatus,
-          quarantineStatus: workflow.quarantineStatus,
-          quarantineReason: workflow.quarantineReason,
-          availabilityStatus: workflow.availabilityStatus,
-          importBatchId: String(batchId),
-          importedAt,
-          importedBy,
-          releaseStatus: workflow.quarantineStatus === 'RELEASED' ? 'AVAILABLE' : 'QUARANTINE',
           createdAt: new Date(),
         },
         $set: {
           consentStatus: workflow.consentStatus,
-          quarantineStatus: workflow.quarantineStatus,
           quarantineReason: workflow.quarantineReason,
-          availabilityStatus: workflow.availabilityStatus,
+          specimenStatus,
           importBatchId: String(batchId),
           importedAt,
           importedBy,
-          releaseStatus: workflow.quarantineStatus === 'RELEASED' ? 'AVAILABLE' : 'QUARANTINE',
           updatedAt: new Date(),
         },
       },
       { upsert: true }
     );
+
+    const committedSample = await samples.findOne({ specimenId: normalized.specimenId });
+
+    // #526: mirrors sample.service.js's #492/#524 pins — only recorded for a
+    // genuine insert (the $setOnInsert branch above, signaled by
+    // upsertedId), since a commit that only matches an already-existing
+    // sample doesn't write fresh rcsPreview/sprec data via $setOnInsert and
+    // would otherwise grow duplicate versioned snapshots on every re-commit
+    // that touches the same specimenId. Best-effort, same as every other
+    // creation path: a failure here doesn't roll back the commit.
+    if (upsertResult?.upsertedId && committedSample) {
+      if (normalized.rcsPreview) {
+        try {
+          const assessment = await rcsAssessmentService.recordAssessment(db, normalized.specimenId, normalized.rcsPreview);
+          await samples.updateOne(
+            { _id: committedSample._id },
+            { $set: { sealedRcsAssessmentId: assessment._id } }
+          );
+          committedSample.sealedRcsAssessmentId = assessment._id;
+        } catch (assessmentError) {
+          logger.error('Falha ao registrar RcsAssessment para a amostra importada via FHIR:', assessmentError.message || assessmentError);
+        }
+      }
+
+      const sprec = normalized.rcsPreview?.sprec;
+      if (sprec) {
+        try {
+          const profile = await specimenPreanalyticsService.recordProfile(db, normalized.specimenId, sprec);
+          await samples.updateOne(
+            { _id: committedSample._id },
+            { $set: { sealedSpecimenPreanalyticsId: profile._id } }
+          );
+          committedSample.sealedSpecimenPreanalyticsId = profile._id;
+        } catch (profileError) {
+          logger.error('Falha ao registrar SpecimenPreanalytics para a amostra importada via FHIR:', profileError.message || profileError);
+        }
+      }
+    }
+    if (committedSample) {
+      if (specimenStatus === 'quarantined' && !wasQuarantined) {
+        await quarantineActionService.recordAction(db, {
+          specimenIds: [String(committedSample._id)],
+          reasonCodes: [workflow.quarantineReason || 'FHIR_IMPORT_REVIEW_REQUIRED'],
+          authorizedBy: importedBy || 'SYSTEM',
+        });
+      } else if (specimenStatus === 'available' && wasQuarantined) {
+        await quarantineActionService.releaseActiveAction(db, String(committedSample._id), importedBy || 'SYSTEM');
+      }
+    }
 
     await staging.updateOne(
       { _id: record._id },
@@ -990,6 +1121,13 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
   const staging = collection(db, 'import_staging_records');
   const samples = collection(db, 'samples');
 
+  // #799: this is the one entry point that never resolves through getBatch, so
+  // it needs the discriminator itself. It is also the most damaging one to
+  // leave open -- it marks the record RELEASED/AVAILABLE and then writes to
+  // `samples` keyed on normalized.specimenId, which an LGPD quarantine record
+  // does not carry.
+  await findFhirBatch(db, batchId);
+
   const record = await staging.findOne({ _id: recordId, batchId });
   if (!record) {
     const error = new Error('Registro FHIR não encontrado para anexar documentação externa.');
@@ -997,8 +1135,24 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
     throw error;
   }
 
+  // #801: this endpoint's job is bypassing the *consent* gate out of band --
+  // not the validation gate. Same notion of "blocking" sendConsents already
+  // uses (everything except NEEDS_EMAIL, since routing around a missing
+  // e-mail is this endpoint's whole purpose): a record still carrying a
+  // blocking validation error must be refused rather than driven straight to
+  // COMMITTED/RELEASED/AVAILABLE. Deliberately not gated on
+  // `status === READY_TO_COMMIT` (unlike commitBatch) -- a consent-blocked
+  // record legitimately never reaches that status, and that's exactly the
+  // case this endpoint exists to unblock.
+  const errors = Array.isArray(record.errors) ? record.errors : [];
+  const blockingErrors = errors.filter((error) => error.code !== 'NEEDS_EMAIL');
+  if (blockingErrors.length > 0) {
+    throw createBadRequest('Registro possui erros de validação bloqueantes e não pode receber documentação externa.');
+  }
+
   const normalized = record.normalized || {};
   const now = new Date();
+
   const updatedRecord = {
     consentStatus: 'EXTERNAL_ATTACHED',
     quarantineStatus: 'RELEASED',
@@ -1015,20 +1169,57 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
     updatedAt: now,
   };
 
-  await staging.updateOne({ _id: recordId, batchId }, { $set: updatedRecord });
-  await samples.updateOne(
-    { specimenId: normalized.specimenId },
-    {
-      $set: {
-        consentStatus: 'EXTERNAL_ATTACHED',
-        quarantineStatus: 'RELEASED',
-        quarantineReason: null,
-        availabilityStatus: 'AVAILABLE',
-        releaseStatus: 'AVAILABLE',
-        updatedAt: now,
+  // #918: releasing the specimen (samples.updateOne) and marking this
+  // staging record COMMITTED (staging.updateOne) used to be two independent
+  // writes -- if the second failed, the specimen was already
+  // available/EXTERNAL_ATTACHED with no staging or audit record explaining
+  // the release. Refusing here on matchedCount === 0 (before the staging
+  // write runs) only mitigates that by ordering: it is not atomicity, and on
+  // a standalone deployment (no replica set / mongos -- see
+  // isTransactionCapable) there is still a residual window between the two
+  // writes where a crash leaves the specimen released with its staging
+  // record stuck at NEEDS_REVIEW. Where the deployment supports it, both
+  // writes plus the quarantine release run inside one transaction instead.
+  const capable = await isTransactionCapable(db);
+
+  const doRelease = async (session) => {
+    const dbOptions = session ? { session } : undefined;
+
+    const existingSample = await samples.findOne({ specimenId: normalized.specimenId }, dbOptions);
+    const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
+
+    const sampleUpdateResult = await samples.updateOne(
+      { specimenId: normalized.specimenId },
+      {
+        $set: {
+          consentStatus: 'EXTERNAL_ATTACHED',
+          quarantineReason: null,
+          specimenStatus: 'available',
+          updatedAt: now,
+        },
       },
+      dbOptions
+    );
+
+    if (!sampleUpdateResult || sampleUpdateResult.matchedCount === 0) {
+      const error = new Error('Nenhuma amostra encontrada para o specimenId deste registro; documentação externa não anexada.');
+      error.statusCode = 404;
+      throw error;
     }
-  );
+
+    await staging.updateOne({ _id: recordId, batchId }, { $set: updatedRecord }, dbOptions);
+
+    if (existingSample && wasQuarantined) {
+      await quarantineActionService.releaseActiveAction(db, String(existingSample._id), options.userID || 'SYSTEM', undefined, session);
+    }
+  };
+
+  if (capable) {
+    await withMongoTransaction(db, (session) => doRelease(session));
+  } else {
+    logger.warn('[FHIR_IMPORT] attachExternalDocument: MongoDB standalone (sem replica set/mongos) -- release da amostra e commit do registro staging seguem como duas escritas sequenciais, não atômicas.', { batchId, recordId });
+    await doRelease(undefined);
+  }
 
   await audit(db, 'FHIR_IMPORT_EXTERNAL_DOCUMENT_ATTACHED', { batchId, recordId, participantId: normalized.participantId, specimenId: normalized.specimenId });
 

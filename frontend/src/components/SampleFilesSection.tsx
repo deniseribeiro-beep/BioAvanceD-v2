@@ -139,6 +139,7 @@ export default function SampleFilesSection({ sampleID }: SampleFilesSectionProps
         {canUploadDelete && (
           <Button
             variant="primary"
+            data-testid="sample-files-open-upload-button"
             onClick={() => setShowUploadModal(true)}
             style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}
           >
@@ -199,7 +200,7 @@ export default function SampleFilesSection({ sampleID }: SampleFilesSectionProps
             </thead>
             <tbody>
               {files.map((file) => (
-                <tr key={file._id}>
+                <tr key={file._id} data-testid={`sample-file-row-${file._id}`}>
                   <td>
                     <span style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>
                       {file.fileName}
@@ -229,6 +230,7 @@ export default function SampleFilesSection({ sampleID }: SampleFilesSectionProps
                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                       <Button
                         variant="secondary"
+                        data-testid={`sample-file-download-button-${file._id}`}
                         onClick={() => handleDownload(file)}
                         style={{ padding: '0.375rem', minWidth: 'auto' }}
                         title={t('sampleFiles.download') || 'Download'}
@@ -238,6 +240,7 @@ export default function SampleFilesSection({ sampleID }: SampleFilesSectionProps
                       {canUploadDelete && (
                         <Button
                           variant="danger"
+                          data-testid={`sample-file-delete-button-${file._id}`}
                           onClick={() => handleDelete(file)}
                           disabled={deletingFileId === file._id}
                           style={{ padding: '0.375rem', minWidth: 'auto' }}
@@ -277,6 +280,7 @@ export default function SampleFilesSection({ sampleID }: SampleFilesSectionProps
               </label>
               <input
                 id="file-upload-input"
+                data-testid="file-upload-input"
                 type="file"
                 onChange={handleFileSelect}
                 accept=".raw,.zip,.csv,.xls,.xlsx,.pdf,.txt"
@@ -339,6 +343,7 @@ export default function SampleFilesSection({ sampleID }: SampleFilesSectionProps
                 {t('common.cancel') || 'Cancelar'}
               </Button>
               <Button
+                data-testid="sample-files-upload-submit"
                 onClick={handleUpload}
                 disabled={!selectedFile || uploading}
               >

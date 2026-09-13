@@ -6,14 +6,19 @@ export interface Patient {
   participantId: string; // ID canônico do participante
   
   // 2. NOME - Caractere - Nome completo do paciente
-  patientName: string;
+  // RF005/RNF007 (#575): civil identity — segregated to ParticipantIdentity,
+  // never returned as a direct field on Patient. Optional here since it's
+  // only ever present via an authorized re-identification response.
+  patientName?: string;
 
   // Contato para envio do TCLE
   email?: string;
   phone?: string;
-  
+
   // 3. DATA_NASCIMENTO - Caractere - Data de nascimento (formato DD/MM/YYYY)
-  birthDate: string; // Alterado para string no formato DD/MM/YYYY
+  // RF005/RNF007 (#575): civil identity — segregated to ParticipantIdentity,
+  // see patientName above.
+  birthDate?: string; // Alterado para string no formato DD/MM/YYYY
   
   // 4. IDADE - Numérico - Idade em anos completos
   age?: number;
@@ -93,7 +98,6 @@ export interface Patient {
   consentTokenExpiresAt?: Date | string | null;
   consentNotifiedAt?: Date | string | null;
   consentAcceptedAt?: Date | string | null;
-  sampleList?: Sample[] | string[];
   linkedProject?: string;
   createdAt?: Date | string;
   updatedAt?: Date | string;
@@ -151,6 +155,93 @@ export interface RcsEvaluation {
   calculation_trace: Record<string, any>;
 }
 
+// Campo embutido em Sample, gravado por AllocateSampleUseCase/MoveSampleUseCase/
+// ReleaseSampleUseCase (só boxId/position são garantidos; boxName/locationID/readable
+// dependem de qual caminho de escrita alocou a amostra). Não carrega freezer/shelf/rack
+// nem path — para isso, use SampleStorageLocationDTO via GET /storage/sample/:sampleId.
+export interface SampleEmbeddedStorageLocation {
+  boxId?: string | null;
+  boxName?: string | null;
+  position?: string | null;
+  locationID?: number | null;
+  readable?: string | null;
+  path?: string | null;
+}
+
+// dict-02 StorageAssignment (ELM-0167-0178): o registro bruto de
+// storageAssignments, anexado de forma aditiva (não substitui storageLocation)
+// em MongoStorageRepository.findSampleById/findCurrentStorageAssignment (#507,
+// #510) e em sample.service.js#createSample/intakeWizard.js no POST de criação.
+// Sem boxName/readable/path resolvidos — para isso, use SampleStorageLocationDTO.
+export interface StorageAssignmentRecord {
+  storageAssignmentId: string;
+  specimenId: string;
+  storageLocationId?: string | null;
+  facilityId?: string | null;
+  roomId?: string | null;
+  equipmentId?: string | null;
+  shelfId?: string | null;
+  rackId?: string | null;
+  boxId: string | null;
+  positionCode: string;
+  nominalTemperature?: number | null;
+  placedAt?: Date | string;
+  removedAt?: Date | string | null;
+  occupancyStatus?: 'ocupada' | 'livre' | string;
+}
+
+// Resposta de GET /storage/sample/:sampleId (GetSampleStorageLocationUseCase /
+// MongoStorageRepository.getSampleStorageLocation). `path` é a hierarquia legível
+// separada por "/" (ex: "FREEZER_01/SHELF_1/RACK_A/BOX_01"); fullHierarchy carrega
+// apenas IDs, não nomes.
+export interface SampleStorageLocationDTO {
+  specimenId: string;
+  barcode?: string | null;
+  box: {
+    boxId: string;
+    boxName: string | null;
+    position: string | null;
+  };
+  locationID?: number | null;
+  readable?: string | null;
+  path: string;
+  fullHierarchy: {
+    freezerId: string;
+    shelfId: string;
+    rackId: string;
+    boxId: string;
+  } | null;
+}
+
+// dict-02 SpecimenPreanalytics (ELM-0145+, #388): one versioned SPREC
+// snapshot, as persisted by specimen-preanalytics.service.js and returned
+// by GET /:id/sprec-profiles (newest first) — mirrors the generic axis
+// slots (preCentrifugation/centrifugation/secondCentrifugation/
+// postCentrifugationDelay, populated regardless of matrixType) plus their
+// solid-matrix canonical aliases (warmIschemiaTime/coldIschemiaTime/
+// fixationStabilizationType/fixationTime) used to build a display summary.
+export interface SpecimenPreanalyticsProfile {
+  _id?: string;
+  specimenId: string;
+  matrixType: 'fluid' | 'solid' | string | null;
+  sampleType?: string | null;
+  primaryContainer?: string | null;
+  preCentrifugation?: string | null;
+  centrifugation?: string | null;
+  secondCentrifugation?: string | null;
+  postCentrifugationDelay?: string | null;
+  longTermStorage?: string | null;
+  sprecCode?: string | null;
+  sprecVersion?: string | null;
+  warmIschemiaTime?: string | null;
+  coldIschemiaTime?: string | null;
+  fixationStabilizationType?: string | null;
+  fixationTime?: string | null;
+  profileStatus?: string;
+  recordedAt?: Date | string;
+  createdAt?: Date | string;
+}
+
 export interface Sample {
   _id?: string; // MongoDB ID
   participantId: string;
@@ -179,11 +270,13 @@ export interface Sample {
   quality_score?: number | null;
   quality_category?: 'A' | 'B' | 'C' | 'D' | 'E' | '' | string;
   merkle_root?: string | null;
-  release_status?: 'AVAILABLE' | 'BLOCKED' | 'QUARANTINE' | string;
   consentStatus?: 'PENDING' | 'SIGNED' | 'EXTERNAL_ATTACHED' | 'WAIVED_TRANSFER' | 'NOT_REQUIRED' | string;
-  quarantineStatus?: 'QUARANTINED' | 'RELEASED' | string;
+  // Canonical status (storage/custody split, #389/#409) — derive quarantine/availability
+  // UI state from this.
+  specimenStatus?: 'available' | 'reserved' | 'checked_out' | 'partial' | 'depleted' | 'quarantined' | 'destroyed' | 'unavailable' | 'disposed' | string;
+  // quarantineReason still carries the human-readable reason text — no
+  // specimenStatus equivalent exists for that, so it stays legacy-sourced (#407/#415).
   quarantineReason?: 'CONSENT_PENDING' | 'EXTERNAL_DOCUMENT_REQUIRED' | 'TRANSFER_REVIEW_REQUIRED' | null | string;
-  availabilityStatus?: 'BLOCKED' | 'AVAILABLE' | 'Disponível' | 'Parcialmente Disponível' | 'Indisponível' | string;
   importBatchId?: string | null;
   importedAt?: Date | string | null;
   importedBy?: string | null;
@@ -214,8 +307,8 @@ export interface Sample {
   // Campos de movimentação
   movementType?: 'Armazenamento' | 'Transferência';
   // Controle de quantidade (novos campos)
-  availableQuantity?: number; // Quantidade disponível após retiradas
-  originalQuantity?: number; // Quantidade original (nunca muda)
+  currentQuantity?: number; // Quantidade disponível após retiradas (dict-02 ELM-0139)
+  initialQuantity?: number; // Quantidade original (nunca muda; dict-02 ELM-0138)
   totalWithdrawn?: number; // Total já retirado
   totalReturned?: number; // Total já devolvido
   lastWithdrawalID?: number; // ID da última retirada
@@ -224,25 +317,30 @@ export interface Sample {
   volumeCurrent?: number; // Volume atual
   checked?: boolean; // Flag opcional para seleção em UI (fallback a arrays de IDs)
   // Status de disponibilidade
-  currentStatus?: 'Available' | 'PartiallyWithdrawn' | 'TotallyWithdrawn' | 'Withdrawn' | 'Expired' | 'Destroyed' | 'Unusable';
+  currentStatus?: 'Available' | 'PartiallyWithdrawn' | 'TotallyWithdrawn' | 'Withdrawn' | 'Destroyed' | 'Unusable';
   status?: 'AVAILABLE' | 'QUARANTINED' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE';
   // Campos de retirada
   withdrawalDate?: Date | string;
   withdrawalType?: 'Parcial' | 'Total';
   withdrawalResponsible?: string;
   sampleDestination?: string;
-  storageLocation?: {
-    freezerId?: string | null;
-    freezerName?: string | null;
-    shelfId?: string | null;
-    shelfName?: string | null;
-    rackId?: string | null;
-    rackName?: string | null;
-    boxId?: string | null;
-    boxName?: string | null;
-    position?: string | null;
-    path?: string | null;
-  } | null;
+  storageLocation?: SampleEmbeddedStorageLocation | null;
+  // dict-02 StorageAssignment, anexado de forma aditiva ao storageLocation
+  // acima (#495) — só presente em respostas específicas que já o resolvem
+  // (POST de criação); GET /samples/:id ainda não o resolve (ver #495 no
+  // dict-07/dict-08 tracking).
+  storageAssignment?: StorageAssignmentRecord | null;
+  // GET /samples (list view) only (#517) — batched, per-row resolution of
+  // the same shape GET /storage/sample/:sampleId returns, so SamplesPageView
+  // doesn't have to read storageLocation above directly nor make one
+  // follow-up request per row.
+  resolvedStorageLocation?: SampleStorageLocationDTO | null;
+  // GET /samples (list view) only (#517) — the sample's current SPREC
+  // snapshot (sealedSpecimenPreanalyticsId-pinned if set, else newest),
+  // batched the same way as resolvedStorageLocation above. SampleDetailsPage
+  // (#518) also reads this field, sourcing the same sample object from the
+  // shared useSamples() list rather than a dedicated per-sample fetch.
+  currentSpecimenPreanalytics?: SpecimenPreanalyticsProfile | null;
   // Soft delete fields
   deleted?: boolean;
   deletedAt?: Date | string;
@@ -264,7 +362,10 @@ export interface SampleWithMeasurementUnit {
 
 export interface SampleWithQualityDescription {
   _id?: string; // MongoDB ID
-  qualityID: number;
+  // #881: the canonical business identifier is the string MIABIS code the
+  // seed writes on `id` (settled by #902) -- the numeric qualityID this
+  // mount used to require is retired.
+  id: string;
   description: string;
   createdAt?: Date | string;
   updatedAt?: Date | string;
@@ -287,7 +388,7 @@ export interface Result {
   analysisType?: string;
   method?: string;
   responsibleResearcher?: string;
-  sampleID: number; // Obrigatório - deve estar vinculado a uma amostra
+  specimenId: string; // Obrigatório - Specimen.specimenId da amostra vinculada (#628)
   equipmentID?: number; // Associação Result → Equipment
   equipmentName?: string;
   importJobID?: string; // Vincula resultado com job de importação
@@ -391,6 +492,7 @@ export interface Equipment {
   type?: 'Freezer' | 'Analytical' | 'Storage' | 'Processing' | 'Other'; // Tipo de equipamento
   status?: 'Calibrado' | 'Maintenance' | 'Active' | 'Inactive' | 'Needs Calibration'; // Status do equipamento
   purchaseDate?: Date | string;
+  organizationId?: string | null; // Organization.organizationId (UUID) -- sem backfill, null = não escopado/legado (#635)
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }
@@ -408,14 +510,66 @@ export interface Location {
   wellPosition?: string; // Campo do backend (string) - posição do eppendorf
 }
 
-export interface ClinicalUnit {
-  _id?: string;
-  name: string;
+export interface Organization {
+  _id?: string; // MongoDB ID
+  organizationId: string;
+  officialName: string;
   normalizedName?: string;
   acronym?: string | null;
-  active?: boolean;
-  createdAt?: Date | string;
-  updatedAt?: Date | string;
+  organizationType?: string | null;
+  countryCode: string;
+  website?: string | null;
+}
+
+// #726 (RF008 AC#6) — ReportTemplate, api/backend/src/models/ReportTemplate.js
+export const REPORT_TEMPLATE_HANDLER_KEYS = [
+  'samplesByPatient',
+  'patient',
+  'sample',
+  'sampleAnalysis',
+  'temperature',
+  'sensor',
+  'equipment',
+  'result',
+  'withdrawalHistory',
+  'tissueOriginHistory',
+  'extracellularNetwork',
+  'accessLogs',
+] as const;
+
+export type ReportTemplateHandlerKey = typeof REPORT_TEMPLATE_HANDLER_KEYS[number];
+
+export interface ReportTemplate {
+  _id?: string;
+  code: string;
+  name: string;
+  description?: string | null;
+  handlerKey: ReportTemplateHandlerKey | string;
+  handlerOptions?: Record<string, unknown>;
+  isSystemDefined: boolean;
+  templateStatus: 'active' | 'retired';
+  createdBy?: string | null;
+  updatedBy?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// RF020 / MIABIS Collection (ELM-0039..0052) — dict-02_DICIONARIO.md
+export interface Collection {
+  _id?: string; // MongoDB ID
+  collectionId: string;
+  collectionName: string;
+  collectionStatus?: string;
+  sampleTypes?: Array<Record<string, unknown>>;
+  datasetTypes?: Array<Record<string, unknown>>;
+  diseaseScope?: Array<Record<string, unknown>>;
+  inclusionCriteriaCategories?: Array<Record<string, unknown>>;
+  exclusionCriteria?: string | null;
+  miabisUseAccessConditions?: Array<Record<string, unknown>>;
+  storageTemperatureCategories?: Array<Record<string, unknown>>;
+  participantCount?: number | null;
+  sampleCount?: number | null;
+  relatedPublications?: Array<Record<string, unknown>>;
 }
 
 export interface User {
@@ -425,7 +579,7 @@ export interface User {
   name: string;
   email: string;
   phone?: string;
-  institution?: string;
+  organizationId?: string | null; // Reference -> Organization.organizationId (#347 cutover, replaces the old free-text `institution` field)
   username: string;
   password?: string; // Não deve ser retornado em respostas GET
   accessType?: number; // Mantido para compatibilidade (1: Básico, 2: Intermediário, 3: Completo)
@@ -479,7 +633,8 @@ export interface Temperature {
   dataQualityScore?: number;
   errorCode?: string;
   errorMessage?: string;
-  sensorID: string;
+  sensorId: string; // Campo canônico -- ver Sensor acima (#940)
+  sensorID?: string; // Alias legado
   policyID: number; // Padronizado para Number (consistente com Policy)
   createdAt?: Date | string;
   updatedAt?: Date | string;
@@ -557,7 +712,8 @@ export interface Log {
 
 export interface Sensor {
   _id?: string; // MongoDB ID
-  sensorID: string;
+  sensorId: string; // Campo canônico -- api/backend/src/models/Sensor.js#create grava sensorId (lowercase-d), independente do spelling de entrada (#940)
+  sensorID?: string; // Alias legado -- api.ts ainda envia esta grafia em requests; não removido
   sensorType: string;
   sensorModel?: string;
   maintenanceStatus?: string;
@@ -566,6 +722,9 @@ export interface Sensor {
   calibrationCertificate?: string;
   locationID?: number; // Padronizado para Number (consistente com Sample e Location)
   policyID?: number; // Padronizado para Number (consistente com Policy)
+  macAddress?: string; // Opcional: presente => backend vincula um SensorMetadata (ver #311)
+  storageContainer?: string; // ID do StorageContainer (freezer) vinculado ao SensorMetadata
+  organizationId?: string | null; // Organization.organizationId (UUID) -- sem backfill, null = não escopado/legado (#634)
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }
@@ -686,6 +845,10 @@ export enum ImportJobStatus {
   PENDING = 'pending',
   PROCESSING = 'processing',
   COMPLETED = 'completed',
+  // #890: terminal status for a result-import run that finished normally
+  // but wrote nothing because every processed entry hit an
+  // unimplemented/unsupported format stub (.raw / generic-file).
+  COMPLETED_NO_DATA = 'completed_no_data',
   FAILED = 'failed',
   CANCELLED = 'cancelled'
 }
@@ -705,6 +868,14 @@ export interface ImportJob {
   validationErrors?: ImportValidationError[];
   processingErrors?: string[];
   metrics?: ImportMetrics;
+  // #905: the worker persists flat counts and the jobs-list endpoint
+  // returns them verbatim; `metrics` above only exists on the report
+  // shape (mapped server-side in getJobReport).
+  totalRecords?: number;
+  successCount?: number;
+  errorCount?: number;
+  unprocessedFormats?: number;
+  errors?: Array<{ row?: number; error: string; code?: string; fileName?: string; filePath?: string }>;
   createdAt?: Date | string;
   startedAt?: Date | string;
   completedAt?: Date | string;
@@ -722,8 +893,28 @@ export interface ImportMetrics {
   totalRecords: number;
   successfulRecords: number;
   failedRecords: number;
-  skippedRecords: number;
-  duplicatesFound: number;
+  // #925: both were declared required and neither was produced at the time.
+  // duplicatesFound was read by the report modal against a `?? 0` default
+  // that made "nobody counted" indistinguishable from "none found". Optional
+  // now, so a consumer has to decide what an absent value means instead of
+  // being handed a zero.
+  //
+  // #991: skippedRecords is now written end to end -- import-worker.js puts
+  // it in the job-completion payload and import-async.service.js carries it
+  // into this metrics object -- and ResultsPage.tsx renders it (gated on
+  // `!== undefined`, same idiom as duplicatesFound). Still optional: pre-#991
+  // jobs never had it written, and an absent value must stay absent rather
+  // than render as a false zero.
+  skippedRecords?: number;
+  /**
+   * #931: a labelled SUBSET of `failedRecords`, not a sibling of it. Every
+   * duplicate row is pushed onto the import's `errors` array and skipped, so
+   * it is already inside `failedRecords` -- `successfulRecords +
+   * failedRecords + duplicatesFound` deliberately exceeds `totalRecords`.
+   * Present only on jobs run since #931; still optional so pre-#931 jobs omit
+   * the tile rather than claiming zero (#925).
+   */
+  duplicatesFound?: number;
   processingTime?: number; // em segundos
   recordsPerSecond?: number;
 }

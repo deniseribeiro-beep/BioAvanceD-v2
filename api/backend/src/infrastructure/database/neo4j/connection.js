@@ -4,6 +4,7 @@ const logger = require('../../../utils/logger');
 
 let neo4jDriver = null;
 let connectingPromise = null;
+let lastFailureAt = 0;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -34,6 +35,14 @@ async function connectNeo4j() {
   }
 
   if (!connectingPromise) {
+    const cooldownMs = env.NEO4J_CONNECT_FAILURE_COOLDOWN_MS;
+    const sinceLastFailure = Date.now() - lastFailureAt;
+    if (lastFailureAt && sinceLastFailure < cooldownMs) {
+      throw new Error(
+        `[ISO20387][NEO4J] Reconexão em cooldown após falha recente (retry em ${cooldownMs - sinceLastFailure}ms)`
+      );
+    }
+
     const config = getNeo4jConfig();
     assertNeo4jEnv(config);
 
@@ -75,9 +84,11 @@ async function connectNeo4j() {
         }
 
         neo4jDriver = driver;
+        lastFailureAt = 0;
         logger.info('[ISO20387][NEO4J] Conexão e validação de rastreabilidade estabelecidas');
         return neo4jDriver;
       } catch (error) {
+        lastFailureAt = Date.now();
         await driver.close();
         logger.error('[ISO20387][NEO4J] Falha de conexão que impacta cadeia de custódia:', error.message);
         throw error;

@@ -2,6 +2,7 @@ const userSecurityService = require('../services/user-security.service');
 const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
 const { ObjectId } = require('mongodb');
+const sessionService = require('../services/session.service');
 
 /**
  * Controller de Segurança do Usuário
@@ -190,13 +191,23 @@ class UserSecurityController {
 
       await userSecurityService.updatePassword(db, req.user.userID, currentPassword, newPassword);
 
+      // #958 / RNF021 AC#2. This is the path the UI actually calls
+      // (frontend api.ts -> PUT /user/security/password); auth.controller's
+      // change-password is the same rule on the other route. All-but-current,
+      // same reasoning, and revoked here rather than inside updatePassword so
+      // the current access token stays in the controller where it already is.
+      const currentToken = (req.headers && req.headers.authorization || '').replace('Bearer ', '');
+      await sessionService.revokeAllOtherSessions(
+        db, req.user.userID, currentToken, 'password_change', req.user.userID
+      );
+
       // Registra auditoria
       auditLogger.init(db);
       await auditLogger.log({
         action: 'UPDATE',
-        entity: 'Password',
-        entityID: req.user.userID,
-        result: 'success',
+        resourceType: 'Password',
+        resourceId: req.user.userID,
+        status: 'success',
         severity: 'critical',
         message: 'Senha alterada',
         req: req,
@@ -237,9 +248,9 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'CREATE',
-        entity: 'RecoveryCodes',
-        entityID: req.user.userID,
-        result: 'success',
+        resourceType: 'RecoveryCodes',
+        resourceId: req.user.userID,
+        status: 'success',
         severity: 'critical',
         message: 'Códigos de recuperação gerados',
         req: req,
@@ -286,9 +297,9 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'DELETE',
-        entity: 'Session',
-        entityID: id,
-        result: 'success',
+        resourceType: 'Session',
+        resourceId: id,
+        status: 'success',
         severity: 'warning',
         message: 'Sessão revogada',
         req: req,
@@ -330,9 +341,9 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'DELETE',
-        entity: 'Sessions',
-        entityID: req.user.userID,
-        result: 'success',
+        resourceType: 'Sessions',
+        resourceId: req.user.userID,
+        status: 'success',
         severity: 'critical',
         message: 'Todas as sessões revogadas',
         req: req,
@@ -383,9 +394,9 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'CREATE',
-        entity: 'PasswordReset',
-        entityID: req.user.userID,
-        result: 'success',
+        resourceType: 'PasswordReset',
+        resourceId: req.user.userID,
+        status: 'success',
         severity: 'critical',
         message: 'Solicitação de reset de senha criada',
         payload: {

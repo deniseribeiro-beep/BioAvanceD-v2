@@ -207,8 +207,34 @@ const globalLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 10,
+  // Strict brute-force budget everywhere by default. The real Docker dev
+  // stack (compose.yml + compose.dev.yml) needs enough headroom that a
+  // real-backend e2e spec file doing several logins/2FA calls per minute
+  // doesn't 429 (#350) -- but per RNF008.6, that relaxation can't be
+  // inferred from NODE_ENV/isDev (a generic indicator every non-production
+  // run shares, including a staging deploy that just left NODE_ENV unset).
+  // It requires the explicit, isolated AUTH_RATE_LIMIT_RELAXED opt-in that
+  // only that compose file's environment sets (#359), and even then never
+  // applies in production.
+  max: (env.AUTH_RATE_LIMIT_RELAXED && env.NODE_ENV !== "production") ? 100 : 10,
   message: "Muitas requisições para autenticação. Tente novamente mais tarde.",
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: false,
+});
+
+// #823/#832: six routes on the e-consent router carry no `authenticate` --
+// the emailed token IS the credential, so they are unauthenticated by design
+// and verify a secret on every call. That is authLimiter's shape exactly, and
+// until now they had only globalLimiter's shared 1000-per-15-min budget, which
+// is a weak ceiling for walking an 8-digit participantId space. Same
+// strict-by-default posture, on its own isolated flag (see env.js) rather than
+// reusing AUTH_RATE_LIMIT_RELAXED: the two relax different controls, and a
+// stack needing headroom on one does not thereby need it on the other.
+const consentLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: (env.CONSENT_RATE_LIMIT_RELAXED && env.NODE_ENV !== "production") ? 100 : 10,
+  message: "Muitas requisições. Tente novamente mais tarde.",
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: false,
@@ -217,6 +243,14 @@ const authLimiter = rateLimit({
 if (!isTest) {
   app.use(globalLimiter);
   app.use("/api/auth", authLimiter);
+  // Scoped to the token-credential paths ONLY. The rest of /api/e-consent is
+  // authenticate-gated operator surface (template and policy CRUD, the
+  // pending-patients list) and must not share a participant-facing budget --
+  // a coordinator doing bulk consent work would 429 on it.
+  app.use("/api/e-consent/validate", consentLimiter);
+  app.use("/api/e-consent/update", consentLimiter);
+  app.use("/api/e-consent/consent-tokens", consentLimiter);
+  app.use("/api/e-consent/import/fhir/consent", consentLimiter);
 }
 
 app.use("/api/auth", require("./src/interface/routes/auth.routes"));
@@ -225,11 +259,11 @@ app.use("/api/hpo", require("./src/interface/routes/hpo.routes"));
 app.use("/api/patients", require("./src/interface/routes/patient.routes"));
 app.use("/api/v1/patients", require("./src/interface/routes/patient.routes"));
 app.use("/api/samples", require("./src/interface/routes/sample.routes"));
-app.use("/api/labels", require("./src/interface/routes/label.routes"));
 app.use("/api/quality", require("./src/interface/routes/quality.routes"));
 app.use("/api/import", require("./src/interface/routes/import.routes"));
 app.use("/api/results", require("./src/interface/routes/result.routes"));
 app.use("/api/reports", require("./src/interface/routes/reports.routes"));
+app.use("/api/report-templates", require("./src/interface/routes/reportTemplates.routes"));
 app.use("/api/logs", require("./src/interface/routes/logs.routes"));
 app.use("/api/audit", require("./src/interface/routes/audit.routes"));
 app.use("/api/analysis-files", require("./src/interface/routes/analysis-file.routes"));
@@ -240,36 +274,164 @@ app.use("/api/measurement-units", createMasterDataRouter({
   idField: "unitID",
   model: require("./src/models/MeasurementUnit")
 }));
+// #881: retired the numeric qualityID idField. The canonical business
+// identifier, settled by #902, is the string MIABIS code the seed writes
+// on `id` -- src/reference-data/essential/manifest.js:12 declares
+// uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
+// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
+// master-data.routes.js:24's additive $or branch). idField is now 'id',
+// and the numeric generateId override (Date.now()) is removed so the
+// factory's randomUUID() default no longer matters here either --
+// QualityDescription.js's create() now returns `id`, not a numeric key.
 app.use("/api/quality-descriptions", createMasterDataRouter({
   collectionName: "qualityDescriptions",
-  idField: "qualityID",
+  idField: "id",
   model: require("./src/models/QualityDescription")
 }));
+// #881: retired the numeric sampleTypeID idField. The canonical business
+// identifier, settled by #902, is the string MIABIS code the seed writes
+// on `id` -- src/reference-data/essential/manifest.js:12 declares
+// uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
+// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
+// master-data.routes.js:24's additive $or branch). idField is now 'id',
+// and the numeric generateId override (Date.now()) is removed so the
+// factory's randomUUID() default no longer matters here either --
+// SampleType.js's create() now returns `id`, not a numeric key.
 app.use("/api/sample-types", createMasterDataRouter({
   collectionName: "sampleTypes",
-  idField: "sampleTypeID",
+  idField: "id",
   model: require("./src/models/SampleType")
 }));
+// #881: retired the numeric originID idField. The canonical business
+// identifier, settled by #902, is the string MIABIS code the seed writes
+// on `id` -- src/reference-data/essential/manifest.js:12 declares
+// uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
+// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
+// master-data.routes.js:24's additive $or branch). idField is now 'id',
+// and the numeric generateId override (Date.now()) is removed so the
+// factory's randomUUID() default no longer matters here either --
+// SampleOrigin.js's create() now returns `id`, not a numeric key.
 app.use("/api/sample-origins", createMasterDataRouter({
   collectionName: "sampleOrigins",
-  idField: "originID",
+  idField: "id",
   model: require("./src/models/SampleOrigin")
 }));
+// #881: retired the numeric protocolID idField. The canonical business
+// identifier, settled by #902, is the string MIABIS code the seed writes
+// on `id` -- src/reference-data/essential/manifest.js:12 declares
+// uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
+// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
+// master-data.routes.js:24's additive $or branch). idField is now 'id',
+// and the numeric generateId override (Date.now()) is removed so the
+// factory's randomUUID() default no longer matters here either --
+// ExtractionProtocol.js's create() now returns `id`, not a numeric key.
 app.use("/api/extraction-protocols", createMasterDataRouter({
   collectionName: "extractionProtocols",
-  idField: "protocolID",
+  idField: "id",
   model: require("./src/models/ExtractionProtocol")
 }));
+app.use("/api/studies", createMasterDataRouter({
+  collectionName: "studies",
+  idField: "studyId",
+  model: require("./src/models/Study")
+}));
+app.use("/api/protocols", createMasterDataRouter({
+  collectionName: "protocols",
+  idField: "protocolId",
+  model: require("./src/models/Protocol")
+}));
+// #665: Assay and ReagentLot ride createMasterDataRouter's shared
+// requireRole(3, 4) write gate, so a Tecnico cannot POST either -- while
+// POST /api/nonconformances (same RF025 slice) is deliberately
+// requireRole(2, 3, 4). That asymmetry was investigated and the gate is
+// LEFT AS IS. Recorded here so the next audit does not re-open it.
+//
+// RF025's "Ator primario: Tecnico" does not carry authorization weight
+// anywhere in this repo: RF004, RF006 and RF016 all say the same thing and
+// are implemented as requirePermission capabilities (sample.routes.js), not
+// requireRole floors -- and RF002 AC#1, the one AC that describes what a
+// Tecnico may do, says "operacoes AUTORIZADAS de cadastro", deferring to
+// the authorization model rather than defining it. None of RF025's six ACs
+// has a grammatical subject; they are impersonal infinitives, and none says
+// who registers an Assay or a ReagentLot. dict-02 has no creator/owner
+// column for any entity -- Assay.operatorId (ELM-0292) records who RAN the
+// assay, which is data about the assay, not a statement about who may POST
+// the record. And equipment.routes.js, cited in #665 as the precedent for
+// a looser gate, is not one: it predates the factory by six days, was never
+// migrated into it, and gates writes on requirePermission('createPatient'),
+// which Tecnico does not hold -- so its effective create audience is the
+// same Coordenador/Administrador tier.
+//
+// INFERENCE, not a citation: the consistent reading is that a Tecnico runs
+// the assay (recorded as operatorId) while a Coordenador enters the
+// master-data record -- an ordinary separation of duties. Cheap to
+// overturn: createMasterDataRouter has no per-entity role override today,
+// and adding a `writeRoles` option (defaulting to [3, 4]) would let these
+// two mounts pass [2, 3, 4] without touching the other 12 entities.
+app.use("/api/assays/:assayId/files", require("./src/interface/routes/assay-file.routes"));
+app.use("/api/assays", createMasterDataRouter({
+  collectionName: "assays",
+  idField: "assayId",
+  model: require("./src/models/Assay"),
+  validateReferences: require("./src/services/assayReferenceValidator").validateAssayReferences
+}));
+app.use("/api/reagent-lots", createMasterDataRouter({
+  collectionName: "reagentLots",
+  idField: "reagentId",
+  model: require("./src/models/ReagentLot")
+}));
+app.use("/api/nonconformances", require("./src/routes/nonconformance.js"));
+app.use("/api/datasets/:datasetId/files", require("./src/interface/routes/dataset-file.routes"));
+app.use("/api/datasets", createMasterDataRouter({
+  collectionName: "datasets",
+  idField: "datasetId",
+  model: require("./src/models/Dataset")
+}));
+app.use("/api/collections", createMasterDataRouter({
+  collectionName: "collections",
+  idField: "collectionId",
+  model: require("./src/models/Collection")
+}));
+app.use("/api/workflow-runs/:workflowRunId/files", require("./src/interface/routes/workflow-run-file-link.routes"));
+app.use("/api/workflow-runs", createMasterDataRouter({
+  collectionName: "workflowRuns",
+  idField: "workflowRunId",
+  model: require("./src/models/WorkflowRun")
+}));
+app.use("/api/omics-qualifications", createMasterDataRouter({
+  collectionName: "omicsQualifications",
+  idField: "omicsQualificationId",
+  model: require("./src/models/OmicsQualification")
+}));
+app.use("/api/omics-runs", createMasterDataRouter({
+  collectionName: "omicsRuns",
+  idField: "omicsRunId",
+  model: require("./src/models/OmicsRun")
+}));
 app.use("/api/equipment", require("./src/interface/routes/equipment.routes"));
-app.use("/api/locations", require("./src/interface/routes/location.routes"));
-app.use("/api/clinical-units", require("./src/interface/routes/clinical-unit.routes"));
+app.use("/api/organizations", require("./src/interface/routes/organization.routes"));
 app.use("/api/storage", require("./src/interface/routes/storage.routes"));
+app.use("/api/facilities", require("./src/interface/routes/facility.routes"));
+app.use("/api/rooms", require("./src/interface/routes/room.routes"));
 app.use("/api/policies", require("./src/interface/routes/policy.routes"));
 app.use("/api/sensors", require("./src/interface/routes/sensor.routes"));
 app.use("/api/iot", require("./src/interface/routes/iot.routes"));
+// RF029 slice 1/6 (#669): test-support-only ingestion gateway probe, same
+// NODE_ENV+shared-secret gating as iot.routes.js's telemetry-monitor routes.
+app.use("/api/_test-support/ingestion", require("./src/interface/routes/ingestionTestSupport.routes"));
 app.use("/api/temperature", require("./src/interface/routes/temperature.routes"));
 app.use("/api/incidents", require("./src/interface/routes/incident.routes"));
 app.use("/api/e-consent", require("./src/routes/eConsent.js"));
+app.use("/api/retention-policies", require("./src/routes/retentionPolicy.js"));
+app.use("/api/legal-holds", require("./src/routes/legalHold.js"));
+app.use("/api/disposition-actions", require("./src/routes/dispositionAction.js"));
+app.use("/api/access-requests", require("./src/routes/accessRequest.js"));
+app.use("/api/notification-rules", require("./src/routes/notificationRule.js"));
+app.use("/api/notifications", require("./src/routes/notification.js"));
 app.use("/api/intake-wizard", require("./src/interface/routes/intakeWizard.routes"));
 app.use("/api/terminologies", require("./src/interface/routes/terminologies.routes"));
 app.use("/api/users", require("./src/interface/routes/user.routes"));
@@ -277,6 +439,7 @@ app.use("/api/access", require("./src/interface/routes/access.routes"));
 app.use("/api/security", require("./src/interface/routes/security.routes"));
 app.use("/api/user/security", require("./src/interface/routes/user-security.routes"));
 app.use("/api/backup", require("./src/interface/routes/backup.routes"));
+app.use("/api/backup-policy", require("./src/interface/routes/backupPolicy.routes"));
 app.use("/api/import-lgpd", require("./src/interface/routes/import-lgpd.routes"));
 app.use("/api/compliance", require("./src/interface/routes/compliance.routes"));
 app.use("/api/cids", require("./src/interface/routes/cid.routes"));

@@ -20,6 +20,7 @@ class ResultWorker {
       total: 0,
       success: 0,
       errors: [],
+      unprocessedFormats: 0,
     };
 
     try {
@@ -33,13 +34,13 @@ class ResultWorker {
 
       if (ext === '.zip') {
         // Processa arquivo ZIP
-        await this.processZip(db, filePath, results, fhirResources);
+        await this.processZip(db, jobID, filePath, results, fhirResources);
       } else if (ext === '.raw') {
         // Processa arquivo RAW
         await this.processRaw(db, filePath, results, fhirResources);
       } else if (ext === '.csv') {
         // Processa arquivo CSV
-        await this.processCSV(db, filePath, results, fhirResources);
+        await this.processCSV(db, jobID, filePath, results, fhirResources);
       } else {
         throw new Error(`Formato de arquivo não suportado: ${ext}`);
       }
@@ -50,6 +51,7 @@ class ResultWorker {
         total: results.total,
         success: results.success,
         errors: results.errors,
+        unprocessedFormats: results.unprocessedFormats,
         processingTime,
         fhirResourcesCreated,
         fhirResourcesUpdated,
@@ -64,8 +66,13 @@ class ResultWorker {
   /**
    * Processa arquivo ZIP
    */
-  async processZip(db, filePath, results, fhirResources) {
+  async processZip(db, jobID, filePath, results, fhirResources) {
     return new Promise((resolve, reject) => {
+      // validateEntrySizes: false — some zip writers (e.g. streamed
+      // archives using data descriptors) report an uncompressedSize of 0
+      // in the central directory even though the entry has real content;
+      // yauzl's AssertByteCountStream then throws "too many bytes in the
+      // stream" while decompressing perfectly valid data.
       yauzl.open(filePath, { lazyEntries: true, validateEntrySizes: false }, (err, zipfile) => {
         if (err) {
           return reject(err);
@@ -101,9 +108,7 @@ class ResultWorker {
                 }
                 entryHandled = true;
 
-                if (errorMessage) {
-                  results.errors.push({ error: errorMessage });
-                }
+                results.errors.push({ error: errorMessage });
 
                 try {
                   if (!writeStream.destroyed) {
@@ -137,7 +142,7 @@ class ResultWorker {
                 }
                 entryHandled = true;
                 try {
-                  await this.processFile(db, tempPath, results, fhirResources);
+                  await this.processFile(db, jobID, tempPath, results, fhirResources);
                 } catch (error) {
                   results.errors.push({
                     error: `Erro ao processar ${entry.fileName}: ${error.message}`,
@@ -181,7 +186,7 @@ class ResultWorker {
   /**
    * Processa arquivo CSV
    */
-  async processCSV(db, filePath, results, fhirResources) {
+  async processCSV(db, jobID, filePath, results, fhirResources) {
     return new Promise((resolve, reject) => {
       const rows = [];
       fs.createReadStream(filePath)
@@ -192,7 +197,7 @@ class ResultWorker {
         .on('end', async () => {
           try {
             for (const row of rows) {
-              await this.processResultRow(db, row, results, fhirResources);
+              await this.processResultRow(db, jobID, row, results, fhirResources);
             }
             resolve();
           } catch (error) {
@@ -208,10 +213,10 @@ class ResultWorker {
   /**
    * Processa arquivo genérico
    */
-  async processFile(db, filePath, results, fhirResources) {
+  async processFile(db, jobID, filePath, results, fhirResources) {
     const ext = path.extname(filePath).toLowerCase();
     if (ext === '.csv') {
-      await this.processCSV(db, filePath, results, fhirResources);
+      await this.processCSV(db, jobID, filePath, results, fhirResources);
     } else if (ext === '.raw') {
       await this.processRaw(db, filePath, results, fhirResources);
     } else {
@@ -223,33 +228,37 @@ class ResultWorker {
   /**
    * Processa linha de resultado do CSV
    */
-  async processResultRow(db, row, results, fhirResources) {
+  async processResultRow(db, jobID, row, results, fhirResources) {
     results.total++;
 
     try {
       // Valida campos obrigatórios
-      if (!row.specimenId && !row.specimenId && !row.barcode) {
-        throw new Error('specimenId, specimenId ou barcode é obrigatório');
+      if (!row.specimenId && !row.barcode) {
+        throw new Error('specimenId ou barcode é obrigatório');
       }
 
       // Busca amostra
       const samplesCollection = db.collection('amostras');
       const sample = await samplesCollection.findOne({
         $or: [
-          { specimenId: row.specimenId || row.specimenId },
+          { specimenId: row.specimenId },
           { barcode: row.barcode },
         ],
       });
 
       if (!sample) {
         throw new Error(
-          `Amostra não encontrada: ${row.specimenId || row.specimenId || row.barcode}`
+          `Amostra não encontrada: ${row.specimenId || row.barcode}`
         );
       }
 
       // Cria resultado
+      // #628: specimenId must be the Specimen's own canonical business
+      // identifier -- never a Mongo _id fallback, which would reintroduce
+      // the exact stored-shape inconsistency this field's dedicated fix
+      // exists to remove.
       const resultData = {
-        specimenId: sample.specimenId || sample._id,
+        specimenId: sample.specimenId,
         testName: row.testName || row.test || 'Unknown Test',
         testCode: row.testCode || row.code || 'UNKNOWN',
         resultValue: row.resultValue || row.value || null,
@@ -259,6 +268,12 @@ class ResultWorker {
         createdAt: new Date(),
         updatedAt: new Date(),
       };
+
+      // #861: absent/undefined jobID (e.g. a result created outside an
+      // import job) must not write a junk importJobID field.
+      if (jobID) {
+        resultData.importJobID = jobID;
+      }
 
       const resultsCollection = db.collection('results');
       const result = await resultsCollection.insertOne(resultData);
@@ -312,9 +327,11 @@ class ResultWorker {
     // Implementação básica - pode ser expandida conforme necessário
     results.total++;
     results.errors.push({
+      code: 'FORMAT_NOT_IMPLEMENTED',
       error: 'Processamento de arquivo RAW ainda não totalmente implementado',
       fileName,
     });
+    results.unprocessedFormats += 1;
   }
 
   /**
@@ -324,9 +341,11 @@ class ResultWorker {
     // Implementação básica - pode ser expandida conforme necessário
     results.total++;
     results.errors.push({
+      code: 'FORMAT_UNSUPPORTED',
       error: 'Formato de arquivo não suportado',
       filePath,
     });
+    results.unprocessedFormats += 1;
   }
 }
 

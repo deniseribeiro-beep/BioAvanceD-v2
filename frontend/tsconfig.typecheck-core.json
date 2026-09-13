@@ -1,9 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "include": [
-    "src/vite-env.d.ts",
-    "src/services/api.ts",
-    "src/hooks/useBackup.ts",
-    "src/views/ResetPasswordPage.tsx"
-  ]
-}

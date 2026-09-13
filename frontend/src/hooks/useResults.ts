@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
 import { Result } from '../types/models';
 import { resultService } from '../services/api';
+import { extractResponseEntity, extractResponseItems } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
+import { useRequestSequence } from './useRequestSequence';
 
 export function useResults(importJobID?: string) {
   const [results, setResults] = useState<Result[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // #901: extracted onto the shared guard -- see useRequestSequence.ts.
+  const requestSeq = useRequestSequence();
 
   useEffect(() => {
     loadResults();
@@ -23,28 +27,31 @@ export function useResults(importJobID?: string) {
   }, []);
 
   const loadResults = async () => {
+    const seq = requestSeq.next();
     try {
       setLoading(true);
       const response = await resultService.getAll(importJobID);
-      const responseData: any = response.data;
+      if (!requestSeq.isCurrent(seq)) return;
       // API agora retorna { data: [...], pagination: {...} }
-      const resultsData = Array.isArray(responseData) 
-        ? responseData 
-        : (responseData?.data || []);
+      const resultsData = extractResponseItems<Result>(response);
       setResults(resultsData);
       setError(null);
     } catch (err: any) {
+      if (!requestSeq.isCurrent(seq)) return;
       setError(err.message || 'Erro ao carregar resultados');
       setResults([]); // Garante array vazio em caso de erro
     } finally {
-      setLoading(false);
+      if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
 
-  const linkSample = async (resultID: number, sampleID: number) => {
+  const linkSample = async (resultID: number, specimenId: string) => {
     try {
-      const response = await resultService.linkSample(resultID, sampleID);
-      setResults(results.map((r) => (r.resultID === resultID ? response.data : r)));
+      const response = await resultService.linkSample(resultID, specimenId);
+      // PUT /results/:id/link-sample returns { success, message } with no
+      // data key -- reload the list instead of writing the bare envelope
+      // into state.
+      await loadResults();
       return response.data;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao vincular amostra');
@@ -54,9 +61,10 @@ export function useResults(importJobID?: string) {
   const createResult = async (data: Partial<Result>) => {
     try {
       const response = await resultService.create(data);
-      setResults([...results, response.data]);
+      const newResult = extractResponseEntity<Result>(response, data as any);
+      setResults([...results, newResult]);
       notifyDashboardDataChanged();
-      return response.data;
+      return newResult;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao criar resultado');
     }
@@ -65,7 +73,9 @@ export function useResults(importJobID?: string) {
   const updateResult = async (id: number, data: Partial<Result>) => {
     try {
       const response = await resultService.update(id, data);
-      setResults(results.map((r) => (r.resultID === id ? response.data : r)));
+      // PUT /results/:id returns { success, message } with no data key --
+      // reload the list instead of writing the bare envelope into state.
+      await loadResults();
       notifyDashboardDataChanged();
       return response.data;
     } catch (err: any) {

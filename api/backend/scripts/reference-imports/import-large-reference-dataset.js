@@ -1,4 +1,17 @@
-const allowedDatasets = new Set(['hpo', 'orpha', 'cid', 'omim', 'mondo']);
+// HPO graduated to its own operational importer (import-hpo-reference-dataset.js,
+// #367), MONDO to its own (import-mondo-reference-dataset.js, #548), ORPHA
+// to its own (import-orpha-reference-dataset.js, #549), ICD-11 to its own
+// (import-icd11-reference-dataset.js, #549), ICD-10 to its own
+// (import-icd10-reference-dataset.js, #549), and OMIM to its own
+// (import-omim-reference-dataset.js, #549) — none of these are listed here.
+//
+// The cid token was the original shared placeholder for BOTH §7.4 step 4
+// sources named "CID" in the plan's Portuguese text — CID-11 (ICD-11) and
+// CID-10 (ICD-10); it was dropped once both graduated (#549). The omim
+// token (lowercase, no longer present below) closed out the same §7.4 step
+// 4 group now that it too has graduated its own operational script — same
+// removal shape as every source above it.
+const allowedDatasets = new Set([]);
 
 function parseArgs(argv) {
   const args = { dataset: null, sourceFile: null, dryRun: false };

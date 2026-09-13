@@ -52,6 +52,18 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # #965: production Redis requires auth. Without this the server accepted
+    # unauthenticated connections while validateEnv.js:44 demanded a
+    # REDIS_PASSWORD outside development -- and that mismatch was FATAL for
+    # the worker: import-worker.js:39 -> worker.js:44 lets validateRedisOnly's
+    # throw escape, so `worker` crashlooped on a stack whose backend was
+    # healthy. The backend survived only because queue.js catches it and logs.
+    # Same variable the app reads, so the two cannot drift.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD e obrigatorio}"]
+    environment:
+      # redis-cli reads REDISCLI_AUTH, so the healthcheck authenticates
+      # without putting the password on a command line visible in `ps`.
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?REDIS_PASSWORD e obrigatorio}
     volumes:
       - redis_data:/data
     healthcheck:
@@ -74,7 +86,21 @@ services:
     read_only: true
     cap_drop: ["ALL"]
     tmpfs:
-      - /tmp
+      - /tmp:size=64m,mode=1777
+    # #955: read_only:true above is correct and stays, but entrypoint.sh writes
+    # to all three of these paths and none was writable, so "set -eu" aborted
+    # the script before it reached exec "$@" and the container never started --
+    # taking backend and frontend with it via depends_on: service_healthy.
+    # Named volumes rather than tmpfs because the CA key material generated
+    # here must SURVIVE a restart: regenerating it silently invalidates every
+    # timestamp the TSA has ever issued.
+    # /etc/tsa itself is deliberately NOT the mount point -- openssl-ts.cnf is
+    # baked into the image there (#954), and a volume over /etc/tsa would
+    # freeze the first build's copy of it forever.
+    volumes:
+      - tsa_certs:/etc/tsa/certs
+      - tsa_state:/var/lib/tsa
+      - tsa_secrets:/run/secrets
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8095/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
@@ -95,7 +121,12 @@ services:
     read_only: true
     cap_drop: ["ALL"]
     tmpfs:
-      - /tmp
+      - /tmp:size=64m,mode=1777
+    # #955: entrypoint.sh writes /run/secrets/witness_key.pem, which is on the
+    # read-only rootfs. Persisted for the same reason as the TSA's key -- a
+    # regenerated witness key invalidates every signature it has co-signed.
+    volumes:
+      - witness_secrets:/run/secrets
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8096/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
@@ -112,7 +143,7 @@ services:
     ports:
       - "${BACKEND_HOST_PORT:-3000}:3000"
     env_file:
-      - .env.production.example
+      - .env.production
     environment:
       NODE_ENV: production
       CHOKIDAR_USEPOLLING: "false"
@@ -132,13 +163,108 @@ services:
     read_only: true
     cap_drop: ["ALL"]
     tmpfs:
-      - /tmp
+      - /tmp:size=64m,mode=1777
+    # #893: the app writes uploads, staged import files, sample/result
+    # attachments and backups. read_only:true is correct and stays -- what was
+    # wrong is that those paths were hardcoded under /app, the one place a
+    # hardened container must not be writable. UPLOAD_DIR/STORAGE_DIR/BACKUP_DIR
+    # (.env.production.example) move them here. The worker mounts the SAME
+    # volumes: the API writes the staged file and the worker reads it back by
+    # the absolute path in rawData.storagePath, which is why compose.test.yml
+    # already shares uploads-test-data between its own pair.
+    volumes:
+      - uploads_data:/data/uploads
+      - storage_data:/data/storage
+      - backups_data:/data/backups
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 20
       start_period: 30s
+
+  worker:
+    # Runs import-worker.js and the per-entity workers under
+    # src/workers/workers/*.js (#310, follow-up from #309) — without
+    # this service the import-worker pipeline never runs in a
+    # production compose deployment, mirroring the dev compose worker.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    init: true
+    # #955: was "npm run worker". package.json:10 aliases a plain
+    # "node ./src/workers/worker.js", so the npm layer buys nothing and costs a
+    # process that wants a writable $HOME/.npm -- "adduser -S app"
+    # (api/backend/Dockerfile.prod:20) puts /home/app on the read-only rootfs.
+    # direct form is also signal-transparent under "init: true" above.
+    command: ["node", "./src/workers/worker.js"]
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/worker-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    read_only: true
+    cap_drop: ["ALL"]
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    # #893: same three volumes as backend, and they must be the same ones --
+    # the worker reads back files the API wrote, by absolute path.
+    volumes:
+      - uploads_data:/data/uploads
+      - storage_data:/data/storage
+      - backups_data:/data/backups
+
+  neo4j-projection-worker:
+    # Drains graph_projection_outbox into Neo4j (#309, follow-up from RF023/#292)
+    # — without this service, outbox rows written by consent.service.js
+    # (and future appendLineageEvent/appendQualityEvent/appendTelemetryEvent
+    # callers) sit PENDING forever and the graph projection never happens.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    init: true
+    # #955: same as the worker service above -- package.json:26 aliases
+    # "node src/workers/neo4jProjection.worker.js".
+    command: ["node", "src/workers/neo4jProjection.worker.js"]
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/neo4j-projection-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    read_only: true
+    cap_drop: ["ALL"]
+    tmpfs:
+      - /tmp:size=64m,mode=1777
 
   frontend:
     build:
@@ -149,14 +275,34 @@ services:
     ports:
       - "${FRONTEND_HOST_PORT:-80}:80"
     env_file:
-      - .env.production.example
+      - .env.production
     depends_on:
       backend:
         condition: service_healthy
     read_only: true
     cap_drop: ["ALL"]
+    # #955: read_only:true with no tmpfs and no volumes -- nginx could not
+    # write its pid file or any proxy/client temp path, so the container could
+    # never start. frontend/Dockerfile.prod:30 chowns these to "app", which fixes
+    # ownership and not read-onlyness. nginx.conf overrides neither "pid" nor
+    # any *_temp_path, and it is a conf.d/ server block so it cannot: "pid" is
+    # a main-context directive. mode=1777 matches the /tmp idiom already used
+    # throughout this file; the image runs as USER app, not root.
+    tmpfs:
+      - /var/cache/nginx:size=32m,mode=1777
+      - /var/run:size=8m,mode=1777
+    # #924: was `node -e "fetch(...)"`, copied from the backend's healthcheck.
+    # The backend runs node:22-alpine; this service's runtime stage is
+    # nginx:1.27-alpine, which ships no node binary -- verified by running the
+    # image: `command -v wget` -> /usr/bin/wget, `command -v node` -> absent.
+    # So the old check could never pass and this container could only ever be
+    # unhealthy. Nothing in this file waits on it with
+    # `condition: service_healthy`, which is the only reason the stack still
+    # came up at all.
+    #
+    # BusyBox wget is the idiom compose.test.yml:624 already uses.
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 20
@@ -167,3 +313,15 @@ volumes:
   neo4j_data:
   influxdb_data:
   redis_data:
+  # #893: writable application data, deliberately outside /app so backend and
+  # worker keep read_only:true.
+  uploads_data:
+  storage_data:
+  backups_data:
+  # #955: the TSA/witness key material and the TSA serial counter. These are
+  # not caches -- losing them invalidates previously issued timestamps and
+  # signatures, which is why they are named volumes and not tmpfs.
+  tsa_certs:
+  tsa_state:
+  tsa_secrets:
+  witness_secrets:

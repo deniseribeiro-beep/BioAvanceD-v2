@@ -1,0 +1,10 @@
+{"id":"UCUM:0","lbl":"unit, unspecified","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"UCUM:MASS","lbl":"mass units","is_a":["UCUM:0"],"synonyms":[],"obsolete":false}
+{"id":"UCUM:CONC","lbl":"concentration units","is_a":["UCUM:0"],"synonyms":[],"obsolete":false}
+{"id":"mg","lbl":"milligram","is_a":["UCUM:MASS"],"synonyms":[],"obsolete":false}
+{"id":"kg","lbl":"kilogram","is_a":["UCUM:MASS"],"synonyms":[],"obsolete":false}
+{"id":"mg/dL","lbl":"milligram per deciliter","is_a":["UCUM:CONC"],"synonyms":[],"obsolete":false}
+{"id":"mmol/L","lbl":"millimole per liter","is_a":["UCUM:CONC"],"synonyms":[],"obsolete":false}
+{"id":"mm[Hg]","lbl":"millimeter of mercury","is_a":["UCUM:0"],"synonyms":[],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"ZZZ","lbl":"","is_a":[],"synonyms":[],"obsolete":false}

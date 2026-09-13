@@ -26,12 +26,23 @@ function createAutoAssignSampleController() {
       const result = await storageService.autoAssignSampleToBox(sampleId, boxId);
 
       if (!result.success) {
+        // #987 applied to the fourth storage endpoint. This defaulted to 400,
+        // so every failure that is not one of the four sentinels below --
+        // including the topology refusal e47219c6 just added, a database
+        // outage, or a bug -- was reported as a bad request. A caller doing
+        // what a 400 instructs, retrying with different input, would fail
+        // identically forever.
+        //
+        // Unlike allocate/move/release there is no validation-shaped 400 case
+        // here: autoAssignSampleToBox returns exactly these four sentinels for
+        // client-actionable conditions and AUTO_ASSIGNMENT_ERROR for
+        // everything else, which is by definition unexpected.
         const statusCode =
           result.error === 'BOX_NOT_FOUND' || result.error === 'SAMPLE_NOT_FOUND'
             ? 404
             : result.error === 'ALREADY_ALLOCATED' || result.error === 'BOX_FULL'
               ? 409
-              : 400;
+              : 500;
 
         return res.status(statusCode).json({
           success: false,

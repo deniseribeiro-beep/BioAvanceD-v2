@@ -3,11 +3,13 @@ const path = require('path');
 const fs = require('fs');
 
 const stagingImportService = require('../services/staging-import.service');
+const batchValidationEngine = require('../services/batch-validation-engine.service');
 const logger = require('../utils/logger');
+const { UPLOADS_BASE } = require('../config/uploadConfig');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadsDir = path.join(__dirname, '../../uploads/temp');
+    const uploadsDir = path.join(UPLOADS_BASE, 'temp');
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }
@@ -118,6 +120,13 @@ class ImportBatchController {
         });
       }
 
+      // #826: mesma causa-raiz do worker. Esta leitura só funcionava porque o
+      // upload (`createStagingImport`) conecta o Mongoose como efeito colateral
+      // -- consultar o status antes de qualquer upload neste processo (após um
+      // restart da API, por exemplo) enfileirava a query e a rejeitava após 10s.
+      const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
+      await connectMongoDB();
+
       const StagingImport = require('../models/StagingImport');
       const stagingImport = await StagingImport.findOne({ jobId });
 
@@ -154,6 +163,29 @@ class ImportBatchController {
         success: false,
         error: 'Erro ao obter status do batch import',
         message: error.message
+      });
+    }
+  }
+
+  /**
+   * #939: le de volta um lote de quarentena (`ASYNC_BATCH_IMPORT`) que
+   * `quarantineRejectedRows` escreveu, seguindo o formato do
+   * FhirImportStagingController#getBatch.
+   */
+  async getQuarantineBatch(req, res) {
+    try {
+      const db = req.app.locals.db;
+      const result = await batchValidationEngine.getQuarantineBatch(db, req.params.id);
+
+      return res.status(200).json({ success: true, ...result });
+    } catch (error) {
+      const statusCode = error?.statusCode || 500;
+      logger.error('Erro ao obter lote de quarentena do batch import:', error);
+
+      return res.status(statusCode).json({
+        success: false,
+        error: 'Erro ao obter lote de quarentena do batch import',
+        message: error.message,
       });
     }
   }

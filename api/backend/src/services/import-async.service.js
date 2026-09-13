@@ -113,16 +113,33 @@ class ImportAsyncService {
     const normalized = this.normalizeHeader(original);
     const fieldMapping = {
       // patientId aliases
-      patientid: 'patientID',
-      idpaciente: 'patientID',
-      idpaciente: 'patientID',
+      // #773: both entries targeted the legacy name 'patientID'. Two
+      // independent sources settle the canonical spelling as
+      // 'participantId': contracts/canonical/v1/index.js declares
+      // participantId (required) and lists no patientID field, and
+      // sample.routes.js:378-384 already 422s a payload carrying patientID
+      // as NON_CANONICAL_FIELD, the same "Legacy Fields Prohibited" list.
+      // The keys on the left are user-facing CSV column names and stay as
+      // they are -- only the canonical target changes.
+      patientid: 'participantId',
+      // #770: `idpaciente` was listed twice here. Both copies assigned the
+      // same value, so the duplicate was inert -- but it is the same
+      // rename-collision tell that started this family at #758, so it goes.
+      idpaciente: 'participantId',
       // sampleType aliases
       sampletype: 'sampleType',
       tipoamostra: 'sampleType',
       // collection/registration date aliases
-      collectiondate: 'registrationDate',
-      datacoleta: 'registrationDate',
-      registerdate: 'registrationDate',
+      // #770: these three targeted 'registrationDate', a name e2549bee
+      // canonicalized away. Two independent sources settle the canonical
+      // spelling: canonical-fields.arch.test.js lists both registrationDate
+      // and registerDate in ASPIRATIONAL_FORBIDDEN, and sample.routes.js
+      // rejects both at the API boundary as NON_CANONICAL_FIELD. The keys on
+      // the left are user-facing CSV column names and stay as they are --
+      // only the canonical target changes.
+      collectiondate: 'registeredAt',
+      datacoleta: 'registeredAt',
+      registerdate: 'registeredAt',
       // location aliases
       locationid: 'locationID',
       idlocalizacao: 'locationID',
@@ -170,15 +187,24 @@ class ImportAsyncService {
     if (ext === '.csv') {
       return await new Promise((resolve) => {
         let resolved = false;
-        fs.createReadStream(file.path)
-          .pipe(csv())
+        const source = fs.createReadStream(file.path);
+        source.on('error', () => {
+          if (resolved) return;
+          resolved = true;
+          resolve([]);
+        });
+        source.pipe(csv())
           .on('headers', (headers) => {
             if (resolved) return;
             const canonical = headers.map(h => this.canonicalizeHeader(h));
             resolved = true;
             resolve(canonical);
           })
-          .on('error', () => resolve([]))
+          .on('error', () => {
+            if (resolved) return;
+            resolved = true;
+            resolve([]);
+          })
           .on('end', () => {
             if (!resolved) resolve([]);
           });
@@ -342,8 +368,16 @@ class ImportAsyncService {
         const state = await queueJob.getState();
         const progress = queueJob.progress || 0;
 
+        // #890: BullMQ only knows its own generic 'completed' state -- it has
+        // no notion of our custom terminal status 'completed_no_data'. Redis
+        // retains the job for up to 24h after the worker wrote the DB's
+        // terminal status, so without this guard every getJobStatus() call
+        // in that window would clobber 'completed_no_data' back to
+        // 'completed', silently erasing the #890 fix's user-facing signal.
+        const dbStatusIsCustomTerminal = job.status === 'completed_no_data';
+
         // Atualiza status no banco se necessário
-        if (state !== job.status) {
+        if (state !== job.status && !(state === 'completed' && dbStatusIsCustomTerminal)) {
           await jobsCollection.updateOne(
             { jobID },
             {
@@ -415,16 +449,15 @@ class ImportAsyncService {
    */
   async cancelJob(db, jobID) {
     try {
-      const queue = getQueue();
-      const queueJob = await queue.getJob(jobID);
-
-      if (queueJob) {
-        await queueJob.remove();
-      }
-
+      // #907: only a job that has not reached a terminal state can be
+      // cancelled -- the unguarded version rewrote completed/failed/
+      // completed_no_data jobs to 'cancelled', falsifying the record, and
+      // removed their Redis entry inside the retention window. The DB
+      // write goes first and gates the queue removal on having matched.
+      const TERMINAL_STATUSES = ['completed', 'failed', 'completed_no_data', 'cancelled'];
       const jobsCollection = db.collection('importJobs');
-      await jobsCollection.updateOne(
-        { jobID },
+      const result = await jobsCollection.updateOne(
+        { jobID, status: { $nin: TERMINAL_STATUSES } },
         {
           $set: {
             status: 'cancelled',
@@ -432,6 +465,16 @@ class ImportAsyncService {
           },
         }
       );
+
+      if (result.matchedCount === 0) {
+        return { success: false, message: 'Job já finalizado ou inexistente; não pode ser cancelado' };
+      }
+
+      const queue = getQueue();
+      const queueJob = await queue.getJob(jobID);
+      if (queueJob) {
+        await queueJob.remove();
+      }
 
       return { success: true, message: 'Job cancelado com sucesso' };
     } catch (error) {
@@ -542,7 +585,42 @@ class ImportAsyncService {
         totalRecords: job.totalRecords,
         successCount: job.successCount,
         errorCount: job.errorCount,
-        errors: job.importErrors,
+        // #905: the worker writes `errors`. The old mapping read
+        // `importErrors`, which ImportJob.toJSON() stamped as an
+        // always-empty [] on every created document (nothing ever
+        // populated it) -- so the report carried no error detail, ever.
+        // ImportJob no longer emits the field; the ?? belt only matters
+        // for a job the worker never reached (errors absent entirely),
+        // where older documents still carry the stamped [].
+        errors: job.errors ?? job.importErrors,
+        // #905: ResultsPage's report modal reads a nested metrics object
+        // (frontend ImportMetrics shape); the worker writes flat counts.
+        // Map them here so the modal's strip actually renders.
+        metrics: {
+          totalRecords: job.totalRecords,
+          successfulRecords: job.successCount,
+          failedRecords: job.errorCount,
+          processingTime: job.processingTime,
+          skippedRecords: job.skippedRecords,
+          // #925 established there must be no `?? 0` here: while nothing
+          // wrote job.duplicatesFound, a default turned "nobody counted
+          // duplicates" into the claim "there were none". #931 gave it a
+          // writer -- import-worker's completion payload now sets it from
+          // the sub-workers' `duplicates` -- so a job run since then carries
+          // a real number, including a real 0.
+          //
+          // The pass-through stays deliberately undefaulted anyway: a job
+          // completed BEFORE #931 has no such field, and those must keep
+          // omitting the tile rather than newly claiming zero. Same reason as
+          // #925, one field-lifetime later.
+          //
+          // #931: this is a LABELLED SUBSET of failedRecords, not a sibling
+          // of it. A duplicate row is pushed onto `errors` and `continue`d at
+          // all three detection sites, so it is already inside errorCount --
+          // successfulRecords + failedRecords + duplicatesFound deliberately
+          // exceeds totalRecords, and the UI must read it as "of which".
+          duplicatesFound: job.duplicatesFound,
+        },
         progress: job.progress,
         createdAt: job.createdAt,
         startedAt: job.startedAt,

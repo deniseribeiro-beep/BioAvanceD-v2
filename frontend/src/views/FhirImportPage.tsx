@@ -11,6 +11,13 @@ const statusOrder = ['PENDING_CONSENT', 'TCLE_SENT', 'SIGNED', 'EXTERNAL_ATTACHE
 
 type DisplayStatus = (typeof statusOrder)[number];
 
+// This page reads import_staging_records (buildWorkflowSnapshot in
+// fhir-import-staging.service.js), a pre-commit workflow snapshot on the
+// FHIR import record itself — not a Sample. It has no specimenStatus
+// equivalent (that field only exists on samples), so #407's read
+// migration to specimenStatus does not apply here; confirmed out of
+// scope the same way the backend write-site side of it was for #409
+// (see that service's buildWorkflowSnapshot comment).
 type FhirRecord = {
   _id?: string;
   rowNumber?: number;

@@ -45,7 +45,7 @@ async function setCacheValue(cacheKey, ttlSeconds, value) {
 function normalizeCoding(raw = {}, fallbackSystem) {
   const system = String(raw.system || fallbackSystem || '').trim();
   const code = String(raw.code || '').trim();
-  const display = String(raw.display || raw.nome || raw.name || '').trim();
+  const display = String(raw.display || '').trim();
 
   if (!system || !code || !display) {
     return null;
@@ -106,7 +106,6 @@ function normalizeLocalBiomarker(raw) {
 function uniqueCodings(codings = []) {
   const seen = new Set();
   return codings.filter((item) => {
-    if (!item?.code) return false;
     const key = `${item.system}::${item.code}`.toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
@@ -115,10 +114,6 @@ function uniqueCodings(codings = []) {
 }
 
 async function buildLocalSemanticSuggestions(db, orphaCode) {
-  if (!db || typeof db.collection !== 'function') {
-    return null;
-  }
-
   const normalizedOrpha = normalizeOrphaCode(orphaCode);
   if (!normalizedOrpha) {
     return null;
@@ -197,13 +192,17 @@ function normalizeMedicationRecord(raw = {}) {
   };
 }
 
+const medicationDictionaryIndexedDbs = new WeakSet();
+
 async function ensureMedicationDictionaryIndexes(db) {
+  if (medicationDictionaryIndexedDbs.has(db)) return;
   const collection = db.collection('medication_dictionary');
   await collection.createIndex({ generic_name: 1 }, { name: 'generic_name_idx' });
   await collection.createIndex({ atc_code: 1 }, { name: 'atc_code_idx' });
   await collection.createIndex({ name: 'text', generic_name: 'text', synonyms: 'text', code: 'text', atc_code: 'text' }, { name: 'medication_text_idx' });
   await collection.createIndex({ drug_class: 1 }, { name: 'drug_class_idx' });
   await collection.createIndex({ disease_categories: 1 }, { name: 'disease_categories_idx' });
+  medicationDictionaryIndexedDbs.add(db);
 }
 
 router.get('/atc/search', async (req, res) => {
@@ -326,8 +325,13 @@ router.get('/suggest', async (req, res) => {
     await setCacheValue(cacheKey, 3600, JSON.stringify(response));
     res.json(response);
   } catch (err) {
+    const db = req.app.locals.db;
+    if (!db || typeof db.collection !== 'function') {
+      return res.status(500).json({ error: err.message });
+    }
+
     try {
-      const fallback = await buildLocalSemanticSuggestions(req.app.locals.db, orphaCode);
+      const fallback = await buildLocalSemanticSuggestions(db, orphaCode);
       if (fallback) {
         await setCacheValue(cacheKey, 3600, JSON.stringify(fallback));
         return res.json(fallback);

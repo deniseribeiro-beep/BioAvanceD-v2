@@ -10,6 +10,7 @@ import SampleStatusBadge from '../SampleStatusBadge';
 import InlineStorageMovementPanel from './InlineStorageMovementPanel';
 import type { Sample } from '../../types/models';
 import type { SampleWithId } from '../../hooks/samples/useSamplesPage';
+import { getStorageLabel, buildSprecSummary } from './sampleListFormatters';
 
 type TranslatorFn = (key: string, fallback?: string) => string;
 
@@ -44,13 +45,18 @@ interface SamplesPageViewProps {
 }
 
 function mapStatus(sample: Sample): Sample['status'] {
-  const releaseStatus = String((sample as any).release_status || '').toUpperCase();
+  // #532: specimenStatus is the canonical, always-populated signal (see
+  // models.ts's own comment on the field). SampleGraphValidator's
+  // compliance-graph check now writes specimenStatus directly (previously
+  // wrote a separate release_status field, dropped in #532) — no secondary
+  // signal needed here anymore.
+  const specimenStatus = String((sample as any).specimenStatus || '').toLowerCase();
   const consentStatus = String((sample as any).consentStatus || '').toUpperCase();
   const status = sample.status || sample.currentStatus?.toString().toUpperCase();
-  if (releaseStatus === 'QUARANTINE' || releaseStatus === 'BLOCKED' || consentStatus === 'PENDING') {
+  if (specimenStatus === 'quarantined' || BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus) || consentStatus === 'PENDING') {
     return 'QUARANTINED' as Sample['status'];
   }
-  if (releaseStatus === 'AVAILABLE' || consentStatus === 'SIGNED' || consentStatus === 'EXTERNAL_ATTACHED' || consentStatus === 'WAIVED_TRANSFER' || consentStatus === 'NOT_REQUIRED') {
+  if (specimenStatus === 'available' || consentStatus === 'SIGNED' || consentStatus === 'EXTERNAL_ATTACHED' || consentStatus === 'WAIVED_TRANSFER' || consentStatus === 'NOT_REQUIRED') {
     return 'AVAILABLE';
   }
   if (status === 'AVAILABLE' || status === 'PARTIAL' || status === 'DEPLETED' || status === 'UNAVAILABLE') {
@@ -60,53 +66,9 @@ function mapStatus(sample: Sample): Sample['status'] {
 }
 
 function computeVolume(sample: Sample) {
-  const initial = sample.volumeInitial ?? sample.originalQuantity ?? sample.quantity ?? 0;
-  const current = sample.volumeCurrent ?? sample.availableQuantity ?? sample.quantity ?? 0;
+  const initial = sample.volumeInitial ?? sample.initialQuantity ?? sample.quantity ?? 0;
+  const current = sample.volumeCurrent ?? sample.currentQuantity ?? sample.quantity ?? 0;
   return { initial, current };
-}
-
-function getStorageLabel(sample: SampleWithId, t: TranslatorFn) {
-  const storageLocation = (sample as any).storageLocation;
-  const freezerName = storageLocation?.freezerName ? String(storageLocation.freezerName) : '';
-  const shelfName = storageLocation?.shelfName ? String(storageLocation.shelfName) : '';
-  const rackName = storageLocation?.rackName ? String(storageLocation.rackName) : '';
-  const boxName = storageLocation?.boxName ? String(storageLocation.boxName) : '';
-  const position = storageLocation?.position ? String(storageLocation.position) : '';
-  const path = storageLocation?.path ? String(storageLocation.path) : '';
-
-  const hierarchy = [freezerName, shelfName, rackName, boxName].filter(Boolean).join(' > ');
-
-  if (!hierarchy && !position) {
-    return t('samples.storage.awaiting', 'Aguardando Armazenagem');
-  }
-
-  if (path) {
-    return position ? `${path} / ${t('samples.storage.position', 'Posição')} ${position}` : path;
-  }
-
-  if (hierarchy) {
-    return position ? `${hierarchy} / ${t('samples.storage.position', 'Posição')} ${position}` : hierarchy;
-  }
-
-  if (position) {
-    return `${t('samples.storage.position', 'Posição')} ${position}`;
-  }
-
-  return t('samples.storage.definedBox', 'Caixa definida');
-}
-
-function buildSprecSummary(sample: SampleWithId, t: TranslatorFn) {
-  const sprec = (sample as any).sprec || {};
-  const matrixType = String((sample as any).matrix_type || sprec.matrixType || '').trim().toLowerCase();
-  const fields = matrixType === 'solid'
-    ? [sprec.sampleType, sprec.primaryContainer, sprec.warmIschemia, sprec.coldIschemia, sprec.fixationType, sprec.fixationTime, sprec.longTermStorage]
-    : [sprec.sampleType, sprec.primaryContainer, sprec.preCentrifugation, sprec.centrifugation, sprec.secondCentrifugation, sprec.postCentrifugationDelay, sprec.longTermStorage];
-  const code = String((sample as any).sprec_code || (sample as any).sprecCode || fields.map((part) => String(part || '').trim()).filter(Boolean).join('-')).trim();
-  if (!code) {
-    return t('samples.sprec.na', 'SPREC: N/A');
-  }
-
-  return `${t('samples.sprec.prefix', 'SPREC')} ${code}`;
 }
 
 export default function SamplesPageView({
@@ -413,21 +375,25 @@ export default function SamplesPageView({
   );
 }
 
+// specimenStatus values that block use — mirrors backend's
+// BLOCKED_SPECIMEN_STATUSES (Sample.js), the canonical source since #409.
+const BLOCKED_SPECIMEN_STATUSES = ['unavailable', 'destroyed', 'disposed', 'quarantined'];
+
 function isQuarantined(sample: SampleWithId) {
-  const quarantineStatus = String((sample as any).quarantineStatus || '').toUpperCase();
-  const releaseStatus = String((sample as any).release_status || '').toUpperCase();
-  return quarantineStatus === 'QUARANTINED' || releaseStatus === 'QUARANTINE' || releaseStatus === 'BLOCKED' || sample.canUse === false;
+  const specimenStatus = String((sample as any).specimenStatus || '').toLowerCase();
+  return specimenStatus === 'quarantined' || BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus) || sample.canUse === false;
 }
 
 function renderSampleBadges(sample: SampleWithId, t: TranslatorFn) {
-  const quarantineStatus = String((sample as any).quarantineStatus || '').toUpperCase();
-  const availabilityStatus = String((sample as any).availabilityStatus || '').toUpperCase();
+  const specimenStatus = String((sample as any).specimenStatus || '').toLowerCase();
   const consentStatus = String((sample as any).consentStatus || '').toUpperCase();
+  // No specimenStatus equivalent carries the human-readable reason text —
+  // quarantineReason stays legacy-sourced per #407's scope (dual-written, still correct).
   const quarantineReason = String((sample as any).quarantineReason || '').toUpperCase();
 
   const badges: Array<{ label: string; className: string; title: string }> = [];
 
-  if (quarantineStatus === 'QUARANTINED' || availabilityStatus === 'BLOCKED') {
+  if (specimenStatus === 'quarantined' || BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus)) {
     badges.push({ label: t('samples.badges.quarantine', 'Quarentena'), className: 'pending', title: quarantineReason || t('samples.badges.quarantineTitle', 'Amostra bloqueada aguardando regularização ética') });
   }
 
@@ -447,7 +413,7 @@ function renderSampleBadges(sample: SampleWithId, t: TranslatorFn) {
     badges.push({ label: t('samples.badges.externalDocAttached', 'Documento anexado'), className: 'approved', title: t('samples.badges.externalDocAttachedTitle', 'Documento externo anexado e validado') });
   }
 
-  if (quarantineStatus === 'RELEASED' || availabilityStatus === 'AVAILABLE') {
+  if (specimenStatus && !BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus)) {
     badges.push({ label: t('samples.badges.released', 'Liberada'), className: 'approved', title: t('samples.badges.releasedTitle', 'Disponível para uso autorizado') });
   }
 

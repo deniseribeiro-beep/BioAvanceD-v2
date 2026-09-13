@@ -9,10 +9,38 @@ const patientWorker = require('./workers/patient-worker');
 const sampleWorker = require('./workers/sample-worker');
 const resultWorker = require('./workers/result-worker');
 const temperatureWorker = require('./workers/temperature-worker');
-const locationWorker = require('./workers/location-worker');
 const importAsyncService = require('../services/import-async.service');
 const batchValidationEngine = require('../services/batch-validation-engine.service');
 const { connectDB } = require('../database/mongo');
+const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
+
+// #1040: observability-only, matching this file's own fatal-error style
+// (logger.error + process.exit(1), same as the require.main block's
+// initWorker().catch() below). The process must still die -- do NOT turn
+// this into a swallow/continue path. Three call sites deliberately depend on
+// "an unhandled rejection kills the process" staying true:
+// src/services/auth.service.js:540, src/services/consent.service.js:911 and
+// src/utils/collectionResolver.js:23.
+//
+// Registered before any other startup work in this module. Guarded on
+// `process`, not on this module, because src/workers/worker.js requires this
+// file directly, so both files' handler-registration code can run in the
+// SAME worker process -- the guard is what keeps that a single registration
+// instead of two. server.js and neo4jProjection.worker.js register the same
+// pair in their own processes.
+if (!process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__) {
+  process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__ = true;
+
+  process.on('unhandledRejection', (reason) => {
+    logger.error('❌ [#1040] unhandledRejection não tratada -- encerrando worker:', reason);
+    process.exit(1);
+  });
+
+  process.on('uncaughtException', (err) => {
+    logger.error('❌ [#1040] uncaughtException -- encerrando worker:', err);
+    process.exit(1);
+  });
+}
 
 // Lazy getter para evitar TDZ/ciclos de require
 const getNotificationService = () => require('../services/notification.service');
@@ -46,6 +74,13 @@ async function initWorker() {
     // Conecta ao banco
     db = await connectDB();
 
+    // #826: connectDB() abre apenas a conexão do driver nativo. Os modelos
+    // Mongoose alcançados por este worker (StagingImport, via
+    // batch-validation-engine) precisam da conexão do Mongoose -- sem ela o
+    // Mongoose enfileira cada operação e a rejeita após 10s, o job falha,
+    // retenta indefinidamente e o documento nunca sai de `status: queued`.
+    await connectMongoDB();
+
     // Inicializa Redis (usa instância comum)
     const connection = initRedis();
     
@@ -59,23 +94,48 @@ async function initWorker() {
       async (job) => {
         const { jobID, userID, dataType, filePath, fileName, options } = job.data;
         const dataTypeNormalized = (dataType || '').toString().trim().toLowerCase();
-        const allowedTypes = new Set(['patients', 'samples', 'results', 'temperature', 'temperature-iot', 'locations']);
+        const allowedTypes = new Set(['patients', 'samples', 'results', 'temperature', 'temperature-iot']);
 
         if (job.name === 'batch-import') {
           const stagingImportId = job.data?.stagingImportId || job.data?.jobId || job.id;
 
           logger.info(`📦 Iniciando batch import: ${stagingImportId}`);
 
-          const batchResult = await batchValidationEngine.processBatchImport(db, stagingImportId, job);
+          try {
+            const batchResult = await batchValidationEngine.processBatchImport(db, stagingImportId, job);
 
-          await batchValidationEngine.updateProgress(stagingImportId, {
-            status: batchResult.invalidRows > 0 && batchResult.validRows === 0 && batchResult.partialRows === 0
-              ? 'failed'
-              : 'completed',
-            processedRows: batchResult.processedRows,
-          });
+            await batchValidationEngine.updateProgress(stagingImportId, {
+              status: batchResult.invalidRows > 0 && batchResult.validRows === 0 && batchResult.partialRows === 0
+                ? 'failed'
+                : 'completed',
+              processedRows: batchResult.processedRows,
+            });
 
-          return batchResult;
+            return batchResult;
+          } catch (error) {
+            // #900: bullmq's Worker calls the processor's catch once per
+            // attempt, not once per job (worker.js's moveToFailed() runs every
+            // attempt; the retry-vs-fail decision happens inside it, after
+            // this catch already ran). attemptsMade is only incremented after
+            // the throw, so it plus 1 is the attempt that just failed;
+            // Math.max(1, ...) is load-bearing because bullmq defaults
+            // opts.attempts to 0 and treats 0 and 1 identically as "one
+            // attempt only". This predicate is arithmetic-only -- it would
+            // report "still retrying" if a caller ever threw
+            // UnrecoverableError or called job.discard(), neither of which
+            // happens on this path today.
+            const attemptNumber = (job?.attemptsMade || 0) + 1;
+            const attemptsAllowed = Math.max(1, Number(job?.opts?.attempts) || 1);
+
+            await batchValidationEngine.recordAttemptFailure(stagingImportId, {
+              attemptNumber,
+              attemptsAllowed,
+              message: error.message,
+            });
+
+            logger.error(`❌ Erro ao processar batch-import ${stagingImportId} (tentativa ${attemptNumber}/${attemptsAllowed}):`, error);
+            throw error;
+          }
         }
 
         if (!dataTypeNormalized) {
@@ -108,17 +168,32 @@ async function initWorker() {
             case 'patients':
               result = await patientWorker.process(db, jobID, filePath, options);
               break;
-            case 'samples':
-              result = await sampleWorker.process(db, jobID, filePath, options);
+            case 'samples': {
+              // #483: mirrors neo4jProjection.worker.js's connectNeo4j() use —
+              // this worker process never connects Neo4j on its own, so the
+              // lineage driver has to be established here, fail-open, before
+              // handing off. userID threads the queuing user through for
+              // audit-trail attribution (sample-worker.js resolves it to a
+              // name/role); options never carried it before.
+              let neo4jDriver = null;
+              try {
+                const { connectNeo4j } = require('../infrastructure/database/neo4j/connection');
+                neo4jDriver = await connectNeo4j();
+              } catch (neo4jError) {
+                logger.warn(`[WORKER] Neo4j indisponível para rastreabilidade do job ${jobID}: ${neo4jError.message}`);
+              }
+              result = await sampleWorker.process(db, jobID, filePath, {
+                ...options,
+                userID,
+                neo4jDriver,
+              });
               break;
+            }
             case 'results':
               result = await resultWorker.process(db, jobID, filePath, options);
               break;
             case 'temperature':
               result = await temperatureWorker.process(db, jobID, filePath, options);
-              break;
-            case 'locations':
-              result = await locationWorker.process(db, jobID, filePath, options);
               break;
             case 'temperature-iot':
               // Processa dados de IoT streaming
@@ -139,13 +214,42 @@ async function initWorker() {
               throw new Error(`Tipo de dados não suportado: ${dataType}`);
           }
 
+          // #890: a run that finished normally but wrote nothing because
+          // every processed entry hit an unimplemented/unsupported format
+          // stub (.raw / generic-file) must not be reported as a plain
+          // 'completed' -- that reads as a successful import at 100% having
+          // written zero records. A CSV whose rows failed for cause (RF029
+          // staging/quarantine) stays 'completed'; only the
+          // unprocessedFormats signal routes here, per RNF015 AC#7.
+          const producedNothing = result.success === 0 && (result.unprocessedFormats || 0) > 0;
+          const completionStatus = producedNothing ? 'completed_no_data' : 'completed';
+
           // Atualiza status para completed
-          await updateJobStatus(db, jobID, 'completed', 100, {
+          await updateJobStatus(db, jobID, completionStatus, 100, {
             totalRecords: result.total,
             successCount: result.success,
             errorCount: result.errors.length,
             errors: result.errors,
+            unprocessedFormats: result.unprocessedFormats || 0,
             fhirResources: result.fhirResources || [],
+            processingTime: result.processingTime || 0,
+            // #1007: spread condicional, nao `|| 0`. ResultsPage.tsx gateia
+            // os tiles "Ignorados"/"Duplicados" em `!== undefined` justamente
+            // para que um job NAO CONTADO omita o tile em vez de afirmar zero
+            // (#925). O `|| 0` garantia definedness, entao o gate nunca podia
+            // disparar: result-worker.js e temperature-worker.js nao retornam
+            // nenhum dos dois campos em nenhum ramo, e `results` e o unico
+            // dataType que ResultsPage consegue exibir -- logo todo job
+            // exibivel mostrava "Ignorados: 0" como afirmacao sobre um numero
+            // que ninguem mediu. patient-worker/sample-worker sempre retornam
+            // ambos (import-lgpd.service inicializa os dois em 0), entao o
+            // zero MEDIDO da importacao LGPD continua aparecendo.
+            ...(result.skipped !== undefined ? { skippedRecords: result.skipped } : {}),
+            // #931: quantas das `errorCount` rejeicoes foram por duplicidade.
+            // Subconjunto de errorCount, nao um balde a mais -- os tres sites
+            // de deteccao em import-lgpd.service empurram para `errors` e
+            // fazem `continue`, entao a linha ja esta contada la.
+            ...(result.duplicates !== undefined ? { duplicatesFound: result.duplicates } : {}),
             completedAt: new Date(),
           });
 
@@ -175,6 +279,9 @@ async function initWorker() {
                   : (dataTypeNormalized || 'Import');
 
           auditLogger.init(db);
+          // #890: deliberately left as the literal 'completed' here (not
+          // completionStatus) -- bounding blast radius on unaudited
+          // consumers of this AuditLog action string.
           await auditLogger.logImport(
             null, // req não disponível no worker
             entityName,
@@ -188,13 +295,19 @@ async function initWorker() {
               fhirResourcesCreated: result.fhirResourcesCreated || 0,
               fhirResourcesUpdated: result.fhirResourcesUpdated || 0,
               processingTime: result.processingTime || 0,
-            }
+            },
+            // #1105: this is the import WORKER process, not an HTTP request.
+            // Before this it landed on 'api' via Log.js:124's default -- a
+            // canonical dict-02 P1X-0331 value that is simply wrong, and the
+            // reason "show me everything the import worker did" was a guess
+            // rather than a query.
+            { source: 'worker' }
           );
 
           // Envia notificação assíncrona
           await getNotificationService().notifyJobCompleted(userID, {
             jobID,
-            status: 'completed',
+            status: completionStatus,
             dataType: dataTypeNormalized,
             fileName: fileName,
             successCount: result.success,
@@ -206,23 +319,36 @@ async function initWorker() {
 
           return result;
         } catch (error) {
-          if (job.name === 'batch-import') {
-            const stagingImportId = job.data?.stagingImportId || job.data?.jobId || job.id;
-            await batchValidationEngine.updateProgress(stagingImportId, {
-              status: 'failed',
-            });
+          // #900: same attempt-awareness as the batch path above. bullmq runs
+          // this catch once per ATTEMPT, so an unguarded 'failed' write plus
+          // notifyJobFailed meant one failing job flipped the record to failed
+          // at t=0 and sent the user up to three "import failed" notifications
+          // for a run that could still succeed.
+          const attemptNumber = (job?.attemptsMade || 0) + 1;
+          const attemptsAllowed = Math.max(1, Number(job?.opts?.attempts) || 1);
+          const isFinalAttempt = attemptNumber >= attemptsAllowed;
 
-            logger.error(`❌ Erro ao processar batch-import ${stagingImportId}:`, error);
-            throw error;
-          }
+          logger.error(
+            `❌ Erro ao processar job ${jobID} (tentativa ${attemptNumber}/${attemptsAllowed}):`,
+            error
+          );
 
-          logger.error(`❌ Erro ao processar job ${jobID}:`, error);
-
-          // Atualiza status para failed
-          await updateJobStatus(db, jobID, 'failed', 0, {
-            errors: [{ error: error.message, stack: error.stack }],
-            completedAt: new Date(),
-          });
+          // Only the last attempt is terminal. Earlier ones stay 'processing'
+          // and record the attempt, so the failure is visible without claiming
+          // the job is over.
+          await updateJobStatus(
+            db,
+            jobID,
+            isFinalAttempt ? 'failed' : 'processing',
+            0,
+            {
+              errors: [{
+                error: `Tentativa ${attemptNumber}/${attemptsAllowed}: ${error.message}`,
+                stack: error.stack,
+              }],
+              ...(isFinalAttempt ? { completedAt: new Date() } : {}),
+            }
+          );
 
           // Registra no AuditLog
           const auditLogger = require('../utils/auditLogger');
@@ -241,25 +367,43 @@ async function initWorker() {
             null,
             entityFailName,
             error,
-            { action: 'IMPORT', jobID, dataType: dataTypeNormalized, fileName }
+            { action: 'IMPORT', jobID, dataType: dataTypeNormalized, fileName },
+            // #1105: worker process, not an HTTP request -- same as the
+            // logImport site above.
+            { source: 'worker' }
           );
 
-          // Envia notificação de falha
-          await getNotificationService().notifyJobFailed(userID, {
-            jobID,
-            status: 'failed',
-            dataType: dataTypeNormalized,
-            fileName: fileName,
-            error: error.message,
-            completedAt: new Date(),
-          });
+          // #900: only notify once, on the terminal attempt. The audit entry
+          // above is deliberately left per-attempt -- each failure really did
+          // happen and an audit trail should say so -- but a user-facing
+          // "import failed" push for an attempt that will be retried is wrong.
+          if (isFinalAttempt) {
+            await getNotificationService().notifyJobFailed(userID, {
+              jobID,
+              status: 'failed',
+              dataType: dataTypeNormalized,
+              fileName: fileName,
+              error: error.message,
+              completedAt: new Date(),
+            });
+          }
 
           throw error;
         }
       },
       {
         connection,
-        concurrency: parseInt(process.env.WORKER_CONCURRENCY || '2', 10),
+        // #971: default 1, NOT 2. Every duplicate check on the import path is a
+        // non-atomic read-then-write -- checkDuplicatePatient/findOne({barcode})
+        // then insertOne, with no transaction and no findOneAndUpdate. Within one
+        // job the row loop awaits each insert, so a file cannot duplicate against
+        // itself (#942); ACROSS jobs nothing serialises them. Samples survive that
+        // on samples_barcode_unique_v1 (#936); participants have no unique index at
+        // all (#941), so the loser is a second Participant record for one person,
+        // silently, with both jobs reporting success.
+        // Raise this only once the participant identity key has a real unique index.
+        // Pinned by tests/unit/import-worker.test.js.
+        concurrency: parseInt(process.env.WORKER_CONCURRENCY || '1', 10),
         limiter: {
           max: 10,
           duration: 1000,

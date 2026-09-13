@@ -3,6 +3,19 @@ require('dotenv').config();
 module.exports = {
   NODE_ENV: process.env.NODE_ENV || 'development',
   TEST_ENVIRONMENT: process.env.TEST_ENVIRONMENT === 'true' || process.env.TEST_ENVIRONMENT === '1',
+  // #359 / RNF008.6: authLimiter's relaxed budget must be an explicit,
+  // isolated opt-in, not inferred from NODE_ENV (a generic environment
+  // indicator every non-production run shares, including one where
+  // NODE_ENV was simply left unset). Only the real Docker dev stack's
+  // compose file sets this.
+  AUTH_RATE_LIMIT_RELAXED: process.env.AUTH_RATE_LIMIT_RELAXED === 'true' || process.env.AUTH_RATE_LIMIT_RELAXED === '1',
+  // #832 / RNF008.6: same isolated-opt-in shape as AUTH_RATE_LIMIT_RELAXED
+  // above, for consentLimiter's budget on the unauthenticated e-consent
+  // token routes. Deliberately a SEPARATE flag rather than reusing that one:
+  // the two relax different controls (authentication vs. the participant
+  // consent surface), and a stack that needs headroom on one does not
+  // thereby need it on the other.
+  CONSENT_RATE_LIMIT_RELAXED: process.env.CONSENT_RATE_LIMIT_RELAXED === 'true' || process.env.CONSENT_RATE_LIMIT_RELAXED === '1',
   PORT: process.env.PORT || 3000,
 
   // Mongo
@@ -19,6 +32,10 @@ module.exports = {
   NEO4J_CONNECT_MAX_RETRIES: process.env.NEO4J_CONNECT_MAX_RETRIES ? Number(process.env.NEO4J_CONNECT_MAX_RETRIES) : 8,
   NEO4J_CONNECT_INITIAL_DELAY_MS: process.env.NEO4J_CONNECT_INITIAL_DELAY_MS ? Number(process.env.NEO4J_CONNECT_INITIAL_DELAY_MS) : 1000,
   NEO4J_CONNECT_MAX_DELAY_MS: process.env.NEO4J_CONNECT_MAX_DELAY_MS ? Number(process.env.NEO4J_CONNECT_MAX_DELAY_MS) : 15000,
+  // After a connectNeo4j() attempt exhausts all retries, subsequent calls fail
+  // fast (no retry chain) until this cooldown elapses, instead of re-paying the
+  // full backoff on every caller (cron ticks, on-demand routes) while Neo4j is down.
+  NEO4J_CONNECT_FAILURE_COOLDOWN_MS: process.env.NEO4J_CONNECT_FAILURE_COOLDOWN_MS ? Number(process.env.NEO4J_CONNECT_FAILURE_COOLDOWN_MS) : 30000,
   NEO4J_CANONICAL_SALT: process.env.NEO4J_CANONICAL_SALT || process.env.GRAPH_PSEUDONYMIZATION_SALT || process.env.USER_ANON_SALT || '',
   GRAPH_OUTBOX_BATCH_SIZE: process.env.GRAPH_OUTBOX_BATCH_SIZE ? Number(process.env.GRAPH_OUTBOX_BATCH_SIZE) : 100,
   GRAPH_OUTBOX_MAX_ATTEMPTS: process.env.GRAPH_OUTBOX_MAX_ATTEMPTS ? Number(process.env.GRAPH_OUTBOX_MAX_ATTEMPTS) : 8,
@@ -56,25 +73,37 @@ module.exports = {
   // Auth
   JWT_SECRET: process.env.JWT_SECRET,
   JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
+  // #1097: read by server.js's critical-variable guard. eConsent.js and
+  // fhir-import-staging.service.js both read process.env directly at call
+  // time; this declaration is what lets the BOOT check name it.
+  CONSENT_SECRET: process.env.CONSENT_SECRET,
   ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
   ENCRYPTION_KEY_ID: process.env.ENCRYPTION_KEY_ID,
   AUDIT_MERKLE_SIGN_KEY_ID: process.env.AUDIT_MERKLE_SIGN_KEY_ID,
-  AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM: process.env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM,
   AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE: process.env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE,
   AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON: process.env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON,
   AUDIT_RFC3161_MODE: process.env.AUDIT_RFC3161_MODE,
   AUDIT_RFC3161_TSA_URL: process.env.AUDIT_RFC3161_TSA_URL,
   AUDIT_RFC3161_TSA_AUTH_TOKEN: process.env.AUDIT_RFC3161_TSA_AUTH_TOKEN,
   AUDIT_EXTERNAL_WITNESS_URL: process.env.AUDIT_EXTERNAL_WITNESS_URL,
+  // #874: reserved for unbuilt work. AUDIT_EXTERNAL_WITNESS_URL above is
+  // genuinely read (the witness call is wired), but nothing yet verifies a
+  // response against this public key -- that signature-verification half
+  // was never built, so this key is currently inert. Do not assume a
+  // signature check exists on the strength of this declaration alone.
   AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: process.env.AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY,
-  // ENCRYPTION_KEY_LEGACY removido
-  // ENCRYPTION_KEY_LEGACY_ID removido
+  // #1086: slot da chave ANTERIOR, somente para decriptação, que torna a
+  // rotação de ENCRYPTION_KEY um ato de configuração e não de código
+  // (RNF020 AC#5). Substitui o par ENCRYPTION_KEY_LEGACY/_LEGACY_ID que
+  // havia sido removido antes do primeiro commit deste repositório -- não
+  // existe commit de remoção para reverter, por isso o slot foi reescrito.
+  ENCRYPTION_KEY_PREVIOUS: process.env.ENCRYPTION_KEY_PREVIOUS,
+  ENCRYPTION_KEY_PREVIOUS_ID: process.env.ENCRYPTION_KEY_PREVIOUS_ID,
   USER_ANON_SALT: process.env.USER_ANON_SALT,
 
   // URLs
   ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
   FRONTEND_URL: process.env.FRONTEND_URL,
-  API_URL: process.env.API_URL,
   ALLOW_CLOUD_INTEGRATIONS: process.env.ALLOW_CLOUD_INTEGRATIONS === 'true' || process.env.ALLOW_CLOUD_INTEGRATIONS === '1',
   ALLOW_EXTERNAL_TERMINOLOGY_SYNC: process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC === 'true' || process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC === '1',
   ALLOW_EXTERNAL_HPO_LOOKUP: process.env.ALLOW_EXTERNAL_HPO_LOOKUP === 'true' || process.env.ALLOW_EXTERNAL_HPO_LOOKUP === '1',
@@ -92,13 +121,26 @@ module.exports = {
 
   // Backup / Monitoring
   BACKUP_DIR: process.env.BACKUP_DIR,
+  // #948: where a restore stages its decrypted copy of a dump. Defaults to
+  // `<BACKUP_DIR>/.restore-scratch`; set only to move that scratch off the
+  // backups volume. It must be DISK-backed and large enough for a whole
+  // dump -- pointing it at /tmp is the defect #948 was filed for, since
+  // compose.prod.yml mounts /tmp as an uncapped RAM tmpfs.
+  RESTORE_SCRATCH_DIR: process.env.RESTORE_SCRATCH_DIR,
+  // #893: writable-storage roots, mirroring BACKUP_DIR's shape -- default
+  // reproduces today's __dirname-relative uploads/storage paths exactly,
+  // set only so prod can point them at a volume mounted outside /app.
+  UPLOAD_DIR: process.env.UPLOAD_DIR,
+  STORAGE_DIR: process.env.STORAGE_DIR,
   BACKUP_CRON: process.env.BACKUP_CRON,
   BACKUP_RETENTION_DAYS: process.env.BACKUP_RETENTION_DAYS,
+  // #749: read by scheduler.service.js#startRetentionSweepSchedule since it
+  // was written, but never registered here -- so the override was dead and
+  // the sweep was pinned to its 0 4 * * * fallback no matter what was set.
+  RETENTION_SWEEP_CRON: process.env.RETENTION_SWEEP_CRON,
+  RESTORE_TEST_CRON: process.env.RESTORE_TEST_CRON,
   TEMP_MONITOR_CRON: process.env.TEMP_MONITOR_CRON,
   TEMP_STALE_MINUTES: process.env.TEMP_STALE_MINUTES,
-  ENABLE_CONSENT_SYNC: process.env.ENABLE_CONSENT_SYNC === 'true' || process.env.ENABLE_CONSENT_SYNC === '1',
-  CONSENT_SYNC_CRON: process.env.CONSENT_SYNC_CRON,
-  CONSENT_SYNC_BATCH_SIZE: process.env.CONSENT_SYNC_BATCH_SIZE,
 
   // Notification
   APP_DOMAIN: process.env.APP_DOMAIN,
@@ -113,6 +155,53 @@ module.exports = {
   COLL_CONSENT_TEMPLATES: process.env.COLL_CONSENT_TEMPLATES || 'consent_templates',
   COLL_SAMPLE_MOVEMENTS: process.env.COLL_SAMPLE_MOVEMENTS || 'sample_movements',
   COLL_BIOMARKER_OBSERVATIONS: process.env.COLL_BIOMARKER_OBSERVATIONS || 'biomarker_observations',
+  // #863: the remaining COLL_* keys below were already read via
+  // src/config/collections.js's `env.COLL_<NAME>` but never declared here --
+  // that importer used a sibling `require('./env')`, which the env-guard's
+  // path-substring filter could not see, so these 41 reads went unchecked.
+  // Each default is copied character-for-character from the corresponding
+  // line in collections.js.
+  COLL_CIDS: process.env.COLL_CIDS || 'cids',
+  COLL_CLINICAL_UNITS: process.env.COLL_CLINICAL_UNITS || 'clinical_units',
+  COLL_ORGANIZATIONS: process.env.COLL_ORGANIZATIONS || 'organizations',
+  COLL_DISEASE_DICTIONARY: process.env.COLL_DISEASE_DICTIONARY || 'disease_dictionary',
+  COLL_MEDICATION_DICTIONARY: process.env.COLL_MEDICATION_DICTIONARY || 'medication_dictionary',
+  COLL_REFERENCE_SEED_RUNS: process.env.COLL_REFERENCE_SEED_RUNS || 'referenceSeedRuns',
+  COLL_FOUNDATION_DATA_RUNS: process.env.COLL_FOUNDATION_DATA_RUNS || 'foundationDataRuns',
+  COLL_PARTICIPANT_IDENTITIES: process.env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities',
+  COLL_RCS_ASSESSMENTS: process.env.COLL_RCS_ASSESSMENTS || 'rcsAssessments',
+  COLL_ENCOUNTERS: process.env.COLL_ENCOUNTERS || 'encounters',
+  COLL_CONDITIONS: process.env.COLL_CONDITIONS || 'conditions',
+  COLL_PHENOTYPE_OBSERVATIONS: process.env.COLL_PHENOTYPE_OBSERVATIONS || 'phenotypeObservations',
+  COLL_CLINICAL_OBSERVATIONS: process.env.COLL_CLINICAL_OBSERVATIONS || 'clinicalObservations',
+  COLL_CLINICAL_OUTCOMES: process.env.COLL_CLINICAL_OUTCOMES || 'clinicalOutcomes',
+  COLL_DERIVED_SCORES: process.env.COLL_DERIVED_SCORES || 'derivedScores',
+  COLL_ALLERGY_INTOLERANCES: process.env.COLL_ALLERGY_INTOLERANCES || 'allergyIntolerances',
+  COLL_FAMILY_HISTORIES: process.env.COLL_FAMILY_HISTORIES || 'familyHistories',
+  COLL_MEDICATION_EXPOSURES: process.env.COLL_MEDICATION_EXPOSURES || 'medicationExposures',
+  COLL_PROCEDURES: process.env.COLL_PROCEDURES || 'procedures',
+  COLL_SPECIMEN_PREANALYTICS: process.env.COLL_SPECIMEN_PREANALYTICS || 'specimenPreanalytics',
+  COLL_QUARANTINE_ACTIONS: process.env.COLL_QUARANTINE_ACTIONS || 'quarantineActions',
+  COLL_REFERENCE_DATASET_RELEASES: process.env.COLL_REFERENCE_DATASET_RELEASES || 'referenceDatasetReleases',
+  COLL_REFERENCE_IMPORT_RUNS: process.env.COLL_REFERENCE_IMPORT_RUNS || 'referenceImportRuns',
+  COLL_REFERENCE_IMPORT_ISSUES: process.env.COLL_REFERENCE_IMPORT_ISSUES || 'referenceImportIssues',
+  COLL_REFERENCE_IMPORT_STAGING: process.env.COLL_REFERENCE_IMPORT_STAGING || 'referenceImportStaging',
+  COLL_TERMINOLOGY_CONCEPTS: process.env.COLL_TERMINOLOGY_CONCEPTS || 'terminologyConcepts',
+  COLL_TERMINOLOGY_RELATIONS: process.env.COLL_TERMINOLOGY_RELATIONS || 'terminologyRelations',
+  COLL_ROLES: process.env.COLL_ROLES || 'roles',
+  COLL_PERMISSIONS: process.env.COLL_PERMISSIONS || 'permissions',
+  COLL_USER_ROLE_ASSIGNMENTS: process.env.COLL_USER_ROLE_ASSIGNMENTS || 'userRoleAssignments',
+  COLL_RETENTION_POLICIES: process.env.COLL_RETENTION_POLICIES || 'retentionPolicies',
+  COLL_NOTIFICATION_RULES: process.env.COLL_NOTIFICATION_RULES || 'notificationRules',
+  COLL_NOTIFICATIONS: process.env.COLL_NOTIFICATIONS || 'notifications',
+  COLL_LABEL_GENERATIONS: process.env.COLL_LABEL_GENERATIONS || 'labelGenerations',
+  COLL_ACCESS_REQUESTS: process.env.COLL_ACCESS_REQUESTS || 'accessRequests',
+  COLL_REAGENT_LOTS: process.env.COLL_REAGENT_LOTS || 'reagentLots',
+  COLL_NONCONFORMANCES: process.env.COLL_NONCONFORMANCES || 'nonconformances',
+  COLL_LEGAL_HOLDS: process.env.COLL_LEGAL_HOLDS || 'legalHolds',
+  COLL_DISPOSITION_ACTIONS: process.env.COLL_DISPOSITION_ACTIONS || 'dispositionActions',
+  COLL_INGESTION_IDEMPOTENCY_KEYS: process.env.COLL_INGESTION_IDEMPOTENCY_KEYS || 'ingestionIdempotencyKeys',
+  COLL_INGESTION_QUARANTINE_RECORDS: process.env.COLL_INGESTION_QUARANTINE_RECORDS || 'ingestionQuarantineRecords',
 
   // Neo4j lineage behavior
   LINEAGE_MODE: process.env.LINEAGE_MODE || 'fail-open',
@@ -120,7 +209,4 @@ module.exports = {
   NEO4J_RETRY_INTERVAL_MS: process.env.NEO4J_RETRY_INTERVAL_MS,
   NEO4J_RETRY_BATCH_SIZE: process.env.NEO4J_RETRY_BATCH_SIZE,
   NEO4J_RETRY_MAX_ATTEMPTS: process.env.NEO4J_RETRY_MAX_ATTEMPTS,
-
-  // Data read strategy
-  FHIR_READ_MODE: process.env.FHIR_READ_MODE || 'fhir-first',
 };

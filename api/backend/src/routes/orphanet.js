@@ -134,7 +134,8 @@ function normalizeDiseaseRecord(item = {}, source = 'local') {
 function dedupeRecords(records = [], limit = 20) {
   const map = new Map();
   for (const record of records) {
-    const normalized = normalizeDiseaseRecord(record, record?.source || 'local');
+    if (!record) continue;
+    const normalized = normalizeDiseaseRecord(record, record.source);
     if (!normalized) continue;
 
     const key = getOrphaNumeric(normalized.orphaCode);
@@ -155,8 +156,8 @@ function dedupeRecords(records = [], limit = 20) {
         cid10: previous.relacoes?.cid10 || normalized.relacoes?.cid10,
         omim: previous.relacoes?.omim || normalized.relacoes?.omim,
       },
-      synonyms: Array.from(new Set([...(previous.synonyms || []), ...(normalized.synonyms || [])])),
-      aliases: Array.from(new Set([...(previous.aliases || []), ...(normalized.aliases || [])])),
+      synonyms: Array.from(new Set([...previous.synonyms, ...normalized.synonyms])),
+      aliases: Array.from(new Set([...previous.aliases, ...normalized.aliases])),
     });
   }
 
@@ -194,7 +195,7 @@ async function searchLocal(db, search, lang, limit) {
       { 'relacoes.cid10': regex },
       { 'relacoes.omim': regex },
       ...(codeRegex ? [{ ORPHA: codeRegex }, { OMIM: codeRegex }, { 'relacoes.omim': codeRegex }, { 'relacoes.orpha': codeRegex }] : []),
-      ...(numericOrpha ? [{ ORPHA: new RegExp(`(^|[;,|])\\s*${escapeRegex(numericOrpha)}\\s*($|[;,|])`, 'i') }] : []),
+      { ORPHA: new RegExp(`(^|[;,|])\\s*${escapeRegex(numericOrpha)}\\s*($|[;,|])`, 'i') },
     ],
   }).limit(limit).toArray();
 
@@ -223,16 +224,16 @@ async function searchLocal(db, search, lang, limit) {
       { 'relacoes.omim': regex },
       { 'relacoes.orpha': regex },
       ...(codeRegex ? [{ code: codeRegex }, { ORPHA: codeRegex }, { ORPHAcode: codeRegex }, { OMIM: codeRegex }, { 'relacoes.omim': codeRegex }, { 'relacoes.orpha': codeRegex }] : []),
-      ...(numericOrpha ? [{ code: numericOrpha }, { orphaCode: normalizeOrphaCode(numericOrpha) }] : []),
+      { code: numericOrpha }, { orphaCode: normalizeOrphaCode(numericOrpha) },
     ],
   };
   const requestedLang = normalizeText(lang).toLowerCase();
   let orphanetDocs = await db.collection(COLLECTION)
-    .find(requestedLang ? { ...orphanetFilter, $or: orphanetFilter.$or, lang: { $in: [requestedLang, '', null] } } : orphanetFilter)
+    .find({ ...orphanetFilter, $or: orphanetFilter.$or, lang: { $in: [requestedLang, '', null] } })
     .limit(limit)
     .toArray();
 
-  if (requestedLang && orphanetDocs.length === 0) {
+  if (orphanetDocs.length === 0) {
     orphanetDocs = await db.collection(COLLECTION)
       .find(orphanetFilter)
       .limit(limit)
@@ -303,7 +304,7 @@ async function searchRemote(search, limit) {
 
 router.get('/search', async (req, res) => {
   const q = normalizeText(req.query.q);
-  const lang = normalizeText(req.query.lang || 'pt');
+  const lang = normalizeText(req.query.lang) || 'pt';
   const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
   if (!q) return res.status(400).json({ error: 'Missing query' });
 
@@ -319,6 +320,8 @@ router.get('/search', async (req, res) => {
       return res.json(localResults);
     }
 
+    // searchRemote catches and logs its own per-URL errors internally and never rethrows,
+    // so only searchLocal (above) can trigger this catch block — see #279.
     const remoteResults = await searchRemote(q, limit);
     if (remoteResults.length > 0) {
       const results = dedupeRecords(remoteResults, limit);
@@ -329,7 +332,7 @@ router.get('/search', async (req, res) => {
     logger.info(`[ORPHANET] Busca concluida: queryLength=${q.length}, resultados=0, origem=vazio`);
     return res.json([]);
   } catch (error) {
-    logger.warn(`[ORPHANET] Busca externa/local falhou; tentando fallback local: ${error.message}`);
+    logger.warn(`[ORPHANET] Busca local falhou; tentando fallback local: ${error.message}`);
     try {
       const fallbackResults = await searchLocal(db, q, lang, limit);
       res.json(fallbackResults);

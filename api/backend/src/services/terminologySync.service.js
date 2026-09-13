@@ -5,6 +5,66 @@ const logger = require('../utils/logger');
 const DEFAULT_TIMEOUT_MS = 15000;
 const ORPHADATA_BASE_URL = process.env.ORPHADATA_BASE_URL || '';
 
+// #941: `Terminology.js:44` declares `{ sistema: 1, codigo: 1 }, { unique:
+// true }`, but the mongoose connection opens with `autoIndex: false`
+// (connection.js:26) and nothing calls `syncIndexes()`/`createIndexes()`
+// anywhere, so that declaration never reaches Mongo. Two independent
+// writers upsert into `terminologies` keyed on the same `{ sistema,
+// codigo }` pair -- this file's own `upsertTerminology` (native db path,
+// reached via `syncFromOrphadata`) and
+// `terminologies.routes.js` (`bulkUpsertTerminologies`) -- so the pair
+// races with no database-level protection. This is the native-driver
+// equivalent, latched per collection name like `cid.service.js`'s
+// `ensureIndexes`. BOTH writers call it; the original fix wired only the
+// first, which is the env-gated one, so the index was not built on the
+// default offline path at all.
+//
+// A `partialFilterExpression` IS required, and the `_v1` index that shipped
+// without one was broken. The reasoning it replaced said "both writers
+// already guard `sistema`/`codigo` as non-empty truthy strings", which is
+// true of the two writers named above and false of the collection: there is
+// a THIRD writer nobody counted.
+//
+// `scripts/seed-essential-reference-data.js`'s `sprec-minimal` entry
+// (`npm run seed:essential`, manifest key `sprec-minimal`, business key
+// `['sistema','fonte','axis','code']`) upserts the four SPREC axis rows into
+// `terminologies` shaped `{ sistema:'SPREC', fonte, axis, code, label,
+// descricao }`. They carry `code`, never `codigo`. Under a plain unique
+// index Mongo reads the missing field as null, so all four share the key
+// `{ 'SPREC', null }` and collide with one another -- the exact
+// explicit-null analogue the old comment concluded did not exist.
+//
+// It failed silently in both orderings, which is why nothing caught it:
+// seed-then-index makes `createIndex` throw E11000, which the catch below
+// logs as a warning and then latches anyway, so the index never exists and
+// never retries; index-then-seed fails the seed run instead.
+//
+// `$type: 'string'` rather than `$exists: true` because a null or numeric
+// `codigo` would collide the same way. Both real writers emit strings and
+// screen falsy values, so nothing legitimate is excluded -- the two writers
+// the old comment reasoned about are still fully covered.
+const indexedTerminologyCollections = new Set();
+
+async function ensureTerminologyIndexes(collection, collectionName = 'terminologies') {
+  if (!collection || typeof collection.createIndex !== 'function' || !collectionName) return;
+  if (indexedTerminologyCollections.has(collectionName)) return;
+
+  try {
+    await collection.createIndex(
+      { sistema: 1, codigo: 1 },
+      {
+        name: 'terminologies_sistema_codigo_unique_v2',
+        unique: true,
+        partialFilterExpression: { sistema: { $type: 'string' }, codigo: { $type: 'string' } },
+      }
+    );
+  } catch (error) {
+    logger.warn(`Não foi possível criar índice terminologies_sistema_codigo_unique_v2 em ${collectionName}: ${error.message}`);
+  }
+
+  indexedTerminologyCollections.add(collectionName);
+}
+
 function isExternalTerminologySyncEnabled() {
   const raw = String(process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC || process.env.ALLOW_CLOUD_INTEGRATIONS || '').trim().toLowerCase();
   return raw === 'true' || raw === '1';
@@ -133,12 +193,12 @@ function normalizeRecord(record = {}, fallbackSystem = 'OUTRO') {
     aliases,
     relacoes,
     ativo: record.ativo !== undefined ? Boolean(record.ativo) : true,
-    sincronizadoEm: new Date(),
-    updatedAt: new Date(),
     fonte: normalizeText(record.fonte || 'orphadata') || 'orphadata',
   };
 
   normalized.hashConteudo = computeHash(normalized);
+  normalized.sincronizadoEm = new Date();
+  normalized.updatedAt = new Date();
 
   return normalized;
 }
@@ -189,15 +249,17 @@ async function upsertOrphanetRedundancy(db, payload) {
 }
 
 async function upsertTerminology(record, db = null) {
-  if (!record.codigo || !record.sistema || !record.descricao) {
+  const payload = normalizeRecord(record, record.sistema);
+
+  if (!payload.codigo || !payload.sistema || !payload.descricao) {
     return { skipped: true, reason: 'missing-required-fields' };
   }
 
-  const payload = normalizeRecord(record, record.sistema);
-
   let result;
   if (db && typeof db.collection === 'function') {
-    await db.collection('terminologies').updateOne(
+    const terminologiesCollection = db.collection('terminologies');
+    await ensureTerminologyIndexes(terminologiesCollection, 'terminologies');
+    await terminologiesCollection.updateOne(
       { sistema: payload.sistema, codigo: payload.codigo },
       { $set: payload },
       { upsert: true }
@@ -243,14 +305,11 @@ async function fetchJsonWithTimeout(url, timeoutMs) {
 
     let data;
     if (responseText) {
-      if (contentType.includes('application/json')) {
+      try {
         data = JSON.parse(responseText);
-      } else {
-        try {
-          data = JSON.parse(responseText);
-        } catch (_error) {
-          data = responseText;
-        }
+      } catch (_error) {
+        logger.warn(`Resposta não é JSON válido (content-type: "${contentType || 'desconhecido'}") de ${url}`);
+        data = responseText;
       }
     } else {
       data = null;
@@ -302,14 +361,18 @@ async function syncFromOrphadata(db = null) {
     '/rd-classification/orphacodes?limit=1000',
   ];
 
+  const consulted = [];
+
   for (const endpoint of endpoints) {
     try {
       const url = `${ORPHADATA_BASE_URL.replace(/\/$/, '')}${endpoint}`;
       const responseData = await fetchJsonWithTimeout(url, DEFAULT_TIMEOUT_MS);
       const records = extractRecords(responseData?.data?.results ?? responseData);
       if (!records.length) {
+        consulted.push({ endpoint, recordCount: 0 });
         continue;
       }
+      consulted.push({ endpoint, recordCount: records.length });
 
       const stats = { attempted: endpoint, upserted: 0, skipped: 0 };
       for (const record of records) {
@@ -333,13 +396,14 @@ async function syncFromOrphadata(db = null) {
         stats.upserted += 1;
       }
 
-      return { success: true, ...stats };
+      return { success: true, ...stats, consulted };
     } catch (error) {
+      consulted.push({ endpoint, recordCount: 0, error: error.message });
       logger.warn(`Falha ao sincronizar terminologias via ${endpoint}: ${error.message}`);
     }
   }
 
-  return { success: false, attempted: endpoints, upserted: 0, skipped: 0 };
+  return { success: false, attempted: endpoints, upserted: 0, skipped: 0, consulted };
 }
 
 async function seedTerminologies(records = []) {
@@ -369,4 +433,5 @@ module.exports = {
   upsertTerminology,
   normalizeRecord,
   isExternalTerminologySyncEnabled,
+  ensureTerminologyIndexes,
 };

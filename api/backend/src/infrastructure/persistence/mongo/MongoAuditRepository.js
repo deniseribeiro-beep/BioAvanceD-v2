@@ -2,12 +2,7 @@
  * Repositório de auditoria imutável em MongoDB.
  */
 const sampleMovementLedger = require('../../../utils/sampleMovementLedger');
-
-function assertExpectedCollectionName(actualName, expectedName) {
-  if (actualName !== expectedName) {
-    throw new Error(`MongoAuditRepository expected collection "${expectedName}" but received "${actualName}"`);
-  }
-}
+const { CANONICAL_COLLECTIONS } = require('../../../config/collections');
 
 function createIsolatedCollectionView(collection) {
   const overrides = new Map();
@@ -52,10 +47,9 @@ class MongoAuditRepository {
    * @returns {Promise<{ movementID: number }>}
    */
   async appendImmutableAudit(input, session) {
-    const movementsCollectionName = 'sample_movements';
-    assertExpectedCollectionName(movementsCollectionName, 'sample_movements');
+    const movementsCollectionName = CANONICAL_COLLECTIONS.sampleMovements;
     const movementsCollection = createIsolatedCollectionView(this.db.collection(movementsCollectionName));
-    sampleMovementLedger.enforceAppendOnlyCollection(movementsCollection, 'sample_movements');
+    sampleMovementLedger.enforceAppendOnlyCollection(movementsCollection, movementsCollectionName);
     await sampleMovementLedger.ensureSampleMovementIndexes(movementsCollection);
 
     const movementID = await this.generateMovementID(session);
@@ -110,7 +104,9 @@ class MongoAuditRepository {
       }
     );
 
-    return counter.value.seq;
+    // mongodb@6.x findOneAndUpdate returns the modified document directly
+    // (not wrapped in `{ value: doc }` as pre-v5 drivers did) — see #294.
+    return counter.seq;
   }
 }
 

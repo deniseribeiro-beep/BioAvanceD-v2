@@ -3,13 +3,16 @@ name: bioavanced-test
 x-test-env: &test-env
   NODE_ENV: test
   TEST_ENVIRONMENT: "true"
-  MONGO_URI: mongodb://mongodb-test:27017/bioavanced_test
+  MONGO_URI: mongodb://mongodb-test:27017/bioavanced_test?replicaSet=rs0
   MONGO_DB: bioavanced_test
   MONGO_DB_NOVO: bioavanced_test
   NEO4J_URI: bolt://neo4j-test:7687
   NEO4J_USERNAME: neo4j
   NEO4J_PASSWORD: testpassword
-  NEO4J_DATABASE: bioavanced_test
+  # neo4j:5-community only supports the default `neo4j` database — named
+  # databases are an Enterprise-only feature (#292: "Graph not found:
+  # bioavanced_test" once RF023's e2e spec actually queried Neo4j).
+  NEO4J_DATABASE: neo4j
   REDIS_URL: redis://redis-test:6379
   INFLUXDB_URL: http://influxdb-test:8086
   INFLUXDB_TOKEN: bioavanced-test-token
@@ -18,31 +21,131 @@ x-test-env: &test-env
   MQTT_ENABLED: "false"
   SMTP_HOST: smtp-test
   SMTP_PORT: "1025"
-  JWT_SECRET: test-secret-key
-  JWT_REFRESH_SECRET: test-refresh-secret-key
-  ENCRYPTION_KEY: test-encryption-key-for-lab-validation-32b
-  ENCRYPTION_KEY_ID: test-key-001
-  RESEND_API_KEY: test-resend-api-key
+  JWT_SECRET: vitest-secret-key
+  JWT_REFRESH_SECRET: vitest-refresh-secret-key
+  ENCRYPTION_KEY: vitest-encryption-key-for-lab-validation-32b
+  ENCRYPTION_KEY_ID: vitest-key-001
+  RESEND_API_KEY: vitest-resend-api-key
   EMAIL_FROM: onboarding@resend.dev
-  USER_ANON_SALT: test-user-anon-salt
-  CONSENT_SECRET: test-consent-secret-key
+  USER_ANON_SALT: vitest-user-anon-salt
+  CONSENT_SECRET: vitest-consent-secret-key
+  # #829: required by NotificationService.getFrontendUrl(), which throws when
+  # it is empty -- and POST /e-consent/generate-link had no try/catch, so that
+  # throw exited the API process. It was set nowhere in this file or
+  # .env.test.example, so that endpoint had never worked on this stack.
+  #
+  # NOT localhost: sendConsentEmail always calls
+  # validateFrontendUrl({ remote: true }), which rejects any non-HTTPS or
+  # loopback host outright -- correctly, since the alternative is emailing a
+  # real participant a link to their own machine. So the test value has to be
+  # an HTTPS non-loopback placeholder; it is never resolved, because the specs
+  # that follow an emailed link strip it to the pathname and navigate relative
+  # to PLAYWRIGHT_BASE_URL.
+  FRONTEND_URL: https://e2e.bioavanced.test
   ALLOW_CLOUD_INTEGRATIONS: "false"
   ALLOW_EXTERNAL_TERMINOLOGY_SYNC: "false"
   ALLOW_EXTERNAL_HPO_LOOKUP: "false"
   ALLOW_EXTERNAL_DRUG_LOOKUP: "false"
+  BOOTSTRAP_ADMIN_NAME: "E2E Test Admin"
+  BOOTSTRAP_ADMIN_EMAIL: e2e-admin@bioavanced.test
+  BOOTSTRAP_ADMIN_USERNAME: admin
+  BOOTSTRAP_ADMIN_TEMP_PASSWORD: Admin@123
+  # RF014 AC#4 (#648): createFirstAdmin.js's forceReset:true is now actually
+  # enforced at login (previously dormant) -- every spec here logs in
+  # directly as TEST_USER/TEST_PASS via realLogin(), with no forced-reset
+  # step of its own, so the bootstrap admin must skip it. Explicit opt-out
+  # (never inferred from NODE_ENV, same isolated-flag shape
+  # ENABLE_TEST_SUPPORT_ROUTES already uses below) -- a real production or
+  # dev-stack bootstrap keeps the default (unset = forceReset:true).
+  BOOTSTRAP_ADMIN_FORCE_RESET: "false"
+  TEST_SUPPORT_SECRET: e2e-test-support-secret
+  # #675: test-support routes also require this explicit opt-in to be
+  # registered at all, on top of NODE_ENV/TEST_SUPPORT_SECRET above --
+  # see utils/testSupportGate.js. This stack is exactly the "controlled
+  # suite" the flag exists for.
+  ENABLE_TEST_SUPPORT_ROUTES: "true"
+  # #1091: machine-ingest credential for POST /api/iot/telemetry
+  # (utils/machineIngestGate.js). Fails closed like TEST_SUPPORT_SECRET
+  # above -- unset means every request 403s regardless of header. The
+  # specs send it as the x-telemetry-ingest-secret header.
+  TELEMETRY_INGEST_SECRET: e2e-telemetry-ingest-secret
+  # #959: these live on the SHARED anchor, not on backend-app-test alone.
+  # The container that runs the sealing job is worker-test, which inherits
+  # only <<: *test-env -- so while these sat in backend-app-test's own
+  # environment block, audit-tsa.service.js threw
+  # "AUDIT_RFC3161_TSA_URL nao configurado" in the one process that needed it.
+  #
+  # The /tsa and /witness SUFFIXES are load-bearing and were missing: the
+  # servers answer POST on exactly those paths (infra/tsa/tsa-server.js,
+  # infra/witness/witness-server.js) and 404 everything else, and
+  # audit-tsa.service.js fetches the configured URL verbatim. Without them
+  # every request landed on the 404 branch -> tsa_http_404 ->
+  # PENDING_TIMESTAMP, indistinguishable from a TSA that was never called.
+  # .env.docker.example already had the suffixed form; these were the outlier.
+  AUDIT_RFC3161_TSA_URL: http://tsa-test:8095/tsa
+  AUDIT_EXTERNAL_WITNESS_URL: http://witness-test:8096/witness
+  AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: ""
 
 services:
   mongodb-test:
     image: mongo:7
     environment:
       MONGO_INITDB_DATABASE: bioavanced_test
+    # Single-node replica set (#297): sample.service.js's withdrawSample/
+    # returnSample need client.startSession()/withTransaction() to keep the
+    # ledger append and balance update atomic, and MongoDB only supports
+    # multi-document transactions on a replica set — a standalone mongod
+    # rejects sessions outright ("not running with --replSet"). rs.initiate()
+    # itself runs from the separate mongo-rs-init-test service below, not
+    # from a docker-entrypoint-initdb.d script here — running it in-process
+    # right after startup hit a reproducible "isSelf could not connect"
+    # NodeNotFound error (mongod dialing its own advertised bridge address
+    # this early gets refused, seemingly a hairpin-NAT limitation), whereas
+    # a separate container connecting in normally, after the healthcheck
+    # confirms the port is reachable, does not.
+    command: ["--replSet", "rs0", "--bind_ip_all"]
     volumes:
       - mongodb-test-data:/data/db
+    ports:
+      # Host-side access for e2e fixture helpers (tests/e2e/helpers/) that
+      # seed data directly (e.g. consentTemplates — no API seed path exists,
+      # see issue #294). npm run test:e2e:docker runs Playwright from the
+      # host, mirroring backend-app-test/frontend-app-test's published ports.
+      - "27017:27017"
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"]
       interval: 10s
       timeout: 5s
       retries: 20
+    networks: [bioavanced-test]
+
+  # One-shot: initiates the single-node replica set from outside mongod's
+  # own process (see the note on mongodb-test above), then exits 0.
+  # backend-app-test and everything else that needs transactions depends on
+  # this completing, not just on mongodb-test being healthy.
+  mongo-rs-init-test:
+    image: mongo:7
+    depends_on:
+      mongodb-test:
+        condition: service_healthy
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -e
+        for i in $(seq 1 20); do
+          if mongosh --host mongodb-test --quiet --eval '
+            try {
+              rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongodb-test:27017" }] });
+            } catch (e) {
+              if (!/already initialized/.test(e.message)) { throw e; }
+            }
+            while (rs.status().myState !== 1) { sleep(500); }
+          '; then
+            exit 0
+          fi
+          sleep 1
+        done
+        exit 1
     networks: [bioavanced-test]
 
   neo4j-test:
@@ -54,6 +157,11 @@ services:
       NEO4J_server_memory_pagecache_size: 256M
     volumes:
       - neo4j-test-data:/data
+    ports:
+      # Host-side access for e2e fixture helpers (tests/e2e/helpers/) that
+      # query Neo4j directly to prove outbox projection (RF023, #292) — same
+      # rationale as mongodb-test's/influxdb-test's published ports above.
+      - "7687:7687"
     healthcheck:
       test: ["CMD-SHELL", "cypher-shell -u neo4j -p testpassword 'RETURN 1' >/dev/null 2>&1"]
       interval: 10s
@@ -90,6 +198,11 @@ services:
       DOCKER_INFLUXDB_INIT_ORG: bioavanced-test
       DOCKER_INFLUXDB_INIT_BUCKET: bioavanced-test
       DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: bioavanced-test-token
+    ports:
+      # Host-side access for e2e fixture helpers (tests/e2e/helpers/) that
+      # query InfluxDB directly to prove telemetry persistence (RF009, #289)
+      # — same rationale as mongodb-test's published port above.
+      - "8086:8086"
     volumes:
       - influxdb-test-data:/var/lib/influxdb2
     healthcheck:
@@ -116,7 +229,18 @@ services:
     expose:
       - "8095"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8095/health >/dev/null"]
+      # #981: probe the port the service was actually told to use. This
+      # hardcoded 8095, which is also tsa-server.js's fallback -- so before
+      # TSA_PORT was wired up, changing it left the server on 8095 and this
+      # check passing, and the only symptom was a connection refused from
+      # another container.
+      #
+      # The $$ is load-bearing: a single $ is interpolated by Compose at
+      # config-parse time against the HOST environment, where TSA_PORT does
+      # not exist, so it renders to the literal 8095 and nothing is gained.
+      # $$ escapes it through to the container's shell, where TSA_PORT is
+      # set. Verified with `docker compose -f compose.test.yml config`.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${TSA_PORT:-8095}/health >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -131,7 +255,10 @@ services:
     expose:
       - "8096"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8096/health >/dev/null"]
+      # #981: same as tsa-test above -- probe the configured port, not a
+      # literal that happens to equal the server's fallback. The $$ escape
+      # matters for the same reason; see that comment.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${WITNESS_PORT:-8096}/health >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -144,14 +271,31 @@ services:
     environment:
       <<: *test-env
       RUN_SERVER_IN_TEST: "1"
-      TSA_URL: http://tsa-test:8095
-      AUDIT_RFC3161_TSA_URL: http://tsa-test:8095
-      AUDIT_EXTERNAL_WITNESS_URL: http://witness-test:8096
-      AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: ""
+      # #981: TSA_URL was set here and read by NOTHING -- git grep over the
+      # whole tracked tree found this line and no reader. The variable the
+      # code actually reads is AUDIT_RFC3161_TSA_URL, which 67ac5405 moved
+      # onto the shared anchor above (with the load-bearing /tsa suffix this
+      # line was missing). So this was a near-miss name carrying the exact
+      # unsuffixed value that #959 item 4 had just finished fixing. Removed.
     command: ["npm", "start"]
+    # #828: the API writes the uploaded staging file to /app/uploads and the
+    # worker reads it back by absolute path (staging-import.service.js ->
+    # rawData.storagePath, resolved in batch-validation-engine.service.js).
+    # They are separate containers, so without a shared mount the worker
+    # throws "Arquivo bruto do staging nao encontrado" and the batch import
+    # never completes. compose.dev.yml does not have this problem because it
+    # bind-mounts ./api/backend:/app into both services.
+    #
+    # This is scaffolding for the shared-filesystem assumption, not an
+    # endorsement of it -- #893 records why storing the bytes (GridFS) is the
+    # real fix, and that change deletes this mount.
+    volumes:
+      - uploads-test-data:/app/uploads
     depends_on:
       mongodb-test:
         condition: service_healthy
+      mongo-rs-init-test:
+        condition: service_completed_successfully
       neo4j-test:
         condition: service_healthy
       redis-test:
@@ -164,6 +308,8 @@ services:
         condition: service_healthy
       witness-test:
         condition: service_healthy
+    ports:
+      - "3000:3000"
     expose:
       - "3000"
     healthcheck:
@@ -173,6 +319,295 @@ services:
       retries: 20
     networks: [bioavanced-test]
 
+  admin-bootstrap-test:
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "admin:create-first"]
+    depends_on:
+      backend-app-test:
+        condition: service_healthy
+    networks: [bioavanced-test]
+
+  foundation-bootstrap-test:
+    # RF022 (#371): one-shot, idempotent essential-reference-data seed —
+    # mirrors compose.dev.yml's `foundation-bootstrap`, wired into the test
+    # stack so pipeline-continuity.spec.ts's RF022/RF028 real-backend
+    # assertions have something to find (#600's trace: zero without this).
+    # Runs once backend-app-test is healthy, same trigger foundation-bootstrap
+    # uses in the dev stack; upsertDocs's $setOnInsert makes repeat runs
+    # no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "seed:essential"]
+    depends_on:
+      backend-app-test:
+        condition: service_healthy
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-test:
+    # RF028 (#374): one-shot, idempotent HPO reference-data import — first
+    # of the 16 Fase 2 sources, mirrors compose.dev.yml's
+    # reference-data-bootstrap. Runs after foundation-bootstrap-test so
+    # Fase 1 schemas/collections are ready first (Plano Integrado Fase 2
+    # dependency), same ordering as the dev stack. Idempotent via the run's
+    # idempotencyKey lookup; repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:hpo"]
+    depends_on:
+      foundation-bootstrap-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-mondo-test:
+    # RF028 (#374): one-shot, idempotent MONDO reference-data import —
+    # second of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-test completes, matching the dev stack's
+    # documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:mondo"]
+    depends_on:
+      reference-data-bootstrap-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-orpha-test:
+    # RF028 (#374): one-shot, idempotent ORPHA reference-data import —
+    # third of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-mondo-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:orpha"]
+    depends_on:
+      reference-data-bootstrap-mondo-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-icd11-test:
+    # RF028 (#374): one-shot, idempotent ICD-11 reference-data import —
+    # fourth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-orpha-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:icd11"]
+    depends_on:
+      reference-data-bootstrap-orpha-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-icd10-test:
+    # RF028 (#374): one-shot, idempotent ICD-10 reference-data import —
+    # fifth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-icd11-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:icd10"]
+    depends_on:
+      reference-data-bootstrap-icd11-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-omim-test:
+    # RF028 (#374): one-shot, idempotent OMIM reference-data import —
+    # sixth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-icd10-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:omim"]
+    depends_on:
+      reference-data-bootstrap-icd10-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-hgnc-test:
+    # RF028 (#374): one-shot, idempotent HGNC reference-data import —
+    # seventh of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-omim-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:hgnc"]
+    depends_on:
+      reference-data-bootstrap-omim-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-loinc-test:
+    # RF028 (#374): one-shot, idempotent LOINC reference-data import —
+    # eighth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-hgnc-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:loinc"]
+    depends_on:
+      reference-data-bootstrap-hgnc-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-ucum-test:
+    # RF028 (#374): one-shot, idempotent UCUM reference-data import —
+    # ninth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-loinc-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:ucum"]
+    depends_on:
+      reference-data-bootstrap-loinc-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-dcb-test:
+    # RF028 (#374): one-shot, idempotent DCB reference-data import — tenth
+    # of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-ucum-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:dcb"]
+    depends_on:
+      reference-data-bootstrap-ucum-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-atc-test:
+    # RF028 (#374): one-shot, idempotent ATC reference-data import —
+    # eleventh of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-dcb-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:atc"]
+    depends_on:
+      reference-data-bootstrap-dcb-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-duo-test:
+    # RF028 (#374): one-shot, idempotent DUO reference-data import —
+    # twelfth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-atc-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:duo"]
+    depends_on:
+      reference-data-bootstrap-atc-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-uberon-test:
+    # RF028 (#374): one-shot, idempotent Uberon reference-data import —
+    # thirteenth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-duo-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:uberon"]
+    depends_on:
+      reference-data-bootstrap-duo-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-ncbitax-test:
+    # RF028 (#374): one-shot, idempotent NCBI Taxonomy reference-data
+    # import — fourteenth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-uberon-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:ncbitax"]
+    depends_on:
+      reference-data-bootstrap-uberon-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-cl-test:
+    # RF028 (#374): one-shot, idempotent Cell Ontology reference-data
+    # import — fifteenth of the 16 Fase 2 sources. Runs after
+    # reference-data-bootstrap-ncbitax-test completes, matching the dev
+    # stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:cl"]
+    depends_on:
+      reference-data-bootstrap-ncbitax-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-edam-test:
+    # RF028 (#374): one-shot, idempotent EDAM reference-data import —
+    # sixteenth and final of the Fase 2 sources, closing out the chain.
+    # Runs after reference-data-bootstrap-cl-test completes, matching the
+    # dev stack's documented recommended order.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:edam"]
+    depends_on:
+      reference-data-bootstrap-cl-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
   worker-test:
     build:
       context: ./api/backend
@@ -180,22 +615,75 @@ services:
     environment:
       <<: *test-env
     command: ["npm", "run", "worker"]
+    # #828: same volume as backend-app-test -- this is the reading half.
+    volumes:
+      - uploads-test-data:/app/uploads
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/worker-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
+    depends_on:
+      # #959: worker-test runs daily-merkle.job, which reaches the TSA and the
+      # witness. It depended on neither, so on a cold bring-up the job could
+      # fire against services that were not up yet.
+      tsa-test:
+        condition: service_healthy
+      witness-test:
+        condition: service_healthy
+      backend-app-test:
+        condition: service_healthy
+    networks: [bioavanced-test]
+
+  neo4j-projection-worker-test:
+    # Drains graph_projection_outbox into Neo4j (RF023, #292) — nothing else
+    # in this stack runs neo4jProjection.worker.js; without this service
+    # outbox rows sit PENDING forever and pipeline-continuity.spec.ts's
+    # polling assertions would time out regardless of backend correctness.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "neo4j:canonical:worker"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/neo4j-projection-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
     depends_on:
       backend-app-test:
         condition: service_healthy
     networks: [bioavanced-test]
 
   frontend-app-test:
+    # #891/#819: a pre-built bundle served by `vite preview`, not a dev server.
+    # There is no bind mount here and cannot be one -- a reproducible test stack
+    # bakes its source in (Dockerfile.dev's `COPY . .`) -- so dev mode bought no
+    # HMR while costing a per-route on-demand transform inside each spec's 5s
+    # expect budget, plus a 300ms polling watcher over an immutable tree.
+    # Service name, ports, healthcheck and network are unchanged, so
+    # playwright-runner, frontend-unit-runner's depends_on, test:e2e:docker and
+    # ci-pipeline.yml all keep working untouched.
     build:
       context: ./frontend
-      dockerfile: Dockerfile.dev
-    environment:
-      VITE_API_BASE_URL: http://backend-app-test:3000/api
-      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: frontend-app-test
-    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+      dockerfile: Dockerfile.prod
+      target: preview
+      args:
+        # Baked in at BUILD time now -- a static bundle reads no container env.
+        # Same value the dev server was given, and for the same reason: it is
+        # consumed by the *host* browser via the published 5173 port for the
+        # per-spec/host-based Playwright workflow (test:e2e:docker), which can't
+        # resolve compose-internal hostnames like backend-app-test.
+        VITE_API_BASE_URL: http://localhost:3000/api
+    command: ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]
     depends_on:
       backend-app-test:
         condition: service_healthy
+    ports:
+      - "5173:5173"
     expose:
       - "5173"
     healthcheck:
@@ -213,6 +701,14 @@ services:
       <<: *test-env
     volumes:
       - ./frontend:/frontend:ro
+      # #658: `current-state:ci` runs `dictionary:validate`, whose SOURCE_MD
+      # resolves to REPO_ROOT/docs/... where REPO_ROOT is
+      # path.join(__dirname, '..', '..', '..'). In-container __dirname is
+      # /app/scripts, so that walks /app/scripts -> /app -> / and clamps at
+      # the filesystem root: the script looks for
+      # /docs/docs-7-27-2026/extracted/dict-02_DICIONARIO.md. Hence /docs,
+      # not /app/docs -- mounting it under the workdir would not be found.
+      - ./docs:/docs:ro
     command: ["npm", "run", "current-state:ci"]
     depends_on:
       mongodb-test:
@@ -227,6 +723,47 @@ services:
         condition: service_healthy
     networks: [bioavanced-test]
 
+  frontend-unit-runner:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    environment:
+      VITE_API_BASE_URL: http://backend-app-test:3000/api
+      CI: "true"
+    command: ["npm", "run", "test:unit:coverage"]
+    depends_on:
+      frontend-app-test:
+        condition: service_healthy
+    networks: [bioavanced-test]
+
+  playwright-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.playwright
+    environment:
+      CI: "true"
+      PLAYWRIGHT_SKIP_WEBSERVER: "1"
+      PLAYWRIGHT_BASE_URL: http://frontend-app-test:5173
+      PLAYWRIGHT_API_BASE_URL: http://backend-app-test:3000
+      TEST_USER: admin
+      TEST_PASS: Admin@123
+      E2E_MONGO_URI: mongodb://mongodb-test:27017
+      E2E_MONGO_DB: bioavanced_test
+      TEST_SUPPORT_SECRET: e2e-test-support-secret
+      # #1091: this service's environment block is flat and does not merge
+      # x-test-env, so the anchor's TELEMETRY_INGEST_SECRET above is
+      # repeated here -- same reason TEST_SUPPORT_SECRET is repeated on the
+      # line above.
+      TELEMETRY_INGEST_SECRET: e2e-telemetry-ingest-secret
+    depends_on:
+      frontend-app-test:
+        condition: service_healthy
+      backend-app-test:
+        condition: service_healthy
+      mongodb-test:
+        condition: service_healthy
+    networks: [bioavanced-test]
+
 networks:
   bioavanced-test:
     driver: bridge
@@ -236,4 +773,6 @@ volumes:
   neo4j-test-data:
   redis-test-data:
   influxdb-test-data:
+  # #828: shared /app/uploads for backend-app-test and worker-test.
+  uploads-test-data:
 

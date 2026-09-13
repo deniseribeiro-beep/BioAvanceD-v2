@@ -6,22 +6,61 @@ const rfc3161AdapterService = require('../services/rfc3161-adapter.service');
 const auditV2Service = require('../services/audit-v2.service');
 const signingProvider = require('../services/audit-signing.provider');
 const auditTreeService = require('../services/audit-tree.service');
+const dailyMerkleJob = require('../workers/jobs/daily-merkle.job');
 const logger = require('../utils/logger');
 
-function isIsoDate(date) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(String(date || ''));
-}
-
-function isHexHash(hash) {
-  return /^[a-f0-9]{64}$/i.test(String(hash || ''));
-}
-
-function isProofValid(proof) {
-  if (!Array.isArray(proof)) return false;
-  return proof.every((step) => step && (step.position === 'left' || step.position === 'right') && isHexHash(step.hash));
-}
-
 class AuditController {
+  // #959: an on-demand anchor. Without this the sealing path had exactly one
+  // trigger -- a 02:30-UTC setTimeout in the worker -- so audit_tree_heads was
+  // empty on every stack and no test could tell a broken TSA from a job that
+  // had simply never fired. manageSystem rather than the viewReports every
+  // other route here uses: this WRITES to the tamper-evident chain.
+  //
+  // createTreeHead upserts on {logId, treeSize} with $setOnInsert, so a repeat
+  // call for the same date is idempotent.
+  async anchorNow(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+
+      // Explicit date required to be useful: the nightly job seals YESTERDAY,
+      // which is never the day a caller has just generated events for.
+      const raw = (req.body && req.body.date) || null;
+      const date = raw === null
+        ? new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+        : String(raw);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ success: false, error: 'date deve estar no formato YYYY-MM-DD' });
+      }
+
+      const treeHead = await dailyMerkleJob.anchorDate(db, date);
+      if (!treeHead) {
+        return res.status(422).json({
+          success: false,
+          error: `Nenhum resultado Merkle válido para ${date}; nada foi selado.`,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          date,
+          treeHeadId: treeHead._id,
+          treeSize: treeHead.treeSize,
+          // anchorStatus is the OUTCOME. `status` is part of the signed
+          // envelope and is the constant PENDING_TIMESTAMP on every document
+          // ever written, so a caller filtering on it sees zero anchored heads
+          // even on a fully anchored corpus. Both are returned, outcome first.
+          anchorStatus: treeHead.anchorStatus,
+          status: treeHead.status,
+        },
+      });
+    } catch (error) {
+      logger.error('Erro ao ancorar tree head sob demanda:', error.message || error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  }
+
   async getMerkleRoot(req, res) {
     try {
       const date = req.params.date;

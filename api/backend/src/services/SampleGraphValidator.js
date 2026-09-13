@@ -2,10 +2,11 @@ const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
-const { generateSampleHash } = require('./MerkleService');
+const { generateSampleHashFromSample } = require('./MerkleService');
 const SampleMovementModel = require('../models/SampleMovement');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const qualityDomain = require('./quality-domain.service');
+const quarantineActionService = require('./quarantine-action.service');
 
 function normalizeString(value) {
   return String(value || '').trim();
@@ -50,8 +51,8 @@ function stableObject(value) {
 
 function hashSampleIntegrityPayload(sample = {}) {
   const canonical = JSON.stringify(stableObject({
-    clinical_data: sample?.clinical_data && typeof sample.clinical_data === 'object' ? sample.clinical_data : {},
-    pharmacology_data: sample?.pharmacology_data && typeof sample.pharmacology_data === 'object' ? sample.pharmacology_data : {},
+    clinicalData: sample?.clinicalData && typeof sample.clinicalData === 'object' ? sample.clinicalData : {},
+    pharmacologyData: sample?.pharmacologyData && typeof sample.pharmacologyData === 'object' ? sample.pharmacologyData : {},
   }));
   return crypto.createHash('sha256').update(canonical).digest('hex');
 }
@@ -85,15 +86,22 @@ function defaultRequirements() {
       recommended: [],
     },
     pharmacology: {
-      required: ['treatment_status'],
-      recommended: ['medication_name', 'last_dose_date'],
+      required: ['treatmentStatus'],
+      recommended: ['medicationName', 'lastDoseDate'],
       treatmentStatuses: ['NAIVE', 'TREATED', 'WASHOUT'],
     },
   };
 }
 
 function resolveSuggestedStatus(graphPath) {
-  if (!graphPath.ethics.valid || !graphPath.clinical.valid || !graphPath.integrity.valid) {
+  // pharmacology sits alongside ethics/clinical/integrity here (not just
+  // folded into `isReleasable`'s every-node check) — before #532, this
+  // function silently ignored it, so a sample could be isReleasable:false
+  // (pharmacology invalid, e.g. ATC drug-class incoherent with the ORPHA
+  // disease) yet still get suggestedStatus: 'AVAILABLE'. Harmless while
+  // suggestedStatus only fed the cosmetic release_status field; load-bearing
+  // now that #532 makes it drive specimenStatus directly.
+  if (!graphPath.ethics.valid || !graphPath.clinical.valid || !graphPath.pharmacology.valid || !graphPath.integrity.valid) {
     return 'BLOCKED';
   }
 
@@ -104,12 +112,69 @@ function resolveSuggestedStatus(graphPath) {
   return 'AVAILABLE';
 }
 
+// #532: same 3-way collapse reports.routes.js's releaseStatusToSpecimenStatus
+// already applies for the physical/consent-quarantine case — BLOCKED is the
+// compliance-graph's hard-failure outcome, which maps onto the same
+// `unavailable` value QUARANTINE's soft-failure filter collapses BLOCKED to.
+const SUGGESTED_STATUS_TO_SPECIMEN_STATUS = {
+  AVAILABLE: 'available',
+  QUARANTINE: 'quarantined',
+  BLOCKED: 'unavailable',
+};
+
+// specimenStatus values a compliance-graph re-evaluation must never touch —
+// destroyed/disposed are final per Sample.js's BLOCKED_SPECIMEN_STATUSES
+// comment ("write sites treat them as non-movable"); this write site is no
+// exception.
+const TERMINAL_SPECIMEN_STATUSES = ['destroyed', 'disposed'];
+
+// Ordering for the escalate-vs-downgrade decision below — only these three
+// values are ever compliance-graph targets (SUGGESTED_STATUS_TO_SPECIMEN_STATUS's
+// range), so terminal states are handled separately, above.
+const SPECIMEN_STATUS_ORDER = { available: 0, quarantined: 1, unavailable: 2 };
+
+// One reasonCode per failing graph node, prefixed so a later re-evaluation
+// can recognize (and safely release) an active QuarantineAction this same
+// validator opened, without touching one opened by an unrelated quarantine
+// source (cold-chain incident, equipment fault, manual action).
+function complianceGraphReasonCodes(graphPath) {
+  const codes = [];
+  if (!graphPath.ethics.valid) codes.push('COMPLIANCE_GRAPH_ETHICS');
+  if (!graphPath.clinical.valid) codes.push('COMPLIANCE_GRAPH_CLINICAL');
+  if (!graphPath.pharmacology.valid) codes.push('COMPLIANCE_GRAPH_PHARMACOLOGY');
+  if (!graphPath.integrity.valid) codes.push('COMPLIANCE_GRAPH_INTEGRITY');
+  if (!graphPath.quality.valid) codes.push('COMPLIANCE_GRAPH_QUALITY');
+  return codes;
+}
+
+function isComplianceGraphOwnedAction(action) {
+  return Boolean(action)
+    && Array.isArray(action.reasonCodes)
+    && action.reasonCodes.length > 0
+    && action.reasonCodes.every((code) => String(code).startsWith('COMPLIANCE_GRAPH_'));
+}
+
+// #1090: the canonical specimenId tier was missing entirely -- a non-ObjectId
+// argument went straight to the RETIRED sampleID key (filter-keys.arch.test.js's
+// RETIRED_FILTER_KEYS), so a caller handing this a canonical specimenId matched
+// nothing. Per #788 that is worse than an empty result: a filter on a key the
+// document lacks matches every other document that also lacks it, and findOne
+// returns an arbitrary one.
+//
+// Not hypothetical -- sampleComplianceSync.service.js:26 calls this with
+// `String(sample._id || sample.specimenId || '')`, so any sample reaching it
+// without an _id is looked up by specimenId against the sampleID key.
+//
+// Mirrors the _id -> specimenId -> legacy sampleID fallback result.routes.js
+// (#628) and sample.routes.js (#857) already use. The legacy leg is kept
+// deliberately; #804 owns sampleID's eventual retirement.
 function normalizeSampleIdFilter(sampleId) {
   if (ObjectId.isValid(sampleId)) {
     return { _id: new ObjectId(sampleId) };
   }
 
-  return { sampleID: normalizeString(sampleId) };
+  const raw = normalizeString(sampleId);
+  return { $or: [{ specimenId: raw }, { sampleID: raw }] };
 }
 
 class SampleGraphValidator {
@@ -146,17 +211,16 @@ class SampleGraphValidator {
   }
 
   async _validateEthics(sample, consentsCollection) {
-    const tcleId = normalizeString(sample?.tcle_id || sample?.consentTemplateId);
-    const patientID = normalizeString(sample?.patientID || sample?.patientId);
+    const tcleId = normalizeString(sample?.consentTemplateId);
+    const participantId = normalizeString(sample?.participantId);
 
-    if (!tcleId || !patientID) {
+    if (!tcleId || !participantId) {
       return { valid: false, reason: 'Consentimento Inválido ou Revogado' };
     }
 
     const consentQuery = {
       $or: [
         { _id: ObjectId.isValid(tcleId) ? new ObjectId(tcleId) : null },
-        { templateId: tcleId },
         { consentTemplateId: tcleId },
       ].filter(Boolean),
     };
@@ -168,9 +232,9 @@ class SampleGraphValidator {
     }
 
     const consentStatus = normalizeString(consent.status).toUpperCase();
-    const consentPatient = normalizeString(consent.patientId || consent.patientID);
+    const consentParticipant = normalizeString(consent.participantId);
 
-    if (consentStatus !== 'ACTIVE' || (consentPatient && consentPatient !== patientID)) {
+    if (consentStatus !== 'ACTIVE' || (consentParticipant && consentParticipant !== participantId)) {
       return { valid: false, reason: 'Consentimento Inválido ou Revogado' };
     }
 
@@ -181,15 +245,15 @@ class SampleGraphValidator {
   }
 
   _validateQuality(sample) {
-    return qualityDomain.validateQualityForRelease(sample);
+    return qualityDomain.validateQualityForReleaseFromSample(this.db, sample);
   }
 
   _validateClinical(sample, requirements = defaultRequirements(), disease = null) {
-    const clinicalData = sample?.clinical_data && typeof sample.clinical_data === 'object'
-      ? sample.clinical_data
+    const clinicalData = sample?.clinicalData && typeof sample.clinicalData === 'object'
+      ? sample.clinicalData
       : {};
-    const pharmacologyData = sample?.pharmacology_data && typeof sample.pharmacology_data === 'object'
-      ? sample.pharmacology_data
+    const pharmacologyData = sample?.pharmacologyData && typeof sample.pharmacologyData === 'object'
+      ? sample.pharmacologyData
       : {};
 
     const orphaCode = normalizeString(clinicalData.orphaCode);
@@ -200,8 +264,8 @@ class SampleGraphValidator {
     }
 
     const biomarkerValues = normalizeBiomarkerMap(
-      clinicalData.biomarkers_values && typeof clinicalData.biomarkers_values === 'object'
-        ? clinicalData.biomarkers_values
+      clinicalData.biomarkerValues && typeof clinicalData.biomarkerValues === 'object'
+        ? clinicalData.biomarkerValues
         : {}
     );
 
@@ -218,9 +282,7 @@ class SampleGraphValidator {
       }
     }
 
-    const treatmentStatus = normalizeString(
-      pharmacologyData.treatment_status || pharmacologyData.treatmentStatus
-    ).toUpperCase();
+    const treatmentStatus = normalizeString(pharmacologyData.treatmentStatus).toUpperCase();
 
     if (requirements?.miabis?.requireTreatmentStatus && !treatmentStatus) {
       return { valid: false, reason: 'Dataset Clínico Incompleto: treatment_status (MIABIS) obrigatório' };
@@ -254,13 +316,11 @@ class SampleGraphValidator {
   }
 
   async _validatePharmacology(sample, requirements = defaultRequirements(), disease = null) {
-    const pharmacologyData = sample?.pharmacology_data && typeof sample.pharmacology_data === 'object'
-      ? sample.pharmacology_data
+    const pharmacologyData = sample?.pharmacologyData && typeof sample.pharmacologyData === 'object'
+      ? sample.pharmacologyData
       : {};
 
-    const treatmentStatus = normalizeString(
-      pharmacologyData.treatment_status || pharmacologyData.treatmentStatus
-    ).toUpperCase();
+    const treatmentStatus = normalizeString(pharmacologyData.treatmentStatus).toUpperCase();
 
     if (requirements?.miabis?.requireTreatmentStatus && !treatmentStatus) {
       return {
@@ -270,7 +330,7 @@ class SampleGraphValidator {
     }
 
     if (treatmentStatus === 'TREATED' || treatmentStatus === 'ON_TREATMENT') {
-      const atcCode = normalizeString(pharmacologyData.atc_code || pharmacologyData.medication_code).replace(/^ATC:/i, '').toUpperCase();
+      const atcCode = normalizeString(pharmacologyData.atcCode).replace(/^ATC:/i, '').toUpperCase();
       if (!atcCode) {
         return {
           valid: false,
@@ -285,7 +345,7 @@ class SampleGraphValidator {
         : [];
 
       if (diseaseDrugClasses.length > 0 && medication) {
-        const medicationDrugClass = normalizeString(medication.drug_class || pharmacologyData.drug_class).toLowerCase();
+        const medicationDrugClass = normalizeString(medication.drug_class || pharmacologyData.atcClass).toLowerCase();
         if (medicationDrugClass && !diseaseDrugClasses.includes(medicationDrugClass)) {
           return {
             valid: false,
@@ -301,13 +361,13 @@ class SampleGraphValidator {
     };
   }
 
-  _validateIntegrity(sample) {
-    const persistedRoot = normalizeString(sample?.merkle_root);
+  async _validateIntegrity(sample) {
+    const persistedRoot = normalizeString(sample?.merkleRoot);
     if (!persistedRoot) {
       return { valid: false, reason: 'Violação de Integridade Criptográfica (Tampering)' };
     }
 
-    const recomputedRoot = generateSampleHash(sample);
+    const recomputedRoot = await generateSampleHashFromSample(this.db, sample);
     if (persistedRoot !== recomputedRoot) {
       return { valid: false, reason: 'Violação de Integridade Criptográfica (Tampering)' };
     }
@@ -332,8 +392,8 @@ class SampleGraphValidator {
       responsible: 'SampleGraphValidator',
       purpose: 'compliance_graph_validation',
       observations: 'Perfil Clínico/Farmacológico selado via Merkle Root',
-      previousQuantity: Number(sample?.availableQuantity || sample?.quantity || 0),
-      newQuantity: Number(sample?.availableQuantity || sample?.quantity || 0),
+      previousQuantity: Number(sample?.currentQuantity || sample?.quantity || 0),
+      newQuantity: Number(sample?.currentQuantity || sample?.quantity || 0),
       timestamp: new Date(),
     });
 
@@ -361,14 +421,14 @@ class SampleGraphValidator {
 
     const consentsCollection = await getCollection(this.db, 'consents');
 
-    const diseaseContext = await this._loadDiseaseRequirements(sample?.clinical_data?.orphaCode);
+    const diseaseContext = await this._loadDiseaseRequirements(sample?.clinicalData?.orphaCode);
 
     const graphPath = {
       ethics: await this._validateEthics(sample, consentsCollection),
-      quality: this._validateQuality(sample),
+      quality: await this._validateQuality(sample),
       clinical: this._validateClinical(sample, diseaseContext.requirements, diseaseContext.disease),
       pharmacology: await this._validatePharmacology(sample, diseaseContext.requirements, diseaseContext.disease),
-      integrity: this._validateIntegrity(sample),
+      integrity: await this._validateIntegrity(sample),
     };
 
     const isReleasable = Object.values(graphPath).every((node) => Boolean(node?.valid));
@@ -376,7 +436,7 @@ class SampleGraphValidator {
 
     const report = {
       sampleId: String(sample._id || sample.sampleID || sampleId),
-      orphaCode: normalizeOrpha(sample?.clinical_data?.orphaCode),
+      orphaCode: normalizeOrpha(sample?.clinicalData?.orphaCode),
       disease: diseaseContext.disease
         ? {
           orpha_code: diseaseContext.disease.orpha_code,
@@ -389,19 +449,71 @@ class SampleGraphValidator {
       suggestedStatus,
     };
 
+    // #532: specimenStatus/QuarantineAction is the canonical status model
+    // (#389/#398/#399/#404/#405/#406/#408) — write there directly instead of
+    // the cosmetic `release_status` field, with a merge rule so this
+    // re-evaluation can only escalate a *stronger* block or release one it
+    // opened itself, never silently clear a block from an unrelated source
+    // (a cold-chain incident, equipment fault, manual action) or a terminal
+    // state (destroyed/disposed).
+    const targetSpecimenStatus = SUGGESTED_STATUS_TO_SPECIMEN_STATUS[suggestedStatus];
+    const currentSpecimenStatus = String(sample.specimenStatus || 'available').toLowerCase();
+    const setPayload = {
+      complianceGraph: {
+        ...report,
+        evaluatedAt: new Date(),
+      },
+      updatedAt: new Date(),
+    };
+
+    let escalated = false;
+    let downgraded = false;
+    let latestActiveAction = null;
+
+    if (!TERMINAL_SPECIMEN_STATUSES.includes(currentSpecimenStatus)) {
+      const targetOrder = SPECIMEN_STATUS_ORDER[targetSpecimenStatus];
+      const currentOrder = SPECIMEN_STATUS_ORDER[currentSpecimenStatus] ?? SPECIMEN_STATUS_ORDER.available;
+
+      if (targetOrder !== currentOrder) {
+        const existingActions = await quarantineActionService.getActionsForSpecimen(this.db, report.sampleId);
+        latestActiveAction = existingActions.find((action) => action.actionStatus === 'active') || null;
+      }
+
+      if (targetOrder > currentOrder) {
+        setPayload.specimenStatus = targetSpecimenStatus;
+        escalated = true;
+      } else if (targetOrder < currentOrder && isComplianceGraphOwnedAction(latestActiveAction)) {
+        setPayload.specimenStatus = targetSpecimenStatus;
+        downgraded = true;
+      }
+    }
+
     await samplesCollection.updateOne(
       { _id: sample._id },
-      {
-        $set: {
-          release_status: suggestedStatus,
-          complianceGraph: {
-            ...report,
-            evaluatedAt: new Date(),
-          },
-          updatedAt: new Date(),
-        },
-      }
+      { $set: setPayload }
     );
+
+    if (escalated) {
+      // Close out a prior self-owned action before opening the new one, so
+      // at most one compliance-graph QuarantineAction is ever active per
+      // specimen — otherwise a QUARANTINE→BLOCKED escalation would leave the
+      // superseded QUARANTINE action dangling as still "active" forever.
+      // An active action from an unrelated source (cold-chain, equipment,
+      // manual) is left untouched; this escalation's own action is recorded
+      // alongside it.
+      if (isComplianceGraphOwnedAction(latestActiveAction)) {
+        await quarantineActionService.releaseActiveAction(this.db, report.sampleId, 'SYSTEM_COMPLIANCE_GRAPH');
+      }
+      const reasonCodes = complianceGraphReasonCodes(graphPath);
+      if (reasonCodes.length > 0) {
+        await quarantineActionService.recordAction(this.db, {
+          specimenIds: [report.sampleId],
+          reasonCodes,
+        });
+      }
+    } else if (downgraded) {
+      await quarantineActionService.releaseActiveAction(this.db, report.sampleId, 'SYSTEM_COMPLIANCE_GRAPH');
+    }
 
     if (!isReleasable) {
       logger.warn('[SAMPLE_GRAPH_VALIDATOR] Amostra bloqueada/quarentenada', {

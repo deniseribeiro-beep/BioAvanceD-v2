@@ -9,14 +9,16 @@ import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
 import { Plus, Edit, Trash2, Radio, AlertCircle, CheckCircle, Box, Thermometer, Radio as RadioIcon, Shield, Download, Filter, X } from 'lucide-react';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { Equipment, Location, Temperature, Sensor, Policy } from '../types/models';
+import { Equipment, Temperature, Sensor, Policy } from '../types/models';
 import { useEquipment } from '../hooks/useEquipment';
-import { useLocations } from '../hooks/useLocations';
 import { useTemperature } from '../hooks/useTemperature';
 import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
+import { useOrganizations } from '../hooks/useOrganizations';
 import { validateReading, validateTemperatureUnit, generateAlert, validateThresholds } from '../utils/validations';
 import { CryoBoxGrid } from '../components/CryoBoxGrid';
+import { storageApi } from '../services/storageApi';
+import { MAINTENANCE_STATUS_OPTIONS, getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
 import IncidentManagementPage from './IncidentManagementPage';
 import './FacilityManagementPage.css';
 
@@ -391,6 +393,8 @@ function EquipmentForm({
   onSave: (data: Partial<Equipment>) => void;
   onCancel: () => void;
 }) {
+  const { organizations } = useOrganizations();
+
   const [formData, setFormData] = useState<Partial<Equipment>>(() => {
     if (equipment) {
       return {
@@ -398,6 +402,7 @@ function EquipmentForm({
         model: equipment.model || '',
         serialNumber: equipment.serialNumber || '',
         purchaseDate: equipment.purchaseDate ? new Date(equipment.purchaseDate) : undefined,
+        organizationId: equipment.organizationId || null,
       };
     }
     return {
@@ -405,6 +410,7 @@ function EquipmentForm({
       model: '',
       serialNumber: '',
       purchaseDate: undefined,
+      organizationId: null,
     };
   });
 
@@ -416,6 +422,7 @@ function EquipmentForm({
         model: equipment.model || '',
         serialNumber: equipment.serialNumber || '',
         purchaseDate: equipment.purchaseDate ? new Date(equipment.purchaseDate) : undefined,
+        organizationId: equipment.organizationId || null,
       });
     } else {
       setFormData({
@@ -423,6 +430,7 @@ function EquipmentForm({
         model: '',
         serialNumber: '',
         purchaseDate: undefined,
+        organizationId: null,
       });
     }
   }, [equipment]);
@@ -478,6 +486,28 @@ function EquipmentForm({
             })
           }
         />
+        <div className="form-grid-full">
+          <label className="input-label" htmlFor="equipmentOrganizationSelect">Organização</label>
+          <select
+            id="equipmentOrganizationSelect"
+            data-testid="equipment-organization-select"
+            className="input"
+            value={formData.organizationId || ''}
+            onChange={(e) =>
+              setFormData({
+                ...formData,
+                organizationId: e.target.value || null,
+              })
+            }
+          >
+            <option value="">Selecione uma organização</option>
+            {organizations.map((org) => (
+              <option key={org.organizationId} value={org.organizationId}>
+                {org.officialName}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       <div className="form-actions">
         <Button data-testid="equipment-cancel-button" type="button" variant="secondary" onClick={onCancel}>Cancelar</Button>
@@ -860,7 +890,7 @@ function SensorsSection() {
   return (
     <>
       <div className="section-header">
-        <Button onClick={() => setIsModalOpen(true)}>
+        <Button data-testid="new-sensor-button" onClick={() => setIsModalOpen(true)}>
           <Plus size={18} />
           Novo Sensor
         </Button>
@@ -883,15 +913,15 @@ function SensorsSection() {
         >
           {sensorRows.length > 0 ? (
             sensorRows.map((sensor) => {
-              const sensorId = sensor.sensorID || sensor._id || 'N/A';
+              const sensorId = sensor.sensorID || (sensor as any).sensorId || sensor._id || 'N/A';
               return (
             <tr key={sensorId}>
               <td>{sensorId}</td>
               <td>{sensor.sensorType}</td>
               <td>{sensor.sensorModel}</td>
               <td>
-                <span className={`status-badge status-${(sensor.maintenanceStatus || 'Operacional').toLowerCase().replace(' ', '-')}`}>
-                  {sensor.maintenanceStatus || 'Operacional'}
+                <span className={`status-badge status-${(sensor.maintenanceStatus || 'operational').toLowerCase().replace(' ', '-')}`}>
+                  {getMaintenanceStatusLabel(sensor.maintenanceStatus)}
                 </span>
               </td>
               <td>
@@ -1001,19 +1031,35 @@ function SensorForm({
   onSave: (data: Partial<Sensor>) => void;
   onCancel: () => void;
 }) {
-  const { locations } = useLocations();
   const { policies } = usePolicies();
-  
+  const { organizations } = useOrganizations();
+  const [freezers, setFreezers] = useState<{ _id: string; name: string; containerID?: number }[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    storageApi.listFreezers().then((response) => {
+      if (!cancelled && response.success && Array.isArray(response.data)) {
+        setFreezers(response.data);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const [formData, setFormData] = useState<Partial<Sensor>>(
     sensor || {
       sensorType: '',
       sensorModel: '',
-      maintenanceStatus: 'Operacional',
+      maintenanceStatus: 'operational',
       lastCalibration: null,
       nextCalibration: null,
       calibrationCertificate: '',
       locationID: undefined,
       policyID: undefined,
+      macAddress: '',
+      storageContainer: undefined,
+      organizationId: null,
     }
   );
 
@@ -1025,8 +1071,20 @@ function SensorForm({
   return (
     <form onSubmit={handleSubmit} className="form">
       <div className="form-grid">
+        {!sensor && (
+          <Input
+            label="ID do Sensor"
+            data-testid="sensor-id-input"
+            value={formData.sensorID || ''}
+            onChange={(e) =>
+              setFormData({ ...formData, sensorID: e.target.value })
+            }
+            required
+          />
+        )}
         <Input
           label="Tipo de Sensor"
+          data-testid="sensor-type-input"
           value={formData.sensorType || ''}
           onChange={(e) =>
             setFormData({ ...formData, sensorType: e.target.value })
@@ -1045,16 +1103,16 @@ function SensorForm({
           <select
             id="maintenanceStatusSelect"
             className="input"
-            value={formData.maintenanceStatus || 'Operacional'}
+            value={formData.maintenanceStatus || 'operational'}
             onChange={(e) =>
               setFormData({ ...formData, maintenanceStatus: e.target.value })
             }
           >
-            <option value="Operacional">Operacional</option>
-            <option value="Em Manutenção">Em Manutenção</option>
-            <option value="Fora de Serviço">Fora de Serviço</option>
-            <option value="Calibração Pendente">Calibração Pendente</option>
-            <option value="Aguardando Reparo">Aguardando Reparo</option>
+            {MAINTENANCE_STATUS_OPTIONS.map((option, index) => (
+              <option key={`${option.value}-${index}`} value={option.value}>
+                {option.label}
+              </option>
+            ))}
           </select>
         </div>
         <Input
@@ -1110,19 +1168,14 @@ function SensorForm({
               })
             }
           >
-            {locations.map((location) => {
-            const locationId = (location as any)._id || location.locationID;
-            const valueId = location.locationID || locationId; // garante valor único
-            const wellInfo = location.wellPosition || location.eppendorfWell || 'N/A';
-  
-           return (
-             <option key={String(locationId)} value={String(valueId)}>
-                Bloco {location.block}, Prateleira {location.rack}, Gaveta {location.drawer}, Caixa {location.box}
-               {wellInfo !== 'N/A' ? `, Poço ${wellInfo}` : ''}
-             </option>
-         );
-        })}
-
+            <option value="">Selecione um freezer</option>
+            {freezers
+              .filter((freezer) => freezer.containerID !== undefined && freezer.containerID !== null)
+              .map((freezer) => (
+                <option key={freezer._id} value={String(freezer.containerID)}>
+                  {freezer.name}
+                </option>
+              ))}
           </select>
         </div>
         <div className="form-grid-full">
@@ -1146,12 +1199,65 @@ function SensorForm({
             ))}
           </select>
         </div>
+        <Input
+          label="MAC Address"
+          data-testid="sensor-mac-address-input"
+          placeholder="AA:BB:CC:DD:EE:FF"
+          value={formData.macAddress || ''}
+          onChange={(e) =>
+            setFormData({ ...formData, macAddress: e.target.value })
+          }
+        />
+        <div className="form-grid-full">
+          <label className="input-label" htmlFor="sensorStorageContainerSelect">Contêiner de Armazenamento (Freezer)</label>
+          <select
+            id="sensorStorageContainerSelect"
+            data-testid="sensor-storage-container-select"
+            className="input"
+            value={formData.storageContainer || ''}
+            onChange={(e) =>
+              setFormData({
+                ...formData,
+                storageContainer: e.target.value || undefined,
+              })
+            }
+          >
+            <option value="">Selecione um freezer</option>
+            {freezers.map((freezer) => (
+              <option key={freezer._id} value={freezer._id}>
+                {freezer.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="form-grid-full">
+          <label className="input-label" htmlFor="sensorOrganizationSelect">Organização</label>
+          <select
+            id="sensorOrganizationSelect"
+            data-testid="sensor-organization-select"
+            className="input"
+            value={formData.organizationId || ''}
+            onChange={(e) =>
+              setFormData({
+                ...formData,
+                organizationId: e.target.value || null,
+              })
+            }
+          >
+            <option value="">Selecione uma organização</option>
+            {organizations.map((org) => (
+              <option key={org.organizationId} value={org.organizationId}>
+                {org.officialName}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       <div className="form-actions">
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancelar
         </Button>
-        <Button type="submit">Salvar</Button>
+        <Button type="submit" data-testid="sensor-form-submit">Salvar</Button>
       </div>
     </form>
   );

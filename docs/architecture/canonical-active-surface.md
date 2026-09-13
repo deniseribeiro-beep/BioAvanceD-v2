@@ -88,7 +88,7 @@ Classification:
 - `api/backend/scripts/neo4j-canonical-rebuild.js` - operational script and active.
 - `api/backend/scripts/lint.js` - operational script and active.
 - `api/backend/scripts/audit-verify.js` and companion audit scripts - operational.
-- `api/backend/scripts/seed-essential-reference-data.js` - manual essential seed only, not startup-bound.
+- `api/backend/scripts/seed-essential-reference-data.js` - one-shot bootstrap on compose.dev.yml's `foundation-bootstrap` service (#366); compose.test.yml/CI still only exec it manually or via --dry-run until #371 lands.
 - `api/backend/scripts/validate-essential-reference-data.js` - structural validation only.
 - `api/backend/scripts/reference-imports/import-large-reference-dataset.js` - scaffold only.
 

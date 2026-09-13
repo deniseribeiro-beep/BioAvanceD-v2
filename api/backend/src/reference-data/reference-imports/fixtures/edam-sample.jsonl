@@ -1,0 +1,13 @@
+{"id":"data_0006","lbl":"Data","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"data_2044","lbl":"Sequence","is_a":["data_0006"],"synonyms":[],"obsolete":false}
+{"id":"data_2977","lbl":"Nucleic acid sequence","is_a":["data_2044"],"synonyms":[],"obsolete":false}
+{"id":"format_1915","lbl":"Format","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"format_3464","lbl":"JSON","is_a":["format_1915"],"synonyms":[],"obsolete":false}
+{"id":"operation_0004","lbl":"Operation","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"operation_2945","lbl":"Data analysis","is_a":["operation_0004"],"synonyms":[],"obsolete":false}
+{"id":"topic_0003","lbl":"Topic","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"topic_0605","lbl":"Informatics","is_a":["topic_0003"],"synonyms":[],"obsolete":false}
+{"id":"format_9001","lbl":"specialized format subtype","is_a":["format_1915"],"synonyms":[],"obsolete":false}
+{"id":"topic_9002","lbl":"regional discipline subdivision","is_a":["topic_0003"],"synonyms":[],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"data_9999","lbl":"","is_a":[],"synonyms":[],"obsolete":false}

@@ -97,9 +97,9 @@ function authConsent(options = {}) {
           
           await auditLogger.log({
             action: 'CONSENT_BLOCK_DENIED',
-            entity: 'PatientConsent',
-            entityID: sanitizedPatientID,
-            result: 'blocked',
+            resourceType: 'PatientConsent',
+            resourceId: sanitizedPatientID,
+            status: 'blocked',
             severity: 'warning',
             message: logMessage,
             payload: {
@@ -145,9 +145,9 @@ function authConsent(options = {}) {
               
               await auditLogger.log({
                 action: 'CONSENT_SCOPE_DENIED',
-                entity: 'PatientConsent',
-                entityID: sanitizedPatientID,
-                result: 'blocked',
+                resourceType: 'PatientConsent',
+                resourceId: sanitizedPatientID,
+                status: 'blocked',
                 severity: 'warning',
                 message: logMessage,
                 payload: {
@@ -190,9 +190,9 @@ function authConsent(options = {}) {
             
             await auditLogger.log({
               action: 'CONSENT_REVOKED_DENIED',
-              entity: 'PatientConsent',
-              entityID: sanitizedPatientID,
-              result: 'blocked',
+              resourceType: 'PatientConsent',
+              resourceId: sanitizedPatientID,
+              status: 'blocked',
               severity: 'warning',
               message: logMessage,
               payload: {
@@ -227,9 +227,9 @@ function authConsent(options = {}) {
         
         await auditLogger.log({
           action: 'CONSENT_VALIDATED',
-          entity: 'PatientConsent',
-          entityID: sanitizedPatientID,
-          result: 'success',
+          resourceType: 'PatientConsent',
+          resourceId: sanitizedPatientID,
+          status: 'success',
           severity: 'info',
           message: `Acesso concedido - Validação de consentimento passou`,
           payload: {

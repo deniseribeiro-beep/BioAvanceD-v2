@@ -1,3 +1,5 @@
+const { EQUIPMENT_STATUS } = require('./equipmentStatus');
+
 /**
  * Modelo de validação e estrutura para Equipment
  */
@@ -10,13 +12,10 @@ class EquipmentModel {
     'Other'           // Outros
   ];
 
-  static EQUIPMENT_STATUS = [
-    'Calibrado',      // Equipamento calibrado e pronto para uso
-    'Maintenance',    // Em manutenção
-    'Active',         // Ativo e operacional
-    'Inactive',       // Inativo
-    'Needs Calibration' // Necessita calibração
-  ];
+  // #774: moved to equipmentStatus.js, which BLOCKED_EQUIPMENT_STATUSES now
+  // derives from — re-exported here so EquipmentModel.EQUIPMENT_STATUS keeps
+  // working for existing callers/tests.
+  static EQUIPMENT_STATUS = EQUIPMENT_STATUS;
 
   static validate(data) {
     const errors = [];
@@ -77,6 +76,11 @@ class EquipmentModel {
       type: data.type || 'Other', // Padrão: Other
       status: data.status || 'Active', // Padrão: Active
       purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : null,
+      // #635: Organization.organizationId (UUID string), not a Mongo ref --
+      // same shape as Sample.collectionSite/Patient.clinicalUnitId/
+      // Sensor.organizationId (#634). No backfill for pre-existing
+      // equipment (null = unscoped/legacy).
+      organizationId: data.organizationId || null,
       createdAt: new Date(),
       updatedAt: new Date()
     };

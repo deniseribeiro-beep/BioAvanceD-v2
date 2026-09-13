@@ -136,6 +136,34 @@ class StorageApiService {
   }
 
   /**
+   * Mover amostra já armazenada para uma posição específica (não necessariamente a próxima livre)
+   */
+  async moveSample(
+    sampleId: string,
+    targetBoxId: string,
+    targetPosition: string,
+    reason?: string,
+    notes?: string
+  ): Promise<AllocateResponse> {
+    try {
+      const response = await api.post(`${API_STORAGE_BASE}/move`, {
+        sampleId,
+        targetBoxId,
+        targetPosition,
+        reason,
+        notes,
+      });
+      return response.data;
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.response?.data?.error || 'MOVE_SAMPLE_ERROR',
+        message: error.response?.data?.message || error.message,
+      };
+    }
+  }
+
+  /**
    * Liberar amostra de uma posição
    */
   async releaseSample(sampleId: string): Promise<ReleaseResponse> {

@@ -4,7 +4,13 @@ const { tmpdir } = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 
-const PORT = Number(process.env.PORT || 8095);
+// #981: TSA_PORT first. compose.test.yml sets TSA_PORT and this read was
+// PORT-only, so the variable that looks like the knob was inert -- changing
+// it moved nothing, the server kept listening on 8095, and the healthcheck
+// (which hardcoded 8095 too) kept passing. The failure would have surfaced
+// as a connection refused from a different container. PORT is kept as a
+// fallback so any caller relying on the generic name still works.
+const PORT = Number(process.env.TSA_PORT || process.env.PORT || 8095);
 const MAX_BODY_BYTES = Number(process.env.TSA_MAX_BODY_BYTES || 1024 * 1024);
 const OPENSSL_BIN = process.env.OPENSSL_BIN || 'openssl';
 const TSA_CONFIG = process.env.TSA_CONFIG || '/etc/tsa/openssl-ts.cnf';

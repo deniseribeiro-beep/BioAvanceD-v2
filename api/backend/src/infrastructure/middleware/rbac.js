@@ -1,49 +1,32 @@
 /**
  * Middleware RBAC (Role-Based Access Control)
  * RNF008 - Controle de Acesso Baseado em Função
- * 
- * AccessTypes (corrigidos):
- * 1 = UsuarioExterno
- * 2 = Tecnico
- * 3 = Coordenador
- * 4 = Administrador
+ *
+ * #421: enforcement resolves via UserRoleAssignment -> Role -> Permission
+ * (see rbac-assignment.service.js), not accessType/roleName — atomic
+ * cutover per dict-07's migration-table rule, no dual-read of the old
+ * fields here. hierarchyLevel mirrors the old accessType numbering:
+ * 1 = UsuarioExterno, 2 = Tecnico, 3 = Coordenador, 4 = Administrador.
  */
 
 const logger = require('../../utils/logger');
+const {
+  resolveUserHierarchyLevel,
+  userHasPermission,
+  resolveUserOrganizationScope,
+  isOrganizationScopeUsable,
+} = require('../../services/rbac-assignment.service');
+const { PERMISSION_CATALOG } = require('../../services/rbac-catalog-seed.service');
 
-function resolveUserRole(user = {}) {
-  const roleFromAccessType = Number(user.accessType || user.role || 0);
-  if ([1, 2, 3, 4].includes(roleFromAccessType)) {
-    return roleFromAccessType;
-  }
-
-  const normalizedRoleName = String(user.roleName || user.role || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toLowerCase();
-
-  const roleNameToAccessType = {
-    administrador: 4,
-    admin: 4,
-    coordenador: 3,
-    tecnico: 2,
-    pesquisador: 1,
-    pesquisadora: 1,
-    researcher: 1,
-    'usuario externo': 1,
-    'usuário externo': 1,
-    external: 1,
-  };
-
-  return roleNameToAccessType[normalizedRoleName] || 1;
+function getDb(req) {
+  return req.app && req.app.locals && req.app.locals.db;
 }
 
 /**
  * Verifica se o usuário tem o nível de acesso necessário
  */
 const requireRole = (...allowedRoles) => {
-  return (req, res, next) => {
+  return async (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({
         success: false,
@@ -52,25 +35,20 @@ const requireRole = (...allowedRoles) => {
       });
     }
 
-    const userRole = resolveUserRole(req.user);
-    
-    // Verifica se é administrador também por roleName (fallback)
-    const isAdminByRoleName = req.user.roleName === 'Administrador';
-    const isAdminByAccessType = userRole === 4;
-    const isAdmin = isAdminByRoleName || isAdminByAccessType;
-
-    // Se a rota requer administrador (4), verifica ambos os métodos
-    if (allowedRoles.includes(4) && !isAdmin) {
-      logger.warn(`Acesso negado para usuário ${req.user.userID} - Role: ${userRole}, RoleName: ${req.user.roleName}, Requerido: ${allowedRoles.join(', ')}`);
-      return res.status(403).json({
+    const db = getDb(req);
+    if (!db) {
+      logger.error('requireRole: req.app.locals.db indisponível');
+      return res.status(500).json({
         success: false,
-        error: 'Acesso negado',
-        message: 'Apenas administradores podem acessar este recurso'
+        error: 'Erro interno',
+        message: 'Erro ao verificar permissões'
       });
     }
 
-    if (!allowedRoles.includes(userRole)) {
-      logger.warn(`Acesso negado para usuário ${req.user.userID} - Role: ${userRole}, RoleName: ${req.user.roleName}, Requerido: ${allowedRoles.join(', ')}`);
+    const userLevel = await resolveUserHierarchyLevel(db, req.user.userID);
+
+    if (userLevel === null || !allowedRoles.includes(userLevel)) {
+      logger.warn(`Acesso negado para usuário ${req.user.userID} - Nível: ${userLevel}, Requerido: ${allowedRoles.join(', ')}`);
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -83,53 +61,67 @@ const requireRole = (...allowedRoles) => {
 };
 
 /**
- * Permissões específicas por funcionalidade
+ * Permissões específicas por funcionalidade (nomes usados como
+ * permissionCode no catálogo Permission). Derivado de PERMISSION_CATALOG
+ * (rbac-catalog-seed.service.js) em vez de listado à parte, para que um
+ * novo permissionCode só precise ser adicionado uma vez (#436).
  */
-const permissions = {
-  // RF003 - Cadastro de usuário
-  createUser: [3, 4], // Coordenador (3), Administrador (4)
-
-  // RF004 - Cadastro de amostra
-  createSample: [2, 3, 4], // Técnico (2), Coordenador (3), Administrador (4)
-  
-  // Editar e deletar amostra
-  editSample: [3, 4], // Coordenador (3), Administrador (4)
-  deleteSample: [4], // Least privilege: apenas Administrador (4)
-
-  // RF005 - Cadastro de paciente
-  createPatient: [3, 4], // Coordenador (3), Administrador (4)
-
-  // RF006 - Retirada de amostra
-  withdrawSample: [2, 3, 4], // Técnico (2), Coordenador (3), Administrador (4)
-
-  // RF007 - Upload de arquivos de análise (apenas Admin e Coordenador)
-  uploadSampleFiles: [3, 4], // Coordenador (3), Administrador (4)
-  deleteSampleFiles: [3, 4], // Coordenador (3), Administrador (4)
-  
-  // RF007 - Upload de arquivos (geral - mantido para compatibilidade)
-  uploadFiles: [2, 3, 4], // Técnico (2), Coordenador (3), Administrador (4)
-
-  // RF008 - Relatórios
-  viewReports: [1, 2, 3, 4], // Todos: Usuário Externo (1), Técnico (2), Coordenador (3), Administrador (4)
-
-  // RF009 - Visualizar temperatura
-  viewTemperature: [2, 3, 4], // Técnico (2), Coordenador (3), Administrador (4)
-
-  // RF010 - Backup
-  manageBackup: [4], // Apenas Administrador (4)
-
-  // Gerenciar sistema
-  manageSystem: [4], // Apenas Administrador (4)
-  
-  // Reset MFA
-  resetMFA: [4], // Apenas Administrador (4)
-};
+const permissions = Object.fromEntries(
+  Object.keys(PERMISSION_CATALOG).map((code) => [code, true])
+);
 
 /**
- * Middleware para verificar permissão específica
+ * #631: default HTTP-verb -> dict-02 action mapping, used when a route
+ * doesn't pass an explicit action to `requirePermission`. Deliberately
+ * the lowest-risk shape (#630's own audit note): this covers every call
+ * site whose derived action is already within its permissionCode's
+ * (now #630-corrected) allowedActions, which is the overwhelming
+ * majority. Only a route where the default would derive an action
+ * outside its code's allowedActions needs the explicit override.
  */
-const requirePermission = (permission) => {
-  return (req, res, next) => {
+const METHOD_TO_ACTION = {
+  GET: 'READ',
+  HEAD: 'READ',
+  POST: 'CREATE',
+  PUT: 'UPDATE',
+  PATCH: 'UPDATE',
+  DELETE: 'DELETE',
+};
+
+function logForbiddenAttempt(db, req, message) {
+  setImmediate(async () => {
+    try {
+      if (db) {
+        const auditLogger = require('../../utils/auditLogger');
+        auditLogger.init(db);
+        await auditLogger.log({
+          action: 'FORBIDDEN',
+          resourceType: 'Access',
+          status: 'error',
+          severity: 'warning',
+          message,
+          req: req,
+          module: 'Segurança'
+        });
+      }
+    } catch (error) {
+      // Não bloqueia se houver erro no log
+    }
+  });
+}
+
+/**
+ * Middleware para verificar permissão específica.
+ *
+ * #631: also enforces `PERMISSION_CATALOG[permission].allowedActions` —
+ * the action is `explicitAction` when the route passes one, otherwise
+ * derived from `req.method` via `METHOD_TO_ACTION`. A route whose real
+ * action doesn't match its HTTP verb (e.g. a POST that reads/updates an
+ * existing resource rather than creating one) must pass `explicitAction`
+ * explicitly; see #630's audit for which call sites need it.
+ */
+const requirePermission = (permission, explicitAction) => {
+  return async (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({
         success: false,
@@ -138,10 +130,7 @@ const requirePermission = (permission) => {
       });
     }
 
-    const userRole = resolveUserRole(req.user);
-    const allowedRoles = permissions[permission];
-
-    if (!allowedRoles) {
+    if (!permissions[permission]) {
       logger.error(`Permissão não definida: ${permission}`);
       return res.status(500).json({
         success: false,
@@ -150,31 +139,33 @@ const requirePermission = (permission) => {
       });
     }
 
-    if (!allowedRoles.includes(userRole)) {
-      logger.warn(`Permissão negada: ${permission} para usuário ${req.user.userID} (Role: ${userRole})`);
-      
-      // Registra tentativa de acesso negado
-      setImmediate(async () => {
-        try {
-          const db = req.app.locals.db;
-          if (db) {
-            const auditLogger = require('../../utils/auditLogger');
-            auditLogger.init(db);
-            await auditLogger.log({
-              action: 'FORBIDDEN',
-              entity: 'Access',
-              result: 'error',
-              severity: 'warning',
-              message: `Tentativa de acesso negado: ${permission} (Role: ${userRole})`,
-              req: req,
-              module: 'Segurança'
-            });
-          }
-        } catch (error) {
-          // Não bloqueia se houver erro no log
-        }
+    const db = getDb(req);
+    if (!db) {
+      logger.error('requirePermission: req.app.locals.db indisponível');
+      return res.status(500).json({
+        success: false,
+        error: 'Erro interno',
+        message: 'Erro ao verificar permissões'
       });
-      
+    }
+
+    const hasPermission = await userHasPermission(db, req.user.userID, permission);
+
+    if (!hasPermission) {
+      logger.warn(`Permissão negada: ${permission} para usuário ${req.user.userID}`);
+      logForbiddenAttempt(db, req, `Tentativa de acesso negado: ${permission}`);
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Você não tem permissão para esta ação'
+      });
+    }
+
+    const action = explicitAction || METHOD_TO_ACTION[req.method];
+    const allowedActions = PERMISSION_CATALOG[permission].allowedActions;
+    if (!action || !allowedActions.includes(action)) {
+      logger.warn(`Ação não permitida: ${action || req.method} para permissão ${permission} (usuário ${req.user.userID})`);
+      logForbiddenAttempt(db, req, `Ação não permitida: ${action || req.method} para permissão ${permission}`);
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -186,9 +177,52 @@ const requirePermission = (permission) => {
   };
 };
 
+/**
+ * #340 (RF003 AC#3): resolves the caller's organization scope
+ * (rbac-assignment.service#resolveUserOrganizationScope) and attaches it as
+ * req.organizationScope for the route to filter/check against. Org-less
+ * users ('none'/'unassigned' scope) get a hard 403 here rather than an
+ * empty list — the product decision confirmed 2026-08-18. Administrador
+ * (hierarchyLevel 4) resolves to 'global' and is left unfiltered by the
+ * route, same bypass every other RBAC gate in this file gives it.
+ */
+const requireOrganizationScope = async (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      error: 'Não autenticado',
+      message: 'É necessário fazer login'
+    });
+  }
+
+  const db = getDb(req);
+  if (!db) {
+    logger.error('requireOrganizationScope: req.app.locals.db indisponível');
+    return res.status(500).json({
+      success: false,
+      error: 'Erro interno',
+      message: 'Erro ao verificar escopo organizacional'
+    });
+  }
+
+  const scope = await resolveUserOrganizationScope(db, req.user.userID);
+
+  if (!isOrganizationScopeUsable(scope)) {
+    logger.warn(`Acesso negado por escopo organizacional: usuário ${req.user.userID} sem organização atribuída (scope=${scope.scope})`);
+    return res.status(403).json({
+      success: false,
+      error: 'Sem organização atribuída',
+      message: 'Seu usuário não possui organização atribuída para acessar este recurso'
+    });
+  }
+
+  req.organizationScope = scope;
+  next();
+};
+
 module.exports = {
   requireRole,
   requirePermission,
+  requireOrganizationScope,
   permissions
 };
-

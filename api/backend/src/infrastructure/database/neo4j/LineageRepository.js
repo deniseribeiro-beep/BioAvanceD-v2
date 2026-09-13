@@ -136,6 +136,10 @@ class LineageRepository {
   async recordCustodyEvent(input) {
     this.ensureDriver();
 
+    if (!input?.eventType) {
+      throw new Error('[ISO20387][NEO4J] eventType obrigatório para trilha de custódia');
+    }
+
     const session = this.driver.session({ database: this.database });
     const specimenId = this.normalizePointerId(input?.specimenId, 'specimenId');
     const eventId = `${input.eventType}-${specimenId}-${Date.now()}`;

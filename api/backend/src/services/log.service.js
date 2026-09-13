@@ -5,6 +5,42 @@ const { anonymizeLogs, anonymizeLogUser } = require('../utils/userAnonymization'
 const { serializeLogs, serializeLogSimple } = require('../utils/logSerializer');
 const ExcelJS = require('exceljs');
 const auditV2Service = require('./audit-v2.service');
+const securityAlertsService = require('./securityAlerts.service');
+
+// #780: getLogs used to build its Mongo sort spec straight from the
+// request's `sortBy`, with no validation. A key no document carries is legal
+// in Mongo and compares equal across every document, so on this *paginated*
+// query an unrecognized field did not degrade to "unsorted" -- it silently
+// returned the wrong page with a 200. Audit logs are also the one collection
+// where ordering is part of the meaning.
+//
+// Derived from Log.js's own document builder rather than guessed, so the
+// list cannot drift from what createLog actually writes. Deliberately
+// excluded: `timestampFormatted` (a pt-BR display string -- sorting it is
+// lexicographic on "dd/mm/yyyy" and meaningless), and the free-form/object
+// fields `message`, `payload`, `errorStack` and `metadata`.
+const SORTABLE_LOG_FIELDS = new Set([
+  'logId',
+  'dateTime',
+  'timestamp',
+  'timestampISO',
+  'userId',
+  'userName',
+  'action',
+  'resourceType',
+  'resourceId',
+  'status',
+  'entity',
+  'entityID',
+  'result',
+  'severity',
+  'source',
+  'ipSource',
+  'module',
+  'createdAt',
+]);
+
+const DEFAULT_LOG_SORT = { dateTime: -1, timestamp: -1 };
 
 /**
  * Service de Logs/Auditoria
@@ -57,7 +93,15 @@ class LogService {
       
       const validation = LogModel.validate(sanitizedLogData);
       if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
+        // #1106: tag the failure KIND at its only throw site. Everything in
+        // this method that can throw reaches one catch in auditLogger.log,
+        // where a caller defect and a dead database were indistinguishable.
+        // The two are cleanly separable here and nowhere else: validation
+        // throws BEFORE logsCollection.insertOne is reached, so the tag is a
+        // fact rather than a guess made downstream from a message string.
+        const validationError = new Error(validation.errors.join(', '));
+        validationError.code = 'LOG_VALIDATION_FAILED';
+        throw validationError;
       }
 
       const logsCollection = db.collection('logs');
@@ -86,6 +130,22 @@ class LogService {
         await auditV2Service.ingestLogRecord(createdLog, db);
       } catch (auditError) {
         logger.warn('Falha ao espelhar log em audit_events:', auditError.message || auditError);
+        // RNF009's Merkle audit trail is tamper-evident by design; a swallowed
+        // ingest failure here means it silently stops recording (#369/#394).
+        // A warn-level log line alone was proven to hide that for ~4 weeks.
+        securityAlertsService.init(db);
+        await securityAlertsService.logSecurityAlert({
+          type: 'AUDIT_TRAIL_WRITE_FAILURE',
+          severity: 'critical',
+          userID: createdLog.userId || createdLog.userID,
+          action: 'AUDIT_V2_INGEST_FAILED',
+          reason: 'Falha ao espelhar log em audit_events (trilha Merkle RNF009)',
+          details: {
+            logID: createdLog._id,
+            entity: createdLog.entity,
+            error: auditError.message || String(auditError)
+          }
+        });
       }
 
       // Serializa o log criado para converter tipos especiais
@@ -265,16 +325,20 @@ class LogService {
       const page = parseInt(filters.page) || 1;
       const actualSkip = skip || (page - 1) * limit;
 
-      // Ordenação
-      const sortField = filters.sortBy || 'dateTime';
-      const sortOrder = filters.sortOrder === 'asc' ? 1 : -1;
-      const sort = { [sortField]: sortOrder };
+      // Ordenação (#780: allow-listed -- see SORTABLE_LOG_FIELDS above)
+      const requestedSortBy = typeof filters.sortBy === 'string' ? filters.sortBy.trim() : '';
+      const sortField = SORTABLE_LOG_FIELDS.has(requestedSortBy) ? requestedSortBy : null;
 
-      // Se não houver campo de ordenação, ordena por data
-      if (!filters.sortBy) {
-        sort.dateTime = -1;
-        sort.timestamp = -1;
+      if (requestedSortBy && !sortField) {
+        logger.warn(
+          `[LOGS] Campo de ordenação não reconhecido, aplicando ordenação padrão: ${requestedSortBy}`
+        );
       }
+
+      const sortOrder = filters.sortOrder === 'asc' ? 1 : -1;
+      // Falls back to the date pair rather than to the requested name, so an
+      // unrecognized field can never reach the driver as a sort key.
+      const sort = sortField ? { [sortField]: sortOrder } : { ...DEFAULT_LOG_SORT };
 
       // Busca logs
       const logs = await logsCollection
@@ -299,7 +363,13 @@ class LogService {
         limit,
         skip: actualSkip,
         page: page || Math.floor(actualSkip / limit) + 1,
-        totalPages: Math.ceil(total / limit)
+        totalPages: Math.ceil(total / limit),
+        // #780: the ordering actually applied. Without this the allow-list's
+        // fallback would be as silent as the bug it replaces -- a caller
+        // sending an unrecognized sortBy would still get a plausible 200 with
+        // no way to tell the parameter was dropped (cf. #789).
+        sortBy: sortField || 'dateTime',
+        sortOrder: sortField && sortOrder === 1 ? 'asc' : 'desc'
       };
     } catch (error) {
       logger.error('Erro ao buscar logs:', error.message);

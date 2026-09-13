@@ -33,8 +33,8 @@ export default function QualityDescriptionPage() {
       <Card>
         <Table headers={['ID', 'Descrição', 'Ações']}>
           {qualities.map((quality) => (
-            <tr key={quality.qualityID}>
-              <td>{quality.qualityID}</td>
+            <tr key={quality.id}>
+              <td>{quality.id}</td>
               <td>{quality.description}</td>
               <td>
                 <div className="table-actions">
@@ -53,7 +53,7 @@ export default function QualityDescriptionPage() {
                     onClick={async () => {
                       if (confirm('Tem certeza que deseja excluir esta descrição?')) {
                         try {
-                          await deleteQuality(quality.qualityID);
+                          await deleteQuality(quality.id);
                         } catch (err: any) {
                           alert(err.message);
                         }
@@ -83,7 +83,7 @@ export default function QualityDescriptionPage() {
           onSave={async (data) => {
             try {
               if (editingQuality) {
-                await updateQuality(editingQuality.qualityID, data);
+                await updateQuality(editingQuality.id, data);
               } else {
                 await createQuality(data);
               }

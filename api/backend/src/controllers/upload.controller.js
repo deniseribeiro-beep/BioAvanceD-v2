@@ -1,12 +1,11 @@
 const path = require('path');
 const fs = require('fs');
 const logger = require('../utils/logger');
-const { upload, UPLOAD_ROOT } = require('../config/uploadConfig');
+const { upload, UPLOAD_ROOT, UPLOADS_BASE } = require('../config/uploadConfig');
 const analysisValidationService = require('../services/analysisValidation.service');
 
 const getRelativePath = (absolutePath) => {
-  const basePath = path.join(__dirname, '../../uploads');
-  const relative = path.relative(basePath, absolutePath);
+  const relative = path.relative(UPLOADS_BASE, absolutePath);
   return relative.split(path.sep).join('/');
 };
 
@@ -26,7 +25,7 @@ class UploadController {
       }
 
       const file = req.file;
-      const specimenId = req.body.specimenId || req.body.specimenId || null;
+      const specimenId = req.body.specimenId || null;
 
       if (!file) {
         return res.status(400).json({
@@ -51,7 +50,7 @@ class UploadController {
         if (fs.existsSync(file.path)) {
           fs.unlinkSync(file.path);
         }
-        return res.status(validationResult.patientStatus === 'PENDING_CONSENT' ? 409 : 400).json({
+        return res.status(validationResult.patientStatus ? 409 : 400).json({
           success: false,
           error: validationResult.error,
           code: validationResult.patientStatus ? 'CONSENT_PENDING' : 'SAMPLE_NOT_FOUND'

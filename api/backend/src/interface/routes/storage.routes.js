@@ -15,6 +15,11 @@ const {
   createGetFreezerTreeController
 } = require('../controllers/storage-query.controller');
 const { authenticate } = require('../../infrastructure/middleware/auth');
+// #888: requireRole is no longer imported -- every gate on this router is now
+// a permission code. The role list it carried lives on as the grant list for
+// manageStorageAllocation in rbac-catalog-seed.service.js.
+const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { ObjectId } = require('mongodb');
 const logger = require('../../utils/logger');
 
 /**
@@ -33,6 +38,41 @@ router.use((req, res, next) => {
   logger.debug(`[Storage] ${req.method} ${req.path}`);
   next();
 });
+
+// ==================== AUTORIZACAO ====================
+// #859: authenticate alone is not authorization. Every mutation below is
+// gated so that a level-1 Usuario Externo cannot move, allocate or release
+// a sample -- RF002 AC#5 requires the backend to enforce this independently
+// of what the frontend hides.
+//
+// #888: this used to read "the RBAC catalog defines no storage-scoped
+// permission code at all, so a requirePermission here would have to borrow a
+// wrong-domain code", and gated on a MUTATION_ROLES = [2, 3, 4] constant
+// instead. The catalog now has two storage codes (26 codes, per
+// Object.keys(PERMISSION_CATALOG).length in rbac-catalog-seed.service.js):
+//
+//   manageStorageAllocation (StorageAssignment) -- WHERE a specimen sits:
+//     POST /allocate, /allocate/auto, /move, DELETE /release/:sampleId.
+//     Granted to Tecnico + Coordenador + Administrador, which reproduces the
+//     old MUTATION_ROLES [2, 3, 4] exactly, so the swap is behaviour-
+//     preserving rather than a re-authorization.
+//   manageStorageTopology (StorageContainer) -- WHAT the container tree is:
+//     PATCH /freezer/:freezerId/room. Granted to Coordenador +
+//     Administrador, which is both RF017's stated actor and, conveniently,
+//     'createPatient''s existing grant -- so that swap is a runtime no-op
+//     and stops recording a Patient-domain authorization for a freezer
+//     action.
+//
+// This deliberately does NOT settle the RF006-vs-RF017 actor disagreement:
+// RF006 (custody and movement) names the Tecnico as primary actor, RF017
+// (storage topology) names the Coordenador. The technician floor on
+// allocation freezes #859's status quo rather than resolving it; that
+// question stays open.
+//
+// The other four files borrowing 'createPatient' (equipment.routes.js,
+// facility.routes.js, room.routes.js, routes/eConsent.js) are deliberately
+// left alone here -- see #888 for why folding them in would bury the
+// catalog change, which is the actually-risky part.
 
 // ==================== ENDPOINTS ====================
 
@@ -119,7 +159,7 @@ router.get('/samples/search', createSearchSamplesController());
  *   "occupiedBySampleId": "507f..."
  * }
  */
-router.post('/allocate', createAllocateSampleController());
+router.post('/allocate', requirePermission('manageStorageAllocation'), createAllocateSampleController());
 
 /**
  * POST /api/storage/allocate/auto
@@ -164,7 +204,7 @@ router.post('/allocate', createAllocateSampleController());
  *   "message": "..."
  * }
  */
-router.post('/allocate/auto', createAutoAssignSampleController());
+router.post('/allocate/auto', requirePermission('manageStorageAllocation'), createAutoAssignSampleController());
 
 /**
  * POST /api/storage/move
@@ -179,7 +219,7 @@ router.post('/allocate/auto', createAutoAssignSampleController());
  *   "notes": "Movido durante inventário"
  * }
  */
-router.post('/move', createMoveSampleController());
+router.post('/move', requirePermission('manageStorageAllocation'), createMoveSampleController());
 
 /**
  * DELETE /api/storage/release/:sampleId
@@ -196,7 +236,7 @@ router.post('/move', createMoveSampleController());
  *   "message": "Amostra liberada de A1"
  * }
  */
-router.delete('/release/:sampleId', createReleaseSampleController());
+router.delete('/release/:sampleId', requirePermission('manageStorageAllocation'), createReleaseSampleController());
 
 /**
  * GET /api/storage/sample/:sampleId
@@ -340,6 +380,19 @@ router.get('/freezer/:freezerId/stats', createGetFreezerStatsController());
  *     "stats": { ... }
  *   }
  * }
+ *
+ * Response 404 (caixa inexistente) -- #892:
+ * {
+ *   "success": false,
+ *   "error": "BOX_NOT_FOUND",
+ *   "data": { "valid": false, "error": "BOX_NOT_FOUND" }
+ * }
+ *
+ * Ate o #892 esta rota devolvia 400 tambem para a caixa inexistente, porque
+ * o repositorio relata os dois casos pelo mesmo `valid: false`. Era a unica
+ * rota deste router que respondia 400 para entidade ausente, e contrariava a
+ * tabela de codigos de `docs/STORAGE_API_EXAMPLES.js`, que lista
+ * BOX_NOT_FOUND em "404 - Nao encontrado".
  */
 router.get('/box/:boxId/integrity', createCheckBoxIntegrityController());
 
@@ -409,6 +462,107 @@ router.get('/box/:boxId/integrity', createCheckBoxIntegrityController());
  * }
  */
 router.get('/freezer/:freezerId/tree', createGetFreezerTreeController());
+
+/**
+ * PATCH /api/storage/freezer/:freezerId/room
+ * Atribuir/alterar a Room (dict-02 StorageAssignment.roomId, ELM-0169) de um
+ * FREEZER — closes the assignment-path gap #419 deferred from #418 (models
+ * existed, nothing could set them).
+ *
+ * Body:
+ * {
+ *   "roomId": "507f1f77bcf86cd799439012"
+ * }
+ *
+ * Response 200:
+ * {
+ *   "success": true,
+ *   "data": { "_id": "...", "roomId": "507f..." }
+ * }
+ *
+ * Response 404:
+ * {
+ *   "success": false,
+ *   "error": "FREEZER_NOT_FOUND" | "ROOM_NOT_FOUND"
+ * }
+ *
+ * Response 400 (container não é FREEZER):
+ * {
+ *   "success": false,
+ *   "error": "NOT_A_FREEZER"
+ * }
+ */
+router.patch('/freezer/:freezerId/room', authenticate, requirePermission('manageStorageTopology'), async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+
+    if (!ObjectId.isValid(req.params.freezerId)) {
+      return res.status(400).json({ success: false, error: 'ID inválido' });
+    }
+    const freezerObjectId = new ObjectId(req.params.freezerId);
+
+    const freezer = await db.collection('storageContainers').findOne({ _id: freezerObjectId });
+    if (!freezer) {
+      return res.status(404).json({ success: false, error: 'FREEZER_NOT_FOUND' });
+    }
+    if (freezer.containerType !== 'FREEZER') {
+      return res.status(400).json({
+        success: false,
+        error: 'NOT_A_FREEZER',
+        message: 'roomId só pode ser atribuído a containers do tipo FREEZER'
+      });
+    }
+
+    const { roomId } = req.body;
+    let roomObjectId = null;
+    if (roomId) {
+      if (!ObjectId.isValid(roomId)) {
+        return res.status(400).json({ success: false, error: 'roomId inválido' });
+      }
+      roomObjectId = new ObjectId(roomId);
+      const room = await db.collection('rooms').findOne({ _id: roomObjectId, deletedAt: null });
+      if (!room) {
+        return res.status(404).json({ success: false, error: 'ROOM_NOT_FOUND' });
+      }
+    }
+
+    await db.collection('storageContainers').updateOne(
+      { _id: freezerObjectId },
+      { $set: { roomId: roomObjectId, updatedAt: new Date() } }
+    );
+
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'UPDATE',
+      resourceType: 'StorageContainer',
+      resourceId: req.params.freezerId,
+      status: 'success',
+      severity: 'info',
+      message: 'Room atribuída ao FREEZER',
+      payload: { roomId: roomObjectId ? roomObjectId.toString() : null },
+      req: req,
+      module: 'Armazenamento'
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: { _id: freezerObjectId, roomId: roomObjectId }
+    });
+  } catch (error) {
+    logger.error('[Storage] Erro ao atribuir room ao freezer:', error.message || error);
+    // #1022: was 400, the only failure path in this router not using 5xx --
+    // it told the caller "you sent something wrong" and "the server broke" in
+    // one body. This routes only genuine unhandled exceptions: the expected
+    // failures (FREEZER_NOT_FOUND, NOT_A_FREEZER, ROOM_NOT_FOUND) are all
+    // handled above. Same class #892 fixed for checkBoxIntegrity here.
+    return res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: error.message
+    });
+  }
+});
 
 // ==================== ERROR HANDLING ====================
 router.use((err, req, res, next) => {

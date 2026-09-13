@@ -2,9 +2,27 @@ const mongoose = require('mongoose');
 const { ObjectId } = require('mongodb'); // Native MongoDB driver para evitar conflitos BSON
 const env = require('../config/env');
 const logger = require('../utils/logger');
-const SampleMovementModel = require('../models/SampleMovement');
-const { appendMovementWithHashChain, enforceAppendOnlyCollection, ensureSampleMovementIndexes } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
+const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
+const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
+const positionGrid = require('../utils/storagePositionGrid');
+// #988: same guard MongoStorageRepository.withTransaction applies to
+// allocate/move/release -- autoAssignSampleToBox is the fourth storage
+// endpoint that runs a Mongo transaction, and it was the only one still
+// opening a raw session with no topology attribution.
+const { isKnownStandaloneDeployment } = require('../utils/mongoTransaction');
+
+/**
+ * #988: identical wording to the error MongoStorageRepository.withTransaction
+ * throws for allocate/move/release, kept here (not imported) because
+ * autoAssignSampleToBox does not go through that repository method -- it
+ * opens its own raw session. See that method's own comment for the full
+ * context of why this check exists.
+ */
+const STANDALONE_DEPLOYMENT_TRANSACTION_ERROR =
+  'Transação Mongo indisponível: esta implantação não é um replica set nem mongos. ' +
+  'Alocação, movimentação e liberação de amostras exigem transação (RF006 item 7, F3-G10). ' +
+  'Configure o mongod com --replSet (ver compose.test.yml) ou aponte MONGO_URI para um replica set.';
 
 /**
  * Storage Service - Núcleo de Armazenamento Físico
@@ -21,6 +39,8 @@ class StorageService {
   constructor(db, neo4jDriver = null) {
     this.db = db;
     this.neo4jDriver = neo4jDriver || db?.neo4jDriver || null;
+    this.storageRepository = new MongoStorageRepository(db);
+    this.auditRepository = new MongoAuditRepository(db);
   }
 
   _normalizeObjectId(value) {
@@ -35,300 +55,8 @@ class StorageService {
     return value;
   }
 
-  _isPositionOccupied(occupancyGrid, position) {
-    if (!occupancyGrid) {
-      return false;
-    }
-
-    if (typeof occupancyGrid.has === 'function' && typeof occupancyGrid.get === 'function') {
-      return Boolean(occupancyGrid.has(position) && occupancyGrid.get(position));
-    }
-
-    return Boolean(occupancyGrid[position]);
-  }
-
   _findFirstAvailablePosition(box) {
-    const capacityRows = Number(box?.dimension?.rows || 0);
-    const capacityCols = Number(box?.dimension?.cols || 0);
-
-    if (capacityRows < 1 || capacityCols < 1) {
-      return null;
-    }
-
-    const allPositions = this._getAllValidPositions({ rows: capacityRows, cols: capacityCols });
-    const occupancyGrid = box?.occupancyGrid || {};
-
-    return allPositions.find((position) => !this._isPositionOccupied(occupancyGrid, position)) || null;
-  }
-
-  /**
-   * FUNÇÃO PRINCIPAL: Validate Position Availability (Collision Detector)
-   *
-   * Verifica se uma posição está disponível de forma SEGURA
-   * - Valida formato da posição (ex: A1)
-   * - Valida se posição cabe nas dimensões da caixa (ex: nem J1 em 9x9)
-   * - Verifica colisão com amostras existentes
-   *
-   * @param {ObjectId} boxId - ID da StorageBox
-   * @param {string} position - Posição (ex: "A1", "B4")
-   * @returns {Promise<{ available: boolean, error?: string, boxData?: object }>}
-   */
-  async validatePositionAvailability(boxId, position) {
-    try {
-      // Validar entrada
-      if (!boxId || !position) {
-        return {
-          available: false,
-          error: 'INVALID_INPUT',
-          message: 'boxId e position são obrigatórios'
-        };
-      }
-
-      // Converter boxId para ObjectId se necessário
-      let boxObjId;
-      try {
-        boxObjId = ObjectId.isValid(boxId) ? new ObjectId(boxId) : boxId;
-      } catch (err) {
-        console.error('[Storage] Erro ao converter boxId:', err);
-        boxObjId = boxId;
-      }
-
-      // Buscar caixa
-      const storageBoxesCollection = this.db.collection('storageBoxes');
-      const box = await storageBoxesCollection.findOne({ _id: boxObjId });
-
-      if (!box) {
-        return {
-          available: false,
-          error: 'BOX_NOT_FOUND',
-          message: `StorageBox ${boxId} não encontrada`
-        };
-      }
-
-      // 1️⃣ VALIDAÇÃO: Formato de posição (ex: A1, B4, I9)
-      const positionRegex = /^([A-Z])(\d+)$/;
-      const match = position.match(positionRegex);
-
-      if (!match) {
-        return {
-          available: false,
-          error: 'INVALID_POSITION_FORMAT',
-          message: `Posição "${position}" inválida. Usar formato: Letra+Número (ex: A1, B4)`
-        };
-      }
-
-      // 2️⃣ VALIDAÇÃO: Posição dentro das dimensões da caixa
-      const [, rowLetter, colStr] = match;
-      const row = rowLetter.charCodeAt(0) - 65; // 0-indexed (A=0, B=1, etc)
-      const col = parseInt(colStr, 10);
-
-      const { rows: maxRows, cols: maxCols } = box.dimension;
-
-      if (row >= maxRows || row < 0) {
-        return {
-          available: false,
-          error: 'POSITION_OUT_OF_BOUNDS_ROW',
-          message: `Posição "${position}" fora do intervalo. Linhas válidas: A até ${String.fromCharCode(65 + maxRows - 1)}`
-        };
-      }
-
-      if (col > maxCols || col < 1) {
-        return {
-          available: false,
-          error: 'POSITION_OUT_OF_BOUNDS_COL',
-          message: `Posição "${position}" fora do intervalo. Colunas válidas: 1 até ${maxCols}`
-        };
-      }
-
-      // 3️⃣ VALIDAÇÃO: Colisão (posição já ocupada)
-      const occupiedSampleId = box.occupancyGrid?.get(position);
-
-      if (occupiedSampleId) {
-        return {
-          available: false,
-          error: 'STORAGE_COLLISION',
-          message: `Posição "${position}" já está ocupada por amostra ${occupiedSampleId}`,
-          occupiedBySampleId: occupiedSampleId
-        };
-      }
-
-      // ✅ Posição está disponível!
-      return {
-        available: true,
-        boxData: {
-          boxId: box._id,
-          boxName: box.name,
-          dimension: box.dimension,
-          currentOccupancy: box.currentOccupancy,
-          capacity: box.dimension.rows * box.dimension.cols,
-          availablePositions: (box.dimension.rows * box.dimension.cols) - box.currentOccupancy
-        }
-      };
-    } catch (error) {
-      logger.error('Erro em validatePositionAvailability:', error);
-      return {
-        available: false,
-        error: 'INTERNAL_ERROR',
-        message: `Erro ao validar posição: ${error.message}`
-      };
-    }
-  }
-
-  /**
-   * Alocar amostra a uma posição
-   * Operação ATÔMICA: valida + insere em uma transação
-   *
-   * @param {ObjectId} specimenId - ID da amostra
-   * @param {ObjectId} boxId - ID da StorageBox
-   * @param {string} position - Posição (ex: "A1")
-   * @returns {Promise<{ success: boolean, error?: string, sampleLocation?: object }>}
-   */
-  async allocateSampleToPosition(specimenId, boxId, position) {
-    const session = this.db.getMongo().startSession();
-
-    try {
-      // Iniciar transação
-      await session.withTransaction(async () => {
-        const storageBoxesCollection = this.db.collection('storageBoxes');
-        const samplesCollection = await getCollection(this.db, 'samples');
-
-        // Validar disponibilidade primeiro (fora da transação para speedup)
-        const validation = await this.validatePositionAvailability(boxId, position);
-        if (!validation.available) {
-          throw new Error(JSON.stringify(validation));
-        }
-
-        // Converter IDs usando MongoDB native driver
-        const { ObjectId } = require('mongodb');
-        
-        let sampleObjId, boxObjId;
-        try {
-          sampleObjId = ObjectId.isValid(specimenId) ? new ObjectId(specimenId) : specimenId;
-          boxObjId = ObjectId.isValid(boxId) ? new ObjectId(boxId) : boxId;
-        } catch (err) {
-          console.error('[Storage] Erro ao converter ObjectIds:', err);
-          sampleObjId = specimenId;
-          boxObjId = boxId;
-        }
-
-        // CRITICAL SECTION: Dentro da transação
-
-        // 1. Verificar se amostra já está em outra posição
-        const existingSample = await samplesCollection.findOne(
-          { _id: sampleObjId },
-          { session }
-        );
-
-        if (!existingSample) {
-          throw new Error(`Amostra ${specimenId} não encontrada`);
-        }
-
-        if (existingSample.storageLocation?.boxId && existingSample.storageLocation?.position) {
-          throw new Error(
-            `Amostra já está alocada em ${existingSample.storageLocation.boxId} / ${existingSample.storageLocation.position}`
-          );
-        }
-
-        // 2. Update Box: adicionar sample ao occupancyGrid
-        const updateBoxResult = await storageBoxesCollection.updateOne(
-          {
-            _id: boxObjId,
-            [`occupancyGrid.${position}`]: { $exists: false }
-          },
-          {
-            $set: {
-              [`occupancyGrid.${position}`]: sampleObjId,
-              'currentOccupancy': { $inc: 1 },
-              'updatedAt': new Date()
-            }
-          },
-          { session }
-        );
-
-        if (updateBoxResult.matchedDocuments === 0) {
-          throw new Error('STORAGE_COLLISION: Colisão detectada durante alocação');
-        }
-
-        // 3. Update Sample: definir storageLocation
-        const updateSampleResult = await samplesCollection.updateOne(
-          { _id: sampleObjId },
-          {
-            $set: {
-              'storageLocation.boxId': boxObjId,
-              'storageLocation.position': position,
-              'status': 'AVAILABLE', // Amostra agora tem localização
-              'updatedAt': new Date()
-            }
-          },
-          { session }
-        );
-
-        if (updateSampleResult.modifiedCount === 0) {
-          throw new Error('Falha ao atualizar amostra');
-        }
-
-        // 4. Criar/atualizar SampleMovement (auditoria)
-        const movementsCollection = this.db.collection('sample_movements');
-        enforceAppendOnlyCollection(movementsCollection, 'sample_movements');
-        await ensureSampleMovementIndexes(movementsCollection);
-
-        const movementID = await SampleMovementModel.generateMovementID(this.db);
-        await appendMovementWithHashChain(
-          movementsCollection,
-          {
-            movementID,
-            specimenId: sampleObjId.toString(),
-            barcode: existingSample.barcode,
-            type: 'allocate',
-            quantity: existingSample.quantity,
-            unit: existingSample.unit || 'µL',
-            responsible: 'SYSTEM',
-            userId: null,
-            timestamp: new Date(),
-            storageAction: {
-              boxId: boxObjId,
-              position: position
-            },
-            createdAt: new Date(),
-            immutable: true
-          },
-          { session }
-        );
-      });
-
-      logger.info(`✅ Amostra ${specimenId} alocada em ${boxId}/${position}`);
-
-      return {
-        success: true,
-        sampleLocation: {
-          specimenId,
-          boxId,
-          position
-        }
-      };
-    } catch (error) {
-      const errorMsg = error.message;
-
-      // Parse error response se for JSON
-      let errorObj;
-      try {
-        errorObj = JSON.parse(errorMsg);
-      } catch (e) {
-        errorObj = {
-          error: 'ALLOCATION_ERROR',
-          message: errorMsg
-        };
-      }
-
-      logger.error(`Erro ao alocar amostra: ${errorMsg}`);
-
-      return {
-        success: false,
-        ...errorObj
-      };
-    } finally {
-      await session.endSession();
-    }
+    return positionGrid.findFirstAvailablePosition(box);
   }
 
   /**
@@ -349,17 +77,29 @@ class StorageService {
    * @returns {Promise<{ success: boolean, sampleLocation?: { specimenId: string, boxId: string, position: string }, graphPersisted?: boolean, error?: string, message?: string }>}
    */
   async autoAssignSampleToBox(specimenId, boxId) {
-    const samplesCollection = await getCollection(this.db, 'samples');
-    const storageBoxesCollection = this.db.collection('storageBoxes');
     const sampleObjId = this._normalizeObjectId(specimenId);
     const boxObjId = this._normalizeObjectId(boxId);
-    const session = this.db.getMongo().startSession();
     let assignedPosition = null;
     let boxSnapshot = null;
     let sampleSnapshot = null;
 
     try {
-      boxSnapshot = await storageBoxesCollection.findOne({ _id: boxObjId });
+      // #988: same topology refusal MongoStorageRepository.withTransaction
+      // gives allocate/move/release, applied narrowly here since this method
+      // opens its own raw session rather than going through that repository
+      // method. Deliberately before startSession() below.
+      // #994: this pre-check is now redundant with the identical refusal
+      // inside storageRepository.withTransaction below, and is kept
+      // DELIBERATELY. The repository's copy runs at the transaction, which is
+      // after the two reads below -- so without this a standalone deployment
+      // would answer BOX_NOT_FOUND/SAMPLE_NOT_FOUND before it ever reported
+      // the topology problem. Removing it would silently regress e47219c6's
+      // ordering, which is the only part of #988 part 1 that survived.
+      if (await isKnownStandaloneDeployment(this.db)) {
+        throw new Error(STANDALONE_DEPLOYMENT_TRANSACTION_ERROR);
+      }
+
+      boxSnapshot = await this.storageRepository.findBoxById(boxObjId);
       if (!boxSnapshot) {
         return {
           success: false,
@@ -368,7 +108,7 @@ class StorageService {
         };
       }
 
-      sampleSnapshot = await samplesCollection.findOne({ _id: sampleObjId });
+      sampleSnapshot = await this.storageRepository.findSampleById(sampleObjId);
       if (!sampleSnapshot) {
         return {
           success: false,
@@ -377,11 +117,11 @@ class StorageService {
         };
       }
 
-      if (sampleSnapshot.storageLocation?.boxId && sampleSnapshot.storageLocation?.position) {
+      if (sampleSnapshot.storageAssignment?.boxId && sampleSnapshot.storageAssignment?.positionCode) {
         return {
           success: false,
           error: 'ALREADY_ALLOCATED',
-          message: `Amostra já está alocada em ${sampleSnapshot.storageLocation.boxId}/${sampleSnapshot.storageLocation.position}`
+          message: `Amostra já está alocada em ${sampleSnapshot.storageAssignment.boxId}/${sampleSnapshot.storageAssignment.positionCode}`
         };
       }
 
@@ -394,72 +134,60 @@ class StorageService {
         };
       }
 
-      const positionMatch = nextPosition.match(/^([A-Z])(\d+)$/);
-      const rowLetter = positionMatch?.[1] || 'A';
-      const column = Number(positionMatch?.[2] || 1);
-
-      await session.withTransaction(async () => {
-        const freshBox = await storageBoxesCollection.findOne({ _id: boxObjId }, { session });
-        if (!freshBox) {
-          throw new Error('BOX_NOT_FOUND');
-        }
-
-        const freshSample = await samplesCollection.findOne({ _id: sampleObjId }, { session });
-        if (!freshSample) {
-          throw new Error('SAMPLE_NOT_FOUND');
-        }
-
-        if (freshSample.storageLocation?.boxId && freshSample.storageLocation?.position) {
-          throw new Error('ALREADY_ALLOCATED');
-        }
-
-        const lockedPosition = this._findFirstAvailablePosition(freshBox);
-        if (!lockedPosition) {
-          throw new Error('BOX_FULL');
-        }
-
-        const updateBoxResult = await storageBoxesCollection.updateOne(
-          {
-            _id: boxObjId,
-            [`occupancyGrid.${lockedPosition}`]: { $exists: false }
-          },
-          {
-            $set: {
-              [`occupancyGrid.${lockedPosition}`]: sampleObjId,
-              currentOccupancy: Number(freshBox.currentOccupancy || 0) + 1,
-              updatedAt: new Date(),
-              lastModified: new Date()
-            }
-          },
-          { session }
+      // #994: was `session = this.db.getMongo().startSession()` plus a raw
+      // `session.withTransaction(...)`. `getMongo()` is a MONGOSH method --
+      // the native driver's Db has no such thing, so this endpoint threw
+      // `TypeError: this.db.getMongo is not a function` on every real
+      // deployment, before it opened a session and before any write. Routing
+      // through the repository's own withTransaction is what the three
+      // sibling use-cases (allocate/move/release) already do, and it brings
+      // the correct client derivation, the topology refusal and session
+      // lifecycle with it instead of hand-rolling a fourth copy.
+      await this.storageRepository.withTransaction(async (session) => {
+        assignedPosition = await this.storageRepository.autoAssignSamplePosition(
+          { specimenId: sampleObjId, boxId: boxObjId },
+          session
         );
 
-        if (updateBoxResult.matchedCount === 0) {
-          throw new Error('STORAGE_COLLISION: Colisão detectada durante alocação automática');
-        }
-
-        const updateSampleResult = await samplesCollection.updateOne(
-          { _id: sampleObjId },
+        // #988: the other three storage endpoints (allocate/move/release)
+        // each append an immutable audit row inside their transaction --
+        // autoAssignSampleToBox wrote none. Mirrors releaseSampleFromPosition's
+        // shape (context.actor/timestamp convention) below, appended in the
+        // same transaction so a committed relocation can never land without
+        // its custody row.
+        await this.auditRepository.appendImmutableAudit(
           {
-            $set: {
-              'storageLocation.boxId': boxObjId,
-              'storageLocation.position': lockedPosition,
-              status: 'AVAILABLE',
-              updatedAt: new Date()
-            }
+            specimenId: sampleObjId.toString(),
+            barcode: sampleSnapshot?.barcode || null,
+            eventType: 'auto_allocate',
+            before: {
+              storageLocation: null
+            },
+            after: {
+              storageLocation: { boxId: String(boxObjId), position: assignedPosition }
+            },
+            context: {
+              actor: { userName: 'SYSTEM' }
+            },
+            timestamp: new Date()
           },
-          { session }
+          session
         );
-
-        if (updateSampleResult.matchedCount === 0) {
-          throw new Error('Falha ao atualizar a amostra após alocação automática');
-        }
-
-        assignedPosition = lockedPosition;
       });
 
+      // #1004: rowLetter/column must be derived from assignedPosition (the
+      // transaction-committed position from the in-transaction re-scan), not
+      // from nextPosition (the pre-transaction scan). The two can diverge
+      // when a concurrent request claims the pre-scanned slot -- that is the
+      // designed retry behaviour of session.withTransaction -- and decomposing
+      // the stale nextPosition here previously fed the Neo4j MERGE below a
+      // self-contradicting coordinate/row/column (e.g. coordinate 'A2' with
+      // row 'A', column 1 derived from a different slot).
       const canPersistGraph = this.neo4jDriver && typeof this.neo4jDriver.session === 'function';
       if (canPersistGraph && assignedPosition) {
+        const positionMatch = assignedPosition.match(/^([A-Z])(\d+)$/);
+        const rowLetter = positionMatch?.[1] || 'A';
+        const column = Number(positionMatch?.[2] || 1);
         const neo4jSession = this.neo4jDriver.session({ database: env.NEO4J_DATABASE || 'neo4j' });
 
         try {
@@ -502,49 +230,15 @@ class StorageService {
             }
           );
         } catch (neo4jError) {
-          const rollbackSession = this.db.getMongo().startSession();
-          try {
-            await rollbackSession.withTransaction(async () => {
-              await storageBoxesCollection.updateOne(
-                {
-                  _id: boxObjId,
-                  [`occupancyGrid.${assignedPosition}`]: sampleObjId
-                },
-                {
-                  $unset: {
-                    [`occupancyGrid.${assignedPosition}`]: ''
-                  },
-                  $inc: {
-                    currentOccupancy: -1
-                  },
-                  $set: {
-                    updatedAt: new Date(),
-                    lastModified: new Date()
-                  }
-                },
-                { session: rollbackSession }
-              );
-
-              await samplesCollection.updateOne(
-                {
-                  _id: sampleObjId,
-                  'storageLocation.boxId': boxObjId,
-                  'storageLocation.position': assignedPosition
-                },
-                {
-                  $unset: {
-                    storageLocation: ''
-                  },
-                  $set: {
-                    updatedAt: new Date()
-                  }
-                },
-                { session: rollbackSession }
-              );
-            });
-          } finally {
-            await rollbackSession.endSession();
-          }
+          // #994: the second `getMongo()` call site. Same fix, same reason --
+          // this compensation path was equally dead, which is why #988 part 3
+          // (what compensates the compensation) could not even be observed.
+          await this.storageRepository.withTransaction(async (rollbackSession) => {
+            await this.storageRepository.rollbackAutoAssignedPosition(
+              { specimenId: sampleObjId, boxId: boxObjId, position: assignedPosition },
+              rollbackSession
+            );
+          });
 
           throw neo4jError;
         } finally {
@@ -552,7 +246,7 @@ class StorageService {
         }
       }
 
-      logger.info(`✅ Alocação inteligente realizada para amostra ${specimenId} em ${boxId}/${nextPosition}`);
+      logger.info(`✅ Alocação inteligente realizada para amostra ${specimenId} em ${boxId}/${assignedPosition}`);
 
       return {
         success: true,
@@ -560,7 +254,7 @@ class StorageService {
         sampleLocation: {
           specimenId: String(sampleObjId),
           boxId: String(boxObjId),
-          position: nextPosition
+          position: assignedPosition
         }
       };
     } catch (error) {
@@ -579,9 +273,10 @@ class StorageService {
                 : 'AUTO_ASSIGNMENT_ERROR',
         message: error.message || 'Erro ao realizar alocação inteligente'
       };
-    } finally {
-      await session.endSession();
     }
+    // #994: the `finally { session.endSession() }` that stood here is gone
+    // with the raw session -- storageRepository.withTransaction owns the
+    // session lifecycle and ends it in its own finally.
   }
 
   /**
@@ -593,9 +288,6 @@ class StorageService {
    */
   async releaseSampleFromPosition(specimenId) {
     try {
-      const samplesCollection = await getCollection(this.db, 'samples');
-      const storageBoxesCollection = this.db.collection('storageBoxes');
-
       // Converter specimenId
       let sampleObjId;
       try {
@@ -605,8 +297,9 @@ class StorageService {
         sampleObjId = specimenId;
       }
 
-      // Buscar amostra e sua localização
-      const sample = await samplesCollection.findOne({ _id: sampleObjId });
+      // Buscar amostra e sua StorageAssignment canônica (dict-02 ELM-0167-0178, #507)
+      // em vez do snapshot legado sample.storageLocation.
+      const sample = await this.storageRepository.findSampleById(sampleObjId);
 
       if (!sample) {
         return {
@@ -616,7 +309,7 @@ class StorageService {
         };
       }
 
-      if (!sample.storageLocation?.boxId || !sample.storageLocation?.position) {
+      if (!sample.storageAssignment?.boxId || !sample.storageAssignment?.positionCode) {
         return {
           success: false,
           error: 'NO_STORAGE_LOCATION',
@@ -624,64 +317,30 @@ class StorageService {
         };
       }
 
-      const { boxId, position } = sample.storageLocation;
+      const boxId = sample.storageAssignment.boxId;
+      const position = sample.storageAssignment.positionCode;
 
-      // Remover de occupancyGrid
-      let boxObjId;
-      try {
-        boxObjId = new ObjectId(boxId);
-      } catch (err) {
-        console.error('[Storage] Erro ao converter boxId:', err);
-        boxObjId = boxId;
-      }
-      
-      const updateBoxResult = await storageBoxesCollection.updateOne(
-        { _id: boxObjId },
-        {
-          $unset: {
-            [`occupancyGrid.${position}`]: ''
-          },
-          $set: {
-            'updatedAt': new Date()
-          }
-        }
-      );
+      // Liberar posição (occupancyGrid da box + storageLocation da amostra),
+      // via MongoStorageRepository para não duplicar a lógica atômica de escrita.
+      await this.storageRepository.releaseSamplePosition({ specimenId: sampleObjId });
 
-      // Limpar storageLocation em Sample
-      await samplesCollection.updateOne(
-        { _id: sampleObjId },
-        {
-          $unset: {
-            'storageLocation': ''
-          },
-          $set: {
-            'updatedAt': new Date()
-          }
-        }
-      );
-
-      // Criar movimento de auditoria
-      const movementsCollection = this.db.collection('sample_movements');
-      enforceAppendOnlyCollection(movementsCollection, 'sample_movements');
-      await ensureSampleMovementIndexes(movementsCollection);
-
-      const movementID = await SampleMovementModel.generateMovementID(this.db);
-      await appendMovementWithHashChain(movementsCollection, {
-        movementID,
+      // Registrar auditoria (mesmo ledger sample_movements usado pelos use-cases)
+      await this.auditRepository.appendImmutableAudit({
         specimenId: sampleObjId.toString(),
         barcode: sample.barcode,
-        type: 'release',
-        quantity: sample.quantity,
-        unit: sample.unit || 'µL',
-        responsible: 'SYSTEM',
-        timestamp: new Date(),
-        storageAction: {
-          boxId: boxId,
-          position: position,
-          action: 'released'
+        eventType: 'release',
+        before: {
+          storageLocation: { boxId, position },
+          quantity: sample.quantity,
+          unit: sample.unit || 'µL'
         },
-        createdAt: new Date(),
-        immutable: true
+        after: {
+          storageLocation: null
+        },
+        context: {
+          actor: { userName: 'SYSTEM' }
+        },
+        timestamp: new Date()
       });
 
       logger.info(`✅ Amostra ${specimenId} liberada de ${boxId}/${position}`);
@@ -705,165 +364,13 @@ class StorageService {
   }
 
   /**
-   * Encontrar primeira posição disponível em uma caixa
-   *
-   * @param {ObjectId} boxId - ID da StorageBox
-   * @returns {Promise<{ found: boolean, position?: string, availableCount?: number }>}
-   */
-  async findAvailablePosition(boxId) {
-    try {
-      const storageBoxesCollection = this.db.collection('storageBoxes');
-
-      let boxObjId;
-      try {
-        boxObjId = ObjectId.isValid(boxId) ? new ObjectId(boxId) : boxId;
-      } catch (err) {
-        console.error('[Storage] Erro ao converter boxId:', err);
-        boxObjId = boxId;
-      }
-
-      const box = await storageBoxesCollection.findOne({ _id: boxObjId });
-
-      if (!box) {
-        return {
-          found: false,
-          error: 'BOX_NOT_FOUND',
-          message: `StorageBox ${boxId} não encontrada`
-        };
-      }
-
-      // Gerar todas as posições válidas
-      const allPositions = this._getAllValidPositions(box.dimension);
-
-      // Encontrar primeira posição vazia
-      for (const pos of allPositions) {
-        if (!box.occupancyGrid?.has(pos)) {
-          const availableCount = allPositions.filter(
-            p => !box.occupancyGrid?.has(p)
-          ).length;
-
-          return {
-            found: true,
-            position: pos,
-            availableCount,
-            boxStats: {
-              capacity: box.dimension.rows * box.dimension.cols,
-              occupied: box.currentOccupancy,
-              available: availableCount
-            }
-          };
-        }
-      }
-
-      return {
-        found: false,
-        message: 'Nenhuma posição disponível nesta caixa',
-        boxStats: {
-          capacity: box.dimension.rows * box.dimension.cols,
-          occupied: box.currentOccupancy,
-          available: 0
-        }
-      };
-    } catch (error) {
-      logger.error('Erro ao procurar posição disponível:', error);
-      return {
-        found: false,
-        error: 'SEARCH_ERROR',
-        message: error.message
-      };
-    }
-  }
-
-  /**
-   * Obter localização de armazenagem de uma amostra
-   *
-   * @param {ObjectId} specimenId - ID da amostra
-   * @returns {Promise<{ found: boolean, location?: object }>}
-   */
-  async getSampleStorage(specimenId) {
-    try {
-      const samplesCollection = await getCollection(this.db, 'samples');
-      const storagePathsCollection = this.db.collection('storagePaths');
-
-      const sampleObjId = ObjectId.isValid(specimenId)
-        ? new ObjectId(specimenId)
-        : specimenId;
-
-      const sample = await samplesCollection.findOne({ _id: sampleObjId });
-
-      if (!sample) {
-        return {
-          found: false,
-          error: 'SAMPLE_NOT_FOUND'
-        };
-      }
-
-      if (!sample.storageLocation?.boxId) {
-        return {
-          found: false,
-          message: 'Amostra sem localização de armazenamento'
-        };
-      }
-
-      // Buscar caminho completo
-      let boxObjId2;
-      try {
-        boxObjId2 = new ObjectId(sample.storageLocation.boxId);
-      } catch (err) {
-        console.error('[Storage] Erro ao converter boxId:', err);
-        boxObjId2 = sample.storageLocation.boxId;
-      }
-      
-      const storagePath = await storagePathsCollection.findOne({
-        boxId: boxObjId2
-      });
-
-      return {
-        found: true,
-        location: {
-          specimenId: sample._id,
-          barcode: sample.barcode,
-          box: {
-            boxId: sample.storageLocation.boxId,
-            position: sample.storageLocation.position
-          },
-          path: storagePath?.path || 'N/A',
-          fullHierarchy: storagePath ? {
-            freezerId: storagePath.freezerId,
-            shelfId: storagePath.shelfId,
-            rackId: storagePath.rackId,
-            boxId: storagePath.boxId
-          } : null
-        }
-      };
-    } catch (error) {
-      logger.error('Erro ao obter localização de amostra:', error);
-      return {
-        found: false,
-        error: 'QUERY_ERROR',
-        message: error.message
-      };
-    }
-  }
-
-  /**
    * Gerar todas as posições válidas para uma caixa
    * Helper method - privado
    *
    * @private
    */
   _getAllValidPositions(dimension) {
-    const positions = [];
-    const { rows, cols } = dimension;
-
-    for (let r = 0; r < rows; r++) {
-      const letter = String.fromCharCode(65 + r); // A, B, C...
-      for (let c = 1; c <= cols; c++) {
-        positions.push(`${letter}${c}`);
-      }
-    }
-
-    return positions;
+    return positionGrid.getAllValidPositions(dimension);
   }
 
   /**
@@ -947,95 +454,6 @@ class StorageService {
     }
   }
 
-  /**
-   * Estatísticas de ocupação para um freezer completo
-   *
-   * @param {ObjectId} freezerId - ID do StorageContainer (FREEZER)
-   * @returns {Promise<{ stats: object }>}
-   */
-  async getFreezerOccupancyStats(freezerId) {
-    try {
-      const storageContainersCollection = this.db.collection('storageContainers');
-      const storageBoxesCollection = this.db.collection('storageBoxes');
-
-      let freezerObjId;
-      try {
-        freezerObjId = ObjectId.isValid(freezerId) ? new ObjectId(freezerId) : freezerId;
-      } catch (err) {
-        console.error('[Storage] Erro ao converter freezerId:', err);
-        freezerObjId = freezerId;
-      }
-
-      const freezer = await storageContainersCollection.findOne({
-        _id: freezerObjId,
-        containerType: 'FREEZER'
-      });
-
-      if (!freezer) {
-        return {
-          stats: null,
-          error: 'FREEZER_NOT_FOUND'
-        };
-      }
-
-      // Aggregação para calcular ocupação por shelf e rack
-      const stats = await storageBoxesCollection
-        .aggregate([
-          {
-            $lookup: {
-              from: 'storageContainers',
-              localField: 'parent_id',
-              foreignField: '_id',
-              as: 'rack'
-            }
-          },
-          {
-            $unwind: '$rack'
-          },
-          {
-            $group: {
-              _id: '$rack._id',
-              rackName: { $first: '$rack.name' },
-              totalCapacity: {
-                $sum: {
-                  $multiply: ['$dimension.rows', '$dimension.cols']
-                }
-              },
-              totalOccupied: { $sum: '$currentOccupancy' }
-            }
-          },
-          {
-            $sort: { rackName: 1 }
-          }
-        ])
-        .toArray();
-
-      const totalCapacity = stats.reduce((sum, r) => sum + r.totalCapacity, 0);
-      const totalOccupied = stats.reduce((sum, r) => sum + r.totalOccupied, 0);
-
-      return {
-        stats: {
-          freezerId: freezer._id,
-          freezerName: freezer.name,
-          temperature: freezer.temperature,
-          rackStats: stats,
-          aggregate: {
-            totalCapacity,
-            totalOccupied,
-            totalAvailable: totalCapacity - totalOccupied,
-            occupancyPercent: Math.round((totalOccupied / totalCapacity) * 100)
-          }
-        }
-      };
-    } catch (error) {
-      logger.error('Erro ao calcular stats de freezer:', error);
-      return {
-        stats: null,
-        error: 'STATS_ERROR',
-        message: error.message
-      };
-    }
-  }
 }
 
 module.exports = StorageService;

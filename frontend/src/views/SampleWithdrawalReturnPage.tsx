@@ -1,13 +1,20 @@
 import { useState } from 'react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { sampleService } from '../services/api';
-import { Sample, SampleMovement } from '../types/models';
+import { storageApi } from '../services/storageApi';
+import { Sample, SampleMovement, SampleStorageLocationDTO } from '../types/models';
 import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
 import Select from '../components/UI/Select';
 import Card from '../components/UI/Card';
 import { MIABIS_QUALITY } from '../config/constants/specimen.constants';
+import { resolveSpecimenStatus, getSpecimenStatusColor, translateSpecimenStatus } from '../utils/sampleHelpers';
 import './SampleWithdrawalReturnPage.css';
+
+// #539: shared with every other specimenStatus reader (SampleDetailsPage,
+// ReportViewPage, ...) via sampleHelpers.ts — re-exported here so this
+// page's own imports/tests keep working unchanged.
+export { resolveSpecimenStatus, getSpecimenStatusColor, translateSpecimenStatus };
 
 // Tipos locais para formulários
 interface WithdrawalFormData {
@@ -28,6 +35,60 @@ interface ReturnFormData {
   observations: string;
 }
 
+// #538: this page used to gate on `sample.currentStatus`, a field the real
+// withdraw/return write path (sample.service.js#withdrawSample/returnSample)
+// never sets — it writes `specimenStatus` (dict-02 ELM-0123) instead, which
+// already carries the withdrawal-lifecycle concept via its `partial`/
+// `depleted` values (Sample.js#computeStatus derives them from quantity on
+// every write). Deriving from specimenStatus below fixes that dead gate.
+type WithdrawalSample = Pick<Sample, 'specimenStatus' | 'totalWithdrawn' | 'totalReturned' | 'initialQuantity' | 'quantity'>;
+
+// Mirrors sample.service.js#withdrawSample's BLOCKED_SPECIMEN_STATUSES, plus
+// 'depleted' — a frontend-only UX guard against resubmitting a Total
+// withdrawal on an already-fully-withdrawn sample. The backend's own guard
+// doesn't independently block that case today (tracked separately, not part
+// of this fix).
+const WITHDRAWAL_BLOCKED_STATUSES = ['depleted', 'quarantined', 'destroyed', 'unavailable', 'disposed'];
+
+export function canWithdrawSample(sample: WithdrawalSample | null): boolean {
+  if (!sample) return false;
+  return !WITHDRAWAL_BLOCKED_STATUSES.includes(resolveSpecimenStatus(sample));
+}
+
+export function getPendingReturnQuantity(sample: WithdrawalSample | null): number {
+  if (!sample) return 0;
+  const totalWithdrawn = sample.totalWithdrawn || 0;
+  const totalReturned = sample.totalReturned || 0;
+  // Legacy data: status says fully withdrawn but the movement ledger has no
+  // recorded withdrawal quantity — fall back to the original amount.
+  if (resolveSpecimenStatus(sample) === 'depleted' && totalWithdrawn === 0) {
+    return sample.initialQuantity ?? sample.quantity ?? 0;
+  }
+  return totalWithdrawn - totalReturned;
+}
+
+export function resolveInitialTab(sample: WithdrawalSample | null): 'withdraw' | 'return' {
+  const status = resolveSpecimenStatus(sample);
+  return status === 'partial' || status === 'depleted' ? 'return' : 'withdraw';
+}
+
+export function getStorageLabel(location: SampleStorageLocationDTO | null): string {
+  const boxName = location?.box?.boxName ? String(location.box.boxName) : '';
+  const position = location?.box?.position ? String(location.box.position) : '';
+  const path = location?.path ? String(location.path) : '';
+
+  if (!boxName && !path && !position) {
+    return 'Aguardando Armazenagem';
+  }
+  if (path) {
+    return position ? `${path} / Posição ${position}` : path;
+  }
+  if (boxName) {
+    return position ? `${boxName} / Posição ${position}` : boxName;
+  }
+  return `Posição ${position}`;
+}
+
 export default function SampleWithdrawalReturnPage() {
   const { t } = useLanguage();
   
@@ -36,6 +97,7 @@ export default function SampleWithdrawalReturnPage() {
   const [sample, setSample] = useState<Sample | null>(null);
   const [patientInfo, setPatientInfo] = useState<{ patientID: string; patientName: string } | null>(null);
   const [movements, setMovements] = useState<SampleMovement[]>([]);
+  const [storageLocation, setStorageLocation] = useState<SampleStorageLocationDTO | null>(null);
   const [loading, setLoading] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -100,6 +162,7 @@ export default function SampleWithdrawalReturnPage() {
     setSample(null);
     setPatientInfo(null);
     setMovements([]);
+    setStorageLocation(null);
 
     try {
       const response = await sampleService.getByBarcode(searchBarcode.trim());
@@ -122,13 +185,10 @@ export default function SampleWithdrawalReturnPage() {
         }
         // Carregar movimentações
         await loadMovements(result.sample._id || '');
+        // Carregar localização física resolvida (dict-02 StorageAssignment, #495)
+        await loadStorageLocation(result.sample._id || '');
         // Auto-switch para aba de devolução se amostra está retirada
-        const status = result.sample.currentStatus;
-        if (status === 'Withdrawn' || status === 'TotallyWithdrawn' || status === 'PartiallyWithdrawn') {
-          setActiveTab('return');
-        } else {
-          setActiveTab('withdraw');
-        }
+        setActiveTab(resolveInitialTab(result.sample));
       } else {
         setMessage({ type: 'error', text: t('samples.sampleNotFound') || 'Amostra não encontrada' });
       }
@@ -152,23 +212,10 @@ export default function SampleWithdrawalReturnPage() {
     }
   };
 
-  // Calcular quantidade pendente de devolução
-  const getPendingReturnQuantity = (): number => {
-    if (!sample) return 0;
-    const totalWithdrawn = sample.totalWithdrawn || 0;
-    const totalReturned = sample.totalReturned || 0;
-    // Se status é Withdrawn mas totalWithdrawn é 0, usa quantidade original (dados legados)
-    if ((sample.currentStatus === 'Withdrawn' || sample.currentStatus === 'TotallyWithdrawn') && totalWithdrawn === 0) {
-      return sample.originalQuantity ?? sample.quantity ?? 0;
-    }
-    return totalWithdrawn - totalReturned;
-  };
-
-  // Verificar se pode fazer retirada
-  const canWithdraw = (): boolean => {
-    if (!sample) return false;
-    const status = sample.currentStatus;
-    return status !== 'TotallyWithdrawn' && status !== 'Withdrawn' && status !== 'Unusable' && status !== 'Destroyed';
+  // Carregar localização física resolvida (StorageAssignment, dict-02 ELM-0167-0178)
+  const loadStorageLocation = async (sampleId: string) => {
+    const response = await storageApi.getSampleLocation(sampleId);
+    setStorageLocation(response.success && response.data ? (response.data as SampleStorageLocationDTO) : null);
   };
 
   // Validar formulário de retirada
@@ -181,7 +228,7 @@ export default function SampleWithdrawalReturnPage() {
       if (!qty || qty <= 0) {
         return 'Quantidade é obrigatória para retirada parcial';
       }
-      const available = sample?.availableQuantity ?? sample?.quantity ?? 0;
+      const available = sample?.currentQuantity ?? sample?.quantity ?? 0;
       if (qty > available) {
         return `Quantidade indisponível. Disponível: ${available} ${sample?.unit || 'µL'}`;
       }
@@ -200,7 +247,7 @@ export default function SampleWithdrawalReturnPage() {
 
   // Validar formulário de devolução
   const validateReturnForm = (): string | null => {
-    const pendingQty = getPendingReturnQuantity();
+    const pendingQty = getPendingReturnQuantity(sample);
     if (pendingQty <= 0) {
       return 'Não há quantidade pendente de devolução';
     }
@@ -297,7 +344,7 @@ export default function SampleWithdrawalReturnPage() {
     try {
       const data = {
         returnType: returnForm.returnType as 'Parcial' | 'Total',
-        returnQuantity: returnForm.returnType === 'Parcial' ? parseFloat(returnForm.returnQuantity) : getPendingReturnQuantity(),
+        returnQuantity: returnForm.returnType === 'Parcial' ? parseFloat(returnForm.returnQuantity) : getPendingReturnQuantity(sample),
         returnResponsible: returnForm.returnResponsible,
         condition: returnForm.condition as 'Íntegra' | 'Parcialmente comprometida' | 'Inutilizada',
         observations: returnForm.observations
@@ -346,31 +393,6 @@ export default function SampleWithdrawalReturnPage() {
     }
   };
 
-  // Obter cor do status
-  const getStatusColor = (status: string | undefined): string => {
-    switch (status) {
-      case 'Available': return 'var(--success)';
-      case 'PartiallyWithdrawn': return 'var(--warning)';
-      case 'TotallyWithdrawn': return 'var(--danger)';
-      case 'Unusable': return 'var(--danger)';
-      case 'Destroyed': return 'var(--danger)';
-      default: return 'var(--text)';
-    }
-  };
-
-  // Traduzir status
-  const translateStatus = (status: string | undefined): string => {
-    switch (status) {
-      case 'Available': return 'Disponível';
-      case 'PartiallyWithdrawn': return 'Parcialmente Retirada';
-      case 'TotallyWithdrawn': return 'Totalmente Retirada';
-      case 'Withdrawn': return 'Retirada';
-      case 'Unusable': return 'Inutilizada';
-      case 'Expired': return 'Expirada';
-      case 'Destroyed': return 'Destruída';
-      default: return status || '-';
-    }
-  };
 
   return (
     <div className="page withdrawal-return-page">
@@ -441,12 +463,12 @@ export default function SampleWithdrawalReturnPage() {
                 <h4>Controle Físico</h4>
                 <div className="info-row">
                   <span className="info-label">Quantidade Original:</span>
-                  <span className="info-value">{sample.originalQuantity ?? sample.quantity ?? '-'} {sample.unit || 'µL'}</span>
+                  <span className="info-value">{sample.initialQuantity ?? sample.quantity ?? '-'} {sample.unit || 'µL'}</span>
                 </div>
                 <div className="info-row highlight">
                   <span className="info-label">Quantidade Disponível:</span>
                   <span className="info-value available-qty">
-                    {sample.availableQuantity ?? sample.quantity ?? '-'} {sample.unit || 'µL'}
+                    {sample.currentQuantity ?? sample.quantity ?? '-'} {sample.unit || 'µL'}
                   </span>
                 </div>
                 <div className="info-row">
@@ -455,12 +477,12 @@ export default function SampleWithdrawalReturnPage() {
                 </div>
                 <div className="info-row">
                   <span className="info-label">Pendente Devolução:</span>
-                  <span className="info-value pending-qty">{getPendingReturnQuantity()} {sample.unit || 'µL'}</span>
+                  <span className="info-value pending-qty">{getPendingReturnQuantity(sample)} {sample.unit || 'µL'}</span>
                 </div>
                 <div className="info-row">
                   <span className="info-label">Armazenagem:</span>
                   <span className="info-value">
-                    {sample.locationID ? `ID: ${sample.locationID}` : 'Aguardando Armazenagem'}
+                    {getStorageLabel(storageLocation)}
                   </span>
                 </div>
               </div>
@@ -472,9 +494,9 @@ export default function SampleWithdrawalReturnPage() {
                   <span className="info-label">Status Atual:</span>
                   <span 
                     className="info-value status-badge"
-                    style={{ color: getStatusColor(sample.currentStatus) }}
+                    style={{ color: getSpecimenStatusColor(resolveSpecimenStatus(sample)) }}
                   >
-                    {translateStatus(sample.currentStatus)}
+                    {translateSpecimenStatus(resolveSpecimenStatus(sample))}
                   </span>
                 </div>
                 <div className="info-row">
@@ -496,14 +518,14 @@ export default function SampleWithdrawalReturnPage() {
             <button 
               className={`tab-button ${activeTab === 'withdraw' ? 'active' : ''}`}
               onClick={() => setActiveTab('withdraw')}
-              disabled={!canWithdraw()}
+              disabled={!canWithdrawSample(sample)}
             >
               {t('samples.withdraw') || 'Retirar Amostra'}
             </button>
             <button 
               className={`tab-button ${activeTab === 'return' ? 'active' : ''}`}
               onClick={() => setActiveTab('return')}
-              disabled={getPendingReturnQuantity() <= 0}
+              disabled={getPendingReturnQuantity(sample) <= 0}
             >
               {t('samples.return') || 'Registrar Devolução'}
             </button>
@@ -530,10 +552,10 @@ export default function SampleWithdrawalReturnPage() {
                     type="number"
                     step="0.01"
                     min="0.01"
-                    max={sample.availableQuantity ?? sample.quantity}
+                    max={sample.currentQuantity ?? sample.quantity}
                     value={withdrawForm.withdrawalQuantity}
                     onChange={(e) => setWithdrawForm({ ...withdrawForm, withdrawalQuantity: e.target.value })}
-                    helperText={`Disponível: ${sample.availableQuantity ?? sample.quantity} ${sample.unit || 'µL'}`}
+                    helperText={`Disponível: ${sample.currentQuantity ?? sample.quantity} ${sample.unit || 'µL'}`}
                   />
                 )}
 
@@ -579,7 +601,7 @@ export default function SampleWithdrawalReturnPage() {
                   <Button 
                     variant="primary" 
                     onClick={() => handleConfirmAction('withdraw')}
-                    disabled={loading || !canWithdraw()}
+                    disabled={loading || !canWithdrawSample(sample)}
                   >
                     {loading ? 'Processando...' : 'Confirmar Retirada'}
                   </Button>
@@ -599,7 +621,7 @@ export default function SampleWithdrawalReturnPage() {
                   options={[
                     { value: '', label: 'Selecione...' },
                     { value: 'Parcial', label: 'Parcial' },
-                    { value: 'Total', label: `Total (${getPendingReturnQuantity()} ${sample.unit || 'µL'})` }
+                    { value: 'Total', label: `Total (${getPendingReturnQuantity(sample)} ${sample.unit || 'µL'})` }
                   ]}
                 />
 
@@ -609,10 +631,10 @@ export default function SampleWithdrawalReturnPage() {
                     type="number"
                     step="0.01"
                     min="0.01"
-                    max={getPendingReturnQuantity()}
+                    max={getPendingReturnQuantity(sample)}
                     value={returnForm.returnQuantity}
                     onChange={(e) => setReturnForm({ ...returnForm, returnQuantity: e.target.value })}
-                    helperText={`Pendente: ${getPendingReturnQuantity()} ${sample.unit || 'µL'}`}
+                    helperText={`Pendente: ${getPendingReturnQuantity(sample)} ${sample.unit || 'µL'}`}
                   />
                 )}
 
@@ -657,7 +679,7 @@ export default function SampleWithdrawalReturnPage() {
                   <Button 
                     variant="success" 
                     onClick={() => handleConfirmAction('return')}
-                    disabled={loading || getPendingReturnQuantity() <= 0}
+                    disabled={loading || getPendingReturnQuantity(sample) <= 0}
                   >
                     {loading ? 'Processando...' : 'Confirmar Devolução'}
                   </Button>
@@ -727,14 +749,14 @@ export default function SampleWithdrawalReturnPage() {
             </p>
             {pendingAction === 'withdraw' && (
               <div className="confirm-details">
-                <p><strong>Quantidade:</strong> {withdrawForm.withdrawalType === 'Total' ? (sample?.availableQuantity ?? sample?.quantity) : withdrawForm.withdrawalQuantity} {sample?.unit || 'µL'}</p>
+                <p><strong>Quantidade:</strong> {withdrawForm.withdrawalType === 'Total' ? (sample?.currentQuantity ?? sample?.quantity) : withdrawForm.withdrawalQuantity} {sample?.unit || 'µL'}</p>
                 <p><strong>Responsável:</strong> {withdrawForm.withdrawalResponsible}</p>
                 <p><strong>Destino:</strong> {withdrawForm.sampleDestination}</p>
               </div>
             )}
             {pendingAction === 'return' && (
               <div className="confirm-details">
-                <p><strong>Quantidade:</strong> {returnForm.returnType === 'Total' ? getPendingReturnQuantity() : returnForm.returnQuantity} {sample?.unit || 'µL'}</p>
+                <p><strong>Quantidade:</strong> {returnForm.returnType === 'Total' ? getPendingReturnQuantity(sample) : returnForm.returnQuantity} {sample?.unit || 'µL'}</p>
                 <p><strong>Responsável:</strong> {returnForm.returnResponsible}</p>
                 <p><strong>Condição:</strong> {returnForm.condition}</p>
                 {returnForm.condition === 'Inutilizada' && (

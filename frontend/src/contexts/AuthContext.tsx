@@ -2,12 +2,12 @@ import { createContext, useContext, useState, useEffect, useMemo, useCallback, u
 import { User } from '../types/models';
 import { authService } from '../services/api';
 import { hasRoleAccess, canRoleAccessRoute, getAccessTypeForRole, RoleName } from '../utils/rolePermissions';
-import { clearClientSession } from '../utils/sessionCleanup';
+import { clearClientSession, onClientLogout } from '../utils/sessionCleanup';
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  login: (username: string, password: string, twoFactorCode?: string) => Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean; user?: User } | void>;
+  login: (username: string, password: string, twoFactorCode?: string, newPassword?: string) => Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean; requiresPasswordChange?: boolean; user?: User } | void>;
   logout: () => Promise<void>;
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -239,25 +239,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []); // Executa apenas uma vez na montagem
 
-  const login = useCallback(async (username: string, password: string, twoFactorCode?: string): Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean; user?: User } | void> => {
+  // api.ts's response interceptor dispatches this event on a forced logout
+  // (401 + failed refresh) — every other hook that reads auth-derived data
+  // (useUsers, useOrganizations, useResults, ...) already clears its own
+  // state on it via the same onClientLogout subscription; AuthContext is
+  // the actual source of truth for isAuthenticated/user/token that
+  // ProtectedRoute and LoginPage read, and needs to clear its own state
+  // the same way rather than relying solely on the page reload that
+  // currently accompanies every real-world call site of this event (#614).
+  useEffect(() => {
+    return onClientLogout(() => {
+      setUser(null);
+      setToken(null);
+    });
+  }, []);
+
+  const login = useCallback(async (username: string, password: string, twoFactorCode?: string, newPassword?: string): Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean; requiresPasswordChange?: boolean; user?: User } | void> => {
     try {
-      const response = await authService.login(username, password, twoFactorCode);
-      
+      const response = await authService.login(username, password, twoFactorCode, newPassword);
+
       // Backend retorna diferentes estruturas:
       // 1. Login com sucesso: { success: true, data: { token, user } }
       // 2. Requer MFA: { success: true, requiresMFA: true, requiresTwoFactor: true }
       // 3. Requer setup MFA: { success: true, requiresMFASetup: true, requiresTwoFactorSetup: true }
+      // 4. Requer troca de senha (RF014 AC#4, #648): { success: true, requiresPasswordChange: true }
       const responseData = response.data || {};
-      
+
       // Verifica flags primeiro
       const requiresTwoFactor = responseData.requiresTwoFactor || responseData.requiresMFA || false;
       const requiresTwoFactorSetup = responseData.requiresTwoFactorSetup || responseData.requiresMFASetup || false;
-      
+      const requiresPasswordChange = responseData.requiresPasswordChange || false;
+
       // Extrai token e user (pode estar em data.data ou data)
       const data = responseData.data || responseData;
       const newToken = data?.token || responseData.token;
       const userData = data?.user || responseData.user;
-      
+
       // Se requer configuração obrigatória de 2FA no primeiro login
       if (requiresTwoFactorSetup) {
         // Salva credenciais temporariamente para usar após configurar 2FA
@@ -265,12 +282,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem('tempPassword', password);
         return { requiresTwoFactorSetup: true };
       }
-      
+
       // Se requer 2FA mas não foi fornecido código, retorna informação para o componente
       if (requiresTwoFactor && !twoFactorCode) {
         return { requiresTwoFactor: true };
       }
-      
+
+      // Se o admin forçou redefinição de senha e a nova senha ainda não foi
+      // enviada, retorna informação para o componente solicitar a nova senha.
+      if (requiresPasswordChange && !newPassword) {
+        return { requiresPasswordChange: true };
+      }
+
       // Se tem token, significa que login foi bem-sucedido
       if (newToken && userData) {
         // Se não tiver roleName mas tiver accessType, mapeia

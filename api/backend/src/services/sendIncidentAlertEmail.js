@@ -1,7 +1,6 @@
 const { Resend } = require('resend');
 const logger = require('../utils/logger');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const from = process.env.EMAIL_FROM || 'onboarding@resend.dev';
 
 function escapeHtml(value) {
@@ -22,6 +21,8 @@ async function sendIncidentAlertEmail(incident, recipients, escalationLevel = 0)
     logger.warn('RESEND_API_KEY não configurada - alerta de incidente não enviado por email');
     return { success: false, reason: 'RESEND_API_KEY not configured' };
   }
+
+  const resend = new Resend(process.env.RESEND_API_KEY);
 
   if (!recipients || recipients.length === 0) {
     logger.warn('Nenhum destinatário fornecido para alerta de incidente');
@@ -90,8 +91,7 @@ async function sendIncidentAlertEmail(incident, recipients, escalationLevel = 0)
   `;
 
   const normalizedRecipients = recipients
-    .map((email) => String(email || '').trim())
-    .filter((email) => email.length > 0);
+    .map((email) => String(email || '').trim());
 
   const invalidRecipients = normalizedRecipients.filter((email) => !isValidEmail(email));
   const validRecipients = normalizedRecipients.filter((email) => isValidEmail(email));
@@ -101,15 +101,15 @@ async function sendIncidentAlertEmail(incident, recipients, escalationLevel = 0)
     return {
       success: false,
       sent: 0,
-      failed: invalidRecipients.length || normalizedRecipients.length,
-      results: invalidRecipients.map((email) => ({
+      failed: invalidRecipients.length,
+      results: invalidRecipients.map(() => ({
         status: 'rejected',
-        reason: new Error(`Invalid email: ${email}`)
+        reason: new Error('Invalid email')
       }))
     };
   }
 
-  const results = await Promise.allSettled(
+  const sendResults = await Promise.allSettled(
     validRecipients.map(email => resend.emails.send({
       from,
       to: email,
@@ -118,8 +118,16 @@ async function sendIncidentAlertEmail(incident, recipients, escalationLevel = 0)
     }))
   );
 
+  let sendIndex = 0;
+  const results = normalizedRecipients.map((email) => {
+    if (!isValidEmail(email)) {
+      return { status: 'rejected', reason: new Error('Invalid email') };
+    }
+    return sendResults[sendIndex++];
+  });
+
   const successful = results.filter(r => r.status === 'fulfilled').length;
-  const failed = results.filter(r => r.status === 'rejected').length + invalidRecipients.length;
+  const failed = results.filter(r => r.status === 'rejected').length;
 
   if (failed > 0) {
     logger.error(`[INCIDENT_EMAIL] ${successful} enviados, ${failed} falharam para incidente ${incident.sensorName}`);
@@ -129,13 +137,7 @@ async function sendIncidentAlertEmail(incident, recipients, escalationLevel = 0)
     success: successful > 0,
     sent: successful,
     failed: failed,
-    results: [
-      ...invalidRecipients.map((email) => ({
-        status: 'rejected',
-        reason: new Error(`Invalid email: ${email}`)
-      })),
-      ...results
-    ]
+    results
   };
 }
 

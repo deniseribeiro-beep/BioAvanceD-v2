@@ -80,7 +80,7 @@ router.post('/', authenticate, requirePermission('createUser'), async (req, res)
 
     const validation = AccessModel.validate(req.body);
     if (!validation.isValid) {
-      return res.status(400).json({
+      return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
         message: validation.errors.join(', ')
@@ -124,11 +124,23 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
 
     const { ObjectId } = require('mongodb');
     const accessCollection = db.collection('access');
-    req.body.updatedAt = new Date();
+
+    // #875: $set used to be built straight from req.body, letting a caller
+    // inject arbitrary keys or overwrite fields like accessID. Allowlist to
+    // AccessModel.create()'s own fields; accessID is business identity and
+    // is excluded, updatedAt is server-set here (never caller-supplied).
+    const ALLOWED_ACCESS_UPDATE_FIELDS = ['reportID', 'reportType', 'accessType', 'userId', 'grantedAt', 'expiresAt'];
+    const updateFields = {};
+    for (const field of ALLOWED_ACCESS_UPDATE_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+        updateFields[field] = req.body[field];
+      }
+    }
+    updateFields.updatedAt = new Date();
 
     const result = await accessCollection.updateOne(
       { _id: new ObjectId(req.params.id) },
-      { $set: req.body }
+      { $set: updateFields }
     );
 
     if (result.matchedCount === 0) {

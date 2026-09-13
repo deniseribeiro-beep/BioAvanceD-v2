@@ -11,7 +11,7 @@ const auditLogger = require('../../utils/auditLogger');
  * Todas as rotas de segurança requerem autenticação e perfil Administrador
  */
 router.use(authenticate);
-router.use(requireRole(4)); // Apenas Administrador (accessType 4)
+router.use(requireRole(4)); // Apenas Administrador (hierarchyLevel 4)
 
 /**
  * GET /api/security/config
@@ -108,8 +108,8 @@ router.get('/logs/export', async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'EXPORT',
-      entity: 'Logs',
-      result: 'success',
+      resourceType: 'Logs',
+      status: 'success',
       severity: 'info',
       message: (req.t && req.t('security.logsExportMessage')) ? req.t('security.logsExportMessage').replace('{format}', format) : `Exportação de logs realizada (formato: ${format})`,
       payload: { format, filters },

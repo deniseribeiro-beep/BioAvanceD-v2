@@ -45,6 +45,36 @@ router.post('/amostras',
   importLGPDController.importSamples.bind(importLGPDController)
 );
 
+// Leitura de lote em quarentena (#794, RNF011 AC#4)
+// Mesma permissao que a importacao que produz o lote -- quem pode importar
+// amostras pode revisar as linhas que a importacao rejeitou. Nao introduz
+// permissao nova de proposito: uma permissao nova nao chega a uma stack ja
+// semeada sem re-seed explicito do catalogo RBAC.
+// Listagem de lotes em quarentena (#794 item 2) -- mesma permissao que a
+// leitura de um lote. E o unico ponto de entrada navegavel: `stagingBatchId`
+// volta na resposta da importacao, mas nenhuma tela chama a importacao LGPD
+// (#808), entao ninguem chega a um lote so pelo id.
+router.get('/batches',
+  authenticate,
+  requirePermission('createSample'),
+  importLGPDController.listQuarantineBatches.bind(importLGPDController)
+);
+
+router.get('/batches/:batchId',
+  authenticate,
+  requirePermission('createSample'),
+  importLGPDController.getQuarantineBatch.bind(importLGPDController)
+);
+
+// Download de templates - Pacientes CSV (#815: the fourth combination, missing
+// until now -- the frontend client built this URL for a route that never
+// existed, and only escaped notice because nothing called it.)
+router.get('/pacientes/template/csv',
+  authenticate,
+  requirePermission('createPatient'),
+  importLGPDController.downloadPatientTemplateCSV.bind(importLGPDController)
+);
+
 // Download de templates - Pacientes Excel
 router.get('/pacientes/template/xlsx',
   authenticate,

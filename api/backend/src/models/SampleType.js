@@ -5,12 +5,14 @@ class SampleTypeModel {
   static validate(data) {
     const errors = [];
 
-    // sampleTypeID é opcional - será gerado automaticamente se não fornecido
-    if (data.sampleTypeID !== undefined && data.sampleTypeID !== null) {
-      if (typeof data.sampleTypeID !== 'number') {
-        errors.push('sampleTypeID deve ser um número');
-      }
-    }
+    // #881: sampleTypeID retired. The canonical business identifier is the
+    // string MIABIS code the seed writes on `id`, settled by #902 -- the
+    // manifest declares uniqueKeys: ['id'] and the seed uses it verbatim as
+    // the upsert filter; create-db.js indexes only `id`; every KEYED
+    // backend lookup resolves on `id` (import-lgpd.service.js:1376). The
+    // router factory (app.js) now mounts this entity with idField: 'id'
+    // and no numeric generateId override, so create() below returns `id`
+    // instead of a numeric key.
 
     if (!data.description || typeof data.description !== 'string') {
       errors.push('description é obrigatório e deve ser string');
@@ -24,7 +26,7 @@ class SampleTypeModel {
 
   static create(data) {
     return {
-      sampleTypeID: data.sampleTypeID,
+      id: data.id,
       description: data.description,
       code: data.code || null, // Código MIABIS se aplicável
       createdAt: new Date(),

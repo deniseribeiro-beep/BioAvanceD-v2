@@ -11,7 +11,7 @@ class TemperatureModel {
       errors.push('sensorId é obrigatório');
     }
 
-    if (data.temperatureValue === undefined || typeof data.temperatureValue !== 'number') {
+    if (data.temperatureValue === undefined || typeof data.temperatureValue !== 'number' || Number.isNaN(data.temperatureValue)) {
       errors.push('temperatureValue é obrigatório e deve ser number');
     }
 
@@ -81,6 +81,12 @@ class TemperatureModel {
       maintenanceStatus: data.maintenanceStatus || null, // ok, pending, overdue
       dataQualityScore: data.dataQualityScore || null, // Float 0-1
       operatorId: data.operatorId || null, // String
+      // #636: Organization.organizationId (UUID string), not a Mongo ref --
+      // same shape as Sample.collectionSite/Sensor.organizationId (#634)/
+      // Equipment.organizationId (#635). No backfill for pre-existing
+      // readings (null = unscoped/legacy) -- fuzzy-matching facility/zone
+      // was explicitly decided against per F3-G09.
+      organizationId: data.organizationId || null,
       createdAt: new Date()
     };
   }

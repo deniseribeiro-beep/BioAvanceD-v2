@@ -1,0 +1,119 @@
+import { MongoClient, Db, ObjectId } from 'mongodb';
+
+/**
+ * RF011 (#324) fixture: reads back the FHIR import staging pipeline's
+ * real Mongo state (import_batches/import_staging_records + the
+ * committed patients/samples/audit_logs it writes into) — there's no API
+ * to fetch a committed sample by specimenId or an audit_logs entry, so
+ * this connects to the test stack's Mongo directly, same pattern as
+ * seedParticipant.ts.
+ */
+
+const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
+const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
+
+let client: MongoClient | null = null;
+
+async function getDb(): Promise<Db> {
+  if (!client) {
+    client = new MongoClient(mongoUri);
+    await client.connect();
+  }
+  return client.db(mongoDbName);
+}
+
+export async function closeFhirImportDb(): Promise<void> {
+  if (client) {
+    await client.close();
+    client = null;
+  }
+}
+
+/**
+ * #787 (RNF011 AC#4): the LGPD sample import's quarantine, which writes
+ * into the same two collections as the FHIR path above. Reads the batch and
+ * its rejected rows back out of Mongo, so an e2e spec can prove the rows
+ * actually survived the HTTP response rather than trusting the response's
+ * own stagingBatchId.
+ */
+export async function findLgpdQuarantineBatch(batchId: string) {
+  const db = await getDb();
+  return db.collection('import_batches').findOne({ _id: new ObjectId(batchId) });
+}
+
+export async function findLgpdQuarantinedRows(batchId: string) {
+  const db = await getDb();
+  return db
+    .collection('import_staging_records')
+    .find({ batchId: new ObjectId(batchId) })
+    .sort({ rowNumber: 1 })
+    .toArray();
+}
+
+// #794: seeds a batch of the OTHER import type, so a test can assert that the
+// LGPD batch route refuses it. Both importers share `import_batches`, so a
+// reader that filters on `_id` alone serves whichever batch it is handed --
+// see #799 for that same leak in the FHIR direction.
+export async function seedForeignImportBatch(): Promise<string> {
+  const db = await getDb();
+  const now = new Date();
+  const result = await db.collection('import_batches').insertOne({
+    type: 'FHIR_BUNDLE',
+    source: 'FHIR',
+    status: 'STAGED',
+    fileName: 'e2e-794-foreign-batch.json',
+    counts: { total: 0, success: 0, errors: 0 },
+    createdBy: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return String(result.insertedId);
+}
+
+export async function removeForeignImportBatch(batchId: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('import_batches').deleteOne({ _id: new ObjectId(batchId) });
+}
+
+export async function findStagingRecordBySpecimenId(specimenId: string) {
+  const db = await getDb();
+  return db.collection('import_staging_records').findOne({ 'normalized.specimenId': specimenId });
+}
+
+export async function findCommittedSample(specimenId: string) {
+  const db = await getDb();
+  return db.collection('samples').findOne({ specimenId });
+}
+
+export async function findCommittedPatient(participantId: string) {
+  const db = await getDb();
+  return db.collection('patients').findOne({ participantId });
+}
+
+// RF005/RNF007 (#571/#575): patientName is civil identity — commitBatch
+// never writes it onto the canonical Patient document; its sole write
+// target is this segregated collection (plaintext-additive pending #574's
+// ciphertext-only cutover, so no decryption needed here).
+export async function findCommittedParticipantIdentity(participantId: string) {
+  const db = await getDb();
+  return db.collection('participantIdentities').findOne({ participantId });
+}
+
+export async function findFhirImportAuditLogs(batchId: string) {
+  const db = await getDb();
+  // audit()'s batchId is stored as whatever type the caller passed —
+  // commitBatch/sendConsents pass the real ObjectId, not its string form —
+  // so query by ObjectId, not the hex string the API response serializes.
+  return db
+    .collection('audit_logs')
+    .find({ module: 'FHIR_IMPORT', batchId: new ObjectId(batchId) })
+    .toArray();
+}
+
+export async function removeFhirImportFixtures(specimenId: string, participantId: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('samples').deleteMany({ specimenId });
+  await db.collection('patients').deleteMany({ participantId });
+  await db.collection('participantIdentities').deleteMany({ participantId });
+  await db.collection('import_staging_records').deleteMany({ 'normalized.specimenId': specimenId });
+}
