@@ -1,46 +1,58 @@
-const fs = require('fs');
-const crypto = require('crypto');
 const canonicalDictionary = require('../src/reference-data/canonical-dictionary');
-const { parseDictionary, SOURCE_MD } = require('./generate-dictionary-catalog');
 
-/**
- * RF022 follow-up (#381): dict-08_MAIN_GAPS.md's Foundation Data Pipeline
- * gate is "929 elementos verificados" — this makes that gate a real CI
- * check instead of only a library function, mirroring
- * `validate-essential-reference-data.js`'s CI-gate pattern
- * (`current-state:ci` runs both).
- */
 function fail(messages) {
   for (const message of messages) console.error(message);
-  process.exit(1);
+  process.exitCode = 1;
 }
 
-function main() {
-  const completeness = canonicalDictionary.checkCompleteness();
+async function main() {
+  const completeness = await canonicalDictionary.checkCompleteness();
+  const checksum = await canonicalDictionary.dictionaryChecksum();
   const messages = [];
 
   if (completeness.loadedTotal !== completeness.expectedTotal) {
-    messages.push(`Canonical dictionary catalog has ${completeness.loadedTotal} elements, expected ${completeness.expectedTotal}.`);
+    messages.push(`Canonical dictionary v2.0.0 has ${completeness.loadedTotal} elements, expected ${completeness.expectedTotal}.`);
+  }
+  if (completeness.historicalTotal !== completeness.expectedHistoricalTotal) {
+    messages.push(`Historical element accounting is ${completeness.historicalTotal}, expected ${completeness.expectedHistoricalTotal}.`);
+  }
+  if (completeness.newTotal !== completeness.expectedNewTotal) {
+    messages.push(`V2 element accounting is ${completeness.newTotal}, expected ${completeness.expectedNewTotal}.`);
+  }
+  if (completeness.entityTotal !== completeness.expectedEntityTotal) {
+    messages.push(`Canonical entity/artifact accounting is ${completeness.entityTotal}, expected ${completeness.expectedEntityTotal}.`);
   }
   if (completeness.duplicateIds.length) {
-    messages.push(`Duplicate element IDs in canonical dictionary catalog: ${completeness.duplicateIds.join(', ')}`);
+    messages.push(`Duplicate element IDs: ${completeness.duplicateIds.join(', ')}`);
   }
   if (completeness.missingRequiredFieldIds.length) {
-    messages.push(`Elements missing entity/field/cardinality/phase: ${completeness.missingRequiredFieldIds.join(', ')}`);
+    messages.push(`Elements missing executable contract metadata: ${completeness.missingRequiredFieldIds.join(', ')}`);
+  }
+  if (completeness.nonPhaseOneIds.length) {
+    messages.push(`Elements outside Foundation preparation Phase 1: ${completeness.nonPhaseOneIds.join(', ')}`);
+  }
+  if (!completeness.verified) {
+    messages.push('Canonical dictionary v2.0.0 completeness gate did not verify.');
   }
 
-  // The checksum above is computed from the checked-in catalog.1.3.0.json —
-  // it can't, by itself, tell you that JSON is stale relative to
-  // dict-02_DICIONARIO.md. Re-parse the source directly and compare so an
-  // edited dictionary with a forgotten regeneration fails here.
-  const freshCatalog = parseDictionary(fs.readFileSync(SOURCE_MD, 'utf8'));
-  const freshChecksum = crypto.createHash('sha256').update(JSON.stringify(freshCatalog)).digest('hex');
-  if (freshChecksum !== canonicalDictionary.dictionaryChecksum()) {
-    messages.push('catalog.1.3.0.json is stale relative to dict-02_DICIONARIO.md — run `npm run dictionary:generate`.');
+  if (messages.length) {
+    fail(messages);
+    return;
   }
 
-  if (messages.length) fail(messages);
-  console.log(`Canonical dictionary catalog validation passed: ${completeness.loadedTotal}/${completeness.expectedTotal} elements verified (v${completeness.dictionaryVersion}).`);
+  console.log(JSON.stringify({
+    status: 'PASS',
+    dictionaryVersion: completeness.dictionaryVersion,
+    sourceSheet: completeness.sourceSheet,
+    loadedTotal: completeness.loadedTotal,
+    historicalTotal: completeness.historicalTotal,
+    newTotal: completeness.newTotal,
+    entityTotal: completeness.entityTotal,
+    checksum,
+  }, null, 2));
 }
 
-main();
+main().catch((error) => {
+  console.error(error.stack || error.message || String(error));
+  process.exitCode = 1;
+});
