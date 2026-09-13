@@ -36,7 +36,6 @@
     "seed:essential:dry-run": "node scripts/seed-essential-reference-data.js --dry-run",
     "seed:essential": "node scripts/seed-essential-reference-data.js",
     "seed:validate:essential": "node scripts/validate-essential-reference-data.js",
-    "dictionary:generate": "node scripts/generate-dictionary-catalog.js",
     "dictionary:validate": "node scripts/validate-dictionary-catalog.js",
     "current-state:ci": "npm run test:architecture && npm run seed:validate:essential && npm run dictionary:validate && node tests/compliance/generate-compliance-evidence.js",
     "reference:import:plan": "node scripts/reference-imports/import-large-reference-dataset.js --dry-run",
