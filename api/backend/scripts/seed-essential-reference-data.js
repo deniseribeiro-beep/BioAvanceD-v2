@@ -4,20 +4,13 @@ const crypto = require('crypto');
 const os = require('os');
 const { version: pipelineVersion } = require('../package.json');
 const { connectNewDB, closeConnection } = require('../src/database/mongo');
-const { getManifest, getManifestByKey } = require('../src/reference-data/essential');
+const { getManifest } = require('../src/reference-data/essential');
 const miabisSeed = require('../src/reference-data/miabis.min.json');
 const sprecSeed = require('../src/reference-data/sprec.min.json');
 const rcsReferenceData = require('../src/services/rcs-reference-data');
 const FoundationDataRunModel = require('../src/models/FoundationDataRun');
 const canonicalDictionary = require('../src/reference-data/canonical-dictionary');
 const { CANONICAL_COLLECTIONS } = require('../src/config/collections');
-
-// This bootstrap only wires the 3-entry essential manifest (#366); the full
-// 929-element canonical dictionary (dict-02_DICIONARIO.md v1.3.0) is loaded
-// separately from `canonical-dictionary` (#381) purely to pin
-// dictionaryVersion/dictionaryChecksum/completeness on each run — Mongo
-// schemas for the ~817 non-technical domain elements are still out of scope
-// (dict-08_MAIN_GAPS.md's per-domain rows, tracked independently).
 
 function parseArgs(argv) {
   const args = { dryRun: false, list: false, only: null };
@@ -93,11 +86,6 @@ async function upsertDocs(db, collectionName, docs, uniqueKeys = []) {
   return planned;
 }
 
-/**
- * Core bootstrap logic, factored out from `main()` so it can run against an
- * injected `db` (a real Mongo handle from the CLI entrypoint, or a fake
- * collection in tests) instead of always opening a live connection.
- */
 async function runSeed({ db, args, environment, deploymentId }) {
   const manifest = getManifest();
   const selected = args.only ? manifest.filter((entry) => entry.key === args.only) : manifest;
@@ -126,11 +114,14 @@ async function runSeed({ db, args, environment, deploymentId }) {
   const runs = db.collection(CANONICAL_COLLECTIONS.foundationDataRuns);
   const previousRun = await runs.find({ environment }).sort({ startedAt: -1 }).limit(1).next();
   const steps = [];
-  // #381: the completeness gate dict-08_MAIN_GAPS.md names for the
-  // Foundation Data Pipeline row ("929 elementos verificados") — computed
-  // once per run and recorded regardless of manifest-step outcome, since it
-  // verifies the dictionary artifact itself, not this run's manifest steps.
-  const dictionaryCompleteness = canonicalDictionary.checkCompleteness();
+  const dictionaryCompleteness = await canonicalDictionary.checkCompleteness();
+  const dictionaryChecksum = await canonicalDictionary.dictionaryChecksum();
+
+  if (!dictionaryCompleteness.verified) {
+    const error = new Error('Canonical dictionary v2.0.0 completeness gate failed before Foundation data preparation.');
+    error.code = 'CANONICAL_DICTIONARY_NOT_READY';
+    throw error;
+  }
 
   try {
     for (const entry of selected) {
@@ -153,13 +144,10 @@ async function runSeed({ db, args, environment, deploymentId }) {
       runStatus: 'failed',
       executionMode: 'apply',
       configurationChecksum: checksumFor({ selectedKeys: selected.map((entry) => entry.key), only: args.only, environment, deploymentId }),
-      dictionaryChecksum: canonicalDictionary.dictionaryChecksum(),
+      dictionaryChecksum,
       completedAt: new Date(),
       steps: [...steps, { step: selected[steps.length]?.key || 'unknown', status: 'failed' }],
       validationSummary: { passed: steps.length, failed: 1, dictionaryCompleteness },
-      // P1X-0409: errorSummary must stay sanitized (no secrets/tokens/raw
-      // payloads) — truncate defensively since a Mongo write-error message
-      // can echo back offending field values.
       errorSummary: { fatal: 1, message: String(error.message || error).slice(0, 300) },
       initiatedBy: 'system:foundation-data-pipeline',
       previousRunId: previousRun ? previousRun.foundationDataRunId : null,
@@ -177,7 +165,7 @@ async function runSeed({ db, args, environment, deploymentId }) {
     runStatus: 'completed',
     executionMode: 'apply',
     configurationChecksum: checksumFor({ selectedKeys: selected.map((entry) => entry.key), only: args.only, environment, deploymentId }),
-    dictionaryChecksum: canonicalDictionary.dictionaryChecksum(),
+    dictionaryChecksum,
     completedAt: new Date(),
     steps,
     validationSummary: { passed: steps.length, failed: 0, dictionaryCompleteness },
