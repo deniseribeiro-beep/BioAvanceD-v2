@@ -1,32 +1,20 @@
 const MoveSampleUseCase = require('../../core/use-cases/MoveSampleUseCase');
 const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../../infrastructure/persistence/mongo/MongoAuditRepository');
-const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
+const MongoLineageRepository = require('../../infrastructure/persistence/mongo/MongoLineageRepository');
 const logger = require('../../utils/logger');
 
-// Substrings of the client-input validation errors MoveSampleUseCase throws
-// (validateCommand + pre-transaction business rule checks). Anything not
-// matching one of these, or the 404/409 patterns above, is treated as an
-// unexpected/infra failure and mapped to 500 instead of masked as a 400.
 const VALIDATION_ERROR_PATTERNS = [
   'inválido',
   'obrigatório',
   'deve seguir formato',
   'não possui localização de origem',
-  'deve ser diferente da posição atual'
+  'deve ser diferente da posição atual',
+  'Localização de origem mudou'
 ];
 
-// Substrings of MongoStorageRepository.checkLocationBlocked's rejection
-// messages (#646 Wave 3, RF017 AC#7) -- a separate list from the
-// client-input patterns above since these are business/state rules
-// (destination box or an ancestor container unavailable), not malformed
-// input, even though both map to the same 400 status.
 const LOCATION_BLOCKED_PATTERNS = ['está retirada de uso', 'Localização indisponível'];
 
-/**
- * Factory de controller HTTP para movimentação de amostras.
- * Mantém a rota desacoplada da implementação concreta do caso de uso.
- */
 function createMoveSampleController() {
   return async function moveSampleController(req, res) {
     try {
@@ -43,7 +31,7 @@ function createMoveSampleController() {
 
       const storageRepository = new MongoStorageRepository(db);
       const auditRepository = new MongoAuditRepository(db);
-      const lineageRepository = new LineageRepository(req.app.locals.neo4jDriver || null);
+      const lineageRepository = new MongoLineageRepository(db);
 
       const useCase = new MoveSampleUseCase({
         storageRepository,
@@ -81,16 +69,11 @@ function createMoveSampleController() {
       } else if (message.includes('STORAGE_COLLISION')) {
         statusCode = 409;
       } else if (LOCATION_BLOCKED_PATTERNS.some((pattern) => message.includes(pattern))) {
-        // #646 Wave 3 (RF017 AC#7): checkLocationBlocked's own rejection
-        // messages ("... está retirada de uso", "Localização
-        // indisponível: ...") don't match não encontrada/STORAGE_COLLISION/
-        // VALIDATION_ERROR_PATTERNS, so without this branch a correctly-
-        // rejected move (destination box RETIRED or under a non-OPERATIONAL
-        // ancestor) reported as a 500 Internal Server Error instead of a
-        // 400 -- the request wasn't malformed, a business rule blocked it.
         statusCode = 400;
       } else if (VALIDATION_ERROR_PATTERNS.some((pattern) => message.includes(pattern))) {
         statusCode = 400;
+      } else if (message.includes('RF023_LINEAGE_VALIDATION_FAILED')) {
+        statusCode = 422;
       }
 
       return res.status(statusCode).json({
