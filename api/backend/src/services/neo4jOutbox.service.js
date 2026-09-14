@@ -131,6 +131,10 @@ class Neo4jOutboxService {
       projectionState: event.projectionState || options.projectionState || {},
     });
     const { updatedAt, ...docWithoutUpdatedAt } = doc;
+    const writeOptions = {
+      upsert: true,
+      ...(options.session ? { session: options.session } : {}),
+    };
 
     await collection.updateOne(
       { eventId: doc.eventId },
@@ -140,7 +144,7 @@ class Neo4jOutboxService {
           updatedAt: new Date(),
         },
       },
-      { upsert: true }
+      writeOptions
     );
 
     return doc;
