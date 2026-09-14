@@ -1,5 +1,5 @@
 const { ObjectId } = require('mongodb');
-const { ensureStorageContainerIndexes } = require('../utils/storageIndexes');
+const { ensureStorageConfigurationIndexes } = require('../utils/storageIndexes');
 
 const CONTAINER_PARENT_TYPES = Object.freeze({
   SHELF: 'FREEZER',
@@ -47,17 +47,13 @@ class StorageTopologyAuthoringService {
    * specimen placement remains exclusively in the normalized v2 chain:
    * SpecimenContainerAssignment -> ContainerPositionAssignment ->
    * StoragePosition -> StorageRack -> RackLocationAssignment.
-   *
-   * This service exists so a clean installation can author the layout that
-   * allocation/query flows consume without relying on a legacy backfill or
-   * test fixture (#1124).
    */
   constructor(db) {
     this.db = db;
   }
 
   async ensureLayoutIndexes() {
-    await ensureStorageContainerIndexes(this.db.collection('storageContainers'));
+    await ensureStorageConfigurationIndexes(this.db);
   }
 
   async createContainer(input = {}, actorId = null) {
@@ -86,10 +82,7 @@ class StorageTopologyAuthoringService {
       if (!parent) throw topologyError('PARENT_NOT_FOUND', 'Container pai não encontrado', 404);
       const expectedParentType = CONTAINER_PARENT_TYPES[containerType];
       if (parent.containerType !== expectedParentType) {
-        throw topologyError(
-          'INVALID_HIERARCHY',
-          `${containerType} exige parent do tipo ${expectedParentType}, recebido ${parent.containerType}`
-        );
+        throw topologyError('INVALID_HIERARCHY', `${containerType} exige parent do tipo ${expectedParentType}, recebido ${parent.containerType}`);
       }
       if (roomId) throw topologyError('INVALID_ROOM_SCOPE', 'roomId só é aplicável a FREEZER');
       if (input.temperature !== undefined && input.temperature !== null) {
@@ -104,12 +97,7 @@ class StorageTopologyAuthoringService {
         equipmentID: { $in: buildIdVariants(equipmentIdentifier) },
         deletedAt: null,
       });
-      if (!equipment) {
-        throw topologyError('EQUIPMENT_NOT_FOUND', `Equipment ${equipmentIdentifier} não encontrado`, 404);
-      }
-      // The existing RF004/RF017 join is StorageContainer.containerID ==
-      // Equipment.equipmentID. Store the identifier as string so the native
-      // partial unique index from #941 is actually applicable.
+      if (!equipment) throw topologyError('EQUIPMENT_NOT_FOUND', `Equipment ${equipmentIdentifier} não encontrado`, 404);
       containerID = String(equipment.equipmentID ?? equipmentIdentifier);
 
       if (roomId) {
@@ -130,9 +118,7 @@ class StorageTopologyAuthoringService {
       containerType,
       parent_id: parentId,
       roomId: containerType === 'FREEZER' ? roomId : null,
-      temperature: containerType === 'FREEZER' && input.temperature !== undefined
-        ? Number(input.temperature)
-        : null,
+      temperature: containerType === 'FREEZER' && input.temperature !== undefined ? Number(input.temperature) : null,
       temperatureUnit,
       capacity: input.capacity === undefined || input.capacity === null ? null : Number(input.capacity),
       status,
@@ -162,6 +148,8 @@ class StorageTopologyAuthoringService {
   }
 
   async createBox(input = {}, actorId = null) {
+    await this.ensureLayoutIndexes();
+
     const name = requiredText(input.name, 'name');
     const parentId = optionalObjectId(input.parentId ?? input.parent_id, 'parentId');
     if (!parentId) throw topologyError('INVALID_HIERARCHY', 'parentId é obrigatório');
