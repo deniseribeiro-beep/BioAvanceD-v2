@@ -15,15 +15,11 @@ class StagingImportService {
   }
 
   sanitizeFileName(fileName) {
-    return String(fileName || 'batch-import')
-      .trim()
-      .replace(/[^a-zA-Z0-9._-]/g, '_');
+    return String(fileName || 'batch-import').trim().replace(/[^a-zA-Z0-9._-]/g, '_');
   }
 
   ensureDirectoryExists(dirPath) {
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-    }
+    if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
   }
 
   buildStagingFilePath(jobId, originalName) {
@@ -36,10 +32,8 @@ class StagingImportService {
     if (!file || !file.path || !fs.existsSync(file.path)) {
       throw new Error('Arquivo bruto não encontrado para staging');
     }
-
     const stagingFilePath = this.buildStagingFilePath(jobId, file.originalname);
     fs.copyFileSync(file.path, stagingFilePath);
-
     return {
       storageType: 'filesystem',
       storagePath: stagingFilePath,
@@ -51,20 +45,13 @@ class StagingImportService {
 
   async createStagingImport(file) {
     await connectMongoDB();
-
-    // #941: build the jobId index the schema has always declared. Mongoose
-    // connects with autoIndex:false and nothing calls syncIndexes(), so
-    // `unique: true` on StagingImport.js never reaches Mongo on its own.
-    // Un-awaited and best-effort, the same terms collectionResolver.js uses
-    // for ensureSampleIndexes: the helper never rejects, index creation is
-    // idempotent and latched, and a first insert racing the build is
-    // harmless -- jobId is a uuidv4 from this single writer, so the index is
-    // the lookup path these rows are read by, not the uniqueness mechanism.
-    ensureStagingImportIndexes(StagingImport.collection);
+    // #941: jobId is the lookup key for the batch lifecycle. Ensure the
+    // native index has completed before the first persisted row rather than
+    // racing an un-awaited best-effort build.
+    await ensureStagingImportIndexes(StagingImport.collection);
 
     const jobId = uuidv4();
     const rawData = await this.persistRawFile(file, jobId);
-
     const stagingImport = await StagingImport.create({
       jobId,
       fileName: file.originalname,
@@ -74,16 +61,12 @@ class StagingImportService {
       importErrors: [],
       rawData,
     });
-
     return stagingImport.toObject();
   }
 
   async dispatchBatchJob(stagingImport) {
     const queue = getQueue();
-
-    if (!queue) {
-      throw new Error('Fila de importação indisponível');
-    }
+    if (!queue) throw new Error('Fila de importação indisponível');
 
     const queueJob = await queue.add(
       'batch-import',
@@ -92,69 +75,33 @@ class StagingImportService {
         stagingImportId: stagingImport.jobId,
         fileName: stagingImport.fileName,
       },
-      {
-        jobId: stagingImport.jobId,
-        removeOnComplete: true,
-        // #900: removeOnFail was `false`, which bullmq reads as keep-forever
-        // ({count: -1}) and which overrode config/queue.js's 7-day retention.
-        // Nothing consumed it: no bull-board/arena is installed and nothing in
-        // src/ reads failed jobs -- the only failed-job reference is a
-        // getJobCounts health probe. The sibling NotificationService queue
-        // chose bounded retention for itself, the option carried no comment or
-        // issue number in a file that annotates every deliberate option
-        // choice, and the durable failure record now lives on
-        // StagingImport.importErrors (which only started working in 058bbd39).
-        // Omitting the key restores the queue default: failures are retained
-        // 7 days, which still covers manual redis-cli inspection.
-      }
+      { jobId: stagingImport.jobId, removeOnComplete: true }
     );
 
     await StagingImport.updateOne(
       { jobId: stagingImport.jobId },
-      {
-        $set: {
-          status: 'queued',
-          updatedAt: new Date(),
-        },
-      }
+      { $set: { status: 'queued', updatedAt: new Date() } }
     );
-
     logger.info(`Job batch-import enfileirado: ${queueJob.id}`);
-
     return queueJob;
   }
 
   async createBatchImportJob(file) {
     let stagingImport = null;
-
     try {
       stagingImport = await this.createStagingImport(file);
       const queueJob = await this.dispatchBatchJob(stagingImport);
-
-      return {
-        jobId: stagingImport.jobId,
-        stagingImport,
-        queueJob,
-      };
+      return { jobId: stagingImport.jobId, stagingImport, queueJob };
     } catch (error) {
       if (stagingImport?.jobId) {
         await StagingImport.updateOne(
           { jobId: stagingImport.jobId },
           {
-            $set: {
-              status: 'failed',
-              updatedAt: new Date(),
-            },
-            $push: {
-              importErrors: {
-                message: error.message,
-                occurredAt: new Date(),
-              },
-            },
+            $set: { status: 'failed', updatedAt: new Date() },
+            $push: { importErrors: { message: error.message, occurredAt: new Date() } },
           }
         );
       }
-
       throw error;
     }
   }
