@@ -28,10 +28,11 @@ function resolveArtifact(file) {
 function computeArtifactMetadata(file) {
   const artifactPath = resolveArtifact(file);
   if (!fs.existsSync(artifactPath)) {
-    throw new Error(`Release artifact is missing from checkout: docs/${file}`);
+    return { missing: true, sha256: null, bytes: null };
   }
   const bytes = fs.readFileSync(artifactPath);
   return {
+    missing: false,
     sha256: sha256(bytes),
     bytes: bytes.length
   };
@@ -43,26 +44,43 @@ function main() {
     throw new Error('RELEASE_MANIFEST.json must declare at least one artifact.');
   }
 
+  const missing = [];
   const mismatches = [];
-  const updatedArtifacts = manifest.artifacts.map((artifact) => {
+  const updatedArtifacts = [];
+
+  for (const artifact of manifest.artifacts) {
     const actual = computeArtifactMetadata(artifact.file);
     const expected = {
       sha256: artifact.sha256,
       bytes: artifact.bytes
     };
 
+    if (actual.missing) {
+      missing.push({ file: artifact.file, expected });
+      updatedArtifacts.push({ ...artifact });
+      continue;
+    }
+
     if (expected.sha256 !== actual.sha256 || expected.bytes !== actual.bytes) {
       mismatches.push({ file: artifact.file, expected, actual });
     }
 
-    return {
+    updatedArtifacts.push({
       ...artifact,
       sha256: actual.sha256,
       bytes: actual.bytes
-    };
-  });
+    });
+  }
 
   if (WRITE_MODE) {
+    if (missing.length > 0) {
+      for (const item of missing) {
+        console.error(`Cannot update manifest: missing docs/${item.file}`);
+      }
+      process.exitCode = 1;
+      return;
+    }
+
     const updatedManifest = {
       ...manifest,
       artifacts: updatedArtifacts
@@ -75,8 +93,16 @@ function main() {
     return;
   }
 
-  if (mismatches.length > 0) {
-    console.error(`RELEASE_MANIFEST integrity FAILED: ${mismatches.length} artifact(s) differ from committed bytes.`);
+  if (missing.length > 0 || mismatches.length > 0) {
+    console.error(`RELEASE_MANIFEST integrity FAILED: ${missing.length} missing, ${mismatches.length} metadata mismatch(es).`);
+
+    for (const item of missing) {
+      console.error(`\n${item.file}`);
+      console.error('  checkout status : MISSING');
+      console.error(`  manifest bytes  : ${item.expected.bytes}`);
+      console.error(`  manifest sha256 : ${item.expected.sha256}`);
+    }
+
     for (const mismatch of mismatches) {
       console.error(`\n${mismatch.file}`);
       console.error(`  manifest bytes : ${mismatch.expected.bytes}`);
@@ -84,7 +110,8 @@ function main() {
       console.error(`  manifest sha256: ${mismatch.expected.sha256}`);
       console.error(`  checkout sha256: ${mismatch.actual.sha256}`);
     }
-    console.error('\nTo regenerate only bytes/sha256 metadata from this checkout:');
+
+    console.error('\nTo regenerate only bytes/sha256 metadata from this checkout after restoring missing artifacts:');
     console.error('  node scripts/verify-release-manifest.js --write');
     process.exitCode = 1;
     return;
