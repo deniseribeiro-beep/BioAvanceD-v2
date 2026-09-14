@@ -1,4 +1,4 @@
-const { ensureStorageContainerIndexes } = require('../utils/storageIndexes');
+const { ensureStorageConfigurationIndexes } = require('../utils/storageIndexes');
 const NormalizedPhysicalStorageStore = require('../infrastructure/persistence/mongo/NormalizedPhysicalStorageStore');
 
 /**
@@ -13,8 +13,13 @@ async function backfillLocationsToStorage(db) {
   const equipmentCollection = db.collection('equipment');
   const samplesCollection = db.collection('samples');
   const storageContainersCollection = db.collection('storageContainers');
-  ensureStorageContainerIndexes(storageContainersCollection);
   const storageBoxesCollection = db.collection('storageBoxes');
+
+  // #941: the migration writes the same governed configuration collections
+  // as the runtime authoring surface. Complete their native index builds
+  // before the first migrated row so the backfill cannot race the constraints.
+  await ensureStorageConfigurationIndexes(db);
+
   const physicalStore = new NormalizedPhysicalStorageStore(db);
   await physicalStore.ensureIndexes();
 
@@ -35,15 +40,31 @@ async function backfillLocationsToStorage(db) {
     skipped: [],
   };
 
+  function equipmentIdVariants(value) {
+    const text = String(value).trim();
+    const variants = [text];
+    const numeric = Number(text);
+    if (Number.isFinite(numeric)) variants.push(numeric);
+    return [...new Set(variants)];
+  }
+
   async function findOrCreateFreezer(equipmentID) {
-    if (freezerCache.has(equipmentID)) return freezerCache.get(equipmentID);
-    let freezer = await storageContainersCollection.findOne({ containerType: 'FREEZER', containerID: equipmentID });
+    const canonicalEquipmentId = String(equipmentID).trim();
+    if (freezerCache.has(canonicalEquipmentId)) return freezerCache.get(canonicalEquipmentId);
+
+    // Historical synthetic fixtures may contain numeric containerID values.
+    // Read both representations during migration, but all new writes use the
+    // canonical string representation used by the governed #1124 authoring surface.
+    let freezer = await storageContainersCollection.findOne({
+      containerType: 'FREEZER',
+      containerID: { $in: equipmentIdVariants(canonicalEquipmentId) }
+    });
     if (!freezer) {
-      const equipment = await equipmentCollection.findOne({ equipmentID });
+      const equipment = await equipmentCollection.findOne({ equipmentID: { $in: equipmentIdVariants(canonicalEquipmentId) } });
       const now = new Date();
       const doc = {
-        containerID: equipmentID,
-        name: equipment?.name || equipment?.equipmentDescription || `Equipment ${equipmentID}`,
+        containerID: canonicalEquipmentId,
+        name: equipment?.name || equipment?.equipmentDescription || `Equipment ${canonicalEquipmentId}`,
         description: null,
         containerType: 'FREEZER',
         parent_id: null,
@@ -61,7 +82,7 @@ async function backfillLocationsToStorage(db) {
       freezer = { _id: result.insertedId, ...doc };
       summary.freezersCreated += 1;
     }
-    freezerCache.set(equipmentID, freezer._id);
+    freezerCache.set(canonicalEquipmentId, freezer._id);
     return freezer._id;
   }
 
