@@ -26,6 +26,9 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
     if (type === 'STORAGE_ASSIGNMENT_UPSERTED' || type === 'STORAGE_ASSIGNMENT_RELEASED') {
       return this.applyStorageAssignmentProjection(session, event);
     }
+    if (type === 'TELEMETRY_EXPOSURE_SUMMARIZED') {
+      return this.applyTelemetryExposureSummaryProjection(session, event);
+    }
 
     return super.applyEvent(session, event);
   }
@@ -100,7 +103,9 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
 
     const participantId = normalizeText(payload.participantId);
     const donorId = participantId ? this.pseudonymizeDonorId(participantId) : '';
-    const parentSpecimenId = normalizeText(payload.parentSpecimenId);
+    const parentSpecimenIds = Array.isArray(payload.parentSpecimenIds)
+      ? payload.parentSpecimenIds.map(normalizeText).filter(Boolean)
+      : [normalizeText(payload.parentSpecimenId)].filter(Boolean);
 
     await session.run(
       `
@@ -122,8 +127,8 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
           SET donated.updatedAt = datetime(), donated.eventId = $eventId
         )
 
-        FOREACH (_ IN CASE WHEN $parentSpecimenId = '' THEN [] ELSE [1] END |
-          MERGE (parent:Sample:Specimen {id: $parentSpecimenId})
+        FOREACH (parentSpecimenId IN $parentSpecimenIds |
+          MERGE (parent:Sample:Specimen {id: parentSpecimenId})
           ON CREATE SET parent.createdAt = datetime(), parent.source = $sourceService
           SET parent.updatedAt = datetime()
           MERGE (sample)-[derived:DERIVED_FROM]->(parent)
@@ -144,7 +149,7 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
       {
         specimenId,
         donorId,
-        parentSpecimenId,
+        parentSpecimenIds,
         barcode: payload.barcode || null,
         specimenStatus: payload.specimenStatus || null,
         sourceService: normalizeText(event.sourceService) || 'unknown',
@@ -295,6 +300,87 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
     );
 
     return { projected: true, eventType: event.eventType, specimenId, assignmentId };
+  }
+
+  async applyTelemetryExposureSummaryProjection(session, event) {
+    const payload = event?.payload || {};
+    const summaryId = normalizeText(payload.telemetryExposureSummaryId || event.aggregateId);
+    const specimenId = normalizeText(payload.specimenId);
+    if (!summaryId || !specimenId) {
+      throw new Error('[RF023] Telemetry exposure projection requires summary and specimen ids');
+    }
+
+    const windowStart = normalizeIso(payload.windowStart);
+    const windowEnd = normalizeIso(payload.windowEnd);
+    const calculatedAt = normalizeIso(payload.calculatedAt || event.occurredAt) || new Date().toISOString();
+
+    await session.run(
+      `
+        MERGE (sample:Sample:Specimen {id: $specimenId})
+        ON CREATE SET sample.createdAt = datetime(), sample.source = $sourceService
+        SET sample.updatedAt = datetime()
+
+        MERGE (summary:TelemetryExposureSummary {id: $summaryId})
+        ON CREATE SET summary.createdAt = datetime(), summary.source = $sourceService
+        SET summary.updatedAt = datetime(),
+            summary.exposurePathHash = $exposurePathHash,
+            summary.datastreamIds = $datastreamIds,
+            summary.observationCount = $observationCount,
+            summary.minimumValue = $minimumValue,
+            summary.maximumValue = $maximumValue,
+            summary.meanValue = $meanValue,
+            summary.timeOutsideThresholdSeconds = $timeOutsideThresholdSeconds,
+            summary.excursionCount = $excursionCount,
+            summary.coverageRatio = $coverageRatio,
+            summary.sourceQueryHash = $sourceQueryHash,
+            summary.sourceReadingSetHash = $sourceReadingSetHash,
+            summary.calculationVersion = $calculationVersion,
+            summary.calculatedAt = datetime($calculatedAt),
+            summary.windowStart = CASE WHEN $windowStart IS NULL THEN null ELSE datetime($windowStart) END,
+            summary.windowEnd = CASE WHEN $windowEnd IS NULL THEN null ELSE datetime($windowEnd) END,
+            summary.lastProjectionEventId = $eventId,
+            summary.lastProjectionAt = datetime()
+
+        MERGE (sample)-[exposed:HAS_TELEMETRY_EXPOSURE]->(summary)
+        ON CREATE SET exposed.createdAt = datetime(), exposed.source = $sourceService
+        SET exposed.updatedAt = datetime(), exposed.eventId = $eventId
+
+        FOREACH (_ IN CASE WHEN $specimenContainerAssignmentId = '' THEN [] ELSE [1] END |
+          MERGE (assignment:SpecimenContainerAssignment {id: $specimenContainerAssignmentId})
+          ON CREATE SET assignment.createdAt = datetime(), assignment.source = $sourceService
+          SET assignment.updatedAt = datetime()
+          MERGE (summary)-[through:EXPOSURE_THROUGH]->(assignment)
+          ON CREATE SET through.createdAt = datetime(), through.source = $sourceService
+          SET through.updatedAt = datetime(), through.eventId = $eventId
+        )
+
+        RETURN summary.id AS summaryId
+      `,
+      {
+        summaryId,
+        specimenId,
+        specimenContainerAssignmentId: normalizeText(payload.specimenContainerAssignmentId),
+        exposurePathHash: payload.exposurePathHash || null,
+        datastreamIds: Array.isArray(payload.datastreamIds) ? payload.datastreamIds.map(String) : [],
+        windowStart,
+        windowEnd,
+        observationCount: Number(payload.observationCount || 0),
+        minimumValue: payload.minimumValue ?? null,
+        maximumValue: payload.maximumValue ?? null,
+        meanValue: payload.meanValue ?? null,
+        timeOutsideThresholdSeconds: Number(payload.timeOutsideThresholdSeconds || 0),
+        excursionCount: Number(payload.excursionCount || 0),
+        coverageRatio: payload.coverageRatio ?? null,
+        sourceQueryHash: payload.sourceQueryHash || null,
+        sourceReadingSetHash: payload.sourceReadingSetHash || null,
+        calculationVersion: payload.calculationVersion || '2.0.0',
+        calculatedAt,
+        sourceService: normalizeText(event.sourceService) || 'unknown',
+        eventId: normalizeText(event.eventId),
+      }
+    );
+
+    return { projected: true, eventType: event.eventType, specimenId, summaryId };
   }
 }
 
