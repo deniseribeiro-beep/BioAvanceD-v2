@@ -1,0 +1,35 @@
+services:
+  foundation-bootstrap-test:
+    # RF022 / Foundation v2.0.0: o one-shot deve executar depois dos
+    # healthchecks de infraestrutura e antes de qualquer API/worker dependente.
+    # !override remove a dependência legada de backend-app-test e evita ciclo.
+    depends_on: !override
+      mongodb-test:
+        condition: service_healthy
+      mongo-rs-init-test:
+        condition: service_completed_successfully
+      neo4j-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+      influxdb-test:
+        condition: service_healthy
+      tsa-test:
+        condition: service_healthy
+      witness-test:
+        condition: service_healthy
+
+  backend-app-test:
+    depends_on:
+      foundation-bootstrap-test:
+        condition: service_completed_successfully
+
+  worker-test:
+    depends_on:
+      foundation-bootstrap-test:
+        condition: service_completed_successfully
+
+  neo4j-projection-worker-test:
+    depends_on:
+      foundation-bootstrap-test:
+        condition: service_completed_successfully
