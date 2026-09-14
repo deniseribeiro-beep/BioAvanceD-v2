@@ -25,13 +25,25 @@ replace_once(
     'sample.service constructor',
 )
 
-# import-lgpd.service.js only retained an unused legacy import.
+# import-lgpd.service.js: allocation lineage also uses canonical Mongo + outbox.
 import_lgpd = Path('api/backend/src/services/import-lgpd.service.js')
 replace_once(
     import_lgpd,
     "const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');\n",
-    '',
-    'import-lgpd dead import',
+    "const MongoLineageRepository = require('../infrastructure/persistence/mongo/MongoLineageRepository');\n",
+    'import-lgpd import',
+)
+replace_once(
+    import_lgpd,
+    "    const { startBoxId = null, autoIncrement = false, groupFields = {}, neo4jDriver = null, actor = {} } = options;\n",
+    "    const { startBoxId = null, autoIncrement = false, groupFields = {}, actor = {} } = options;\n",
+    'import-lgpd options',
+)
+replace_once(
+    import_lgpd,
+    "        lineageRepository: new LineageRepository(neo4jDriver)\n",
+    "        lineageRepository: new MongoLineageRepository(db)\n",
+    'import-lgpd constructor',
 )
 
 # sample.routes.js: RegisterSampleUseCase receives canonical Mongo lineage repository.
