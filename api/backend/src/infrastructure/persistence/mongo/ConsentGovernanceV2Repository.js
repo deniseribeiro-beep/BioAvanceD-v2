@@ -83,17 +83,26 @@ class ConsentGovernanceV2Repository {
       const purpose = permission.purpose && typeof permission.purpose === 'object'
         ? permission.purpose
         : { code: normalizeText(permission.purposeCode || permissionCode) || 'unspecified' };
+      const validityPeriod = permission.validityPeriod && typeof permission.validityPeriod === 'object'
+        ? permission.validityPeriod
+        : {
+            start: normalizeDate(permission.validFrom || template?.validFrom, createdAt),
+            end: normalizeDate(permission.validTo || template?.validTo, null)
+          };
+      const conditions = Array.isArray(permission.conditions) ? permission.conditions : [];
 
+      // Persist only the canonical ConsentPermission v2 shape. Template-only
+      // authoring metadata such as `required` stays on ConsentTemplate and is
+      // deliberately not duplicated into the permission authority (#967).
       return {
         consentPermissionId: `consent-permission:${crypto.randomUUID()}`,
         consentId,
         permissionCode,
         purpose,
         decision,
+        ...(conditions.length ? { conditions } : {}),
         policyVersion: normalizeText(template.version || template.templateVersion || '1.0.0'),
-        required: Boolean(permission.required),
-        createdAt,
-        updatedAt: createdAt
+        validityPeriod
       };
     }).filter((permission) => permission.permissionCode);
   }
@@ -343,7 +352,7 @@ class ConsentGovernanceV2Repository {
   async listPermissions(consentId, session) {
     return this.collection('consentPermissions')
       .find({ consentId: normalizeText(consentId) }, { session })
-      .sort({ createdAt: 1 })
+      .sort({ permissionCode: 1, consentPermissionId: 1 })
       .toArray();
   }
 
