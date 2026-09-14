@@ -3,8 +3,16 @@ const env = require('./env');
 const CANONICAL_COLLECTIONS = Object.freeze({
   patients: env.COLL_PATIENTS || 'patients',
   samples: env.COLL_SAMPLES || 'samples',
-  consents: env.COLL_CONSENTS || 'patientConsents',
+  // v2 canonical authority. `env.COLL_CONSENTS` historically defaulted to
+  // patientConsents; preserve explicit operator overrides while moving the
+  // implicit default to the approved Consent entity collection.
+  consents: process.env.COLL_CONSENTS ? env.COLL_CONSENTS : 'consents',
   consentTemplates: env.COLL_CONSENT_TEMPLATES || 'consent_templates',
+  consentPermissions: 'consentPermissions',
+  consentDecisionEvents: 'consentDecisionEvents',
+  consentRevocations: 'consentRevocations',
+  consentAuthorizationDecisions: 'consentAuthorizationDecisions',
+  consentCommunicationEvents: 'consentCommunicationEvents',
   sampleMovements: env.COLL_SAMPLE_MOVEMENTS || 'sample_movements',
   biomarkerObservations: env.COLL_BIOMARKER_OBSERVATIONS || 'biomarker_observations',
   cids: env.COLL_CIDS || 'cids',
