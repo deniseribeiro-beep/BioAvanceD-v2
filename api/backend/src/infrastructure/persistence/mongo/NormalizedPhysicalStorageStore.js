@@ -28,10 +28,11 @@ class NormalizedPhysicalStorageStore {
     if (existingAssignment) return existingAssignment;
 
     const container = PhysicalStorageV2.container({ specimenId });
+    const { status: _status, updatedAt: _updatedAt, ...containerOnInsert } = container;
     await containers.updateOne(
       { containerId: container.containerId },
       {
-        $setOnInsert: container,
+        $setOnInsert: containerOnInsert,
         $set: { status: 'occupied', updatedAt: new Date() }
       },
       { upsert: true, session }
@@ -55,16 +56,18 @@ class NormalizedPhysicalStorageStore {
       columnCount: box?.dimension?.cols || 0,
       capacity: Number(box?.dimension?.rows || 0) * Number(box?.dimension?.cols || 0)
     });
+    const { updatedAt: _rackUpdatedAt, ...rackOnInsert } = rack;
     await storageRacks.updateOne(
       { storageRackId },
-      { $setOnInsert: rack, $set: { updatedAt: new Date() } },
+      { $setOnInsert: rackOnInsert, $set: { updatedAt: new Date() } },
       { upsert: true, session }
     );
 
     const position = PhysicalStorageV2.storagePosition({ storageRackId, positionCode });
+    const { updatedAt: _positionUpdatedAt, ...positionOnInsert } = position;
     await storagePositions.updateOne(
       { storagePositionId: position.storagePositionId },
-      { $setOnInsert: position, $set: { updatedAt: new Date() } },
+      { $setOnInsert: positionOnInsert, $set: { updatedAt: new Date() } },
       { upsert: true, session }
     );
 
@@ -140,15 +143,16 @@ class NormalizedPhysicalStorageStore {
     const current = await this.findCurrentBySpecimen(specimenId, session);
     if (!current) return null;
     const { containerPositionAssignments } = this.collections();
+    const removedAt = new Date();
     await containerPositionAssignments.updateOne(
       {
         containerPositionAssignmentId: current.containerPositionAssignmentId,
         removedAt: null
       },
-      { $set: PhysicalStorageV2.closeFields() },
+      { $set: PhysicalStorageV2.closeFields(removedAt) },
       { session }
     );
-    return current;
+    return { ...current, removedAt };
   }
 
   async releaseSpecimenContainer(specimenId, session) {
@@ -169,7 +173,7 @@ class NormalizedPhysicalStorageStore {
       { $set: { status: 'available', updatedAt: at } },
       { session }
     );
-    return current;
+    return { ...current, releasedAt: at };
   }
 
   async findCurrentBySpecimen(specimenId, session) {
