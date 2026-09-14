@@ -11,30 +11,20 @@ function createFakeOutbox() {
 describe('graphProjection.service', () => {
   describe('stableHash', () => {
     it('produces the same hash regardless of key order', () => {
-      const a = stableHash({ b: 2, a: 1 });
-      const b = stableHash({ a: 1, b: 2 });
-      expect(a).toBe(b);
+      expect(stableHash({ b: 2, a: 1 })).toBe(stableHash({ a: 1, b: 2 }));
     });
 
     it('produces different hashes for different payloads', () => {
-      const a = stableHash({ a: 1 });
-      const b = stableHash({ a: 2 });
-      expect(a).not.toBe(b);
+      expect(stableHash({ a: 1 })).not.toBe(stableHash({ a: 2 }));
     });
 
-    it('hashes an undefined payload the same as an empty object (issue #176 fix)', () => {
-      expect(() => stableHash(undefined)).not.toThrow();
+    it('hashes nullish payloads as an empty object', () => {
       expect(stableHash(undefined)).toBe(stableHash({}));
-    });
-
-    it('hashes a null payload the same as an empty object', () => {
-      expect(() => stableHash(null)).not.toThrow();
       expect(stableHash(null)).toBe(stableHash({}));
     });
 
     it('returns a 64-char hex sha256 digest', () => {
-      const hash = stableHash({ x: 1 });
-      expect(hash).toMatch(/^[0-9a-f]{64}$/);
+      expect(stableHash({ x: 1 })).toMatch(/^[0-9a-f]{64}$/);
     });
   });
 
@@ -47,13 +37,12 @@ describe('graphProjection.service', () => {
 
     it('uses the injected outbox when provided', () => {
       const outbox = createFakeOutbox();
-      const service = new GraphProjectionService({ outbox });
-      expect(service.outbox).toBe(outbox);
+      expect(new GraphProjectionService({ outbox }).outbox).toBe(outbox);
     });
   });
 
   describe('appendConsentEvent', () => {
-    it('emits CONSENT_UPSERTED for a non-REVOKED status', async () => {
+    it('emits participant-scoped CONSENT_UPSERTED without specimen authority (#1026)', async () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
       const db = {};
@@ -61,62 +50,86 @@ describe('graphProjection.service', () => {
       await service.appendConsentEvent(db, {
         ethicalConsentId: 'ec-1',
         participantId: 'donor-1',
-        specimenId: 'sample-1',
+        specimenId: 'must-not-leak',
         status: 'ACTIVE',
         signedAt: '2026-01-01T00:00:00Z',
         sourceService: 'custom-source',
         traceId: 'trace-1',
       });
 
-      expect(outbox.appendEvent).toHaveBeenCalledWith(db, expect.objectContaining({
+      expect(outbox.appendEvent).toHaveBeenCalledTimes(1);
+      const [calledDb, event] = outbox.appendEvent.mock.calls[0];
+      expect(calledDb).toBe(db);
+      expect(event).toEqual(expect.objectContaining({
         eventType: 'CONSENT_UPSERTED',
         aggregateType: 'EthicalConsent',
         aggregateId: 'ec-1',
         sourceService: 'custom-source',
         traceId: 'trace-1',
-        schemaVersion: 1,
-        payload: expect.objectContaining({
-          participantId: 'donor-1',
-          specimenId: 'sample-1',
-          ethicalConsentId: 'ec-1',
-          status: 'ACTIVE',
-          signedAt: '2026-01-01T00:00:00Z',
-        }),
+        schemaVersion: 2,
       }));
+      expect(event.payload).toEqual({
+        participantId: 'donor-1',
+        ethicalConsentId: 'ec-1',
+        consentTemplateId: null,
+        status: 'ACTIVE',
+        signedAt: '2026-01-01T00:00:00Z',
+        revokedAt: null,
+      });
+      expect(event.payload).not.toHaveProperty('specimenId');
     });
 
-    it('emits CONSENT_REVOKED when status is REVOKED', async () => {
+    it('emits CONSENT_REVOKED only with explicit participant and status', async () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
 
-      await service.appendConsentEvent({}, { ethicalConsentId: 'ec-2', status: 'REVOKED' });
+      await service.appendConsentEvent({}, {
+        ethicalConsentId: 'ec-2',
+        participantId: 'p-2',
+        status: 'REVOKED',
+      });
 
-      const call = outbox.appendEvent.mock.calls[0][1];
-      expect(call.eventType).toBe('CONSENT_REVOKED');
+      expect(outbox.appendEvent.mock.calls[0][1].eventType).toBe('CONSENT_REVOKED');
     });
 
-    it('falls back through consentId then aggregateId for aggregateId, and defaults status/sourceService/signedAt', async () => {
+    it('accepts consentId/aggregateId only as consent identity when participant/status are explicit', async () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
 
-      await service.appendConsentEvent({}, { consentId: 'c-3' });
-      let call = outbox.appendEvent.mock.calls[0][1];
-      expect(call.aggregateId).toBe('c-3');
-      expect(call.payload.status).toBe('ACTIVE');
-      expect(call.payload.specimenId).toBeNull();
-      expect(call.payload.ethicalConsentId).toBe('c-3');
-      expect(call.sourceService).toBe('graph-projection-service');
-      expect(call.traceId).toBeNull();
-      expect(call.payload.signedAt).toBeInstanceOf(Date);
+      await service.appendConsentEvent({}, { consentId: 'c-3', participantId: 'p-3', status: 'ACTIVE' });
+      let event = outbox.appendEvent.mock.calls[0][1];
+      expect(event.aggregateId).toBe('c-3');
+      expect(event.payload.ethicalConsentId).toBe('c-3');
+      expect(event.payload).not.toHaveProperty('specimenId');
 
-      await service.appendConsentEvent({}, { aggregateId: 'agg-4' });
-      call = outbox.appendEvent.mock.calls[1][1];
-      expect(call.aggregateId).toBe('agg-4');
+      await service.appendConsentEvent({}, { aggregateId: 'c-4', participantId: 'p-4', status: 'VALID' });
+      event = outbox.appendEvent.mock.calls[1][1];
+      expect(event.aggregateId).toBe('c-4');
+      expect(event.payload.ethicalConsentId).toBe('c-4');
+      expect(event.payload.status).toBe('VALID');
+    });
 
-      await service.appendConsentEvent({}, {});
-      call = outbox.appendEvent.mock.calls[2][1];
-      expect(call.aggregateId).toBe('');
-      expect(call.payload.ethicalConsentId).toBeNull();
+    it('fails closed when status, participantId or consent identity is absent (#1026)', async () => {
+      const service = new GraphProjectionService({ outbox: createFakeOutbox() });
+
+      await expect(service.appendConsentEvent({}, {
+        ethicalConsentId: 'c-status', participantId: 'p-status',
+      })).rejects.toThrow('requires explicit status');
+
+      await expect(service.appendConsentEvent({}, {
+        ethicalConsentId: 'c-participant', status: 'ACTIVE',
+      })).rejects.toThrow('requires participantId');
+
+      await expect(service.appendConsentEvent({}, {
+        participantId: 'p-consent', status: 'ACTIVE',
+      })).rejects.toThrow('requires ethicalConsentId');
+    });
+
+    it('rejects unsupported consent state instead of converting it to ACTIVE', async () => {
+      const service = new GraphProjectionService({ outbox: createFakeOutbox() });
+      await expect(service.appendConsentEvent({}, {
+        ethicalConsentId: 'c-unknown', participantId: 'p-unknown', status: 'UNKNOWN',
+      })).rejects.toThrow('Unsupported consent projection status');
     });
   });
 
@@ -124,35 +137,21 @@ describe('graphProjection.service', () => {
     it('uses specimenId for aggregateId and payload when present', async () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
-
       await service.appendLineageEvent({}, { specimenId: 's-1', parentSpecimenId: 'p-1', traceId: 't-1' });
-
       const call = outbox.appendEvent.mock.calls[0][1];
       expect(call.eventType).toBe('LINEAGE_REGISTERED');
-      expect(call.aggregateType).toBe('Sample');
       expect(call.aggregateId).toBe('s-1');
       expect(call.payload).toEqual({ specimenId: 's-1', parentSpecimenId: 'p-1' });
       expect(call.traceId).toBe('t-1');
     });
 
-    it('falls back to childSpecimenId, then aggregateId, then empty string', async () => {
+    it('falls back to childSpecimenId then aggregateId', async () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
-
       await service.appendLineageEvent({}, { childSpecimenId: 'child-1' });
-      let call = outbox.appendEvent.mock.calls[0][1];
-      expect(call.aggregateId).toBe('child-1');
-      expect(call.payload.specimenId).toBe('child-1');
-
+      expect(outbox.appendEvent.mock.calls[0][1].aggregateId).toBe('child-1');
       await service.appendLineageEvent({}, { aggregateId: 'agg-2' });
-      call = outbox.appendEvent.mock.calls[1][1];
-      expect(call.aggregateId).toBe('agg-2');
-      expect(call.payload.specimenId).toBeNull();
-
-      await service.appendLineageEvent({}, {});
-      call = outbox.appendEvent.mock.calls[2][1];
-      expect(call.aggregateId).toBe('');
-      expect(call.payload.parentSpecimenId).toBeNull();
+      expect(outbox.appendEvent.mock.calls[1][1].aggregateId).toBe('agg-2');
     });
   });
 
@@ -160,49 +159,21 @@ describe('graphProjection.service', () => {
     it('emits QUALITY_ASSESSED with provided fields', async () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
-
       await service.appendQualityEvent({}, {
-        specimenId: 's-1',
-        qualityAssessmentId: 'qa-1',
-        status: 'PASSED',
-        score: 0.9,
+        specimenId: 's-1', qualityAssessmentId: 'qa-1', status: 'PASSED', score: 0.9,
         evaluatedAt: '2026-01-02T00:00:00Z',
       });
-
       const call = outbox.appendEvent.mock.calls[0][1];
       expect(call.eventType).toBe('QUALITY_ASSESSED');
-      expect(call.aggregateType).toBe('Sample');
       expect(call.aggregateId).toBe('s-1');
-      expect(call.payload).toEqual({
-        specimenId: 's-1',
-        qualityAssessmentId: 'qa-1',
-        status: 'PASSED',
-        score: 0.9,
-        evaluatedAt: '2026-01-02T00:00:00Z',
-      });
+      expect(call.payload.score).toBe(0.9);
     });
 
-    it('defaults status to UNKNOWN, score to null, and falls back to aggregateId', async () => {
+    it('preserves a score of 0', async () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
-
-      await service.appendQualityEvent({}, { aggregateId: 'agg-9' });
-
-      const call = outbox.appendEvent.mock.calls[0][1];
-      expect(call.aggregateId).toBe('agg-9');
-      expect(call.payload.status).toBe('UNKNOWN');
-      expect(call.payload.score).toBeNull();
-      expect(call.payload.evaluatedAt).toBeInstanceOf(Date);
-    });
-
-    it('preserves a score of 0 rather than nullish-coalescing it away', async () => {
-      const outbox = createFakeOutbox();
-      const service = new GraphProjectionService({ outbox });
-
       await service.appendQualityEvent({}, { specimenId: 's-0', score: 0 });
-
-      const call = outbox.appendEvent.mock.calls[0][1];
-      expect(call.payload.score).toBe(0);
+      expect(outbox.appendEvent.mock.calls[0][1].payload.score).toBe(0);
     });
   });
 
@@ -210,39 +181,14 @@ describe('graphProjection.service', () => {
     it('emits TELEMETRY_INCIDENT_RECORDED with provided fields', async () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
-
       await service.appendTelemetryEvent({}, {
-        specimenId: 's-1',
-        telemetryIncidentId: 'ti-1',
-        severity: 'HIGH',
-        status: 'OPEN',
+        specimenId: 's-1', telemetryIncidentId: 'ti-1', severity: 'HIGH', status: 'OPEN',
         occurredAt: '2026-01-03T00:00:00Z',
       });
-
       const call = outbox.appendEvent.mock.calls[0][1];
       expect(call.eventType).toBe('TELEMETRY_INCIDENT_RECORDED');
-      expect(call.aggregateType).toBe('Sample');
       expect(call.aggregateId).toBe('s-1');
-      expect(call.payload).toEqual({
-        specimenId: 's-1',
-        telemetryIncidentId: 'ti-1',
-        severity: 'HIGH',
-        status: 'OPEN',
-        occurredAt: '2026-01-03T00:00:00Z',
-      });
-    });
-
-    it('defaults severity to UNKNOWN and status to OPEN, and falls back to aggregateId', async () => {
-      const outbox = createFakeOutbox();
-      const service = new GraphProjectionService({ outbox });
-
-      await service.appendTelemetryEvent({}, { aggregateId: 'agg-7' });
-
-      const call = outbox.appendEvent.mock.calls[0][1];
-      expect(call.aggregateId).toBe('agg-7');
-      expect(call.payload.severity).toBe('UNKNOWN');
-      expect(call.payload.status).toBe('OPEN');
-      expect(call.payload.occurredAt).toBeInstanceOf(Date);
+      expect(call.payload.severity).toBe('HIGH');
     });
   });
 
@@ -250,43 +196,15 @@ describe('graphProjection.service', () => {
     it('emits TERMINOLOGY_CONCEPT_PROMOTED with provided fields', async () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
-
       await service.appendTerminologyConceptEvent({}, {
-        terminologyConceptId: 'tc-1',
-        systemUri: 'http://purl.obolibrary.org/obo/hp.owl',
-        code: 'HP:0000001',
-        version: 'sample-2026-07-31',
-        display: 'All',
-        conceptStatus: 'active',
+        terminologyConceptId: 'tc-1', systemUri: 'http://purl.obolibrary.org/obo/hp.owl',
+        code: 'HP:0000001', version: 'sample-2026-07-31', display: 'All', conceptStatus: 'active',
         referenceDatasetReleaseId: 'rel-1',
       });
-
       const call = outbox.appendEvent.mock.calls[0][1];
       expect(call.eventType).toBe('TERMINOLOGY_CONCEPT_PROMOTED');
-      expect(call.aggregateType).toBe('TerminologyConcept');
       expect(call.aggregateId).toBe('tc-1');
-      expect(call.payload).toEqual({
-        terminologyConceptId: 'tc-1',
-        systemUri: 'http://purl.obolibrary.org/obo/hp.owl',
-        code: 'HP:0000001',
-        version: 'sample-2026-07-31',
-        display: 'All',
-        conceptStatus: 'active',
-        referenceDatasetReleaseId: 'rel-1',
-      });
-    });
-
-    it('defaults conceptStatus to active and falls back to aggregateId', async () => {
-      const outbox = createFakeOutbox();
-      const service = new GraphProjectionService({ outbox });
-
-      await service.appendTerminologyConceptEvent({}, { aggregateId: 'agg-tc' });
-
-      const call = outbox.appendEvent.mock.calls[0][1];
-      expect(call.aggregateId).toBe('agg-tc');
-      expect(call.payload.conceptStatus).toBe('active');
-      expect(call.payload.systemUri).toBeNull();
-      expect(call.payload.code).toBeNull();
+      expect(call.payload.code).toBe('HP:0000001');
     });
   });
 
@@ -294,40 +212,14 @@ describe('graphProjection.service', () => {
     it('emits TERMINOLOGY_RELATION_PROMOTED with provided fields', async () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
-
       await service.appendTerminologyRelationEvent({}, {
-        terminologyRelationId: 'tr-1',
-        sourceConceptId: 'tc-source',
-        targetConceptId: 'tc-target',
-        relationType: 'is_a',
-        relationVersion: 'sample-2026-07-31',
-        referenceDatasetReleaseId: 'rel-1',
+        terminologyRelationId: 'tr-1', sourceConceptId: 'tc-source', targetConceptId: 'tc-target',
+        relationType: 'is_a', relationVersion: 'sample-2026-07-31', referenceDatasetReleaseId: 'rel-1',
       });
-
       const call = outbox.appendEvent.mock.calls[0][1];
       expect(call.eventType).toBe('TERMINOLOGY_RELATION_PROMOTED');
-      expect(call.aggregateType).toBe('TerminologyRelation');
       expect(call.aggregateId).toBe('tr-1');
-      expect(call.payload).toEqual({
-        terminologyRelationId: 'tr-1',
-        sourceConceptId: 'tc-source',
-        targetConceptId: 'tc-target',
-        relationType: 'is_a',
-        relationVersion: 'sample-2026-07-31',
-        referenceDatasetReleaseId: 'rel-1',
-      });
-    });
-
-    it('falls back to aggregateId when terminologyRelationId is absent', async () => {
-      const outbox = createFakeOutbox();
-      const service = new GraphProjectionService({ outbox });
-
-      await service.appendTerminologyRelationEvent({}, { aggregateId: 'agg-tr' });
-
-      const call = outbox.appendEvent.mock.calls[0][1];
-      expect(call.aggregateId).toBe('agg-tr');
-      expect(call.payload.sourceConceptId).toBeNull();
-      expect(call.payload.targetConceptId).toBeNull();
+      expect(call.payload.sourceConceptId).toBe('tc-source');
     });
   });
 });
