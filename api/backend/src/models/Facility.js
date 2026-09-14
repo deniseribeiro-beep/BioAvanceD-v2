@@ -6,46 +6,21 @@ const mongoose = require("mongoose");
  */
 const FacilitySchema = new mongoose.Schema(
   {
-    name: {
-      type: String,
-      required: true,
-      trim: true,
-      example: "Campus Central",
-    },
-    code: {
-      type: String,
-      trim: true,
-      default: null,
-    },
-    address: {
-      type: String,
-      default: null,
-    },
-    description: {
-      type: String,
-      default: null,
-    },
-
+    name: { type: String, required: true, trim: true, example: "Campus Central" },
+    code: { type: String, trim: true, default: null },
+    address: { type: String, default: null },
+    description: { type: String, default: null },
     createdBy: mongoose.Schema.Types.ObjectId,
-    createdAt: {
-      type: Date,
-      default: Date.now,
-      immutable: true,
-    },
-    updatedAt: {
-      type: Date,
-      default: Date.now,
-    },
+    createdAt: { type: Date, default: Date.now, immutable: true },
+    updatedAt: { type: Date, default: Date.now },
     deletedAt: { type: Date, default: null },
   },
-  {
-    collection: "facilities",
-    timestamps: false,
-    strict: true,
-  }
+  { collection: "facilities", timestamps: false, strict: true }
 );
 
-FacilitySchema.index({ name: 1 });
+// #941: production CRUD uses the native driver. The executable index is
+// facilities_active_name_v1 in utils/storageIndexes.js; no inert Schema.index
+// declaration is kept as a false runtime guarantee.
 
 FacilitySchema.pre("save", function (next) {
   this.updatedAt = new Date();
