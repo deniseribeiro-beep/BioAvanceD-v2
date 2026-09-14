@@ -6,6 +6,7 @@ class NormalizedPhysicalStorageStore {
     this.resolveStorageLocationId = options.resolveStorageLocationId || (async ({ hierarchy, boxId }) => (
       hierarchy?.equipmentId || hierarchy?.roomId || hierarchy?.facilityId || String(boxId)
     ));
+    this.indexesPromise = null;
   }
 
   collections() {
@@ -19,7 +20,56 @@ class NormalizedPhysicalStorageStore {
     };
   }
 
+  async ensureIndexes() {
+    if (this.indexesPromise) return this.indexesPromise;
+    this.indexesPromise = (async () => {
+      const {
+        containers,
+        storageRacks,
+        storagePositions,
+        specimenContainerAssignments,
+        containerPositionAssignments,
+        rackLocationAssignments
+      } = this.collections();
+
+      const definitions = [
+        [containers, { containerId: 1 }, { unique: true, name: 'ux_container_id' }],
+        [storageRacks, { storageRackId: 1 }, { unique: true, name: 'ux_storage_rack_id' }],
+        [storagePositions, { storagePositionId: 1 }, { unique: true, name: 'ux_storage_position_id' }],
+        [specimenContainerAssignments, { specimenContainerAssignmentId: 1 }, { unique: true, name: 'ux_specimen_container_assignment_id' }],
+        [specimenContainerAssignments, { specimenId: 1 }, {
+          unique: true,
+          partialFilterExpression: { releasedAt: null },
+          name: 'ux_open_specimen_container_assignment'
+        }],
+        [containerPositionAssignments, { containerPositionAssignmentId: 1 }, { unique: true, name: 'ux_container_position_assignment_id' }],
+        [containerPositionAssignments, { containerId: 1 }, {
+          unique: true,
+          partialFilterExpression: { removedAt: null },
+          name: 'ux_open_container_position_assignment'
+        }],
+        [rackLocationAssignments, { rackLocationAssignmentId: 1 }, { unique: true, name: 'ux_rack_location_assignment_id' }],
+        [rackLocationAssignments, { storageRackId: 1 }, {
+          unique: true,
+          partialFilterExpression: { removedAt: null },
+          name: 'ux_open_rack_location_assignment'
+        }]
+      ];
+
+      for (const [collection, keys, options] of definitions) {
+        if (typeof collection.createIndex === 'function') {
+          await collection.createIndex(keys, options);
+        }
+      }
+    })().catch((error) => {
+      this.indexesPromise = null;
+      throw error;
+    });
+    return this.indexesPromise;
+  }
+
   async ensureContainerForSpecimen(specimenId, session) {
+    await this.ensureIndexes();
     const { containers, specimenContainerAssignments } = this.collections();
     const existingAssignment = await specimenContainerAssignments.findOne(
       { specimenId: String(specimenId), releasedAt: null },
@@ -38,15 +88,13 @@ class NormalizedPhysicalStorageStore {
       { upsert: true, session }
     );
 
-    const assignment = PhysicalStorageV2.specimenContainerAssignment({
-      specimenId,
-      containerId: container.containerId
-    });
+    const assignment = PhysicalStorageV2.specimenContainerAssignment({ specimenId, containerId: container.containerId });
     await specimenContainerAssignments.insertOne(assignment, { session });
     return assignment;
   }
 
   async ensureRackAndPosition({ box, positionCode, hierarchy }, session) {
+    await this.ensureIndexes();
     const { storageRacks, storagePositions, rackLocationAssignments } = this.collections();
     const storageRackId = PhysicalStorageV2.storageRackIdForBox(box._id);
     const rack = PhysicalStorageV2.storageRack({
@@ -72,11 +120,7 @@ class NormalizedPhysicalStorageStore {
     );
 
     const storageLocationId = await this.resolveStorageLocationId({ hierarchy, boxId: box._id });
-    let rackLocationAssignment = await rackLocationAssignments.findOne(
-      { storageRackId, removedAt: null },
-      { session }
-    );
-
+    let rackLocationAssignment = await rackLocationAssignments.findOne({ storageRackId, removedAt: null }, { session });
     if (!rackLocationAssignment || String(rackLocationAssignment.storageLocationId) !== String(storageLocationId)) {
       if (rackLocationAssignment) {
         await rackLocationAssignments.updateOne(
@@ -85,10 +129,7 @@ class NormalizedPhysicalStorageStore {
           { session }
         );
       }
-      rackLocationAssignment = PhysicalStorageV2.rackLocationAssignment({
-        storageRackId,
-        storageLocationId
-      });
+      rackLocationAssignment = PhysicalStorageV2.rackLocationAssignment({ storageRackId, storageLocationId });
       await rackLocationAssignments.insertOne(rackLocationAssignment, { session });
     }
 
@@ -96,12 +137,10 @@ class NormalizedPhysicalStorageStore {
   }
 
   async assignSpecimenPosition({ specimenId, box, positionCode, hierarchy }, session) {
+    await this.ensureIndexes();
     const { containerPositionAssignments } = this.collections();
     const specimenContainerAssignment = await this.ensureContainerForSpecimen(specimenId, session);
-    const { rack, position, rackLocationAssignment } = await this.ensureRackAndPosition(
-      { box, positionCode, hierarchy },
-      session
-    );
+    const { rack, position, rackLocationAssignment } = await this.ensureRackAndPosition({ box, positionCode, hierarchy }, session);
 
     const current = await containerPositionAssignments.findOne(
       { containerId: specimenContainerAssignment.containerId, removedAt: null },
@@ -109,13 +148,7 @@ class NormalizedPhysicalStorageStore {
     );
     if (current) {
       if (String(current.storagePositionId) === String(position.storagePositionId)) {
-        return {
-          specimenContainerAssignment,
-          containerPositionAssignment: current,
-          rackLocationAssignment,
-          storageRack: rack,
-          storagePosition: position
-        };
+        return { specimenContainerAssignment, containerPositionAssignment: current, rackLocationAssignment, storageRack: rack, storagePosition: position };
       }
       await containerPositionAssignments.updateOne(
         { containerPositionAssignmentId: current.containerPositionAssignmentId, removedAt: null },
@@ -129,26 +162,17 @@ class NormalizedPhysicalStorageStore {
       storagePositionId: position.storagePositionId
     });
     await containerPositionAssignments.insertOne(containerPositionAssignment, { session });
-
-    return {
-      specimenContainerAssignment,
-      containerPositionAssignment,
-      rackLocationAssignment,
-      storageRack: rack,
-      storagePosition: position
-    };
+    return { specimenContainerAssignment, containerPositionAssignment, rackLocationAssignment, storageRack: rack, storagePosition: position };
   }
 
   async releaseSpecimenPosition(specimenId, session) {
+    await this.ensureIndexes();
     const current = await this.findCurrentBySpecimen(specimenId, session);
     if (!current) return null;
     const { containerPositionAssignments } = this.collections();
     const removedAt = new Date();
     await containerPositionAssignments.updateOne(
-      {
-        containerPositionAssignmentId: current.containerPositionAssignmentId,
-        removedAt: null
-      },
+      { containerPositionAssignmentId: current.containerPositionAssignmentId, removedAt: null },
       { $set: PhysicalStorageV2.closeFields(removedAt) },
       { session }
     );
@@ -156,11 +180,9 @@ class NormalizedPhysicalStorageStore {
   }
 
   async releaseSpecimenContainer(specimenId, session) {
+    await this.ensureIndexes();
     const { specimenContainerAssignments, containers } = this.collections();
-    const current = await specimenContainerAssignments.findOne(
-      { specimenId: String(specimenId), releasedAt: null },
-      { session }
-    );
+    const current = await specimenContainerAssignments.findOne({ specimenId: String(specimenId), releasedAt: null }, { session });
     if (!current) return null;
     const at = new Date();
     await specimenContainerAssignments.updateOne(
@@ -168,15 +190,12 @@ class NormalizedPhysicalStorageStore {
       { $set: { releasedAt: at, updatedAt: at } },
       { session }
     );
-    await containers.updateOne(
-      { containerId: current.containerId },
-      { $set: { status: 'available', updatedAt: at } },
-      { session }
-    );
+    await containers.updateOne({ containerId: current.containerId }, { $set: { status: 'available', updatedAt: at } }, { session });
     return { ...current, releasedAt: at };
   }
 
   async findCurrentBySpecimen(specimenId, session) {
+    await this.ensureIndexes();
     const {
       specimenContainerAssignments,
       containerPositionAssignments,
@@ -190,28 +209,18 @@ class NormalizedPhysicalStorageStore {
       { session }
     );
     if (!specimenContainerAssignment) return null;
-
     const containerPositionAssignment = await containerPositionAssignments.findOne(
-      { containerId: specimenContainerAssignment.containerId, removedAt: null },
-      { session }
+      { containerId: specimenContainerAssignment.containerId, removedAt: null }, { session }
     );
     if (!containerPositionAssignment) return null;
-
     const storagePosition = await storagePositions.findOne(
-      { storagePositionId: containerPositionAssignment.storagePositionId },
-      { session }
+      { storagePositionId: containerPositionAssignment.storagePositionId }, { session }
     );
     if (!storagePosition) return null;
-
-    const storageRack = await storageRacks.findOne(
-      { storageRackId: storagePosition.storageRackId },
-      { session }
-    );
+    const storageRack = await storageRacks.findOne({ storageRackId: storagePosition.storageRackId }, { session });
     if (!storageRack) return null;
-
     const rackLocationAssignment = await rackLocationAssignments.findOne(
-      { storageRackId: storageRack.storageRackId, removedAt: null },
-      { session }
+      { storageRackId: storageRack.storageRackId, removedAt: null }, { session }
     );
 
     return {
@@ -233,6 +242,7 @@ class NormalizedPhysicalStorageStore {
   }
 
   async findCurrentBySpecimens(specimenIds, session) {
+    await this.ensureIndexes();
     const result = new Map();
     for (const specimenId of specimenIds || []) {
       result.set(String(specimenId), await this.findCurrentBySpecimen(specimenId, session));
