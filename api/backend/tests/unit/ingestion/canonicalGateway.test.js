@@ -2,18 +2,21 @@ import { describe, it, expect } from 'vitest';
 const { collectAliasViolations, validateIngestionPayload, assertReferencesExist } = require('../../../src/ingestion/canonicalGateway');
 const { createFakeDb } = require('./testHelpers');
 
-describe('ingestion/canonicalGateway (RF029 AC 1/2)', () => {
+const VALID_PARTICIPANT = {
+  participantId: '550e8400-e29b-41d4-a716-446655440000',
+  pseudonymId: [{ system: 'urn:bioadvanced:test', value: 'SYN-001' }],
+};
+
+describe('ingestion/canonicalGateway (RF029 AC 1/2; canonical v2.0.0)', () => {
   describe('collectAliasViolations', () => {
     const aliasMap = { participantId: ['patientID', 'patientId'] };
 
-    it('flags a legacy alias key present on the payload', () => {
-      const hits = collectAliasViolations({ patientID: '123' }, aliasMap);
-      expect(hits).toEqual(['patientID']);
+    it('flags a replaced alias key present on the payload', () => {
+      expect(collectAliasViolations({ patientID: '123' }, aliasMap)).toEqual(['patientID']);
     });
 
     it('does not flag the canonical key itself', () => {
-      const hits = collectAliasViolations({ participantId: '123' }, aliasMap);
-      expect(hits).toEqual([]);
+      expect(collectAliasViolations({ participantId: '123' }, aliasMap)).toEqual([]);
     });
 
     it('returns no hits for a non-object payload', () => {
@@ -22,47 +25,42 @@ describe('ingestion/canonicalGateway (RF029 AC 1/2)', () => {
     });
 
     it('de-duplicates repeated alias hits', () => {
-      const hits = collectAliasViolations(
+      expect(collectAliasViolations(
         { patientID: '1' },
         { participantId: ['patientID'], other: ['patientID'] },
-      );
-      expect(hits).toEqual(['patientID']);
+      )).toEqual(['patientID']);
     });
   });
 
   describe('validateIngestionPayload', () => {
-    it('passes a payload that matches a registered canonical schema exactly', () => {
-      const result = validateIngestionPayload({
-        schemaId: 'canonical.v1.participant',
-        payload: { participantId: 'P-1' },
-      });
+    it('passes a payload matching the approved Participant v2 contract', async () => {
+      const result = await validateIngestionPayload({ entityType: 'Participant', payload: VALID_PARTICIPANT });
       expect(result.valid).toBe(true);
       expect(result.violations).toEqual([]);
     });
 
-    it('rejects an unknown field the schema does not declare (additionalProperties: false)', () => {
-      const result = validateIngestionPayload({
-        schemaId: 'canonical.v1.participant',
-        payload: { participantId: 'P-1', unknownField: 'x' },
+    it('rejects a field that the approved Participant entity does not declare', async () => {
+      const result = await validateIngestionPayload({
+        entityType: 'Participant',
+        payload: { ...VALID_PARTICIPANT, unknownField: 'x' },
       });
       expect(result.valid).toBe(false);
-      expect(result.violations.some((v) => v.code === 'CONTRACT_VIOLATION')).toBe(true);
+      expect(result.violations.some((v) => v.code === 'CONTRACT_VIOLATION' && v.field === 'unknownField')).toBe(true);
     });
 
-    it('rejects a missing required field', () => {
-      const result = validateIngestionPayload({ schemaId: 'canonical.v1.participant', payload: {} });
+    it('enforces required cardinality from the v2 dictionary', async () => {
+      const result = await validateIngestionPayload({
+        entityType: 'Participant',
+        payload: { participantId: VALID_PARTICIPANT.participantId },
+      });
       expect(result.valid).toBe(false);
-      expect(result.violations.some((v) => v.field === 'participantId')).toBe(true);
+      expect(result.violations.some((v) => v.field === 'pseudonymId')).toBe(true);
     });
 
-    it('combines alias violations with contract violations in one list', () => {
-      // patientID trips the alias check (present) AND the contract check
-      // twice over: it's an undeclared field (additionalProperties: false)
-      // *and* its presence doesn't satisfy participantId's own
-      // requiredness — Ajv's allErrors:true reports both.
-      const result = validateIngestionPayload({
-        schemaId: 'canonical.v1.participant',
-        payload: { patientID: 'P-1' },
+    it('combines alias and v2 contract violations', async () => {
+      const result = await validateIngestionPayload({
+        entityType: 'Participant',
+        payload: { patientID: VALID_PARTICIPANT.participantId },
         aliasMap: { participantId: ['patientID'] },
       });
       expect(result.valid).toBe(false);
@@ -71,9 +69,9 @@ describe('ingestion/canonicalGateway (RF029 AC 1/2)', () => {
       expect(codes).toContain('CONTRACT_VIOLATION');
     });
 
-    it('skips contract validation entirely when no schemaId is given', () => {
-      const result = validateIngestionPayload({ payload: { anything: true } });
-      expect(result.valid).toBe(true);
+    it('requires an entity registered by the approved v2 dictionary', async () => {
+      await expect(validateIngestionPayload({ entityType: 'NotCanonical', payload: {} }))
+        .rejects.toThrow(/not registered/);
     });
   });
 
@@ -101,7 +99,7 @@ describe('ingestion/canonicalGateway (RF029 AC 1/2)', () => {
       ]);
     });
 
-    it('skips a reference whose value is absent (a presence concern, not this function\'s)', async () => {
+    it('skips a reference whose value is absent', async () => {
       const db = createFakeDb({ participants: [] });
       const result = await assertReferencesExist(db, [
         { collection: 'participants', field: 'participantId', value: null, label: 'participantId' },
