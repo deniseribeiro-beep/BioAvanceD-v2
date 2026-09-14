@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Remove final compatibility adapter consumers
+      - name: Remove final compatibility adapter and LGPD consumer
         run: python3 scripts/wave2-remove-lineage-adapter.py
       - name: Install backend dependencies
         working-directory: api/backend
