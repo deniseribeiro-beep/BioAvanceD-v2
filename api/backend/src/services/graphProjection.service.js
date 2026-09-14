@@ -12,7 +12,7 @@ class GraphProjectionService {
     this.outbox = options.outbox || new Neo4jOutboxService();
   }
 
-  async appendConsentEvent(db, payload) {
+  async appendConsentEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: payload.status === 'REVOKED' ? 'CONSENT_REVOKED' : 'CONSENT_UPSERTED',
       aggregateType: 'EthicalConsent',
@@ -27,10 +27,72 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 
-  async appendLineageEvent(db, payload) {
+  async appendSpecimenEvent(db, payload, options = {}) {
+    return this.outbox.appendEvent(db, {
+      eventType: 'SPECIMEN_UPSERTED',
+      aggregateType: 'Specimen',
+      aggregateId: String(payload.specimenId || payload.aggregateId || ''),
+      payload: {
+        specimenId: payload.specimenId || null,
+        participantId: payload.participantId || null,
+        parentSpecimenId: payload.parentSpecimenId || null,
+        barcode: payload.barcode || null,
+        specimenStatus: payload.specimenStatus || payload.status || null,
+      },
+      sourceService: payload.sourceService || 'graph-projection-service',
+      traceId: payload.traceId || null,
+      schemaVersion: 2,
+    }, options);
+  }
+
+  async appendCustodyEvent(db, payload, options = {}) {
+    return this.outbox.appendEvent(db, {
+      eventType: 'CUSTODY_EVENT_RECORDED',
+      aggregateType: 'Specimen',
+      aggregateId: String(payload.specimenId || payload.aggregateId || ''),
+      payload: {
+        specimenId: payload.specimenId || null,
+        custodyEventId: payload.custodyEventId || null,
+        eventType: payload.eventType || null,
+        happenedAt: payload.happenedAt || new Date(),
+        actorId: payload.actorId || null,
+        reason: payload.reason || null,
+        from: payload.from || null,
+        to: payload.to || null,
+      },
+      sourceService: payload.sourceService || 'graph-projection-service',
+      traceId: payload.traceId || null,
+      schemaVersion: 2,
+    }, options);
+  }
+
+  async appendStorageAssignmentEvent(db, payload, options = {}) {
+    return this.outbox.appendEvent(db, {
+      eventType: payload.releasedAt ? 'STORAGE_ASSIGNMENT_RELEASED' : 'STORAGE_ASSIGNMENT_UPSERTED',
+      aggregateType: 'SpecimenContainerAssignment',
+      aggregateId: String(payload.specimenContainerAssignmentId || payload.aggregateId || ''),
+      payload: {
+        specimenContainerAssignmentId: payload.specimenContainerAssignmentId || null,
+        specimenId: payload.specimenId || null,
+        containerId: payload.containerId || null,
+        containerPositionAssignmentId: payload.containerPositionAssignmentId || null,
+        storagePositionId: payload.storagePositionId || null,
+        rackLocationAssignmentId: payload.rackLocationAssignmentId || null,
+        storageRackId: payload.storageRackId || null,
+        storageLocationId: payload.storageLocationId || null,
+        assignedAt: payload.assignedAt || null,
+        releasedAt: payload.releasedAt || null,
+      },
+      sourceService: payload.sourceService || 'graph-projection-service',
+      traceId: payload.traceId || null,
+      schemaVersion: 2,
+    }, options);
+  }
+
+  async appendLineageEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'LINEAGE_REGISTERED',
       aggregateType: 'Sample',
@@ -42,10 +104,10 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 
-  async appendQualityEvent(db, payload) {
+  async appendQualityEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'QUALITY_ASSESSED',
       aggregateType: 'Sample',
@@ -60,10 +122,10 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 
-  async appendTelemetryEvent(db, payload) {
+  async appendTelemetryEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'TELEMETRY_INCIDENT_RECORDED',
       aggregateType: 'Sample',
@@ -78,14 +140,14 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 
   // RF028 AC9: "Persistir primeiro no MongoDB e projetar no Neo4j
   // exclusivamente pelo outbox" — appended by reference-imports/pipeline.js's
   // promote() on the same write that inserts a TerminologyConcept, same
   // outbox pattern RF023 uses for consent/lineage/quality/telemetry.
-  async appendTerminologyConceptEvent(db, payload) {
+  async appendTerminologyConceptEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'TERMINOLOGY_CONCEPT_PROMOTED',
       aggregateType: 'TerminologyConcept',
@@ -102,10 +164,10 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 
-  async appendTerminologyRelationEvent(db, payload) {
+  async appendTerminologyRelationEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'TERMINOLOGY_RELATION_PROMOTED',
       aggregateType: 'TerminologyRelation',
@@ -121,7 +183,7 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 }
 
