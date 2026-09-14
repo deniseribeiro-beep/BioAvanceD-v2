@@ -1,14 +1,9 @@
 const ReleaseSampleUseCase = require('../../core/use-cases/ReleaseSampleUseCase');
 const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../../infrastructure/persistence/mongo/MongoAuditRepository');
-const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
+const MongoLineageRepository = require('../../infrastructure/persistence/mongo/MongoLineageRepository');
 const logger = require('../../utils/logger');
 
-// Substrings of the client-input validation errors ReleaseSampleUseCase and
-// MongoStorageRepository.releaseSamplePosition throw. Anything not matching
-// one of these, or the 404/409 patterns below, is treated as an
-// unexpected/infra failure and mapped to 500 instead of masked as a 400
-// (#987, mirrors move-sample.controller.js).
 const VALIDATION_ERROR_PATTERNS = [
   'obrigatório',
   'não possui localização de armazenamento'
@@ -31,7 +26,7 @@ function createReleaseSampleController() {
       const useCase = new ReleaseSampleUseCase({
         storageRepository: new MongoStorageRepository(db),
         auditRepository: new MongoAuditRepository(db),
-        lineageRepository: new LineageRepository(req.app.locals.neo4jDriver || null)
+        lineageRepository: new MongoLineageRepository(db)
       });
 
       const result = await useCase.execute({
@@ -48,6 +43,7 @@ function createReleaseSampleController() {
       return res.status(200).json({
         success: true,
         data: result.releasedFrom,
+        projectionQueued: result.lineageQueued,
         message: `Amostra liberada de ${result.releasedFrom.position}`
       });
     } catch (error) {
@@ -61,6 +57,8 @@ function createReleaseSampleController() {
         statusCode = 409;
       } else if (VALIDATION_ERROR_PATTERNS.some((pattern) => message.includes(pattern))) {
         statusCode = 400;
+      } else if (message.includes('RF023_LINEAGE_VALIDATION_FAILED')) {
+        statusCode = 422;
       }
 
       return res.status(statusCode).json({
