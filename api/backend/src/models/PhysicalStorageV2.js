@@ -21,9 +21,9 @@ class PhysicalStorageV2 {
     return {
       containerId: data.containerId || this.containerIdForSpecimen(data.specimenId),
       containerType: data.containerType || 'specimen_primary_container',
-      status: data.status || 'occupied',
-      createdAt: nowOr(data.createdAt),
-      updatedAt: nowOr(data.updatedAt)
+      emptyStatus: data.emptyStatus || 'occupied',
+      status: data.status || 'active',
+      createdAt: nowOr(data.createdAt)
     };
   }
 
@@ -35,10 +35,11 @@ class PhysicalStorageV2 {
       rackType: data.rackType || 'specimen_storage_rack',
       rowCount: rows,
       columnCount: columns,
-      capacity: Number(data.capacity || rows * columns),
-      sourceStorageBoxId: data.sourceStorageBoxId ? String(data.sourceStorageBoxId) : null,
-      createdAt: nowOr(data.createdAt),
-      updatedAt: nowOr(data.updatedAt)
+      coordinateScheme: data.coordinateScheme || 'alpha_numeric',
+      orientationRule: data.orientationRule || 'top_left_origin',
+      status: data.status || 'active',
+      ...(data.storageLocationId ? { storageLocationId: String(data.storageLocationId) } : {}),
+      ...(data.catalogReference ? { catalogReference: String(data.catalogReference) } : {})
     };
   }
 
@@ -51,21 +52,20 @@ class PhysicalStorageV2 {
       positionCode,
       rowIndex: match ? match[1].charCodeAt(0) - 64 : null,
       columnIndex: match ? Number(match[2]) : null,
-      createdAt: nowOr(data.createdAt),
-      updatedAt: nowOr(data.updatedAt)
+      status: data.status || 'available'
     };
   }
 
   static specimenContainerAssignment(data) {
-    const assignedAt = nowOr(data.assignedAt);
+    const loadedAt = nowOr(data.loadedAt || data.assignedAt);
     return {
       specimenContainerAssignmentId: data.specimenContainerAssignmentId || crypto.randomUUID(),
       specimenId: String(data.specimenId),
       containerId: String(data.containerId),
-      assignedAt,
-      releasedAt: data.releasedAt || null,
-      createdAt: assignedAt,
-      updatedAt: assignedAt
+      loadedAt,
+      unloadedAt: data.unloadedAt || data.releasedAt || null,
+      assignmentStatus: data.assignmentStatus || 'active',
+      sourceEventId: String(data.sourceEventId || crypto.randomUUID())
     };
   }
 
@@ -77,8 +77,8 @@ class PhysicalStorageV2 {
       storagePositionId: String(data.storagePositionId),
       placedAt,
       removedAt: data.removedAt || null,
-      createdAt: placedAt,
-      updatedAt: placedAt
+      assignmentStatus: data.assignmentStatus || 'active',
+      ...(data.sourceScanEventId ? { sourceScanEventId: String(data.sourceScanEventId) } : {})
     };
   }
 
@@ -90,13 +90,17 @@ class PhysicalStorageV2 {
       storageLocationId: String(data.storageLocationId),
       placedAt,
       removedAt: data.removedAt || null,
-      createdAt: placedAt,
-      updatedAt: placedAt
+      assignmentStatus: data.assignmentStatus || 'active',
+      sourceEventId: String(data.sourceEventId || crypto.randomUUID())
     };
   }
 
-  static closeFields(at = new Date(), field = 'removedAt') {
-    return { [field]: at, updatedAt: at };
+  static closeFields(at = new Date()) {
+    return { removedAt: at, assignmentStatus: 'inactive' };
+  }
+
+  static unloadContainerFields(at = new Date()) {
+    return { unloadedAt: at, assignmentStatus: 'inactive' };
   }
 }
 
