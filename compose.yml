@@ -1,18 +1,75 @@
 name: bioavanced
 
 services:
+  mongo-keyfile-init:
+    image: mongo:7
+    user: "0:0"
+    restart: "no"
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -eu
+        if [ ! -s /mongo-keyfile/keyfile ]; then
+          openssl rand -base64 756 > /mongo-keyfile/keyfile
+        fi
+        chown 999:999 /mongo-keyfile/keyfile
+        chmod 400 /mongo-keyfile/keyfile
+    volumes:
+      - mongodb_keyfile:/mongo-keyfile
+
   mongodb:
     image: mongo:7
     restart: unless-stopped
+    command: ["--replSet", "rs0", "--bind_ip_all", "--keyFile", "/run/mongodb-keyfile/keyfile"]
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    volumes:
+      - mongodb_keyfile:/run/mongodb-keyfile:ro
+    depends_on:
+      mongo-keyfile-init:
+        condition: service_completed_successfully
+    # #923: healthy now means transaction-ready, not merely TCP/ping-ready.
+    # The separate mongo-rs-init service below starts from service_started,
+    # initiates rs0, and this check only flips green after this node is PRIMARY.
     healthcheck:
-      test: ["CMD", "mongosh", "--username", "${MONGO_ROOT_USERNAME}", "--password", "${MONGO_ROOT_PASSWORD}", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
+      test: ["CMD-SHELL", "mongosh --quiet --username '$${MONGO_INITDB_ROOT_USERNAME}' --password '$${MONGO_INITDB_ROOT_PASSWORD}' --authenticationDatabase admin --eval 'quit(db.hello().isWritablePrimary ? 0 : 1)' >/dev/null 2>&1"]
+      interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 30
       start_period: 10s
+
+  mongo-rs-init:
+    image: mongo:7
+    restart: "no"
+    depends_on:
+      mongodb:
+        condition: service_started
+    environment:
+      MONGO_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -eu
+        for i in $$(seq 1 60); do
+          if mongosh --host mongodb --quiet \
+            --username "$$MONGO_ROOT_USERNAME" \
+            --password "$$MONGO_ROOT_PASSWORD" \
+            --authenticationDatabase admin --eval '
+              try {
+                rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongodb:27017" }] });
+              } catch (e) {
+                if (!/already initialized/.test(e.message)) { throw e; }
+              }
+              quit(db.hello().isWritablePrimary ? 0 : 1);
+            '; then
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "MongoDB replica set rs0 did not become PRIMARY" >&2
+        exit 1
 
   neo4j:
     image: neo4j:5-community
@@ -85,3 +142,5 @@ services:
       retries: 20
       start_period: 10s
 
+volumes:
+  mongodb_keyfile:
