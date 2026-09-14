@@ -78,12 +78,11 @@ class StorageTopologyAuthoringService {
     const roomId = optionalObjectId(input.roomId, 'roomId');
     const storageContainers = this.db.collection('storageContainers');
 
-    let parent = null;
     if (containerType === 'FREEZER') {
       if (parentId) throw topologyError('INVALID_HIERARCHY', 'FREEZER não pode ter parentId');
     } else {
       if (!parentId) throw topologyError('INVALID_HIERARCHY', `${containerType} exige parentId`);
-      parent = await storageContainers.findOne({ _id: parentId, deletedAt: null });
+      const parent = await storageContainers.findOne({ _id: parentId, deletedAt: null });
       if (!parent) throw topologyError('PARENT_NOT_FOUND', 'Container pai não encontrado', 404);
       const expectedParentType = CONTAINER_PARENT_TYPES[containerType];
       if (parent.containerType !== expectedParentType) {
@@ -103,7 +102,7 @@ class StorageTopologyAuthoringService {
       const equipmentIdentifier = requiredText(input.equipmentId ?? input.containerID, 'equipmentId');
       const equipment = await this.db.collection('equipment').findOne({
         equipmentID: { $in: buildIdVariants(equipmentIdentifier) },
-        deletedAt: { $in: [null, undefined] },
+        deletedAt: null,
       });
       if (!equipment) {
         throw topologyError('EQUIPMENT_NOT_FOUND', `Equipment ${equipmentIdentifier} não encontrado`, 404);
