@@ -21,7 +21,7 @@ const participantIdentityService = require('./participantIdentity.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
-const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
+const MongoLineageRepository = require('../infrastructure/persistence/mongo/MongoLineageRepository');
 const { ObjectId } = require('mongodb');
 
 const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
@@ -362,7 +362,7 @@ class SampleService {
       const allocateUseCase = new AllocateSampleUseCase({
         storageRepository: new MongoStorageRepository(db),
         auditRepository: new MongoAuditRepository(db),
-        lineageRepository: new LineageRepository(options?.neo4jDriver || null)
+        lineageRepository: new MongoLineageRepository(db)
       });
 
       try {

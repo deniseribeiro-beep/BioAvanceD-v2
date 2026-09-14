@@ -6,7 +6,7 @@ const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
 const consentValidator = require('../../services/consent.validator');
 const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCase');
-const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
+const MongoLineageRepository = require('../../infrastructure/persistence/mongo/MongoLineageRepository');
 const { getCollection } = require('../../utils/collectionResolver');
 const { ObjectId } = require('mongodb');
 // #933: extraída para src/utils/userFilter.js para que os scripts de
@@ -874,7 +874,7 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
 
     const registerSampleUseCase = new RegisterSampleUseCase({
       sampleRepository,
-      lineageRepository: new LineageRepository(req.app.locals.neo4jDriver || null),
+      lineageRepository: new MongoLineageRepository(db),
       quarantineService: req.app.locals.neo4jQuarantineService || req.app.locals.topologicalQuarantine || null
     });
 

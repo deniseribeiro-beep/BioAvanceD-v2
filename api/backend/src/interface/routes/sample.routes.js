@@ -83,7 +83,7 @@ router.get('/:id/compliance-graph', authenticate, requireOrganizationScope, asyn
   }
 });
 const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCase');
-const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
+const MongoLineageRepository = require('../../infrastructure/persistence/mongo/MongoLineageRepository');
 const { getCollection } = require('../../utils/collectionResolver');
 const { ObjectId } = require('mongodb');
 const logService = require('../../services/log.service');
@@ -356,7 +356,7 @@ router.post('/',
 
       const registerSampleUseCase = new RegisterSampleUseCase({
         sampleRepository,
-        lineageRepository: new LineageRepository(req.app.locals.neo4jDriver || null),
+        lineageRepository: new MongoLineageRepository(db),
         quarantineService: req.app.locals.neo4jQuarantineService || req.app.locals.topologicalQuarantine || null
       });
 

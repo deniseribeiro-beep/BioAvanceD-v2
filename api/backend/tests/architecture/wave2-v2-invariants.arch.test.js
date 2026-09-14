@@ -63,6 +63,21 @@ test('Wave 2 never uses COMPROMISED as a specimenStatus value', () => {
   assert.deepEqual(offenders, [], `COMPROMISED specimenStatus residuals: ${offenders.join(', ')}`);
 });
 
+test('Wave 2 has no legacy Neo4j lineage compatibility adapter', () => {
+  const legacyAdapterPath = path.join(SRC_ROOT, 'infrastructure/database/neo4j/LineageRepository.js');
+  assert.equal(fs.existsSync(legacyAdapterPath), false, 'legacy LineageRepository.js must be physically removed');
+  const executablePattern = /(?:const|let|var)\s+LineageRepository\s*=\s*require\s*\(\s*['"][^'"]*database\/neo4j\/LineageRepository['"]\s*\)|new\s+LineageRepository\s*\(/;
+  const offenders = sourceFiles()
+    .filter(({ source }) => {
+      const withoutComments = source
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      return executablePattern.test(withoutComments);
+    })
+    .map(({ relative }) => relative);
+  assert.deepEqual(offenders, [], `legacy lineage adapter consumers: ${offenders.join(', ')}`);
+});
+
 test('RF023 domain Neo4j writes are confined to projection/rebuild boundary', () => {
   const allow = [
     /^services\/neo4jCanonicalProjection(?:V2)?\.service\.js$/,

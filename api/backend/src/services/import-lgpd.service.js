@@ -30,7 +30,7 @@ const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
-const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
+const MongoLineageRepository = require('../infrastructure/persistence/mongo/MongoLineageRepository');
 
 const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
 
@@ -1359,7 +1359,7 @@ class ImportLGPDService {
   }
 
   async importSamples(db, file, options = {}) {
-    const { startBoxId = null, autoIncrement = false, groupFields = {}, neo4jDriver = null, actor = {} } = options;
+    const { startBoxId = null, autoIncrement = false, groupFields = {}, actor = {} } = options;
     const results = {
       total: 0,
       success: 0,
@@ -1390,7 +1390,7 @@ class ImportLGPDService {
       const allocateUseCase = new AllocateSampleUseCase({
         storageRepository: new MongoStorageRepository(db),
         auditRepository: new MongoAuditRepository(db),
-        lineageRepository: new LineageRepository(neo4jDriver)
+        lineageRepository: new MongoLineageRepository(db)
       });
 
       // Campos obrigatórios para amostras.
