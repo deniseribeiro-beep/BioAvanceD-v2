@@ -22,9 +22,31 @@ if (!process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__) {
   });
 }
 
+async function resolveProjectionDriver(options = {}) {
+  if (options.neo4jDriver) return options.neo4jDriver;
+
+  try {
+    return await connectNeo4j();
+  } catch (error) {
+    // Neo4j is a derived projection in v2. When the projection worker is
+    // configured fail-open, canonical writes remain durable in MongoDB/outbox
+    // and the worker can retry on the next cycle without affecting the HTTP
+    // runtime. Fail-closed remains available specifically for this worker.
+    if (env.NEO4J_REQUIRED) throw error;
+    logger.warn('[GRAPH_OUTBOX] Neo4j indisponível; projeção adiada, outbox preservada', {
+      error: error.message || error
+    });
+    return null;
+  }
+}
+
 async function runProjectionOnce(options = {}) {
   const db = options.db || await connectDB();
-  const neo4jDriver = options.neo4jDriver || await connectNeo4j();
+  const neo4jDriver = await resolveProjectionDriver(options);
+  if (!neo4jDriver) {
+    return { processed: 0, projected: 0, failed: 0, deferred: true };
+  }
+
   const outboxService = options.outboxService || new Neo4jOutboxService();
   const projector = options.projector || new Neo4jCanonicalProjectionV2Service();
   const maxAttempts = Number(options.maxAttempts || env.GRAPH_OUTBOX_MAX_ATTEMPTS || 8);
