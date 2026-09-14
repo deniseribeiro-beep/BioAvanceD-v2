@@ -1,0 +1,33 @@
+services:
+  foundation-bootstrap:
+    # RF022 / Foundation v2.0.0: infraestrutura saudável primeiro, Foundation
+    # one-shot depois, aplicação e workers somente após conclusão com exit 0.
+    # !override substitui a dependência legada de backend e elimina o ciclo.
+    depends_on: !override
+      mongodb:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+      tsa:
+        condition: service_healthy
+      witness:
+        condition: service_healthy
+
+  backend:
+    depends_on:
+      foundation-bootstrap:
+        condition: service_completed_successfully
+
+  worker:
+    depends_on:
+      foundation-bootstrap:
+        condition: service_completed_successfully
+
+  neo4j-projection-worker:
+    depends_on:
+      foundation-bootstrap:
+        condition: service_completed_successfully
