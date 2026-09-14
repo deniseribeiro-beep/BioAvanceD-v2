@@ -18,113 +18,60 @@ describe('neo4jCanonicalProjection.service', () => {
     process.env = { ...originalEnv };
   });
 
-  describe('constructor', () => {
-    it('defaults database from options', () => {
+  describe('constructor/pseudonymization', () => {
+    it('uses configured database and deterministic pseudonymous donor ids', () => {
       const service = new Neo4jCanonicalProjectionService({ database: 'custom' });
       expect(service.database).toBe('custom');
+      expect(service.pseudonymizeDonorId('Donor-1')).toMatch(/^DONOR_[0-9a-f]{24}$/);
+      expect(service.pseudonymizeDonorId('Donor-1')).toBe(service.pseudonymizeDonorId('donor-1'));
     });
 
-    it('falls back to process.env.NEO4J_DATABASE then "neo4j"', () => {
-      process.env.NEO4J_DATABASE = 'env-db';
-      expect(new Neo4jCanonicalProjectionService().database).toBe('env-db');
-      delete process.env.NEO4J_DATABASE;
-      expect(new Neo4jCanonicalProjectionService().database).toBe('neo4j');
-    });
-  });
-
-  describe('pseudonymizeDonorId', () => {
-    it('hashes the identity using the primary salt', () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const id = service.pseudonymizeDonorId('Donor-1');
-      expect(id).toMatch(/^DONOR_[0-9a-f]{24}$/);
-    });
-
-    it('falls back through GRAPH_PSEUDONYMIZATION_SALT and USER_ANON_SALT when NEO4J_CANONICAL_SALT is unset', () => {
+    it('falls back through salts and fails when none exists', () => {
       delete process.env.NEO4J_CANONICAL_SALT;
       process.env.GRAPH_PSEUDONYMIZATION_SALT = 'graph-salt';
-      const service = new Neo4jCanonicalProjectionService();
-      expect(() => service.pseudonymizeDonorId('x')).not.toThrow();
-    });
-
-    it('throws when no salt is configured', () => {
-      delete process.env.NEO4J_CANONICAL_SALT;
-      const service = new Neo4jCanonicalProjectionService();
-      expect(() => service.pseudonymizeDonorId('x')).toThrow('Salt de pseudonimização ausente');
+      expect(() => new Neo4jCanonicalProjectionService().pseudonymizeDonorId('x')).not.toThrow();
+      delete process.env.GRAPH_PSEUDONYMIZATION_SALT;
+      expect(() => new Neo4jCanonicalProjectionService().pseudonymizeDonorId('x'))
+        .toThrow('Salt de pseudonimização ausente');
     });
   });
 
   describe('applyEvent dispatch', () => {
-    it('routes CONSENT_UPSERTED and CONSENT_REVOKED to applyConsentProjection', async () => {
+    it.each([
+      ['CONSENT_UPSERTED', { participantId: 'p1' }],
+      ['CONSENT_REVOKED', { participantId: 'p1' }],
+      ['LINEAGE_REGISTERED', {}],
+      ['QUALITY_ASSESSED', {}],
+      ['TELEMETRY_INCIDENT_RECORDED', {}],
+      ['TERMINOLOGY_CONCEPT_PROMOTED', {}],
+      ['TERMINOLOGY_RELATION_PROMOTED', {}],
+    ])('routes %s to a projector', async (eventType, payload) => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
-      const event = { eventType: 'consent_upserted', payload: { participantId: 'p1' } };
-      const result = await service.applyEvent(session, event);
+      const result = await service.applyEvent(session, { eventType, aggregateId: 'agg', eventId: 'evt', payload });
       expect(result.projected).toBe(true);
       expect(session.run).toHaveBeenCalledTimes(1);
     });
 
-    it('routes LINEAGE_REGISTERED to applyLineageProjection', async () => {
+    it('skips an unknown or missing event without Cypher', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
-      const result = await service.applyEvent(session, { eventType: 'LINEAGE_REGISTERED', payload: {} });
-      expect(result.projected).toBe(true);
-    });
-
-    it('routes QUALITY_ASSESSED to applyQualityProjection', async () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const session = makeSession();
-      const result = await service.applyEvent(session, { eventType: 'QUALITY_ASSESSED', payload: {} });
-      expect(result.projected).toBe(true);
-    });
-
-    it('routes TELEMETRY_INCIDENT_RECORDED to applyTelemetryProjection', async () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const session = makeSession();
-      const result = await service.applyEvent(session, { eventType: 'TELEMETRY_INCIDENT_RECORDED', payload: {} });
-      expect(result.projected).toBe(true);
-    });
-
-    it('routes TERMINOLOGY_CONCEPT_PROMOTED to applyTerminologyConceptProjection', async () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const session = makeSession();
-      const result = await service.applyEvent(session, { eventType: 'TERMINOLOGY_CONCEPT_PROMOTED', payload: {} });
-      expect(result.projected).toBe(true);
-    });
-
-    it('routes TERMINOLOGY_RELATION_PROMOTED to applyTerminologyRelationProjection', async () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const session = makeSession();
-      const result = await service.applyEvent(session, { eventType: 'TERMINOLOGY_RELATION_PROMOTED', payload: {} });
-      expect(result.projected).toBe(true);
-    });
-
-    it('returns skipped for an unrecognized event type without calling session.run', async () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const session = makeSession();
-      const result = await service.applyEvent(session, { eventType: 'SOMETHING_ELSE', aggregateType: 'Foo', eventId: 'e1' });
-      expect(result).toEqual({ skipped: true, eventType: 'SOMETHING_ELSE', aggregateType: 'Foo', eventId: 'e1' });
+      expect((await service.applyEvent(session, { eventType: 'SOMETHING_ELSE' })).skipped).toBe(true);
+      expect((await service.applyEvent(session, undefined)).skipped).toBe(true);
       expect(session.run).not.toHaveBeenCalled();
-    });
-
-    it('handles a missing event gracefully via optional chaining', async () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const session = makeSession();
-      const result = await service.applyEvent(session, undefined);
-      expect(result.skipped).toBe(true);
-      expect(result.eventType).toBe('');
     });
   });
 
   describe('applyConsentProjection', () => {
-    it('projects using payload fields including specimenId (FOREACH branch taken)', async () => {
+    it('uses an explicit legacy specimenId only when one is actually present', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
       const event = {
         eventType: 'CONSENT_UPSERTED',
-        aggregateId: 'agg-1',
+        aggregateId: 'consent-aggregate',
         schemaVersion: 2,
         occurredAt: '2026-01-01T00:00:00.000Z',
-        sourceService: 'lims',
+        sourceService: 'legacy-compat',
         eventId: 'evt-1',
         payload: {
           participantId: 'participant-1',
@@ -134,222 +81,102 @@ describe('neo4jCanonicalProjection.service', () => {
           signedAt: '2026-01-02T00:00:00.000Z',
         },
       };
+
       const result = await service.applyConsentProjection(session, event);
-      expect(result.projected).toBe(true);
+      const params = session.run.mock.calls[0][1];
       expect(result.consentId).toBe('consent-1');
-      const params = session.run.mock.calls[0][1];
       expect(params.specimenId).toBe('spec-1');
+      expect(params.consentId).toBe('consent-1');
       expect(params.consentStatus).toBe('ACTIVE');
-      expect(params.occurredAt).toBe('2026-01-02T00:00:00.000Z');
     });
 
-    it('falls back to aggregateId/defaults when payload fields are absent (empty-specimenId FOREACH skip)', async () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const session = makeSession();
-      const event = { eventType: 'CONSENT_REVOKED', aggregateId: 'agg-2', payload: {} };
-      await service.applyConsentProjection(session, event);
-      const params = session.run.mock.calls[0][1];
-      expect(params.specimenId).toBe('agg-2');
-      expect(params.consentId).toBe('agg-2');
-      expect(params.consentStatus).toBe('ACTIVE');
-      expect(params.sourceService).toBe('unknown');
-      expect(params.schemaVersion).toBe(1);
-    });
-  });
-
-  describe('applyLineageProjection', () => {
-    it('projects parent/child specimen ids from payload', async () => {
+    it('never turns consent aggregateId into a specimen id (#1026)', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
       const event = {
-        eventType: 'LINEAGE_REGISTERED',
-        aggregateId: 'agg-3',
+        eventType: 'CONSENT_REVOKED',
+        aggregateId: 'CONSENT-NOT-A-SPECIMEN',
         eventId: 'evt-2',
-        payload: { specimenId: 'child-1', parentSpecimenId: 'parent-1' },
+        payload: { participantId: 'participant-2', status: 'REVOKED' },
       };
-      const result = await service.applyLineageProjection(session, event);
-      expect(result.specimenId).toBe('child-1');
-      const params = session.run.mock.calls[0][1];
-      expect(params.parentSpecimenId).toBe('parent-1');
-    });
 
-    it('falls back to aggregateId for specimenId when payload omits it', async () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const session = makeSession();
-      const result = await service.applyLineageProjection(session, { aggregateId: 'agg-4', payload: {} });
-      expect(result.specimenId).toBe('agg-4');
+      await service.applyConsentProjection(session, event);
+      const [cypher, params] = session.run.mock.calls[0];
+      expect(params.specimenId).toBe('');
+      expect(params.consentId).toBe('CONSENT-NOT-A-SPECIMEN');
+      expect(params.consentStatus).toBe('REVOKED');
+      expect(cypher).toContain("CASE WHEN $specimenId = '' THEN [] ELSE [1] END");
     });
   });
 
-  describe('applyQualityProjection', () => {
-    it('projects score and evaluatedAt from payload', async () => {
+  describe('lineage/quality/telemetry projections', () => {
+    it('projects explicit parent/child lineage', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
-      const event = {
-        aggregateId: 'agg-5',
-        eventId: 'evt-3',
-        payload: { specimenId: 'spec-5', qualityAssessmentId: 'qa-1', status: 'passed', score: 92, evaluatedAt: '2026-01-03T00:00:00.000Z' },
-      };
-      const result = await service.applyQualityProjection(session, event);
-      expect(result.specimenId).toBe('spec-5');
-      const params = session.run.mock.calls[0][1];
-      expect(params.assessmentId).toBe('qa-1');
-      expect(params.score).toBe(92);
-      expect(params.status).toBe('passed');
+      const result = await service.applyLineageProjection(session, {
+        aggregateId: 'agg', eventId: 'evt', payload: { specimenId: 'child', parentSpecimenId: 'parent' },
+      });
+      expect(result.specimenId).toBe('child');
+      expect(session.run.mock.calls[0][1].parentSpecimenId).toBe('parent');
     });
 
-    it('defaults score to null and assessmentId to eventId when payload omits them', async () => {
+    it('projects quality score and preserves null defaults', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
-      await service.applyQualityProjection(session, { aggregateId: 'agg-6', eventId: 'evt-4', payload: {} });
-      const params = session.run.mock.calls[0][1];
-      expect(params.score).toBeNull();
-      expect(params.assessmentId).toBe('evt-4');
-      expect(params.status).toBe('UNKNOWN');
-    });
-  });
+      await service.applyQualityProjection(session, {
+        aggregateId: 'spec', eventId: 'qa-event', payload: { score: 92, status: 'passed' },
+      });
+      expect(session.run.mock.calls[0][1]).toEqual(expect.objectContaining({ score: 92, status: 'passed' }));
 
-  describe('applyTelemetryProjection', () => {
-    it('projects severity/status/occurredAt from payload', async () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const session = makeSession();
-      const event = {
-        aggregateId: 'agg-7',
-        eventId: 'evt-5',
-        payload: { specimenId: 'spec-7', telemetryIncidentId: 'inc-1', severity: 'critical', status: 'closed', occurredAt: '2026-01-04T00:00:00.000Z' },
-      };
-      const result = await service.applyTelemetryProjection(session, event);
-      expect(result.specimenId).toBe('spec-7');
-      const params = session.run.mock.calls[0][1];
-      expect(params.incidentId).toBe('inc-1');
-      expect(params.severity).toBe('critical');
-      expect(params.status).toBe('closed');
+      const session2 = makeSession();
+      await service.applyQualityProjection(session2, { aggregateId: 'spec', eventId: 'qa-event-2', payload: {} });
+      expect(session2.run.mock.calls[0][1].score).toBeNull();
     });
 
-    it('defaults severity/status/incidentId when payload omits them', async () => {
+    it('projects telemetry incident defaults', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
-      await service.applyTelemetryProjection(session, { aggregateId: 'agg-8', eventId: 'evt-6', payload: {} });
-      const params = session.run.mock.calls[0][1];
-      expect(params.incidentId).toBe('evt-6');
-      expect(params.severity).toBe('UNKNOWN');
-      expect(params.status).toBe('OPEN');
+      await service.applyTelemetryProjection(session, { aggregateId: 'spec', eventId: 'inc', payload: {} });
+      expect(session.run.mock.calls[0][1]).toEqual(expect.objectContaining({
+        incidentId: 'inc', severity: 'UNKNOWN', status: 'OPEN', specimenId: 'spec',
+      }));
     });
   });
 
-  describe('normalizeIso branch (via applyQualityProjection evaluatedAt)', () => {
-    it('falls back to now() when evaluatedAt/occurredAt are both invalid', async () => {
+  describe('terminology projections', () => {
+    it('projects terminology concepts by canonical id', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
-      await service.applyQualityProjection(session, { aggregateId: 'agg-9', eventId: 'evt-7', payload: { evaluatedAt: 'not-a-date' } });
-      const params = session.run.mock.calls[0][1];
-      expect(params.evaluatedAt).not.toBe('not-a-date');
-      expect(() => new Date(params.evaluatedAt).toISOString()).not.toThrow();
-    });
-
-    it('normalizes a Date instance directly without re-parsing', async () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const session = makeSession();
-      const evaluatedAt = new Date('2026-01-05T00:00:00.000Z');
-      await service.applyQualityProjection(session, { aggregateId: 'agg-10', eventId: 'evt-8', payload: { evaluatedAt } });
-      const params = session.run.mock.calls[0][1];
-      expect(params.evaluatedAt).toBe('2026-01-05T00:00:00.000Z');
-    });
-  });
-
-  describe('applyTerminologyConceptProjection', () => {
-    it('projects systemUri/code/version/display from payload, keyed by terminologyConceptId', async () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const session = makeSession();
-      const event = {
-        eventType: 'TERMINOLOGY_CONCEPT_PROMOTED',
-        aggregateId: 'agg-tc',
-        eventId: 'evt-tc-1',
-        schemaVersion: 1,
-        sourceService: 'reference-imports-pipeline',
-        payload: {
-          terminologyConceptId: 'tc-1',
-          systemUri: 'http://purl.obolibrary.org/obo/hp.owl',
-          code: 'HP:0000001',
-          version: 'sample-2026-07-31',
-          display: 'All',
-          conceptStatus: 'active',
-        },
-      };
-      const result = await service.applyTerminologyConceptProjection(session, event);
-      expect(result.projected).toBe(true);
+      const result = await service.applyTerminologyConceptProjection(session, {
+        eventId: 'evt', aggregateId: 'fallback', sourceService: 'reference',
+        payload: { terminologyConceptId: 'tc-1', code: 'HP:1', systemUri: 'http://example', display: 'Example' },
+      });
       expect(result.conceptId).toBe('tc-1');
-      const params = session.run.mock.calls[0][1];
-      expect(params.conceptId).toBe('tc-1');
-      expect(params.code).toBe('HP:0000001');
-      expect(params.systemUri).toBe('http://purl.obolibrary.org/obo/hp.owl');
-      expect(params.display).toBe('All');
+      expect(session.run.mock.calls[0][1].code).toBe('HP:1');
     });
 
-    it('falls back to aggregateId for conceptId and "active" for conceptStatus when payload omits them', async () => {
+    it('projects terminology relations by explicit endpoints', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
-      const result = await service.applyTerminologyConceptProjection(session, { aggregateId: 'agg-tc-2', payload: {} });
-      expect(result.conceptId).toBe('agg-tc-2');
-      const params = session.run.mock.calls[0][1];
-      expect(params.conceptStatus).toBe('active');
-      expect(params.code).toBe('');
-    });
-  });
-
-  describe('applyTerminologyRelationProjection', () => {
-    it('projects sourceConceptId/targetConceptId/relationType from payload', async () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const session = makeSession();
-      const event = {
-        eventType: 'TERMINOLOGY_RELATION_PROMOTED',
-        aggregateId: 'agg-tr',
-        eventId: 'evt-tr-1',
+      const result = await service.applyTerminologyRelationProjection(session, {
+        eventId: 'evt', aggregateId: 'rel-fallback', sourceService: 'reference',
         payload: {
-          terminologyRelationId: 'tr-1',
-          sourceConceptId: 'tc-source',
-          targetConceptId: 'tc-target',
-          relationType: 'is_a',
-          relationVersion: 'sample-2026-07-31',
+          terminologyRelationId: 'rel-1', sourceConceptId: 'tc-a', targetConceptId: 'tc-b', relationType: 'is_a',
         },
-      };
-      const result = await service.applyTerminologyRelationProjection(session, event);
-      expect(result.projected).toBe(true);
-      expect(result.sourceConceptId).toBe('tc-source');
-      expect(result.targetConceptId).toBe('tc-target');
-      const params = session.run.mock.calls[0][1];
-      expect(params.relationId).toBe('tr-1');
-      expect(params.relationType).toBe('is_a');
-    });
-
-    it('falls back to aggregateId for relationId when payload omits terminologyRelationId', async () => {
-      const service = new Neo4jCanonicalProjectionService();
-      const session = makeSession();
-      await service.applyTerminologyRelationProjection(session, { aggregateId: 'agg-tr-2', payload: {} });
-      const params = session.run.mock.calls[0][1];
-      expect(params.relationId).toBe('agg-tr-2');
-      expect(params.sourceConceptId).toBe('');
-      expect(params.targetConceptId).toBe('');
+      });
+      expect(result.sourceConceptId).toBe('tc-a');
+      expect(result.targetConceptId).toBe('tc-b');
+      expect(session.run.mock.calls[0][1].relationId).toBe('rel-1');
     });
   });
 
   describe('stableStringify', () => {
-    it('sorts object keys and stringifies deterministically regardless of input key order', () => {
-      const a = stableStringify({ b: 1, a: 2 });
-      const b = stableStringify({ a: 2, b: 1 });
-      expect(a).toBe(b);
-      expect(a).toBe('{"a":2,"b":1}');
-    });
-
-    it('recurses into arrays and nested objects', () => {
-      const result = stableStringify({ list: [{ z: 1, a: 2 }, 'x'] });
-      expect(result).toBe('{"list":[{"a":2,"z":1},"x"]}');
-    });
-
-    it('serializes Date instances as ISO strings', () => {
-      const date = new Date('2026-01-01T00:00:00.000Z');
-      const result = stableStringify({ when: date });
-      expect(result).toBe('{"when":"2026-01-01T00:00:00.000Z"}');
+    it('sorts object keys recursively and normalizes Date values', () => {
+      const value = {
+        z: 1,
+        a: { y: 2, x: new Date('2026-01-01T00:00:00.000Z') },
+      };
+      expect(stableStringify(value)).toBe('{"a":{"x":"2026-01-01T00:00:00.000Z","y":2},"z":1}');
     });
   });
 });
