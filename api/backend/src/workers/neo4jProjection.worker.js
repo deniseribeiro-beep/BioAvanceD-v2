@@ -4,28 +4,10 @@ const { connectNeo4j } = require('../infrastructure/database/neo4j/connection');
 const logger = require('../utils/logger');
 const env = require('../config/env');
 const { Neo4jOutboxService } = require('../services/neo4jOutbox.service');
-const { Neo4jCanonicalProjectionService } = require('../services/neo4jCanonicalProjection.service');
+const { Neo4jCanonicalProjectionV2Service } = require('../services/neo4jCanonicalProjectionV2.service');
 
-// #992: heartbeat file probed by the container healthcheck (mtime-based).
-// Not a new env var -- a module-level constant, per #992's decision to avoid
-// tripping the env-declaration architecture test. Distinct path from
-// worker.js's heartbeat since both containers share the /tmp filesystem
-// convention but not a container.
 const HEARTBEAT_PATH = '/tmp/neo4j-projection-heartbeat';
 
-// #1040: observability-only, matching this file's own fatal-error style
-// (logger.error + process.exit(1), same as the require.main block's
-// runProjectionWorker().catch() below). The process must still die -- do NOT
-// turn this into a swallow/continue path. Three call sites deliberately
-// depend on "an unhandled rejection kills the process" staying true:
-// src/services/auth.service.js:540, src/services/consent.service.js:911 and
-// src/utils/collectionResolver.js:23.
-//
-// Registered before any other startup work in this module. Guarded on
-// `process`, not on this module, since server.js and the other two worker
-// entrypoints register the same pair of handlers -- the guard keeps a single
-// registration if any of them ever end up sharing a process (as worker.js
-// and import-worker.js already do).
 if (!process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__) {
   process.__BIOAVANCE_1040_PROCESS_HANDLERS_INSTALLED__ = true;
 
@@ -44,7 +26,7 @@ async function runProjectionOnce(options = {}) {
   const db = options.db || await connectDB();
   const neo4jDriver = options.neo4jDriver || await connectNeo4j();
   const outboxService = options.outboxService || new Neo4jOutboxService();
-  const projector = options.projector || new Neo4jCanonicalProjectionService();
+  const projector = options.projector || new Neo4jCanonicalProjectionV2Service();
   const maxAttempts = Number(options.maxAttempts || env.GRAPH_OUTBOX_MAX_ATTEMPTS || 8);
 
   await outboxService.rescheduleStaleProcessing(db, {
