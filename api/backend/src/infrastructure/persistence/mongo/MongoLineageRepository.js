@@ -15,11 +15,14 @@ class MongoLineageRepository {
    * @param {{ graphProjectionService?: GraphProjectionService }} [options]
    */
   constructor(db, options = {}) {
-    if (!db || typeof db.collection !== 'function') {
-      throw new Error('[RF023] MongoDB obrigatório para linhagem canônica');
-    }
     this.db = db;
     this.graphProjectionService = options.graphProjectionService || new GraphProjectionService();
+  }
+
+  ensureDb() {
+    if (!this.db || typeof this.db.collection !== 'function') {
+      throw new Error('[RF023] MongoDB obrigatório para linhagem canônica');
+    }
   }
 
   normalizePointerId(pointer, fieldName) {
@@ -36,11 +39,13 @@ class MongoLineageRepository {
   }
 
   async findSpecimen(specimenId, session) {
+    this.ensureDb();
     const samples = await getCollection(this.db, 'samples');
     return samples.findOne({ _id: this.toObjectId(specimenId) }, { session });
   }
 
   async findActiveConsent(participantId, session) {
+    this.ensureDb();
     if (!participantId) return null;
     const consents = await getCollection(this.db, 'consents');
     const rows = await consents
@@ -165,9 +170,6 @@ class MongoLineageRepository {
   }
 
   async compensateCustodyEvent() {
-    // RF023 v2 no longer writes Neo4j before Mongo. The outbox row is enlisted
-    // in the same Mongo transaction, so rollback removes both domain mutation
-    // and projection event atomically; there is nothing to compensate.
     return { compensated: false, reason: 'transactional_outbox_requires_no_compensation' };
   }
 }
