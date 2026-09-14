@@ -1,0 +1,369 @@
+name: Wave 2 final reconciliation #1132 (one-shot)
+
+on:
+  push:
+    branches:
+      - stabilize/v2.0.0-prototype
+    paths:
+      - .github/workflows/wave2-finalize-1132-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: stabilize/v2.0.0-prototype
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Apply Wave 2 final reconciliation
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f'{path}: expected {count} occurrence(s), found {actual}: {old[:100]!r}')
+              p.write_text(text.replace(old, new))
+              print(f'patched {path}: {count} replacement(s)')
+
+          # 1) Keep the filter-key architecture anchor on the real v2 implementation.
+          replace_exact(
+              'api/backend/tests/architecture/filter-keys.arch.test.js',
+              "    'services/consent.service.js'\n",
+              "    'services/consent-v2.service.js'\n"
+          )
+
+          # 2) Intake: consume normalized consent v2 and remove the composite canonical/v1 validator.
+          replace_exact(
+              'api/backend/src/routes/intakeWizard.js',
+              "const { validate } = require('../contracts/canonical/v1');\n",
+              "const consentService = require('../services/consent.service');\n"
+          )
+
+          old_consent = '''async function resolveConsentDecision(db, patient) {
+            const patientIDs = buildIdVariants(patient?.participantId, patient?._id?.toString()).map(String);
+            if (patientIDs.length === 0) {
+              const error = new Error('Paciente sem identificador para validar consentimento ativo.');
+              error.statusCode = 400;
+              throw error;
+            }
+
+            const consentsCollection = await getCollection(db, 'consents');
+            const activeConsent = await consentsCollection.findOne(
+              {
+                participantId: { $in: patientIDs },
+                status: 'ACTIVE',
+              },
+              {
+                sort: { signedAt: -1, updatedAt: -1, createdAt: -1 },
+              }
+            );
+
+            if (activeConsent) {
+              return {
+                active: true,
+                consentId: activeConsent._id || null,
+                patientId: activeConsent.participantId || null,
+                status: 'SIGNED',
+                quarantineReason: null,
+                governanceReason: null,
+              };
+            }
+
+            const revokedConsent = await consentsCollection.findOne(
+              {
+                participantId: { $in: patientIDs },
+                status: 'REVOKED',
+              },
+              {
+                sort: { revokedAt: -1, updatedAt: -1, createdAt: -1 },
+              }
+            );
+
+            if (revokedConsent) {
+              return {
+                active: false,
+                consentId: revokedConsent._id || null,
+                patientId: revokedConsent.participantId || null,
+                status: 'REVOKED',
+                quarantineReason: 'CONSENT_REVOKED',
+                governanceReason: 'Consentimento revogado.',
+              };
+            }
+
+            return {
+              active: false,
+              consentId: null,
+              patientId: null,
+              status: 'PENDING',
+              quarantineReason: 'CONSENT_PENDING',
+              governanceReason: 'Consentimento ainda não ativo/assinado.',
+            };
+          }'''.replace('          ', '')
+
+          new_consent = '''async function resolveConsentDecision(db, patient) {
+            const participantId = normalizeString(patient?.participantId);
+            if (!participantId) {
+              const error = new Error('Paciente sem identificador para validar consentimento ativo.');
+              error.statusCode = 400;
+              throw error;
+            }
+
+            // Wave 2: consent governance is authoritative in the normalized v2
+            // collections. The compatibility view is derived by consent-v2.service;
+            // this route no longer reads the retired mutable `consents` authority.
+            const consent = await consentService.getPatientConsent(db, participantId);
+            if (consent?.status === 'ACTIVE') {
+              return {
+                active: true,
+                consentId: consent.consentId || consent._id || null,
+                patientId: participantId,
+                status: 'SIGNED',
+                quarantineReason: null,
+                governanceReason: null,
+              };
+            }
+
+            if (consent?.status === 'REVOKED') {
+              return {
+                active: false,
+                consentId: consent.consentId || consent._id || null,
+                patientId: participantId,
+                status: 'REVOKED',
+                quarantineReason: 'CONSENT_REVOKED',
+                governanceReason: 'Consentimento revogado.',
+              };
+            }
+
+            return {
+              active: false,
+              consentId: null,
+              patientId: participantId,
+              status: 'PENDING',
+              quarantineReason: 'CONSENT_PENDING',
+              governanceReason: 'Consentimento ainda não ativo/assinado.',
+            };
+          }'''.replace('          ', '')
+          replace_exact('api/backend/src/routes/intakeWizard.js', old_consent, new_consent)
+
+          replace_exact(
+              'api/backend/src/routes/intakeWizard.js',
+              "        parentSpecimenId: ['parentSampleId'],\n",
+              "        parentSpecimenIds: ['parentSpecimenId'],\n"
+          )
+
+          old_validation = '''    const validation = validate('canonical.v1.intake', data);
+              if (!validation.valid) {
+                const fields = [];
+                for (const issue of validation.errors || []) {
+                  const field = issue.instancePath?.replace(/^\\//, '').replace(/\\//g, '.') || issue.params?.missingProperty || null;
+                  if (field) fields.push(field);
+                }
+                return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: [...new Set(fields)] });
+              }
+
+          '''.replace('          ', '')
+          replace_exact('api/backend/src/routes/intakeWizard.js', old_validation, '')
+
+          # 3) Remove documentary v1 references from active source files.
+          p = Path('api/backend/src/models/SampleFile.js')
+          t = p.read_text()
+          if 'canonical.v1.file' not in t:
+              raise SystemExit('SampleFile.js: expected canonical.v1.file documentary reference')
+          p.write_text(t.replace('canonical.v1.file', 'canonical v2 DataFile'))
+
+          p = Path('api/backend/src/services/import-async.service.js')
+          t = p.read_text()
+          if 'contracts/canonical/v1/index.js' not in t:
+              raise SystemExit('import-async.service.js: expected canonical/v1 documentary reference')
+          p.write_text(t.replace('contracts/canonical/v1/index.js', 'contracts/canonical/v2/index.js').replace('canonical.v1.', 'canonical.v2.'))
+
+          # 4) Normalized physical storage becomes the read authority for location filters.
+          store_path = Path('api/backend/src/infrastructure/persistence/mongo/NormalizedPhysicalStorageStore.js')
+          store = store_path.read_text()
+          anchor = '''  async findCurrentBySpecimens(specimenIds, session) {
+            await this.ensureIndexes();
+            const result = new Map();
+            for (const specimenId of specimenIds || []) {
+              result.set(String(specimenId), await this.findCurrentBySpecimen(specimenId, session));
+            }
+            return result;
+          }
+          '''.replace('          ', '')
+          method = '''
+            async findSpecimenIdsByLocation({ boxIds = [], positionCode = null, session } = {}) {
+              await this.ensureIndexes();
+              const {
+                storageRacks,
+                storagePositions,
+                containerPositionAssignments,
+                specimenContainerAssignments
+              } = this.collections();
+
+              const boxKeys = [...new Set((boxIds || []).filter((value) => value !== undefined && value !== null && String(value).trim() !== '').map(String))];
+              if (boxKeys.length === 0) return [];
+              const queryOptions = session ? { session } : undefined;
+
+              // Compare the source box id by its BSON string representation so this
+              // resolver works with both native MongoDB and mongoose-backed callers
+              // without constructing a BSON ObjectId from the wrong driver version.
+              const racks = await storageRacks.find(
+                { $expr: { $in: [{ $toString: '$sourceStorageBoxId' }, boxKeys] } },
+                queryOptions
+              ).toArray();
+              const rackIds = racks.map((rack) => rack.storageRackId);
+              if (rackIds.length === 0) return [];
+
+              const positionFilter = { storageRackId: { $in: rackIds } };
+              if (positionCode) positionFilter.positionCode = String(positionCode);
+              const positions = await storagePositions.find(positionFilter, queryOptions).toArray();
+              const positionIds = positions.map((position) => position.storagePositionId);
+              if (positionIds.length === 0) return [];
+
+              const placements = await containerPositionAssignments.find(
+                { storagePositionId: { $in: positionIds }, removedAt: null },
+                queryOptions
+              ).toArray();
+              const containerIds = placements.map((placement) => placement.containerId);
+              if (containerIds.length === 0) return [];
+
+              const assignments = await specimenContainerAssignments.find(
+                { containerId: { $in: containerIds }, releasedAt: null },
+                queryOptions
+              ).toArray();
+              return [...new Set(assignments.map((assignment) => String(assignment.specimenId)).filter(Boolean))];
+            }
+          '''.replace('          ', '')
+          if anchor not in store:
+              raise SystemExit('NormalizedPhysicalStorageStore.js: findCurrentBySpecimens anchor not found')
+          store_path.write_text(store.replace(anchor, anchor + method, 1))
+
+          # Reports: resolve box/position through normalized assignments, then restrict by specimenId.
+          replace_exact(
+              'api/backend/src/interface/routes/reports.routes.js',
+              "const rcsAssessmentService = require('../../services/rcs-assessment.service');\n",
+              "const rcsAssessmentService = require('../../services/rcs-assessment.service');\nconst NormalizedPhysicalStorageStore = require('../../infrastructure/persistence/mongo/NormalizedPhysicalStorageStore');\n"
+          )
+          reports_old = '''  // `localizacao` is the storageLocation.boxId/position snapshot Sample
+            // carries (IStorageRepository.js's own framing), not a StorageAssignment
+            // join. An unparseable boxId fails closed with a never-matching
+            // condition rather than being dropped -- dropping it would be #741's
+            // failure mode one dimension over.
+            const storageBoxId = normalizeFilterText(filters.storageBoxId || filters.boxId);
+            if (storageBoxId) {
+              conditions.push({
+                'storageLocation.boxId': /^[0-9a-f]{24}$/i.test(storageBoxId)
+                  ? new ObjectId(storageBoxId)
+                  : { $in: [] },
+              });
+            }
+
+            const storagePosition = normalizeFilterText(filters.storagePosition || filters.position);
+            if (storagePosition) {
+              conditions.push({ 'storageLocation.position': storagePosition });
+            }
+          '''.replace('          ', '')
+          reports_new = '''  // Wave 2: physical location is resolved exclusively through the normalized
+            // Container -> StoragePosition -> StorageRack assignment chain. Sample no
+            // longer carries an authoritative embedded storageLocation snapshot.
+            const storageBoxId = normalizeFilterText(filters.storageBoxId || filters.boxId);
+            const storagePosition = normalizeFilterText(filters.storagePosition || filters.position);
+            if (storageBoxId || storagePosition) {
+              const physicalStore = new NormalizedPhysicalStorageStore(db);
+              const matchingSpecimenIds = storageBoxId
+                ? await physicalStore.findSpecimenIdsByLocation({
+                    boxIds: [storageBoxId],
+                    positionCode: storagePosition || null,
+                  })
+                : [];
+              conditions.push({ specimenId: { $in: matchingSpecimenIds } });
+            }
+          '''.replace('          ', '')
+          replace_exact('api/backend/src/interface/routes/reports.routes.js', reports_old, reports_new)
+
+          # ObjectId is no longer needed after removing the embedded storageLocation filter.
+          replace_exact(
+              'api/backend/src/interface/routes/reports.routes.js',
+              "const { ObjectId } = require('mongodb');\n",
+              ''
+          )
+
+          # Equipment/sensor quarantine: resolve affected specimens through normalized storage.
+          replace_exact(
+              'api/backend/src/services/equipment-sensor-quarantine.service.js',
+              "const logger = require('../utils/logger');\n",
+              "const logger = require('../utils/logger');\nconst NormalizedPhysicalStorageStore = require('../infrastructure/persistence/mongo/NormalizedPhysicalStorageStore');\n"
+          )
+          quarantine_old = '''function buildSampleFilterFromBoxIds(boxIds = []) {
+            if (!Array.isArray(boxIds) || boxIds.length === 0) {
+              return null;
+            }
+
+            return { 'storageLocation.boxId': { $in: dedupeIds(boxIds) } };
+          }'''.replace('          ', '')
+          quarantine_new = '''async function buildSampleFilterFromBoxIds(db, boxIds = [], options = {}) {
+            if (!Array.isArray(boxIds) || boxIds.length === 0) {
+              return null;
+            }
+
+            const physicalStore = new NormalizedPhysicalStorageStore(db);
+            const specimenIds = await physicalStore.findSpecimenIdsByLocation({
+              boxIds: dedupeIds(boxIds),
+              session: options.session || null,
+            });
+            return { specimenId: { $in: specimenIds } };
+          }'''.replace('          ', '')
+          replace_exact('api/backend/src/services/equipment-sensor-quarantine.service.js', quarantine_old, quarantine_new)
+          replace_exact('api/backend/src/services/equipment-sensor-quarantine.service.js', '  const filter = buildSampleFilterFromBoxIds(boxIds);\n', '  const filter = await buildSampleFilterFromBoxIds(db, boxIds, options);\n', count=2)
+          replace_exact('api/backend/src/services/equipment-sensor-quarantine.service.js', '  const filter = buildSampleFilterFromBoxIds(dedupedBoxIds);\n', '  const filter = await buildSampleFilterFromBoxIds(db, dedupedBoxIds, options);\n')
+
+          # 5) Neo4j reset in testEnvironment is administrative cleanup, not a domain writer.
+          replace_exact(
+              'api/backend/tests/architecture/wave2-v2-invariants.arch.test.js',
+              "    /^workers\\/neo4jProjection\\.worker\\.js$/,\n",
+              "    /^workers\\/neo4jProjection\\.worker\\.js$/,\n    /^scripts\\/testEnvironment\\.js$/, // administrative test reset only\n"
+          )
+
+          # 6) canonical/v1 is deleted only after every active source consumer above is removed.
+          v1 = Path('api/backend/src/contracts/canonical/v1/index.js')
+          if not v1.exists():
+              raise SystemExit('canonical/v1/index.js unexpectedly absent before controlled deletion')
+          v1.unlink()
+          try:
+              v1.parent.rmdir()
+          except OSError:
+              pass
+
+          # One-shot workflow must not remain in the final tree.
+          Path('.github/workflows/wave2-finalize-1132-once.yml').unlink()
+          PY
+
+      - name: Install backend dependencies
+        working-directory: api/backend
+        run: npm ci
+
+      - name: Validate Wave 2 architecture before commit
+        working-directory: api/backend
+        run: npm run test:architecture
+
+      - name: Commit reconciled Wave 2 state
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git status --short
+          git commit -m "fix(wave2): eliminate final v1 and storage authority residuals (#1132)"
+          git push origin HEAD:stabilize/v2.0.0-prototype
