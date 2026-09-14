@@ -249,18 +249,6 @@ class TelemetryMonitor {
     return [...new Set(specimenAssignments.map((row) => String(row.specimenId)))];
   }
 
-  // Retained for compatibility with older callers/tests; no longer an
-  // authority lookup for specimen location.
-  async resolveBoxIdsUnderFreezer(freezerContainerId) {
-    const racks = await this.db.collection('rackLocationAssignments')
-      .find({ storageLocationId: String(freezerContainerId), removedAt: null })
-      .toArray();
-    const storageRacks = await this.db.collection('storageRacks')
-      .find({ storageRackId: { $in: racks.map((row) => row.storageRackId) } })
-      .toArray();
-    return storageRacks.map((rack) => rack.sourceStorageBoxId).filter(Boolean);
-  }
-
   async findSensorsWithMissingReadings() {
     const sensors = await this.db.collection('sensorMetadata').find({}).toArray();
     if (!sensors.length) return [];
@@ -362,13 +350,10 @@ class TelemetryMonitor {
     while (frontier.length) {
       const parent = frontier.shift();
       const parentIds = [String(parent._id), parent.specimenId ? String(parent.specimenId) : null].filter(Boolean);
-      const children = await samples.find({
-        $or: [
-          { parentSpecimenIds: { $in: parentIds } },
-          { parentSpecimenId: { $in: parentIds } },
-          { parentSampleId: { $in: parentIds } }
-        ]
-      }, { session }).toArray();
+      const children = await samples.find(
+        { parentSpecimenIds: { $in: parentIds } },
+        { session }
+      ).toArray();
       for (const child of children) {
         const key = String(child._id);
         if (!discovered.has(key)) {
