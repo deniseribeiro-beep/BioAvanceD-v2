@@ -5,7 +5,7 @@ services:
     build:
       context: ./api/backend
       dockerfile: Dockerfile.prod
-    command: ["node", "scripts/seed-essential-reference-data.js"]
+    command: ["node", "scripts/run-foundation-data-pipeline.js"]
     env_file:
       - .env.production
     environment:
@@ -27,6 +27,8 @@ services:
     cap_drop: ["ALL"]
     tmpfs:
       - /tmp:size=64m,mode=1777
+    volumes:
+      - storage_data:/data/storage
 
   backend:
     depends_on:
