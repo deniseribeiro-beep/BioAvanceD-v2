@@ -3,6 +3,7 @@ services:
     # RF022 / Foundation v2.0.0: o one-shot deve executar depois dos
     # healthchecks de infraestrutura e antes de qualquer API/worker dependente.
     # !override remove a dependência legada de backend-app-test e evita ciclo.
+    command: ["node", "scripts/run-foundation-data-pipeline.js"]
     depends_on: !override
       mongodb-test:
         condition: service_healthy
