@@ -1,24 +1,8 @@
 /**
- * RF029 slice 1/6 (#669): the ingestion gateway shape itself. Composes
- * idempotency (AC5), the provenance envelope (AC3), canonical-contract +
- * reference-existence validation (AC1/2), and the active-code check (AC4)
- * into one call an entity slice (#670-673) makes per record, quarantining
- * (AC6) on any violation instead of correcting or dropping silently.
- *
- * AC8 (AuditEvent + GraphProjectionOutboxEvent) is deliberately NOT emitted
- * from here — this codebase's existing convention (routes/intakeWizard.js)
- * calls auditLogger/GraphProjectionService at the *route* layer, not the
- * service layer (reference-imports/quarantine.js follows the same
- * no-audit-call-in-the-service-module precedent). An entity slice's own
- * route is where AC8 gets wired, reusing auditLogger.log()/
- * GraphProjectionService as-is — no new infrastructure needed, see #669's
- * own scope note. interface/routes/ingestionTestSupport.routes.js
- * demonstrates the expected call shape for #670-673 to follow.
- *
- * This foundation does not persist the domain entity itself on an
- * `accepted` outcome — no entity type is wired to it yet (that's
- * #670-673's job). It only proves the gateway's own accept/quarantine/
- * replay contract.
+ * RF029 ingestion gateway. It composes idempotency, provenance, canonical
+ * v2 contract validation, reference existence and active-reference-code
+ * validation, and quarantines invalid records instead of correcting them
+ * silently.
  */
 const { validateProvenanceEnvelope } = require('./provenanceEnvelope');
 const { validateIngestionPayload, assertReferencesExist } = require('./canonicalGateway');
@@ -29,7 +13,6 @@ const { quarantineRecord } = require('./quarantine');
 async function ingestRecord({
   db,
   entityType,
-  schemaId = null,
   aliasMap = {},
   payload,
   provenance,
@@ -54,7 +37,7 @@ async function ingestRecord({
   }
 
   const provenanceResult = validateProvenanceEnvelope(provenance);
-  const contractResult = validateIngestionPayload({ schemaId, payload, aliasMap });
+  const contractResult = await validateIngestionPayload({ entityType, payload, aliasMap });
   const referenceResult = await assertReferencesExist(db, references);
   const codeResult = await validateActiveCodes(db, referenceCodes);
 
