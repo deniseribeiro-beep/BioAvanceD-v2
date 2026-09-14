@@ -21,12 +21,14 @@ class GraphProjectionService {
         participantId: payload.participantId,
         specimenId: payload.specimenId || null,
         ethicalConsentId: payload.ethicalConsentId || payload.consentId || null,
+        consentTemplateId: payload.consentTemplateId || null,
         status: payload.status || 'ACTIVE',
         signedAt: payload.signedAt || new Date(),
+        revokedAt: payload.revokedAt || null,
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
-      schemaVersion: 1,
+      schemaVersion: 2,
     }, options);
   }
 
@@ -39,6 +41,9 @@ class GraphProjectionService {
         specimenId: payload.specimenId || null,
         participantId: payload.participantId || null,
         parentSpecimenId: payload.parentSpecimenId || null,
+        parentSpecimenIds: Array.isArray(payload.parentSpecimenIds)
+          ? payload.parentSpecimenIds
+          : (payload.parentSpecimenId ? [payload.parentSpecimenId] : []),
         barcode: payload.barcode || null,
         specimenStatus: payload.specimenStatus || payload.status || null,
       },
@@ -70,8 +75,9 @@ class GraphProjectionService {
   }
 
   async appendStorageAssignmentEvent(db, payload, options = {}) {
+    const isReleased = Boolean(payload.removedAt || payload.releasedAt);
     return this.outbox.appendEvent(db, {
-      eventType: payload.releasedAt ? 'STORAGE_ASSIGNMENT_RELEASED' : 'STORAGE_ASSIGNMENT_UPSERTED',
+      eventType: isReleased ? 'STORAGE_ASSIGNMENT_RELEASED' : 'STORAGE_ASSIGNMENT_UPSERTED',
       aggregateType: 'SpecimenContainerAssignment',
       aggregateId: String(payload.specimenContainerAssignmentId || payload.aggregateId || ''),
       payload: {
@@ -85,6 +91,8 @@ class GraphProjectionService {
         storageLocationId: payload.storageLocationId || null,
         assignedAt: payload.assignedAt || null,
         releasedAt: payload.releasedAt || null,
+        placedAt: payload.placedAt || null,
+        removedAt: payload.removedAt || null,
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
@@ -95,7 +103,7 @@ class GraphProjectionService {
   async appendLineageEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'LINEAGE_REGISTERED',
-      aggregateType: 'Sample',
+      aggregateType: 'Specimen',
       aggregateId: String(payload.specimenId || payload.childSpecimenId || payload.aggregateId || ''),
       payload: {
         specimenId: payload.specimenId || payload.childSpecimenId || null,
@@ -103,14 +111,14 @@ class GraphProjectionService {
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
-      schemaVersion: 1,
+      schemaVersion: 2,
     }, options);
   }
 
   async appendQualityEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'QUALITY_ASSESSED',
-      aggregateType: 'Sample',
+      aggregateType: 'Specimen',
       aggregateId: String(payload.specimenId || payload.aggregateId || ''),
       payload: {
         specimenId: payload.specimenId || null,
@@ -121,14 +129,14 @@ class GraphProjectionService {
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
-      schemaVersion: 1,
+      schemaVersion: 2,
     }, options);
   }
 
   async appendTelemetryEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'TELEMETRY_INCIDENT_RECORDED',
-      aggregateType: 'Sample',
+      aggregateType: 'Specimen',
       aggregateId: String(payload.specimenId || payload.aggregateId || ''),
       payload: {
         specimenId: payload.specimenId || null,
@@ -143,10 +151,39 @@ class GraphProjectionService {
     }, options);
   }
 
-  // RF028 AC9: "Persistir primeiro no MongoDB e projetar no Neo4j
-  // exclusivamente pelo outbox" — appended by reference-imports/pipeline.js's
-  // promote() on the same write that inserts a TerminologyConcept, same
-  // outbox pattern RF023 uses for consent/lineage/quality/telemetry.
+  async appendTelemetryExposureSummaryEvent(db, payload, options = {}) {
+    return this.outbox.appendEvent(db, {
+      eventType: 'TELEMETRY_EXPOSURE_SUMMARIZED',
+      aggregateType: 'TelemetryExposureSummary',
+      aggregateId: String(payload.telemetryExposureSummaryId || payload.aggregateId || ''),
+      payload: {
+        telemetryExposureSummaryId: payload.telemetryExposureSummaryId || null,
+        specimenId: payload.specimenId || null,
+        specimenContainerAssignmentId: payload.specimenContainerAssignmentId || null,
+        containerPositionAssignmentId: payload.containerPositionAssignmentId || null,
+        rackLocationAssignmentId: payload.rackLocationAssignmentId || null,
+        exposurePathHash: payload.exposurePathHash || null,
+        datastreamIds: Array.isArray(payload.datastreamIds) ? payload.datastreamIds : [],
+        windowStart: payload.windowStart || null,
+        windowEnd: payload.windowEnd || null,
+        observationCount: Number(payload.observationCount || 0),
+        minimumValue: payload.minimumValue ?? null,
+        maximumValue: payload.maximumValue ?? null,
+        meanValue: payload.meanValue ?? null,
+        timeOutsideThresholdSeconds: Number(payload.timeOutsideThresholdSeconds || 0),
+        excursionCount: Number(payload.excursionCount || 0),
+        coverageRatio: payload.coverageRatio ?? null,
+        sourceQueryHash: payload.sourceQueryHash || null,
+        sourceReadingSetHash: payload.sourceReadingSetHash || null,
+        calculationVersion: payload.calculationVersion || '1.0.0',
+        calculatedAt: payload.calculatedAt || new Date(),
+      },
+      sourceService: payload.sourceService || 'graph-projection-service',
+      traceId: payload.traceId || null,
+      schemaVersion: 2,
+    }, options);
+  }
+
   async appendTerminologyConceptEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'TERMINOLOGY_CONCEPT_PROMOTED',
