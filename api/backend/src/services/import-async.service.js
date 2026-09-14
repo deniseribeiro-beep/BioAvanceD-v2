@@ -115,7 +115,7 @@ class ImportAsyncService {
       // patientId aliases
       // #773: both entries targeted the legacy name 'patientID'. Two
       // independent sources settle the canonical spelling as
-      // 'participantId': contracts/canonical/v1/index.js declares
+      // 'participantId': contracts/canonical/v2/index.js declares
       // participantId (required) and lists no patientID field, and
       // sample.routes.js:378-384 already 422s a payload carrying patientID
       // as NON_CANONICAL_FIELD, the same "Legacy Fields Prohibited" list.

@@ -1526,7 +1526,7 @@ test('#788: the sweep still collects the filter sites it is meant to cover', () 
   for (const anchor of [
     'infrastructure/persistence/mongo/MongoStorageRepository.js',
     'services/sample.service.js',
-    'services/consent.service.js'
+    'services/consent-v2.service.js'
   ]) {
     assert.ok(files.has(anchor), `${anchor} filters, but the sweep did not collect it`);
   }

@@ -69,6 +69,7 @@ test('RF023 domain Neo4j writes are confined to projection/rebuild boundary', ()
     /^services\/neo4jCanonicalProjection\.service\.js$/,
     /^infrastructure\/database\/neo4j\/connection\.js$/,
     /^workers\/neo4jProjection\.worker\.js$/,
+    /^scripts\/testEnvironment\.js$/, // administrative test reset only
     /rebuild/i,
     /migration/i,
     /admin/i,

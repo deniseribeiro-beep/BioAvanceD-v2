@@ -3,6 +3,7 @@ const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger')
 const { getCollection } = require('../utils/collectionResolver');
 const quarantineActionService = require('./quarantine-action.service');
 const logger = require('../utils/logger');
+const NormalizedPhysicalStorageStore = require('../infrastructure/persistence/mongo/NormalizedPhysicalStorageStore');
 
 const QUARANTINE_TRIGGER_STATUSES = new Set([
   'offline',
@@ -323,12 +324,16 @@ async function findBoxIdsBySensorKey(db, sensorKey, options = {}) {
   return dedupeIds(boxIds);
 }
 
-function buildSampleFilterFromBoxIds(boxIds = []) {
+async function buildSampleFilterFromBoxIds(db, boxIds = [], options = {}) {
   if (!Array.isArray(boxIds) || boxIds.length === 0) {
     return null;
   }
-
-  return { 'storageLocation.boxId': { $in: dedupeIds(boxIds) } };
+  const physicalStore = new NormalizedPhysicalStorageStore(db);
+  const specimenIds = await physicalStore.findSpecimenIdsByLocation({
+    boxIds: dedupeIds(boxIds),
+    session: options.session || null,
+  });
+  return { specimenId: { $in: specimenIds } };
 }
 
 async function quarantineSamplesByFilter(db, filter, context = {}) {
@@ -452,7 +457,7 @@ async function quarantineByEquipmentStatus(db, equipmentContext, newStatus, opti
   }
 
   const boxIds = await findBoxIdsByEquipment(db, equipmentContext, options);
-  const filter = buildSampleFilterFromBoxIds(boxIds);
+  const filter = await buildSampleFilterFromBoxIds(db, boxIds, options);
   const sourceId = equipmentContext?.equipmentID || equipmentContext?._id || equipmentContext?.id || null;
   const reason = buildStatusChangeReason('equipment', sourceId, newStatus);
 
@@ -503,7 +508,7 @@ async function quarantineBySensorStatus(db, sensorContext, newStatus, options = 
   }
   const dedupedBoxIds = dedupeIds(boxIds);
 
-  const filter = buildSampleFilterFromBoxIds(dedupedBoxIds);
+  const filter = await buildSampleFilterFromBoxIds(db, dedupedBoxIds, options);
   const sourceId = sensorContext?.sensorId || sensorContext?.sensorID || sensorContext?._id || null;
   const reason = buildStatusChangeReason('sensor', sourceId, newStatus);
 
@@ -542,7 +547,7 @@ async function quarantineByColdChainIncident(db, incident = {}, options = {}) {
   }
 
   const boxIds = await findBoxIdsBySensorKey(db, sensorKey, options);
-  const filter = buildSampleFilterFromBoxIds(boxIds);
+  const filter = await buildSampleFilterFromBoxIds(db, boxIds, options);
   const incidentId = incident?._id ? String(incident._id) : sensorKey;
   const reason = buildColdChainIncidentReason(incident);
 

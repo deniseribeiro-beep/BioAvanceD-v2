@@ -1,5 +1,4 @@
 const express = require('express');
-const { ObjectId } = require('mongodb');
 const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
@@ -11,6 +10,7 @@ const { SPECIMEN_TYPE_IDS, SAMPLE_ORIGIN_IDS } = require('../../config/constants
 const logger = require('../../utils/logger');
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
+const NormalizedPhysicalStorageStore = require('../../infrastructure/persistence/mongo/NormalizedPhysicalStorageStore');
 const { resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, isAuditReader } = require('../../services/rbac-assignment.service');
 
 function normalizeReport(report) {
@@ -265,23 +265,17 @@ async function buildSampleQuery(db, filters = {}) {
     conditions.push({ sampleOrigin });
   }
 
-  // `localizacao` is the storageLocation.boxId/position snapshot Sample
-  // carries (IStorageRepository.js's own framing), not a StorageAssignment
-  // join. An unparseable boxId fails closed with a never-matching
-  // condition rather than being dropped -- dropping it would be #741's
-  // failure mode one dimension over.
   const storageBoxId = normalizeFilterText(filters.storageBoxId || filters.boxId);
-  if (storageBoxId) {
-    conditions.push({
-      'storageLocation.boxId': /^[0-9a-f]{24}$/i.test(storageBoxId)
-        ? new ObjectId(storageBoxId)
-        : { $in: [] },
-    });
-  }
-
   const storagePosition = normalizeFilterText(filters.storagePosition || filters.position);
-  if (storagePosition) {
-    conditions.push({ 'storageLocation.position': storagePosition });
+  if (storageBoxId || storagePosition) {
+    const physicalStore = new NormalizedPhysicalStorageStore(db);
+    const matchingSpecimenIds = storageBoxId
+      ? await physicalStore.findSpecimenIdsByLocation({
+          boxIds: [storageBoxId],
+          positionCode: storagePosition || null,
+        })
+      : [];
+    conditions.push({ specimenId: { $in: matchingSpecimenIds } });
   }
 
   // #341 (RF003 AC#3): org-scoped caller's sample-rooted report queries

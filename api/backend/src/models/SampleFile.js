@@ -1,7 +1,7 @@
 // RF007 AC#5 ("Registrar URI, formato, tamanho...")/#679: dict-02_DICIONARIO.md's
 // DataFile entity types two controlled vocabularies -- fileRole (ELM-0317,
 // pipeline stage) and fileFormat (ELM-0319, EDAM/MIME-coded) -- that RF007's
-// real upload path never populated, leaving canonical.v1.file's own fields
+// real upload path never populated, leaving canonical v2 DataFile's own fields
 // unvalidated/optional (#679's own investigation). fileFormat maps
 // deterministically from the existing closed fileType enum (both describe
 // the same technical container format, just different vocabularies -- RAW

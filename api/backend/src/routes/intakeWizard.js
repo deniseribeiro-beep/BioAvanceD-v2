@@ -21,7 +21,7 @@ const clinicalOutcomeService = require('../services/clinical-outcome.service');
 const derivedScoreService = require('../services/derived-score.service');
 const { computeCharlsonScore, ALGORITHM_VERSION: CCI_ALGORITHM_VERSION, SCORE_TYPE: CCI_SCORE_TYPE } = require('../services/charlsonComorbidityIndex');
 const logger = require('../utils/logger');
-const { validate } = require('../contracts/canonical/v1');
+const consentService = require('../services/consent.service');
 
 // #693 (RF005 clinical-data slice 5/5): systemUri constants matching this
 // repo's existing reference-import sources (reference-data/reference-
@@ -529,60 +529,38 @@ async function resolveMatchedPatient(db, data = {}) {
 }
 
 async function resolveConsentDecision(db, patient) {
-  const patientIDs = buildIdVariants(patient?.participantId, patient?._id?.toString()).map(String);
-  if (patientIDs.length === 0) {
+  const participantId = normalizeString(patient?.participantId);
+  if (!participantId) {
     const error = new Error('Paciente sem identificador para validar consentimento ativo.');
     error.statusCode = 400;
     throw error;
   }
 
-  const consentsCollection = await getCollection(db, 'consents');
-  const activeConsent = await consentsCollection.findOne(
-    {
-      participantId: { $in: patientIDs },
-      status: 'ACTIVE',
-    },
-    {
-      sort: { signedAt: -1, updatedAt: -1, createdAt: -1 },
-    }
-  );
-
-  if (activeConsent) {
+  const consent = await consentService.getPatientConsent(db, participantId);
+  if (consent?.status === 'ACTIVE') {
     return {
       active: true,
-      consentId: activeConsent._id || null,
-      patientId: activeConsent.participantId || null,
+      consentId: consent.consentId || consent._id || null,
+      patientId: participantId,
       status: 'SIGNED',
       quarantineReason: null,
       governanceReason: null,
     };
   }
-
-  const revokedConsent = await consentsCollection.findOne(
-    {
-      participantId: { $in: patientIDs },
-      status: 'REVOKED',
-    },
-    {
-      sort: { revokedAt: -1, updatedAt: -1, createdAt: -1 },
-    }
-  );
-
-  if (revokedConsent) {
+  if (consent?.status === 'REVOKED') {
     return {
       active: false,
-      consentId: revokedConsent._id || null,
-      patientId: revokedConsent.participantId || null,
+      consentId: consent.consentId || consent._id || null,
+      patientId: participantId,
       status: 'REVOKED',
       quarantineReason: 'CONSENT_REVOKED',
       governanceReason: 'Consentimento revogado.',
     };
   }
-
   return {
     active: false,
     consentId: null,
-    patientId: null,
+    patientId: participantId,
     status: 'PENDING',
     quarantineReason: 'CONSENT_PENDING',
     governanceReason: 'Consentimento ainda não ativo/assinado.',
@@ -775,7 +753,7 @@ async function handleIntakeWizard(req, res) {
       }),
       ...collectCanonicalViolations(data?.specimen, {
         specimenId: ['sampleID', 'sampleId', 'specimenID', 'mongoSampleId'],
-        parentSpecimenId: ['parentSampleId'],
+        parentSpecimenIds: ['parentSpecimenId'],
         registeredAt: ['registerDate', 'registrationDate'],
         withdrawnAt: ['withdrawalDate'],
         receivedAt: ['receivedTime'],
@@ -796,16 +774,6 @@ async function handleIntakeWizard(req, res) {
 
     if (canonicalViolations.length > 0) {
       return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: canonicalViolations });
-    }
-
-    const validation = validate('canonical.v1.intake', data);
-    if (!validation.valid) {
-      const fields = [];
-      for (const issue of validation.errors || []) {
-        const field = issue.instancePath?.replace(/^\//, '').replace(/\//g, '.') || issue.params?.missingProperty || null;
-        if (field) fields.push(field);
-      }
-      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: [...new Set(fields)] });
     }
 
     const db = req.app.locals.db;

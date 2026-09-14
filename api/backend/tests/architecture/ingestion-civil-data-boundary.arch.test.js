@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const { schemas } = require('../../src/contracts/canonical/v1');
+const { getSchema } = require('../../src/contracts/canonical/v2');
 
 const SRC_ROOT = path.resolve(__dirname, '../../src');
 
@@ -15,13 +15,11 @@ const SRC_ROOT = path.resolve(__dirname, '../../src');
 // generalizes graphProjection.service.js's existing per-call-site discipline
 // (each appendXEvent method is hand-written to omit civil fields) into an
 // automated check any future outbox call site is caught by. The forbidden
-// list is derived from contracts/canonical/v1's own participantSchema
+// list is derived from the approved canonical v2 ParticipantIdentity schema
 // (minus participantId, which IS allowed — every appendXEvent payload
 // legitimately carries it as the aggregate/correlation id), not a
-// hand-maintained duplicate — so it can't silently drift from the canonical
+// hand-maintained duplicate — so it cannot silently drift from the canonical
 // contract the way two independently-maintained lists could.
-const FORBIDDEN_CIVIL_FIELDS = Object.keys(schemas.participantSchema.properties)
-  .filter((field) => field !== 'participantId');
 
 function walk(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -36,7 +34,11 @@ function walk(dir, out = []) {
   return out;
 }
 
-test('no outbox appendEvent call site writes a civil/identity field into its payload', () => {
+test('no outbox appendEvent call site writes a civil/identity field into its payload', async () => {
+  const participantIdentitySchema = await getSchema('ParticipantIdentity');
+  assert.ok(participantIdentitySchema, 'canonical v2 must expose ParticipantIdentity');
+  const forbiddenCivilFields = Object.keys(participantIdentitySchema.properties || {})
+    .filter((field) => field !== 'participantId');
   const hits = [];
 
   for (const file of walk(SRC_ROOT)) {
@@ -47,7 +49,7 @@ test('no outbox appendEvent call site writes a civil/identity field into its pay
     // reads, etc.) that has nothing to do with Neo4j projection.
     if (!content.includes('.appendEvent(')) continue;
 
-    for (const field of FORBIDDEN_CIVIL_FIELDS) {
+    for (const field of forbiddenCivilFields) {
       // Object-literal key form only (`field: value`) — a shorthand
       // property (`{ field }`) inside a payload block would slip past this,
       // same "textual, not AST-based" limitation fhir-boundary.arch.test.js

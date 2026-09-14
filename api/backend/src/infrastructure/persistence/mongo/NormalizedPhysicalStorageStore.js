@@ -249,6 +249,46 @@ class NormalizedPhysicalStorageStore {
     }
     return result;
   }
+
+  async findSpecimenIdsByLocation({ boxIds = [], positionCode = null, session } = {}) {
+    await this.ensureIndexes();
+    const {
+      storageRacks,
+      storagePositions,
+      containerPositionAssignments,
+      specimenContainerAssignments,
+    } = this.collections();
+    const boxKeys = [...new Set(
+      (boxIds || [])
+        .filter((value) => value !== undefined && value !== null && String(value).trim() !== '')
+        .map(String)
+    )];
+    if (boxKeys.length === 0) return [];
+    const queryOptions = session ? { session } : undefined;
+    const racks = await storageRacks.find(
+      { $expr: { $in: [{ $toString: '$sourceStorageBoxId' }, boxKeys] } },
+      queryOptions
+    ).toArray();
+    const rackIds = racks.map((rack) => rack.storageRackId);
+    if (rackIds.length === 0) return [];
+    const positionFilter = { storageRackId: { $in: rackIds } };
+    if (positionCode) positionFilter.positionCode = String(positionCode);
+    const positions = await storagePositions.find(positionFilter, queryOptions).toArray();
+    const positionIds = positions.map((position) => position.storagePositionId);
+    if (positionIds.length === 0) return [];
+    const placements = await containerPositionAssignments.find(
+      { storagePositionId: { $in: positionIds }, removedAt: null },
+      queryOptions
+    ).toArray();
+    const containerIds = placements.map((placement) => placement.containerId);
+    if (containerIds.length === 0) return [];
+    const assignments = await specimenContainerAssignments.find(
+      { containerId: { $in: containerIds }, releasedAt: null },
+      queryOptions
+    ).toArray();
+    return [...new Set(assignments.map((assignment) => String(assignment.specimenId)).filter(Boolean))];
+  }
+
 }
 
 module.exports = NormalizedPhysicalStorageStore;
