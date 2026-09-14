@@ -76,8 +76,12 @@ class Neo4jCanonicalProjectionService {
   async applyConsentProjection(session, event) {
     const payload = event.payload || {};
     const donorId = this.pseudonymizeDonorId(payload.participantId || event.aggregateId);
-    const specimenId = normalizeText(payload.specimenId || event.aggregateId);
-    const consentId = normalizeText(payload.consentId || event.aggregateId);
+    // #1026: aggregateId belongs to EthicalConsent for consent events and can
+    // never be used as a specimen identity. Only an explicit legacy
+    // specimenId may enter this compatibility projector; v2 derives the
+    // relationship by traversing Donor-[:DONATED]->Sample instead.
+    const specimenId = normalizeText(payload.specimenId);
+    const consentId = normalizeText(payload.ethicalConsentId || payload.consentId || event.aggregateId);
     const consentStatus = normalizeText(payload.status || 'ACTIVE').toUpperCase();
     const consentAt = normalizeIso(payload.signedAt || event.occurredAt);
 
