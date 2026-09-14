@@ -2,8 +2,7 @@ const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const { getCollection } = require('../../../utils/collectionResolver');
 const { GraphProjectionService } = require('../../../services/graphProjection.service');
-
-const ACTIVE_CONSENT_STATUSES = new Set(['ACTIVE', 'VALID', 'GRANTED']);
+const ConsentGovernanceV2Repository = require('./ConsentGovernanceV2Repository');
 
 class MongoLineageRepository {
   /**
@@ -12,11 +11,14 @@ class MongoLineageRepository {
    * authorization source for a domain write.
    *
    * @param {import('mongodb').Db} db
-   * @param {{ graphProjectionService?: GraphProjectionService }} [options]
+   * @param {{ graphProjectionService?: GraphProjectionService, consentRepository?: ConsentGovernanceV2Repository }} [options]
    */
   constructor(db, options = {}) {
     this.db = db;
     this.graphProjectionService = options.graphProjectionService || new GraphProjectionService();
+    this.consentRepository = options.consentRepository || new ConsentGovernanceV2Repository(db, {
+      graphProjectionService: this.graphProjectionService
+    });
   }
 
   ensureDb() {
@@ -41,19 +43,18 @@ class MongoLineageRepository {
   async findSpecimen(specimenId, session) {
     this.ensureDb();
     const samples = await getCollection(this.db, 'samples');
-    return samples.findOne({ _id: this.toObjectId(specimenId) }, { session });
+    const normalized = this.toObjectId(specimenId);
+    return samples.findOne({
+      $or: [
+        { _id: normalized },
+        { specimenId: String(specimenId) }
+      ]
+    }, { session });
   }
 
   async findActiveConsent(participantId, session) {
     this.ensureDb();
-    if (!participantId) return null;
-    const consents = await getCollection(this.db, 'consents');
-    const rows = await consents
-      .find({ participantId: String(participantId), status: { $in: [...ACTIVE_CONSENT_STATUSES] } }, { session })
-      .sort({ signedAt: -1, createdAt: -1 })
-      .limit(1)
-      .toArray();
-    return rows[0] || null;
+    return this.consentRepository.findActiveConsent(participantId, session);
   }
 
   async validateBeforePersistence(input, session) {
@@ -69,14 +70,23 @@ class MongoLineageRepository {
 
     if (input?.requireEthicalConsent === false) return true;
 
-    const participantId = specimen.participantId || specimen.donorId || null;
+    const participantId = specimen.participantId || null;
     if (!participantId) {
       throw new Error('[RF023] Espécime sem participantId para decisão de consentimento');
     }
 
-    const consent = await this.findActiveConsent(participantId, session);
-    if (!consent) {
-      throw new Error('[RF023] Consentimento ativo não encontrado na autoridade MongoDB');
+    const authorization = await this.consentRepository.authorize({
+      participantId,
+      permissionCode: input.permissionCode || null,
+      purposeCode: input.purposeCode || null,
+      evaluatedAt: input.happenedAt || new Date()
+    }, session);
+
+    if (authorization.decision === 'deny') {
+      throw new Error('[RF023] Operação negada pela governança de consentimento v2');
+    }
+    if (authorization.decision === 'review_required') {
+      throw new Error('[RF023] Operação requer revisão de consentimento/finalidade');
     }
 
     return true;
@@ -87,11 +97,11 @@ class MongoLineageRepository {
     return this.graphProjectionService.appendSpecimenEvent(
       this.db,
       {
-        specimenId: String(specimen._id),
-        participantId: specimen.participantId || specimen.donorId || null,
-        parentSpecimenId: specimen.parentSpecimenId || specimen.parentSampleId || null,
+        specimenId: String(specimen.specimenId || specimen._id),
+        participantId: specimen.participantId || null,
+        parentSpecimenIds: Array.isArray(specimen.parentSpecimenIds) ? specimen.parentSpecimenIds : [],
         barcode: specimen.barcode || null,
-        specimenStatus: specimen.specimenStatus || specimen.status || null,
+        specimenStatus: specimen.specimenStatus || null,
         sourceService: 'mongo-lineage-repository',
       },
       { session }
@@ -118,7 +128,7 @@ class MongoLineageRepository {
     await this.graphProjectionService.appendCustodyEvent(
       this.db,
       {
-        specimenId,
+        specimenId: String(specimen.specimenId || specimenId),
         custodyEventId: eventId,
         eventType: String(input.eventType),
         happenedAt: input.happenedAt || new Date(),
@@ -136,35 +146,39 @@ class MongoLineageRepository {
 
   async createSampleNodeWithParent(input, session) {
     const specimenId = this.normalizePointerId(input?.specimenId, 'specimenId');
+    if (!session) {
+      throw new Error('[RF023] Linhagem e outbox devem compartilhar a transação MongoDB');
+    }
+
     const specimen = await this.findSpecimen(specimenId, session);
     if (!specimen) {
       throw new Error('[RF023] Espécime canônico não encontrado no MongoDB');
     }
 
-    await this.appendSpecimenProjection(
-      {
-        ...specimen,
-        parentSpecimenId: input.parentSampleId || specimen.parentSpecimenId || specimen.parentSampleId || null,
-      },
-      session
-    );
+    const parentSpecimenIds = Array.isArray(input.parentSpecimenIds)
+      ? input.parentSpecimenIds.map(String).filter(Boolean)
+      : Array.isArray(specimen.parentSpecimenIds)
+        ? specimen.parentSpecimenIds.map(String).filter(Boolean)
+        : [];
 
-    if (input.parentSampleId) {
+    await this.appendSpecimenProjection({ ...specimen, parentSpecimenIds }, session);
+
+    for (const parentSpecimenId of parentSpecimenIds) {
       await this.graphProjectionService.appendLineageEvent(
         this.db,
         {
-          specimenId,
-          parentSpecimenId: String(input.parentSampleId),
+          specimenId: String(specimen.specimenId || specimenId),
+          parentSpecimenId,
           sourceService: 'mongo-lineage-repository',
         },
-        session ? { session } : {}
+        { session }
       );
     }
 
     return {
-      specimenId,
-      parentId: input.parentSampleId || null,
-      relationshipType: input.relationshipType || 'TOPOLOGICAL_PARENT',
+      specimenId: String(specimen.specimenId || specimenId),
+      parentSpecimenIds,
+      relationshipType: input.relationshipType || 'DERIVED_FROM',
       queued: true,
     };
   }
