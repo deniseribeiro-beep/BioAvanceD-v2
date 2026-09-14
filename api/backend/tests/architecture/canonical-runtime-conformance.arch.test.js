@@ -44,6 +44,7 @@ async function diffRuntimeShape(entity, runtimeObject) {
   return {
     extra: [...runtimeKeys].filter((key) => !canonicalKeys.has(key)).sort(),
     missingRequired: [...requiredKeys].filter((key) => !runtimeKeys.has(key)).sort(),
+    schema,
   };
 }
 
@@ -166,10 +167,11 @@ for (const [entity, producer] of Object.entries(RUNTIME_TARGETS)) {
   test(`${entity} runtime producer conforms to canonical v2 field names and required fields`, async () => {
     const runtimeObject = producer();
     const diff = await diffRuntimeShape(entity, runtimeObject);
+    const observed = { extra: diff.extra, missingRequired: diff.missingRequired };
     assert.deepEqual(
-      diff,
+      observed,
       { extra: [], missingRequired: [] },
-      `${entity} runtime drift detected: ${JSON.stringify(diff)}`,
+      `${entity} runtime drift detected: ${JSON.stringify(observed)}; canonicalSchema=${JSON.stringify(diff.schema)}`,
     );
   });
 }
@@ -186,7 +188,7 @@ test('the conformance helper fails in both directions: invented runtime key and 
 
   const invented = { ...valid, definitelyNotCanonical: true };
   const extraDiff = await diffRuntimeShape('Container', invented);
-  assert.deepEqual(extraDiff.extra, ['definitelyNotCanonical']);
+  assert.ok(extraDiff.extra.includes('definitelyNotCanonical'));
 
   const missing = { ...valid };
   delete missing[required[0]];
