@@ -52,7 +52,15 @@ anchor = """test('Wave 2 never uses COMPROMISED as a specimenStatus value', () =
 addition = """test('Wave 2 has no legacy Neo4j lineage compatibility adapter', () => {
   const legacyAdapterPath = path.join(SRC_ROOT, 'infrastructure/database/neo4j/LineageRepository.js');
   assert.equal(fs.existsSync(legacyAdapterPath), false, 'legacy LineageRepository.js must be physically removed');
-  const offenders = violationsFor(/(?:const|let|var)\\s+LineageRepository\\s*=\\s*require\\s*\\(\\s*['\"][^'\"]*database\\/neo4j\\/LineageRepository['\"]\\s*\\)|new\\s+LineageRepository\\s*\\(/);
+  const executablePattern = /(?:const|let|var)\\s+LineageRepository\\s*=\\s*require\\s*\\(\\s*['\"][^'\"]*database\\/neo4j\\/LineageRepository['\"]\\s*\\)|new\\s+LineageRepository\\s*\\(/;
+  const offenders = sourceFiles()
+    .filter(({ source }) => {
+      const withoutComments = source
+        .replace(/\\/\\*[\\s\\S]*?\\*\\//g, '')
+        .replace(/^\\s*\\/\\/.*$/gm, '');
+      return executablePattern.test(withoutComments);
+    })
+    .map(({ relative }) => relative);
   assert.deepEqual(offenders, [], `legacy lineage adapter consumers: ${offenders.join(', ')}`);
 });
 
@@ -65,6 +73,8 @@ runtime_pattern = re.compile(r"(?:const|let|var)\s+LineageRepository\s*=\s*requi
 residuals = []
 for path in Path('api/backend/src').rglob('*.js'):
     text = path.read_text(errors='ignore')
+    text = re.sub(r'/\*[\s\S]*?\*/', '', text)
+    text = re.sub(r'^\s*//.*$', '', text, flags=re.MULTILINE)
     if runtime_pattern.search(text):
         residuals.append(str(path))
 if residuals:
