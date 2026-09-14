@@ -82,6 +82,7 @@ const REQUIRED_RUNTIME_FIELDS = [
 
 let catalogPromise = null;
 let sourcePathCache = null;
+let sourceSheetCache = null;
 
 function normalizeCellValue(value) {
   if (value === null || value === undefined) return null;
@@ -114,22 +115,48 @@ function resolveDictionaryPath() {
   return sourcePathCache;
 }
 
+function observedHeaders(worksheet) {
+  return SOURCE_HEADERS.map((_, index) => normalizeCellValue(worksheet.getRow(1).getCell(index + 1).value));
+}
+
+function hasCanonicalHeaders(worksheet) {
+  const observed = observedHeaders(worksheet);
+  return SOURCE_HEADERS.every((expected, index) => observed[index] === expected);
+}
+
+function resolveDictionaryWorksheet(workbook) {
+  const named = workbook.getWorksheet(SOURCE_SHEET);
+  if (named && hasCanonicalHeaders(named)) return named;
+
+  // The approved workbook is authoritative. Sheet captions are presentation
+  // metadata; the executable gate identifies the canonical dictionary by its
+  // complete, approved 25-column header contract rather than accepting a
+  // different data shape merely because its tab caption happens to match.
+  const headerMatched = workbook.worksheets.find(hasCanonicalHeaders);
+  if (headerMatched) return headerMatched;
+
+  const sheetNames = workbook.worksheets.map((sheet) => sheet.name);
+  throw new Error(
+    `Canonical dictionary worksheet not found in ${SOURCE_FILENAME}. Expected tab ${SOURCE_SHEET} or the exact approved header contract. Available sheets: ${sheetNames.join(', ')}`,
+  );
+}
+
 function assertHeaders(worksheet) {
-  const observed = SOURCE_HEADERS.map((_, index) => normalizeCellValue(worksheet.getRow(1).getCell(index + 1).value));
+  const observed = observedHeaders(worksheet);
   const mismatches = SOURCE_HEADERS
     .map((expected, index) => ({ expected, observed: observed[index], index }))
     .filter(({ expected, observed: actual }) => expected !== actual);
 
   if (mismatches.length > 0) {
-    throw new Error(`DICIONARIO_V2 header drift: ${JSON.stringify(mismatches)}`);
+    throw new Error(`Canonical dictionary header drift in worksheet ${worksheet.name}: ${JSON.stringify(mismatches)}`);
   }
 }
 
 async function parseApprovedDictionary() {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(resolveDictionaryPath());
-  const worksheet = workbook.getWorksheet(SOURCE_SHEET);
-  if (!worksheet) throw new Error(`Worksheet ${SOURCE_SHEET} not found in ${SOURCE_FILENAME}`);
+  const worksheet = resolveDictionaryWorksheet(workbook);
+  sourceSheetCache = worksheet.name;
 
   assertHeaders(worksheet);
 
@@ -183,7 +210,7 @@ async function checkCompleteness() {
   const missingRequiredFieldIds = catalog
     .filter((element) => REQUIRED_RUNTIME_FIELDS.some((field) => element[field] === null || element[field] === undefined || element[field] === ''))
     .map((element) => element.elementId);
-  const historicalTotal = ids.filter((id) => /^ELM-|^P1X-/.test(id)).length;
+  const historicalTotal = ids.filter((id) => /^(ELM-|P1X-)/.test(id)).length;
   const newTotal = ids.filter((id) => /^V2E-/.test(id)).length;
   const entityTotal = new Set(catalog.map((element) => element.entity)).size;
   const nonPhaseOneIds = catalog.filter((element) => element.preparationPhase !== 'Phase 1').map((element) => element.elementId);
@@ -191,7 +218,7 @@ async function checkCompleteness() {
   return {
     dictionaryVersion: DICTIONARY_VERSION,
     sourcePath: resolveDictionaryPath(),
-    sourceSheet: SOURCE_SHEET,
+    sourceSheet: sourceSheetCache || SOURCE_SHEET,
     expectedTotal: EXPECTED_TOTAL_ELEMENTS,
     loadedTotal: catalog.length,
     uniqueTotal: uniqueIds.size,
@@ -218,6 +245,7 @@ async function checkCompleteness() {
 function resetCacheForTests() {
   catalogPromise = null;
   sourcePathCache = null;
+  sourceSheetCache = null;
 }
 
 module.exports = {
