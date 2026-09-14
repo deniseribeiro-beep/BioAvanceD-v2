@@ -1,14 +1,9 @@
 const AllocateSampleUseCase = require('../../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../../infrastructure/persistence/mongo/MongoAuditRepository');
-const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
+const MongoLineageRepository = require('../../infrastructure/persistence/mongo/MongoLineageRepository');
 const logger = require('../../utils/logger');
 
-// Substrings of the client-input validation errors AllocateSampleUseCase and
-// MongoStorageRepository.allocateSamplePosition throw. Anything not matching
-// one of these, or the 404/409/LOCATION_BLOCKED_PATTERNS below, is treated
-// as an unexpected/infra failure and mapped to 500 instead of masked as a
-// 400 (#987, mirrors move-sample.controller.js).
 const VALIDATION_ERROR_PATTERNS = [
   'obrigatórios',
   'inválida',
@@ -16,11 +11,6 @@ const VALIDATION_ERROR_PATTERNS = [
   'já está alocada em outra posição'
 ];
 
-// Substrings of MongoStorageRepository.checkLocationBlocked's rejection
-// messages (#646 Wave 3, RF017 AC#7) -- a separate list from the
-// client-input patterns above since these are business/state rules
-// (destination box or an ancestor container unavailable), not malformed
-// input, even though both map to the same 400 status.
 const LOCATION_BLOCKED_PATTERNS = ['está retirada de uso', 'Localização indisponível'];
 
 function createAllocateSampleController() {
@@ -40,7 +30,7 @@ function createAllocateSampleController() {
       const useCase = new AllocateSampleUseCase({
         storageRepository: new MongoStorageRepository(db),
         auditRepository: new MongoAuditRepository(db),
-        lineageRepository: new LineageRepository(req.app.locals.neo4jDriver || null)
+        lineageRepository: new MongoLineageRepository(db)
       });
 
       const result = await useCase.execute({
@@ -59,6 +49,7 @@ function createAllocateSampleController() {
       return res.status(201).json({
         success: true,
         data: result.sampleLocation,
+        projectionQueued: result.lineageQueued,
         message: `Amostra alocada com sucesso em ${result.sampleLocation.position}`
       });
     } catch (error) {
@@ -74,6 +65,8 @@ function createAllocateSampleController() {
         statusCode = 400;
       } else if (VALIDATION_ERROR_PATTERNS.some((pattern) => message.includes(pattern))) {
         statusCode = 400;
+      } else if (message.includes('RF023_LINEAGE_VALIDATION_FAILED')) {
+        statusCode = 422;
       }
 
       return res.status(statusCode).json({
