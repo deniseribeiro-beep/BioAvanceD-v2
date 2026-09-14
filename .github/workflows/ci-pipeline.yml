@@ -6,10 +6,12 @@ on:
   push:
     branches:
       - main
+      - stabilize/v2.0.0-prototype
 
   pull_request:
     branches:
       - main
+      - stabilize/v2.0.0-prototype
 
 permissions:
   contents: read
@@ -47,6 +49,9 @@ jobs:
 
       - name: Validate Git diff
         run: git diff --check
+
+      - name: Canonical v2 dictionary gate
+        run: npm --prefix api/backend run dictionary:validate
 
       # #960: there is no separate "Backend typecheck" step because there is
       # no backend typecheck. api/backend is plain JavaScript and
