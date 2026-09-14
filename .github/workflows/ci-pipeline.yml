@@ -53,11 +53,6 @@ jobs:
       - name: Canonical v2 dictionary gate
         run: npm --prefix api/backend run dictionary:validate
 
-      # #960: there is no separate "Backend typecheck" step because there is
-      # no backend typecheck. api/backend is plain JavaScript and
-      # scripts/lint.js is a `node --check` syntax pass over src/ and
-      # scripts/; the package.json `typecheck` alias that used to back a
-      # second step here ran that identical command.
       - name: Backend lint
         run: npm --prefix api/backend run lint
 
@@ -69,28 +64,54 @@ jobs:
           npm --prefix api/backend run seed:validate:essential
           npm --prefix api/backend run seed:essential:dry-run
 
-      # #960: and no "Frontend lint" step, because there is no linter. There
-      # is no eslint config or dependency anywhere in this repo -- the
-      # frontend `lint` alias that used to back a step here ran
-      # `tsc --noEmit`, the identical command as the typecheck below.
       - name: Frontend typecheck
         run: npm --prefix frontend run typecheck
 
       - name: Frontend build
         run: npm --prefix frontend run build
 
-      - name: Validate Compose configuration
+      - name: Validate effective Compose configuration and RF022 precedence
         run: |
           docker compose \
             --env-file .env.test.example \
             -f compose.test.yml \
+            -f compose.test.foundation.yml \
             config --quiet
+
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            -f compose.test.foundation.yml \
+            config --format json > /tmp/bioavanced-compose-effective.json
+
+          node <<'NODE'
+          const fs = require('fs');
+          const cfg = JSON.parse(fs.readFileSync('/tmp/bioavanced-compose-effective.json', 'utf8'));
+          const services = cfg.services || {};
+          const foundation = services['foundation-bootstrap-test'];
+          if (!foundation) throw new Error('foundation-bootstrap-test ausente do Compose efetivo');
+          const foundationDeps = foundation.depends_on || {};
+          if (foundationDeps['backend-app-test']) {
+            throw new Error('RF022 violado: Foundation ainda depende da API');
+          }
+          for (const required of ['mongodb-test', 'mongo-rs-init-test', 'neo4j-test', 'redis-test', 'influxdb-test']) {
+            if (!foundationDeps[required]) throw new Error(`RF022: Foundation sem dependência de ${required}`);
+          }
+          for (const dependent of ['backend-app-test', 'worker-test', 'neo4j-projection-worker-test']) {
+            const dep = services[dependent]?.depends_on?.['foundation-bootstrap-test'];
+            if (!dep || dep.condition !== 'service_completed_successfully') {
+              throw new Error(`RF022: ${dependent} não está bloqueado por Foundation concluído`);
+            }
+          }
+          console.log('RF022 Compose precedence verified in effective configuration.');
+          NODE
 
       - name: Remove previous validation stack
         run: |
           docker compose \
             --env-file .env.test.example \
             -f compose.test.yml \
+            -f compose.test.foundation.yml \
             down --volumes --remove-orphans
 
       - name: Build validation stack
@@ -98,13 +119,15 @@ jobs:
           docker compose \
             --env-file .env.test.example \
             -f compose.test.yml \
+            -f compose.test.foundation.yml \
             build --no-cache
 
-      - name: Start application stack
+      - name: Start Foundation infrastructure
         run: |
           docker compose \
             --env-file .env.test.example \
             -f compose.test.yml \
+            -f compose.test.foundation.yml \
             up -d --wait \
             mongodb-test \
             neo4j-test \
@@ -113,34 +136,67 @@ jobs:
             influxdb-test \
             smtp-test \
             tsa-test \
-            witness-test \
-            backend-app-test \
-            worker-test \
-            frontend-app-test
+            witness-test
 
-      - name: Display service status
+      - name: Initialize MongoDB replica set
         run: |
           docker compose \
             --env-file .env.test.example \
             -f compose.test.yml \
-            ps
+            -f compose.test.foundation.yml \
+            up --no-deps --abort-on-container-exit --exit-code-from mongo-rs-init-test mongo-rs-init-test
 
-      - name: Verify empty MongoDB application collections
+      - name: Run Foundation one-shot before application
         run: |
           docker compose \
             --env-file .env.test.example \
             -f compose.test.yml \
+            -f compose.test.foundation.yml \
+            up --no-deps --abort-on-container-exit --exit-code-from foundation-bootstrap-test foundation-bootstrap-test
+
+      - name: Verify Foundation execution evidence
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            -f compose.test.foundation.yml \
+            exec -T mongodb-test \
+            mongosh --quiet bioavanced_test --eval '
+              const runs = db.getCollection("foundationDataRuns").find({}).sort({ startedAt: -1 }).limit(1).toArray();
+              if (runs.length !== 1) {
+                print("FoundationDataRun evidence missing.");
+                quit(1);
+              }
+              const run = runs[0];
+              const completeness = run.validationSummary && run.validationSummary.dictionaryCompleteness;
+              printjson({
+                foundationDataRunId: run.foundationDataRunId,
+                runStatus: run.runStatus,
+                dictionaryVersion: run.dictionaryVersion,
+                dictionaryChecksum: run.dictionaryChecksum,
+                completeness
+              });
+              if (run.runStatus !== "completed") quit(1);
+              if (run.dictionaryVersion !== "2.0.0") quit(1);
+              if (!completeness || completeness.verified !== true) quit(1);
+              if (completeness.expectedTotal !== 1644 || completeness.loadedTotal !== 1644) quit(1);
+              if (completeness.historicalTotal !== 929) quit(1);
+            '
+
+      - name: Verify Foundation creates no operational domain records
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            -f compose.test.foundation.yml \
             exec -T mongodb-test \
             mongosh --quiet bioavanced_test --eval '
               const collections = [
                 "users",
                 "patients",
                 "samples",
+                "patientConsents",
                 "consents",
-                "medication_dictionary",
-                "orphanet_diseases",
-                "terminologies",
-                "hpo_terms",
                 "biomarker_observations",
                 "sensors",
                 "equipment",
@@ -149,27 +205,25 @@ jobs:
               ];
 
               let total = 0;
-
               for (const name of collections) {
                 const count = db.getCollection(name).countDocuments({});
                 print(name + ": " + count);
                 total += count;
               }
-
               if (total !== 0) {
-                print("Application collections are not empty.");
+                print("Foundation criou registros operacionais de domínio indevidos.");
                 quit(1);
               }
-
-              print("All application collections are empty.");
+              print("Foundation post-condition verified: no operational domain records.");
             '
 
-      - name: Verify empty Neo4j graph
+      - name: Verify empty Neo4j graph after Foundation
         run: |
           NODE_COUNT="$(
             docker compose \
               --env-file .env.test.example \
               -f compose.test.yml \
+              -f compose.test.foundation.yml \
               exec -T neo4j-test \
               cypher-shell \
                 -u neo4j \
@@ -179,15 +233,43 @@ jobs:
               | tail -n 1 \
               | tr -d '\r'
           )"
-
-          echo "Neo4j node count: ${NODE_COUNT}"
+          echo "Neo4j node count after Foundation: ${NODE_COUNT}"
           test "${NODE_COUNT}" = "0"
+
+      - name: Start application only after Foundation
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            -f compose.test.foundation.yml \
+            up -d --wait \
+            backend-app-test \
+            worker-test \
+            neo4j-projection-worker-test \
+            frontend-app-test
+
+      - name: Prove runtime Foundation precedence
+        run: |
+          FOUNDATION_FINISHED="$(docker inspect -f '{{.State.FinishedAt}}' bioavanced-test-foundation-bootstrap-test-1)"
+          BACKEND_STARTED="$(docker inspect -f '{{.State.StartedAt}}' bioavanced-test-backend-app-test-1)"
+          echo "Foundation finished: ${FOUNDATION_FINISHED}"
+          echo "Backend started:      ${BACKEND_STARTED}"
+          node -e 'const f=Date.parse(process.argv[1]);const b=Date.parse(process.argv[2]);if(!Number.isFinite(f)||!Number.isFinite(b)||f>b){process.exit(1)}' "${FOUNDATION_FINISHED}" "${BACKEND_STARTED}"
+
+      - name: Display service status
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            -f compose.test.foundation.yml \
+            ps -a
 
       - name: Run backend test suite
         run: |
           docker compose \
             --env-file .env.test.example \
             -f compose.test.yml \
+            -f compose.test.foundation.yml \
             run --rm --no-deps backend-unit-runner
 
       - name: Collect Compose logs on failure
@@ -197,6 +279,7 @@ jobs:
           docker compose \
             --env-file .env.test.example \
             -f compose.test.yml \
+            -f compose.test.foundation.yml \
             logs --no-color > compose-test.log
 
       - name: Upload failure evidence
@@ -214,4 +297,5 @@ jobs:
           docker compose \
             --env-file .env.test.example \
             -f compose.test.yml \
+            -f compose.test.foundation.yml \
             down --volumes --remove-orphans
