@@ -1,111 +1,111 @@
 const logger = require('./logger');
 
-/**
- * #941: unique indexes on `storageContainers.containerID` and
- * `sensorMetadata.sensorId`.
- *
- * `StorageContainer.js` and `SensorMetadata.schema.js` have declared these
- * constraints all along (`containerID: { unique: true, sparse: true }` and
- * `SensorMetadataSchema.index({ sensorId: 1 }, { unique: true })`) and
- * neither declaration ever reaches Mongo:
- * `infrastructure/database/mongodb/connection.js:26` connects with
- * `autoIndex: false`, and nothing anywhere calls `syncIndexes()` or
- * `createIndexes()` on a mongoose model. So a schema-level `unique: true`
- * would have been a no-op that reads as a fix. This is the native-driver
- * equivalent, wired at the write path -- see `utils/sampleIndexes.js` for
- * the precedent this copies.
- *
- * ## Why `storageContainers.containerID` needs `$type: 'string'`
- *
- * `findOrCreateFreezer` in `location-storage-backfill.service.js` writes a
- * real `containerID`, but the SHELF/RACK/DRAWER path in `findOrCreateContainer`
- * in the same file never sets the field at all. A plain unique index would
- * collide on the second container created without one. `$type: 'string'`
- * indexes only the rows that carry a real `containerID`, the same shape
- * `sampleIndexes.js` uses on `samples.barcode` and for the same reason.
- *
- * ## Why `sensorMetadata.sensorId` needs no partial filter
- *
- * `sensorId` is `required: true` on `SensorMetadata.schema.js` -- every row
- * has one, so a plain unique index is correct.
- *
- * ## Failure posture
- *
- * Best-effort, like `ensureSampleIndexes` -- a failed index build must not
- * take down storage-container or sensor-metadata writes. But it **logs**
- * rather than swallowing: the one failure that matters is `E11000` on an
- * already-duplicated `containerID`/`sensorId`, which would mean a live
- * unguarded check-then-insert (storage containers) or upsert race (sensor
- * metadata) already produced a duplicate that needs a repair migration
- * before the constraint can hold. A silent catch would make that invisible.
- *
- * ## The latch
- *
- * Unlike `ensureSampleIndexes`, which is latched externally by
- * `collectionResolver.js` (these two collections never pass through that
- * resolver -- see the module-level doc comment on this file's caller side),
- * each function here latches itself, keyed by `collection.collectionName`
- * (the resolved name, mirroring `collectionResolver.js`'s `samplesIndexed`
- * Set), so both call sites stay a single, un-awaited line.
- */
-// #941: collection names whose indexes have already been ensured this
-// process, one Set per collection kind so a storageContainers name and a
-// sensorMetadata name never shadow one another.
 const storageContainersIndexed = new Set();
+const storageBoxesIndexed = new Set();
 const sensorMetadataIndexed = new Set();
+const facilityRoomIndexed = new Set();
+
+async function createIndexesBestEffort(collection, definitions, label) {
+  if (!collection || typeof collection.createIndex !== 'function') return;
+  for (const [keys, options] of definitions) {
+    try {
+      await collection.createIndex(keys, options);
+    } catch (error) {
+      logger.warn(`[${label}][INDEX] Não foi possível criar ${options.name} (#941): ${error?.message || error}`);
+    }
+  }
+}
 
 async function ensureStorageContainerIndexes(collection) {
   if (!collection || typeof collection.createIndex !== 'function') return;
-
-  const name = collection.collectionName;
+  const name = collection.collectionName || 'storageContainers';
   if (storageContainersIndexed.has(name)) return;
   storageContainersIndexed.add(name);
 
-  try {
-    await collection.createIndex(
+  await createIndexesBestEffort(collection, [
+    [
       { containerID: 1 },
       {
         name: 'storage_containers_containerid_unique_v1',
         unique: true,
         partialFilterExpression: { containerID: { $type: 'string' } }
       }
-    );
-  } catch (error) {
-    logger.warn(
-      '[STORAGE][INDEX] Não foi possível criar storage_containers_containerid_unique_v1 (#941). '
-        + 'Um E11000 aqui significa containerID duplicados já gravados -- '
-        + 'a unicidade segue apenas em nível de aplicação até que sejam corrigidos: '
-        + (error?.message || error)
-    );
-  }
+    ],
+    [
+      { containerType: 1, status: 1, name: 1 },
+      { name: 'storage_containers_type_status_name_v1' }
+    ],
+    [
+      { parent_id: 1, containerType: 1, name: 1 },
+      { name: 'storage_containers_parent_type_name_v1' }
+    ]
+  ], 'STORAGE');
+}
+
+async function ensureStorageBoxIndexes(collection) {
+  if (!collection || typeof collection.createIndex !== 'function') return;
+  const name = collection.collectionName || 'storageBoxes';
+  if (storageBoxesIndexed.has(name)) return;
+  storageBoxesIndexed.add(name);
+
+  // The live tree query filters by parent_id and sorts by name. The old
+  // Mongoose declarations ({parent_id,status} and {name}) matched neither
+  // operation as a compound access path.
+  await createIndexesBestEffort(collection, [
+    [
+      { parent_id: 1, name: 1 },
+      { name: 'storage_boxes_parent_name_v1' }
+    ]
+  ], 'STORAGE_BOX');
 }
 
 async function ensureSensorMetadataIndexes(collection) {
   if (!collection || typeof collection.createIndex !== 'function') return;
-
-  const name = collection.collectionName;
+  const name = collection.collectionName || 'sensorMetadata';
   if (sensorMetadataIndexed.has(name)) return;
   sensorMetadataIndexed.add(name);
 
-  try {
-    await collection.createIndex(
+  // sensorId is the actual upsert identity. macAddress is metadata, not an
+  // identity key in any runtime read/write path, so no uniqueness constraint
+  // is invented for it.
+  await createIndexesBestEffort(collection, [
+    [
       { sensorId: 1 },
       {
         name: 'sensor_metadata_sensorid_unique_v1',
         unique: true
       }
-    );
-  } catch (error) {
-    logger.warn(
-      '[SENSOR_METADATA][INDEX] Não foi possível criar sensor_metadata_sensorid_unique_v1 (#941). '
-        + 'Um E11000 aqui significa sensorId duplicados já gravados -- '
-        + 'a unicidade segue apenas em nível de aplicação (upsert) até que sejam corrigidos: '
-        + (error?.message || error)
-    );
-  }
+    ]
+  ], 'SENSOR_METADATA');
+}
+
+async function ensureFacilityRoomIndexes(db) {
+  if (!db || typeof db.collection !== 'function') return;
+  const dbName = db.databaseName || 'default';
+  if (facilityRoomIndexed.has(dbName)) return;
+  facilityRoomIndexed.add(dbName);
+
+  await createIndexesBestEffort(db.collection('facilities'), [
+    [{ deletedAt: 1, name: 1 }, { name: 'facilities_active_name_v1' }]
+  ], 'FACILITY');
+  await createIndexesBestEffort(db.collection('rooms'), [
+    [{ facilityId: 1, deletedAt: 1, name: 1 }, { name: 'rooms_facility_active_name_v1' }]
+  ], 'ROOM');
+}
+
+async function ensureStorageConfigurationIndexes(db) {
+  if (!db || typeof db.collection !== 'function') return;
+  await Promise.all([
+    ensureStorageContainerIndexes(db.collection('storageContainers')),
+    ensureStorageBoxIndexes(db.collection('storageBoxes')),
+    ensureFacilityRoomIndexes(db)
+  ]);
 }
 
 module.exports = {
   ensureStorageContainerIndexes,
-  ensureSensorMetadataIndexes
+  ensureStorageBoxIndexes,
+  ensureSensorMetadataIndexes,
+  ensureFacilityRoomIndexes,
+  ensureStorageConfigurationIndexes
 };
