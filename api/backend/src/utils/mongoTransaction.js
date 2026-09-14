@@ -4,9 +4,11 @@
  * @returns {Promise<any>}
  */
 async function withMongoTransaction(db, handler) {
+  await assertTransactionCapable(db);
+
   const client = db?.client || db?.s?.client;
   if (!client || typeof client.startSession !== 'function') {
-    throw new Error('Cliente Mongo não suporta transação');
+    throw transactionCapabilityError('unknown');
   }
 
   const session = client.startSession();
@@ -21,50 +23,50 @@ async function withMongoTransaction(db, handler) {
   }
 }
 
-/**
- * Per-client cache of the transaction-capability probe below, so repeated
- * calls (e.g. one per request) don't re-run `hello` every time.
- */
 const transactionCapabilityCache = new WeakMap();
 
+function transactionCapabilityError(topology) {
+  const error = new Error(
+    `Transação Mongo indisponível: topologia ${topology}. ` +
+    'Operações de custódia exigem replica set ou mongos; nenhuma escrita parcial será executada.'
+  );
+  error.code = 'MONGO_TRANSACTIONS_REQUIRED';
+  error.topology = topology;
+  return error;
+}
+
 /**
- * `typeof client.startSession === 'function'` is not sufficient to know a
- * transaction will succeed: a real `MongoClient` always exposes
- * `startSession`, including against a standalone mongod, where
- * `session.withTransaction` then throws. This runs `hello` against the
- * `admin` database and treats a replica set (`setName` present) or a mongos
- * (`msg === 'isdbgrid'`) as capable; anything else, including a thrown
- * error, is not.
- *
- * @param {import('mongodb').Db} db
- * @returns {Promise<boolean>}
+ * Returns true only after Mongo positively reports a replica set or mongos.
+ * Unknown is deliberately false: absence of proof of transaction capability
+ * is not sufficient for custody/audit/outbox writes.
  */
 async function isTransactionCapable(db) {
   return (await probeTopology(db)) === 'transactional';
 }
 
 /**
- * #923: the mirror question, and it is NOT `!isTransactionCapable(db)`.
+ * Fail-closed preflight for custody-grade operations (#923).
+ * Standalone and unknown are both refused before startSession()/first write.
+ */
+async function assertTransactionCapable(db) {
+  const topology = await probeTopology(db);
+  if (topology !== 'transactional') {
+    throw transactionCapabilityError(topology);
+  }
+  return true;
+}
+
+/**
+ * Historical compatibility export used only by the storage custody layer.
+ * After #923 its operational question is "must this custody operation refuse
+ * this deployment?" rather than merely "did hello positively identify a
+ * standalone?". Thus unknown is intentionally fail-closed as well.
  *
- * The two callers want opposite defaults when the topology cannot be
- * determined:
- *
- *   - "may I USE a transaction?" (#918) — unknown must mean NO, so the
- *     caller takes its sequential fallback rather than throwing.
- *   - "should I REFUSE with a topology error?" (#923) — unknown must mean
- *     NO, so the caller proceeds and lets Mongo answer for itself.
- *
- * Collapsing them into one boolean makes every test fake that mocks a
- * client without mocking `hello` look like a standalone deployment, which
- * is exactly what it is not. So this returns true only on a POSITIVE
- * determination: `hello` answered, and named neither a replica set nor a
- * mongos.
- *
- * @param {import('mongodb').Db} db
- * @returns {Promise<boolean>}
+ * Keeping the export avoids duplicating topology probes in StorageService and
+ * MongoStorageRepository while preserving their pre-write refusal boundary.
  */
 async function isKnownStandaloneDeployment(db) {
-  return (await probeTopology(db)) === 'standalone';
+  return (await probeTopology(db)) !== 'transactional';
 }
 
 /**
@@ -96,4 +98,11 @@ async function probeTopology(db) {
   return topology;
 }
 
-module.exports = { withMongoTransaction, isTransactionCapable, isKnownStandaloneDeployment };
+module.exports = {
+  withMongoTransaction,
+  isTransactionCapable,
+  assertTransactionCapable,
+  isKnownStandaloneDeployment,
+  probeTopology,
+  transactionCapabilityError,
+};
