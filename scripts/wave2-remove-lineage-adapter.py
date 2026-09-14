@@ -22,6 +22,20 @@ sample = sample.replace(
 )
 sample_path.write_text(sample)
 
+# These three route/import files retained dead compatibility imports after
+# their runtime call sites had already migrated. Remove them rather than
+# replacing an unused dependency with another unused dependency.
+for relative, import_line in [
+    ('api/backend/src/services/import-lgpd.service.js', "const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');\n"),
+    ('api/backend/src/interface/routes/sample.routes.js', "const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');\n"),
+    ('api/backend/src/interface/routes/user.routes.js', "const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');\n"),
+]:
+    path = Path(relative)
+    text = path.read_text()
+    if text.count(import_line) != 1:
+        raise SystemExit(f'{relative}: expected one dead LineageRepository import, found {text.count(import_line)}')
+    path.write_text(text.replace(import_line, '', 1))
+
 adapter = Path('api/backend/src/infrastructure/database/neo4j/LineageRepository.js')
 if not adapter.exists():
     raise SystemExit('legacy compatibility LineageRepository.js unexpectedly absent before controlled deletion')
@@ -49,7 +63,6 @@ if arch.count(anchor) != 1:
     raise SystemExit(f'architecture anchor count={arch.count(anchor)}')
 arch_path.write_text(arch.replace(anchor, anchor + addition, 1))
 
-# Prove the active source tree no longer depends on the compatibility adapter.
 residuals = []
 for path in Path('api/backend/src').rglob('*.js'):
     text = path.read_text(errors='ignore')
