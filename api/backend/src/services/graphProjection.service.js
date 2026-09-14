@@ -7,22 +7,42 @@ function stableHash(payload) {
   return crypto.createHash('sha256').update(ordered).digest('hex');
 }
 
+function normalizeConsentStatus(value) {
+  const status = String(value || '').trim().toUpperCase();
+  if (!status) {
+    throw new Error('[RF023] Consent projection requires explicit status');
+  }
+  if (!['ACTIVE', 'VALID', 'GRANTED', 'REVOKED'].includes(status)) {
+    throw new Error(`[RF023] Unsupported consent projection status: ${status}`);
+  }
+  return status;
+}
+
 class GraphProjectionService {
   constructor(options = {}) {
     this.outbox = options.outbox || new Neo4jOutboxService();
   }
 
-  async appendConsentEvent(db, payload, options = {}) {
+  async appendConsentEvent(db, payload = {}, options = {}) {
+    const participantId = String(payload.participantId || '').trim();
+    const ethicalConsentId = String(payload.ethicalConsentId || payload.consentId || payload.aggregateId || '').trim();
+    const status = normalizeConsentStatus(payload.status);
+    if (!participantId) {
+      throw new Error('[RF023] Consent projection requires participantId');
+    }
+    if (!ethicalConsentId) {
+      throw new Error('[RF023] Consent projection requires ethicalConsentId');
+    }
+
     return this.outbox.appendEvent(db, {
-      eventType: payload.status === 'REVOKED' ? 'CONSENT_REVOKED' : 'CONSENT_UPSERTED',
+      eventType: status === 'REVOKED' ? 'CONSENT_REVOKED' : 'CONSENT_UPSERTED',
       aggregateType: 'EthicalConsent',
-      aggregateId: String(payload.ethicalConsentId || payload.consentId || payload.aggregateId || ''),
+      aggregateId: ethicalConsentId,
       payload: {
-        participantId: payload.participantId,
-        specimenId: payload.specimenId || null,
-        ethicalConsentId: payload.ethicalConsentId || payload.consentId || null,
+        participantId,
+        ethicalConsentId,
         consentTemplateId: payload.consentTemplateId || null,
-        status: payload.status || 'ACTIVE',
+        status,
         signedAt: payload.signedAt || new Date(),
         revokedAt: payload.revokedAt || null,
       },
