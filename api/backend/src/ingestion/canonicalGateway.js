@@ -1,21 +1,13 @@
 /**
- * RF029 AC 1/2 ("Validar todo payload contra os contratos canônicos... /
- * Rejeitar aliases, campos desconhecidos, referências inexistentes e
- * cardinalidades inválidas", #669): a reusable gateway-level validator entity
- * slices (#670-673) call, instead of each reimplementing
- * routes/intakeWizard.js's own local `collectCanonicalViolations` alias
- * check. intakeWizard.js itself is left untouched — its inline copy predates
- * this module and isn't in this slice's scope to migrate.
+ * RF029 canonical ingestion validation.
  *
- * "Unknown fields" and "cardinalidades inválidas" are enforced by
- * contracts/canonical/v1's Ajv schemas whenever they're declared
- * `additionalProperties: false` with correct `type`/`minItems`/`maxItems` —
- * validateIngestionPayload folds that Ajv pass in alongside the alias check
- * rather than reimplementing it. "Referências inexistentes" is handled
- * separately by assertReferencesExist, since it needs a `db` handle and is
- * specific to which foreign-key-shaped fields a given entity actually has.
+ * The executable contract is generated from the approved BioAvanceD
+ * Canonical Data Model v2.0.0 workbook. Payload validation rejects aliases,
+ * unknown fields, invalid cardinalities and values that violate executable
+ * entity contracts prepared in Foundation. Reference existence is checked
+ * separately because it requires a persistence handle.
  */
-const { validate: validateContract } = require('../contracts/canonical/v1');
+const { validateEntity } = require('../contracts/canonical/v2');
 
 function collectAliasViolations(payload, aliasMap = {}) {
   const hits = [];
@@ -24,27 +16,20 @@ function collectAliasViolations(payload, aliasMap = {}) {
   for (const aliases of Object.values(aliasMap)) {
     const aliasList = Array.isArray(aliases) ? aliases : [];
     for (const alias of aliasList) {
-      if (Object.prototype.hasOwnProperty.call(payload, alias)) {
-        hits.push(alias);
-      }
+      if (Object.prototype.hasOwnProperty.call(payload, alias)) hits.push(alias);
     }
   }
 
   return [...new Set(hits)];
 }
 
-function extractAjvField(issue) {
+function extractContractField(issue) {
   const path = issue.instancePath?.replace(/^\//, '').replace(/\//g, '.');
   return path || issue.params?.missingProperty || issue.params?.additionalProperty || null;
 }
 
-/**
- * Combines alias rejection (AC 2) with the existing Ajv canonical-contract
- * pass (AC 1) into one violation list. `schemaId` is optional — a slice with
- * no registered contracts/canonical/v1 schema yet can still get alias
- * rejection alone.
- */
-function validateIngestionPayload({ schemaId = null, payload, aliasMap = {} }) {
+async function validateIngestionPayload({ entityType, payload, aliasMap = {} }) {
+  if (!entityType) throw new Error('validateIngestionPayload: entityType é obrigatório');
   const violations = [];
 
   for (const alias of collectAliasViolations(payload, aliasMap)) {
@@ -55,29 +40,22 @@ function validateIngestionPayload({ schemaId = null, payload, aliasMap = {} }) {
     });
   }
 
-  if (schemaId) {
-    const result = validateContract(schemaId, payload);
-    if (!result.valid) {
-      for (const issue of result.errors || []) {
-        violations.push({
-          code: 'CONTRACT_VIOLATION',
-          field: extractAjvField(issue),
-          message: issue.message || 'Violação de contrato canônico',
-          ajvKeyword: issue.keyword || null,
-        });
-      }
+  const result = await validateEntity(entityType, payload);
+  if (!result.valid) {
+    for (const issue of result.errors || []) {
+      violations.push({
+        code: 'CONTRACT_VIOLATION',
+        field: extractContractField(issue),
+        message: issue.message || 'Violação de contrato canônico v2.0.0',
+        contractVersion: '2.0.0',
+        ajvKeyword: issue.keyword || null,
+      });
     }
   }
 
   return { valid: violations.length === 0, violations };
 }
 
-/**
- * AC 2's "referências inexistentes": generic FK-style existence check. Each
- * entry only produces a violation when `value` is present but doesn't
- * resolve — an absent/empty value is a presence concern for the contract
- * schema's own `required`, not this function's job.
- */
 async function assertReferencesExist(db, references = []) {
   const violations = [];
 
