@@ -61,15 +61,50 @@ test('active governed enum values are present in the generated contract when the
   assert.deepEqual(missing, []);
 });
 
-test('all documented relationship source fields resolve to a canonical v2 source contract', async () => {
+test('all documented relationship endpoints resolve to canonical v2 entities/artifacts', async () => {
   const registry = await canonicalV2.getRegistry();
   const unresolved = [];
 
   for (const relationship of registry.relationships) {
+    const relationshipId = relationship['Relationship ID'];
+    const sourceEntity = relationship['Source entity'];
+    const targetEntities = String(relationship['Target entity'] || '')
+      .split('|')
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    if (!registry.schemas.has(sourceEntity)) {
+      unresolved.push(`${relationshipId}:source:${sourceEntity}`);
+    }
+    for (const targetEntity of targetEntities) {
+      if (!registry.schemas.has(targetEntity)) {
+        unresolved.push(`${relationshipId}:target:${targetEntity}`);
+      }
+    }
+  }
+
+  assert.deepEqual(unresolved, []);
+});
+
+test('relationship source fields that are canonical elements resolve to their source contract', async () => {
+  const registry = await canonicalV2.getRegistry();
+  const canonicalFieldKeys = new Set(
+    registry.elements.map((element) => `${element.entity}.${element.canonicalField}`),
+  );
+  const unresolved = [];
+
+  // RELACIONAMENTOS also contains conceptual/inverse navigation fields such
+  // as Consent.permissions and Specimen.rcsAssessments. Those are governed
+  // relationships, but they are deliberately not additional DICIONARIO
+  // elements and must not be injected into persisted entity payloads. When a
+  // relationship source field *is* a canonical element, however, its
+  // executable schema must contain it.
+  for (const relationship of registry.relationships) {
     const sourceEntity = relationship['Source entity'];
     const sourceField = relationship['Source field'];
+    if (!canonicalFieldKeys.has(`${sourceEntity}.${sourceField}`)) continue;
     const schema = registry.schemas.get(sourceEntity);
-    if (!schema || !Object.prototype.hasOwnProperty.call(schema.properties || {}, sourceField)) {
+    if (!Object.prototype.hasOwnProperty.call(schema?.properties || {}, sourceField)) {
       unresolved.push(`${relationship['Relationship ID']}:${sourceEntity}.${sourceField}`);
     }
   }
