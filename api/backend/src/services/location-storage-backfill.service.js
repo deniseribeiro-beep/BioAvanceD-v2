@@ -1,16 +1,12 @@
-const StorageAssignmentModel = require('../models/StorageAssignment');
 const { ensureStorageContainerIndexes } = require('../utils/storageIndexes');
+const NormalizedPhysicalStorageStore = require('../infrastructure/persistence/mongo/NormalizedPhysicalStorageStore');
 
 /**
- * #461 — one-time backfill: legacy `locations` (+ Sample.locationID
- * references) into the canonical StorageContainer/StorageBox/
- * StorageAssignment chain. Design/field mapping:
- * docs/architecture/legacy-location-migration-mapping.md.
+ * One-time migration from legacy `locations` into physical-storage v2.
  *
- * `locations` stays read-only — this only reads it, never writes back.
- * Safe to run more than once: containers/boxes are found-or-created by
- * their deterministic parent+name key, and an already-open
- * StorageAssignment for the same specimen/box/position is not duplicated.
+ * Legacy locations stay read-only. StorageContainer/StorageBox are retained
+ * as migration/layout sources, while the resulting specimen placement is
+ * written exclusively through the normalized v2 assignment chain.
  */
 async function backfillLocationsToStorage(db) {
   const locationsCollection = db.collection('locations');
@@ -19,10 +15,10 @@ async function backfillLocationsToStorage(db) {
   const storageContainersCollection = db.collection('storageContainers');
   ensureStorageContainerIndexes(storageContainersCollection);
   const storageBoxesCollection = db.collection('storageBoxes');
-  const storageAssignmentsCollection = db.collection('storageAssignments');
+  const physicalStore = new NormalizedPhysicalStorageStore(db);
+  await physicalStore.ensureIndexes();
 
   const locations = await locationsCollection.find({}).toArray();
-
   const freezerCache = new Map();
   const containerCache = new Map();
   const boxCache = new Map();
@@ -41,12 +37,7 @@ async function backfillLocationsToStorage(db) {
 
   async function findOrCreateFreezer(equipmentID) {
     if (freezerCache.has(equipmentID)) return freezerCache.get(equipmentID);
-
-    let freezer = await storageContainersCollection.findOne({
-      containerType: 'FREEZER',
-      containerID: equipmentID,
-    });
-
+    let freezer = await storageContainersCollection.findOne({ containerType: 'FREEZER', containerID: equipmentID });
     if (!freezer) {
       const equipment = await equipmentCollection.findOne({ equipmentID });
       const now = new Date();
@@ -70,7 +61,6 @@ async function backfillLocationsToStorage(db) {
       freezer = { _id: result.insertedId, ...doc };
       summary.freezersCreated += 1;
     }
-
     freezerCache.set(equipmentID, freezer._id);
     return freezer._id;
   }
@@ -78,14 +68,8 @@ async function backfillLocationsToStorage(db) {
   async function findOrCreateContainer(parentId, containerType, value, counterKey) {
     const cacheKey = `${parentId}:${containerType}:${value}`;
     if (containerCache.has(cacheKey)) return containerCache.get(cacheKey);
-
     const name = `${containerType} ${value}`;
-    let container = await storageContainersCollection.findOne({
-      parent_id: parentId,
-      containerType,
-      name,
-    });
-
+    let container = await storageContainersCollection.findOne({ parent_id: parentId, containerType, name });
     if (!container) {
       const now = new Date();
       const doc = {
@@ -107,7 +91,6 @@ async function backfillLocationsToStorage(db) {
       container = { _id: result.insertedId, ...doc };
       summary[counterKey] += 1;
     }
-
     containerCache.set(cacheKey, container._id);
     return container._id;
   }
@@ -115,16 +98,10 @@ async function backfillLocationsToStorage(db) {
   async function findOrCreateBox(parentId, boxNumber) {
     const cacheKey = `${parentId}:${boxNumber}`;
     if (boxCache.has(cacheKey)) return boxCache.get(cacheKey);
-
     const name = `Box ${boxNumber}`;
     let box = await storageBoxesCollection.findOne({ parent_id: parentId, name });
-
     if (!box) {
       const now = new Date();
-      // Legacy `locations` carries no box dimensions — default to the
-      // schema's max grid so any backfilled wellPosition stays in bounds;
-      // real dimensions land whenever a consumer migration (#462-#464)
-      // next writes this box.
       const doc = {
         name,
         description: null,
@@ -142,14 +119,12 @@ async function backfillLocationsToStorage(db) {
       box = { _id: result.insertedId, ...doc };
       summary.boxesCreated += 1;
     }
-
     boxCache.set(cacheKey, box._id);
     return box._id;
   }
 
   for (const location of locations) {
     summary.locationsProcessed += 1;
-
     if (location.equipmentID === null || location.equipmentID === undefined) {
       summary.skipped.push({ locationID: location.locationID, reason: 'missing equipmentID' });
       continue;
@@ -158,47 +133,43 @@ async function backfillLocationsToStorage(db) {
       summary.skipped.push({ locationID: location.locationID, reason: 'missing rack' });
       continue;
     }
+    if (location.box === null || location.box === undefined) {
+      summary.skipped.push({ locationID: location.locationID, reason: 'missing box' });
+      continue;
+    }
+    if (!location.wellPosition) {
+      summary.skipped.push({ locationID: location.locationID, reason: 'missing wellPosition' });
+      continue;
+    }
 
     const freezerId = await findOrCreateFreezer(location.equipmentID);
-    // block==null backfills a single synthetic SHELF per freezer, per the
-    // mapping doc — not a "no shelf" branch.
-    const blockValue = location.block ?? 0;
-    const shelfId = await findOrCreateContainer(freezerId, 'SHELF', blockValue, 'shelvesCreated');
+    const shelfId = await findOrCreateContainer(freezerId, 'SHELF', location.block ?? 0, 'shelvesCreated');
     const rackId = await findOrCreateContainer(shelfId, 'RACK', location.rack, 'racksCreated');
-
     let boxParentId = rackId;
     if (location.drawer !== null && location.drawer !== undefined) {
       boxParentId = await findOrCreateContainer(rackId, 'DRAWER', location.drawer, 'drawersCreated');
     }
 
-    if (location.box === null || location.box === undefined) {
-      summary.skipped.push({ locationID: location.locationID, reason: 'missing box' });
-      continue;
-    }
-
     const boxId = await findOrCreateBox(boxParentId, location.box);
     locationIdToBoxId.set(location.locationID, boxId);
-
+    const box = await storageBoxesCollection.findOne({ _id: boxId });
     const samples = await samplesCollection.find({ locationID: location.locationID }).toArray();
-    for (const sample of samples) {
-      const existing = await storageAssignmentsCollection.findOne({
-        specimenId: String(sample._id),
-        boxId: String(boxId),
-        positionCode: location.wellPosition,
-        removedAt: null,
-      });
-      if (existing) continue;
 
-      const record = StorageAssignmentModel.open({
-        specimenId: sample._id,
-        boxId,
-        positionCode: location.wellPosition,
-        equipmentId: freezerId,
-        shelfId,
-        rackId,
-        placedAt: sample.registeredAt || sample.receivedAt || sample.createdAt || undefined,
+    for (const sample of samples) {
+      const specimenId = String(sample.specimenId || sample._id);
+      if (await physicalStore.findCurrentBySpecimen(specimenId)) continue;
+      await physicalStore.assignSpecimenPosition({
+        specimenId,
+        box,
+        positionCode: String(location.wellPosition).toUpperCase(),
+        hierarchy: {
+          equipmentId: String(freezerId),
+          shelfId: String(shelfId),
+          rackId: String(rackId),
+          roomId: null,
+          facilityId: null
+        }
       });
-      await storageAssignmentsCollection.insertOne(record);
       summary.assignmentsCreated += 1;
     }
   }
