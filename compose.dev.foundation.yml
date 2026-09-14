@@ -3,6 +3,7 @@ services:
     # RF022 / Foundation v2.0.0: infraestrutura saudável primeiro, Foundation
     # one-shot depois, aplicação e workers somente após conclusão com exit 0.
     # !override substitui a dependência legada de backend e elimina o ciclo.
+    command: ["node", "scripts/run-foundation-data-pipeline.js"]
     depends_on: !override
       mongodb:
         condition: service_healthy
