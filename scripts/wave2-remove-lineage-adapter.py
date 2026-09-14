@@ -52,7 +52,7 @@ anchor = """test('Wave 2 never uses COMPROMISED as a specimenStatus value', () =
 addition = """test('Wave 2 has no legacy Neo4j lineage compatibility adapter', () => {
   const legacyAdapterPath = path.join(SRC_ROOT, 'infrastructure/database/neo4j/LineageRepository.js');
   assert.equal(fs.existsSync(legacyAdapterPath), false, 'legacy LineageRepository.js must be physically removed');
-  const offenders = violationsFor(/require\\s*\\(\\s*['\"][^'\"]*database\\/neo4j\\/LineageRepository['\"]\\s*\\)|new\\s+LineageRepository\\s*\\(/);
+  const offenders = violationsFor(/(?:const|let|var)\\s+LineageRepository\\s*=\\s*require\\s*\\(\\s*['\"][^'\"]*database\\/neo4j\\/LineageRepository['\"]\\s*\\)|new\\s+LineageRepository\\s*\\(/);
   assert.deepEqual(offenders, [], `legacy lineage adapter consumers: ${offenders.join(', ')}`);
 });
 
@@ -61,14 +61,14 @@ if arch.count(anchor) != 1:
     raise SystemExit(f'architecture anchor count={arch.count(anchor)}')
 arch_path.write_text(arch.replace(anchor, anchor + addition, 1))
 
-runtime_pattern = re.compile(r"require\s*\(\s*['\"][^'\"]*database/neo4j/LineageRepository['\"]\s*\)|new\s+LineageRepository\s*\(")
+runtime_pattern = re.compile(r"(?:const|let|var)\s+LineageRepository\s*=\s*require\s*\(\s*['\"][^'\"]*database/neo4j/LineageRepository['\"]\s*\)|new\s+LineageRepository\s*\(")
 residuals = []
 for path in Path('api/backend/src').rglob('*.js'):
     text = path.read_text(errors='ignore')
     if runtime_pattern.search(text):
         residuals.append(str(path))
 if residuals:
-    raise SystemExit(f'legacy lineage adapter runtime residuals: {residuals}')
+    raise SystemExit(f'legacy lineage adapter executable residuals: {residuals}')
 
 for temporary in [
     Path('.github/workflows/wave2-remove-lineage-adapter.yml'),
