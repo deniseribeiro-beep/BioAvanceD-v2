@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const canonicalV2 = require('../../src/contracts/canonical/v2');
+const canonicalDictionary = require('../../src/reference-data/canonical-dictionary');
 const PhysicalStorageV2 = require('../../src/models/PhysicalStorageV2');
 const ConsentGovernanceV2Repository = require('../../src/infrastructure/persistence/mongo/ConsentGovernanceV2Repository');
 const { Neo4jOutboxService } = require('../../src/services/neo4jOutbox.service');
@@ -46,6 +47,29 @@ async function diffRuntimeShape(entity, runtimeObject) {
     missingRequired: [...requiredKeys].filter((key) => !runtimeKeys.has(key)).sort(),
     schema,
   };
+}
+
+async function diagnosticMetadata(entity, fields) {
+  const rows = await canonicalDictionary.listByEntity(entity);
+  const wanted = new Set(fields);
+  return rows
+    .filter((row) => wanted.has(row.canonicalField))
+    .map((row) => ({
+      elementId: row.elementId,
+      field: row.canonicalField,
+      definition: row.definition,
+      dataType: row.dataType,
+      cardinality: row.cardinality,
+      requirement: row.requirement,
+      applicabilityCondition: row.applicabilityCondition,
+      vocabularyOrEnum: row.vocabularyOrEnum,
+      syntheticExample: row.syntheticExample,
+      authoritativePersistence: row.authoritativePersistence,
+      changeStatus: row.changeStatus,
+      relatedPreviousElement: row.relatedPreviousElement,
+      justification: row.justification,
+      migrationNotes: row.migrationNotes,
+    }));
 }
 
 const fixedNow = new Date('2026-09-14T12:00:00.000Z');
@@ -168,10 +192,11 @@ for (const [entity, producer] of Object.entries(RUNTIME_TARGETS)) {
     const runtimeObject = producer();
     const diff = await diffRuntimeShape(entity, runtimeObject);
     const observed = { extra: diff.extra, missingRequired: diff.missingRequired };
+    const metadata = await diagnosticMetadata(entity, [...diff.extra, ...diff.missingRequired]);
     assert.deepEqual(
       observed,
       { extra: [], missingRequired: [] },
-      `${entity} runtime drift detected: ${JSON.stringify(observed)}; canonicalSchema=${JSON.stringify(diff.schema)}`,
+      `${entity} runtime drift detected: ${JSON.stringify(observed)}; canonicalSchema=${JSON.stringify(diff.schema)}; dictionaryMetadata=${JSON.stringify(metadata)}`,
     );
   });
 }
