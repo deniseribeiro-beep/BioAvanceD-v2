@@ -4,18 +4,9 @@ const env = require('../config/env');
 const logger = require('../utils/logger');
 
 const COLLECTION_NAME = 'graph_projection_outbox';
+const CANONICAL_MODEL_RELEASE_ID = 'release-2.0.0';
+const DEFAULT_EVENT_TYPE_VERSION = '1.0.0';
 
-// #941: `ensureIndexes` (including the `eventId` unique index that makes
-// outbox delivery idempotent) was previously only ever called from
-// `scripts/neo4j-canonical-rebuild.js:83` -- a manual script, not the
-// normal `appendEvent` write path, so on a regular boot or worker run the
-// unique index was never built. Latched per collection name here, the same
-// "once per process" shape `cid.service.js`'s `ensureIndexes` uses, so a
-// hot append path doesn't re-issue `createIndex` on every call. Failure
-// posture is unchanged from `ensureIndexes` itself: it still throws rather
-// than logs (no internal try/catch), so this wiring does not swallow an
-// index-build failure -- it just avoids retrying it after the first
-// attempt in this process.
 const ensuredOutboxIndexCollections = new Set();
 
 function stableValue(value) {
@@ -49,6 +40,18 @@ function normalizeText(value) {
   return String(value || '').trim();
 }
 
+function normalizeAggregateVersion(value) {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : 1;
+}
+
+function buildIdempotencyKey({ eventType, aggregateType, aggregateId, aggregateVersion, payloadHash }) {
+  return crypto
+    .createHash('sha256')
+    .update(stableStringify({ eventType, aggregateType, aggregateId, aggregateVersion, payloadHash }))
+    .digest('hex');
+}
+
 class Neo4jOutboxService {
   constructor(options = {}) {
     this.collectionName = options.collectionName || COLLECTION_NAME;
@@ -64,6 +67,10 @@ class Neo4jOutboxService {
   async ensureIndexes(db) {
     const collection = this.getCollection(db);
     await collection.createIndex({ eventId: 1 }, { unique: true, name: 'graph_projection_outbox_eventId_unique' });
+    await collection.createIndex({ idempotencyKey: 1 }, {
+      name: 'graph_projection_outbox_idempotency_idx',
+      partialFilterExpression: { idempotencyKey: { $type: 'string' } }
+    });
     await collection.createIndex({ status: 1, aggregateType: 1, aggregateId: 1, occurredAt: 1 }, { name: 'graph_projection_outbox_status_aggregate_idx' });
     await collection.createIndex({ leaseUntil: 1, status: 1, occurredAt: 1 }, { name: 'graph_projection_outbox_lease_idx' });
     return true;
@@ -72,15 +79,32 @@ class Neo4jOutboxService {
   buildEvent(event = {}) {
     const eventId = normalizeText(event.eventId) || crypto.randomUUID();
     const payload = event.payload || {};
+    const payloadHash = hashPayload(payload);
+    const eventType = normalizeText(event.eventType);
+    const aggregateType = normalizeText(event.aggregateType);
+    const aggregateId = normalizeText(event.aggregateId);
+    const aggregateVersion = normalizeAggregateVersion(event.aggregateVersion);
+    const schemaVersion = Number(event.schemaVersion || 1);
+    const canonicalModelReleaseId = normalizeText(event.canonicalModelReleaseId) || CANONICAL_MODEL_RELEASE_ID;
+    const eventTypeVersion = normalizeText(event.eventTypeVersion) || DEFAULT_EVENT_TYPE_VERSION;
+    const idempotencyKey = normalizeText(event.idempotencyKey) || buildIdempotencyKey({
+      eventType,
+      aggregateType,
+      aggregateId,
+      aggregateVersion,
+      payloadHash
+    });
+    const now = new Date();
+
     return {
       eventId,
-      eventType: normalizeText(event.eventType),
-      aggregateType: normalizeText(event.aggregateType),
-      aggregateId: normalizeText(event.aggregateId),
+      eventType,
+      aggregateType,
+      aggregateId,
       payload,
-      payloadHash: hashPayload(payload),
-      schemaVersion: Number(event.schemaVersion || 1),
-      occurredAt: event.occurredAt ? new Date(event.occurredAt) : new Date(),
+      payloadHash,
+      schemaVersion,
+      occurredAt: event.occurredAt ? new Date(event.occurredAt) : now,
       status: 'PENDING',
       attempts: 0,
       lastError: null,
@@ -90,30 +114,18 @@ class Neo4jOutboxService {
       sourceService: normalizeText(event.sourceService) || 'unknown',
       traceId: normalizeText(event.traceId) || null,
       projectionState: event.projectionState || {},
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: now,
+      updatedAt: now,
+      canonicalModelReleaseId,
+      aggregateVersion,
+      eventTypeVersion,
+      idempotencyKey,
     };
   }
 
   async appendEvent(db, event, options = {}) {
     const collection = this.getCollection(db);
 
-    // #941: the outbox eventId unique index is what makes delivery idempotent,
-    // and until now it was built ONLY by scripts/neo4j-canonical-rebuild.js --
-    // so on a normal boot or worker run it never existed. Built here instead,
-    // once per collection name per process.
-    //
-    // Logged, not thrown, and that differs deliberately from ensureIndexes own
-    // posture. The two callers want opposite things from a failed build: the
-    // manual rebuild script is ASKING for the indexes, so a failure is its
-    // result; appendEvent is asking to append, and the index is a backstop
-    // rather than the mechanism -- the same argument utils/sampleIndexes.js
-    // makes for samples.barcode. Letting a build failure take down every
-    // outbox append would trade a missing index for a broken projection
-    // pipeline.
-    //
-    // Latched BEFORE the await so a persistent failure cannot retry per
-    // append; that matches utils/collectionResolver.js:46-48.
     if (!ensuredOutboxIndexCollections.has(this.collectionName)) {
       ensuredOutboxIndexCollections.add(this.collectionName);
       try {
@@ -121,7 +133,7 @@ class Neo4jOutboxService {
       } catch (error) {
         logger.warn(
           `[NEO4J_OUTBOX] Falha ao criar indices de ${this.collectionName}: ${error.message}. ` +
-          ('A entrega continua, mas sem a garantia de idempotencia do indice unico em eventId (#941).')
+          'A entrega continua, mas sem as garantias de indice do outbox (#941).'
         );
       }
     }
@@ -297,5 +309,8 @@ module.exports = {
   Neo4jOutboxService,
   hashPayload,
   stableStringify,
+  buildIdempotencyKey,
   COLLECTION_NAME,
+  CANONICAL_MODEL_RELEASE_ID,
+  DEFAULT_EVENT_TYPE_VERSION,
 };
