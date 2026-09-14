@@ -22,7 +22,9 @@ jobs:
         with:
           node-version: "22"
       - name: Apply deterministic patch
-        run: python3 scripts/wave2-finalize-1132.py
+        run: |
+          python3 scripts/wave2-finalize-1132.py
+          python3 scripts/wave2-finalize-1132-testfix.py
       - name: Install backend dependencies
         working-directory: api/backend
         run: npm ci
