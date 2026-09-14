@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { seedCanonicalOutbox } = require('../../../scripts/neo4j-canonical-rebuild');
+const {
+  seedCanonicalOutbox,
+  canonicalConsentStatus,
+  canonicalSpecimenId,
+} = require('../../../scripts/neo4j-canonical-rebuild');
 
 /**
  * Real query-matching fake (exact-match filter + sort + $in), not a canned
@@ -70,7 +74,6 @@ function createFakeCollection() {
 
 function createFakeDb(seed = {}) {
   const collections = {
-    patients: createFakeCollection(),
     consents: createFakeCollection(),
     samples: createFakeCollection(),
     rcsAssessments: createFakeCollection(),
@@ -101,6 +104,100 @@ function fakeOutbox() {
 }
 
 describe('neo4j-canonical-rebuild#seedCanonicalOutbox', () => {
+  it('rebuilds consent/specimen using the same v2 semantics as runtime (#1026)', async () => {
+    const db = createFakeDb({
+      consents: [
+        {
+          _id: 'mongo-c1',
+          consentId: 'CONSENT-1',
+          participantId: 'P1',
+          currentStateDerived: 'active',
+          templateVersionId: 'T1',
+          effectivePeriod: { start: new Date('2026-01-01T00:00:00Z') },
+          updatedAt: new Date('2026-01-01T00:00:00Z'),
+        },
+        {
+          _id: 'mongo-c2',
+          consentId: 'CONSENT-2',
+          participantId: 'P1',
+          currentStateDerived: 'revoked',
+          templateVersionId: 'T2',
+          effectivePeriod: { start: new Date('2026-02-01T00:00:00Z') },
+          updatedAt: new Date('2026-03-01T00:00:00Z'),
+        },
+      ],
+      samples: [
+        {
+          _id: 'mongo-s1',
+          specimenId: 'SPEC-1',
+          participantId: 'P1',
+          parentSpecimenIds: ['SPEC-PARENT'],
+          barcode: 'BC-1',
+          specimenStatus: 'available',
+        },
+      ],
+    });
+
+    await seedCanonicalOutbox(db, fakeOutbox());
+
+    const events = db.collections.graph_projection_outbox.docs;
+    const consentEvents = events.filter((event) => event.aggregateType === 'EthicalConsent');
+    expect(consentEvents).toHaveLength(2);
+    expect(consentEvents.map((event) => [event.aggregateId, event.eventType, event.payload.status])).toEqual([
+      ['CONSENT-1', 'CONSENT_UPSERTED', 'ACTIVE'],
+      ['CONSENT-2', 'CONSENT_REVOKED', 'REVOKED'],
+    ]);
+    expect(consentEvents.every((event) => event.payload.participantId === 'P1')).toBe(true);
+
+    const specimenEvents = events.filter((event) => event.eventType === 'SPECIMEN_UPSERTED');
+    expect(specimenEvents).toHaveLength(1);
+    expect(specimenEvents[0]).toEqual(expect.objectContaining({
+      aggregateType: 'Specimen',
+      aggregateId: 'SPEC-1',
+      schemaVersion: 2,
+      payload: expect.objectContaining({
+        specimenId: 'SPEC-1',
+        participantId: 'P1',
+        parentSpecimenIds: ['SPEC-PARENT'],
+        barcode: 'BC-1',
+        specimenStatus: 'available',
+      }),
+    }));
+
+    // The old #1026 rebuild defect emitted CONSENT_UPSERTED with aggregateType
+    // Sample and no real status, which fabricated ACTIVE consent per specimen.
+    expect(events.some((event) => event.eventType === 'CONSENT_UPSERTED' && event.aggregateType !== 'EthicalConsent')).toBe(false);
+  });
+
+  it('refuses to infer ACTIVE from a missing/legacy status field (#1026)', async () => {
+    const db = createFakeDb({
+      consents: [
+        {
+          _id: 'mongo-legacy-consent',
+          consentId: 'CONSENT-LEGACY',
+          participantId: 'P1',
+          status: 'ACTIVE',
+        },
+      ],
+    });
+
+    await expect(seedCanonicalOutbox(db, fakeOutbox()))
+      .rejects.toThrow('sem currentStateDerived canônico ativo/revogado');
+    expect(db.collections.graph_projection_outbox.docs).toHaveLength(0);
+  });
+
+  it('maps only explicit canonical consent states', () => {
+    expect(canonicalConsentStatus({ consentId: 'a', currentStateDerived: 'active' })).toBe('ACTIVE');
+    expect(canonicalConsentStatus({ consentId: 'b', currentStateDerived: 'revoked' })).toBe('REVOKED');
+    expect(() => canonicalConsentStatus({ consentId: 'c', currentStateDerived: '' }))
+      .toThrow('Consent c sem currentStateDerived');
+  });
+
+  it('uses specimenId as graph identity and only falls back to Mongo _id when canonical id is absent', () => {
+    expect(canonicalSpecimenId({ _id: 'mongo-id', specimenId: 'SPEC-CANONICAL' })).toBe('SPEC-CANONICAL');
+    expect(canonicalSpecimenId({ _id: 'mongo-id' })).toBe('mongo-id');
+  });
+
   it('resolves QUALITY_ASSESSED score from the canonical RcsAssessment snapshot, not the embedded Sample.rcsScore (#525)', async () => {
     const db = createFakeDb({
       samples: [
@@ -116,6 +213,8 @@ describe('neo4j-canonical-rebuild#seedCanonicalOutbox', () => {
 
     const qualityEvent = db.collections.graph_projection_outbox.docs.find((e) => e.eventType === 'QUALITY_ASSESSED');
     expect(qualityEvent.payload.score).toBe(91);
+    expect(qualityEvent.aggregateId).toBe('SPEC-1');
+    expect(qualityEvent.payload.specimenId).toBe('SPEC-1');
   });
 
   it('falls back to the embedded Sample.rcsScore when no RcsAssessment snapshot has been recorded for the specimen', async () => {
