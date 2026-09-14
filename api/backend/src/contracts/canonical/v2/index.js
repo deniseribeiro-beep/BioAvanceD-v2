@@ -83,16 +83,37 @@ function schemaForElement(element, enumValues) {
   const values = enumValues.get(`${element.entity}.${element.canonicalField}`) || [];
   if (values.length && scalar.type === 'string') scalar.enum = values;
 
-  if (!isArrayElement(element)) return scalar;
+  const schema = isArrayElement(element)
+    ? (() => {
+        const { min, max } = cardinalityBounds(element.cardinality);
+        const arraySchema = { type: 'array', items: scalar };
+        if (min > 0) arraySchema.minItems = min;
+        if (max !== null) arraySchema.maxItems = max;
+        return arraySchema;
+      })()
+    : scalar;
 
-  const { min, max } = cardinalityBounds(element.cardinality);
-  const schema = { type: 'array', items: scalar };
-  if (min > 0) schema.minItems = min;
-  if (max !== null) schema.maxItems = max;
+  // Deprecated dictionary elements remain represented so historical reads
+  // and migration tooling can understand them, but they are not part of the
+  // active write contract. This is especially important for
+  // TelemetryExposureSummary.storageAssignmentId: the approved dictionary
+  // explicitly says it was replaced by the normalized temporal assignment
+  // chain and that new writes must be rejected after migration.
+  if (/^deprecated$/i.test(String(element.changeStatus || '').trim())) {
+    schema.deprecated = true;
+    schema.readOnly = true;
+  }
+
   return schema;
 }
 
 function shouldRequire(element) {
+  // A deprecated element may have historical cardinality 1..1, but that does
+  // not make it mandatory for new v2 writes. Keeping it in `required` would
+  // force the runtime to recreate exactly the legacy shortcut the migration
+  // notes say must no longer be written (#967).
+  if (/^deprecated$/i.test(String(element.changeStatus || '').trim())) return false;
+
   const { min } = cardinalityBounds(element.cardinality);
   if (min < 1) return false;
   return !/^conditional$/i.test(String(element.requirement || '').trim());
