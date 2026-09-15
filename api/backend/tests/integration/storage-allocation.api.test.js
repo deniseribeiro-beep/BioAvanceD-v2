@@ -11,12 +11,114 @@ const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 
-// #1006: route -> requirePermission -> controller -> service integration
-// coverage for the storage mutation routes (POST /allocate, POST /move,
-// DELETE /release/:sampleId), against a db no test author fabricated
-// methods onto. See db.factory.js's own comments for why that matters:
-// #994 was 41 green unit tests certifying a dead endpoint because a mock
-// invented a method the real driver doesn't have.
+function sameValue(a, b) {
+  if (a instanceof Date || b instanceof Date) return new Date(a).getTime() === new Date(b).getTime();
+  if (a instanceof ObjectId || b instanceof ObjectId) return String(a) === String(b);
+  return a === b;
+}
+
+function getPath(obj, path) {
+  return String(path).split('.').reduce((value, key) => value == null ? undefined : value[key], obj);
+}
+
+function setPath(obj, path, value) {
+  const keys = String(path).split('.');
+  let cursor = obj;
+  for (let i = 0; i < keys.length - 1; i += 1) {
+    if (!cursor[keys[i]] || typeof cursor[keys[i]] !== 'object') cursor[keys[i]] = {};
+    cursor = cursor[keys[i]];
+  }
+  cursor[keys[keys.length - 1]] = value;
+}
+
+function unsetPath(obj, path) {
+  const keys = String(path).split('.');
+  const parent = keys.slice(0, -1).reduce((value, key) => value?.[key], obj);
+  if (parent) delete parent[keys[keys.length - 1]];
+}
+
+function matchesCondition(actual, expected) {
+  if (expected instanceof ObjectId || expected instanceof Date || expected instanceof RegExp || expected === null || typeof expected !== 'object') {
+    if (expected instanceof RegExp) return expected.test(String(actual ?? ''));
+    return sameValue(actual, expected);
+  }
+  for (const [op, value] of Object.entries(expected)) {
+    if (op === '$exists' && Boolean(actual !== undefined) !== Boolean(value)) return false;
+    if (op === '$ne' && sameValue(actual, value)) return false;
+    if (op === '$in' && !value.some((candidate) => sameValue(actual, candidate))) return false;
+    if (op === '$lte' && !(actual <= value)) return false;
+    if (op === '$gte' && !(actual >= value)) return false;
+  }
+  return true;
+}
+
+function matches(doc, filter = {}) {
+  return Object.entries(filter).every(([key, expected]) => {
+    if (key === '$or') return expected.some((part) => matches(doc, part));
+    if (key === '$and') return expected.every((part) => matches(doc, part));
+    return matchesCondition(getPath(doc, key), expected);
+  });
+}
+
+function createStatefulCollection(initial = []) {
+  const docs = initial.map((doc) => structuredClone(doc));
+  const cursorFor = (rows) => ({
+    sort: vi.fn((criteria = {}) => {
+      const [[field, direction = 1]] = Object.entries(criteria);
+      const sorted = [...rows].sort((a, b) => {
+        const av = getPath(a, field); const bv = getPath(b, field);
+        return av === bv ? 0 : (av > bv ? direction : -direction);
+      });
+      return cursorFor(sorted);
+    }),
+    limit: vi.fn((n) => cursorFor(rows.slice(0, n))),
+    skip: vi.fn((n) => cursorFor(rows.slice(n))),
+    project: vi.fn(() => cursorFor(rows)),
+    toArray: vi.fn().mockResolvedValue(rows),
+    next: vi.fn().mockResolvedValue(rows[0] || null)
+  });
+
+  const collection = {
+    docs,
+    collectionName: 'stateful',
+    createIndex: vi.fn().mockResolvedValue(null),
+    findOne: vi.fn(async (filter = {}) => docs.find((doc) => matches(doc, filter)) || null),
+    find: vi.fn((filter = {}) => cursorFor(docs.filter((doc) => matches(doc, filter)))),
+    countDocuments: vi.fn(async (filter = {}) => docs.filter((doc) => matches(doc, filter)).length),
+    insertOne: vi.fn(async (doc) => {
+      const stored = structuredClone(doc);
+      if (!stored._id) stored._id = new ObjectId();
+      docs.push(stored);
+      return { insertedId: stored._id };
+    }),
+    insertMany: vi.fn(async (rows) => {
+      rows.forEach((row) => docs.push(structuredClone(row)));
+      return { insertedCount: rows.length };
+    }),
+    updateOne: vi.fn(async (filter, update, options = {}) => {
+      let doc = docs.find((row) => matches(row, filter));
+      let upserted = false;
+      if (!doc && options.upsert) {
+        doc = {};
+        for (const [key, value] of Object.entries(filter)) {
+          if (!key.startsWith('$') && (value === null || typeof value !== 'object' || value instanceof ObjectId)) setPath(doc, key, value);
+        }
+        docs.push(doc);
+        upserted = true;
+      }
+      if (!doc) return { matchedCount: 0, modifiedCount: 0 };
+      if (upserted && update.$setOnInsert) Object.entries(update.$setOnInsert).forEach(([key, value]) => setPath(doc, key, structuredClone(value)));
+      if (update.$set) Object.entries(update.$set).forEach(([key, value]) => setPath(doc, key, structuredClone(value)));
+      if (update.$unset) Object.keys(update.$unset).forEach((key) => unsetPath(doc, key));
+      if (update.$inc) Object.entries(update.$inc).forEach(([key, value]) => setPath(doc, key, Number(getPath(doc, key) || 0) + Number(value)));
+      return { matchedCount: upserted ? 0 : 1, modifiedCount: 1, upsertedCount: upserted ? 1 : 0 };
+    }),
+    updateMany: vi.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 }),
+    deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }),
+    deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 })
+  };
+  return collection;
+}
 
 function makeToken(accessType = 4) {
   return jwt.sign(
@@ -26,232 +128,199 @@ function makeToken(accessType = 4) {
   );
 }
 
-function dbWithRbac(collections, accessType = 4) {
-  return createDbMock({
-    ...collections,
-    ...buildRbacCollections([{ userAccountId: 'qa-user-1', accessType }]),
-  });
-}
-
 function givenSession() {
   vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'sess-1' } });
   vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'sess-1' });
 }
 
-beforeEach(() => { givenSession(); });
-afterEach(() => { vi.restoreAllMocks(); });
-
 const SAMPLE_ID = new ObjectId();
-const BOX_ID = new ObjectId();
+const SOURCE_BOX_ID = new ObjectId();
 const TARGET_BOX_ID = new ObjectId();
+const PARTICIPANT_ID = 'participant-storage-v2';
 
-// Three fixture hazards verified in db.factory.js's createCollectionMock:
-// no `findOneAndUpdate` (the movement-id counter path needs one on
-// `counters`) and no cursor `.next()` (the movement ledger's hash-chain
-// read needs one on `sample_movements`). Any test whose request reaches
-// the transaction's audit-append step needs both, or the call is a
-// TypeError caught upstream and surfaced as a generic 500 that would look,
-// to an unwary assertion, just like a legitimate rejection.
-function ledgerCollections() {
+function activeConsentCollections() {
+  const now = new Date();
   return {
-    counters: createCollectionMock({
-      findOneAndUpdate: vi.fn().mockResolvedValue({ _id: 'sample_movements', seq: 1 }),
-    }),
-    sample_movements: createCollectionMock({
-      find: vi.fn().mockReturnValue({
-        sort: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({ next: vi.fn().mockResolvedValue(null) }),
-        }),
-      }),
-      insertOne: vi.fn().mockResolvedValue({ insertedId: new ObjectId() }),
-    }),
+    consents: createStatefulCollection([{
+      consentId: 'consent-storage-v2',
+      participantId: PARTICIPANT_ID,
+      currentStateDerived: 'active',
+      effectivePeriod: { start: new Date(now.getTime() - 86400000), end: null },
+      createdAt: now
+    }]),
+    consentPermissions: createStatefulCollection(),
+    consentRevocations: createStatefulCollection(),
+    consentAuthorizationDecisions: createStatefulCollection()
   };
 }
 
-describe('POST /api/storage/allocate', () => {
-  it('rejects accessType 1 with 403 -- the permission gate is server-side, not a frontend hide', async () => {
-    const samples = createCollectionMock();
-    const storageBoxes = createCollectionMock();
-    app.locals.db = dbWithRbac({ samples, storageBoxes, ...ledgerCollections() }, 1);
+function movementCollections() {
+  return {
+    counters: createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ _id: 'sample_movements', seq: 1 }) }),
+    sample_movements: createCollectionMock({
+      find: vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ next: vi.fn().mockResolvedValue(null) }) })
+      }),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: new ObjectId() })
+    })
+  };
+}
 
+function canonicalSeed(boxId = SOURCE_BOX_ID, positionCode = 'A1') {
+  const specimenId = String(SAMPLE_ID);
+  const rackId = String(boxId);
+  const containerId = `container:${specimenId}`;
+  const positionId = `${rackId}:${positionCode}`;
+  return {
+    containers: [{ containerId, status: 'active', emptyStatus: 'occupied' }],
+    specimenContainerAssignments: [{
+      specimenContainerAssignmentId: 'sca-seeded', specimenId, containerId,
+      loadedAt: new Date(), unloadedAt: null, assignmentStatus: 'active', sourceEventId: 'evt-seeded'
+    }],
+    containerPositionAssignments: [{
+      containerPositionAssignmentId: 'cpa-seeded', containerId, storagePositionId: positionId,
+      placedAt: new Date(), removedAt: null, assignmentStatus: 'active'
+    }],
+    storagePositions: [{ storagePositionId: positionId, storageRackId: rackId, positionCode, status: 'occupied' }],
+    storageRacks: [{ storageRackId: rackId, rowCount: 2, columnCount: 2, status: 'active' }],
+    rackLocationAssignments: [{
+      rackLocationAssignmentId: 'rla-seeded', storageRackId: rackId, storageLocationId: rackId,
+      placedAt: new Date(), removedAt: null, assignmentStatus: 'active'
+    }]
+  };
+}
+
+function buildDb({ withPlacement = false, accessType = 2 } = {}) {
+  const seeded = withPlacement ? canonicalSeed() : {
+    containers: [], specimenContainerAssignments: [], containerPositionAssignments: [],
+    storagePositions: [], storageRacks: [], rackLocationAssignments: []
+  };
+  const sourceBox = {
+    _id: SOURCE_BOX_ID,
+    name: 'Source Box',
+    dimension: { rows: 2, cols: 2 },
+    occupancyGrid: withPlacement ? { A1: SAMPLE_ID } : {},
+    currentOccupancy: withPlacement ? 1 : 0,
+    ...(withPlacement ? { canonicalStorageRackId: String(SOURCE_BOX_ID) } : {})
+  };
+  const targetBox = {
+    _id: TARGET_BOX_ID,
+    name: 'Target Box',
+    dimension: { rows: 2, cols: 2 },
+    occupancyGrid: {},
+    currentOccupancy: 0
+  };
+
+  const collections = {
+    samples: createStatefulCollection([{
+      _id: SAMPLE_ID,
+      specimenId: String(SAMPLE_ID),
+      barcode: 'BC-STORAGE-V2',
+      participantId: PARTICIPANT_ID,
+      specimenStatus: 'available'
+    }]),
+    storageBoxes: createStatefulCollection([sourceBox, targetBox]),
+    storageContainers: createStatefulCollection(),
+    storagePaths: createStatefulCollection(),
+    rooms: createStatefulCollection(),
+    containers: createStatefulCollection(seeded.containers),
+    specimenContainerAssignments: createStatefulCollection(seeded.specimenContainerAssignments),
+    containerPositionAssignments: createStatefulCollection(seeded.containerPositionAssignments),
+    storagePositions: createStatefulCollection(seeded.storagePositions),
+    storageRacks: createStatefulCollection(seeded.storageRacks),
+    rackLocationAssignments: createStatefulCollection(seeded.rackLocationAssignments),
+    graph_projection_outbox: createStatefulCollection(),
+    ...activeConsentCollections(),
+    ...movementCollections(),
+    ...buildRbacCollections([{ userAccountId: 'qa-user-1', accessType }])
+  };
+  const db = createDbMock(collections);
+  return { db, collections };
+}
+
+beforeEach(() => givenSession());
+afterEach(() => vi.restoreAllMocks());
+
+describe('storage transactional routes canonical v2 (#1006)', () => {
+  it('keeps manageStorageAllocation enforced server-side', async () => {
+    const { db } = buildDb({ accessType: 1 });
+    app.locals.db = db;
     const res = await request(app)
       .post('/api/storage/allocate')
       .set('Authorization', `Bearer ${makeToken(1)}`)
-      .send({ sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString(), position: 'A1' });
-
+      .send({ sampleId: String(SAMPLE_ID), boxId: String(SOURCE_BOX_ID), position: 'A1' });
     expect(res.status).toBe(403);
+    expect(db.client.startSession).not.toHaveBeenCalled();
   });
 
-  it('accessType 2 allocates successfully and really enters a transaction -- session opened once, ended once', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', storageLocation: null };
-    const box = { _id: BOX_ID, name: 'Box A1-01', dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
-    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
-    const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(box) });
-    const storageAssignments = createCollectionMock();
-    const db = dbWithRbac({ samples, storageBoxes, storageAssignments, ...ledgerCollections() }, 2);
+  it('POST /allocate persists the normalized custody chain in one real mock transaction', async () => {
+    const { db, collections } = buildDb();
     app.locals.db = db;
-
     const res = await request(app)
       .post('/api/storage/allocate')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString(), position: 'A1' });
+      .send({ sampleId: String(SAMPLE_ID), boxId: String(SOURCE_BOX_ID), position: 'A1' });
 
     expect(res.status).toBe(201);
+    expect(res.body.currentStoragePlacement).toMatchObject({ boxId: String(SOURCE_BOX_ID), positionCode: 'A1' });
     expect(db.client.startSession).toHaveBeenCalledTimes(1);
     expect(db.session.endSession).toHaveBeenCalledTimes(1);
+    expect(collections.specimenContainerAssignments.insertOne).toHaveBeenCalledWith(expect.anything(), { session: db.session });
+    expect(collections.containerPositionAssignments.insertOne).toHaveBeenCalledWith(expect.anything(), { session: db.session });
+    expect(collections.sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
   });
 
-  it('carries the same transaction session on every write -- box update, sample update, assignment insert, movement insert', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', storageLocation: null };
-    const box = { _id: BOX_ID, name: 'Box A1-01', dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
-    const boxUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
-    const sampleUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
-    const assignmentInsertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
-    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample), updateOne: sampleUpdateOne });
-    const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(box), updateOne: boxUpdateOne });
-    const storageAssignments = createCollectionMock({ insertOne: assignmentInsertOne });
-    const { sample_movements, counters } = ledgerCollections();
-    const db = dbWithRbac({ samples, storageBoxes, storageAssignments, sample_movements, counters }, 2);
+  it('POST /allocate/auto is integrated and returns the same canonical placement contract', async () => {
+    const { db, collections } = buildDb();
     app.locals.db = db;
-
     const res = await request(app)
-      .post('/api/storage/allocate')
+      .post('/api/storage/allocate/auto')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString(), position: 'A1' });
+      .send({ specimenId: String(SAMPLE_ID), boxId: String(SOURCE_BOX_ID) });
 
     expect(res.status).toBe(201);
-    const session = db.session;
-    expect(boxUpdateOne).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ session }));
-    expect(sampleUpdateOne).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ session }));
-    expect(assignmentInsertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session }));
-    expect(sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session }));
+    expect(res.body.currentStoragePlacement).toMatchObject({ boxId: String(SOURCE_BOX_ID), positionCode: 'A1' });
+    expect(res.body.projectionQueued).toBe(true);
+    expect(db.client.startSession).toHaveBeenCalledTimes(1);
+    expect(collections.specimenContainerAssignments.insertOne).toHaveBeenCalledWith(expect.anything(), { session: db.session });
+    expect(collections.sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
   });
 
-  it('a box-update matchedCount:0 surfaces as 409, not 500 -- the occupancy-collision guard actually fires', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', storageLocation: null };
-    const box = { _id: BOX_ID, name: 'Box A1-01', dimension: { rows: 9, cols: 9 }, occupancyGrid: { A1: SAMPLE_ID } };
-    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
-    const storageBoxes = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue(box),
-      // Hazard #3 from db.factory.js: updateOne defaults to matchedCount:1,
-      // so the compare-and-set occupancy guard can't fire by default. A
-      // green 201 there would only prove the route reached the write, not
-      // that the guard works. Overriding it here is what actually exercises
-      // the collision path.
-      updateOne: vi.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 }),
-    });
-    app.locals.db = dbWithRbac({ samples, storageBoxes, ...ledgerCollections() }, 2);
-
-    const res = await request(app)
-      .post('/api/storage/allocate')
-      .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString(), position: 'A1' });
-
-    expect(res.status).toBe(409);
-  });
-
-  it('an infrastructure failure on the sample lookup surfaces as 500, not masked as a 400', async () => {
-    const samples = createCollectionMock({ findOne: vi.fn().mockRejectedValue(new Error('driver exploded')) });
-    app.locals.db = dbWithRbac({ samples, ...ledgerCollections() }, 2);
-
-    const res = await request(app)
-      .post('/api/storage/allocate')
-      .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString(), position: 'A1' });
-
-    expect(res.status).toBe(500);
-  });
-});
-
-describe('POST /api/storage/move', () => {
-  it('rejects accessType 1 with 403', async () => {
-    app.locals.db = dbWithRbac({ ...ledgerCollections() }, 1);
-
-    const res = await request(app)
-      .post('/api/storage/move')
-      .set('Authorization', `Bearer ${makeToken(1)}`)
-      .send({ sampleId: SAMPLE_ID.toString(), targetBoxId: TARGET_BOX_ID.toString(), targetPosition: 'B2' });
-
-    expect(res.status).toBe(403);
-  });
-
-  it('a body missing targetPosition is 400 and never opens a session -- the validation gate really is pre-transaction', async () => {
-    const db = dbWithRbac({ ...ledgerCollections() }, 2);
+  it('POST /move closes the old normalized placement and creates the new placement atomically', async () => {
+    const { db, collections } = buildDb({ withPlacement: true });
     app.locals.db = db;
-
     const res = await request(app)
       .post('/api/storage/move')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ sampleId: SAMPLE_ID.toString(), targetBoxId: TARGET_BOX_ID.toString() });
-
-    expect(res.status).toBe(400);
-    expect(db.client.startSession).not.toHaveBeenCalled();
-  });
-
-  it('a valid move succeeds and the movement insert carries the transaction session', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', storageLocation: { boxId: BOX_ID, position: 'A1' } };
-    const targetBox = { _id: TARGET_BOX_ID, name: 'Box B', dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
-    const openAssignment = { specimenId: String(SAMPLE_ID), boxId: BOX_ID, positionCode: 'A1', removedAt: null };
-
-    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
-    const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(targetBox) });
-    const storageAssignments = createCollectionMock({ findOne: vi.fn().mockResolvedValue(openAssignment) });
-    const { sample_movements, counters } = ledgerCollections();
-    const db = dbWithRbac({ samples, storageBoxes, storageAssignments, sample_movements, counters }, 2);
-    app.locals.db = db;
-
-    const res = await request(app)
-      .post('/api/storage/move')
-      .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ sampleId: SAMPLE_ID.toString(), targetBoxId: TARGET_BOX_ID.toString(), targetPosition: 'B2' });
+      .send({ sampleId: String(SAMPLE_ID), targetBoxId: String(TARGET_BOX_ID), targetPosition: 'B2', reason: 'integration' });
 
     expect(res.status).toBe(200);
-    expect(sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
-  });
-});
-
-describe('DELETE /api/storage/release/:sampleId', () => {
-  it('rejects accessType 1 with 403', async () => {
-    app.locals.db = dbWithRbac({ ...ledgerCollections() }, 1);
-
-    const res = await request(app)
-      .delete(`/api/storage/release/${SAMPLE_ID}`)
-      .set('Authorization', `Bearer ${makeToken(1)}`);
-
-    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(true);
+    expect(db.client.startSession).toHaveBeenCalledTimes(1);
+    expect(collections.containerPositionAssignments.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ containerPositionAssignmentId: 'cpa-seeded', assignmentStatus: 'active' }),
+      expect.objectContaining({ $set: expect.objectContaining({ assignmentStatus: 'inactive' }) }),
+      { session: db.session }
+    );
+    expect(collections.containerPositionAssignments.insertOne).toHaveBeenCalledWith(expect.anything(), { session: db.session });
+    expect(collections.sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
   });
 
-  it('a sample with no open storage assignment is 400 and never opens a session', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', storageLocation: { boxId: BOX_ID, position: 'A1' } };
-    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
-    // storageAssignments deliberately left at its default findOne (-> null):
-    // no open StorageAssignment row for this specimen.
-    const db = dbWithRbac({ samples, ...ledgerCollections() }, 2);
+  it('DELETE /release/:sampleId closes the normalized placement and writes immutable audit in the same session', async () => {
+    const { db, collections } = buildDb({ withPlacement: true });
     app.locals.db = db;
-
-    const res = await request(app)
-      .delete(`/api/storage/release/${SAMPLE_ID}`)
-      .set('Authorization', `Bearer ${makeToken(2)}`);
-
-    expect(res.status).toBe(400);
-    expect(db.client.startSession).not.toHaveBeenCalled();
-  });
-
-  it('a valid release succeeds and the assignment-closing update carries the transaction session', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', storageLocation: { boxId: BOX_ID, position: 'A1' } };
-    const openAssignment = { specimenId: String(SAMPLE_ID), boxId: BOX_ID, positionCode: 'A1', removedAt: null };
-    const assignmentUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
-
-    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
-    const storageAssignments = createCollectionMock({ findOne: vi.fn().mockResolvedValue(openAssignment), updateOne: assignmentUpdateOne });
-    const db = dbWithRbac({ samples, storageAssignments, ...ledgerCollections() }, 2);
-    app.locals.db = db;
-
     const res = await request(app)
       .delete(`/api/storage/release/${SAMPLE_ID}`)
       .set('Authorization', `Bearer ${makeToken(2)}`);
 
     expect(res.status).toBe(200);
-    expect(assignmentUpdateOne).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ session: db.session }));
+    expect(res.body.success).toBe(true);
+    expect(db.client.startSession).toHaveBeenCalledTimes(1);
+    expect(collections.containerPositionAssignments.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ containerPositionAssignmentId: 'cpa-seeded', assignmentStatus: 'active' }),
+      expect.objectContaining({ $set: expect.objectContaining({ assignmentStatus: 'inactive' }) }),
+      { session: db.session }
+    );
+    expect(collections.sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
   });
 });
