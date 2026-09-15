@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getStorageLabel, buildSprecSummary, buildSprecAxisSummary } from './sampleListFormatters';
 import type { SampleWithId } from '../../hooks/samples/useSamplesPage';
-import type { SampleStorageLocationDTO, SpecimenPreanalyticsProfile } from '../../types/models';
+import type { CurrentStoragePlacementDTO, SpecimenPreanalyticsProfile } from '../../types/models';
 
 const t = (_key: string, fallback?: string) => fallback ?? _key;
 
@@ -14,7 +14,7 @@ function makeSample(overrides: Partial<SampleWithId> = {}): SampleWithId {
   } as SampleWithId;
 }
 
-function makeLocation(overrides: Partial<SampleStorageLocationDTO> = {}): SampleStorageLocationDTO {
+function makePlacement(overrides: Partial<CurrentStoragePlacementDTO> = {}): CurrentStoragePlacementDTO {
   return {
     specimenId: 'SPEC-1',
     box: { boxId: 'box-1', boxName: null, position: null },
@@ -32,29 +32,26 @@ function makeProfile(overrides: Partial<SpecimenPreanalyticsProfile> = {}): Spec
   };
 }
 
-// #517: SamplesPageView's list view reads these from the batched
-// resolvedStorageLocation/currentSpecimenPreanalytics fields GET /samples
-// now embeds, instead of the legacy sample.storageLocation/sample.sprec.
 describe('getStorageLabel', () => {
-  it('reports awaiting storage when no resolvedStorageLocation exists', () => {
+  it('reports awaiting storage when no currentStoragePlacement exists', () => {
     expect(getStorageLabel(makeSample(), t)).toBe('Aguardando Armazenagem');
   });
 
-  it('reports awaiting storage when the resolved location has no box/path/position', () => {
-    const sample = makeSample({ resolvedStorageLocation: makeLocation() });
+  it('reports awaiting storage when the placement has no box/path/position', () => {
+    const sample = makeSample({ currentStoragePlacement: makePlacement() });
     expect(getStorageLabel(sample, t)).toBe('Aguardando Armazenagem');
   });
 
   it('treats a resolver path of "N/A" as no path, not a literal label', () => {
     const sample = makeSample({
-      resolvedStorageLocation: makeLocation({ box: { boxId: 'box-1', boxName: 'BOX_01', position: 'A1' } }),
+      currentStoragePlacement: makePlacement({ box: { boxId: 'box-1', boxName: 'BOX_01', position: 'A1' } }),
     });
     expect(getStorageLabel(sample, t)).toBe('BOX_01 / Posição A1');
   });
 
   it('prefers the readable path over the box name when both are present', () => {
     const sample = makeSample({
-      resolvedStorageLocation: makeLocation({
+      currentStoragePlacement: makePlacement({
         path: 'FREEZER_01/SHELF_1/RACK_A/BOX_01',
         box: { boxId: 'box-1', boxName: 'BOX_01', position: 'A1' },
       }),
@@ -64,9 +61,16 @@ describe('getStorageLabel', () => {
 
   it('falls back to just the position when neither path nor box name is present', () => {
     const sample = makeSample({
-      resolvedStorageLocation: makeLocation({ box: { boxId: 'box-1', boxName: null, position: 'A1' } }),
+      currentStoragePlacement: makePlacement({ box: { boxId: 'box-1', boxName: null, position: 'A1' } }),
     });
     expect(getStorageLabel(sample, t)).toBe('Posição A1');
+  });
+
+  it('supports the flat intake projection', () => {
+    const sample = makeSample({
+      currentStoragePlacement: makePlacement({ box: null, boxName: 'BOX_02', positionCode: 'B3' }),
+    });
+    expect(getStorageLabel(sample, t)).toBe('BOX_02 / Posição B3');
   });
 });
 
@@ -112,9 +116,6 @@ describe('buildSprecSummary', () => {
   });
 });
 
-// #518: SampleDetailsPage's per-axis breakdown, sibling to buildSprecSummary
-// above — same currentSpecimenPreanalytics source, formatted as one
-// `Label:value` pair per axis instead of a single dash-joined code.
 describe('buildSprecAxisSummary', () => {
   it('reports N/A for every axis when no currentSpecimenPreanalytics profile is resolved', () => {
     expect(buildSprecAxisSummary(makeSample(), t)).toBe(
