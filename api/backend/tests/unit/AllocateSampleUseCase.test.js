@@ -1,334 +1,138 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 const AllocateSampleUseCase = require('../../src/core/use-cases/AllocateSampleUseCase');
 const env = require('../../src/config/env');
 
 const originalLineageMode = env.LINEAGE_MODE;
-
-afterEach(() => {
-  env.LINEAGE_MODE = originalLineageMode;
-});
+const placement = {
+  specimenId: 'sample-1',
+  containerId: 'container-1',
+  storageRackId: 'rack-1',
+  storagePositionId: 'position-1',
+  boxId: 'box-new',
+  positionCode: 'B2'
+};
 
 function makeSample(overrides = {}) {
   return {
     _id: 'sample-1',
     barcode: 'BC-1',
-    storageAssignment: { boxId: 'box-old', positionCode: 'a1' },
+    currentStoragePlacement: null,
     ...overrides
   };
 }
 
-function makeDeps({
-  sample = makeSample(),
-  secondSample = undefined, // if provided, used for the in-transaction lookup instead of `sample`
-  withLineageRepo = false,
-  lineageImpl = {},
-  transactionImpl = null
-} = {}) {
-  const findSampleById = vi.fn(async () => sample);
+function makeDeps({ sample = makeSample(), secondSample, lineage = true, transactionImpl } = {}) {
+  const findSampleById = vi.fn().mockResolvedValue(sample);
   if (secondSample !== undefined) {
     findSampleById.mockImplementationOnce(async () => sample).mockImplementationOnce(async () => secondSample);
   }
 
   const storageRepository = {
     findSampleById,
-    allocateSamplePosition: vi.fn(async () => undefined),
-    withTransaction: vi.fn(async (fn) => {
-      if (transactionImpl) {
-        return transactionImpl(fn);
-      }
-      return fn('session-token');
-    })
+    allocateSamplePosition: vi.fn().mockResolvedValue(placement),
+    withTransaction: vi.fn(async (handler) => transactionImpl ? transactionImpl(handler) : handler('session-1'))
   };
+  const auditRepository = { appendImmutableAudit: vi.fn().mockResolvedValue({ movementID: 1 }) };
+  const lineageRepository = lineage ? {
+    validateBeforePersistence: vi.fn().mockResolvedValue(true),
+    recordCustodyEvent: vi.fn().mockResolvedValue({ eventId: 'evt-1', queued: true })
+  } : undefined;
 
-  const auditRepository = {
-    appendImmutableAudit: vi.fn(async () => undefined)
-  };
-
-  let lineageRepository;
-  if (withLineageRepo) {
-    lineageRepository = {
-      validateBeforePersistence: vi.fn(
-        lineageImpl.validateBeforePersistence || (async () => undefined)
-      ),
-      recordCustodyEvent: vi.fn(
-        lineageImpl.recordCustodyEvent || (async () => ({ eventId: 'evt-1' }))
-      ),
-      compensateCustodyEvent: vi.fn(
-        lineageImpl.compensateCustodyEvent || (async () => undefined)
-      )
-    };
-  }
-
-  const useCase = new AllocateSampleUseCase({
+  return {
+    useCase: new AllocateSampleUseCase({ storageRepository, auditRepository, lineageRepository }),
     storageRepository,
     auditRepository,
     lineageRepository
-  });
-
-  return { useCase, storageRepository, auditRepository, lineageRepository };
+  };
 }
 
-const baseCommand = () => ({
+const command = () => ({
   specimenId: 'sample-1',
   boxId: 'box-new',
   position: 'b2',
   actor: { userId: 'user-1' }
 });
 
-describe('AllocateSampleUseCase', () => {
-  describe('validateCommand', () => {
-    it('throws when specimenId is missing', async () => {
-      const { useCase } = makeDeps();
-      const cmd = baseCommand();
-      delete cmd.specimenId;
-      await expect(useCase.execute(cmd)).rejects.toThrow('specimenId, boxId e position são obrigatórios');
-    });
+afterEach(() => {
+  env.LINEAGE_MODE = originalLineageMode;
+  vi.restoreAllMocks();
+});
 
-    it('throws when boxId is missing', async () => {
-      const { useCase } = makeDeps();
-      const cmd = baseCommand();
-      delete cmd.boxId;
-      await expect(useCase.execute(cmd)).rejects.toThrow('specimenId, boxId e position são obrigatórios');
-    });
-
-    it('throws when position is missing', async () => {
-      const { useCase } = makeDeps();
-      const cmd = baseCommand();
-      delete cmd.position;
-      await expect(useCase.execute(cmd)).rejects.toThrow('specimenId, boxId e position são obrigatórios');
-    });
+describe('AllocateSampleUseCase canonical v2', () => {
+  it('validates required allocation fields before persistence', async () => {
+    const { useCase, storageRepository } = makeDeps();
+    await expect(useCase.execute({ boxId: 'box-new', position: 'A1' })).rejects.toThrow(
+      'specimenId, boxId e position são obrigatórios'
+    );
+    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
   });
 
-  it('happy path with no lineageRepository (fail-open default): lineage skipped, transaction succeeds', async () => {
-    env.LINEAGE_MODE = 'fail-open';
-    const { useCase, storageRepository, auditRepository } = makeDeps();
-
-    const result = await useCase.execute(baseCommand());
+  it('returns the canonical current placement and persists state, outbox lineage and audit in one session', async () => {
+    const { useCase, storageRepository, auditRepository, lineageRepository } = makeDeps();
+    const result = await useCase.execute(command());
 
     expect(result).toEqual({
       success: true,
-      sampleLocation: {
-        specimenId: 'sample-1',
-        boxId: 'box-new',
-        position: 'B2'
-      },
-      lineageValidated: false,
-      lineagePersisted: false,
-      lineageEventId: null
+      currentStoragePlacement: placement,
+      lineageValidated: true,
+      lineagePersisted: true,
+      lineageQueued: true,
+      lineageEventId: 'evt-1'
     });
-    expect(storageRepository.withTransaction).toHaveBeenCalledTimes(1);
-    expect(storageRepository.allocateSamplePosition).toHaveBeenCalledTimes(1);
-    expect(auditRepository.appendImmutableAudit).toHaveBeenCalledTimes(1);
+    expect(storageRepository.allocateSamplePosition).toHaveBeenCalledWith(
+      { specimenId: 'sample-1', boxId: 'box-new', position: 'B2' },
+      'session-1'
+    );
+    expect(lineageRepository.validateBeforePersistence).toHaveBeenCalledWith(expect.anything(), 'session-1');
+    expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledWith(expect.anything(), 'session-1');
+    expect(auditRepository.appendImmutableAudit).toHaveBeenCalledWith(expect.anything(), 'session-1');
   });
 
-  it('happy path with a lineageRepository provided: validation+recording called, flags true, eventId from persisted result', async () => {
-    const { useCase, lineageRepository } = makeDeps({
-      withLineageRepo: true,
-      lineageImpl: {
-        recordCustodyEvent: async () => ({ eventId: 'evt-success' })
-      }
+  it('audits the previous canonical placement as physicalStorage', async () => {
+    const { useCase, auditRepository } = makeDeps({
+      sample: makeSample({ currentStoragePlacement: { boxId: 'box-old', positionCode: 'a1' } })
     });
-
-    const result = await useCase.execute(baseCommand());
-
-    expect(result.lineageValidated).toBe(true);
-    expect(result.lineagePersisted).toBe(true);
-    expect(result.lineageEventId).toBe('evt-success');
-    expect(lineageRepository.validateBeforePersistence).toHaveBeenCalledTimes(1);
-    expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledTimes(1);
+    await useCase.execute(command());
+    expect(auditRepository.appendImmutableAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        before: { physicalStorage: { boxId: 'box-old', position: 'A1' } },
+        after: { physicalStorage: { boxId: 'box-new', position: 'B2' } }
+      }),
+      'session-1'
+    );
   });
 
-  it('throws "Amostra não encontrada" when sample is not found on the first lookup, before any transaction attempt', async () => {
+  it('fails before opening a transaction when the specimen does not exist', async () => {
     const { useCase, storageRepository } = makeDeps({ sample: null });
-
-    await expect(useCase.execute(baseCommand())).rejects.toThrow('Amostra não encontrada');
+    await expect(useCase.execute(command())).rejects.toThrow('Amostra não encontrada');
     expect(storageRepository.withTransaction).not.toHaveBeenCalled();
   });
 
-  it('throws when the sample disappears between the first lookup and the in-transaction lookup (race)', async () => {
-    const { useCase, storageRepository } = makeDeps({
-      sample: makeSample(),
-      secondSample: null
-    });
-
-    await expect(useCase.execute(baseCommand())).rejects.toThrow('Amostra não encontrada');
-    expect(storageRepository.findSampleById).toHaveBeenCalledTimes(2);
+  it('fails atomically when the specimen disappears during the transaction', async () => {
+    const { useCase, storageRepository } = makeDeps({ sample: makeSample(), secondSample: null });
+    await expect(useCase.execute(command())).rejects.toThrow('Amostra não encontrada');
+    expect(storageRepository.allocateSamplePosition).not.toHaveBeenCalled();
   });
 
-  it('fail-closed with no lineageRepository throws instead of continuing', async () => {
-    env.LINEAGE_MODE = 'fail-closed';
-    const { useCase, storageRepository } = makeDeps();
-
-    await expect(useCase.execute(baseCommand())).rejects.toThrow();
-    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
-  });
-
-  it('fail-closed and validateBeforePersistence rejects: throws wrapped ISO20387 error, transaction never runs', async () => {
-    env.LINEAGE_MODE = 'fail-closed';
-    const { useCase, storageRepository } = makeDeps({
-      withLineageRepo: true,
-      lineageImpl: {
-        validateBeforePersistence: async () => {
-          throw new Error('neo4j down');
-        }
-      }
-    });
-
-    await expect(useCase.execute(baseCommand())).rejects.toThrow(
-      'ISO20387_LINEAGE_VALIDATION_FAILED: operação bloqueada antes do MongoDB'
-    );
-    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
-  });
-
-  it('fail-open (default) and lineage call rejects: swallowed, lineageValidated false, execution continues to the transaction', async () => {
+  it('fail-open permits allocation when the lineage repository is unavailable', async () => {
     env.LINEAGE_MODE = 'fail-open';
-    const { useCase, storageRepository } = makeDeps({
-      withLineageRepo: true,
-      lineageImpl: {
-        validateBeforePersistence: async () => {
-          throw new Error('neo4j down');
-        }
-      }
-    });
-
-    const result = await useCase.execute(baseCommand());
-
-    expect(result.success).toBe(true);
-    expect(result.lineageValidated).toBe(false);
-    expect(result.lineagePersisted).toBe(false);
-    expect(result.lineageEventId).toBeNull();
-    expect(storageRepository.withTransaction).toHaveBeenCalledTimes(1);
+    const { useCase, storageRepository } = makeDeps({ lineage: false });
+    const result = await useCase.execute(command());
+    expect(result.lineageQueued).toBe(false);
+    expect(storageRepository.allocateSamplePosition).toHaveBeenCalledTimes(1);
   });
 
-  it('transaction throws: compensateLineageIfNeeded is invoked with correct args and the original mongoError is re-thrown', async () => {
-    const mongoError = new Error('mongo write conflict');
-    const { useCase, lineageRepository } = makeDeps({
-      withLineageRepo: true,
-      lineageImpl: {
-        recordCustodyEvent: async () => ({ eventId: 'evt-compensate' })
-      },
-      transactionImpl: async () => {
-        throw mongoError;
-      }
-    });
-
-    await expect(useCase.execute(baseCommand())).rejects.toThrow('mongo write conflict');
-    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
-    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledWith({
-      eventId: 'evt-compensate',
-      specimenId: 'sample-1',
-      reason: 'mongo_transaction_failed'
-    });
+  it('fail-closed blocks the whole Mongo transaction when canonical lineage cannot be persisted', async () => {
+    env.LINEAGE_MODE = 'fail-closed';
+    const { useCase, storageRepository } = makeDeps({ lineage: false });
+    await expect(useCase.execute(command())).rejects.toThrow('Repositório canônico de linhagem ausente');
+    expect(storageRepository.allocateSamplePosition).not.toHaveBeenCalled();
   });
 
-  it('transaction throws but lineage was never persisted (fail-open, no lineageRepository): compensateCustodyEvent not called, original error still thrown', async () => {
-    const mongoError = new Error('mongo write conflict 2');
-    const { useCase } = makeDeps({
-      transactionImpl: async () => {
-        throw mongoError;
-      }
-    });
-
-    await expect(useCase.execute(baseCommand())).rejects.toThrow('mongo write conflict 2');
-    // no lineageRepository at all, so there is nothing to call - the rethrow itself is the assertion
-  });
-
-  it('a failing compensateCustodyEvent call does not mask/replace the original mongoError', async () => {
-    const mongoError = new Error('mongo write conflict 3');
-    const { useCase, lineageRepository } = makeDeps({
-      withLineageRepo: true,
-      lineageImpl: {
-        recordCustodyEvent: async () => ({ eventId: 'evt-compensate-fail' }),
-        compensateCustodyEvent: async () => {
-          throw new Error('compensation also failed');
-        }
-      },
-      transactionImpl: async () => {
-        throw mongoError;
-      }
-    });
-
-    await expect(useCase.execute(baseCommand())).rejects.toThrow('mongo write conflict 3');
-    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
-  });
-
-  it('sample with no prior storageAssignment and no barcode, actor with no userId: null-fallback branches all taken', async () => {
-    const { useCase, auditRepository } = makeDeps({
-      sample: makeSample({ storageAssignment: undefined, barcode: undefined })
-    });
-    const cmd = baseCommand();
-    delete cmd.actor.userId;
-
-    const result = await useCase.execute(cmd);
-
-    expect(result.success).toBe(true);
-    expect(auditRepository.appendImmutableAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        barcode: null,
-        before: { storageLocation: null }
-      }),
-      'session-token'
-    );
-  });
-
-  it('sample has a storageAssignment object but boxId/positionCode fields are falsy: beforeLocation resolves those fields to null', async () => {
-    const { useCase, auditRepository } = makeDeps({
-      sample: makeSample({ storageAssignment: { boxId: '', positionCode: '' } })
-    });
-
-    await useCase.execute(baseCommand());
-
-    expect(auditRepository.appendImmutableAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        before: { storageLocation: { boxId: null, position: null } }
-      }),
-      'session-token'
-    );
-  });
-
-  it('fail-closed with a lineageRepository, LINEAGE_MODE unset: falls back to fail-open default so it does not throw', async () => {
-    delete env.LINEAGE_MODE;
-    const { useCase } = makeDeps({ withLineageRepo: true });
-
-    const result = await useCase.execute(baseCommand());
-
-    expect(result.lineageValidated).toBe(true);
-  });
-
-  it('lineage validation rejects with a non-Error (no .message): logger.error still falls back to the raw value', async () => {
-    env.LINEAGE_MODE = 'fail-open';
-    const { useCase } = makeDeps({
-      withLineageRepo: true,
-      lineageImpl: {
-        validateBeforePersistence: async () => {
-          throw 'neo4j down (string)';
-        }
-      }
-    });
-
-    const result = await useCase.execute(baseCommand());
-
-    expect(result.lineageValidated).toBe(false);
-  });
-
-  it('compensateCustodyEvent rejects with a non-Error (no .message): logger.error still falls back to the raw value', async () => {
-    const mongoError = new Error('mongo write conflict 4');
-    const { useCase, lineageRepository } = makeDeps({
-      withLineageRepo: true,
-      lineageImpl: {
-        recordCustodyEvent: async () => ({ eventId: 'evt-compensate-fail-2' }),
-        compensateCustodyEvent: async () => {
-          throw 'compensation failed (string)';
-        }
-      },
-      transactionImpl: async () => {
-        throw mongoError;
-      }
-    });
-
-    await expect(useCase.execute(baseCommand())).rejects.toThrow('mongo write conflict 4');
-    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
+  it('rethrows a Mongo transaction failure without any direct graph compensation path', async () => {
+    const failure = new Error('mongo transaction failed');
+    const { useCase } = makeDeps({ transactionImpl: async () => { throw failure; } });
+    await expect(useCase.execute(command())).rejects.toThrow('mongo transaction failed');
   });
 });
