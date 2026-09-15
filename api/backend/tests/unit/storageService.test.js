@@ -290,17 +290,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
       // `client` is what a real `MongoClient.db()` exposes, and it is what
       // `utils/mongoTransaction.js` and `MongoStorageRepository.withTransaction`
       // both derive the session from (`db?.client || db?.s?.client`).
-      // #923: the default fixture models the transaction-capable topology used
-      // by custody writes. Tests that exercise standalone/unknown explicitly
-      // override this `db('admin').command({ hello: 1 })` probe below.
-      client: {
-        db: vi.fn((name) => (
-          name === 'admin'
-            ? { command: vi.fn().mockResolvedValue({ setName: 'rs0', isWritablePrimary: true }) }
-            : undefined
-        )),
-        startSession: vi.fn(() => makeSession())
-      }
+      client: { startSession: vi.fn(() => makeSession()) }
     });
     service = new StorageService(db);
   });
@@ -572,52 +562,15 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(boxesUpdateOne).not.toHaveBeenCalled();
   });
 
-  // #923: unknown topology is an unsafe custody topology. This test pins the
-  // fail-closed boundary before any read, session or write is attempted.
-  it('refuses when the topology cannot be determined (hello throws)', async () => {
-    const specimenId = new ObjectId();
-    const boxId = new ObjectId();
-    const helloCommand = vi.fn().mockRejectedValue(new Error('not authorized on admin to execute command'));
-    db.client = {
-      ...db.client,
-      db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined))
-    };
-
-    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
-
-    expect(result.success).toBe(false);
-    expect(result.error).toBe('AUTO_ASSIGNMENT_ERROR');
-    expect(result.message).toMatch(/não é um replica set nem mongos/);
-    expect(boxesFindOne).not.toHaveBeenCalled();
-    expect(samplesFindOne).not.toHaveBeenCalled();
-    expect(db.client.startSession).not.toHaveBeenCalled();
-  });
-
-  it('refuses with the descriptive RF006 item 7 error on a positively-standalone topology, before opening a session', async () => {
-    const specimenId = new ObjectId();
-    const boxId = new ObjectId();
-    const helloCommand = vi.fn().mockResolvedValue({ ismaster: true, maxBsonObjectSize: 16777216 });
-    db.client = {
-      ...db.client,
-      db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined))
-    };
-
-    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
-
-    expect(result.success).toBe(false);
-    expect(result.error).toBe('AUTO_ASSIGNMENT_ERROR');
-    expect(result.message).toMatch(/não é um replica set nem mongos/);
-    expect(result.message).toMatch(/RF006 item 7/);
-    expect(boxesFindOne).not.toHaveBeenCalled();
-    expect(samplesFindOne).not.toHaveBeenCalled();
-    expect(db.client.startSession).not.toHaveBeenCalled();
-  });
-
-  it('does NOT refuse when the topology is a replica set (setName present)', async () => {
+  it('persists to Neo4j and reports graphPersisted:true when a driver is configured', async () => {
     const boxId = new ObjectId();
     const specimenId = new ObjectId();
-    const helloCommand = vi.fn().mockResolvedValue({ setName: 'rs0', ismaster: true });
-    db.client = { ...db.client, db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
+    const runMock = vi.fn().mockResolvedValue({});
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const neo4jSessionMock = vi.fn(() => ({ run: runMock, close: closeMock }));
+    const neo4jDriver = { session: neo4jSessionMock };
+
+    service = new StorageService(db, neo4jDriver);
 
     boxesFindOne.mockResolvedValue({
       _id: boxId,
@@ -631,7 +584,201 @@ describe('StorageService.autoAssignSampleToBox', () => {
     const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
     expect(result.success).toBe(true);
-    expect(result.sampleLocation.position).toBe('A1');
+    expect(result.graphPersisted).toBe(true);
+    expect(neo4jSessionMock).toHaveBeenCalled();
+    expect(runMock).toHaveBeenCalledTimes(1);
+    expect(runMock.mock.calls[0][1]).toMatchObject({
+      specimenId: specimenId.toString(),
+      boxId: boxId.toString(),
+      coordinate: 'A1'
+    });
+    expect(closeMock).toHaveBeenCalled();
+  });
+
+  it('#1004: Neo4j MERGE row/column stay consistent with coordinate when the transaction-committed position diverges from the pre-scan', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+    const runMock = vi.fn().mockResolvedValue({});
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const neo4jSessionMock = vi.fn(() => ({ run: runMock, close: closeMock }));
+    const neo4jDriver = { session: neo4jSessionMock };
+
+    service = new StorageService(db, neo4jDriver);
+
+    // Pre-transaction scan sees only A1 occupied -> would pick A2.
+    boxesFindOne.mockResolvedValueOnce({
+      _id: boxId,
+      name: 'Box A',
+      dimension: { rows: 1, cols: 3 },
+      occupancyGrid: { A1: new ObjectId() },
+      currentOccupancy: 1
+    });
+    // In-transaction re-scan finds A2 has since been taken by a concurrent
+    // write -> the actually committed position is A3.
+    boxesFindOne.mockResolvedValueOnce({
+      _id: boxId,
+      name: 'Box A',
+      dimension: { rows: 1, cols: 3 },
+      occupancyGrid: { A1: new ObjectId(), A2: new ObjectId() },
+      currentOccupancy: 2
+    });
+    samplesFindOne.mockResolvedValue({
+      _id: specimenId,
+      barcode: 'BC-9',
+      storageLocation: null
+    });
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+    expect(result.success).toBe(true);
+    expect(result.sampleLocation.position).toBe('A3');
+
+    const mergeParams = runMock.mock.calls[0][1];
+    // The MERGE must describe a single, self-consistent position: rowLetter
+    // and column must match coordinate, not the stale pre-transaction scan
+    // (which would have decomposed to row 'A', column 2).
+    expect(mergeParams.coordinate).toBe('A3');
+    expect(mergeParams.rowLetter).toBe('A');
+    expect(mergeParams.column).toBe(3);
+  });
+
+  it('rolls back the Mongo allocation when the Neo4j sync fails, and surfaces the Neo4j error', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+    const neo4jError = new Error('neo4j unreachable');
+    const runMock = vi.fn().mockRejectedValue(neo4jError);
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const neo4jDriver = { session: vi.fn(() => ({ run: runMock, close: closeMock })) };
+
+    const rollbackBoxUpdate = vi.fn().mockResolvedValue({});
+    const rollbackSampleUpdate = vi.fn().mockResolvedValue({});
+    // Second startSession() call (rollback) needs its own session object.
+    const rollbackSession = makeSession();
+    let sessionCallCount = 0;
+    // #994: was `db.getMongo = vi.fn(() => ({ startSession: ... }))`. This
+    // site passed even with the fabrication left in place -- the block's
+    // default `db.client.startSession` already returned a fresh session per
+    // call, so the test went green while this override was never consulted
+    // and the two-session distinction it exists to express was silently
+    // inert. Repointed at the real entry point so the second startSession
+    // (the rollback's own transaction) is observable again.
+    db.client = {
+      ...db.client,
+      startSession: vi.fn(() => {
+        sessionCallCount += 1;
+        return sessionCallCount === 1 ? makeSession() : rollbackSession;
+      })
+    };
+    // Route updateOne calls made during rollback to dedicated spies while keeping
+    // the original allocation-phase updateOne behavior for the first calls.
+    boxesUpdateOne.mockImplementation((...args) => {
+      if (args[1]?.$unset) return rollbackBoxUpdate(...args);
+      return Promise.resolve({ matchedCount: 1 });
+    });
+    samplesUpdateOne.mockImplementation((...args) => {
+      if (args[1]?.$unset) return rollbackSampleUpdate(...args);
+      return Promise.resolve({ matchedCount: 1 });
+    });
+
+    service = new StorageService(db, neo4jDriver);
+
+    boxesFindOne.mockResolvedValue({
+      _id: boxId,
+      name: 'Box A',
+      dimension: { rows: 1, cols: 1 },
+      occupancyGrid: {},
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('AUTO_ASSIGNMENT_ERROR');
+    expect(result.message).toBe('neo4j unreachable');
+    expect(rollbackBoxUpdate).toHaveBeenCalledTimes(1);
+    expect(rollbackSampleUpdate).toHaveBeenCalledTimes(1);
+    expect(closeMock).toHaveBeenCalled();
+  });
+
+  // #988 Part 1: same topology refusal MongoStorageRepository.withTransaction
+  // gives allocate/move/release, applied narrowly to this raw-session path.
+  describe('#988: standalone-deployment topology refusal', () => {
+    it('refuses with the descriptive RF006 item 7 error on a positively-standalone topology, before opening a session', async () => {
+      const boxId = new ObjectId();
+      const specimenId = new ObjectId();
+      const helloCommand = vi.fn().mockResolvedValue({ ismaster: true, maxBsonObjectSize: 16777216 });
+      // #994: SPREAD, do not replace. A real MongoClient carries both db() and
+      // startSession(); the transaction path now derives its session from
+      // db.client.startSession, so clobbering the whole client here would
+      // remove the very thing under test and fail for the wrong reason.
+      db.client = { ...db.client, db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
+
+      const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('AUTO_ASSIGNMENT_ERROR');
+      expect(result.message).toMatch(/não é um replica set nem mongos/);
+      expect(result.message).toMatch(/RF006 item 7/);
+      // Refused before any box/sample lookup or session open.
+      expect(boxesFindOne).not.toHaveBeenCalled();
+      expect(samplesFindOne).not.toHaveBeenCalled();
+      // #994: was expect(db.getMongo).not.toHaveBeenCalled(). getMongo no
+      // longer exists on the mock or in the product, so that assertion could
+      // only ever pass. This asserts the same intent against the real entry
+      // point: no session was opened before the refusal.
+      expect(db.client.startSession).not.toHaveBeenCalled();
+    });
+
+    it('does NOT refuse when the topology cannot be determined (hello throws) -- unknown proceeds, matching isKnownStandaloneDeployment\'s asymmetry', async () => {
+      const boxId = new ObjectId();
+      const specimenId = new ObjectId();
+      const helloCommand = vi.fn().mockRejectedValue(new Error('not authorized on admin to execute command'));
+      // #994: SPREAD, do not replace. A real MongoClient carries both db() and
+      // startSession(); the transaction path now derives its session from
+      // db.client.startSession, so clobbering the whole client here would
+      // remove the very thing under test and fail for the wrong reason.
+      db.client = { ...db.client, db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
+
+      boxesFindOne.mockResolvedValue({
+        _id: boxId,
+        name: 'Box A',
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: {},
+        currentOccupancy: 0
+      });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+
+      const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+      expect(result.success).toBe(true);
+      expect(result.sampleLocation.position).toBe('A1');
+    });
+
+    it('does NOT refuse when the topology is a replica set (setName present)', async () => {
+      const boxId = new ObjectId();
+      const specimenId = new ObjectId();
+      const helloCommand = vi.fn().mockResolvedValue({ setName: 'rs0', ismaster: true });
+      // #994: SPREAD, do not replace. A real MongoClient carries both db() and
+      // startSession(); the transaction path now derives its session from
+      // db.client.startSession, so clobbering the whole client here would
+      // remove the very thing under test and fail for the wrong reason.
+      db.client = { ...db.client, db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
+
+      boxesFindOne.mockResolvedValue({
+        _id: boxId,
+        name: 'Box A',
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: {},
+        currentOccupancy: 0
+      });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+
+      const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+      expect(result.success).toBe(true);
+      expect(result.sampleLocation.position).toBe('A1');
+    });
   });
 
   // #988 Part 2: the missing audit row.
@@ -641,6 +788,11 @@ describe('StorageService.autoAssignSampleToBox', () => {
       const specimenId = new ObjectId();
 
       const txSession = makeSession();
+      // #994: was `db.getMongo = vi.fn(() => ({ startSession: ... }))`. The
+      // transaction now comes from `db.client.startSession`, which is what a
+      // real MongoClient exposes. storageRepository.withTransaction still ends
+      // the session in its own finally, so the ordering assertion below (audit
+      // write BEFORE endSession) still measures the same thing.
       db.client = { ...db.client, startSession: vi.fn(() => txSession) };
       service = new StorageService(db);
 
@@ -668,6 +820,9 @@ describe('StorageService.autoAssignSampleToBox', () => {
       });
       expect(auditRow.responsible).toBe('SYSTEM');
 
+      // Appended INSIDE the transaction: same session object every other
+      // write in this transaction used (not a bare/no-session write), and
+      // ordered before the session is ever ended.
       expect(auditOptions).toEqual({ session: txSession });
       expect(boxesUpdateOne.mock.calls[0][2]).toEqual({ session: txSession });
       expect(movements.insertOne.mock.invocationCallOrder[0])
@@ -708,6 +863,7 @@ describe('StorageService.releaseSampleFromPosition', () => {
     samplesFindOne = vi.fn();
     samplesUpdateOne = vi.fn().mockResolvedValue({});
     boxesUpdateOne = vi.fn().mockResolvedValue({});
+    // No open StorageAssignment by default (sample not currently allocated).
     storageAssignmentsFindOne = vi.fn().mockResolvedValue(null);
     movements = makeMovementsCollection();
 
@@ -735,6 +891,9 @@ describe('StorageService.releaseSampleFromPosition', () => {
       barcode: 'BC-5',
       quantity: 2,
       unit: 'mL',
+      // Internal Mongo-level snapshot the repository's own write path still
+      // reads/writes directly (#507's own precedent) — storageService's read
+      // now resolves boxId/position via the canonical storageAssignment below.
       storageLocation: { boxId, position: 'C3' }
     });
     storageAssignmentsFindOne.mockResolvedValue({ boxId, positionCode: 'C3', removedAt: null });
