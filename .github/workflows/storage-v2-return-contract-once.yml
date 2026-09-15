@@ -1,0 +1,76 @@
+name: Storage v2 return contract once
+
+on:
+  push:
+    branches:
+      - stabilize/v2.0.0-prototype
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: stabilize/v2.0.0-prototype
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Normalize auto-allocation return contract
+        shell: python
+        run: |
+          from pathlib import Path
+
+          repo = Path('api/backend/src/infrastructure/persistence/mongo/MongoStorageRepository.js')
+          text = repo.read_text(encoding='utf-8')
+          old = """    await this.assignCanonicalPhysicalPlacement({
+      specimenId: sample.specimenId || sample._id,
+      boxId: boxObjId,
+      positionCode: position
+    }, session);
+    return position;
+  }"""
+          new = """    return this.assignCanonicalPhysicalPlacement({
+      specimenId: sample.specimenId || sample._id,
+      boxId: boxObjId,
+      positionCode: position
+    }, session);
+  }"""
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one autoAssign return block, found {text.count(old)}')
+          repo.write_text(text.replace(old, new), encoding='utf-8')
+
+          service = Path('api/backend/src/services/storageService.js')
+          text = service.read_text(encoding='utf-8')
+          replacements = [
+            ('      let assignedPosition = null;\n', '      let currentStoragePlacement = null;\n'),
+            ('        assignedPosition = await this.storageRepository.autoAssignSamplePosition(\n', '        currentStoragePlacement = await this.storageRepository.autoAssignSamplePosition(\n'),
+            ('            physicalStorage: { boxId: String(boxObjId), position: assignedPosition }\n', '            physicalStorage: { boxId: String(boxObjId), position: currentStoragePlacement.positionCode }\n'),
+            ('          to: { boxId: String(boxObjId), position: assignedPosition },\n', '          to: { boxId: String(boxObjId), position: currentStoragePlacement.positionCode },\n'),
+            ('      logger.info(`✅ Alocação inteligente realizada para amostra ${specimenId} em ${boxId}/${assignedPosition}`);\n', '      logger.info(`✅ Alocação inteligente realizada para amostra ${specimenId} em ${boxId}/${currentStoragePlacement.positionCode}`);\n'),
+          ]
+          for old_text, new_text in replacements:
+              if text.count(old_text) != 1:
+                  raise SystemExit(f'expected exactly one occurrence: {old_text!r}; found {text.count(old_text)}')
+              text = text.replace(old_text, new_text)
+          old_return = """        sampleLocation: {
+          specimenId: String(sampleObjId),
+          boxId: String(boxObjId),
+          position: assignedPosition
+        }
+"""
+          new_return = """        currentStoragePlacement
+"""
+          if text.count(old_return) != 1:
+              raise SystemExit(f'expected one sampleLocation return block, found {text.count(old_return)}')
+          service.write_text(text.replace(old_return, new_return), encoding='utf-8')
+      - name: Commit migration and remove workflow
+        shell: bash
+        run: |
+          rm .github/workflows/storage-v2-return-contract-once.yml
+          git config user.name "BioAvanceD CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add api/backend/src/infrastructure/persistence/mongo/MongoStorageRepository.js api/backend/src/services/storageService.js .github/workflows/storage-v2-return-contract-once.yml
+          git commit -m "refactor(v2): return canonical storage placement"
+          git push origin HEAD:stabilize/v2.0.0-prototype
