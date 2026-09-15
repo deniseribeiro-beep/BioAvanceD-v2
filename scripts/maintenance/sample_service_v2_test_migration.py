@@ -54,6 +54,14 @@ text, count = pattern.subn('', text)
 if count != 1:
     raise SystemExit(f'mock storageAssignments block replacement count={count}')
 
+text = text.replace(
+    """    // #474: AllocateSampleUseCase's openStorageAssignment resolves hierarchy
+    // via storagePaths (not the parent_id walk resolveStorageHierarchyForBox
+    // still uses for the pre-allocation equipment/sensor gate above).""",
+    """    // The allocation use case resolves governed layout hierarchy from
+    // storagePaths while physical custody itself is persisted by the normalized v2 chain."""
+)
+
 old = "return Promise.resolve({ _id: query._id, barcode: null, storageLocation: null });"
 new = "return Promise.resolve({ _id: query._id, specimenId: String(query._id), barcode: null });"
 if text.count(old) != 1:
@@ -117,8 +125,7 @@ replacement = """
       const result = await sampleService.createSample(db, validSampleData({ positionCode: 'B2' }));
       const [insertedSample] = db.collections.samples.insertOne.mock.calls[0];
 
-      expect(Object.prototype.hasOwnProperty.call(insertedSample, 'storageLocation')).toBe(false);
-      expect(Object.prototype.hasOwnProperty.call(insertedSample, 'storageAssignment')).toBe(false);
+      expect(insertedSample.currentStoragePlacement).toBeUndefined();
       expect(result.currentStoragePlacement).toEqual(currentCanonicalPlacement);
       expect(result.locationID).toBeUndefined();
     });
