@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Search, MapPin, AlertCircle, Loader, QrCode } from 'lucide-react';
 import { storageApi } from '../services/storageApi';
-import type { SampleStorageLocationDTO } from '../types/models';
+import type { CurrentStoragePlacementDTO } from '../types/models';
 import './SampleLocator.css';
 
 interface SampleLocatorProps {}
@@ -9,16 +9,14 @@ interface SampleLocatorProps {}
 export const SampleLocator: React.FC<SampleLocatorProps> = () => {
   const [searchInput, setSearchInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<SampleStorageLocationDTO | null>(null);
+  const [result, setResult] = useState<CurrentStoragePlacementDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [releasing, setReleasing] = useState(false);
   const [scanMode, setScanMode] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (scanMode) {
-      inputRef.current?.focus();
-    }
+    if (scanMode) inputRef.current?.focus();
   }, [scanMode]);
 
   const handleSearch = async () => {
@@ -34,7 +32,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
     try {
       const response = await storageApi.getSampleLocation(searchInput);
       if (response.success && response.data) {
-        setResult(response.data as SampleStorageLocationDTO);
+        setResult(response.data as CurrentStoragePlacementDTO);
       } else {
         setError(`Amostra "${searchInput}" não encontrada no banco de dados.`);
       }
@@ -58,7 +56,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
   };
 
   const handleRelease = async () => {
-    if (!result) return;
+    if (!result?.specimenId) return;
 
     setReleasing(true);
     setError(null);
@@ -79,10 +77,12 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !loading) {
-      handleSearch();
-    }
+    if (e.key === 'Enter' && !loading) handleSearch();
   };
+
+  const resultPath = result?.path || '';
+  const resultBoxName = result?.box?.boxName || result?.boxName || result?.box?.boxId || result?.boxId || '';
+  const resultPosition = result?.box?.position || result?.positionCode || '';
 
   return (
     <div className="sample-locator" data-testid="sample-locator">
@@ -111,17 +111,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
         </div>
         <div className="sample-locator-actions" data-testid="sample-locator-actions">
           <button onClick={handleSearch} disabled={loading} className="btn-search" data-testid="sample-locator-search-button">
-            {loading ? (
-              <>
-                <Loader size={16} className="spinner" />
-                Buscando
-              </>
-            ) : (
-              <>
-                <Search size={16} />
-                Pesquisar
-              </>
-            )}
+            {loading ? <><Loader size={16} className="spinner" />Buscando</> : <><Search size={16} />Pesquisar</>}
           </button>
           <button
             type="button"
@@ -138,41 +128,26 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
       </div>
 
       <p className={`sample-locator-mode ${scanMode ? 'active' : ''}`}>
-        {scanMode
-          ? 'Leitura ativa: escaneie no campo e pressione Enter.'
-          : 'Use busca manual ou ative a leitura.'}
+        {scanMode ? 'Leitura ativa: escaneie no campo e pressione Enter.' : 'Use busca manual ou ative a leitura.'}
       </p>
 
       {error && (
         <div className="error-box" data-testid="sample-locator-error-box">
           <AlertCircle size={20} />
-          <div>
-            <strong>Erro</strong>
-            <p>{error}</p>
-          </div>
+          <div><strong>Erro</strong><p>{error}</p></div>
         </div>
       )}
 
       {result && (
         <div className="result-box" data-testid="sample-locator-result-box">
-          <div className="result-header" data-testid="sample-locator-result-header">
-            <h4>Localização encontrada</h4>
-          </div>
-
+          <div className="result-header" data-testid="sample-locator-result-header"><h4>Localização encontrada</h4></div>
           <div className="result-content" data-testid="sample-locator-result-content">
-            <div className="info-row">
-              <span className="label">ID</span>
-              <code>{result.specimenId}</code>
-            </div>
-            <div className="info-row">
-              <span className="label">Barcode</span>
-              <code>{result.barcode}</code>
-            </div>
-
+            <div className="info-row"><span className="label">ID</span><code>{result.specimenId}</code></div>
+            <div className="info-row"><span className="label">Barcode</span><code>{result.barcode}</code></div>
             <div className="hierarchy-section">
               <h5>Hierarquia</h5>
               <div className="hierarchy-badges">
-                {result.path.split('/').filter(Boolean).map((segment, index) => (
+                {resultPath.split('/').filter(Boolean).map((segment, index) => (
                   <React.Fragment key={`${segment}-${index}`}>
                     {index > 0 && <span className="hierarchy-arrow">→</span>}
                     <span className="badge">{segment}</span>
@@ -180,50 +155,20 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
                 ))}
               </div>
             </div>
-
-            <div className="info-row">
-              <span className="label">Caixa</span>
-              <code>{result.box.boxName || result.box.boxId}</code>
-            </div>
-            <div className="info-row highlight">
-              <span className="label">Posição</span>
-              <span className="position-badge">{result.box.position}</span>
-            </div>
+            <div className="info-row"><span className="label">Caixa</span><code>{resultBoxName}</code></div>
+            <div className="info-row highlight"><span className="label">Posição</span><span className="position-badge">{resultPosition}</span></div>
           </div>
-
           <div className="result-actions" data-testid="sample-locator-result-actions">
-            <button
-              onClick={handleSearch}
-              className="btn-secondary"
-              disabled={releasing}
-              data-testid="sample-locator-new-search-button"
-            >
-              Nova Busca
-            </button>
-            <button
-              onClick={handleRelease}
-              disabled={releasing}
-              className="btn-danger"
-              data-testid="sample-locator-release-button"
-            >
-              {releasing ? (
-                <>
-                  <Loader size={16} className="spinner" />
-                  Liberando...
-                </>
-              ) : (
-                'Liberar Posição'
-              )}
+            <button onClick={handleSearch} className="btn-secondary" disabled={releasing} data-testid="sample-locator-new-search-button">Nova Busca</button>
+            <button onClick={handleRelease} disabled={releasing} className="btn-danger" data-testid="sample-locator-release-button">
+              {releasing ? <><Loader size={16} className="spinner" />Liberando...</> : 'Liberar Posição'}
             </button>
           </div>
         </div>
       )}
 
       {!result && !loading && !error && (
-        <div className="empty-state">
-          <Search size={48} />
-          <p>Digite um ID ou código de barras para localizar uma amostra</p>
-        </div>
+        <div className="empty-state"><Search size={48} /><p>Digite um ID ou código de barras para localizar uma amostra</p></div>
       )}
     </div>
   );
