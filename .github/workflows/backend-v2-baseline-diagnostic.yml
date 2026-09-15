@@ -1,0 +1,176 @@
+name: Backend v2 reconciliation baseline
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - stabilize/v2.0.0-prototype
+    paths:
+      - .github/workflows/backend-v2-baseline-diagnostic.yml
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: backend-v2-reconciliation-baseline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  baseline:
+    name: Full Vitest + architecture + coverage baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: api/backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm --prefix api/backend ci
+
+      - name: Full Vitest baseline
+        id: full
+        continue-on-error: true
+        working-directory: api/backend
+        run: |
+          set -o pipefail
+          npx vitest run tests/unit tests/integration tests/compliance --reporter=default 2>&1 | tee /tmp/backend-v2-full-vitest.log
+
+      - name: Architecture baseline
+        id: architecture
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm --prefix api/backend run test:architecture 2>&1 | tee /tmp/backend-v2-architecture.log
+
+      - name: Instrumented coverage baseline
+        id: coverage
+        continue-on-error: true
+        working-directory: api/backend
+        run: |
+          rm -rf coverage
+          set -o pipefail
+          npx vitest run tests/unit tests/integration tests/compliance --coverage --reporter=default 2>&1 | tee /tmp/backend-v2-coverage.log
+
+      - name: Build baseline evidence
+        if: always()
+        env:
+          FULL_OUTCOME: ${{ steps.full.outcome }}
+          ARCH_OUTCOME: ${{ steps.architecture.outcome }}
+          COVERAGE_OUTCOME: ${{ steps.coverage.outcome }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          const read = (p) => fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+          const full = read('/tmp/backend-v2-full-vitest.log');
+          const arch = read('/tmp/backend-v2-architecture.log');
+          const cov = read('/tmp/backend-v2-coverage.log');
+          const summaryPath = path.join(process.cwd(), 'api/backend/coverage/coverage-summary.json');
+          const coverageSummary = fs.existsSync(summaryPath) ? JSON.parse(fs.readFileSync(summaryPath, 'utf8')) : null;
+
+          function compactVitest(text) {
+            const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+            const selected = lines.filter((line) =>
+              /^(Test Files|Tests|Duration)\b/.test(line) ||
+              /^FAIL\s/.test(line) ||
+              /Failed Suites|Failed Tests|Cannot find module|MODULE_NOT_FOUND|ERR_MODULE_NOT_FOUND/.test(line)
+            );
+            return [...new Set(selected)].slice(-40);
+          }
+
+          function metric(name) {
+            const value = coverageSummary?.total?.[name];
+            if (!value) return `${name}: unavailable`;
+            return `${name}: **${value.pct}%** (${value.covered}/${value.total})`;
+          }
+
+          const body = [
+            '## Baseline real da reconciliação backend v2',
+            '',
+            `- SHA medido: \`${process.env.GITHUB_SHA}\``,
+            '- mudança neste SHA: somente adição do workflow diagnóstico de baseline; nenhum arquivo de backend/modelagem foi alterado em relação ao HEAD inicial `f05d64f451210642a072742a30602a7c3a855a06`.',
+            '- branch: `stabilize/v2.0.0-prototype`',
+            `- Full Vitest outcome: **${process.env.FULL_OUTCOME || 'unknown'}**`,
+            `- Architecture outcome: **${process.env.ARCH_OUTCOME || 'unknown'}**`,
+            `- Coverage run outcome: **${process.env.COVERAGE_OUTCOME || 'unknown'}**`,
+            '',
+            '### Comandos',
+            '',
+            '- `npx vitest run tests/unit tests/integration tests/compliance --reporter=default`',
+            '- `npm --prefix api/backend run test:architecture`',
+            '- `npx vitest run tests/unit tests/integration tests/compliance --coverage --reporter=default`',
+            '',
+            '### Full Vitest — resumo observado',
+            '',
+            '```text',
+            ...(compactVitest(full).length ? compactVitest(full) : ['No Vitest summary captured']),
+            '```',
+            '',
+            '### Cobertura instrumentada',
+            '',
+            `- ${metric('statements')}`,
+            `- ${metric('branches')}`,
+            `- ${metric('functions')}`,
+            `- ${metric('lines')}`,
+            '',
+            '### Falhas/imports relevantes observados no coverage run',
+            '',
+            '```text',
+            ...(compactVitest(cov).length ? compactVitest(cov) : ['No coverage-run failure summary captured']),
+            '```',
+            '',
+            '### Architecture — resumo',
+            '',
+            '```text',
+            ...arch.split(/\r?\n/).filter((line) => /tests?|pass|fail|duration|suites/i.test(line)).slice(-25),
+            '```',
+            '',
+            'Este snapshot é diagnóstico: nenhum gap será corrigido antes de classificar as falhas conforme a modelagem canônica v2 e o checklist aprovado.'
+          ].join('\n');
+
+          fs.writeFileSync('/tmp/backend-v2-baseline.md', body);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, body + '\n');
+          NODE
+
+      - name: Upload baseline evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-v2-reconciliation-baseline
+          if-no-files-found: warn
+          path: |
+            /tmp/backend-v2-full-vitest.log
+            /tmp/backend-v2-architecture.log
+            /tmp/backend-v2-coverage.log
+            /tmp/backend-v2-baseline.md
+            api/backend/coverage/coverage-summary.json
+            api/backend/coverage/coverage-final.json
+            api/backend/coverage/lcov.info
+
+      - name: Publish baseline to issue 228
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment 228 --repo "$GITHUB_REPOSITORY" --body-file /tmp/backend-v2-baseline.md
+
+      - name: Preserve diagnostic failure status
+        if: always()
+        env:
+          FULL_OUTCOME: ${{ steps.full.outcome }}
+          ARCH_OUTCOME: ${{ steps.architecture.outcome }}
+          COVERAGE_OUTCOME: ${{ steps.coverage.outcome }}
+        run: |
+          if [ "$FULL_OUTCOME" != "success" ] || [ "$ARCH_OUTCOME" != "success" ] || [ "$COVERAGE_OUTCOME" != "success" ]; then
+            echo "Baseline contains failures; see issue #228 and uploaded evidence."
+            exit 1
+          fi
