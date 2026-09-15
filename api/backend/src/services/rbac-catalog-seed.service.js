@@ -99,20 +99,11 @@ const PERMISSION_CATALOG = {
   editSample: { resourceType: 'Sample', allowedActions: ['UPDATE'], displayName: 'Editar amostra' },
   deleteSample: { resourceType: 'Sample', allowedActions: ['DELETE'], displayName: 'Excluir amostra' },
   createPatient: { resourceType: 'Patient', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Criar paciente' },
-  // #888: the catalog had no storage-scoped code at all, so storage.routes.js
-  // could only be gated by role, and its one requirePermission site borrowed
-  // 'createPatient' -- a Patient-domain authorization recorded for a freezer
-  // action. Two codes rather than one, because the router has two genuinely
-  // different concerns: WHERE a specimen sits, and WHAT the container tree is.
-  //
-  // allowedActions is derived from METHOD_TO_ACTION (rbac.js:82), not from
-  // taste: POST -> CREATE, PATCH -> UPDATE, DELETE -> DELETE. dict-02's
-  // Permission vocabulary also offers RELEASE, which maps neatly onto
-  // DELETE /release/:sampleId, but the verb map derives DELETE for that route
-  // and requirePermission checks the derived action -- so RELEASE would deny
-  // every release. Left out deliberately; it needs a METHOD_TO_ACTION change
-  // or an explicit second argument, and neither belongs in this issue.
-  manageStorageAllocation: { resourceType: 'StorageAssignment', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar alocação de armazenamento' },
+  // Storage allocation governs the canonical specimen-to-container custody
+  // relationship. Position/rack relationships remain implementation details
+  // of the same command, while SpecimenContainerAssignment is the aggregate
+  // boundary exposed to authorization and audit.
+  manageStorageAllocation: { resourceType: 'SpecimenContainerAssignment', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar alocação de armazenamento' },
   // #929: broadened from ['READ', 'UPDATE']. #888 created this code with the
   // only two verbs storage.routes.js then used (PATCH /freezer/:id/room), but
   // equipment/facility/room .routes.js each gate POST, PUT and DELETE with it
