@@ -45,14 +45,14 @@ test('physical-storage runtime contains no executable generic legacy facade', ()
 test('canonical v2 physical-storage chain remains executable authority', () => {
   const modelFile = path.resolve(SRC_ROOT, 'models/PhysicalStorageV2.js');
   const content = fs.readFileSync(modelFile, 'utf8');
-  for (const entity of [
-    'SpecimenContainerAssignment',
-    'ContainerPositionAssignment',
-    'StoragePosition',
-    'StorageRack',
-    'RackLocationAssignment'
+  for (const factory of [
+    'specimenContainerAssignment',
+    'containerPositionAssignment',
+    'storagePosition',
+    'storageRack',
+    'rackLocationAssignment'
   ]) {
-    assert.match(content, new RegExp(`\\b${entity}\\b`));
+    assert.match(content, new RegExp(`\\b${factory}\\b`));
   }
 });
 
