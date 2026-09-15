@@ -24,7 +24,9 @@ jobs:
           cache: npm
           cache-dependency-path: api/backend/package-lock.json
       - name: Migrate remaining storage tests
-        run: python3 scripts/maintenance/migrate_remaining_storage_v2_tests_v2.py
+        run: |
+          python3 scripts/maintenance/migrate_remaining_storage_v2_tests_v2.py
+          python3 scripts/maintenance/fix_intake_v2_test_harness.py
       - name: Install backend dependencies
         run: |
           npm --prefix api/backend ci
