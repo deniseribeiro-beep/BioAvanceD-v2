@@ -86,17 +86,6 @@ const LOINC_OBSERVATION_SYSTEM_URI = 'http://loinc.org';
  * for each. All 6 sibling slices are now wired.
  */
 async function recordClinicalEntities(db, { participantId, clinicalData, pharmacologyData, registeredAt }) {
-  // #782: every write below is best-effort by design (see the doc comment
-  // above) and that is not in dispute -- a phenotype that fails to record
-  // should not fail an entire specimen intake. What was missing was any
-  // signal to the caller. The only trace of a failure was a server-side
-  // logger.error line, so the wizard returned an unqualified 200 whether all
-  // ten entity types recorded or none did: the operator saw success and moved
-  // on, while the clinical annotations for a specimen already in a freezer
-  // were quietly absent.
-  //
-  // This collects per-entity outcomes and returns them. It deliberately
-  // changes nothing about what is attempted, what fails, or what persists.
   const outcome = { recorded: {}, failed: [] };
   const recorded = (entity) => {
     outcome.recorded[entity] = (outcome.recorded[entity] || 0) + 1;
@@ -279,11 +268,6 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
     }
   }
 
-  // #712: ELM-0252..0254 ClinicalOutcome -- manual-entry longitudinal-
-  // outcome list (progressão/remissão/recidiva/resposta/toxicidade/
-  // hospitalização/óbito). Like AllergyIntolerance/FamilyHistory/
-  // Procedure above, dict-02's own row set for this entity has no
-  // participantId field -- not invented here, matches #691's model.
   const clinicalOutcomes = Array.isArray(clinicalData?.clinicalOutcomes) ? clinicalData.clinicalOutcomes : [];
   for (const entry of clinicalOutcomes) {
     const outcomeTypeCode = String(entry?.outcomeType || '').trim();
@@ -301,15 +285,6 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
     }
   }
 
-  // #713: ELM-0255..0259 DerivedScore -- real original-1987 Charlson
-  // Comorbidity Index, computed from the wizard's already-collected
-  // charlsonConditions checklist (charlsonComorbidityIndex.js's own file
-  // comment documents which checklist items actually map to a real
-  // Charlson category and which don't). Skipped entirely (not created
-  // with a zero score) when none of the reported conditions map to a real
-  // category -- dict-02 ELM-0259 requires scoreComponents non-empty
-  // ("nunca armazenar somente o escore final"), so there is nothing valid
-  // to persist in that case.
   const { scoreValue, scoreComponents } = computeCharlsonScore(clinicalData?.charlsonComorbidities);
   if (scoreComponents.length > 0) {
     try {
@@ -353,7 +328,7 @@ function collectCanonicalViolations(payload, aliasMap = {}) {
   const fields = [];
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return fields;
 
-  for (const [canonicalKey, aliases] of Object.entries(aliasMap)) {
+  for (const aliases of Object.values(aliasMap)) {
     const aliasList = Array.isArray(aliases) ? aliases : [];
     for (const alias of aliasList) {
       if (Object.prototype.hasOwnProperty.call(payload, alias)) {
@@ -373,9 +348,7 @@ function buildIdVariants(...values) {
     if (!stringValue) return;
     variants.push(stringValue);
     const numericValue = Number(stringValue);
-    if (Number.isFinite(numericValue)) {
-      variants.push(numericValue);
-    }
+    if (Number.isFinite(numericValue)) variants.push(numericValue);
   });
   return [...new Set(variants)];
 }
@@ -385,10 +358,8 @@ function parseBirthDate(value) {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return new Date(value.getFullYear(), value.getMonth(), value.getDate());
   }
-
   const raw = normalizeString(value);
   if (!raw) return null;
-
   const ddmmyyyy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(raw);
   if (ddmmyyyy) {
     const day = Number(ddmmyyyy[1]);
@@ -399,7 +370,6 @@ function parseBirthDate(value) {
       return date;
     }
   }
-
   const iso = new Date(raw);
   if (Number.isNaN(iso.getTime())) return null;
   return new Date(iso.getFullYear(), iso.getMonth(), iso.getDate());
@@ -413,43 +383,24 @@ function buildFallbackPatientID() {
 function resolvePatientID(data = {}) {
   const participant = normalizeObject(data?.participant);
   const patientID = normalizeString(participant.participantId);
-
-  if (/^\d{8}$/.test(patientID)) {
-    return patientID;
-  }
-
+  if (/^\d{8}$/.test(patientID)) return patientID;
   return buildFallbackPatientID();
 }
 
 function buildClinicalData(data = {}) {
   const diagnosis = normalizeObject(data?.diagnosis);
   const clinical = normalizeObject(data?.clinical);
-
   return {
     orphaCode: normalizeString(diagnosis.orphaCode),
-    // #698: the wizard's own OMIM field is always "OMIM:<digits>"
-    // (normalizeOmimCode, ClinicalIntakeWizard.jsx), but RF028's real OMIM
-    // importer stores bare digits with no prefix -- strip it here so
-    // conditionCoding matches the TerminologyConcept activeCodeValidator
-    // actually looks up, same as atcCode's "^ATC:/i" strip below.
     omimCode: normalizeString(diagnosis.omimCode).replace(/^OMIM:/i, ''),
     cid: normalizeString(diagnosis.icdCode),
     phenotypes: normalizeArray(clinical.diseasePhenotypes),
     charlsonComorbidities: normalizeArray(clinical.charlsonConditions),
     biomarkerValues: normalizeObject(clinical.biomarkersValues),
-    // #708: ELM-0246..0248 AllergyIntolerance -- manual-entry allergen list.
     allergies: normalizeArray(clinical.allergies),
-    // #709: ELM-0249..0251 FamilyHistory -- manual-entry family list.
     familyHistories: normalizeArray(clinical.familyHistories),
-    // #710: ELM-0242..0245 Procedure -- manual-entry procedure list.
     procedures: normalizeArray(clinical.procedures),
-    // #711: ELM-0219..0232 ClinicalObservation -- manual-entry lab-result
-    // list. Named observationRecords, not clinicalObservations -- see
-    // clinicalDataSchema's own note on the naming collision with the
-    // existing free-text clinical-notes field below.
     observationRecords: normalizeArray(clinical.observationRecords),
-    // #712: ELM-0252..0254 ClinicalOutcome -- manual-entry longitudinal-
-    // outcome list.
     clinicalOutcomes: normalizeArray(clinical.clinicalOutcomes),
   };
 }
@@ -457,16 +408,11 @@ function buildClinicalData(data = {}) {
 function buildPharmacologyData(data = {}) {
   const clinical = normalizeObject(data?.clinical);
   const pharmacology = normalizeObject(clinical.pharmacologyData);
-
   const treatmentStatusRaw = normalizeString(pharmacology.treatmentStatus).toUpperCase();
   const treatmentStatus = ['NAIVE', 'TREATED', 'ON_TREATMENT', 'WASHOUT'].includes(treatmentStatusRaw) ? treatmentStatusRaw : '';
-  const atcCode = normalizeString(pharmacology.atcCode)
-    .replace(/^ATC:/i, '')
-    .toUpperCase();
-  const atcLevel1 = normalizeString(pharmacology.atcClass)
-    .toUpperCase() || (atcCode ? atcCode.charAt(0) : '');
+  const atcCode = normalizeString(pharmacology.atcCode).replace(/^ATC:/i, '').toUpperCase();
+  const atcLevel1 = normalizeString(pharmacology.atcClass).toUpperCase() || (atcCode ? atcCode.charAt(0) : '');
   const drugName = normalizeString(pharmacology.medicationName);
-
   return {
     treatmentStatus,
     medicationName: drugName || null,
@@ -485,7 +431,6 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
   const specimenStatus = requestedStatusRaw === 'available' ? 'available' : 'quarantined';
   const registrationDate = specimen.registeredAt || new Date().toISOString();
   const confirmedPatientID = normalizeString(matchedPatient?.participantId) || resolvePatientID(data);
-
   return {
     participantId: confirmedPatientID,
     patientObjectId: matchedPatient?._id || null,
@@ -503,11 +448,6 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
     clinicalData: buildClinicalData(data),
     pharmacologyData: buildPharmacologyData(data),
     merkleRoot: null,
-    // #502: no RcsAssessment/SpecimenPreanalytics snapshot is recorded for
-    // intake-wizard samples, so pin explicitly to "none" rather than leaving
-    // the property absent — MerkleService.generateSampleHashFromSample reads
-    // an absent property as "pre-#502 sample, resolve newest" instead of
-    // "sealed with no snapshot," which would defeat the pin.
     sealedRcsAssessmentId: null,
     sealedSpecimenPreanalyticsId: null,
     createdAt: new Date(),
@@ -517,15 +457,12 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
 
 async function resolveMatchedPatient(db, data = {}) {
   const participant = normalizeObject(data?.participant);
-
-  const result = await patientIdentityService.matchOrUpsertParticipant(db, {
+  return patientIdentityService.matchOrUpsertParticipant(db, {
     participantId: participant.participantId,
     patientName: participant.patientName,
     birthDate: parseBirthDate(participant.birthDate),
     identityDocument: normalizeString(participant.identityDocument) || null,
   });
-
-  return result;
 }
 
 async function resolveConsentDecision(db, patient) {
@@ -535,36 +472,14 @@ async function resolveConsentDecision(db, patient) {
     error.statusCode = 400;
     throw error;
   }
-
   const consent = await consentService.getPatientConsent(db, participantId);
   if (consent?.status === 'ACTIVE') {
-    return {
-      active: true,
-      consentId: consent.consentId || consent._id || null,
-      patientId: participantId,
-      status: 'SIGNED',
-      quarantineReason: null,
-      governanceReason: null,
-    };
+    return { active: true, consentId: consent.consentId || consent._id || null, patientId: participantId, status: 'SIGNED', quarantineReason: null, governanceReason: null };
   }
   if (consent?.status === 'REVOKED') {
-    return {
-      active: false,
-      consentId: consent.consentId || consent._id || null,
-      patientId: participantId,
-      status: 'REVOKED',
-      quarantineReason: 'CONSENT_REVOKED',
-      governanceReason: 'Consentimento revogado.',
-    };
+    return { active: false, consentId: consent.consentId || consent._id || null, patientId: participantId, status: 'REVOKED', quarantineReason: 'CONSENT_REVOKED', governanceReason: 'Consentimento revogado.' };
   }
-  return {
-    active: false,
-    consentId: null,
-    patientId: participantId,
-    status: 'PENDING',
-    quarantineReason: 'CONSENT_PENDING',
-    governanceReason: 'Consentimento ainda não ativo/assinado.',
-  };
+  return { active: false, consentId: null, patientId: participantId, status: 'PENDING', quarantineReason: 'CONSENT_PENDING', governanceReason: 'Consentimento ainda não ativo/assinado.' };
 }
 
 function isOperationalSensor(sensor) {
@@ -572,12 +487,6 @@ function isOperationalSensor(sensor) {
   return !status || !CRITICAL_SENSOR_STATUSES.includes(status);
 }
 
-/**
- * #463: Sensor has no dict-02 canonical placement of its own (#465), so the
- * operational-sensor safety gate (RF004) matches at the resolved FREEZER
- * StorageContainer's `containerID` — same equipment-level granularity #462
- * established for sample.service.js's createSample gate.
- */
 async function hasOperationalSensorForContainer(db, freezer) {
   const sensorsCollection = db.collection('sensors');
   const variants = buildIdVariants(freezer?.containerID);
@@ -587,43 +496,26 @@ async function hasOperationalSensorForContainer(db, freezer) {
       { locationID: { $in: variants } },
     ],
   }).limit(20).toArray();
-
   return sensors.some(isOperationalSensor);
 }
 
 async function isEquipmentReadyForContainer(db, freezer) {
-  if (freezer?.containerID === undefined || freezer?.containerID === null || freezer?.containerID === '') {
-    return false;
-  }
-
+  if (freezer?.containerID === undefined || freezer?.containerID === null || freezer?.containerID === '') return false;
   const equipmentCollection = db.collection('equipment');
-  const equipment = await equipmentCollection.findOne({
-    equipmentID: { $in: buildIdVariants(freezer.containerID) },
-  });
-
+  const equipment = await equipmentCollection.findOne({ equipmentID: { $in: buildIdVariants(freezer.containerID) } });
   if (!equipment) return false;
   const status = normalizeString(equipment.status || equipment.maintenanceStatus || equipment.operationalStatus).toLowerCase();
   return !isEquipmentBlocked(status);
 }
 
-/**
- * #462/#463: walks the StorageContainer chain up from a StorageBox's
- * `parent_id` (RACK, optionally through a DRAWER) to SHELF then FREEZER —
- * same hierarchy the #461 backfill script materializes. Best-effort: a box
- * with a broken/incomplete chain returns whichever levels resolved, `null`
- * above that.
- */
 async function resolveStorageHierarchyForBox(db, box) {
   const storageContainersCollection = db.collection('storageContainers');
-
   let rack = box.parent_id ? await storageContainersCollection.findOne({ _id: box.parent_id }) : null;
   if (rack && rack.containerType === 'DRAWER') {
     rack = rack.parent_id ? await storageContainersCollection.findOne({ _id: rack.parent_id }) : null;
   }
-
   const shelf = rack?.parent_id ? await storageContainersCollection.findOne({ _id: rack.parent_id }) : null;
   const freezer = shelf?.parent_id ? await storageContainersCollection.findOne({ _id: shelf.parent_id }) : null;
-
   return { rack, shelf, freezer };
 }
 
@@ -631,7 +523,6 @@ function findFirstAvailablePosition(box) {
   const rows = Number(box?.dimension?.rows || 0);
   const cols = Number(box?.dimension?.cols || 0);
   if (rows < 1 || cols < 1) return null;
-
   const occupancyGrid = box?.occupancyGrid || {};
   for (let row = 0; row < rows; row += 1) {
     for (let col = 1; col <= cols; col += 1) {
@@ -642,7 +533,6 @@ function findFirstAvailablePosition(box) {
       if (!occupied) return position;
     }
   }
-
   return null;
 }
 
@@ -657,61 +547,37 @@ function findAvailableStorageBoxCandidates(boxes) {
   });
 }
 
-/**
- * #463: replaces the legacy `locations`-collection scan. A box now carries
- * its own equipment/sensor linkage via the StorageContainer chain it sits
- * in (RACK[/DRAWER]/SHELF/FREEZER), so candidate boxes (available capacity
- * + free position) are gated directly on their resolved FREEZER's readiness
- * instead of an independent `locations` lookup — same convention #462
- * established for sample.service.js's createSample.
- */
 async function resolveAutomaticLocation(db) {
   const boxesCollection = db.collection('storageBoxes');
   const boxes = await boxesCollection.find({}).sort({ name: 1, boxID: 1, _id: 1 }).limit(100).toArray();
   const candidates = findAvailableStorageBoxCandidates(boxes);
-
   if (candidates.length === 0) {
     const error = new Error('Não há localização física disponível com sensor operacional associado para esta amostra.');
     error.statusCode = 409;
     throw error;
   }
-
   for (const box of candidates) {
     const { rack, shelf, freezer } = await resolveStorageHierarchyForBox(db, box);
     if (!freezer) continue;
     if (!(await isEquipmentReadyForContainer(db, freezer))) continue;
     if (!(await hasOperationalSensorForContainer(db, freezer))) continue;
-
-    return {
-      box,
-      rack,
-      shelf,
-      freezer,
-      previewPosition: findFirstAvailablePosition(box),
-    };
+    return { box, rack, shelf, freezer, previewPosition: findFirstAvailablePosition(box) };
   }
-
   const error = new Error('Não há localização física disponível com sensor operacional associado para esta amostra.');
   error.statusCode = 422;
   throw error;
 }
 
-function buildReadableStorageLocation(automaticLocation, allocation) {
-  const storageLocation = allocation?.sampleLocation || {};
+function buildReadableStoragePlacement(automaticLocation, placement) {
   const box = automaticLocation?.box;
   const freezer = automaticLocation?.freezer;
   return [
     freezer?.containerID ? `equipamento ${freezer.containerID}` : null,
     box?.name || box?.boxID ? `box ${box.name || box.boxID}` : null,
-    storageLocation.position ? `posição ${storageLocation.position}` : null,
+    placement?.positionCode ? `posição ${placement.positionCode}` : null,
   ].filter(Boolean).join(' / ');
 }
 
-// #655: label.routes.js (the /api/labels/samples/* family these links used
-// to point at) is retired -- SampleLabelPage.tsx now calls sample.routes.js's
-// symbology/print-job endpoints directly, and this function's own output was
-// never read by any frontend caller either (grepped frontend/src), so this
-// is a same-shape correction, not a behavior change any caller depended on.
 function buildLabelLinks(sample) {
   const sampleId = normalizeString(sample?._id?.toString?.() || sample?._id || sample?.sampleID || sample?.barcode);
   const barcode = normalizeString(sample?.barcode);
@@ -727,30 +593,23 @@ function calcularQualidade(samplePayloadOrTempo, temperatura) {
   if (typeof samplePayloadOrTempo === 'number') {
     return resolverQualidadeMetodologica({
       matrixType: 'fluid',
-      sprec: {
-        matrixType: 'fluid',
-        preCentrifugation: '',
-      },
+      sprec: { matrixType: 'fluid', preCentrifugation: '' },
       documentation_insufficient: true,
       legacy_numeric_quality_input: { tempo: samplePayloadOrTempo, temperatura },
     });
   }
-
   return resolverQualidadeMetodologica(samplePayloadOrTempo);
 }
 
 async function handleIntakeWizard(req, res) {
   const data = req.body;
-
   if (!data || typeof data !== 'object' || Object.keys(data).length === 0) {
     return res.status(400).json({ error: 'Dados inválidos para intake wizard.' });
   }
 
   try {
     const canonicalViolations = [
-      ...collectCanonicalViolations(data?.participant, {
-        participantId: ['patientID', 'patientId', 'pseudoId', 'mongoPatientId'],
-      }),
+      ...collectCanonicalViolations(data?.participant, { participantId: ['patientID', 'patientId', 'pseudoId', 'mongoPatientId'] }),
       ...collectCanonicalViolations(data?.specimen, {
         specimenId: ['sampleID', 'sampleId', 'specimenID', 'mongoSampleId'],
         parentSpecimenIds: ['parentSpecimenId'],
@@ -762,9 +621,7 @@ async function handleIntakeWizard(req, res) {
         merkleRoot: ['merkle_root'],
         legacyCompat: ['legacy_compat'],
       }),
-      ...collectCanonicalViolations(data?.consent, {
-        consentTemplateId: ['tcle_id', 'tcle_template_id', 'selected_tcle'],
-      }),
+      ...collectCanonicalViolations(data?.consent, { consentTemplateId: ['tcle_id', 'tcle_template_id', 'selected_tcle'] }),
       ...collectCanonicalViolations(data?.clinical, {
         clinicalData: ['clinical_data'],
         pharmacologyData: ['pharmacology_data'],
@@ -778,10 +635,7 @@ async function handleIntakeWizard(req, res) {
 
     const db = req.app.locals.db;
     if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível para persistir o intake wizard.',
-      });
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível para persistir o intake wizard.' });
     }
 
     const matchOutcome = await resolveMatchedPatient(db, data);
@@ -791,22 +645,11 @@ async function handleIntakeWizard(req, res) {
 
     auditLogger.init(db);
     await auditLogger.log({
-      action: 'PATIENT_MATCH_UPSERT',
-      resourceType: 'Patient',
-      resourceId: matchOutcome?.patient?.participantId || null,
-      status: 'success',
-      severity: 'info',
-      message: matchOutcome?.created
-        ? 'Novo paciente criado durante intake wizard.'
-        : 'Paciente existente identificado e atualizado durante intake wizard.',
-      payload: {
-        created: Boolean(matchOutcome?.created),
-        matched: !Boolean(matchOutcome?.created),
-        matchType: matchOutcome?.matchType || null,
-        patientID: matchOutcome?.patient?.participantId || null,
-      },
-      req,
-      module: 'Cadastro'
+      action: 'PATIENT_MATCH_UPSERT', resourceType: 'Patient', resourceId: matchOutcome?.patient?.participantId || null,
+      status: 'success', severity: 'info',
+      message: matchOutcome?.created ? 'Novo paciente criado durante intake wizard.' : 'Paciente existente identificado e atualizado durante intake wizard.',
+      payload: { created: Boolean(matchOutcome?.created), matched: !Boolean(matchOutcome?.created), matchType: matchOutcome?.matchType || null, patientID: matchOutcome?.patient?.participantId || null },
+      req, module: 'Cadastro'
     });
 
     const sampleToPersist = buildSampleDocumentFromIntake(data, matchOutcome.patient);
@@ -819,21 +662,11 @@ async function handleIntakeWizard(req, res) {
       qualityAssessment: qualidade,
       consentStatus: consentDecision.active ? 'SIGNED' : consentDecision.status,
       specimenStatus,
-      quarantineReason: isReleased
-        ? null
-        : consentDecision.quarantineReason || (qualityAllowsRelease ? 'GOVERNANCE_BLOCKED' : 'QUALITY_GOVERNANCE_FAILURE'),
+      quarantineReason: isReleased ? null : consentDecision.quarantineReason || (qualityAllowsRelease ? 'GOVERNANCE_BLOCKED' : 'QUALITY_GOVERNANCE_FAILURE'),
     });
-    if (qualidade.sprec && Object.keys(qualidade.sprec).length > 0) {
-      sampleToPersist.sprec = qualidade.sprec;
-    }
+    if (qualidade.sprec && Object.keys(qualidade.sprec).length > 0) sampleToPersist.sprec = qualidade.sprec;
     sampleToPersist.merkleRoot = generateSampleHash(sampleToPersist);
-    // #474: sampleService.createSample now allocates boxId/positionCode
-    // atomically via AllocateSampleUseCase as part of the create call
-    // itself (occupancyGrid write, StorageAssignment, audit/lineage trail)
-    // instead of writing storageLocation directly — the wizard's own
-    // separate assignSampleToBox step this used to run afterward is gone,
-    // since the position is already committed by the time createSample
-    // returns (and re-running it here would now fail as ALREADY_ALLOCATED).
+
     const createdSample = await sampleService.createSample(db, sampleToPersist, {
       auditInfo: {
         userId: req.user?.id || req.user?._id || null,
@@ -843,33 +676,20 @@ async function handleIntakeWizard(req, res) {
         userAgent: req.get('user-agent') || null,
         notes: 'Cadastro integrado via Intake Wizard',
       },
-      neo4jDriver: req.app.locals.neo4jDriver || null,
     });
 
-    const allocation = { sampleLocation: createdSample.storageLocation || null };
-
+    const currentStoragePlacement = createdSample.currentStoragePlacement || null;
     const samplesCollection = await getCollection(db, 'samples');
     const allocatedSample = await samplesCollection.findOne({ _id: createdSample._id }) || createdSample;
 
-    // #505: intakeWizard already computes RCS via qualidade above but never
-    // recorded a queryable RcsAssessment snapshot — mirrors #492's pattern
-    // (sample.service.js#createSample), recorded once the sample has fully
-    // landed (create + allocation both already succeeded by this point) so
-    // a best-effort failure here never fails the intake itself.
     try {
       const assessment = await rcsAssessmentService.recordAssessment(db, allocatedSample.specimenId, qualidade);
-      await samplesCollection.updateOne(
-        { _id: createdSample._id },
-        { $set: { sealedRcsAssessmentId: assessment._id } }
-      );
+      await samplesCollection.updateOne({ _id: createdSample._id }, { $set: { sealedRcsAssessmentId: assessment._id } });
       allocatedSample.sealedRcsAssessmentId = assessment._id;
     } catch (assessmentError) {
       logger.error('Falha ao registrar RcsAssessment para a amostra do intake wizard:', assessmentError.message || assessmentError);
     }
 
-    // #693 (RF005 AC4-6): additive real-entity recording, best-effort --
-    // see recordClinicalEntities' own doc comment for scope/rationale.
-    // #782: outcomes are now returned and surfaced in the response below.
     const clinicalEntitiesOutcome = await recordClinicalEntities(db, {
       participantId: allocatedSample.participantId,
       clinicalData: sampleToPersist.clinicalData,
@@ -880,24 +700,15 @@ async function handleIntakeWizard(req, res) {
     const patientsCollection = await getCollection(db, 'patients');
     await patientsCollection.updateOne(
       { _id: matchOutcome.patient._id },
-      {
-        $set: {
-          lastClinicalData: sampleToPersist.clinicalData || {},
-          updatedAt: new Date(),
-        },
-        $addToSet: {
-          linkedSampleIds: String(createdSample._id),
-        },
-      }
+      { $set: { lastClinicalData: sampleToPersist.clinicalData || {}, updatedAt: new Date() }, $addToSet: { linkedSampleIds: String(createdSample._id) } }
     );
 
-    const storageLocation = {
+    const physicalPlacement = currentStoragePlacement ? {
+      ...currentStoragePlacement,
       equipmentID: automaticLocation.freezer?.containerID || null,
-      boxId: allocation.sampleLocation?.boxId || automaticLocation.box._id,
       boxName: automaticLocation.box.name || automaticLocation.box.boxID || null,
-      position: allocation.sampleLocation?.position || automaticLocation.previewPosition || null,
-      readable: buildReadableStorageLocation(automaticLocation, allocation),
-    };
+      readable: buildReadableStoragePlacement(automaticLocation, currentStoragePlacement),
+    } : null;
 
     const responseMessage = isReleased
       ? 'Cadastro integrado concluído com sucesso, amostra validada e localização automática atribuída.'
@@ -908,105 +719,49 @@ async function handleIntakeWizard(req, res) {
       message: responseMessage,
       qualidade: qualidade.final_grade ? `Grade ${qualidade.final_grade}` : 'Indeterminada',
       qualityAssessment: qualidade,
-      patientMatch: {
-        matched: !matchOutcome.created,
-        created: matchOutcome.created,
-        matchType: matchOutcome.matchType,
-        patientID: matchOutcome.patient?.participantId || null,
-      },
-      consent: {
-        active: consentDecision.active,
-        status: consentDecision.status,
-        consentId: consentDecision.consentId || null,
-        patientId: consentDecision.patientId || null,
-        reason: consentDecision.governanceReason || null,
-      },
-      storageLocation,
-      // #511: canonical StorageAssignment additively exposed alongside the
-      // legacy storageLocation shape above, same precedent #507/#510 set —
-      // sample.service.js#createSample (#510) already resolves it via
-      // MongoStorageRepository.findCurrentStorageAssignment().
-      storageAssignment: createdSample.storageAssignment || null,
+      patientMatch: { matched: !matchOutcome.created, created: matchOutcome.created, matchType: matchOutcome.matchType, patientID: matchOutcome.patient?.participantId || null },
+      consent: { active: consentDecision.active, status: consentDecision.status, consentId: consentDecision.consentId || null, patientId: consentDecision.patientId || null, reason: consentDecision.governanceReason || null },
+      currentStoragePlacement: physicalPlacement,
       label: buildLabelLinks(allocatedSample),
-      // #782: the intake stays a 200 whatever happened to the clinical
-      // entities -- that best-effort design is deliberate. What changes is
-      // that the caller is now told, so a UI can say "specimen saved, 1
-      // phenotype not recorded" instead of an unqualified success. `failed`
-      // is empty on a clean intake, so the common case reads the same.
       clinicalEntities: clinicalEntitiesOutcome,
       data,
-      sample: allocatedSample,
+      sample: { ...allocatedSample, currentStoragePlacement: physicalPlacement },
     });
   } catch (error) {
-    return res.status(error?.statusCode || error?.status || 500).json({
-      success: false,
-      error: error?.message || 'Erro desconhecido ao finalizar o Intake Wizard.',
-    });
+    return res.status(error?.statusCode || error?.status || 500).json({ success: false, error: error?.message || 'Erro desconhecido ao finalizar o Intake Wizard.' });
   }
 }
 
 router.get('/patient-match', async (req, res) => {
   const db = req.app.locals.db;
-  if (!db) {
-    return res.status(503).json({ success: false, error: 'Banco de dados não disponível.' });
-  }
+  if (!db) return res.status(503).json({ success: false, error: 'Banco de dados não disponível.' });
 
   const patientName = normalizeString(req.query?.patientName || req.query?.name);
   const birthDate = parseBirthDate(req.query?.birthDate);
   const participantIdQuery = normalizeString(req.query?.patientID || req.query?.patientId);
-
   if (!participantIdQuery && (!patientName || !birthDate)) {
     return res.status(400).json({ success: false, error: 'Informe patientID ou (patientName + birthDate).' });
   }
 
   try {
-    // RF005/RNF007 (#562): resolve the match via ParticipantIdentity, not
-    // Patient's own (never actually populated by the main intake path)
-    // patientNameNormalized/birthDateKey fields, same pattern #561 applied
-    // to PatientIdentityService.js's import-time matching.
     const identityCollection = await getCollection(db, 'participantIdentities');
     const patientNameNormalized = patientName
-      ? patientName
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toLowerCase()
-        .replace(/\s+/g, ' ')
+      ? patientName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ')
       : '';
-
-    // #1104: decrypt here too. The name+birthDate branch below already
-    // decrypts its candidates, but this participantId branch did not -- so a
-    // ciphertext-only row came back with a null patientName/birthDate while a
-    // grep for decryptIdentity made this file look fully repointed.
-    const rawIdentityById = participantIdQuery
-      ? await identityCollection.findOne({ participantId: participantIdQuery })
-      : null;
+    const rawIdentityById = participantIdQuery ? await identityCollection.findOne({ participantId: participantIdQuery }) : null;
     let identity = rawIdentityById ? participantIdentityService.decryptIdentity(rawIdentityById) : null;
 
     if (!identity && patientNameNormalized && birthDate) {
       const startOfDay = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
       const endOfDay = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), startOfDay.getDate() + 1);
-      // RF005/RNF007 (#574, done for this field in #1104): birthDate is
-      // ciphertext-only, so this narrows by day of birth on the blind index
-      // alone. The plaintext range condition below is NOT a fallback for old
-      // records -- it is the keyless-stack branch (#1083), reached only when
-      // no ENCRYPTION_KEY is configured and the plaintext is therefore the
-      // only thing that was written.
-      // #1099: match under EVERY registered key, so a hash written before
-      // an ENCRYPTION_KEY rotation stays matchable.
       const birthDateHashes = participantIdentityService.computeBlindIndexCandidates('birthDate', birthDate);
       const dateOrConditions = birthDateHashes.length
         ? [{ birthDateHash: { $in: birthDateHashes } }]
         : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
       const candidates = await identityCollection.find({ $or: dateOrConditions }).toArray();
       identity = candidates.find((rawCandidate) => {
-        // patientName is civil identity -- decrypt before comparing so this
-        // keeps matching once the plaintext field is eventually dropped.
         const candidate = participantIdentityService.decryptIdentity(rawCandidate);
-        const candidateNormalized = normalizeString(candidate.patientName)
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .toLowerCase()
-          .replace(/\s+/g, ' ');
+        const candidateNormalized = normalizeString(candidate.patientName).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');
         return candidateNormalized === patientNameNormalized;
       }) || null;
     }
@@ -1014,50 +769,24 @@ router.get('/patient-match', async (req, res) => {
     let patientStatus = 'ACTIVE';
     if (identity?.participantId) {
       const patientsCollection = await getCollection(db, 'patients');
-      const patientRecord = await patientsCollection.findOne(
-        { participantId: identity.participantId },
-        { projection: { status: 1 } }
-      );
+      const patientRecord = await patientsCollection.findOne({ participantId: identity.participantId }, { projection: { status: 1 } });
       patientStatus = normalizeString(patientRecord?.status) || 'ACTIVE';
     }
 
     auditLogger.init(db);
     await auditLogger.log({
-      action: 'PATIENT_MATCH_UPSERT',
-      resourceType: 'Patient',
-      resourceId: identity?.participantId || participantIdQuery || null,
-      status: 'success',
-      severity: 'info',
-      message: identity
-        ? 'Heurística de intake encontrou paciente existente para upsert.'
-        : 'Heurística de intake não encontrou paciente correspondente.',
-      payload: {
-        endpoint: '/patient-match',
-        matched: Boolean(identity),
-        query: {
-          patientID: participantIdQuery || null,
-          patientName: patientName || null,
-          birthDate: birthDate ? birthDate.toISOString().slice(0, 10) : null,
-        },
-      },
-      req,
-      module: 'Cadastro'
+      action: 'PATIENT_MATCH_UPSERT', resourceType: 'Patient', resourceId: identity?.participantId || participantIdQuery || null,
+      status: 'success', severity: 'info',
+      message: identity ? 'Heurística de intake encontrou paciente existente para upsert.' : 'Heurística de intake não encontrou paciente correspondente.',
+      payload: { endpoint: '/patient-match', matched: Boolean(identity), query: { patientID: participantIdQuery || null, patientName: patientName || null, birthDate: birthDate ? birthDate.toISOString().slice(0, 10) : null } },
+      req, module: 'Cadastro'
     });
 
     return res.json({
       success: true,
       matched: Boolean(identity),
-      patient: identity
-        ? {
-          patientID: normalizeString(identity.participantId),
-          patientName: normalizeString(identity.patientName),
-          birthDate: identity.birthDate || null,
-          status: patientStatus,
-        }
-        : null,
-      message: identity
-        ? 'Paciente identificado. Novos dados serão vinculados ao perfil histórico.'
-        : '',
+      patient: identity ? { patientID: normalizeString(identity.participantId), patientName: normalizeString(identity.patientName), birthDate: identity.birthDate || null, status: patientStatus } : null,
+      message: identity ? 'Paciente identificado. Novos dados serão vinculados ao perfil histórico.' : '',
     });
   } catch (error) {
     return res.status(500).json({ success: false, error: error?.message || 'Falha ao consultar paciente.' });
