@@ -18,25 +18,26 @@ jobs:
           ref: stabilize/v2.0.0-prototype
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Normalize auto-allocation return contract
-        shell: python
+        shell: bash
         run: |
+          python3 - <<'PY'
           from pathlib import Path
 
           repo = Path('api/backend/src/infrastructure/persistence/mongo/MongoStorageRepository.js')
           text = repo.read_text(encoding='utf-8')
           old = """    await this.assignCanonicalPhysicalPlacement({
-      specimenId: sample.specimenId || sample._id,
-      boxId: boxObjId,
-      positionCode: position
-    }, session);
-    return position;
-  }"""
+              specimenId: sample.specimenId || sample._id,
+              boxId: boxObjId,
+              positionCode: position
+            }, session);
+            return position;
+          }"""
           new = """    return this.assignCanonicalPhysicalPlacement({
-      specimenId: sample.specimenId || sample._id,
-      boxId: boxObjId,
-      positionCode: position
-    }, session);
-  }"""
+              specimenId: sample.specimenId || sample._id,
+              boxId: boxObjId,
+              positionCode: position
+            }, session);
+          }"""
           if text.count(old) != 1:
               raise SystemExit(f'expected one autoAssign return block, found {text.count(old)}')
           repo.write_text(text.replace(old, new), encoding='utf-8')
@@ -50,27 +51,51 @@ jobs:
             ('          to: { boxId: String(boxObjId), position: assignedPosition },\n', '          to: { boxId: String(boxObjId), position: currentStoragePlacement.positionCode },\n'),
             ('      logger.info(`✅ Alocação inteligente realizada para amostra ${specimenId} em ${boxId}/${assignedPosition}`);\n', '      logger.info(`✅ Alocação inteligente realizada para amostra ${specimenId} em ${boxId}/${currentStoragePlacement.positionCode}`);\n'),
           ]
-          for old_text, new_text in replacements:
-              if text.count(old_text) != 1:
-                  raise SystemExit(f'expected exactly one occurrence: {old_text!r}; found {text.count(old_text)}')
-              text = text.replace(old_text, new_text)
+          for before, after in replacements:
+              if text.count(before) != 1:
+                  raise SystemExit(f'expected one occurrence: {before!r}; found {text.count(before)}')
+              text = text.replace(before, after)
           old_return = """        sampleLocation: {
-          specimenId: String(sampleObjId),
-          boxId: String(boxObjId),
-          position: assignedPosition
-        }
-"""
-          new_return = """        currentStoragePlacement
-"""
+                  specimenId: String(sampleObjId),
+                  boxId: String(boxObjId),
+                  position: assignedPosition
+                }
+          """
           if text.count(old_return) != 1:
               raise SystemExit(f'expected one sampleLocation return block, found {text.count(old_return)}')
-          service.write_text(text.replace(old_return, new_return), encoding='utf-8')
-      - name: Commit migration and remove workflow
+          text = text.replace(old_return, '        currentStoragePlacement\n')
+          service.write_text(text, encoding='utf-8')
+
+          controller = Path('api/backend/src/interface/controllers/auto-assign-sample.controller.js')
+          text = controller.read_text(encoding='utf-8')
+          old = """      return res.status(201).json({
+                success: true,
+                data: result.sampleLocation,
+                message: `Amostra alocada automaticamente na Posição ${result.sampleLocation.position}`,
+                projectionQueued: result.projectionQueued === true,
+                projectionEventId: result.projectionEventId || null
+              });"""
+          new = """      const currentStoragePlacement = result.currentStoragePlacement || null;
+              return res.status(201).json({
+                success: true,
+                data: currentStoragePlacement,
+                currentStoragePlacement,
+                message: currentStoragePlacement?.positionCode
+                  ? `Amostra alocada automaticamente na Posição ${currentStoragePlacement.positionCode}`
+                  : 'Amostra alocada automaticamente',
+                projectionQueued: result.projectionQueued === true,
+                projectionEventId: result.projectionEventId || null
+              });"""
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one controller response block, found {text.count(old)}')
+          controller.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+      - name: Commit canonical return contract and remove one-shot workflow
         shell: bash
         run: |
           rm .github/workflows/storage-v2-return-contract-once.yml
           git config user.name "BioAvanceD CI"
           git config user.email "actions@users.noreply.github.com"
-          git add api/backend/src/infrastructure/persistence/mongo/MongoStorageRepository.js api/backend/src/services/storageService.js .github/workflows/storage-v2-return-contract-once.yml
-          git commit -m "refactor(v2): return canonical storage placement"
+          git add api/backend/src/infrastructure/persistence/mongo/MongoStorageRepository.js api/backend/src/services/storageService.js api/backend/src/interface/controllers/auto-assign-sample.controller.js .github/workflows/storage-v2-return-contract-once.yml
+          git commit -m "refactor(v2): return canonical auto-allocation placement"
           git push origin HEAD:stabilize/v2.0.0-prototype
