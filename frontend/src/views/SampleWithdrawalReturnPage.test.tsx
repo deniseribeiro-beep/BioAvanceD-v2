@@ -8,9 +8,9 @@ import {
   resolveSpecimenStatus,
   translateSpecimenStatus,
 } from './SampleWithdrawalReturnPage';
-import type { SampleStorageLocationDTO } from '../types/models';
+import type { CurrentStoragePlacementDTO } from '../types/models';
 
-function makeLocation(overrides: Partial<SampleStorageLocationDTO> = {}): SampleStorageLocationDTO {
+function makePlacement(overrides: Partial<CurrentStoragePlacementDTO> = {}): CurrentStoragePlacementDTO {
   return {
     specimenId: 'SPEC-1',
     box: { boxId: 'box-1', boxName: null, position: null },
@@ -21,37 +21,38 @@ function makeLocation(overrides: Partial<SampleStorageLocationDTO> = {}): Sample
 }
 
 describe('getStorageLabel', () => {
-  it('reports awaiting storage when no resolved location exists', () => {
+  it('reports awaiting storage when no resolved placement exists', () => {
     expect(getStorageLabel(null)).toBe('Aguardando Armazenagem');
   });
 
-  it('reports awaiting storage when the resolved location has no box/path/position', () => {
-    expect(getStorageLabel(makeLocation())).toBe('Aguardando Armazenagem');
+  it('reports awaiting storage when the placement has no box/path/position', () => {
+    expect(getStorageLabel(makePlacement())).toBe('Aguardando Armazenagem');
   });
 
   it('prefers the readable path over the box name when both are present', () => {
-    const location = makeLocation({
+    const placement = makePlacement({
       path: 'FREEZER_01/SHELF_1/RACK_A/BOX_01',
       box: { boxId: 'box-1', boxName: 'BOX_01', position: 'A1' },
     });
-    expect(getStorageLabel(location)).toBe('FREEZER_01/SHELF_1/RACK_A/BOX_01 / Posição A1');
+    expect(getStorageLabel(placement)).toBe('FREEZER_01/SHELF_1/RACK_A/BOX_01 / Posição A1');
   });
 
   it('falls back to the box name when there is no path', () => {
-    const location = makeLocation({ box: { boxId: 'box-1', boxName: 'BOX_01', position: 'A1' } });
-    expect(getStorageLabel(location)).toBe('BOX_01 / Posição A1');
+    const placement = makePlacement({ box: { boxId: 'box-1', boxName: 'BOX_01', position: 'A1' } });
+    expect(getStorageLabel(placement)).toBe('BOX_01 / Posição A1');
   });
 
   it('falls back to just the position when neither path nor box name is present', () => {
-    const location = makeLocation({ box: { boxId: 'box-1', boxName: null, position: 'A1' } });
-    expect(getStorageLabel(location)).toBe('Posição A1');
+    const placement = makePlacement({ box: { boxId: 'box-1', boxName: null, position: 'A1' } });
+    expect(getStorageLabel(placement)).toBe('Posição A1');
+  });
+
+  it('supports the flat intake projection without recreating a storage alias', () => {
+    const placement = makePlacement({ box: null, boxName: 'BOX_02', positionCode: 'B3' });
+    expect(getStorageLabel(placement)).toBe('BOX_02 / Posição B3');
   });
 });
 
-// #538: the withdraw/return gates used to read `sample.currentStatus`, a
-// field the real withdraw/return write path (sample.service.js) never
-// sets — these cover the fix, deriving from `specimenStatus` instead
-// (dict-02 ELM-0123, the field Sample.js#computeStatus actually writes).
 describe('resolveSpecimenStatus', () => {
   it('defaults to available when specimenStatus is absent, matching the backend default', () => {
     expect(resolveSpecimenStatus(null)).toBe('available');
@@ -92,15 +93,11 @@ describe('getPendingReturnQuantity', () => {
   });
 
   it('falls back to the original quantity for legacy depleted samples with no ledger total', () => {
-    expect(
-      getPendingReturnQuantity({ specimenStatus: 'depleted', totalWithdrawn: 0, totalReturned: 0, initialQuantity: 500 })
-    ).toBe(500);
+    expect(getPendingReturnQuantity({ specimenStatus: 'depleted', totalWithdrawn: 0, totalReturned: 0, initialQuantity: 500 })).toBe(500);
   });
 
   it('does not apply the legacy fallback once a ledger total exists', () => {
-    expect(
-      getPendingReturnQuantity({ specimenStatus: 'depleted', totalWithdrawn: 500, totalReturned: 500, initialQuantity: 500 })
-    ).toBe(0);
+    expect(getPendingReturnQuantity({ specimenStatus: 'depleted', totalWithdrawn: 500, totalReturned: 500, initialQuantity: 500 })).toBe(0);
   });
 });
 
