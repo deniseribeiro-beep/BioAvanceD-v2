@@ -30,9 +30,9 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
     setResult(null);
 
     try {
-      const response = await storageApi.getSampleLocation(searchInput);
+      const response = await storageApi.getCurrentStoragePlacement(searchInput);
       if (response.success && response.data) {
-        setResult(response.data as CurrentStoragePlacementDTO);
+        setResult(response.data);
       } else {
         setError(`Amostra "${searchInput}" não encontrada no banco de dados.`);
       }
