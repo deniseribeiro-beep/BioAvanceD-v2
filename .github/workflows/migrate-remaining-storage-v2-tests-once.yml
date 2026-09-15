@@ -27,6 +27,7 @@ jobs:
         run: |
           python3 scripts/maintenance/migrate_remaining_storage_v2_tests_v2.py
           python3 scripts/maintenance/fix_intake_v2_test_harness.py
+          python3 scripts/maintenance/fix_intake_canonical_shape_validation.py
       - name: Install backend dependencies
         run: |
           npm --prefix api/backend ci
