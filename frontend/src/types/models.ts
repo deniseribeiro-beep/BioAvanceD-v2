@@ -1,52 +1,25 @@
 // Modelos baseados no diagrama UML
 
 export interface Patient {
-  _id?: string; // MongoDB ID
-  // 1. ID - Numérico - Identificador único (gerado automaticamente)
-  participantId: string; // ID canônico do participante
-  
-  // 2. NOME - Caractere - Nome completo do paciente
-  // RF005/RNF007 (#575): civil identity — segregated to ParticipantIdentity,
-  // never returned as a direct field on Patient. Optional here since it's
-  // only ever present via an authorized re-identification response.
+  _id?: string;
+  participantId: string;
   patientName?: string;
-
-  // Contato para envio do TCLE
   email?: string;
   phone?: string;
-
-  // 3. DATA_NASCIMENTO - Caractere - Data de nascimento (formato DD/MM/YYYY)
-  // RF005/RNF007 (#575): civil identity — segregated to ParticipantIdentity,
-  // see patientName above.
-  birthDate?: string; // Alterado para string no formato DD/MM/YYYY
-  
-  // 4. IDADE - Numérico - Idade em anos completos
+  birthDate?: string;
   age?: number;
-  
-  // 5. MATRICULA - Caractere - Número do prontuário (obrigatório)
-  recordNumber: string; // Alterado para string conforme especificação
-  
-  // 6. UNIDADE - Caractere - Unidade de tratamento
+  recordNumber: string;
   clinicalUnitId?: string;
   clinicalUnit?: string;
-  
-  // 7. UNIDADE_SIGLA - Caractere - Sigla da unidade
   unitAcronym?: string;
-
   isDeceased?: boolean;
   representativeName?: string;
   representativeEmail?: string;
   representativeIdentityDocument?: string;
   representativePhone?: string;
-  
-  // 8. SEXO - Caractere - Sexo do paciente (Masculino/Feminino)
-  sex: string; // 'Masculino' | 'Feminino'
-  
-  // 9. HD - Caractere - Hipótese diagnóstica principal
+  sex: string;
   diagnosticHypothesis?: string;
-  
-  // 10. CID - Caractere - Classificação Internacional de Doenças (CID-11)
-  icdCode?: string; // Alterado para string conforme especificação
+  icdCode?: string;
   orphaCode?: string;
   omimCode?: string;
   icdReference?: {
@@ -57,40 +30,24 @@ export interface Patient {
     ORPHA?: string;
     OMIM?: string;
   } | null;
-  
-  // 11. PESO - Numérico - Peso do paciente em quilos
   weight?: number;
-  
-  // 12. ALTURA - Numérico - Altura do paciente em centímetros
   heightCm?: number;
-  
-  // 13-23. Fatores - Caractere (Sim/Não)
-  hypertension?: string; // 'Sim' | 'Não'
-  obesity?: string; // 'Sim' | 'Não'
-  diabetesType1?: string; // 'Sim' | 'Não'
-  diabetesType2?: string; // 'Sim' | 'Não'
-  copd?: string; // 'Sim' | 'Não'
-  ckd?: string; // 'Sim' | 'Não'
-  smoking?: string; // 'Sim' | 'Não'
-  alcoholUse?: string; // 'Sim' | 'Não'
-  asthma?: string; // 'Sim' | 'Não'
-  antibioticUse?: string; // 'Sim' | 'Não'
-  insulinUse?: string; // 'Sim' | 'Não'
-  antiviralUse?: string; // 'Sim' | 'Não'
-  
-  // 25. VARIANTE_GENETICA - Caractere - Variante genética ou status (obrigatório)
+  hypertension?: string;
+  obesity?: string;
+  diabetesType1?: string;
+  diabetesType2?: string;
+  copd?: string;
+  ckd?: string;
+  smoking?: string;
+  alcoholUse?: string;
+  asthma?: string;
+  antibioticUse?: string;
+  insulinUse?: string;
+  antiviralUse?: string;
   geneticVariant: string;
-  
-  // 26. ALFA-GAL - Numérico - Resultado do exame de alfa galactosidase
-  alphaGal?: number; // Alterado de boolean para number
-  
-  // 27. LYSO-GB3 - Numérico - Resultado do exame de lyso-gb3
+  alphaGal?: number;
   lysoGb3?: number;
-  
-  // 28. OBSERVACAO - Caractere - Campo aberto para informações
   notes?: string;
-  
-  // Campos de sistema
   status?: 'PENDING_CONSENT' | 'ACTIVE' | 'INACTIVE';
   consentTemplateId?: string;
   consentToken?: string | null;
@@ -155,71 +112,53 @@ export interface RcsEvaluation {
   calculation_trace: Record<string, any>;
 }
 
-// Campo embutido em Sample, gravado por AllocateSampleUseCase/MoveSampleUseCase/
-// ReleaseSampleUseCase (só boxId/position são garantidos; boxName/locationID/readable
-// dependem de qual caminho de escrita alocou a amostra). Não carrega freezer/shelf/rack
-// nem path — para isso, use SampleStorageLocationDTO via GET /storage/sample/:sampleId.
-export interface SampleEmbeddedStorageLocation {
-  boxId?: string | null;
-  boxName?: string | null;
-  position?: string | null;
-  locationID?: number | null;
-  readable?: string | null;
-  path?: string | null;
-}
-
-// dict-02 StorageAssignment (ELM-0167-0178): o registro bruto de
-// storageAssignments, anexado de forma aditiva (não substitui storageLocation)
-// em MongoStorageRepository.findSampleById/findCurrentStorageAssignment (#507,
-// #510) e em sample.service.js#createSample/intakeWizard.js no POST de criação.
-// Sem boxName/readable/path resolvidos — para isso, use SampleStorageLocationDTO.
-export interface StorageAssignmentRecord {
-  storageAssignmentId: string;
-  specimenId: string;
+/**
+ * Canonical-v2 physical-custody read model. Persistence authority remains
+ * SpecimenContainerAssignment -> ContainerPositionAssignment ->
+ * StoragePosition -> StorageRack -> RackLocationAssignment; this interface
+ * is only the API/UI projection of that normalized chain.
+ */
+export interface CanonicalPhysicalPlacement {
+  specimenId?: string | null;
+  containerId?: string | null;
+  specimenContainerAssignmentId?: string | null;
+  containerPositionAssignmentId?: string | null;
+  storagePositionId?: string | null;
+  rackLocationAssignmentId?: string | null;
+  storageRackId?: string | null;
   storageLocationId?: string | null;
-  facilityId?: string | null;
-  roomId?: string | null;
-  equipmentId?: string | null;
-  shelfId?: string | null;
-  rackId?: string | null;
-  boxId: string | null;
-  positionCode: string;
-  nominalTemperature?: number | null;
-  placedAt?: Date | string;
+  boxId?: string | null;
+  positionCode?: string | null;
+  assignedAt?: Date | string | null;
+  releasedAt?: Date | string | null;
+  placedAt?: Date | string | null;
   removedAt?: Date | string | null;
-  occupancyStatus?: 'ocupada' | 'livre' | string;
+  sourceService?: string | null;
 }
 
-// Resposta de GET /storage/sample/:sampleId (GetSampleStorageLocationUseCase /
-// MongoStorageRepository.getSampleStorageLocation). `path` é a hierarquia legível
-// separada por "/" (ex: "FREEZER_01/SHELF_1/RACK_A/BOX_01"); fullHierarchy carrega
-// apenas IDs, não nomes.
-export interface SampleStorageLocationDTO {
-  specimenId: string;
+export interface CurrentStoragePlacementDTO {
+  specimenId?: string | null;
   barcode?: string | null;
-  box: {
+  box?: {
     boxId: string;
     boxName: string | null;
     position: string | null;
-  };
-  locationID?: number | null;
-  readable?: string | null;
-  path: string;
-  fullHierarchy: {
+  } | null;
+  path?: string | null;
+  fullHierarchy?: {
     freezerId: string;
     shelfId: string;
     rackId: string;
     boxId: string;
   } | null;
+  canonicalPlacement?: CanonicalPhysicalPlacement | null;
+  boxId?: string | null;
+  boxName?: string | null;
+  positionCode?: string | null;
+  equipmentID?: string | number | null;
+  readable?: string | null;
 }
 
-// dict-02 SpecimenPreanalytics (ELM-0145+, #388): one versioned SPREC
-// snapshot, as persisted by specimen-preanalytics.service.js and returned
-// by GET /:id/sprec-profiles (newest first) — mirrors the generic axis
-// slots (preCentrifugation/centrifugation/secondCentrifugation/
-// postCentrifugationDelay, populated regardless of matrixType) plus their
-// solid-matrix canonical aliases (warmIschemiaTime/coldIschemiaTime/
-// fixationStabilizationType/fixationTime) used to build a display summary.
 export interface SpecimenPreanalyticsProfile {
   _id?: string;
   specimenId: string;
@@ -243,16 +182,16 @@ export interface SpecimenPreanalyticsProfile {
 }
 
 export interface Sample {
-  _id?: string; // MongoDB ID
+  _id?: string;
   participantId: string;
-  sampleID?: number | null; // ID da amostra (pode ser null, usar _id como fallback)
+  sampleID?: number | null;
   sampleType: string;
   sampleOrigin?: string;
   extractionProtocol?: string;
-  barcode?: string; // Código de barras no formato BR-YYYY-NNN (gerado automaticamente)
+  barcode?: string;
   registrationDate?: Date | string;
   quantity?: number;
-  quality?: string | number; // Id MIABIS canônico ou legado persistido
+  quality?: string | number;
   rcs_evaluation?: RcsEvaluation | null;
   model_version?: string;
   matrix_type?: 'fluid' | 'solid' | string;
@@ -266,16 +205,11 @@ export interface Sample {
   grade_route?: string;
   axis_penalties?: RcsAxisPenalty[];
   calculation_trace?: Record<string, any>;
-  // Deprecated: não usar como fonte de decisão; mantido somente para payloads legados.
   quality_score?: number | null;
   quality_category?: 'A' | 'B' | 'C' | 'D' | 'E' | '' | string;
   merkle_root?: string | null;
   consentStatus?: 'PENDING' | 'SIGNED' | 'EXTERNAL_ATTACHED' | 'WAIVED_TRANSFER' | 'NOT_REQUIRED' | string;
-  // Canonical status (storage/custody split, #389/#409) — derive quarantine/availability
-  // UI state from this.
   specimenStatus?: 'available' | 'reserved' | 'checked_out' | 'partial' | 'depleted' | 'quarantined' | 'destroyed' | 'unavailable' | 'disposed' | string;
-  // quarantineReason still carries the human-readable reason text — no
-  // specimenStatus equivalent exists for that, so it stays legacy-sourced (#407/#415).
   quarantineReason?: 'CONSENT_PENDING' | 'EXTERNAL_DOCUMENT_REQUIRED' | 'TRANSFER_REVIEW_REQUIRED' | null | string;
   importBatchId?: string | null;
   importedAt?: Date | string | null;
@@ -298,50 +232,29 @@ export interface Sample {
     };
     suggestedStatus?: 'AVAILABLE' | 'BLOCKED' | 'QUARANTINE' | string;
   } | null;
-  qualityID?: string | number; // Mantido para compatibilidade
-  unit?: string; // Unidade de medida (µL, mL, etc.)
-  unitID?: number; // Relacionamento Sample → SampleWithMeasurementUnit
+  qualityID?: string | number;
+  unit?: string;
+  unitID?: number;
   locationID?: number;
   linkedProject?: string;
   isRareDisease?: boolean;
-  // Campos de movimentação
   movementType?: 'Armazenamento' | 'Transferência';
-  // Controle de quantidade (novos campos)
-  currentQuantity?: number; // Quantidade disponível após retiradas (dict-02 ELM-0139)
-  initialQuantity?: number; // Quantidade original (nunca muda; dict-02 ELM-0138)
-  totalWithdrawn?: number; // Total já retirado
-  totalReturned?: number; // Total já devolvido
-  lastWithdrawalID?: number; // ID da última retirada
-  // Controle de volume (normaliza naming para front/back)
-  volumeInitial?: number; // Volume inicial
-  volumeCurrent?: number; // Volume atual
-  checked?: boolean; // Flag opcional para seleção em UI (fallback a arrays de IDs)
-  // Status de disponibilidade
+  currentQuantity?: number;
+  initialQuantity?: number;
+  totalWithdrawn?: number;
+  totalReturned?: number;
+  lastWithdrawalID?: number;
+  volumeInitial?: number;
+  volumeCurrent?: number;
+  checked?: boolean;
   currentStatus?: 'Available' | 'PartiallyWithdrawn' | 'TotallyWithdrawn' | 'Withdrawn' | 'Destroyed' | 'Unusable';
   status?: 'AVAILABLE' | 'QUARANTINED' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE';
-  // Campos de retirada
   withdrawalDate?: Date | string;
   withdrawalType?: 'Parcial' | 'Total';
   withdrawalResponsible?: string;
   sampleDestination?: string;
-  storageLocation?: SampleEmbeddedStorageLocation | null;
-  // dict-02 StorageAssignment, anexado de forma aditiva ao storageLocation
-  // acima (#495) — só presente em respostas específicas que já o resolvem
-  // (POST de criação); GET /samples/:id ainda não o resolve (ver #495 no
-  // dict-07/dict-08 tracking).
-  storageAssignment?: StorageAssignmentRecord | null;
-  // GET /samples (list view) only (#517) — batched, per-row resolution of
-  // the same shape GET /storage/sample/:sampleId returns, so SamplesPageView
-  // doesn't have to read storageLocation above directly nor make one
-  // follow-up request per row.
-  resolvedStorageLocation?: SampleStorageLocationDTO | null;
-  // GET /samples (list view) only (#517) — the sample's current SPREC
-  // snapshot (sealedSpecimenPreanalyticsId-pinned if set, else newest),
-  // batched the same way as resolvedStorageLocation above. SampleDetailsPage
-  // (#518) also reads this field, sourcing the same sample object from the
-  // shared useSamples() list rather than a dedicated per-sample fetch.
+  currentStoragePlacement?: CurrentStoragePlacementDTO | null;
   currentSpecimenPreanalytics?: SpecimenPreanalyticsProfile | null;
-  // Soft delete fields
   deleted?: boolean;
   deletedAt?: Date | string;
   deletedBy?: {
@@ -353,7 +266,7 @@ export interface Sample {
 }
 
 export interface SampleWithMeasurementUnit {
-  _id?: string; // MongoDB ID
+  _id?: string;
   unitID: number;
   description: string;
   createdAt?: Date | string;
@@ -361,10 +274,7 @@ export interface SampleWithMeasurementUnit {
 }
 
 export interface SampleWithQualityDescription {
-  _id?: string; // MongoDB ID
-  // #881: the canonical business identifier is the string MIABIS code the
-  // seed writes on `id` (settled by #902) -- the numeric qualityID this
-  // mount used to require is retired.
+  _id?: string;
   id: string;
   description: string;
   createdAt?: Date | string;
@@ -372,7 +282,7 @@ export interface SampleWithQualityDescription {
 }
 
 export interface AnalysisType {
-  _id?: string; // MongoDB ID
+  _id?: string;
   name: string;
   code: string;
   active?: boolean;
@@ -380,18 +290,18 @@ export interface AnalysisType {
 }
 
 export interface Result {
-  _id?: string; // MongoDB ID
+  _id?: string;
   resultID: number;
   fileType: FileType;
   filePath: string;
-  description: string; // Obrigatório
+  description: string;
   analysisType?: string;
   method?: string;
   responsibleResearcher?: string;
-  specimenId: string; // Obrigatório - Specimen.specimenId da amostra vinculada (#628)
-  equipmentID?: number; // Associação Result → Equipment
+  specimenId: string;
+  equipmentID?: number;
   equipmentName?: string;
-  importJobID?: string; // Vincula resultado com job de importação
+  importJobID?: string;
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }
@@ -483,35 +393,35 @@ export enum FileType {
 }
 
 export interface Equipment {
-  _id?: string; // MongoDB ID
+  _id?: string;
   equipmentID: number;
   equipmentDescription: string;
-  name?: string; // Nome amigável do equipamento
+  name?: string;
   model?: string;
   serialNumber?: string;
-  type?: 'Freezer' | 'Analytical' | 'Storage' | 'Processing' | 'Other'; // Tipo de equipamento
-  status?: 'Calibrado' | 'Maintenance' | 'Active' | 'Inactive' | 'Needs Calibration'; // Status do equipamento
+  type?: 'Freezer' | 'Analytical' | 'Storage' | 'Processing' | 'Other';
+  status?: 'Calibrado' | 'Maintenance' | 'Active' | 'Inactive' | 'Needs Calibration';
   purchaseDate?: Date | string;
-  organizationId?: string | null; // Organization.organizationId (UUID) -- sem backfill, null = não escopado/legado (#635)
+  organizationId?: string | null;
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }
 
 export interface Location {
-  _id?: string; // MongoDB ID
-  locationID?: number; // Identificador próprio conforme diagrama
-  equipmentType: number; // Mantido conforme diagrama
-  equipmentID?: number; // Associação Equipment → Location
+  _id?: string;
+  locationID?: number;
+  equipmentType: number;
+  equipmentID?: number;
   block: number;
   rack: number;
   drawer: number;
   box: number;
-  eppendorfWell?: string; // Campo do frontend (string)
-  wellPosition?: string; // Campo do backend (string) - posição do eppendorf
+  eppendorfWell?: string;
+  wellPosition?: string;
 }
 
 export interface Organization {
-  _id?: string; // MongoDB ID
+  _id?: string;
   organizationId: string;
   officialName: string;
   normalizedName?: string;
@@ -521,7 +431,6 @@ export interface Organization {
   website?: string | null;
 }
 
-// #726 (RF008 AC#6) — ReportTemplate, api/backend/src/models/ReportTemplate.js
 export const REPORT_TEMPLATE_HANDLER_KEYS = [
   'samplesByPatient',
   'patient',
@@ -554,9 +463,8 @@ export interface ReportTemplate {
   updatedAt?: string;
 }
 
-// RF020 / MIABIS Collection (ELM-0039..0052) — dict-02_DICIONARIO.md
 export interface Collection {
-  _id?: string; // MongoDB ID
+  _id?: string;
   collectionId: string;
   collectionName: string;
   collectionStatus?: string;
@@ -573,27 +481,26 @@ export interface Collection {
 }
 
 export interface User {
-  _id?: string; // MongoDB ID
+  _id?: string;
   userID?: string;
   id: number;
   name: string;
   email: string;
   phone?: string;
-  organizationId?: string | null; // Reference -> Organization.organizationId (#347 cutover, replaces the old free-text `institution` field)
+  organizationId?: string | null;
   username: string;
-  password?: string; // Não deve ser retornado em respostas GET
-  accessType?: number; // Mantido para compatibilidade (1: Básico, 2: Intermediário, 3: Completo)
-  roleName?: 'Coordenador' | 'Técnico' | 'Administrador' | 'Usuário Externo'; // Role conforme diagrama de caso de uso
-  accessIDs?: number[]; // IDs dos Access permitidos (reportID da tabela Access)
-  allowedReports?: string[]; // Tipos de relatórios permitidos (preenchido pelo backend)
+  password?: string;
+  accessType?: number;
+  roleName?: 'Coordenador' | 'Técnico' | 'Administrador' | 'Usuário Externo';
+  accessIDs?: number[];
+  allowedReports?: string[];
   status?: string;
-  // Campos para Google Authenticator 2FA
   twoFactorEnabled?: boolean;
   twoFactorSecret?: string;
   twoFactorBackupCodes?: string[];
   twoFactorFailedAttempts?: number;
   twoFactorLockedUntil?: Date | string | null;
-  firstLogin?: boolean; // Indica se é o primeiro login (2FA obrigatório)
+  firstLogin?: boolean;
   mfaEnabled?: boolean;
   createdAt?: Date | string;
   updatedAt?: Date | string;
@@ -607,7 +514,7 @@ export interface SpecificUser extends User {
 }
 
 export interface Access {
-  _id?: string; // MongoDB ID
+  _id?: string;
   reportID: number;
   reportType: string;
   createdAt?: Date | string;
@@ -617,14 +524,14 @@ export interface Access {
 export interface Reports {
   reportID: number;
   reportType: string;
-  reportData?: string; // JSON string com os dados do relatório
+  reportData?: string;
   generatedAt?: Date | string;
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }
 
 export interface Temperature {
-  _id?: string; // MongoDB ID
+  _id?: string;
   logID: string;
   timestamp?: Date | string;
   temperatureValue: number;
@@ -633,9 +540,9 @@ export interface Temperature {
   dataQualityScore?: number;
   errorCode?: string;
   errorMessage?: string;
-  sensorId: string; // Campo canônico -- ver Sensor acima (#940)
-  sensorID?: string; // Alias legado
-  policyID: number; // Padronizado para Number (consistente com Policy)
+  sensorId: string;
+  sensorID?: string;
+  policyID: number;
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }
@@ -677,7 +584,7 @@ export interface LogMetadata {
 }
 
 export interface Log {
-  _id?: string; // MongoDB ID
+  _id?: string;
   logID?: number | string;
   timestamp?: Date | string;
   dateTime?: Date | string;
@@ -711,26 +618,26 @@ export interface Log {
 }
 
 export interface Sensor {
-  _id?: string; // MongoDB ID
-  sensorId: string; // Campo canônico -- api/backend/src/models/Sensor.js#create grava sensorId (lowercase-d), independente do spelling de entrada (#940)
-  sensorID?: string; // Alias legado -- api.ts ainda envia esta grafia em requests; não removido
+  _id?: string;
+  sensorId: string;
+  sensorID?: string;
   sensorType: string;
   sensorModel?: string;
   maintenanceStatus?: string;
   lastCalibration?: Date | string | null;
   nextCalibration?: Date | string | null;
   calibrationCertificate?: string;
-  locationID?: number; // Padronizado para Number (consistente com Sample e Location)
-  policyID?: number; // Padronizado para Number (consistente com Policy)
-  macAddress?: string; // Opcional: presente => backend vincula um SensorMetadata (ver #311)
-  storageContainer?: string; // ID do StorageContainer (freezer) vinculado ao SensorMetadata
-  organizationId?: string | null; // Organization.organizationId (UUID) -- sem backfill, null = não escopado/legado (#634)
+  locationID?: number;
+  policyID?: number;
+  macAddress?: string;
+  storageContainer?: string;
+  organizationId?: string | null;
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }
 
 export interface Policy {
-  _id?: string; // MongoDB ID
+  _id?: string;
   policyID: number;
   policyName?: string;
   minThreshold: number;
@@ -745,9 +652,8 @@ export interface Policy {
   updatedAt?: Date | string;
 }
 
-// Interface para Withdrawal mencionada em User.recordSampleWithdrawal()
 export interface SampleHistory {
-  _id?: string; // MongoDB ID
+  _id?: string;
   historyID: number;
   sampleID: number;
   action: 'CREATE' | 'UPDATE' | 'DELETE' | 'WITHDRAWAL' | 'LOCATION_CHANGE' | 'STATUS_CHANGE' | 'QUANTITY_CHANGE';
@@ -767,17 +673,16 @@ export interface SampleHistory {
 }
 
 export interface Withdrawal {
-  _id?: string; // MongoDB ID
+  _id?: string;
   withdrawalID: number;
   sampleID: number;
   withdrawalDate?: Date | string;
   withdrawalType: 'Parcial' | 'Total';
-  withdrawalQuantity?: number; // Quantidade retirada (obrigatório se Parcial)
+  withdrawalQuantity?: number;
   withdrawalResponsible: string;
-  withdrawalDestination?: string; // Renomeado de sampleDestination conforme RF006
-  linkedProject: string; // Campo obrigatório conforme RF006
-  justification?: string; // Renomeado de notes conforme RF006
-  // Campos legados para compatibilidade
+  withdrawalDestination?: string;
+  linkedProject: string;
+  justification?: string;
   sampleDestination?: string;
   notes?: string;
   createdAt?: Date | string;
@@ -785,22 +690,21 @@ export interface Withdrawal {
 }
 
 export interface Return {
-  _id?: string; // MongoDB ID
+  _id?: string;
   returnID: number;
   sampleID: number;
   returnDate?: Date | string;
   returnType: 'Parcial' | 'Total';
-  returnQuantity: number; // Quantidade devolvida
+  returnQuantity: number;
   returnResponsible: string;
-  linkedProject: string; // Campo obrigatório
-  condition?: 'Íntegra' | 'Parcialmente comprometida' | 'Inutilizada'; // Condição da amostra ao devolver
-  notes?: string; // Observações sobre a devolução
-  relatedWithdrawalID?: number; // Referência à retirada original
+  linkedProject: string;
+  condition?: 'Íntegra' | 'Parcialmente comprometida' | 'Inutilizada';
+  notes?: string;
+  relatedWithdrawalID?: number;
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }
 
-// Interface para movimentações de amostras (ledger imutável)
 export interface SampleMovement {
   _id?: string;
   movementID: number;
@@ -810,29 +714,21 @@ export interface SampleMovement {
   quantity: number;
   unit?: string;
   responsible: string;
-  // Campos de retirada
   destination?: string;
   purpose?: string;
   linkedProject?: string;
-  // Campos de devolução
   condition?: 'Íntegra' | 'Parcialmente comprometida' | 'Inutilizada';
   relatedWithdrawalID?: number;
-  // Observações
   observations?: string;
-  // Auditoria
   userId?: string;
   userName?: string;
   userRole?: string;
   ipAddress?: string;
-  // Saldos
   previousQuantity?: number;
   newQuantity?: number;
-  // Timestamps
   timestamp: Date | string;
   createdAt?: Date | string;
 }
-
-// ========== IMPORT SYSTEM TYPES ==========
 
 export enum ImportDataType {
   PATIENTS = 'patients',
@@ -845,32 +741,26 @@ export enum ImportJobStatus {
   PENDING = 'pending',
   PROCESSING = 'processing',
   COMPLETED = 'completed',
-  // #890: terminal status for a result-import run that finished normally
-  // but wrote nothing because every processed entry hit an
-  // unimplemented/unsupported format stub (.raw / generic-file).
   COMPLETED_NO_DATA = 'completed_no_data',
   FAILED = 'failed',
   CANCELLED = 'cancelled'
 }
 
 export interface ImportJob {
-  _id?: string; // MongoDB ID
-  jobID: string; // UUID único
+  _id?: string;
+  jobID: string;
   userID: string;
   userName: string;
   dataType: ImportDataType;
   fileName: string;
   filePath: string;
   fileSize: number;
-  fileFormat: string; // CSV, XLSX, JSON, ZIP, RAW
+  fileFormat: string;
   status: ImportJobStatus;
   metadata?: Record<string, any>;
   validationErrors?: ImportValidationError[];
   processingErrors?: string[];
   metrics?: ImportMetrics;
-  // #905: the worker persists flat counts and the jobs-list endpoint
-  // returns them verbatim; `metrics` above only exists on the report
-  // shape (mapped server-side in getJobReport).
   totalRecords?: number;
   successCount?: number;
   errorCount?: number;
@@ -893,29 +783,9 @@ export interface ImportMetrics {
   totalRecords: number;
   successfulRecords: number;
   failedRecords: number;
-  // #925: both were declared required and neither was produced at the time.
-  // duplicatesFound was read by the report modal against a `?? 0` default
-  // that made "nobody counted" indistinguishable from "none found". Optional
-  // now, so a consumer has to decide what an absent value means instead of
-  // being handed a zero.
-  //
-  // #991: skippedRecords is now written end to end -- import-worker.js puts
-  // it in the job-completion payload and import-async.service.js carries it
-  // into this metrics object -- and ResultsPage.tsx renders it (gated on
-  // `!== undefined`, same idiom as duplicatesFound). Still optional: pre-#991
-  // jobs never had it written, and an absent value must stay absent rather
-  // than render as a false zero.
   skippedRecords?: number;
-  /**
-   * #931: a labelled SUBSET of `failedRecords`, not a sibling of it. Every
-   * duplicate row is pushed onto the import's `errors` array and skipped, so
-   * it is already inside `failedRecords` -- `successfulRecords +
-   * failedRecords + duplicatesFound` deliberately exceeds `totalRecords`.
-   * Present only on jobs run since #931; still optional so pre-#931 jobs omit
-   * the tile rather than claiming zero (#925).
-   */
   duplicatesFound?: number;
-  processingTime?: number; // em segundos
+  processingTime?: number;
   recordsPerSecond?: number;
 }
 
@@ -932,35 +802,31 @@ export interface ImportReport {
 }
 
 export interface SampleFile {
-  _id?: string; // MongoDB ID
-  sampleID: string; // ID da amostra (vinculação obrigatória)
-  fileName: string; // Nome original do arquivo
-  fileType: 'RAW' | 'ZIP' | 'CSV' | 'XLS' | 'XLSX' | 'PDF' | 'TXT'; // Tipo do arquivo
-  fileSize: number; // Tamanho em bytes
-  uploaderAnonId?: string; // ID anonimizado do uploader (LGPD)
-  uploadDate: Date | string; // Data do upload
+  _id?: string;
+  sampleID: string;
+  fileName: string;
+  fileType: 'RAW' | 'ZIP' | 'CSV' | 'XLS' | 'XLSX' | 'PDF' | 'TXT';
+  fileSize: number;
+  uploaderAnonId?: string;
+  uploadDate: Date | string;
   createdAt?: Date | string;
   updatedAt?: Date | string;
-  // storagePath não é exposto ao frontend (segurança)
-  
-  // Campos HL7 opcionais (extensão para interoperabilidade)
-  accessionNumber?: string; // Número de acesso do exame
-  orderNumber?: string; // Número da requisição
-  equipmentID?: number; // ID do equipamento que gerou o arquivo
-  collectionDateTime?: Date | string; // Data/hora da coleta da amostra
-  processingDateTime?: Date | string; // Data/hora do processamento
-  analysisDateTime?: Date | string; // Data/hora da análise
-  loincCode?: string; // Código LOINC do exame/procedimento
-  procedureCode?: string; // Código do procedimento (SNOMED ou local)
+  accessionNumber?: string;
+  orderNumber?: string;
+  equipmentID?: number;
+  collectionDateTime?: Date | string;
+  processingDateTime?: Date | string;
+  analysisDateTime?: Date | string;
+  loincCode?: string;
+  procedureCode?: string;
   equipmentManufacturer?: string;
   equipmentModel?: string;
   equipmentSerialNumber?: string;
   softwareVersion?: string;
-  resultStatus?: 'F' | 'P' | 'C'; // F (Final), P (Preliminar), C (Cancelado)
-  unitOfMeasure?: string; // Unidade de medida padronizada
-  resultValue?: number; // Valor numérico do resultado
-  interpretation?: 'N' | 'A' | 'H' | 'L' | 'HH' | 'LL' | 'C'; // Normal, Anormal, Alto, Baixo, etc.
-  hl7Version?: string; // Ex: "2.8", "FHIR R4"
-  messageType?: string; // Ex: "ORU^R01", "OBR"
+  resultStatus?: 'F' | 'P' | 'C';
+  unitOfMeasure?: string;
+  resultValue?: number;
+  interpretation?: 'N' | 'A' | 'H' | 'L' | 'HH' | 'LL' | 'C';
+  hl7Version?: string;
+  messageType?: string;
 }
-
