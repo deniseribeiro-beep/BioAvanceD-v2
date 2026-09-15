@@ -1,0 +1,144 @@
+name: Fix #923 container topology gate once
+
+on:
+  push:
+    branches:
+      - stabilize/v2.0.0-prototype
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: stabilize/v2.0.0-prototype
+
+      - name: Patch #923 test paths and runner mounts
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          test_path = Path('api/backend/tests/architecture/mongo-transaction-topology.arch.test.js')
+          test_path.write_text("""const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+// This gate runs in two contexts: directly from the repository checkout and
+// inside backend-unit-runner, whose build context is api/backend and WORKDIR
+// is /app. Keep the same #923 assertions active in both places rather than
+// skipping them in Docker. Backend sources are always resolved from the
+// backend root; repository-level Compose files are mounted read-only at
+// /repo-context by compose.test.yml when the gate runs in the container.
+const backendRoot = path.resolve(__dirname, '../..');
+const repoRoot = path.resolve(backendRoot, '../..');
+const containerRepoRoot = '/repo-context';
+
+function readRepo(relativePath) {
+  const candidates = [
+    path.join(repoRoot, relativePath),
+    path.join(containerRepoRoot, relativePath),
+  ];
+
+  const resolved = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!resolved) {
+    throw new Error(`Unable to resolve repository file ${relativePath}; tried: ${candidates.join(', ')}`);
+  }
+  return fs.readFileSync(resolved, 'utf8');
+}
+
+function readBackend(relativePath) {
+  return fs.readFileSync(path.join(backendRoot, relativePath), 'utf8');
+}
+
+for (const file of ['compose.yml', 'compose.prod.yml']) {
+  test(`#923 ${file} runs bundled MongoDB as authenticated-capable rs0`, () => {
+    const source = readRepo(file);
+    assert.match(source, /--replSet["',\\s]+rs0/);
+    assert.match(source, /--keyFile/);
+    assert.match(source, /mongo-keyfile-init:/);
+    assert.match(source, /mongo-rs-init:/);
+    assert.match(source, /rs\\.initiate\\(\\{ _id: ["']rs0["']/);
+    assert.match(source, /isWritablePrimary/);
+  });
+}
+
+test('#923 test stack remains a replica set as the executable reference topology', () => {
+  const source = readRepo('compose.test.yml');
+  assert.match(source, /mongodb-test:/);
+  assert.match(source, /--replSet["',\\s]+rs0/);
+  assert.match(source, /mongo-rs-init-test:/);
+  assert.match(source, /rs\\.initiate/);
+});
+
+test('#923 storage custody still refuses a positively identified standalone deployment', () => {
+  const service = readBackend('src/services/storageService.js');
+  const repository = readBackend('src/infrastructure/persistence/mongo/MongoStorageRepository.js');
+  assert.match(service, /isKnownStandaloneDeployment/);
+  assert.match(repository, /isKnownStandaloneDeployment/);
+  assert.match(service, /Transação Mongo indisponível/);
+  assert.match(repository, /Transação Mongo indisponível/);
+});
+""", encoding='utf-8')
+
+          compose_path = Path('compose.test.yml')
+          compose = compose_path.read_text(encoding='utf-8')
+          old = """      - ./docs:/docs:ro
+    command: [\"npm\", \"run\", \"current-state:ci\"]
+"""
+          new = """      - ./docs:/docs:ro
+      # #923: current-state:ci deliberately re-runs the topology architecture
+      # gate inside backend-unit-runner. Its image only contains api/backend,
+      # so expose the repository-level Compose authorities read-only instead
+      # of skipping those assertions in Docker.
+      - ./compose.yml:/repo-context/compose.yml:ro
+      - ./compose.prod.yml:/repo-context/compose.prod.yml:ro
+      - ./compose.test.yml:/repo-context/compose.test.yml:ro
+    command: [\"npm\", \"run\", \"current-state:ci\"]
+"""
+          if old not in compose:
+              raise SystemExit('backend-unit-runner volume anchor not found')
+          compose_path.write_text(compose.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Validate Git diff
+        run: git diff --check
+
+      - name: Validate host architecture gate
+        run: npm --prefix api/backend ci && npm --prefix api/backend run test:architecture
+
+      - name: Validate effective Compose
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            -f compose.test.foundation.yml \
+            config --quiet
+
+      - name: Validate exact backend container gate
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            -f compose.test.foundation.yml \
+            build backend-unit-runner
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            -f compose.test.foundation.yml \
+            run --rm --no-deps backend-unit-runner
+
+      - name: Commit validated fix
+        run: |
+          git config user.name "Denise Ribeiro"
+          git config user.email "denise.ribeiro@mail.usf.edu.br"
+          git add api/backend/tests/architecture/mongo-transaction-topology.arch.test.js compose.test.yml
+          git commit -m "fix(ci): make #923 topology gate container-aware"
+          git push origin HEAD:stabilize/v2.0.0-prototype
