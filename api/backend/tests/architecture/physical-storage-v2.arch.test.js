@@ -6,6 +6,7 @@ const path = require('path');
 const { stripComments } = require('./helpers/strip-comments');
 
 const SRC_ROOT = path.resolve(__dirname, '../../src');
+const FRONTEND_SRC_ROOT = path.resolve(__dirname, '../../../../frontend/src');
 
 function walk(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -71,6 +72,30 @@ test('storage command path persists projections only through outbox service', ()
   assert.match(projection, /Neo4jOutboxService/);
   assert.match(projection, /SPECIMEN_CONTAINER_ASSIGNMENT_UPSERTED/);
   assert.match(projection, /SPECIMEN_CONTAINER_ASSIGNMENT_RELEASED/);
+});
+
+test('frontend storage contract exposes only canonical-v2 placement semantics', () => {
+  const modelsFile = path.resolve(FRONTEND_SRC_ROOT, 'types/models.ts');
+  const content = fs.readFileSync(modelsFile, 'utf8');
+
+  for (const retired of [
+    'StorageAssignmentRecord',
+    'SampleEmbeddedStorageLocation',
+    'SampleStorageLocationDTO',
+    'resolvedStorageLocation',
+    'storageAssignment',
+    'storageLocation'
+  ]) {
+    assert.strictEqual(
+      content.includes(retired),
+      false,
+      `frontend/src/types/models.ts still exposes retired storage contract ${retired}`
+    );
+  }
+
+  assert.match(content, /interface\s+CanonicalPhysicalPlacement\b/);
+  assert.match(content, /interface\s+CurrentStoragePlacementDTO\b/);
+  assert.match(content, /currentStoragePlacement\?:\s*CurrentStoragePlacementDTO\s*\|\s*null/);
 });
 
 test('retired location backfill is absent from executable tree', () => {
