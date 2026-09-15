@@ -1,6 +1,7 @@
 import api from './api';
+import type { CurrentStoragePlacementDTO } from '../types/models';
 
-const API_STORAGE_BASE = '/storage'; // Usa a baseURL do api
+const API_STORAGE_BASE = '/storage';
 
 interface ValidatePositionResponse {
   success: boolean;
@@ -13,7 +14,7 @@ interface ValidatePositionResponse {
 interface AllocateResponse {
   success: boolean;
   data?: any;
-  sampleLocation?: { position?: string };
+  currentStoragePlacement?: CurrentStoragePlacementDTO | null;
   error?: string;
   message?: string;
 }
@@ -25,9 +26,9 @@ interface ReleaseResponse {
   message?: string;
 }
 
-interface SampleLocationResponse {
+interface CurrentStoragePlacementResponse {
   success: boolean;
-  data?: any;
+  data?: CurrentStoragePlacementDTO | null;
   error?: string;
 }
 
@@ -44,48 +45,27 @@ interface FreezerTreeResponse {
 }
 
 class StorageApiService {
-  /**
-   * Buscar amostras disponíveis para alocação por termo (barcode, patientID, sampleID)
-   * Apenas retorna amostras com consentimento válido e sem localização
-   */
   async searchSamples(term: string): Promise<any> {
     try {
-      const response = await api.get(
-        `${API_STORAGE_BASE}/samples/search?q=${encodeURIComponent(term)}`
-      );
+      const response = await api.get(`${API_STORAGE_BASE}/samples/search?q=${encodeURIComponent(term)}`);
       return response.data;
     } catch (error: any) {
-      return {
-        success: false,
-        error: error.response?.data?.error || 'SEARCH_ERROR',
-        data: []
-      };
+      return { success: false, error: error.response?.data?.error || 'SEARCH_ERROR', data: [] };
     }
   }
 
-  /**
-   * Listar todos os freezers disponíveis
-   */
   async listFreezers(): Promise<FreezerTreeResponse> {
     try {
       const response = await api.get(`${API_STORAGE_BASE}/freezers`);
       return response.data;
     } catch (error: any) {
-      return {
-        success: false,
-        error: error.response?.data?.error || 'LIST_ERROR',
-      };
+      return { success: false, error: error.response?.data?.error || 'LIST_ERROR' };
     }
   }
 
-  /**
-   * Validar se uma posição está disponível
-   */
   async validatePosition(boxId: string, position: string): Promise<ValidatePositionResponse> {
     try {
-      const response = await api.get(
-        `${API_STORAGE_BASE}/validate/${boxId}/${position}`
-      );
+      const response = await api.get(`${API_STORAGE_BASE}/validate/${boxId}/${position}`);
       return response.data;
     } catch (error: any) {
       return {
@@ -97,15 +77,9 @@ class StorageApiService {
     }
   }
 
-  /**
-   * Alocar amostra a uma posição
-   */
   async allocateSample(sampleId: string, boxId: string, position: string): Promise<AllocateResponse> {
     try {
-      const response = await api.post(
-        `${API_STORAGE_BASE}/allocate`,
-        { sampleId, boxId, position }
-      );
+      const response = await api.post(`${API_STORAGE_BASE}/allocate`, { sampleId, boxId, position });
       return response.data;
     } catch (error: any) {
       return {
@@ -116,15 +90,9 @@ class StorageApiService {
     }
   }
 
-  /**
-   * Alocar amostra automaticamente na próxima posição disponível da caixa
-   */
   async autoAssignSampleToBox(sampleId: string, boxId: string): Promise<AllocateResponse> {
     try {
-      const response = await api.post(
-        `${API_STORAGE_BASE}/allocate/auto`,
-        { sampleId, boxId }
-      );
+      const response = await api.post(`${API_STORAGE_BASE}/allocate/auto`, { sampleId, boxId });
       return response.data;
     } catch (error: any) {
       return {
@@ -135,9 +103,6 @@ class StorageApiService {
     }
   }
 
-  /**
-   * Mover amostra já armazenada para uma posição específica (não necessariamente a próxima livre)
-   */
   async moveSample(
     sampleId: string,
     targetBoxId: string,
@@ -163,14 +128,9 @@ class StorageApiService {
     }
   }
 
-  /**
-   * Liberar amostra de uma posição
-   */
   async releaseSample(sampleId: string): Promise<ReleaseResponse> {
     try {
-      const response = await api.delete(
-        `${API_STORAGE_BASE}/release/${sampleId}`
-      );
+      const response = await api.delete(`${API_STORAGE_BASE}/release/${sampleId}`);
       return response.data;
     } catch (error: any) {
       return {
@@ -181,71 +141,39 @@ class StorageApiService {
     }
   }
 
-  /**
-   * Obter localização de uma amostra
-   */
-  async getSampleLocation(sampleId: string): Promise<SampleLocationResponse> {
+  async getCurrentStoragePlacement(sampleId: string): Promise<CurrentStoragePlacementResponse> {
     try {
-      const response = await api.get(
-        `${API_STORAGE_BASE}/sample/${sampleId}`
-      );
+      const response = await api.get(`${API_STORAGE_BASE}/sample/${sampleId}`);
       return response.data;
     } catch (error: any) {
-      return {
-        success: false,
-        error: error.response?.data?.error || 'LOCATION_ERROR',
-      };
+      return { success: false, error: error.response?.data?.error || 'PLACEMENT_ERROR' };
     }
   }
 
-  /**
-   * Obter posições disponíveis em uma caixa
-   */
   async getAvailablePositions(boxId: string): Promise<AvailablePositionsResponse> {
     try {
-      const response = await api.get(
-        `${API_STORAGE_BASE}/box/${boxId}/available`
-      );
+      const response = await api.get(`${API_STORAGE_BASE}/box/${boxId}/available`);
       return response.data;
     } catch (error: any) {
-      return {
-        success: false,
-        error: error.response?.data?.error || 'AVAILABLE_ERROR',
-      };
+      return { success: false, error: error.response?.data?.error || 'AVAILABLE_ERROR' };
     }
   }
 
-  /**
-   * Obter árvore hierárquica do freezer
-   */
   async getFreezerTree(freezerId: string): Promise<FreezerTreeResponse> {
     try {
-      const response = await api.get(
-        `${API_STORAGE_BASE}/freezer/${freezerId}/tree`
-      );
+      const response = await api.get(`${API_STORAGE_BASE}/freezer/${freezerId}/tree`);
       return response.data;
     } catch (error: any) {
-      return {
-        success: false,
-        error: error.response?.data?.error || 'TREE_ERROR',
-      };
+      return { success: false, error: error.response?.data?.error || 'TREE_ERROR' };
     }
   }
 
-  /**
-   * Obter estatísticas de ocupação do freezer
-   */
   async getFreezerStats(freezerId: string) {
     try {
-      const response = await api.get(
-        `${API_STORAGE_BASE}/freezer/${freezerId}/stats`
-      );
+      const response = await api.get(`${API_STORAGE_BASE}/freezer/${freezerId}/stats`);
       return response.data;
     } catch (error: any) {
-      return {
-        success: false,
-        error: error.response?.data?.error || 'STATS_ERROR',
-      };
+      return { success: false, error: error.response?.data?.error || 'STATS_ERROR' };
     }
   }
 }
