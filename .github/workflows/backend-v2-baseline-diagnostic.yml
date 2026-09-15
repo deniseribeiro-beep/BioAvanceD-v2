@@ -36,6 +36,11 @@ jobs:
       - name: Install backend dependencies
         run: npm --prefix api/backend ci
 
+      - name: Restore Rollup optional native dependency
+        run: |
+          ROLLUP_VERSION=$(node -p "require('./api/backend/node_modules/rollup/package.json').version")
+          npm --prefix api/backend install --no-save --package-lock=false "@rollup/rollup-linux-x64-gnu@$ROLLUP_VERSION"
+
       - name: Full Vitest baseline
         id: full
         continue-on-error: true
@@ -98,7 +103,7 @@ jobs:
             '## Baseline real da reconciliação backend v2',
             '',
             `- SHA medido: \`${process.env.GITHUB_SHA}\``,
-            '- mudança neste SHA: somente adição do workflow diagnóstico de baseline; nenhum arquivo de backend/modelagem foi alterado em relação ao HEAD inicial `f05d64f451210642a072742a30602a7c3a855a06`.',
+            '- mudança neste SHA: somente ajuste do workflow diagnóstico de baseline; nenhum arquivo de backend/modelagem foi alterado em relação ao HEAD inicial `f05d64f451210642a072742a30602a7c3a855a06`.',
             '- branch: `stabilize/v2.0.0-prototype`',
             `- Full Vitest outcome: **${process.env.FULL_OUTCOME || 'unknown'}**`,
             `- Architecture outcome: **${process.env.ARCH_OUTCOME || 'unknown'}**`,
