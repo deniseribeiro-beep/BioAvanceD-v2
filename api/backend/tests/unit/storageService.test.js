@@ -290,7 +290,16 @@ describe('StorageService.autoAssignSampleToBox', () => {
       // `client` is what a real `MongoClient.db()` exposes, and it is what
       // `utils/mongoTransaction.js` and `MongoStorageRepository.withTransaction`
       // both derive the session from (`db?.client || db?.s?.client`).
-      client: { startSession: vi.fn(() => makeSession()) }
+      // #923: default write-path fixture is explicitly transaction-capable.
+      // Standalone/unknown cases override the hello probe in their own tests.
+      client: {
+        db: vi.fn((name) => (
+          name === 'admin'
+            ? { command: vi.fn().mockResolvedValue({ setName: 'rs0', isWritablePrimary: true }) }
+            : undefined
+        )),
+        startSession: vi.fn(() => makeSession())
+      }
     });
     service = new StorageService(db);
   });
@@ -730,29 +739,22 @@ describe('StorageService.autoAssignSampleToBox', () => {
       expect(db.client.startSession).not.toHaveBeenCalled();
     });
 
-    it('does NOT refuse when the topology cannot be determined (hello throws) -- unknown proceeds, matching isKnownStandaloneDeployment\'s asymmetry', async () => {
+    it('refuses when the topology cannot be determined (hello throws) -- unknown is fail-closed', async () => {
       const boxId = new ObjectId();
       const specimenId = new ObjectId();
       const helloCommand = vi.fn().mockRejectedValue(new Error('not authorized on admin to execute command'));
-      // #994: SPREAD, do not replace. A real MongoClient carries both db() and
-      // startSession(); the transaction path now derives its session from
-      // db.client.startSession, so clobbering the whole client here would
-      // remove the very thing under test and fail for the wrong reason.
+      // #923: absence of proof of a transaction-capable topology is unsafe for
+      // custody/audit/outbox writes. The service must stop before reads/session.
       db.client = { ...db.client, db: vi.fn((name) => (name === 'admin' ? { command: helloCommand } : undefined)) };
-
-      boxesFindOne.mockResolvedValue({
-        _id: boxId,
-        name: 'Box A',
-        dimension: { rows: 1, cols: 1 },
-        occupancyGrid: {},
-        currentOccupancy: 0
-      });
-      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
 
       const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
-      expect(result.success).toBe(true);
-      expect(result.sampleLocation.position).toBe('A1');
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('AUTO_ASSIGNMENT_ERROR');
+      expect(result.message).toMatch(/não é um replica set nem mongos/);
+      expect(boxesFindOne).not.toHaveBeenCalled();
+      expect(samplesFindOne).not.toHaveBeenCalled();
+      expect(db.client.startSession).not.toHaveBeenCalled();
     });
 
     it('does NOT refuse when the topology is a replica set (setName present)', async () => {
