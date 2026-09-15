@@ -575,14 +575,10 @@ router.get('/:id/label', authenticate, requireOrganizationScope, async (req, res
 
     const samplesCollection = await getCollection(db, 'samples');
     const rawId = String(req.params.id);
-    const numericId = Number(rawId);
     const sample = await samplesCollection.findOne({
       $or: [
         ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
         { specimenId: rawId },
-        ...(Number.isFinite(numericId) ? [{ sampleID: numericId }] : []),
-        { sampleID: rawId },
-        { sampleId: rawId },
         { barcode: rawId },
       ],
     });
@@ -601,7 +597,7 @@ router.get('/:id/label', authenticate, requireOrganizationScope, async (req, res
       });
     }
 
-    const sampleIdentifier = escapeXml(String(sample.sampleID || sample._id || req.params.id));
+    const sampleIdentifier = escapeXml(String(sample.specimenId || sample._id || req.params.id));
     const barcode = escapeXml(String(sample.barcode || sampleIdentifier));
     const title = escapeXml(String(sample.sampleType || 'AMOSTRA').slice(0, 32));
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="378" height="189" viewBox="0 0 378 189">
@@ -639,14 +635,10 @@ router.get('/:id/label/print-job', authenticate, requireOrganizationScope, async
 
     const samplesCollection = await getCollection(db, 'samples');
     const rawId = String(req.params.id);
-    const numericId = Number(rawId);
     const sample = await samplesCollection.findOne({
       $or: [
         ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
         { specimenId: rawId },
-        ...(Number.isFinite(numericId) ? [{ sampleID: numericId }] : []),
-        { sampleID: rawId },
-        { sampleId: rawId },
         { barcode: rawId },
       ],
     });
@@ -672,7 +664,7 @@ router.get('/:id/label/print-job', authenticate, requireOrganizationScope, async
       });
     }
 
-    const sampleIdentifier = String(sample.sampleID ?? sample._id);
+    const sampleIdentifier = String(sample.specimenId ?? sample._id);
     const storageRepository = new MongoStorageRepository(db);
     const placementResult = await storageRepository.getSamplePhysicalPlacement({
       specimenId: sample.specimenId || sample._id
@@ -726,14 +718,10 @@ router.post('/labels/batch', authenticate, requireOrganizationScope, async (req,
     const results = await Promise.all(specimenIds.map(async (rawId) => {
       const id = String(rawId);
       try {
-        const numericId = Number(id);
         const sample = await samplesCollection.findOne({
           $or: [
             ...(ObjectId.isValid(id) ? [{ _id: new ObjectId(id) }] : []),
             { specimenId: id },
-            ...(Number.isFinite(numericId) ? [{ sampleID: numericId }] : []),
-            { sampleID: id },
-            { sampleId: id },
             { barcode: id },
           ],
         });
