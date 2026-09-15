@@ -2,14 +2,21 @@ import type { Sample } from '../../types/models';
 
 export type TranslatorFn = (key: string, fallback?: string) => string;
 
-// #517: reads the batched resolvedStorageLocation GET /samples now embeds
-// per sample (same SampleStorageLocationDTO shape GET /storage/sample/:sampleId
-// returns), instead of the legacy sample.storageLocation embedded field.
 export function getStorageLabel(sample: Sample, t: TranslatorFn) {
-  const resolvedLocation = sample.resolvedStorageLocation;
-  const boxName = resolvedLocation?.box?.boxName ? String(resolvedLocation.box.boxName) : '';
-  const position = resolvedLocation?.box?.position ? String(resolvedLocation.box.position) : '';
-  const path = resolvedLocation?.path && resolvedLocation.path !== 'N/A' ? String(resolvedLocation.path) : '';
+  const placement = sample.currentStoragePlacement;
+  const boxName = placement?.box?.boxName
+    ? String(placement.box.boxName)
+    : placement?.boxName
+      ? String(placement.boxName)
+      : placement?.boxId
+        ? String(placement.boxId)
+        : '';
+  const position = placement?.box?.position
+    ? String(placement.box.position)
+    : placement?.positionCode
+      ? String(placement.positionCode)
+      : '';
+  const path = placement?.path && placement.path !== 'N/A' ? String(placement.path) : '';
 
   if (!boxName && !path && !position) {
     return t('samples.storage.awaiting', 'Aguardando Armazenagem');
@@ -30,12 +37,6 @@ export function getStorageLabel(sample: Sample, t: TranslatorFn) {
   return t('samples.storage.definedBox', 'Caixa definida');
 }
 
-// #517/#518: reads the batched currentSpecimenPreanalytics GET /samples now
-// embeds per sample (sealed-pinned if set, else newest — see
-// specimen-preanalytics.service.js's getCurrentProfilesForSpecimens),
-// instead of the legacy embedded sample.sprec object. Shared by the list
-// view (SamplesPageView) and the details view (SampleDetailsPage) — both
-// source their `samples` array from the same GET /samples call.
 export function buildSprecSummary(sample: Sample, t: TranslatorFn) {
   const profile = sample.currentSpecimenPreanalytics;
   if (!profile) {
@@ -54,10 +55,6 @@ export function buildSprecSummary(sample: Sample, t: TranslatorFn) {
   return `${t('samples.sprec.prefix', 'SPREC')} ${code}`;
 }
 
-// #518 (SampleDetailsPage.tsx's per-axis SPREC breakdown, the sibling
-// migration to buildSprecSummary above): same currentSpecimenPreanalytics
-// source, formatted as one `Label:value` pair per SPREC axis instead of a
-// single dash-joined code.
 export function buildSprecAxisSummary(sample: Sample, t: TranslatorFn) {
   const profile = sample.currentSpecimenPreanalytics;
   const notAvailable = t('common.notAvailable', 'N/A');
