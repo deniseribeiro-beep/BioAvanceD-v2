@@ -709,6 +709,10 @@ services:
       # /docs/docs-7-27-2026/extracted/dict-02_DICIONARIO.md. Hence /docs,
       # not /app/docs -- mounting it under the workdir would not be found.
       - ./docs:/docs:ro
+      # #923: keep repository topology assertions active inside backend-unit-runner.
+      - ./compose.yml:/repo-context/compose.yml:ro
+      - ./compose.prod.yml:/repo-context/compose.prod.yml:ro
+      - ./compose.test.yml:/repo-context/compose.test.yml:ro
     command: ["npm", "run", "current-state:ci"]
     depends_on:
       mongodb-test:
