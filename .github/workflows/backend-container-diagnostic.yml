@@ -1,0 +1,46 @@
+name: BioAvanceD backend container diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - stabilize/v2.0.0-prototype
+
+permissions:
+  contents: read
+
+jobs:
+  backend-container-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build backend unit runner
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            -f compose.test.foundation.yml \
+            build backend-unit-runner
+
+      - name: Run backend container gate with captured output
+        id: backend_gate
+        shell: bash
+        run: |
+          set -o pipefail
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            -f compose.test.foundation.yml \
+            run --rm --no-deps backend-unit-runner 2>&1 | tee backend-container-gate.log
+
+      - name: Upload backend gate output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-container-gate-diagnostic
+          path: backend-container-gate.log
+          if-no-files-found: error
+          retention-days: 2
