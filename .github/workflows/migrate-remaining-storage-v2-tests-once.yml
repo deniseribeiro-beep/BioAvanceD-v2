@@ -1,0 +1,34 @@
+name: Remaining storage v2 test migration
+
+on:
+  push:
+    branches:
+      - stabilize/v2.0.0-prototype
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: stabilize/v2.0.0-prototype
+          fetch-depth: 0
+      - name: Migrate remaining storage tests
+        run: python3 scripts/maintenance/migrate_remaining_storage_v2_tests.py
+      - name: Install backend dependencies
+        working-directory: api/backend
+        run: npm ci
+      - name: Run targeted storage-adjacent tests
+        working-directory: api/backend
+        run: npx vitest run tests/unit/intakeWizard.routes.test.js tests/unit/import-lgpd.service.importSamples.unit.test.js
+      - name: Commit migration
+        run: |
+          git config user.name "BioAvanceD CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "test(v2): migrate remaining canonical storage coverage"
+          git push origin HEAD:stabilize/v2.0.0-prototype
