@@ -3,6 +3,38 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
+const allocateSampleUseCasePath = require.resolve('../../src/core/use-cases/AllocateSampleUseCase');
+const mongoStorageRepositoryPath = require.resolve('../../src/infrastructure/persistence/mongo/MongoStorageRepository');
+
+let currentCanonicalPlacement = null;
+let currentAllocateExecute = vi.fn(async () => ({
+  success: true,
+  currentStoragePlacement: currentCanonicalPlacement,
+  lineageQueued: true,
+  lineageEventId: 'evt-create-allocation'
+}));
+let currentFindCurrentStoragePlacement = vi.fn(async () => currentCanonicalPlacement);
+
+function StableAllocateSampleUseCase() {
+  this.execute = (...args) => currentAllocateExecute(...args);
+}
+function StableMongoStorageRepository() {
+  this.findCurrentStoragePlacement = (...args) => currentFindCurrentStoragePlacement(...args);
+}
+
+require.cache[allocateSampleUseCasePath] = {
+  id: allocateSampleUseCasePath,
+  filename: allocateSampleUseCasePath,
+  loaded: true,
+  exports: StableAllocateSampleUseCase
+};
+require.cache[mongoStorageRepositoryPath] = {
+  id: mongoStorageRepositoryPath,
+  filename: mongoStorageRepositoryPath,
+  loaded: true,
+  exports: StableMongoStorageRepository
+};
+
 const sampleService = require('../../src/services/sample.service');
 const qualityDomain = require('../../src/services/quality-domain.service');
 const { ObjectId } = require('mongodb');
@@ -94,7 +126,6 @@ function makeDb(overrides = {}) {
     patients: makeCollection('patients'),
     storageBoxes: makeCollection('storageBoxes'),
     storageContainers: makeCollection('storageContainers'),
-    storageAssignments: makeCollection('storageAssignments'),
     results: makeCollection('results'),
     ...overrides
   };
@@ -152,20 +183,11 @@ function mockOperationalStorage(db) {
     storageContainers: { findOne: vi.fn((query) => Promise.resolve(containersById.get(String(query._id)) || null)) },
     equipment: { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1' }) },
     sensors: { findOne: vi.fn().mockResolvedValue({ status: 'ok' }) },
-    // #474: AllocateSampleUseCase's openStorageAssignment resolves hierarchy
-    // via storagePaths (not the parent_id walk resolveStorageHierarchyForBox
-    // still uses for the pre-allocation equipment/sensor gate above).
+    // The allocation use case resolves governed layout hierarchy from
+    // storagePaths while physical custody itself is persisted by the normalized v2 chain.
     storagePaths: {
       findOne: vi.fn().mockResolvedValue({ boxId: BOX_ID, rackId: RACK_ID, shelfId: SHELF_ID, freezerId: FREEZER_ID })
-    },
-    // #507: AllocateSampleUseCase's findSampleById resolves the canonical
-    // storageAssignment via findOne before the position is even open — no
-    // open assignment exists yet at create time, so this stays null.
-    storageAssignments: {
-      insertOne: vi.fn().mockResolvedValue({ insertedId: 'assignment-1' }),
-      findOne: vi.fn().mockResolvedValue(null)
-    }
-  };
+    },  };
 
   db.collection.mockImplementation((name) => {
     if (mocked[name]) return mocked[name];
@@ -179,7 +201,7 @@ function mockOperationalStorage(db) {
   // null (the default from makeCollection) unless a test overrides them.
   db.collections.samples.findOne.mockImplementation((query) => {
     if (query && query._id !== undefined) {
-      return Promise.resolve({ _id: query._id, barcode: null, storageLocation: null });
+      return Promise.resolve({ _id: query._id, specimenId: String(query._id), barcode: null });
     }
     return Promise.resolve(null);
   });
@@ -188,6 +210,20 @@ function mockOperationalStorage(db) {
 describe('sample.service', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    currentCanonicalPlacement = {
+      specimenId: '555001',
+      boxId: BOX_ID.toString(),
+      positionCode: 'A1',
+      storageRackId: RACK_ID.toString(),
+      storagePositionId: `${RACK_ID}:A1`
+    };
+    currentAllocateExecute = vi.fn(async () => ({
+      success: true,
+      currentStoragePlacement: currentCanonicalPlacement,
+      lineageQueued: true,
+      lineageEventId: 'evt-create-allocation'
+    }));
+    currentFindCurrentStoragePlacement = vi.fn(async () => currentCanonicalPlacement);
   });
 
   afterEach(() => {
@@ -205,76 +241,65 @@ describe('sample.service', () => {
       expect(result._id).toBe('generated-id');
       expect(result.barcode).toBe('BR-TEST-001');
       expect(db.collections.samples.insertOne).toHaveBeenCalledTimes(1);
-      // #474: AllocateSampleUseCase's audit repository appends its own
-      // 'allocate' movement to the same ledger, alongside the birth
-      // 'create' movement createSample already wrote — two inserts, not one.
-      expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(2);
-      const movementTypes = db.collections.sample_movements.insertOne.mock.calls.map(([arg]) => arg.type);
-      expect(movementTypes).toEqual(['create', 'allocate']);
+      // This unit isolates SampleService: the canonical allocation use case is
+      // doubled here and its own immutable audit/outbox behavior is covered
+      // by AllocateSampleUseCase + storage integration tests.
+      expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
       const [movementArg] = db.collections.sample_movements.insertOne.mock.calls[0];
       expect(movementArg.type).toBe('create');
       expect(movementArg.destination).toBe(`storage:${BOX_ID.toString()}:A1`);
     });
 
-    it('persists the resolved storageLocation (boxId/positionCode) on the created sample, per issue #462', async () => {
+    it('keeps physical custody out of the Sample document and exposes currentStoragePlacement as a read model', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
-
-      await sampleService.createSample(db, validSampleData({ positionCode: 'B2' }));
-
-      const [insertedSample] = db.collections.samples.insertOne.mock.calls[0];
-      expect(insertedSample.storageLocation).toEqual({ boxId: BOX_ID, position: 'B2' });
-      expect(insertedSample.locationID).toBeNull();
-    });
-
-    it('exposes the canonical storageAssignment on the response, resolved from the just-opened StorageAssignment record, per issue #510', async () => {
-      const db = makeDb();
-      mockOperationalStorage(db);
-      const baseImplementation = db.collection.getMockImplementation();
-      const opened = { specimenId: 'generated-id', boxId: BOX_ID, positionCode: 'B2', removedAt: null };
-      const storageAssignmentsFindOne = vi.fn(({ specimenId, removedAt }) => {
-        if (specimenId === opened.specimenId && removedAt === null) {
-          return Promise.resolve(opened);
-        }
-        return Promise.resolve(null);
-      });
-      // Override just storageAssignments.findOne with real query-matching
-      // semantics, keeping mockOperationalStorage's other storage-chain mocks.
-      db.collection.mockImplementation((name) => {
-        if (name === 'storageAssignments') {
-          return { insertOne: vi.fn().mockResolvedValue({ insertedId: 'assignment-1' }), findOne: storageAssignmentsFindOne };
-        }
-        return baseImplementation(name);
-      });
+      currentCanonicalPlacement = {
+        specimenId: '555001',
+        boxId: BOX_ID.toString(),
+        positionCode: 'B2',
+        storageRackId: RACK_ID.toString(),
+        storagePositionId: `${RACK_ID}:B2`
+      };
 
       const result = await sampleService.createSample(db, validSampleData({ positionCode: 'B2' }));
+      const [insertedSample] = db.collections.samples.insertOne.mock.calls[0];
 
-      expect(result.storageAssignment).toEqual(opened);
-      expect(result.storageLocation).toEqual({ boxId: BOX_ID, position: 'B2' });
+      expect(insertedSample.currentStoragePlacement).toBeUndefined();
+      expect(result.currentStoragePlacement).toEqual(currentCanonicalPlacement);
+      expect(result.locationID).toBeUndefined();
     });
 
-    it('opens a StorageAssignment for the specimen at boxId/positionCode, per issue #462/#474', async () => {
+    it('delegates initial physical custody to AllocateSampleUseCase using the canonical box/position command', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
+      currentCanonicalPlacement = {
+        specimenId: '555001',
+        boxId: BOX_ID.toString(),
+        positionCode: 'B2',
+        storageRackId: RACK_ID.toString(),
+        storagePositionId: `${RACK_ID}:B2`
+      };
 
-      const result = await sampleService.createSample(db, validSampleData());
+      await sampleService.createSample(db, validSampleData({ positionCode: 'B2' }), {
+        auditInfo: { userId: 'user-1', userName: 'Tester', userRole: 'Coordenador' }
+      });
 
-      const storageAssignments = db.collection('storageAssignments');
-      expect(storageAssignments.insertOne).toHaveBeenCalledTimes(1);
-      const [assignmentArg] = storageAssignments.insertOne.mock.calls[0];
-      // #474: routed through AllocateSampleUseCase/MongoStorageRepository's
-      // openStorageAssignment, which resolves the hierarchy via storagePaths
-      // (mocked above) rather than sample.service.js's own parent_id walk —
-      // fields come back as strings (StorageAssignmentModel.open casts them).
-      expect(assignmentArg).toMatchObject({
+      expect(currentAllocateExecute).toHaveBeenCalledWith(expect.objectContaining({
         specimenId: 'generated-id',
         boxId: BOX_ID.toString(),
-        positionCode: 'A1',
-        equipmentId: String(FREEZER_ID),
-        shelfId: String(SHELF_ID),
-        rackId: String(RACK_ID),
-        occupancyStatus: 'ocupada'
-      });
+        position: 'B2',
+        actor: expect.objectContaining({ userId: 'user-1', userName: 'Tester', userRole: 'Coordenador' })
+      }));
+      expect(currentFindCurrentStoragePlacement).toHaveBeenCalledWith('555001');
+    });
+
+    it('removes the newborn Sample when canonical allocation fails instead of leaving split custody state', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      currentAllocateExecute = vi.fn(async () => { throw new Error('STORAGE_COLLISION: position occupied'); });
+
+      await expect(sampleService.createSample(db, validSampleData())).rejects.toMatchObject({ statusCode: 409 });
+      expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
     });
 
     it('rejects with 422 when required MIABIS fields are missing', async () => {
@@ -567,7 +592,7 @@ describe('sample.service', () => {
       ).rejects.toThrow(/Sensor atual está em status maintenance/);
     });
 
-    it('does not persist a client-supplied legacy location object (#400 — severed in favor of storageLocation/storageBoxes)', async () => {
+    it('does not persist a client-supplied legacy location object (#400 — canonical placement is normalized outside Sample)', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
       const location = { freezer: 'F1', rack: 'R1', box: 'B1', position: 'A1' };
