@@ -1,5 +1,6 @@
 const { ObjectId } = require('mongodb');
 const { getCollection } = require('../../../utils/collectionResolver');
+const NormalizedPhysicalStorageStore = require('./NormalizedPhysicalStorageStore');
 
 class MongoStorageTopologyReadRepository {
   /**
@@ -188,11 +189,17 @@ class MongoStorageTopologyReadRepository {
   }
 
   /**
+   * Validates the denormalized StorageBox occupancy cache against the
+   * authoritative canonical-v2 custody chain. The box grid remains a layout
+   * acceleration structure; it is never accepted as specimen placement
+   * authority.
+   *
    * @param {{ boxId: string }} input
    */
   async checkBoxIntegrity(input) {
     const storageBoxesCollection = this.db.collection('storageBoxes');
     const samplesCollection = await getCollection(this.db, 'samples');
+    const physicalStore = new NormalizedPhysicalStorageStore(this.db);
 
     const boxObjId = this.toObjectId(input.boxId);
     const box = await storageBoxesCollection.findOne({ _id: boxObjId });
@@ -207,25 +214,35 @@ class MongoStorageTopologyReadRepository {
     let actualCount = 0;
     const occupancyGrid = box.occupancyGrid || {};
 
-    for (const [position, specimenId] of Object.entries(occupancyGrid)) {
-      if (!specimenId) continue;
+    for (const [position, specimenRef] of Object.entries(occupancyGrid)) {
+      if (!specimenRef) continue;
       actualCount += 1;
 
-      const normalizedSampleId = this.toObjectId(specimenId);
+      const normalizedSampleId = this.toObjectId(specimenRef);
       const sample = await samplesCollection.findOne({ _id: normalizedSampleId });
 
       if (!sample) {
-        errors.push(`Orfão: posição ${position} referencia amostra inexistente ${specimenId}`);
+        errors.push(`Orfão: posição ${position} referencia amostra inexistente ${specimenRef}`);
+        continue;
+      }
+
+      const canonicalSpecimenId = sample.specimenId || sample._id;
+      const placement = await physicalStore.findCurrentBySpecimen(canonicalSpecimenId);
+      if (!placement) {
+        errors.push(
+          `Inconsistência: Box referencia ${specimenRef} em ${position}, ` +
+          'mas não existe posicionamento físico canônico ativo'
+        );
         continue;
       }
 
       if (
-        sample.storageLocation?.boxId?.toString() !== boxObjId.toString() ||
-        sample.storageLocation?.position !== position
+        String(placement.boxId) !== String(boxObjId) ||
+        String(placement.positionCode).toUpperCase() !== String(position).toUpperCase()
       ) {
         errors.push(
-          `Inconsistência: Box referencia ${specimenId} em ${position}, ` +
-          `mas amostra aponta para ${sample.storageLocation?.boxId}/${sample.storageLocation?.position}`
+          `Inconsistência: Box referencia ${specimenRef} em ${position}, ` +
+          `mas a cadeia canônica aponta para ${placement.boxId}/${placement.positionCode}`
         );
       }
     }
