@@ -18,7 +18,7 @@ jobs:
           ref: stabilize/v2.0.0-prototype
           fetch-depth: 0
       - name: Migrate remaining storage tests
-        run: python3 scripts/maintenance/migrate_remaining_storage_v2_tests.py
+        run: python3 scripts/maintenance/migrate_remaining_storage_v2_tests_v2.py
       - name: Install backend dependencies
         working-directory: api/backend
         run: npm ci
