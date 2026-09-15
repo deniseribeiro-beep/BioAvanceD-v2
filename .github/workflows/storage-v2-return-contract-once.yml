@@ -1,4 +1,4 @@
-name: Storage v2 return contract once
+name: Storage v2 canonical placement migration
 
 on:
   push:
@@ -10,81 +10,19 @@ permissions:
 
 jobs:
   migrate:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout branch
+        uses: actions/checkout@v4
         with:
           ref: stabilize/v2.0.0-prototype
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Normalize auto-allocation return contract
-        shell: bash
+          fetch-depth: 0
+      - name: Apply canonical placement migration
+        run: python3 scripts/maintenance/storage_v2_return_migration.py
+      - name: Commit migration
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          repo = Path('api/backend/src/infrastructure/persistence/mongo/MongoStorageRepository.js')
-          text = repo.read_text(encoding='utf-8')
-          start = text.index('  async autoAssignSamplePosition(')
-          end = text.index('\n  async ', start + 10)
-          block = text[start:end]
-          pattern = re.compile(r"await this\.assignCanonicalPhysicalPlacement\(\{\s*specimenId: sample\.specimenId \|\| sample\._id,\s*boxId: boxObjId,\s*positionCode: position\s*\}, session\);\s*return position;", re.S)
-          block2, count = pattern.subn("return this.assignCanonicalPhysicalPlacement({\n      specimenId: sample.specimenId || sample._id,\n      boxId: boxObjId,\n      positionCode: position\n    }, session);", block)
-          if count != 1:
-              raise SystemExit(f'autoAssign canonical return replacement count={count}')
-          repo.write_text(text[:start] + block2 + text[end:], encoding='utf-8')
-
-          service = Path('api/backend/src/services/storageService.js')
-          text = service.read_text(encoding='utf-8')
-          start = text.index('  async autoAssignSampleToBox(')
-          end = text.index('\n  async releaseSampleFromPosition(', start)
-          block = text[start:end]
-          pairs = [
-            ('let assignedPosition = null;', 'let currentStoragePlacement = null;'),
-            ('assignedPosition = await this.storageRepository.autoAssignSamplePosition(', 'currentStoragePlacement = await this.storageRepository.autoAssignSamplePosition('),
-            ('position: assignedPosition', 'position: currentStoragePlacement.positionCode'),
-            ('/${assignedPosition}`', '/${currentStoragePlacement.positionCode}`'),
-          ]
-          for before, after in pairs:
-              if before not in block:
-                  raise SystemExit(f'missing service token: {before}')
-              block = block.replace(before, after)
-          block, count = re.subn(
-              r"sampleLocation:\s*\{\s*specimenId:\s*String\(sampleObjId\),\s*boxId:\s*String\(boxObjId\),\s*position:\s*currentStoragePlacement\.positionCode\s*\}",
-              'currentStoragePlacement',
-              block,
-              flags=re.S
-          )
-          if count != 1:
-              raise SystemExit(f'service return replacement count={count}')
-          service.write_text(text[:start] + block + text[end:], encoding='utf-8')
-
-          controller = Path('api/backend/src/interface/controllers/auto-assign-sample.controller.js')
-          text = controller.read_text(encoding='utf-8')
-          pattern = re.compile(r"return res\.status\(201\)\.json\(\{\s*success: true,\s*data: result\.sampleLocation,\s*message: `Amostra alocada automaticamente na Posição \$\{result\.sampleLocation\.position\}`,\s*projectionQueued: result\.projectionQueued === true,\s*projectionEventId: result\.projectionEventId \|\| null\s*\}\);", re.S)
-          replacement = """const currentStoragePlacement = result.currentStoragePlacement || null;
-      return res.status(201).json({
-        success: true,
-        data: currentStoragePlacement,
-        currentStoragePlacement,
-        message: currentStoragePlacement?.positionCode
-          ? `Amostra alocada automaticamente na Posição ${currentStoragePlacement.positionCode}`
-          : 'Amostra alocada automaticamente',
-        projectionQueued: result.projectionQueued === true,
-        projectionEventId: result.projectionEventId || null
-      });"""
-          text2, count = pattern.subn(replacement, text)
-          if count != 1:
-              raise SystemExit(f'controller response replacement count={count}')
-          controller.write_text(text2, encoding='utf-8')
-          PY
-      - name: Commit canonical return contract and remove one-shot workflow
-        shell: bash
-        run: |
-          rm .github/workflows/storage-v2-return-contract-once.yml
           git config user.name "BioAvanceD CI"
           git config user.email "actions@users.noreply.github.com"
-          git add api/backend/src/infrastructure/persistence/mongo/MongoStorageRepository.js api/backend/src/services/storageService.js api/backend/src/interface/controllers/auto-assign-sample.controller.js .github/workflows/storage-v2-return-contract-once.yml
+          git add -A
           git commit -m "refactor(v2): return canonical auto-allocation placement"
           git push origin HEAD:stabilize/v2.0.0-prototype
