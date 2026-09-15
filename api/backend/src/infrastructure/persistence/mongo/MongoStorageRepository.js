@@ -421,12 +421,11 @@ class MongoStorageRepository {
       { $set: { updatedAt: new Date() } },
       { session }
     );
-    await this.assignCanonicalPhysicalPlacement({
+    return this.assignCanonicalPhysicalPlacement({
       specimenId: sample.specimenId || sample._id,
       boxId: boxObjId,
       positionCode: position
     }, session);
-    return position;
   }
 
   async moveSamplePosition(input, session) {

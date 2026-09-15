@@ -84,7 +84,7 @@ class StorageService {
         };
       }
 
-      let assignedPosition = null;
+      let currentStoragePlacement = null;
       let projectionEventId = null;
 
       await this.storageRepository.withTransaction(async (session) => {
@@ -98,7 +98,7 @@ class StorageService {
           requireEthicalConsent: true
         }, session);
 
-        assignedPosition = await this.storageRepository.autoAssignSamplePosition(
+        currentStoragePlacement = await this.storageRepository.autoAssignSamplePosition(
           { specimenId: sampleObjId, boxId: boxObjId },
           session
         );
@@ -110,7 +110,7 @@ class StorageService {
           eventType: 'auto_allocate',
           before: { physicalStorage: null },
           after: {
-            physicalStorage: { boxId: String(boxObjId), position: assignedPosition }
+            physicalStorage: { boxId: String(boxObjId), position: currentStoragePlacement.positionCode }
           },
           context: { actor: { userName: 'SYSTEM' } },
           timestamp: happenedAt
@@ -121,7 +121,7 @@ class StorageService {
           barcode: freshSample.barcode || null,
           eventType: 'auto_allocate',
           from: null,
-          to: { boxId: String(boxObjId), position: assignedPosition },
+          to: { boxId: String(boxObjId), position: currentStoragePlacement.positionCode },
           actorId: null,
           reason: 'auto_allocate',
           happenedAt
@@ -129,17 +129,13 @@ class StorageService {
         projectionEventId = projection?.eventId || null;
       });
 
-      logger.info(`✅ Alocação inteligente realizada para amostra ${specimenId} em ${boxId}/${assignedPosition}`);
+      logger.info(`✅ Alocação inteligente realizada para amostra ${specimenId} em ${boxId}/${currentStoragePlacement.positionCode}`);
 
       return {
         success: true,
         projectionQueued: true,
         projectionEventId,
-        sampleLocation: {
-          specimenId: String(sampleObjId),
-          boxId: String(boxObjId),
-          position: assignedPosition
-        }
+        currentStoragePlacement
       };
     } catch (error) {
       logger.error('[Storage] Erro na alocação inteligente:', error);

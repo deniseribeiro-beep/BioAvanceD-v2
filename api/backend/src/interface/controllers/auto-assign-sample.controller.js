@@ -40,10 +40,14 @@ function createAutoAssignSampleController() {
         });
       }
 
+      const currentStoragePlacement = result.currentStoragePlacement || null;
       return res.status(201).json({
         success: true,
-        data: result.sampleLocation,
-        message: `Amostra alocada automaticamente na Posição ${result.sampleLocation.position}`,
+        data: currentStoragePlacement,
+        currentStoragePlacement,
+        message: currentStoragePlacement?.positionCode
+          ? `Amostra alocada automaticamente na Posição ${currentStoragePlacement.positionCode}`
+          : 'Amostra alocada automaticamente',
         projectionQueued: result.projectionQueued === true,
         projectionEventId: result.projectionEventId || null
       });
