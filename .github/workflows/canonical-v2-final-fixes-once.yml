@@ -1,0 +1,59 @@
+name: Canonical v2 final fixes once
+
+on:
+  push:
+    branches:
+      - stabilize/v2.0.0-prototype
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: stabilize/v2.0.0-prototype
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply final canonical-v2 route fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          sample = Path('api/backend/src/interface/routes/sample.routes.js')
+          text = sample.read_text(encoding='utf-8')
+
+          old_raw = """    const rawId = String(req.params.id);\n    const numericId = Number(rawId);\n    const sample = await samplesCollection.findOne({\n      $or: [\n        ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),\n        { specimenId: rawId },\n        ...(Number.isFinite(numericId) ? [{ sampleID: numericId }] : []),\n        { sampleID: rawId },\n        { sampleId: rawId },\n        { barcode: rawId },\n      ],\n    });"""
+          new_raw = """    const rawId = String(req.params.id);\n    const sample = await samplesCollection.findOne({\n      $or: [\n        ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),\n        { specimenId: rawId },\n        { barcode: rawId },\n      ],\n    });"""
+          if text.count(old_raw) != 2:
+              raise SystemExit(f'expected 2 label-route legacy query blocks, found {text.count(old_raw)}')
+          text = text.replace(old_raw, new_raw)
+
+          old_batch = """      try {\n        const numericId = Number(id);\n        const sample = await samplesCollection.findOne({\n          $or: [\n            ...(ObjectId.isValid(id) ? [{ _id: new ObjectId(id) }] : []),\n            { specimenId: id },\n            ...(Number.isFinite(numericId) ? [{ sampleID: numericId }] : []),\n            { sampleID: id },\n            { sampleId: id },\n            { barcode: id },\n          ],\n        });"""
+          new_batch = """      try {\n        const sample = await samplesCollection.findOne({\n          $or: [\n            ...(ObjectId.isValid(id) ? [{ _id: new ObjectId(id) }] : []),\n            { specimenId: id },\n            { barcode: id },\n          ],\n        });"""
+          if text.count(old_batch) != 1:
+              raise SystemExit(f'expected 1 batch legacy query block, found {text.count(old_batch)}')
+          text = text.replace(old_batch, new_batch)
+          text = text.replace("String(sample.sampleID || sample._id || req.params.id)", "String(sample.specimenId || sample._id || req.params.id)")
+          text = text.replace("String(sample.sampleID ?? sample._id)", "String(sample.specimenId ?? sample._id)")
+          sample.write_text(text, encoding='utf-8')
+
+          rbac = Path('api/backend/tests/architecture/rbac-actions.arch.test.js')
+          rbac_text = rbac.read_text(encoding='utf-8')
+          old_key = "'interface/routes/intakeWizard.routes.js:203'"
+          new_key = "'interface/routes/intakeWizard.routes.js:188'"
+          if rbac_text.count(old_key) != 1:
+              raise SystemExit(f'expected exactly one stale intake subrouter key, found {rbac_text.count(old_key)}')
+          rbac.write_text(rbac_text.replace(old_key, new_key), encoding='utf-8')
+
+      - name: Commit fixes and remove this workflow
+        shell: bash
+        run: |
+          rm .github/workflows/canonical-v2-final-fixes-once.yml
+          git config user.name "BioAvanceD CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add api/backend/src/interface/routes/sample.routes.js api/backend/tests/architecture/rbac-actions.arch.test.js .github/workflows/canonical-v2-final-fixes-once.yml
+          git commit -m "fix(v2): remove retired sample identity filters"
+          git push origin HEAD:stabilize/v2.0.0-prototype
