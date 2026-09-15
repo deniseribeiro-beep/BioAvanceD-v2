@@ -1,0 +1,246 @@
+name: Backend v2 historical test parity
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - stabilize/v2.0.0-prototype
+    paths:
+      - .github/workflows/backend-v2-parity-diagnostic.yml
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  parity:
+    name: Build 048578e4/308e09d2 test parity matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build structural parity matrix
+        env:
+          BASELINE_048: 048578e4c5d9d4c7f868c331076a10fc4f03a6c0
+          BASELINE_308: 308e09d210de414da85c6eb2c6c4af05d803b1a2
+        run: |
+          python - <<'PY'
+          import csv
+          import os
+          import re
+          import subprocess
+          from collections import Counter, defaultdict
+          from pathlib import Path
+
+          HEAD = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          baselines = {
+              '048578e4': os.environ['BASELINE_048'],
+              '308e09d2': os.environ['BASELINE_308'],
+          }
+          test_re = re.compile(r'(?:\.test|\.spec)\.(?:js|cjs|mjs|ts|tsx)$')
+
+          def git_lines(*args):
+              out = subprocess.check_output(['git', *args], text=True, stderr=subprocess.DEVNULL)
+              return [line for line in out.splitlines() if line.strip()]
+
+          def test_paths(ref):
+              return sorted(
+                  p for p in git_lines('ls-tree', '-r', '--name-only', ref, '--', 'api/backend/tests')
+                  if test_re.search(p)
+              )
+
+          def blob(ref, path):
+              try:
+                  return subprocess.check_output(
+                      ['git', 'rev-parse', f'{ref}:{path}'], text=True, stderr=subprocess.DEVNULL
+                  ).strip()
+              except subprocess.CalledProcessError:
+                  return ''
+
+          def family(path):
+              rel = path.replace('api/backend/tests/', '')
+              first = rel.split('/', 1)[0]
+              if first in {'unit', 'integration', 'compliance', 'architecture', 'e2e'}:
+                  return first
+              return 'other'
+
+          def current_signals(path):
+              try:
+                  text = subprocess.check_output(['git', 'show', f'{HEAD}:{path}'], text=True, errors='replace')
+              except subprocess.CalledProcessError:
+                  return ''
+              signals = []
+              if 'contracts/canonical/v1' in text or 'canonical/v1' in text:
+                  signals.append('CANONICAL_V1_IMPORT_OR_REFERENCE')
+              if 'infrastructure/database/neo4j/LineageRepository' in text:
+                  signals.append('REMOVED_NEO4J_LINEAGE_REPOSITORY_IMPORT')
+              if 'StorageAssignment' in text:
+                  signals.append('STORAGE_ASSIGNMENT_TOKEN')
+              if 'storageLocation' in text:
+                  signals.append('STORAGE_LOCATION_TOKEN')
+              if 'graphPersisted' in text:
+                  signals.append('GRAPH_PERSISTED_TOKEN')
+              return ';'.join(signals)
+
+          current = test_paths(HEAD)
+          current_set = set(current)
+          current_by_name = defaultdict(list)
+          for p in current:
+              current_by_name[Path(p).name].append(p)
+
+          rows = []
+          summaries = {}
+          removed_by_baseline = {}
+
+          for label, ref in baselines.items():
+              historical = test_paths(ref)
+              hist_set = set(historical)
+              counts = Counter()
+              removed = []
+
+              for hp in historical:
+                  hb = blob(ref, hp)
+                  if hp in current_set:
+                      cb = blob(HEAD, hp)
+                      status = 'PRESERVED_IDENTICAL' if hb == cb else 'PRESERVED_CHANGED'
+                      cp = hp
+                  else:
+                      candidates = current_by_name.get(Path(hp).name, [])
+                      if len(candidates) == 1:
+                          status = 'REMOVED_MOVED_CANDIDATE'
+                          cp = candidates[0]
+                          cb = blob(HEAD, cp)
+                      else:
+                          status = 'REMOVED_NEEDS_CLASSIFICATION'
+                          cp = ''
+                          cb = ''
+                      removed.append(hp)
+                  counts[status] += 1
+                  rows.append({
+                      'baseline': label,
+                      'historical_path': hp,
+                      'historical_blob': hb,
+                      'current_path': cp,
+                      'current_blob': cb,
+                      'structural_status': status,
+                      'runner_family': family(hp),
+                      'current_signals': current_signals(cp) if cp else '',
+                  })
+
+              current_only = sorted(current_set - hist_set)
+              counts['ADDED_CURRENT'] = len(current_only)
+              summaries[label] = {
+                  'historical_total': len(historical),
+                  'current_total': len(current),
+                  'counts': counts,
+                  'current_only': len(current_only),
+              }
+              removed_by_baseline[label] = removed
+
+              for cp in current_only:
+                  rows.append({
+                      'baseline': label,
+                      'historical_path': '',
+                      'historical_blob': '',
+                      'current_path': cp,
+                      'current_blob': blob(HEAD, cp),
+                      'structural_status': 'ADDED_CURRENT',
+                      'runner_family': family(cp),
+                      'current_signals': current_signals(cp),
+                  })
+
+          matrix_path = Path('/tmp/backend-v2-historical-parity.csv')
+          with matrix_path.open('w', newline='', encoding='utf-8') as f:
+              writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+              writer.writeheader()
+              writer.writerows(rows)
+
+          inventory_path = Path('/tmp/backend-v2-current-test-inventory.csv')
+          with inventory_path.open('w', newline='', encoding='utf-8') as f:
+              writer = csv.writer(f)
+              writer.writerow(['path', 'runner_family', 'blob', 'signals'])
+              for p in current:
+                  writer.writerow([p, family(p), blob(HEAD, p), current_signals(p)])
+
+          signal_rows = [(p, current_signals(p)) for p in current if current_signals(p)]
+          forbidden_imports = [(p, s) for p, s in signal_rows if 'CANONICAL_V1' in s or 'REMOVED_NEO4J' in s]
+
+          runner_counts = Counter(family(p) for p in current)
+          vitest_target_count = sum(runner_counts[k] for k in ('unit', 'integration', 'compliance'))
+          architecture_count = runner_counts['architecture']
+          other_count = len(current) - vitest_target_count - architecture_count
+
+          body = [
+              '## Checkpoint 2 — matriz estrutural de paridade histórica',
+              '',
+              f'- HEAD analisado: `{HEAD}`',
+              f'- arquivos de teste atuais inventariados: **{len(current)}**',
+              f'- famílias atuais: unit={runner_counts["unit"]}, integration={runner_counts["integration"]}, compliance={runner_counts["compliance"]}, architecture={architecture_count}, e2e={runner_counts["e2e"]}, other={runner_counts["other"]}',
+              f'- candidatos ao runner Vitest aprovado (`unit + integration + compliance`): **{vitest_target_count}**',
+              f'- architecture files: **{architecture_count}**',
+              f'- arquivos fora dessas duas famílias (inclui e2e/other): **{other_count}**',
+              '',
+          ]
+
+          for label in ('048578e4', '308e09d2'):
+              s = summaries[label]
+              c = s['counts']
+              body += [
+                  f'### `{label}` × HEAD',
+                  '',
+                  f'- testes históricos inventariados: **{s["historical_total"]}**',
+                  f'- `PRESERVED_IDENTICAL`: **{c["PRESERVED_IDENTICAL"]}**',
+                  f'- `PRESERVED_CHANGED`: **{c["PRESERVED_CHANGED"]}**',
+                  f'- `REMOVED_MOVED_CANDIDATE`: **{c["REMOVED_MOVED_CANDIDATE"]}**',
+                  f'- `REMOVED_NEEDS_CLASSIFICATION`: **{c["REMOVED_NEEDS_CLASSIFICATION"]}**',
+                  f'- `ADDED_CURRENT`: **{c["ADDED_CURRENT"]}**',
+                  '',
+              ]
+
+          body += [
+              '### Resíduos executáveis detectados no inventário atual',
+              '',
+              f'- arquivos atuais com import/referência para `canonical/v1` ou `neo4j/LineageRepository` removido: **{len(forbidden_imports)}**',
+          ]
+          for p, sig in forbidden_imports:
+              body.append(f'  - `{p}` — `{sig}`')
+
+          body += [
+              '',
+              '### Interpretação',
+              '',
+              '- Esta é uma **matriz estrutural**, não a classificação semântica final.',
+              '- `PRESERVED_CHANGED` ainda precisa ser auditado quanto à equivalência de intenção.',
+              '- `REMOVED_*` não será tratado automaticamente como perda: cada caso deverá terminar em `MIGRATED_V2`, `DISTRIBUTED_EQUIVALENT`, `LEGITIMATELY_RETIRED` ou `REAL_GAP` conforme a autoridade v2.',
+              '- Nenhum arquivo legado será restaurado apenas para fazer testes antigos passarem.',
+              '',
+              'A matriz CSV completa e o inventário atual foram anexados ao artifact deste run.'
+          ]
+
+          Path('/tmp/backend-v2-parity-summary.md').write_text('\n'.join(body) + '\n', encoding='utf-8')
+          Path('/tmp/backend-v2-forbidden-imports.txt').write_text(
+              '\n'.join(f'{p}\t{s}' for p, s in forbidden_imports) + ('\n' if forbidden_imports else ''),
+              encoding='utf-8'
+          )
+          print('\n'.join(body))
+          PY
+
+      - name: Upload parity evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-v2-historical-parity
+          path: |
+            /tmp/backend-v2-historical-parity.csv
+            /tmp/backend-v2-current-test-inventory.csv
+            /tmp/backend-v2-forbidden-imports.txt
+            /tmp/backend-v2-parity-summary.md
+
+      - name: Publish parity summary to issue 228
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment 228 --repo "$GITHUB_REPOSITORY" --body-file /tmp/backend-v2-parity-summary.md
