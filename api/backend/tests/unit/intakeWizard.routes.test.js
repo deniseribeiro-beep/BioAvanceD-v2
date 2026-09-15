@@ -5,6 +5,9 @@ import request from 'supertest';
 
 const require = createRequire(import.meta.url);
 
+process.env.ENCRYPTION_KEY = 'bioavanced-intake-wizard-unit-test-key';
+process.env.ENCRYPTION_KEY_ID = 'intake-wizard-test-key';
+
 const notificationServicePath = require.resolve('../../src/services/notification.service');
 const patientIdentityServicePath = require.resolve('../../src/services/PatientIdentityService');
 const merkleServicePath = require.resolve('../../src/services/MerkleService');
@@ -12,8 +15,8 @@ const collectionResolverPath = require.resolve('../../src/utils/collectionResolv
 const auditLoggerPath = require.resolve('../../src/utils/auditLogger');
 const qualityDomainPath = require.resolve('../../src/services/quality-domain.service');
 const sampleServicePath = require.resolve('../../src/services/sample.service');
-const storageServicePath = require.resolve('../../src/services/storageService');
 const rcsAssessmentServicePath = require.resolve('../../src/services/rcs-assessment.service');
+const consentServicePath = require.resolve('../../src/services/consent.service');
 const routePath = require.resolve('../../src/routes/intakeWizard.js');
 
 const allPaths = [
@@ -24,8 +27,8 @@ const allPaths = [
   auditLoggerPath,
   qualityDomainPath,
   sampleServicePath,
-  storageServicePath,
   rcsAssessmentServicePath,
+  consentServicePath,
   routePath,
 ];
 
@@ -50,6 +53,7 @@ function loadRoute({
   generateSampleHash,
   getCollectionImpl,
   resolveMethodologicalQuality,
+  getPatientConsent,
 } = {}) {
   clearCache();
 
@@ -94,6 +98,9 @@ function loadRoute({
   const rcsAssessmentServiceModule = require(rcsAssessmentServicePath);
   rcsAssessmentServiceModule.recordAssessment = vi.fn().mockResolvedValue({ _id: 'assessment-1' });
 
+  const consentServiceModule = require(consentServicePath);
+  consentServiceModule.getPatientConsent = getPatientConsent || vi.fn(async () => currentPatientConsent);
+
   const router = require(routePath);
   return { router, notificationServiceModule, patientIdentityServiceModule, merkleServiceModule, collectionResolverModule, auditLoggerModule, qualityDomainModule, rcsAssessmentServiceModule };
 }
@@ -105,6 +112,8 @@ function buildApp(router, db = {}) {
   app.use('/api/intake-wizard', router);
   return app;
 }
+
+let currentPatientConsent = null;
 
 const VALID_PAYLOAD = {
   participant: { participantId: '12345678', patientName: 'Paciente Teste', email: 'paciente@example.test' },
@@ -118,6 +127,7 @@ const VALID_PAYLOAD = {
 
 describe('intakeWizard routes', () => {
   afterEach(() => {
+    currentPatientConsent = null;
     vi.restoreAllMocks();
     clearCache();
   });
@@ -190,13 +200,17 @@ describe('intakeWizard routes', () => {
       const { router, auditLoggerModule } = loadRoute({ getCollectionImpl });
 
       const sampleServiceModule = require(sampleServicePath);
-      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+      vi.spyOn(sampleServiceModule, 'createSample').mockImplementation(async (_db, sample) => ({
+        _id: 'sample-1',
+        specimenId: sample.specimenId || 'spec-1',
+        participantId: '12345678',
+        currentStoragePlacement: {
+          specimenId: sample.specimenId || 'spec-1',
+          boxId: String(sample.boxId),
+          positionCode: sample.positionCode,
+        },
+      }));
 
-      const StorageService = require(storageServicePath);
-      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-        success: true,
-        sampleLocation: { boxId: 'box-1', position: 'A1' },
-      });
 
       const app = buildApp(router, db);
 
@@ -224,12 +238,9 @@ describe('intakeWizard routes', () => {
       );
     });
 
-    // #511: sample.service.js#createSample (#510) additively exposes the
-    // canonical StorageAssignment on its return value alongside the legacy
-    // storageLocation field. intakeWizard's own response builder (lines
-    // ~579-609) must forward it the same way, not just the legacy shape it
-    // reconstructs from local box/position variables.
-    it('exposes the canonical storageAssignment on the response, per #510 (#511)', async () => {
+    // Intake exposes the canonical v2 placement read model returned by
+    // SampleService and enriches it only with readable topology metadata.
+    it('exposes currentStoragePlacement from the canonical v2 read model', async () => {
       const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
       const findOne = vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
       const samplesCollection = { insertOne, findOne, updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
@@ -278,32 +289,28 @@ describe('intakeWizard routes', () => {
       const { router } = loadRoute({ getCollectionImpl });
 
       const sampleServiceModule = require(sampleServicePath);
-      const canonicalStorageAssignment = {
-        _id: 'assignment-1',
-        sampleId: 'sample-1',
+      const canonicalStoragePlacement = {
+        specimenId: 'spec-1',
         boxId: 'box-1',
-        position: 'A1',
-        status: 'ACTIVE',
+        positionCode: 'A1',
+        storageRackId: 'rack-1',
+        storagePositionId: 'rack-1:A1',
       };
       vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({
         _id: 'sample-1',
         participantId: '12345678',
-        storageAssignment: canonicalStorageAssignment,
+        currentStoragePlacement: canonicalStoragePlacement,
       });
 
-      const StorageService = require(storageServicePath);
-      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-        success: true,
-        sampleLocation: { boxId: 'box-1', position: 'A1' },
-      });
 
       const app = buildApp(router, db);
 
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
 
       expect(res.status).toBe(200);
-      expect(res.body.storageAssignment).toEqual(canonicalStorageAssignment);
-      expect(res.body.storageLocation).toBeTruthy();
+      expect(res.body.currentStoragePlacement).toMatchObject(canonicalStoragePlacement);
+      expect(res.body.currentStoragePlacement).toMatchObject({ boxName: 'Box A', equipmentID: 'EQ-1' });
+      expect(res.body.sample.currentStoragePlacement).toEqual(res.body.currentStoragePlacement);
     });
 
     // #505: intakeWizard already computed RCS via qualidade but never
@@ -335,11 +342,6 @@ describe('intakeWizard routes', () => {
         const sampleServiceModule = require(sampleServicePath);
         vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
 
-        const StorageService = require(storageServicePath);
-        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-          success: true,
-          sampleLocation: { boxId: 'box-1', position: 'A1' },
-        });
 
         const app = buildApp(router, db);
         const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
@@ -380,11 +382,6 @@ describe('intakeWizard routes', () => {
         const sampleServiceModule = require(sampleServicePath);
         vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
 
-        const StorageService = require(storageServicePath);
-        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-          success: true,
-          sampleLocation: { boxId: 'box-1', position: 'A1' },
-        });
 
         const app = buildApp(router, db);
         const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
@@ -449,11 +446,16 @@ function defaultStorageContainersFindOne({ _id }) {
     }
 
     function buildHappyPathDb({ sensorsFind, equipmentFindOne, storageBoxesFind, storageContainersFindOne, consentsFindOneQueue } = {}) {
-      const consentsCollection = {
-        findOne: consentsFindOneQueue
-          ? vi.fn(() => Promise.resolve(consentsFindOneQueue.shift() ?? null))
-          : vi.fn().mockResolvedValue(null),
-      };
+      const consentCandidates = Array.isArray(consentsFindOneQueue) ? [...consentsFindOneQueue] : [];
+      const consentCandidate = consentCandidates.find(Boolean) || null;
+      currentPatientConsent = consentCandidate
+        ? {
+            ...consentCandidate,
+            consentId: consentCandidate.consentId || String(consentCandidate._id || ''),
+            status: consentCandidates[0] === null ? 'REVOKED' : (consentCandidate.status || 'ACTIVE'),
+          }
+        : null;
+      const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
 
       const db = {
         collection: (name) => {
@@ -511,27 +513,25 @@ function defaultStorageContainersFindOne({ _id }) {
       });
 
       const sampleServiceModule = require(sampleServicePath);
-      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+      vi.spyOn(sampleServiceModule, 'createSample').mockImplementation(async (_db, sample) => ({
+        _id: 'sample-1',
+        specimenId: sample.specimenId || 'spec-1',
+        participantId: '12345678',
+        currentStoragePlacement: {
+          specimenId: sample.specimenId || 'spec-1',
+          boxId: String(sample.boxId),
+          positionCode: sample.positionCode,
+        },
+      }));
 
-      const StorageService = require(storageServicePath);
-      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-        success: true,
-        sampleLocation: { boxId: 'box-1', position: 'A1' },
-      });
 
       const app = buildApp(router, db);
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
 
       expect(res.status).toBe(200);
       expect(res.body.consent.active).toBe(true);
-      expect(res.body.storageLocation.position).toBe('A1');
-      expect(consentsCollection.findOne).toHaveBeenCalledWith(
-        expect.objectContaining({
-          participantId: { $in: expect.arrayContaining(['12345678']) },
-          status: 'ACTIVE',
-        }),
-        expect.anything()
-      );
+      expect(res.body.currentStoragePlacement.positionCode).toBe('A1');
+      expect(res.body.consent.consentId).toBe('consent-1');
     });
 
     it('blocks the sample when consent is REVOKED', async () => {
@@ -550,13 +550,17 @@ function defaultStorageContainersFindOne({ _id }) {
       const { router } = loadRoute({ getCollectionImpl });
 
       const sampleServiceModule = require(sampleServicePath);
-      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+      vi.spyOn(sampleServiceModule, 'createSample').mockImplementation(async (_db, sample) => ({
+        _id: 'sample-1',
+        specimenId: sample.specimenId || 'spec-1',
+        participantId: '12345678',
+        currentStoragePlacement: {
+          specimenId: sample.specimenId || 'spec-1',
+          boxId: String(sample.boxId),
+          positionCode: sample.positionCode,
+        },
+      }));
 
-      const StorageService = require(storageServicePath);
-      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-        success: true,
-        sampleLocation: { boxId: 'box-1', position: 'A1' },
-      });
 
       const app = buildApp(router, db);
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
@@ -601,19 +605,23 @@ function defaultStorageContainersFindOne({ _id }) {
       const { router } = loadRoute({ getCollectionImpl });
 
       const sampleServiceModule = require(sampleServicePath);
-      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+      vi.spyOn(sampleServiceModule, 'createSample').mockImplementation(async (_db, sample) => ({
+        _id: 'sample-1',
+        specimenId: sample.specimenId || 'spec-1',
+        participantId: '12345678',
+        currentStoragePlacement: {
+          specimenId: sample.specimenId || 'spec-1',
+          boxId: String(sample.boxId),
+          positionCode: sample.positionCode,
+        },
+      }));
 
-      const StorageService = require(storageServicePath);
-      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-        success: true,
-        sampleLocation: { boxId: 'box-2', position: 'A1' },
-      });
 
       const app = buildApp(router, db);
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
 
       expect(res.status).toBe(200);
-      expect(res.body.storageLocation.equipmentID).toBe('EQ-2');
+      expect(res.body.currentStoragePlacement.equipmentID).toBe('EQ-2');
     });
 
     it('skips a box whose linked equipment is blocked and uses the next one', async () => {
@@ -649,19 +657,23 @@ function defaultStorageContainersFindOne({ _id }) {
       const { router } = loadRoute({ getCollectionImpl });
 
       const sampleServiceModule = require(sampleServicePath);
-      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+      vi.spyOn(sampleServiceModule, 'createSample').mockImplementation(async (_db, sample) => ({
+        _id: 'sample-1',
+        specimenId: sample.specimenId || 'spec-1',
+        participantId: '12345678',
+        currentStoragePlacement: {
+          specimenId: sample.specimenId || 'spec-1',
+          boxId: String(sample.boxId),
+          positionCode: sample.positionCode,
+        },
+      }));
 
-      const StorageService = require(storageServicePath);
-      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-        success: true,
-        sampleLocation: { boxId: 'box-2', position: 'A1' },
-      });
 
       const app = buildApp(router, db);
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
 
       expect(res.status).toBe(200);
-      expect(res.body.storageLocation.equipmentID).toBe('EQ-2');
+      expect(res.body.currentStoragePlacement.equipmentID).toBe('EQ-2');
     });
 
     it('returns 422 when no box has both operational equipment and sensor', async () => {
@@ -751,19 +763,23 @@ function defaultStorageContainersFindOne({ _id }) {
       const { router } = loadRoute({ getCollectionImpl });
 
       const sampleServiceModule = require(sampleServicePath);
-      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+      vi.spyOn(sampleServiceModule, 'createSample').mockImplementation(async (_db, sample) => ({
+        _id: 'sample-1',
+        specimenId: sample.specimenId || 'spec-1',
+        participantId: '12345678',
+        currentStoragePlacement: {
+          specimenId: sample.specimenId || 'spec-1',
+          boxId: String(sample.boxId),
+          positionCode: sample.positionCode,
+        },
+      }));
 
-      const StorageService = require(storageServicePath);
-      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-        success: true,
-        sampleLocation: { boxId: 'box-2', position: 'A1' },
-      });
 
       const app = buildApp(router, db);
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
 
       expect(res.status).toBe(200);
-      expect(res.body.storageLocation.equipmentID).toBe('EQ-2');
+      expect(res.body.currentStoragePlacement.equipmentID).toBe('EQ-2');
     });
 
     it('skips a storage box that is BLOCKED/RETIRED/INACTIVE and one at full occupancy', async () => {
@@ -786,19 +802,23 @@ function defaultStorageContainersFindOne({ _id }) {
       const { router } = loadRoute({ getCollectionImpl });
 
       const sampleServiceModule = require(sampleServicePath);
-      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+      vi.spyOn(sampleServiceModule, 'createSample').mockImplementation(async (_db, sample) => ({
+        _id: 'sample-1',
+        specimenId: sample.specimenId || 'spec-1',
+        participantId: '12345678',
+        currentStoragePlacement: {
+          specimenId: sample.specimenId || 'spec-1',
+          boxId: String(sample.boxId),
+          positionCode: sample.positionCode,
+        },
+      }));
 
-      const StorageService = require(storageServicePath);
-      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-        success: true,
-        sampleLocation: { boxId: 'box-ok', position: 'A1' },
-      });
 
       const app = buildApp(router, db);
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
 
       expect(res.status).toBe(200);
-      expect(res.body.storageLocation.boxName).toBe('OK Box');
+      expect(res.body.currentStoragePlacement.boxName).toBe('OK Box');
     });
 
     it('finds the next free position using a Map-based occupancyGrid', async () => {
@@ -820,19 +840,23 @@ function defaultStorageContainersFindOne({ _id }) {
       const { router } = loadRoute({ getCollectionImpl });
 
       const sampleServiceModule = require(sampleServicePath);
-      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+      vi.spyOn(sampleServiceModule, 'createSample').mockImplementation(async (_db, sample) => ({
+        _id: 'sample-1',
+        specimenId: sample.specimenId || 'spec-1',
+        participantId: '12345678',
+        currentStoragePlacement: {
+          specimenId: sample.specimenId || 'spec-1',
+          boxId: String(sample.boxId),
+          positionCode: sample.positionCode,
+        },
+      }));
 
-      const StorageService = require(storageServicePath);
-      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-        success: true,
-        sampleLocation: { boxId: 'box-1', position: 'A2' },
-      });
 
       const app = buildApp(router, db);
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
 
       expect(res.status).toBe(200);
-      expect(res.body.storageLocation.position).toBe('A2');
+      expect(res.body.currentStoragePlacement.positionCode).toBe('A2');
     });
 
     it('returns 422 NON_CANONICAL_FIELD early when a nested payload section is not an object', async () => {

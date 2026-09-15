@@ -28,6 +28,23 @@ vi.mock('../../src/services/SampleGraphValidator', () => ({
 }));
 vi.mock('../../src/services/MerkleService', () => ({ generateSampleHash: vi.fn(() => 'hash-1') }));
 
+const allocateSampleUseCasePath = require.resolve('../../src/core/use-cases/AllocateSampleUseCase');
+let currentAllocateExecute = vi.fn(async () => ({
+  success: true,
+  currentStoragePlacement: null,
+  lineageQueued: true,
+  lineageEventId: 'evt-import-allocation',
+}));
+function StableAllocateSampleUseCase() {
+  this.execute = (...args) => currentAllocateExecute(...args);
+}
+require.cache[allocateSampleUseCasePath] = {
+  id: allocateSampleUseCasePath,
+  filename: allocateSampleUseCasePath,
+  loaded: true,
+  exports: StableAllocateSampleUseCase,
+};
+
 const service = require('../../src/services/import-lgpd.service');
 const patientIdentityService = require('../../src/services/PatientIdentityService');
 const qualityDomain = require('../../src/services/quality-domain.service');
@@ -109,8 +126,8 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
   const sampleTypesCollection = { findOne: vi.fn().mockResolvedValue(sampleTypeFound ? { id: 'PLASMA', description: 'Plasma' } : null) };
   const sampleOriginsCollection = { findOne: vi.fn().mockResolvedValue(sampleOriginFound ? { id: 'VENOUS_BLOOD', description: 'Sangue Venoso Periferico' } : null) };
   const extractionProtocolsCollection = { findOne: vi.fn().mockResolvedValue(protocolFound ? { id: 'TUBE_EDTA', description: 'Tubo EDTA (Tampa Roxa)' } : null) };
-  // AllocateSampleUseCase's audit trail (MongoAuditRepository) and
-  // storagePaths hierarchy lookup (MongoStorageRepository.openStorageAssignment).
+  // Physical custody is delegated to AllocateSampleUseCase; its normalized
+  // chain/audit/outbox behavior is covered by the storage integration suite.
   const sampleMovementsCollection = {
     insertOne: vi.fn().mockResolvedValue({ insertedId: 'movement-1' }),
     find: vi.fn(() => ({ sort: () => ({ limit: () => ({ toArray: async () => [], next: async () => null }) }) })),
@@ -216,6 +233,12 @@ describe('ImportLGPDService.importSamples', () => {
 
   beforeEach(() => {
     ({ db, samplesCollection, patientsCollection, rcsAssessmentsCollection, specimenPreanalyticsCollection, importBatchesCollection, importStagingRecordsCollection } = makeDb());
+    currentAllocateExecute = vi.fn(async () => ({
+      success: true,
+      currentStoragePlacement: null,
+      lineageQueued: true,
+      lineageEventId: 'evt-import-allocation',
+    }));
 
     vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant').mockResolvedValue(MATCHED_PATIENT);
     vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
@@ -770,34 +793,19 @@ describe('ImportLGPDService.importSamples', () => {
           }),
         })),
       };
-      const storageAssignments = [];
-      const storageAssignmentsCollection = {
-        insertOne: vi.fn(async (doc) => {
-          storageAssignments.push(doc);
-          return { insertedId: new ObjectId() };
-        }),
-        // #523: AllocateSampleUseCase (#477) -> MongoStorageRepository
-        // .findSampleById (#507) calls findOne to resolve the specimen's
-        // current assignment before allocating; a freshly-inserted,
-        // not-yet-allocated row has none, matching sample.service.test.js's
-        // mockOperationalStorage fix in #510/#513.
-        findOne: vi.fn().mockResolvedValue(null),
-      };
       base.db.collection = vi.fn((name) => {
         if (name === 'storageContainers') return storageContainersCollection;
         if (name === 'storageBoxes') return storageBoxesCollection;
-        if (name === 'storageAssignments') return storageAssignmentsCollection;
         if (name === 'equipment') return equipmentCollection;
         if (name === 'sensors') return sensorsCollection;
         return originalCollection(name);
       });
-      base.storageAssignments = storageAssignments;
       return base;
     }
 
     it('assigns the next available box when autoIncrement is on and the row has no boxId', async () => {
       const chain = makeStorageChain(2);
-      const { db, samplesCollection, storageAssignments } = makeDbWithStorageChain(chain);
+      const { db, samplesCollection } = makeDbWithStorageChain(chain);
       vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
 
       const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
@@ -808,9 +816,8 @@ describe('ImportLGPDService.importSamples', () => {
       expect(result.success).toBe(1);
       expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
       const inserted = samplesCollection.insertOne.mock.calls[0][0];
-      expect(String(inserted.storageLocation.boxId)).toBe(String(chain.boxes[0]._id));
-      expect(inserted.storageLocation.position).toBe('A1');
-      expect(storageAssignments).toHaveLength(1);
+      expect(inserted.currentStoragePlacement).toBeUndefined();
+      expect(currentAllocateExecute).toHaveBeenCalledWith(expect.objectContaining({ specimenId: 'sample-id-1', boxId: String(chain.boxes[0]._id), position: 'A1' }));
     });
 
     it('records a per-row error when autoIncrement is on but no more boxes are available', async () => {
@@ -839,7 +846,8 @@ describe('ImportLGPDService.importSamples', () => {
       expect(result.success).toBe(1);
       expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
       const inserted = samplesCollection.insertOne.mock.calls[0][0];
-      expect(String(inserted.storageLocation.boxId)).toBe(String(chain.boxes[0]._id));
+      expect(inserted.currentStoragePlacement).toBeUndefined();
+      expect(currentAllocateExecute).toHaveBeenCalledWith(expect.objectContaining({ specimenId: 'sample-id-1', boxId: String(chain.boxes[0]._id), position: 'A1' }));
     });
 
     it('resolves a CSV-provided boxId directly, without consulting startBoxId/autoIncrement', async () => {
@@ -856,7 +864,8 @@ describe('ImportLGPDService.importSamples', () => {
 
       expect(result.success).toBe(1);
       const inserted = samplesCollection.insertOne.mock.calls[0][0];
-      expect(String(inserted.storageLocation.boxId)).toBe(String(chain.boxes[1]._id));
+      expect(inserted.currentStoragePlacement).toBeUndefined();
+      expect(currentAllocateExecute).toHaveBeenCalledWith(expect.objectContaining({ specimenId: 'sample-id-1', boxId: String(chain.boxes[1]._id), position: 'A1' }));
     });
 
     // #467: bulk LGPD import previously placed samples without checking
