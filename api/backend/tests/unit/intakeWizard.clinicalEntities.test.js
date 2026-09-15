@@ -12,7 +12,7 @@ const collectionResolverPath = require.resolve('../../src/utils/collectionResolv
 const auditLoggerPath = require.resolve('../../src/utils/auditLogger');
 const qualityDomainPath = require.resolve('../../src/services/quality-domain.service');
 const sampleServicePath = require.resolve('../../src/services/sample.service');
-const storageServicePath = require.resolve('../../src/services/storageService');
+const consentServicePath = require.resolve('../../src/services/consent.service');
 const rcsAssessmentServicePath = require.resolve('../../src/services/rcs-assessment.service');
 const encounterServicePath = require.resolve('../../src/services/encounter.service');
 const conditionServicePath = require.resolve('../../src/services/condition.service');
@@ -35,7 +35,7 @@ const allPaths = [
   auditLoggerPath,
   qualityDomainPath,
   sampleServicePath,
-  storageServicePath,
+  consentServicePath,
   rcsAssessmentServicePath,
   // #693's own 4 new services (plus activeCodeValidator, which
   // condition.service.js/phenotype-observation.service.js call directly)
@@ -188,6 +188,9 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     const rcsAssessmentServiceModule = require(rcsAssessmentServicePath);
     rcsAssessmentServiceModule.recordAssessment = vi.fn().mockResolvedValue({ _id: 'assessment-1' });
 
+    const consentServiceModule = require(consentServicePath);
+    consentServiceModule.getPatientConsent = vi.fn().mockResolvedValue(null);
+
     const collections = {
       samples: {
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
@@ -225,13 +228,16 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     });
 
     const sampleServiceModule = require(sampleServicePath);
-    vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
-
-    const StorageService = require(storageServicePath);
-    vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-      success: true,
-      sampleLocation: { boxId: 'box-1', position: 'A1' },
-    });
+    vi.spyOn(sampleServiceModule, 'createSample').mockImplementation(async (_db, sample) => ({
+      _id: 'sample-1',
+      specimenId: sample.specimenId || 'spec-1',
+      participantId: '12345678',
+      currentStoragePlacement: {
+        specimenId: sample.specimenId || 'spec-1',
+        boxId: String(sample.boxId),
+        positionCode: sample.positionCode,
+      },
+    }));
 
     const router = require(routePath);
 

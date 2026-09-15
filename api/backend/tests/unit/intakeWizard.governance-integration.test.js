@@ -29,7 +29,7 @@ const merkleServicePath = require.resolve('../../src/services/MerkleService');
 const auditLoggerPath = require.resolve('../../src/utils/auditLogger');
 const qualityDomainPath = require.resolve('../../src/services/quality-domain.service');
 const sampleServicePath = require.resolve('../../src/services/sample.service');
-const storageServicePath = require.resolve('../../src/services/storageService');
+const consentServicePath = require.resolve('../../src/services/consent.service');
 
 // Same trap as intakeWizard.routes.governance.test.js: quarantine-action.service.js
 // destructures getCollection from collectionResolver at require-time, so every
@@ -47,7 +47,7 @@ const allPaths = [
   auditLoggerPath,
   qualityDomainPath,
   sampleServicePath,
-  storageServicePath,
+  consentServicePath,
 ];
 
 function clearCache() {
@@ -128,14 +128,28 @@ function loadApp({ consentActive, samplesCollection, quarantineActionsCollection
     score: 90,
   }));
 
-  const sampleServiceModule = require(sampleServicePath);
-  vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+  const consentServiceModule = require(consentServicePath);
+  consentServiceModule.getPatientConsent = vi.fn(async () => consentActive
+    ? {
+        _id: 'consent-1',
+        consentId: 'consent-1',
+        participantId: '12345678',
+        status: 'ACTIVE',
+        signedAt: new Date(),
+      }
+    : null);
 
-  const StorageService = require(storageServicePath);
-  vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-    success: true,
-    sampleLocation: { boxId: 'box-1', position: 'A1' },
-  });
+  const sampleServiceModule = require(sampleServicePath);
+  vi.spyOn(sampleServiceModule, 'createSample').mockImplementation(async (_db, sample) => ({
+    _id: 'sample-1',
+    specimenId: sample.specimenId || 'spec-1',
+    participantId: '12345678',
+    currentStoragePlacement: {
+      specimenId: sample.specimenId || 'spec-1',
+      boxId: String(sample.boxId),
+      positionCode: sample.positionCode,
+    },
+  }));
 
   const router = require(routePath);
 
