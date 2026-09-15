@@ -20,6 +20,7 @@ class AllocateSampleUseCase {
     const snapshot = await this.storageRepository.findSampleById(command.specimenId);
     if (!snapshot) throw new Error('Amostra não encontrada');
 
+    let currentStoragePlacement = null;
     let lineageResult = {
       lineageValidated: false,
       lineagePersisted: false,
@@ -55,7 +56,7 @@ class AllocateSampleUseCase {
 
       lineageResult = await this.persistLineageInTransaction(lineagePayload, session);
 
-      await this.storageRepository.allocateSamplePosition({
+      currentStoragePlacement = await this.storageRepository.allocateSamplePosition({
         specimenId: command.specimenId,
         boxId: command.boxId,
         position: normalizedPosition
@@ -76,11 +77,7 @@ class AllocateSampleUseCase {
 
     return {
       success: true,
-      sampleLocation: {
-        specimenId: String(command.specimenId),
-        boxId: String(command.boxId),
-        position: normalizedPosition
-      },
+      currentStoragePlacement,
       lineageValidated: lineageResult.lineageValidated,
       lineagePersisted: lineageResult.lineagePersisted,
       lineageQueued: lineageResult.lineageQueued,
