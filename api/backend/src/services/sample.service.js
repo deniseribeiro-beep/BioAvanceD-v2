@@ -138,7 +138,6 @@ class SampleService {
     try {
       const { boxId, positionCode } = normalizeRequiredStorageBoxAssignment(sampleData.boxId, sampleData.positionCode);
       delete sampleData.locationID;
-      delete sampleData.storageLocation;
 
       const samplesCollection = await getCollection(db, 'samples');
 
@@ -354,11 +353,9 @@ class SampleService {
         throw new Error(`Falha ao registrar cadeia de custódia no nascimento da amostra: ${ledgerError.message || ledgerError}`);
       }
 
-      // #474: storageLocation is no longer written directly onto the create
-      // doc — the sample is inserted unallocated, then AllocateSampleUseCase
-      // performs the atomic occupancyGrid write, storageLocation update,
-      // StorageAssignment record, and audit/lineage trail (same use case
-      // allocate-sample.controller.js and RegisterSampleUseCase reuse).
+      // A amostra nasce sem snapshot físico embutido. AllocateSampleUseCase
+      // persiste occupancyGrid + cadeia física canônica v2 + auditoria +
+      // outbox na fronteira transacional MongoDB.
       const allocateUseCase = new AllocateSampleUseCase({
         storageRepository: new MongoStorageRepository(db),
         auditRepository: new MongoAuditRepository(db),
@@ -386,13 +383,8 @@ class SampleService {
         throw wrapped;
       }
 
-      sample.storageLocation = { boxId, position: positionCode };
-
-      // #510: expose the canonical StorageAssignment (dict-02 ELM-0167-0178)
-      // the allocation above just opened, alongside the legacy storageLocation
-      // snapshot — additive, same precedent #507 set for findSampleById.
-      sample.storageAssignment = await new MongoStorageRepository(db)
-        .findCurrentStorageAssignment(result.insertedId);
+      sample.currentStoragePlacement = await new MongoStorageRepository(db)
+        .findCurrentStoragePlacement(sample.specimenId);
 
       // #492/#502: only recorded once the sample has fully landed (ledger +
       // allocation both succeeded) — a failure here doesn't roll back
@@ -714,8 +706,7 @@ class SampleService {
         'initialQuantity', 'totalWithdrawn', 'totalReturned',
         'accessionNumber', 'orderNumber', 'processingStatus',
         'protocolApplied', 'specimenCollection', 'studyId', 'protocolId',
-        'collectionId', 'linkedFiles', 'qrCode', 'storageLocation',
-        'notes'
+        'collectionId', 'linkedFiles', 'qrCode', 'notes'
       ];
       const restUpdateData = {};
       for (const key of ALLOWED_UPDATE_FIELDS) {
@@ -1136,4 +1127,3 @@ class SampleService {
 }
 
 module.exports = new SampleService();
-

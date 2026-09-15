@@ -44,8 +44,8 @@ function createAutoAssignSampleController() {
         success: true,
         data: result.sampleLocation,
         message: `Amostra alocada automaticamente na Posição ${result.sampleLocation.position}`,
-        graphPersisted: false,
-        projectionQueued: result.projectionQueued === true
+        projectionQueued: result.projectionQueued === true,
+        projectionEventId: result.projectionEventId || null
       });
     } catch (error) {
       logger.error('[AutoAssignSampleController] Erro na alocação automática:', error.message || error);
@@ -58,6 +58,4 @@ function createAutoAssignSampleController() {
   };
 }
 
-module.exports = {
-  createAutoAssignSampleController
-};
+module.exports = { createAutoAssignSampleController };

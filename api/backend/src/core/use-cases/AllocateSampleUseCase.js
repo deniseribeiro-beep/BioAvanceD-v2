@@ -3,44 +3,41 @@ const logger = require('../../utils/logger');
 
 /**
  * Caso de uso: alocar amostra em posição física.
- * RF023 v2: estado, auditoria e evento de projeção são persistidos na mesma
- * transação MongoDB. Neo4j é derivado pelo worker do outbox.
+ * Estado canônico, auditoria e outbox são persistidos na mesma transação
+ * MongoDB; Neo4j permanece somente como projeção assíncrona derivada.
  */
 class AllocateSampleUseCase {
-  /**
-   * @param {{ storageRepository: import('../ports/IStorageRepository'), auditRepository: import('../ports/IAuditRepository'), lineageRepository?: import('../ports/ILineageRepository') }} deps
-   */
   constructor({ storageRepository, auditRepository, lineageRepository }) {
     this.storageRepository = storageRepository;
     this.auditRepository = auditRepository;
     this.lineageRepository = lineageRepository;
   }
 
-  /**
-   * @param {{ specimenId: string, boxId: string, position: string, actor: { userId?: string|null, userName?: string|null, userRole?: string|null, ipAddress?: string|null, userAgent?: string|null } }} command
-   */
   async execute(command) {
     this.validateCommand(command);
 
     const normalizedPosition = String(command.position).trim().toUpperCase();
     const snapshot = await this.storageRepository.findSampleById(command.specimenId);
-    if (!snapshot) {
-      throw new Error('Amostra não encontrada');
-    }
+    if (!snapshot) throw new Error('Amostra não encontrada');
 
-    let lineageResult = { lineageValidated: false, lineagePersisted: false, lineageQueued: false, eventId: null };
+    let lineageResult = {
+      lineageValidated: false,
+      lineagePersisted: false,
+      lineageQueued: false,
+      eventId: null
+    };
 
     await this.storageRepository.withTransaction(async (session) => {
       const sample = await this.storageRepository.findSampleById(command.specimenId, session);
-      if (!sample) {
-        throw new Error('Amostra não encontrada');
-      }
+      if (!sample) throw new Error('Amostra não encontrada');
 
-      const beforeLocation = sample.storageAssignment
+      const beforePlacement = sample.currentStoragePlacement
         ? {
-            boxId: sample.storageAssignment.boxId ? String(sample.storageAssignment.boxId) : null,
-            position: sample.storageAssignment.positionCode
-              ? String(sample.storageAssignment.positionCode).toUpperCase()
+            boxId: sample.currentStoragePlacement.boxId
+              ? String(sample.currentStoragePlacement.boxId)
+              : null,
+            position: sample.currentStoragePlacement.positionCode
+              ? String(sample.currentStoragePlacement.positionCode).toUpperCase()
               : null
           }
         : null;
@@ -49,11 +46,8 @@ class AllocateSampleUseCase {
         specimenId: String(sample._id),
         barcode: sample.barcode || null,
         eventType: 'allocate',
-        from: beforeLocation,
-        to: {
-          boxId: String(command.boxId),
-          position: normalizedPosition
-        },
+        from: beforePlacement,
+        to: { boxId: String(command.boxId), position: normalizedPosition },
         actorId: command?.actor?.userId || null,
         reason: 'allocate',
         happenedAt: new Date()
@@ -61,37 +55,23 @@ class AllocateSampleUseCase {
 
       lineageResult = await this.persistLineageInTransaction(lineagePayload, session);
 
-      await this.storageRepository.allocateSamplePosition(
-        {
-          specimenId: command.specimenId,
-          boxId: command.boxId,
-          position: normalizedPosition
-        },
-        session
-      );
+      await this.storageRepository.allocateSamplePosition({
+        specimenId: command.specimenId,
+        boxId: command.boxId,
+        position: normalizedPosition
+      }, session);
 
-      await this.auditRepository.appendImmutableAudit(
-        {
-          specimenId: String(sample._id),
-          barcode: sample.barcode || null,
-          eventType: 'allocate',
-          before: {
-            storageLocation: beforeLocation
-          },
-          after: {
-            storageLocation: {
-              boxId: String(command.boxId),
-              position: normalizedPosition
-            }
-          },
-          context: {
-            actor: command.actor,
-            reason: 'allocate'
-          },
-          timestamp: new Date()
+      await this.auditRepository.appendImmutableAudit({
+        specimenId: String(sample._id),
+        barcode: sample.barcode || null,
+        eventType: 'allocate',
+        before: { physicalStorage: beforePlacement },
+        after: {
+          physicalStorage: { boxId: String(command.boxId), position: normalizedPosition }
         },
-        session
-      );
+        context: { actor: command.actor, reason: 'allocate' },
+        timestamp: new Date()
+      }, session);
     });
 
     return {
@@ -108,9 +88,6 @@ class AllocateSampleUseCase {
     };
   }
 
-  /**
-   * @param {any} command
-   */
   validateCommand(command) {
     if (!command?.specimenId || !command?.boxId || !command?.position) {
       throw new Error('specimenId, boxId e position são obrigatórios');

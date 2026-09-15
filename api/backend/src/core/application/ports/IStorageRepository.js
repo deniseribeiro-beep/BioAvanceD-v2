@@ -1,105 +1,54 @@
 /**
- * Contrato para operações de armazenamento físico de amostras.
+ * Contrato para operações de armazenamento físico canônico v2.
  */
 class IStorageRepository {
-  /**
-   * Executa uma função dentro de transação Mongo.
-   * @param {(session: import('mongodb').ClientSession) => Promise<any>} handler
-   * @returns {Promise<any>}
-   */
-  async withTransaction(handler) {
+  async withTransaction(_handler) {
     throw new Error('Not implemented');
   }
 
   /**
-   * Busca uma amostra por ID. O objeto retornado inclui `storageAssignment`
-   * (dict-02 ELM-0167-0178, #507): o registro canônico de posicionamento
-   * aberto (ou `null`), em vez de deixar quem chama ler o snapshot
-   * embutido `storageLocation.boxId/position` diretamente.
-   * @param {string} specimenId
-   * @param {import('mongodb').ClientSession} [session]
-   * @returns {Promise<(object & { storageAssignment: object|null })|null>}
+   * Retorna a amostra junto do read model `currentStoragePlacement`, derivado
+   * exclusivamente da cadeia normalizada v2.
    */
-  async findSampleById(specimenId, session) {
+  async findSampleById(_specimenId, _session) {
     throw new Error('Not implemented');
   }
 
-  /**
-   * Busca uma caixa por ID.
-   * @param {string} boxId
-   * @param {import('mongodb').ClientSession} [session]
-   * @returns {Promise<object|null>}
-   */
-  async findBoxById(boxId, session) {
+  async findCurrentStoragePlacement(_specimenId, _session) {
     throw new Error('Not implemented');
   }
 
-  /**
-   * Move a amostra entre posições físicas (origem -> destino).
-   * @param {{ specimenId: string, fromBoxId: string, fromPosition: string, toBoxId: string, toPosition: string }} input
-   * @param {import('mongodb').ClientSession} session
-   * @returns {Promise<void>}
-   */
-  async moveSamplePosition(input, session) {
+  async findBoxById(_boxId, _session) {
     throw new Error('Not implemented');
   }
 
-  /**
-   * Aloca uma amostra em posição física.
-   * @param {{ specimenId: string, boxId: string, position: string }} input
-   * @param {import('mongodb').ClientSession} session
-   * @returns {Promise<void>}
-   */
-  async allocateSamplePosition(input, session) {
+  async moveSamplePosition(_input, _session) {
     throw new Error('Not implemented');
   }
 
-  /**
-   * Libera a posição física atual de uma amostra.
-   * @param {{ specimenId: string }} input
-   * @param {import('mongodb').ClientSession} session
-   * @returns {Promise<{ from: { boxId: string, position: string }, barcode?: string|null, quantity?: number|null, unit?: string|null }>}
-   */
-  async releaseSamplePosition(input, session) {
+  async allocateSamplePosition(_input, _session) {
     throw new Error('Not implemented');
   }
 
-  /**
-   * Valida disponibilidade de posição em caixa.
-   * @param {{ boxId: string, position: string }} input
-   * @returns {Promise<{ available: boolean, error?: string, message?: string, occupiedBySampleId?: string, boxData?: object }>}
-   */
-  async validatePositionAvailability(input) {
+  async releaseSamplePosition(_input, _session) {
     throw new Error('Not implemented');
   }
 
-  /**
-   * Lista posições disponíveis de uma caixa.
-   * @param {{ boxId: string }} input
-   * @returns {Promise<object|null>}
-   */
-  async getBoxAvailablePositions(input) {
+  async validatePositionAvailability(_input) {
     throw new Error('Not implemented');
   }
 
-  /**
-   * Obtém localização de armazenamento da amostra.
-   * @param {{ specimenId: string }} input
-   * @returns {Promise<{ found: boolean, location?: object, error?: string, message?: string }>}
-   */
-  async getSampleStorageLocation(input) {
+  async getBoxAvailablePositions(_input) {
     throw new Error('Not implemented');
   }
 
-  /**
-   * Busca amostras candidatas para alocação (sem enriquecimento de consentimento).
-   * @param {{ query: string }} input
-   * @returns {Promise<object[]>}
-   */
-  async searchAllocatableSampleCandidates(input) {
+  async getSamplePhysicalPlacement(_input) {
     throw new Error('Not implemented');
   }
 
+  async searchAllocatableSampleCandidates(_input) {
+    throw new Error('Not implemented');
+  }
 }
 
 module.exports = IStorageRepository;

@@ -1,25 +1,15 @@
 /**
- * Caso de uso: obter localização de armazenamento da amostra.
+ * Caso de uso: obter o posicionamento físico atual da amostra a partir da
+ * cadeia canônica v2.
  */
 class GetSampleStorageLocationUseCase {
-  /**
-   * @param {{ storageRepository: import('../ports/IStorageRepository') }} deps
-   */
   constructor({ storageRepository }) {
     this.storageRepository = storageRepository;
   }
 
-  /**
-   * @param {{ specimenId: string }} query
-   */
   async execute(query) {
-    if (!query?.specimenId) {
-      throw new Error('specimenId é obrigatório');
-    }
-
-    return this.storageRepository.getSampleStorageLocation({
-      specimenId: query.specimenId
-    });
+    if (!query?.specimenId) throw new Error('specimenId é obrigatório');
+    return this.storageRepository.getSamplePhysicalPlacement({ specimenId: query.specimenId });
   }
 }
 

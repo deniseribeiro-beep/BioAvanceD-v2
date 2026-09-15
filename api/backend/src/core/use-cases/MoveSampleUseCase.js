@@ -2,18 +2,11 @@ const logger = require('../../utils/logger');
 const env = require('../../config/env');
 
 /**
- * Caso de uso: mover uma amostra entre posições de armazenamento.
- * RF023 v2: estado, auditoria e outbox são atômicos no MongoDB; Neo4j é
+ * Caso de uso: mover uma amostra entre posições físicas.
+ * Estado canônico, auditoria e outbox são atômicos no MongoDB; Neo4j é
  * somente projeção assíncrona derivada.
  */
 class MoveSampleUseCase {
-  /**
-   * @param {{
-   *  storageRepository: import('../ports/IStorageRepository'),
-   *  auditRepository: import('../ports/IAuditRepository'),
-   *  lineageRepository?: import('../ports/ILineageRepository')
-   * }} deps
-   */
   constructor({ storageRepository, auditRepository, lineageRepository }) {
     this.storageRepository = storageRepository;
     this.auditRepository = auditRepository;
@@ -24,14 +17,12 @@ class MoveSampleUseCase {
     this.validateCommand(command);
 
     const snapshotSample = await this.storageRepository.findSampleById(command.specimenId);
-    if (!snapshotSample) {
-      throw new Error('Amostra não encontrada');
-    }
+    if (!snapshotSample) throw new Error('Amostra não encontrada');
 
-    const sourceBoxId = snapshotSample?.storageAssignment?.boxId;
-    const sourcePosition = snapshotSample?.storageAssignment?.positionCode;
+    const sourceBoxId = snapshotSample?.currentStoragePlacement?.boxId;
+    const sourcePosition = snapshotSample?.currentStoragePlacement?.positionCode;
     if (!sourceBoxId || !sourcePosition) {
-      throw new Error('Amostra não possui localização de origem para movimentação');
+      throw new Error('Amostra não possui posicionamento físico de origem para movimentação');
     }
 
     const from = {
@@ -48,25 +39,26 @@ class MoveSampleUseCase {
     }
 
     const targetBox = await this.storageRepository.findBoxById(to.boxId);
-    if (!targetBox) {
-      throw new Error('Caixa de destino não encontrada');
-    }
+    if (!targetBox) throw new Error('Caixa de destino não encontrada');
 
     let movementID = null;
     let movedAt = new Date();
     let sampleSnapshot = null;
-    let lineageResult = { lineageValidated: false, lineagePersisted: false, lineageQueued: false, eventId: null };
+    let lineageResult = {
+      lineageValidated: false,
+      lineagePersisted: false,
+      lineageQueued: false,
+      eventId: null
+    };
 
     await this.storageRepository.withTransaction(async (session) => {
       const sample = await this.storageRepository.findSampleById(command.specimenId, session);
-      if (!sample) {
-        throw new Error('Amostra não encontrada');
-      }
+      if (!sample) throw new Error('Amostra não encontrada');
 
-      const currentBoxId = sample?.storageAssignment?.boxId;
-      const currentPosition = sample?.storageAssignment?.positionCode;
+      const currentBoxId = sample?.currentStoragePlacement?.boxId;
+      const currentPosition = sample?.currentStoragePlacement?.positionCode;
       if (!currentBoxId || !currentPosition) {
-        throw new Error('Amostra não possui localização de origem para movimentação');
+        throw new Error('Amostra não possui posicionamento físico de origem para movimentação');
       }
 
       const currentFrom = {
@@ -74,13 +66,11 @@ class MoveSampleUseCase {
         position: String(currentPosition).toUpperCase()
       };
       if (currentFrom.boxId !== from.boxId || currentFrom.position !== from.position) {
-        throw new Error('Localização de origem mudou durante a operação; recarregue a amostra');
+        throw new Error('Posicionamento físico de origem mudou durante a operação; recarregue a amostra');
       }
 
       const target = await this.storageRepository.findBoxById(to.boxId, session);
-      if (!target) {
-        throw new Error('Caixa de destino não encontrada');
-      }
+      if (!target) throw new Error('Caixa de destino não encontrada');
 
       movedAt = new Date();
       lineageResult = await this.persistLineageInTransaction({
@@ -94,48 +84,32 @@ class MoveSampleUseCase {
         happenedAt: movedAt
       }, session);
 
-      await this.storageRepository.moveSamplePosition(
-        {
-          specimenId: command.specimenId,
-          fromBoxId: from.boxId,
-          fromPosition: from.position,
-          toBoxId: to.boxId,
-          toPosition: to.position
-        },
-        session
-      );
+      await this.storageRepository.moveSamplePosition({
+        specimenId: command.specimenId,
+        fromBoxId: from.boxId,
+        fromPosition: from.position,
+        toBoxId: to.boxId,
+        toPosition: to.position
+      }, session);
 
       sampleSnapshot = {
         specimenId: String(sample._id),
         barcode: sample.barcode || null
       };
 
-      const auditResult = await this.auditRepository.appendImmutableAudit(
-        {
-          specimenId: String(sample._id),
-          barcode: sample.barcode || null,
-          eventType: 'move',
-          before: {
-            storageLocation: {
-              boxId: from.boxId,
-              position: from.position
-            }
-          },
-          after: {
-            storageLocation: {
-              boxId: to.boxId,
-              position: to.position
-            }
-          },
-          context: {
-            reason: command.reason || null,
-            notes: command.notes || null,
-            actor: command.actor
-          },
-          timestamp: movedAt
+      const auditResult = await this.auditRepository.appendImmutableAudit({
+        specimenId: String(sample._id),
+        barcode: sample.barcode || null,
+        eventType: 'move',
+        before: { physicalStorage: { boxId: from.boxId, position: from.position } },
+        after: { physicalStorage: { boxId: to.boxId, position: to.position } },
+        context: {
+          reason: command.reason || null,
+          notes: command.notes || null,
+          actor: command.actor
         },
-        session
-      );
+        timestamp: movedAt
+      }, session);
 
       movementID = auditResult.movementID;
     });
@@ -156,9 +130,7 @@ class MoveSampleUseCase {
   }
 
   validateCommand(command) {
-    if (!command || typeof command !== 'object') {
-      throw new Error('Comando de movimentação inválido');
-    }
+    if (!command || typeof command !== 'object') throw new Error('Comando de movimentação inválido');
     if (!command.specimenId) throw new Error('specimenId é obrigatório');
     if (!command.targetBoxId) throw new Error('targetBoxId é obrigatório');
     if (!command.targetPosition || typeof command.targetPosition !== 'string') {

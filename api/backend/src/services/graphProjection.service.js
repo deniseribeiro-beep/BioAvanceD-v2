@@ -9,9 +9,7 @@ function stableHash(payload) {
 
 function normalizeConsentStatus(value) {
   const status = String(value || '').trim().toUpperCase();
-  if (!status) {
-    throw new Error('[RF023] Consent projection requires explicit status');
-  }
+  if (!status) throw new Error('[RF023] Consent projection requires explicit status');
   if (!['ACTIVE', 'VALID', 'GRANTED', 'REVOKED'].includes(status)) {
     throw new Error(`[RF023] Unsupported consent projection status: ${status}`);
   }
@@ -27,12 +25,8 @@ class GraphProjectionService {
     const participantId = String(payload.participantId || '').trim();
     const ethicalConsentId = String(payload.ethicalConsentId || payload.consentId || payload.aggregateId || '').trim();
     const status = normalizeConsentStatus(payload.status);
-    if (!participantId) {
-      throw new Error('[RF023] Consent projection requires participantId');
-    }
-    if (!ethicalConsentId) {
-      throw new Error('[RF023] Consent projection requires ethicalConsentId');
-    }
+    if (!participantId) throw new Error('[RF023] Consent projection requires participantId');
+    if (!ethicalConsentId) throw new Error('[RF023] Consent projection requires ethicalConsentId');
 
     return this.outbox.appendEvent(db, {
       eventType: status === 'REVOKED' ? 'CONSENT_REVOKED' : 'CONSENT_UPSERTED',
@@ -44,11 +38,11 @@ class GraphProjectionService {
         consentTemplateId: payload.consentTemplateId || null,
         status,
         signedAt: payload.signedAt || new Date(),
-        revokedAt: payload.revokedAt || null,
+        revokedAt: payload.revokedAt || null
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
-      schemaVersion: 2,
+      schemaVersion: 2
     }, options);
   }
 
@@ -65,11 +59,11 @@ class GraphProjectionService {
           ? payload.parentSpecimenIds
           : (payload.parentSpecimenId ? [payload.parentSpecimenId] : []),
         barcode: payload.barcode || null,
-        specimenStatus: payload.specimenStatus || payload.status || null,
+        specimenStatus: payload.specimenStatus || payload.status || null
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
-      schemaVersion: 2,
+      schemaVersion: 2
     }, options);
   }
 
@@ -86,18 +80,20 @@ class GraphProjectionService {
         actorId: payload.actorId || null,
         reason: payload.reason || null,
         from: payload.from || null,
-        to: payload.to || null,
+        to: payload.to || null
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
-      schemaVersion: 2,
+      schemaVersion: 2
     }, options);
   }
 
-  async appendStorageAssignmentEvent(db, payload, options = {}) {
+  async appendSpecimenContainerAssignmentEvent(db, payload, options = {}) {
     const isReleased = Boolean(payload.removedAt || payload.releasedAt);
     return this.outbox.appendEvent(db, {
-      eventType: isReleased ? 'STORAGE_ASSIGNMENT_RELEASED' : 'STORAGE_ASSIGNMENT_UPSERTED',
+      eventType: isReleased
+        ? 'SPECIMEN_CONTAINER_ASSIGNMENT_RELEASED'
+        : 'SPECIMEN_CONTAINER_ASSIGNMENT_UPSERTED',
       aggregateType: 'SpecimenContainerAssignment',
       aggregateId: String(payload.specimenContainerAssignmentId || payload.aggregateId || ''),
       payload: {
@@ -112,11 +108,11 @@ class GraphProjectionService {
         assignedAt: payload.assignedAt || null,
         releasedAt: payload.releasedAt || null,
         placedAt: payload.placedAt || null,
-        removedAt: payload.removedAt || null,
+        removedAt: payload.removedAt || null
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
-      schemaVersion: 2,
+      schemaVersion: 2
     }, options);
   }
 
@@ -127,11 +123,11 @@ class GraphProjectionService {
       aggregateId: String(payload.specimenId || payload.childSpecimenId || payload.aggregateId || ''),
       payload: {
         specimenId: payload.specimenId || payload.childSpecimenId || null,
-        parentSpecimenId: payload.parentSpecimenId || null,
+        parentSpecimenId: payload.parentSpecimenId || null
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
-      schemaVersion: 2,
+      schemaVersion: 2
     }, options);
   }
 
@@ -145,11 +141,11 @@ class GraphProjectionService {
         qualityAssessmentId: payload.qualityAssessmentId || null,
         status: payload.status || 'UNKNOWN',
         score: payload.score ?? null,
-        evaluatedAt: payload.evaluatedAt || new Date(),
+        evaluatedAt: payload.evaluatedAt || new Date()
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
-      schemaVersion: 2,
+      schemaVersion: 2
     }, options);
   }
 
@@ -163,11 +159,11 @@ class GraphProjectionService {
         telemetryIncidentId: payload.telemetryIncidentId || null,
         severity: payload.severity || 'UNKNOWN',
         status: payload.status || 'OPEN',
-        occurredAt: payload.occurredAt || new Date(),
+        occurredAt: payload.occurredAt || new Date()
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
-      schemaVersion: 1,
+      schemaVersion: 1
     }, options);
   }
 
@@ -196,11 +192,11 @@ class GraphProjectionService {
         sourceQueryHash: payload.sourceQueryHash || null,
         sourceReadingSetHash: payload.sourceReadingSetHash || null,
         calculationVersion: payload.calculationVersion || '1.0.0',
-        calculatedAt: payload.calculatedAt || new Date(),
+        calculatedAt: payload.calculatedAt || new Date()
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
-      schemaVersion: 2,
+      schemaVersion: 2
     }, options);
   }
 
@@ -216,11 +212,11 @@ class GraphProjectionService {
         version: payload.version || null,
         display: payload.display || null,
         conceptStatus: payload.conceptStatus || 'active',
-        referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null,
+        referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
-      schemaVersion: 1,
+      schemaVersion: 1
     }, options);
   }
 
@@ -235,16 +231,13 @@ class GraphProjectionService {
         targetConceptId: payload.targetConceptId || null,
         relationType: payload.relationType || null,
         relationVersion: payload.relationVersion || null,
-        referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null,
+        referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
-      schemaVersion: 1,
+      schemaVersion: 1
     }, options);
   }
 }
 
-module.exports = {
-  GraphProjectionService,
-  stableHash,
-};
+module.exports = { GraphProjectionService, stableHash };

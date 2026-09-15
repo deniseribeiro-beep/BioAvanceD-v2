@@ -106,7 +106,6 @@ const SampleSchema = new Schema({
   collectionId: { type: String, default: null },
   linkedFiles: { type: [Schema.Types.Mixed], default: [] },
   qrCode: { type: String, default: null },
-  storageLocation: { type: Schema.Types.Mixed, default: null },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 }, { collection: 'samples' });
@@ -240,7 +239,6 @@ class SampleModel {
       collectionId: data.collectionId || null,
       linkedFiles: Array.isArray(data.linkedFiles) ? data.linkedFiles : [],
       qrCode: data.qrCode || null,
-      storageLocation: data.storageLocation || null,
       createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
       updatedAt: new Date()
     };

@@ -2,14 +2,11 @@ const env = require('../../config/env');
 const logger = require('../../utils/logger');
 
 /**
- * Caso de uso: liberar posição física atual da amostra.
- * RF023 v2: estado, auditoria e outbox são persistidos na mesma transação
+ * Caso de uso: liberar o posicionamento físico atual da amostra.
+ * Estado canônico, auditoria e outbox são persistidos na mesma transação
  * MongoDB; Neo4j é somente projeção derivada.
  */
 class ReleaseSampleUseCase {
-  /**
-   * @param {{ storageRepository: import('../ports/IStorageRepository'), auditRepository: import('../ports/IAuditRepository'), lineageRepository?: import('../ports/ILineageRepository') }} deps
-   */
   constructor({ storageRepository, auditRepository, lineageRepository }) {
     this.storageRepository = storageRepository;
     this.auditRepository = auditRepository;
@@ -17,32 +14,31 @@ class ReleaseSampleUseCase {
   }
 
   async execute(command) {
-    if (!command?.specimenId) {
-      throw new Error('specimenId é obrigatório');
-    }
+    if (!command?.specimenId) throw new Error('specimenId é obrigatório');
 
     const sampleSnapshot = await this.storageRepository.findSampleById(command.specimenId);
-    if (!sampleSnapshot) {
-      throw new Error('Amostra não encontrada');
-    }
+    if (!sampleSnapshot) throw new Error('Amostra não encontrada');
 
-    const sourceAssignment = sampleSnapshot?.storageAssignment;
-    if (!sourceAssignment?.boxId || !sourceAssignment?.positionCode) {
-      throw new Error('Amostra não possui localização de armazenamento');
+    const sourcePlacement = sampleSnapshot?.currentStoragePlacement;
+    if (!sourcePlacement?.boxId || !sourcePlacement?.positionCode) {
+      throw new Error('Amostra não possui posicionamento físico ativo');
     }
 
     let releasedFrom = null;
-    let lineageResult = { lineageValidated: false, lineagePersisted: false, lineageQueued: false, eventId: null };
+    let lineageResult = {
+      lineageValidated: false,
+      lineagePersisted: false,
+      lineageQueued: false,
+      eventId: null
+    };
 
     await this.storageRepository.withTransaction(async (session) => {
       const sample = await this.storageRepository.findSampleById(command.specimenId, session);
-      if (!sample) {
-        throw new Error('Amostra não encontrada');
-      }
+      if (!sample) throw new Error('Amostra não encontrada');
 
-      const currentAssignment = sample?.storageAssignment;
-      if (!currentAssignment?.boxId || !currentAssignment?.positionCode) {
-        throw new Error('Amostra não possui localização de armazenamento');
+      const currentPlacement = sample?.currentStoragePlacement;
+      if (!currentPlacement?.boxId || !currentPlacement?.positionCode) {
+        throw new Error('Amostra não possui posicionamento físico ativo');
       }
 
       const happenedAt = new Date();
@@ -51,8 +47,8 @@ class ReleaseSampleUseCase {
         barcode: sample.barcode || null,
         eventType: 'release',
         from: {
-          boxId: String(currentAssignment.boxId),
-          position: String(currentAssignment.positionCode).toUpperCase()
+          boxId: String(currentPlacement.boxId),
+          position: String(currentPlacement.positionCode).toUpperCase()
         },
         to: null,
         actorId: command?.actor?.userId || null,
@@ -73,28 +69,17 @@ class ReleaseSampleUseCase {
         position: release.from.position
       };
 
-      await this.auditRepository.appendImmutableAudit(
-        {
-          specimenId: String(sample._id),
-          barcode: sample.barcode || null,
-          eventType: 'release',
-          before: {
-            storageLocation: {
-              boxId: release.from.boxId,
-              position: release.from.position
-            }
-          },
-          after: {
-            storageLocation: null
-          },
-          context: {
-            actor: command.actor,
-            reason: 'release'
-          },
-          timestamp: happenedAt
+      await this.auditRepository.appendImmutableAudit({
+        specimenId: String(sample._id),
+        barcode: sample.barcode || null,
+        eventType: 'release',
+        before: {
+          physicalStorage: { boxId: release.from.boxId, position: release.from.position }
         },
-        session
-      );
+        after: { physicalStorage: null },
+        context: { actor: command.actor, reason: 'release' },
+        timestamp: happenedAt
+      }, session);
     });
 
     return {

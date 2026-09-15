@@ -13,11 +13,11 @@ const STANDALONE_DEPLOYMENT_TRANSACTION_ERROR =
   'Configure o mongod com --replSet (ver compose.test.yml) ou aponte MONGO_URI para um replica set.';
 
 /**
- * Storage Service - núcleo de armazenamento físico.
+ * Storage Service - núcleo de armazenamento físico canônico v2.
  *
- * RF023 v2: MongoDB é a autoridade operacional. Nenhuma operação deste
- * serviço escreve Neo4j diretamente; projeções são enfileiradas no outbox
- * na mesma transação do estado e da auditoria.
+ * MongoDB é a autoridade operacional. Nenhuma operação deste serviço escreve
+ * Neo4j diretamente; projeções são enfileiradas no outbox na mesma transação
+ * do estado normalizado e da auditoria.
  */
 class StorageService {
   constructor(db) {
@@ -64,11 +64,14 @@ class StorageService {
         };
       }
 
-      if (sampleSnapshot.storageAssignment?.boxId && sampleSnapshot.storageAssignment?.positionCode) {
+      if (
+        sampleSnapshot.currentStoragePlacement?.boxId &&
+        sampleSnapshot.currentStoragePlacement?.positionCode
+      ) {
         return {
           success: false,
           error: 'ALREADY_ALLOCATED',
-          message: `Amostra já está alocada em ${sampleSnapshot.storageAssignment.boxId}/${sampleSnapshot.storageAssignment.positionCode}`
+          message: `Amostra já está alocada em ${sampleSnapshot.currentStoragePlacement.boxId}/${sampleSnapshot.currentStoragePlacement.positionCode}`
         };
       }
 
@@ -88,15 +91,12 @@ class StorageService {
         const freshSample = await this.storageRepository.findSampleById(sampleObjId, session);
         if (!freshSample) throw new Error('SAMPLE_NOT_FOUND');
 
-        await this.lineageRepository.validateBeforePersistence(
-          {
-            specimenId: String(sampleObjId),
-            barcode: freshSample.barcode || null,
-            eventType: 'auto_allocate',
-            requireEthicalConsent: true,
-          },
-          session
-        );
+        await this.lineageRepository.validateBeforePersistence({
+          specimenId: String(sampleObjId),
+          barcode: freshSample.barcode || null,
+          eventType: 'auto_allocate',
+          requireEthicalConsent: true
+        }, session);
 
         assignedPosition = await this.storageRepository.autoAssignSamplePosition(
           { specimenId: sampleObjId, boxId: boxObjId },
@@ -104,34 +104,28 @@ class StorageService {
         );
 
         const happenedAt = new Date();
-        await this.auditRepository.appendImmutableAudit(
-          {
-            specimenId: sampleObjId.toString(),
-            barcode: freshSample.barcode || null,
-            eventType: 'auto_allocate',
-            before: { storageLocation: null },
-            after: {
-              storageLocation: { boxId: String(boxObjId), position: assignedPosition }
-            },
-            context: { actor: { userName: 'SYSTEM' } },
-            timestamp: happenedAt
+        await this.auditRepository.appendImmutableAudit({
+          specimenId: sampleObjId.toString(),
+          barcode: freshSample.barcode || null,
+          eventType: 'auto_allocate',
+          before: { physicalStorage: null },
+          after: {
+            physicalStorage: { boxId: String(boxObjId), position: assignedPosition }
           },
-          session
-        );
+          context: { actor: { userName: 'SYSTEM' } },
+          timestamp: happenedAt
+        }, session);
 
-        const projection = await this.lineageRepository.recordCustodyEvent(
-          {
-            specimenId: String(sampleObjId),
-            barcode: freshSample.barcode || null,
-            eventType: 'auto_allocate',
-            from: null,
-            to: { boxId: String(boxObjId), position: assignedPosition },
-            actorId: null,
-            reason: 'auto_allocate',
-            happenedAt
-          },
-          session
-        );
+        const projection = await this.lineageRepository.recordCustodyEvent({
+          specimenId: String(sampleObjId),
+          barcode: freshSample.barcode || null,
+          eventType: 'auto_allocate',
+          from: null,
+          to: { boxId: String(boxObjId), position: assignedPosition },
+          actorId: null,
+          reason: 'auto_allocate',
+          happenedAt
+        }, session);
         projectionEventId = projection?.eventId || null;
       });
 
@@ -139,7 +133,6 @@ class StorageService {
 
       return {
         success: true,
-        graphPersisted: false,
         projectionQueued: true,
         projectionEventId,
         sampleLocation: {
@@ -150,7 +143,6 @@ class StorageService {
       };
     } catch (error) {
       logger.error('[Storage] Erro na alocação inteligente:', error);
-
       return {
         success: false,
         error: error.message === 'BOX_NOT_FOUND'
@@ -180,11 +172,14 @@ class StorageService {
         };
       }
 
-      if (!sampleSnapshot.storageAssignment?.boxId || !sampleSnapshot.storageAssignment?.positionCode) {
+      if (
+        !sampleSnapshot.currentStoragePlacement?.boxId ||
+        !sampleSnapshot.currentStoragePlacement?.positionCode
+      ) {
         return {
           success: false,
-          error: 'NO_STORAGE_LOCATION',
-          message: 'Amostra não possui localização de armazenamento'
+          error: 'NO_PHYSICAL_PLACEMENT',
+          message: 'Amostra não possui posicionamento físico ativo'
         };
       }
 
@@ -195,26 +190,23 @@ class StorageService {
         const sample = await this.storageRepository.findSampleById(sampleObjId, session);
         if (!sample) throw new Error('SAMPLE_NOT_FOUND');
 
-        const assignment = sample.storageAssignment;
-        if (!assignment?.boxId || !assignment?.positionCode) {
-          throw new Error('NO_STORAGE_LOCATION');
+        const currentPlacement = sample.currentStoragePlacement;
+        if (!currentPlacement?.boxId || !currentPlacement?.positionCode) {
+          throw new Error('NO_PHYSICAL_PLACEMENT');
         }
 
         const from = {
-          boxId: String(assignment.boxId),
-          position: String(assignment.positionCode).toUpperCase()
+          boxId: String(currentPlacement.boxId),
+          position: String(currentPlacement.positionCode).toUpperCase()
         };
         const happenedAt = new Date();
 
-        await this.lineageRepository.validateBeforePersistence(
-          {
-            specimenId: String(sampleObjId),
-            barcode: sample.barcode || null,
-            eventType: 'release',
-            requireEthicalConsent: true,
-          },
-          session
-        );
+        await this.lineageRepository.validateBeforePersistence({
+          specimenId: String(sampleObjId),
+          barcode: sample.barcode || null,
+          eventType: 'release',
+          requireEthicalConsent: true
+        }, session);
 
         const release = await this.storageRepository.releaseSamplePosition(
           { specimenId: sampleObjId },
@@ -227,36 +219,30 @@ class StorageService {
           position: release.from.position
         };
 
-        await this.auditRepository.appendImmutableAudit(
-          {
-            specimenId: sampleObjId.toString(),
-            barcode: sample.barcode || null,
-            eventType: 'release',
-            before: {
-              storageLocation: from,
-              quantity: sample.quantity,
-              unit: sample.unit || 'µL'
-            },
-            after: { storageLocation: null },
-            context: { actor: { userName: 'SYSTEM' } },
-            timestamp: happenedAt
+        await this.auditRepository.appendImmutableAudit({
+          specimenId: sampleObjId.toString(),
+          barcode: sample.barcode || null,
+          eventType: 'release',
+          before: {
+            physicalStorage: from,
+            quantity: sample.quantity,
+            unit: sample.unit || 'µL'
           },
-          session
-        );
+          after: { physicalStorage: null },
+          context: { actor: { userName: 'SYSTEM' } },
+          timestamp: happenedAt
+        }, session);
 
-        const projection = await this.lineageRepository.recordCustodyEvent(
-          {
-            specimenId: String(sampleObjId),
-            barcode: sample.barcode || null,
-            eventType: 'release',
-            from,
-            to: null,
-            actorId: null,
-            reason: 'release',
-            happenedAt
-          },
-          session
-        );
+        const projection = await this.lineageRepository.recordCustodyEvent({
+          specimenId: String(sampleObjId),
+          barcode: sample.barcode || null,
+          eventType: 'release',
+          from,
+          to: null,
+          actorId: null,
+          reason: 'release',
+          happenedAt
+        }, session);
         projectionEventId = projection?.eventId || null;
       });
 
@@ -274,8 +260,8 @@ class StorageService {
         success: false,
         error: error.message === 'SAMPLE_NOT_FOUND'
           ? 'SAMPLE_NOT_FOUND'
-          : error.message === 'NO_STORAGE_LOCATION'
-            ? 'NO_STORAGE_LOCATION'
+          : error.message === 'NO_PHYSICAL_PLACEMENT'
+            ? 'NO_PHYSICAL_PLACEMENT'
             : 'RELEASE_ERROR',
         message: error.message
       };
@@ -293,9 +279,7 @@ class StorageService {
       const boxObjId = this._normalizeObjectId(boxId);
       const box = await storageBoxesCollection.findOne({ _id: boxObjId });
 
-      if (!box) {
-        return { valid: false, error: 'BOX_NOT_FOUND' };
-      }
+      if (!box) return { valid: false, error: 'BOX_NOT_FOUND' };
 
       const errors = [];
       let actualCount = 0;
@@ -313,16 +297,16 @@ class StorageService {
           continue;
         }
 
-        const assignment = await this.storageRepository.findCurrentStorageAssignment(
-          String(sample._id)
+        const currentPlacement = await this.storageRepository.findCurrentStoragePlacement(
+          String(sample.specimenId || sample._id)
         );
-        const assignmentBoxId = assignment?.boxId ? String(assignment.boxId) : null;
-        const assignmentPosition = assignment?.positionCode || null;
+        const placementBoxId = currentPlacement?.boxId ? String(currentPlacement.boxId) : null;
+        const placementPosition = currentPlacement?.positionCode || null;
 
-        if (assignmentBoxId !== String(boxObjId) || assignmentPosition !== position) {
+        if (placementBoxId !== String(boxObjId) || placementPosition !== position) {
           errors.push(
             `Inconsistência: Box referencia ${storedSpecimenId} em ${position}, ` +
-            `mas a atribuição física aponta para ${assignmentBoxId}/${assignmentPosition}`
+            `mas a cadeia física canônica aponta para ${placementBoxId}/${placementPosition}`
           );
         }
       }

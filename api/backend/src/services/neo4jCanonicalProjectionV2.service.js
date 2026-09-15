@@ -23,8 +23,11 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
     if (type === 'CUSTODY_EVENT_RECORDED') {
       return this.applyCustodyProjection(session, event);
     }
-    if (type === 'STORAGE_ASSIGNMENT_UPSERTED' || type === 'STORAGE_ASSIGNMENT_RELEASED') {
-      return this.applyStorageAssignmentProjection(session, event);
+    if (
+      type === 'SPECIMEN_CONTAINER_ASSIGNMENT_UPSERTED' ||
+      type === 'SPECIMEN_CONTAINER_ASSIGNMENT_RELEASED'
+    ) {
+      return this.applySpecimenContainerAssignmentProjection(session, event);
     }
     if (type === 'TELEMETRY_EXPOSURE_SUMMARIZED') {
       return this.applyTelemetryExposureSummaryProjection(session, event);
@@ -89,7 +92,7 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
         schemaVersion: Number(event.schemaVersion || 2),
         occurredAt,
         sourceService: normalizeText(event.sourceService) || 'unknown',
-        eventId: normalizeText(event.eventId),
+        eventId: normalizeText(event.eventId)
       }
     );
 
@@ -153,7 +156,7 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
         barcode: payload.barcode || null,
         specimenStatus: payload.specimenStatus || null,
         sourceService: normalizeText(event.sourceService) || 'unknown',
-        eventId: normalizeText(event.eventId),
+        eventId: normalizeText(event.eventId)
       }
     );
 
@@ -229,19 +232,21 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
         fromPositionId,
         toPositionId,
         sourceService: normalizeText(event.sourceService) || 'unknown',
-        eventId: normalizeText(event.eventId),
+        eventId: normalizeText(event.eventId)
       }
     );
 
     return { projected: true, eventType: event.eventType, specimenId, custodyEventId };
   }
 
-  async applyStorageAssignmentProjection(session, event) {
+  async applySpecimenContainerAssignmentProjection(session, event) {
     const payload = event?.payload || {};
-    const assignmentId = normalizeText(payload.specimenContainerAssignmentId || event.aggregateId);
+    const specimenContainerAssignmentId = normalizeText(
+      payload.specimenContainerAssignmentId || event.aggregateId
+    );
     const specimenId = normalizeText(payload.specimenId);
-    if (!assignmentId || !specimenId) {
-      throw new Error('[RF023] Storage assignment projection requires assignment and specimen ids');
+    if (!specimenContainerAssignmentId || !specimenId) {
+      throw new Error('[RF023] SpecimenContainerAssignment projection requires specimen and assignment ids');
     }
 
     await session.run(
@@ -250,7 +255,7 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
         ON CREATE SET sample.createdAt = datetime(), sample.source = $sourceService
         SET sample.updatedAt = datetime()
 
-        MERGE (assignment:SpecimenContainerAssignment {id: $assignmentId})
+        MERGE (assignment:SpecimenContainerAssignment {id: $specimenContainerAssignmentId})
         ON CREATE SET assignment.createdAt = datetime(), assignment.source = $sourceService
         SET assignment.updatedAt = datetime(),
             assignment.containerId = $containerId,
@@ -281,11 +286,11 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
           MERGE (assignment)-[:RESOLVES_RACK_LOCATION]->(rackAssignment)
         )
 
-        RETURN assignment.id AS assignmentId
+        RETURN assignment.id AS specimenContainerAssignmentId
       `,
       {
         specimenId,
-        assignmentId,
+        specimenContainerAssignmentId,
         containerId: payload.containerId || null,
         assignedAt: normalizeIso(payload.assignedAt),
         releasedAt: normalizeIso(payload.releasedAt),
@@ -295,11 +300,16 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
         storageRackId: payload.storageRackId || null,
         storageLocationId: payload.storageLocationId || null,
         sourceService: normalizeText(event.sourceService) || 'unknown',
-        eventId: normalizeText(event.eventId),
+        eventId: normalizeText(event.eventId)
       }
     );
 
-    return { projected: true, eventType: event.eventType, specimenId, assignmentId };
+    return {
+      projected: true,
+      eventType: event.eventType,
+      specimenId,
+      specimenContainerAssignmentId
+    };
   }
 
   async applyTelemetryExposureSummaryProjection(session, event) {
@@ -376,7 +386,7 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
         calculationVersion: payload.calculationVersion || '2.0.0',
         calculatedAt,
         sourceService: normalizeText(event.sourceService) || 'unknown',
-        eventId: normalizeText(event.eventId),
+        eventId: normalizeText(event.eventId)
       }
     );
 
@@ -384,6 +394,4 @@ class Neo4jCanonicalProjectionV2Service extends Neo4jCanonicalProjectionService 
   }
 }
 
-module.exports = {
-  Neo4jCanonicalProjectionV2Service,
-};
+module.exports = { Neo4jCanonicalProjectionV2Service };
