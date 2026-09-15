@@ -23,21 +23,18 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: api/backend/package-lock.json
-      - name: Migrate remaining storage tests
-        run: |
-          python3 scripts/maintenance/migrate_remaining_storage_v2_tests_v2.py
-          python3 scripts/maintenance/fix_intake_v2_test_harness.py
-          python3 scripts/maintenance/fix_intake_canonical_shape_validation.py
+      - name: Migrate adjacent intake tests
+        run: python3 scripts/maintenance/migrate_adjacent_intake_v2_tests.py
       - name: Install backend dependencies
         run: |
           npm --prefix api/backend ci
           npm --prefix api/backend install --no-save @rollup/rollup-linux-x64-gnu
-      - name: Run targeted storage-adjacent tests
-        run: npm --prefix api/backend exec -- vitest run tests/unit/intakeWizard.routes.test.js tests/unit/import-lgpd.service.importSamples.unit.test.js
+      - name: Run canonical intake/import regression set
+        run: npm --prefix api/backend exec -- vitest run tests/unit/intakeWizard.routes.test.js tests/unit/import-lgpd.service.importSamples.unit.test.js tests/unit/intakeWizard.governance-integration.test.js tests/unit/intakeWizard.clinicalEntities.test.js
       - name: Commit migration
         run: |
           git config user.name "BioAvanceD CI"
           git config user.email "actions@users.noreply.github.com"
           git add -A
-          git commit -m "test(v2): migrate remaining canonical storage coverage"
+          git commit -m "test(v2): align adjacent intake suites with canonical placement"
           git push origin HEAD:stabilize/v2.0.0-prototype
