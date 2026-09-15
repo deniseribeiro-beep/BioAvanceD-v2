@@ -1380,8 +1380,8 @@ class ImportLGPDService {
       const validator = new SampleGraphValidator(db);
       const drugService = new DrugService(db);
       // #477: samples are inserted unallocated, then AllocateSampleUseCase
-      // performs the atomic occupancyGrid write, storageLocation update,
-      // StorageAssignment record and audit/lineage trail — same use case
+      // performs the atomic occupancyGrid write, canonical-v2 normalized
+      // assignment-chain persistence and audit/lineage trail — same use case
       // sample.service.js's createSample reuses (#474). Replaces this
       // loop's old direct storageLocation write + manual StorageAssignment
       // insert, which never updated the box's occupancyGrid, so a fixed
@@ -1615,7 +1615,7 @@ class ImportLGPDService {
             }
           }
 
-          // #459/#477: resolve a candidate storageLocation (boxId/positionCode)
+          // #459/#477: resolve a candidate physical placement (boxId/positionCode)
           // for this row — CSV-provided boxId first, then auto-increment
           // from the StorageBox sequence, then a single fixed startBoxId
           // applied to every location-less row — same precedence the legacy
@@ -1746,11 +1746,9 @@ class ImportLGPDService {
           }
 
           // #477: AllocateSampleUseCase performs the atomic occupancyGrid
-          // write, storageLocation update, StorageAssignment record
+          // write, canonical-v2 normalized assignment-chain persistence
           // (dict-02 ELM-0167-0178) and audit/lineage trail for the
-          // candidate resolved above — replaces the old manual
-          // StorageAssignment insert, which never touched the box's
-          // occupancyGrid.
+          // candidate resolved above.
           if (candidateLocation?.boxId) {
             await allocateUseCase.execute({
               specimenId: insertResult.insertedId,
@@ -1764,7 +1762,6 @@ class ImportLGPDService {
                 userAgent: actor?.userAgent || null
               }
             });
-            sample.storageLocation = { boxId: candidateLocation.boxId, position: candidateLocation.position };
           }
 
           try {
