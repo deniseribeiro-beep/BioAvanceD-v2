@@ -46,11 +46,16 @@ function createAllocateSampleController() {
         }
       });
 
+      const currentStoragePlacement = result.currentStoragePlacement || null;
       return res.status(201).json({
         success: true,
-        data: result.sampleLocation,
+        data: currentStoragePlacement,
+        currentStoragePlacement,
         projectionQueued: result.lineageQueued,
-        message: `Amostra alocada com sucesso em ${result.sampleLocation.position}`
+        projectionEventId: result.lineageEventId || null,
+        message: currentStoragePlacement?.positionCode
+          ? `Amostra alocada com sucesso em ${currentStoragePlacement.positionCode}`
+          : 'Amostra alocada com sucesso'
       });
     } catch (error) {
       logger.error('[AllocateSampleController] Erro ao alocar amostra:', error.message || error);
