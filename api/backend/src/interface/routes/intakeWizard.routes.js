@@ -8,7 +8,6 @@ const { getCollection } = require('../../utils/collectionResolver');
 const { SampleModel } = require('../../models/Sample');
 const quarantineActionService = require('../../services/quarantine-action.service');
 const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
-const GetSampleStorageLocationUseCase = require('../../core/use-cases/GetSampleStorageLocationUseCase');
 
 const router = express.Router();
 
@@ -67,39 +66,25 @@ function resolveGovernanceStatus(body = {}) {
   };
 }
 
-// #452: resolve via the same GetSampleStorageLocationUseCase/
-// MongoStorageRepository abstraction storage-query.controller.js and (post-
-// #450) storageService.js use, instead of trusting the storageLocation field
-// echoed on the in-memory sample. Falls back to that raw field when the
-// abstraction can't be reached (no db, no persisted _id yet, lookup fails) —
-// the summary must never throw for this.
-async function resolveStorageLocationForSummary(db, sample) {
-  if (!db || !sample?._id) {
-    return sample?.storageLocation || null;
-  }
+// Intake summaries resolve physical custody exclusively from the canonical-v2
+// normalized chain. No embedded Sample snapshot or compatibility alias is
+// consulted when the sample has not yet been persisted/resolved.
+async function resolveCurrentStoragePlacement(db, sample) {
+  if (!db) return sample?.currentStoragePlacement || null;
+
+  const specimenRef = sample?.specimenId || sample?._id;
+  if (!specimenRef) return sample?.currentStoragePlacement || null;
 
   try {
-    const useCase = new GetSampleStorageLocationUseCase({
-      storageRepository: new MongoStorageRepository(db),
-    });
-    const result = await useCase.execute({ specimenId: sample._id });
-    if (!result?.found) {
-      return null;
-    }
-    return {
-      boxId: result.location.box.boxId,
-      boxName: result.location.box.boxName,
-      position: result.location.box.position,
-      locationID: result.location.locationID,
-      readable: result.location.readable,
-    };
-  } catch (error) {
-    return sample?.storageLocation || null;
+    const repository = new MongoStorageRepository(db);
+    return await repository.findCurrentStoragePlacement(specimenRef);
+  } catch (_error) {
+    return sample?.currentStoragePlacement || null;
   }
 }
 
 async function buildSafeSampleSummary(db, sample = {}, governanceStatus = {}) {
-  const storageLocation = await resolveStorageLocationForSummary(db, sample);
+  const currentStoragePlacement = await resolveCurrentStoragePlacement(db, sample);
   return {
     _id: normalizeString(sample?._id?.toString?.() || sample?._id) || null,
     specimenId: normalizeString(sample.specimenId || sample.sampleID || sample.sampleId) || null,
@@ -111,7 +96,7 @@ async function buildSafeSampleSummary(db, sample = {}, governanceStatus = {}) {
     final_grade: normalizeString(sample.final_grade) || null,
     rcs_score: sample.rcs_score ?? null,
     sprec: sample.sprec || null,
-    storageLocation,
+    currentStoragePlacement,
   };
 }
 
@@ -134,10 +119,8 @@ async function enforcePersistedGovernanceStatus(req, body) {
   const existingSample = await samplesCollection.findOne(query);
   const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
 
-  // #540: status/currentStatus are legacy fields canonical-data-contract-v1.md
-  // bans on the Sample document — specimenStatus is the sole persisted signal.
-  // governanceStatus.status/currentStatus still feed buildSafeSampleSummary's
-  // response below (a display concern, not a Sample-document write).
+  // status/currentStatus remain response-only governance display fields;
+  // specimenStatus is the sole persisted specimen lifecycle signal.
   await samplesCollection.updateOne(query, {
     $set: {
       specimenStatus,
@@ -167,6 +150,8 @@ async function sanitizeIntakeResponse(db, body = {}, governanceStatus = null) {
   }
 
   const safeGovernanceStatus = governanceStatus || resolveGovernanceStatus(body);
+  const sample = body.sample || {};
+  const currentStoragePlacement = await resolveCurrentStoragePlacement(db, sample);
   return {
     success: true,
     message: body.message,
@@ -174,9 +159,9 @@ async function sanitizeIntakeResponse(db, body = {}, governanceStatus = null) {
     qualityAssessment: body.qualityAssessment || null,
     patientMatch: body.patientMatch || null,
     consent: body.consent || null,
-    storageLocation: body.storageLocation || null,
+    currentStoragePlacement,
     label: body.label || null,
-    sample: await buildSafeSampleSummary(db, body.sample || {}, safeGovernanceStatus),
+    sample: await buildSafeSampleSummary(db, sample, safeGovernanceStatus),
   };
 }
 
