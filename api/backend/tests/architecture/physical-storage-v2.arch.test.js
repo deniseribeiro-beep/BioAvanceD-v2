@@ -78,24 +78,27 @@ test('frontend storage contract exposes only canonical-v2 placement semantics', 
   const modelsFile = path.resolve(FRONTEND_SRC_ROOT, 'types/models.ts');
   const content = fs.readFileSync(modelsFile, 'utf8');
 
-  for (const retired of [
-    'StorageAssignmentRecord',
-    'SampleEmbeddedStorageLocation',
-    'SampleStorageLocationDTO',
-    'resolvedStorageLocation',
-    'storageAssignment',
-    'storageLocation'
-  ]) {
-    assert.strictEqual(
-      content.includes(retired),
-      false,
-      `frontend/src/types/models.ts still exposes retired storage contract ${retired}`
+  const retired = [
+    /\bStorageAssignmentRecord\b/,
+    /\bSampleEmbeddedStorageLocation\b/,
+    /\bSampleStorageLocationDTO\b/,
+    /\bresolvedStorageLocation\b/,
+    /\bstorageAssignment\b/,
+    /\bstorageLocation\b/
+  ];
+
+  for (const pattern of retired) {
+    assert.doesNotMatch(
+      content,
+      pattern,
+      `frontend/src/types/models.ts still exposes retired storage contract ${pattern}`
     );
   }
 
   assert.match(content, /interface\s+CanonicalPhysicalPlacement\b/);
   assert.match(content, /interface\s+CurrentStoragePlacementDTO\b/);
   assert.match(content, /currentStoragePlacement\?:\s*CurrentStoragePlacementDTO\s*\|\s*null/);
+  assert.match(content, /\bstorageLocationId\?:\s*string\s*\|\s*null/);
 });
 
 test('retired location backfill is absent from executable tree', () => {
