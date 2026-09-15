@@ -291,7 +291,7 @@ async function findBoxIdsBySensorKey(db, sensorKey, options = {}) {
     const sensorsCollection = db.collection('sensors');
     const sensors = await sensorsCollection.find(buildSensorLookup(rawSensorKey), sessionOptions).toArray();
     for (const sensor of sensors) {
-      const equipmentIdentifiers = collectIdentifierValues(sensor.locationId, sensor.locationID, sensor.storageLocation?.locationID);
+      const equipmentIdentifiers = collectIdentifierValues(sensor.locationId, sensor.locationID);
       const freezers = await resolveFreezersByEquipmentIdentifiers(db, equipmentIdentifiers, options);
       for (const freezer of freezers) {
         boxIds.push(...await findBoxIdsUnderFreezer(db, freezer._id, options));
@@ -306,7 +306,7 @@ async function findBoxIdsBySensorKey(db, sensorKey, options = {}) {
     const metadataDocs = await sensorMetadataCollection.find(buildSensorLookup(rawSensorKey), sessionOptions).toArray();
 
     for (const metadata of metadataDocs) {
-      const equipmentIdentifiers = collectIdentifierValues(metadata.locationId, metadata.locationID, metadata.storageLocation?.locationID);
+      const equipmentIdentifiers = collectIdentifierValues(metadata.locationId, metadata.locationID);
       const freezersFromMetadata = await resolveFreezersByEquipmentIdentifiers(db, equipmentIdentifiers, options);
       for (const freezer of freezersFromMetadata) {
         boxIds.push(...await findBoxIdsUnderFreezer(db, freezer._id, options));
