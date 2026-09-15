@@ -17,14 +17,20 @@ jobs:
         with:
           ref: stabilize/v2.0.0-prototype
           fetch-depth: 0
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: api/backend/package-lock.json
       - name: Migrate remaining storage tests
         run: python3 scripts/maintenance/migrate_remaining_storage_v2_tests_v2.py
       - name: Install backend dependencies
-        working-directory: api/backend
-        run: npm ci
+        run: |
+          npm --prefix api/backend ci
+          npm --prefix api/backend install --no-save @rollup/rollup-linux-x64-gnu
       - name: Run targeted storage-adjacent tests
-        working-directory: api/backend
-        run: npx vitest run tests/unit/intakeWizard.routes.test.js tests/unit/import-lgpd.service.importSamples.unit.test.js
+        run: npm --prefix api/backend exec -- vitest run tests/unit/intakeWizard.routes.test.js tests/unit/import-lgpd.service.importSamples.unit.test.js
       - name: Commit migration
         run: |
           git config user.name "BioAvanceD CI"
