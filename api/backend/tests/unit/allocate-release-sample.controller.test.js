@@ -34,8 +34,12 @@ describe('allocate-sample.controller', () => {
   });
 
   it('allocates and returns 201 with the expected response shape', async () => {
-    const sampleLocation = { boxId: 'box-1', position: 'A1' };
-    vi.spyOn(AllocateSampleUseCase.prototype, 'execute').mockResolvedValue({ sampleLocation });
+    const currentStoragePlacement = { specimenId: 's1', boxId: 'box-1', positionCode: 'A1' };
+    vi.spyOn(AllocateSampleUseCase.prototype, 'execute').mockResolvedValue({
+      currentStoragePlacement,
+      lineageQueued: true,
+      lineageEventId: 'evt-allocate'
+    });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
       body: { specimenId: 's1', boxId: 'box-1', position: 'A1' },
@@ -48,12 +52,15 @@ describe('allocate-sample.controller', () => {
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
-      data: sampleLocation,
+      data: currentStoragePlacement,
+      currentStoragePlacement,
+      projectionQueued: true,
+      projectionEventId: 'evt-allocate',
       message: 'Amostra alocada com sucesso em A1'
     });
   });
 
-  it('maps the wire-contract specimenId onto the use case command as specimenId (#482)', async () => {
+  it('passes the canonical specimenId to the allocation use case', async () => {
     const executeSpy = vi.spyOn(AllocateSampleUseCase.prototype, 'execute')
       .mockResolvedValue({ sampleLocation: { position: 'A1' } });
     const req = {

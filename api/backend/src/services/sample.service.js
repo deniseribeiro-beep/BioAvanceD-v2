@@ -383,7 +383,7 @@ class SampleService {
         throw wrapped;
       }
 
-      sample.currentStoragePlacement = await new MongoStorageRepository(db)
+      const currentStoragePlacement = await new MongoStorageRepository(db)
         .findCurrentStoragePlacement(sample.specimenId);
 
       // #492/#502: only recorded once the sample has fully landed (ledger +
@@ -431,7 +431,8 @@ class SampleService {
 
       return {
         _id: result.insertedId,
-        ...sample
+        ...sample,
+        currentStoragePlacement
       };
     } catch (error) {
       logger.error('Erro ao criar amostra:', error.message);

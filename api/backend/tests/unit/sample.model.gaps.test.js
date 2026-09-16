@@ -176,12 +176,9 @@ describe('SampleModel.create - field normalization', () => {
     expect(defaultSample.pharmacologyData).toBeNull();
   });
 
-  it('passes through storageLocation when provided, defaults to null otherwise', () => {
-    const withLocation = Sample.create({ ...validData, storageLocation: { boxId: 'box1', position: 'A1' } });
-    expect(withLocation.storageLocation).toEqual({ boxId: 'box1', position: 'A1' });
-
-    const withoutLocation = Sample.create({ ...validData });
-    expect(withoutLocation.storageLocation).toBeNull();
+  it('does not persist the retired embedded storageLocation alias', () => {
+    const sample = Sample.create({ ...validData, storageLocation: { boxId: 'box1', position: 'A1' } });
+    expect(sample.storageLocation).toBeUndefined();
   });
 
   it('uses receivedAt and processingStatus defaults/overrides', () => {

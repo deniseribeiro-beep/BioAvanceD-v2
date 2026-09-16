@@ -135,6 +135,7 @@ function makeDb(overrides = {}) {
     collection: vi.fn((name) => collections[name] || (collections[name] = makeCollection(name))),
     // no listCollections -> collectionResolver falls back to canonical names directly
     client: {
+      db: vi.fn(() => ({ command: vi.fn().mockResolvedValue({ setName: 'rs0', isWritablePrimary: true }) })),
       startSession: vi.fn(() => session)
     },
     session

@@ -144,7 +144,7 @@ describe('storage-query.controller.getSampleLocationController', () => {
   it('returns 200 with the location when found', async () => {
     vi.spyOn(GetSampleStorageLocationUseCase.prototype, 'execute').mockResolvedValue({
       found: true,
-      location: { boxId: 'B1', position: 'A1' }
+      placement: { boxId: 'B1', position: 'A1' }
     });
     const req = buildReq({ params: { specimenId: 'sample-1' } });
     const res = buildRes();
@@ -155,10 +155,10 @@ describe('storage-query.controller.getSampleLocationController', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true, data: { boxId: 'B1', position: 'A1' } });
   });
 
-  it('calls the use case with specimenId (#456: use case requires specimenId, not specimenId)', async () => {
+  it('calls the use case with specimenId (#456: use case receives the canonical specimenId)', async () => {
     const executeSpy = vi.spyOn(GetSampleStorageLocationUseCase.prototype, 'execute').mockResolvedValue({
       found: true,
-      location: { boxId: 'B1', position: 'A1' }
+      placement: { boxId: 'B1', position: 'A1' }
     });
     const req = buildReq({ params: { specimenId: 'sample-1' } });
     const res = buildRes();

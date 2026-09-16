@@ -16,6 +16,13 @@ const listFreezersPath = require.resolve('../../src/core/use-cases/ListOperation
 const searchSamplesPath = require.resolve('../../src/core/use-cases/SearchAllocatableSamplesUseCase');
 const getPlacementPath = require.resolve('../../src/core/use-cases/GetSampleStorageLocationUseCase');
 const getAvailablePath = require.resolve('../../src/core/use-cases/GetBoxAvailablePositionsUseCase');
+const controllerPaths = [
+  require.resolve('../../src/interface/controllers/allocate-sample.controller'),
+  require.resolve('../../src/interface/controllers/auto-assign-sample.controller'),
+  require.resolve('../../src/interface/controllers/move-sample.controller'),
+  require.resolve('../../src/interface/controllers/release-sample.controller'),
+  require.resolve('../../src/interface/controllers/storage-query.controller'),
+];
 
 const placement = {
   specimenId: 'SPEC-1',
@@ -99,7 +106,15 @@ installClass(getAvailablePath, function StableGetBoxAvailablePositionsUseCase() 
   this.execute = (...args) => currentGetAvailable(...args);
 });
 
+for (const controllerPath of controllerPaths) delete require.cache[controllerPath];
+delete require.cache[routePath];
 const router = require(routePath);
+
+// The router/controllers retain the stable doubles above. Release global CJS cache
+// entries immediately so this test file cannot contaminate adjacent suites.
+for (const modulePath of [allocatePath, movePath, releasePath, storageServicePath, listFreezersPath, searchSamplesPath, getPlacementPath, getAvailablePath, ...controllerPaths, routePath]) {
+  delete require.cache[modulePath];
+}
 
 function resetDoubles() {
   currentAuth = (req, _res, next) => {
@@ -152,14 +167,14 @@ describe('storage.routes canonical v2', () => {
     expect(currentSearchSamples).toHaveBeenCalledWith({ query: 'BC-1' });
   });
 
-  it('GET /sample/:specimenId exposes the canonical placement projection', async () => {
+  it('GET /specimen/:specimenId exposes the canonical placement projection', async () => {
     const res = await request(buildApp()).get('/api/storage/specimen/SPEC-1');
     expect(res.status).toBe(200);
     expect(res.body.data.canonicalPlacement).toEqual(placement);
     expect(currentGetPlacement).toHaveBeenCalledWith({ specimenId: 'SPEC-1' });
   });
 
-  it('GET /sample/:specimenId maps a missing specimen to 404', async () => {
+  it('GET /specimen/:specimenId maps a missing specimen to 404', async () => {
     currentGetPlacement.mockResolvedValueOnce({ found: false, error: 'SAMPLE_NOT_FOUND', message: 'Amostra não encontrada' });
     const res = await request(buildApp()).get('/api/storage/specimen/missing');
     expect(res.status).toBe(404);

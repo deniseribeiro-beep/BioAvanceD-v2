@@ -69,8 +69,12 @@ function buildAutoAllocationDb({ accessType = 2, boxFull = false, specimenMissin
   const storagePaths = createCollectionMock({
     findOne: vi.fn().mockResolvedValue({ boxId, rackId: 'rack-config', shelfId: 'shelf-config', freezerId: 'freezer-config' }),
   });
+  const operationalFreezer = { _id: 'freezer-config', containerType: 'FREEZER', roomId: null, status: 'OPERATIONAL' };
   const storageContainers = createCollectionMock({
-    findOne: vi.fn().mockResolvedValue({ _id: 'freezer-config', containerType: 'FREEZER', roomId: null, status: 'OPERATIONAL' }),
+    findOne: vi.fn(async (query = {}) => {
+      if (query?.status?.$ne === 'OPERATIONAL') return null;
+      return operationalFreezer;
+    }),
   });
 
   const containers = createCollectionMock();

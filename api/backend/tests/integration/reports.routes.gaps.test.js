@@ -840,8 +840,13 @@ describe('reports.routes.js gaps', () => {
       );
     });
 
-    it('localizacao: storageBoxId vira um ObjectId em storageLocation.boxId', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ samples: [{ specimenId: 'SPEC-1' }] });
+    it('localizacao: storageBoxId e storagePosition resolvem para specimenId pela cadeia fisica v2', async () => {
+      const { db, capturedQueries } = buildCollectionDb({
+        samples: [{ specimenId: 'SPEC-LOC-1' }],
+        storagePositions: [{ storagePositionId: 'pos-1', storageRackId: 'rack-1', positionCode: 'A1' }],
+        containerPositionAssignments: [{ containerId: 'container-1', storagePositionId: 'pos-1', assignmentStatus: 'active' }],
+        specimenContainerAssignments: [{ specimenId: 'SPEC-LOC-1', containerId: 'container-1', assignmentStatus: 'active' }],
+      });
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
@@ -849,11 +854,8 @@ describe('reports.routes.js gaps', () => {
         .send({ filters: { storageBoxId: '507f1f77bcf86cd799439011', storagePosition: 'A1' } });
 
       expect(response.status).toBe(200);
-      const locationCondition = capturedQueries.samples.$and.find((part) => part['storageLocation.boxId']);
-      expect(locationCondition).toBeDefined();
-      expect(String(locationCondition['storageLocation.boxId'])).toBe('507f1f77bcf86cd799439011');
       expect(capturedQueries.samples.$and).toEqual(
-        expect.arrayContaining([{ 'storageLocation.position': 'A1' }])
+        expect.arrayContaining([{ specimenId: { $in: ['SPEC-LOC-1'] } }])
       );
     });
 
@@ -870,7 +872,7 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(capturedQueries.samples.$and).toEqual(
-        expect.arrayContaining([{ 'storageLocation.boxId': { $in: [] } }])
+        expect.arrayContaining([{ specimenId: { $in: [] } }])
       );
     });
 

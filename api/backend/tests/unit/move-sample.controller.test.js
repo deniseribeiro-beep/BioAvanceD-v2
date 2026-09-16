@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-const { createMoveSampleController } = require('../../src/interface/controllers/move-sample.controller');
-const MoveSampleUseCase = require('../../src/core/use-cases/MoveSampleUseCase');
+const moveUseCasePath = require.resolve('../../src/core/use-cases/MoveSampleUseCase');
+const moveControllerPath = require.resolve('../../src/interface/controllers/move-sample.controller');
+delete require.cache[moveUseCasePath];
+delete require.cache[moveControllerPath];
+const MoveSampleUseCase = require(moveUseCasePath);
+const { createMoveSampleController } = require(moveControllerPath);
 
 function buildRes() {
   const res = {};
@@ -28,7 +32,7 @@ describe('move-sample.controller', () => {
 
   it('passes a command that satisfies the real MoveSampleUseCase.validateCommand (regression: #487)', async () => {
     // Exercises the real validateCommand instead of a mocked execute(), so a
-    // controller/use-case field-name mismatch (specimenId vs specimenId) fails
+    // controller/use-case field-name mismatch at the canonical specimenId boundary fails
     // this test instead of silently 400ing on every real request.
     const validateSpy = vi.spyOn(MoveSampleUseCase.prototype, 'validateCommand');
     vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockImplementation(function (command) {

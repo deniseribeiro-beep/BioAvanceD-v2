@@ -1,5 +1,6 @@
 const { ObjectId } = require('mongodb');
 const MongoStorageTopologyReadRepository = require('../../src/infrastructure/persistence/mongo/MongoStorageTopologyReadRepository');
+const NormalizedPhysicalStorageStore = require('../../src/infrastructure/persistence/mongo/NormalizedPhysicalStorageStore');
 
 function makeCollection() {
   return {
@@ -270,10 +271,12 @@ describe('MongoStorageTopologyReadRepository', () => {
         currentOccupancy: 1,
         occupancyGrid: { A1: sampleId.toString() }
       };
-      const sample = {
-        _id: sampleId,
-        storageLocation: { boxId: boxId, position: 'A1' }
-      };
+      const sample = { _id: sampleId, specimenId: 'SPEC-INTEGRITY-1' };
+      vi.spyOn(NormalizedPhysicalStorageStore.prototype, 'findCurrentBySpecimen').mockResolvedValue({
+        specimenId: 'SPEC-INTEGRITY-1',
+        boxId,
+        positionCode: 'A1'
+      });
 
       const storageBoxes = makeCollection();
       storageBoxes.findOne.mockResolvedValue(box);
@@ -331,10 +334,12 @@ describe('MongoStorageTopologyReadRepository', () => {
         currentOccupancy: 1,
         occupancyGrid: { A1: sampleId.toString() }
       };
-      const sample = {
-        _id: sampleId,
-        storageLocation: { boxId: otherBoxId, position: 'B2' }
-      };
+      const sample = { _id: sampleId, specimenId: 'SPEC-INTEGRITY-2' };
+      vi.spyOn(NormalizedPhysicalStorageStore.prototype, 'findCurrentBySpecimen').mockResolvedValue({
+        specimenId: 'SPEC-INTEGRITY-2',
+        boxId: otherBoxId,
+        positionCode: 'B2'
+      });
 
       const storageBoxes = makeCollection();
       storageBoxes.findOne.mockResolvedValue(box);
