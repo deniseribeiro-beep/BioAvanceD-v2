@@ -87,8 +87,8 @@ jobs:
         run: |
           set +e
           docker compose -f ../../compose.test.yml run --rm \
-            -v "$PWD/tests/unit:/app/tests/unit:ro" \
-            -v "$PWD/tests/integration:/app/tests/integration:ro" \
+            -v "$PWD/tests/unit:/app/tests/unit" \
+            -v "$PWD/tests/integration:/app/tests/integration" \
             -v "/tmp:/diagnostics" \
             -e NO_COLOR=1 \
             -e FORCE_COLOR=0 \
@@ -147,6 +147,15 @@ jobs:
             catch (error) { rawVitest = { parseError: error.message }; }
           }
           const prefer = (primary, fallback) => Number.isFinite(primary) ? primary : fallback;
+          const jsonFileResults = Array.isArray(rawVitest?.testResults) ? rawVitest.testResults : [];
+          const jsonFileCounts = jsonFileResults.reduce((counts, result) => {
+            counts.total += 1;
+            if (result?.status === 'passed') counts.passed += 1;
+            else if (result?.status === 'failed') counts.failed += 1;
+            else counts.skipped += 1;
+            return counts;
+          }, { total: 0, passed: 0, failed: 0, skipped: 0 });
+          const hasJsonFileResults = jsonFileResults.length > 0;
           const normalized = {
             sha: process.env.GITHUB_SHA,
             outcome: process.env.FULL_VITEST_OUTCOME || 'unknown',
@@ -157,10 +166,10 @@ jobs:
             candidateInventory: inventory,
             vitestJsonProduced: fs.existsSync(vitestJsonPath),
             testFiles: {
-              total: prefer(rawVitest?.numTotalTestSuites, parsedFiles.total),
-              passed: prefer(rawVitest?.numPassedTestSuites, parsedFiles.passed),
-              failed: prefer(rawVitest?.numFailedTestSuites, parsedFiles.failed),
-              skipped: prefer(rawVitest?.numPendingTestSuites, parsedFiles.skipped)
+              total: hasJsonFileResults ? jsonFileCounts.total : parsedFiles.total,
+              passed: hasJsonFileResults ? jsonFileCounts.passed : parsedFiles.passed,
+              failed: hasJsonFileResults ? jsonFileCounts.failed : parsedFiles.failed,
+              skipped: hasJsonFileResults ? jsonFileCounts.skipped : parsedFiles.skipped
             },
             tests: {
               total: prefer(rawVitest?.numTotalTests, parsedTests.total),
@@ -171,7 +180,7 @@ jobs:
             },
             startLine,
             durationLine,
-            jsonTestResultFiles: Array.isArray(rawVitest?.testResults) ? rawVitest.testResults.length : 0
+            jsonTestResultFiles: jsonFileResults.length
           };
           fs.writeFileSync(resultPath, JSON.stringify(normalized, null, 2));
           const fmt = value => Number.isFinite(value) ? String(value) : 'unavailable';
