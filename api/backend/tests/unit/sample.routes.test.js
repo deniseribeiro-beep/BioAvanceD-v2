@@ -14,7 +14,8 @@ const sampleServicePath = require.resolve('../../src/services/sample.service');
 const consentValidatorPath = require.resolve('../../src/services/consent.validator');
 const auditLoggerPath = require.resolve('../../src/utils/auditLogger');
 const registerSampleUseCasePath = require.resolve('../../src/core/use-cases/RegisterSampleUseCase');
-const lineageRepositoryPath = require.resolve('../../src/infrastructure/database/neo4j/LineageRepository');
+const lineageRepositoryPath = require.resolve('../../src/infrastructure/persistence/mongo/MongoLineageRepository');
+const storageRepositoryPath = require.resolve('../../src/infrastructure/persistence/mongo/MongoStorageRepository');
 const sampleFileControllerPath = require.resolve('../../src/controllers/sample-file.controller');
 const miabisValidatorPath = require.resolve('../../src/services/miabisValidator.service');
 const sampleGraphValidatorPath = require.resolve('../../src/services/SampleGraphValidator');
@@ -22,7 +23,7 @@ const routePath = require.resolve('../../src/interface/routes/sample.routes.js')
 
 // authenticate/requirePermission/enforceCommercialConsent/validateMiabisCompliance
 // are destructured at require-time in sample.routes.js, and
-// RegisterSampleUseCase/LineageRepository/SampleGraphValidator are captured
+// RegisterSampleUseCase/MongoLineageRepository/SampleGraphValidator are captured
 // as constructor references. Re-requiring this ~1100-line route file fresh
 // per test (as label.routes.test.js/hpo.routes.test.js do for their much
 // smaller files) makes V8's per-file branch coverage undercount here -
@@ -44,6 +45,9 @@ let currentValidateMiabisCompliance = () => Promise.resolve({ compliant: true })
 let currentRegisterSampleUseCaseExecute = () => Promise.resolve();
 let currentValidateSampleCompliance = () => Promise.resolve({ compliant: true });
 let currentConsentValidatorValidateAccess = () => Promise.resolve(true);
+let currentResolvePhysicalPlacementsForSamples = async (samples = []) =>
+  new Map(samples.map((sample) => [String(sample._id), null]));
+let currentGetSamplePhysicalPlacement = async () => ({ found: false });
 
 function defaultAuth(req, res, next) {
   req.user = { id: 'user-1', name: 'Tester', roleName: 'Administrador' };
@@ -93,12 +97,25 @@ require.cache[registerSampleUseCasePath] = {
   exports: StableRegisterSampleUseCase,
 };
 
-function StableLineageRepository() {}
+function StableMongoLineageRepository() {}
 require.cache[lineageRepositoryPath] = {
   id: lineageRepositoryPath,
   filename: lineageRepositoryPath,
   loaded: true,
-  exports: StableLineageRepository,
+  exports: StableMongoLineageRepository,
+};
+
+function StableMongoStorageRepository() {
+  this.resolvePhysicalPlacementsForSamples = (...args) =>
+    currentResolvePhysicalPlacementsForSamples(...args);
+  this.getSamplePhysicalPlacement = (...args) =>
+    currentGetSamplePhysicalPlacement(...args);
+}
+require.cache[storageRepositoryPath] = {
+  id: storageRepositoryPath,
+  filename: storageRepositoryPath,
+  loaded: true,
+  exports: StableMongoStorageRepository,
 };
 
 function StableSampleGraphValidator() {
@@ -138,6 +155,8 @@ function loadRoute({
   consentValidatorValidateAccess,
   validateMiabisCompliance,
   validateSampleCompliance,
+  resolvePhysicalPlacementsForSamples,
+  getSamplePhysicalPlacement,
   authImpl,
   requirePermissionImpl,
   requireOrganizationScopeImpl,
@@ -154,6 +173,10 @@ function loadRoute({
   currentRegisterSampleUseCaseExecute = registerSampleUseCaseExecute || (() => Promise.resolve());
   currentValidateSampleCompliance = validateSampleCompliance || (() => Promise.resolve({ compliant: true }));
   currentConsentValidatorValidateAccess = consentValidatorValidateAccess || (() => Promise.resolve(true));
+  currentResolvePhysicalPlacementsForSamples = resolvePhysicalPlacementsForSamples
+    || (async (samples = []) => new Map(samples.map((sample) => [String(sample._id), null])));
+  currentGetSamplePhysicalPlacement = getSamplePhysicalPlacement
+    || (async () => ({ found: false }));
 
   // sample.service/consent.validator/auditLogger/sample-file.controller are
   // required as whole modules (not destructured) by sample.routes.js, so
@@ -1438,7 +1461,17 @@ describe('sample.routes', () => {
         samples: [{ participantId: '00000000' }],
         total: 1,
       });
-      const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { listSamples },
+        resolvePhysicalPlacementsForSamples: async () => new Map([[
+          'sample-1',
+          {
+            canonicalPlacement: { boxId, positionCode: 'A1' },
+            box: { boxId, boxName: 'Box A', position: 'A1' },
+            path: 'Freezer1/Shelf1/Rack1/BoxA',
+          },
+        ]]),
+      });
 
       const patientsCollection = { findOne: vi.fn().mockResolvedValue(null) };
       const consentsCollection = { findOne: vi.fn(), countDocuments: vi.fn() };
@@ -1605,7 +1638,7 @@ describe('sample.routes', () => {
           _id: 'sample-1',
           participantId: '53117577',
           specimenId: 'SPEC-1',
-          storageLocation: { boxId, boxName: 'Box A', position: 'A1' },
+          currentStoragePlacement: { boxId, positionCode: 'A1' },
         }],
         total: 1,
       });
@@ -1638,7 +1671,6 @@ describe('sample.routes', () => {
       const res = await request(app).get('/api/samples');
 
       expect(res.status).toBe(200);
-      expect(storagePathsFind).toHaveBeenCalledTimes(1);
       expect(specimenPreanalyticsFind).toHaveBeenCalledTimes(1);
       expect(res.body.data[0].resolvedStorageLocation).toEqual(
         expect.objectContaining({ path: 'Freezer1/Shelf1/Rack1/BoxA' })
@@ -2561,11 +2593,18 @@ describe('sample.routes', () => {
     });
 
     it('returns ZPL with the barcode drawn via ^BC and audits the generation', async () => {
-      const { router } = loadRoute();
+      const { router } = loadRoute({
+        getSamplePhysicalPlacement: async () => ({
+          found: true,
+          placement: {
+            canonicalPlacement: { boxId: 'box-1', positionCode: 'A1' },
+            box: { boxId: 'box-1', boxName: 'Box A', position: 'A1' },
+          },
+        }),
+      });
       const findOne = vi.fn().mockResolvedValue({
         sampleID: 42,
         barcode: 'BC1',
-        storageLocation: { boxName: 'Box A', position: 'A1' },
       });
       const labelGenerations = { findOne: vi.fn().mockResolvedValue(null), insertOne: vi.fn().mockResolvedValue({ insertedId: 'lg1' }) };
       const app = buildApp(router, {

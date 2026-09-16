@@ -8,7 +8,6 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const sampleService = require('../../src/services/sample.service');
-const LineageRepository = require('../../src/infrastructure/database/neo4j/LineageRepository');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 
 const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-tech-1', accessType: 2 }]);
@@ -47,7 +46,6 @@ describe('RF004/RNF011 - POST /api/samples validações de integridade', () => {
   beforeEach(() => {
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'session-sample-validation-1' } });
     vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-sample-validation-1' });
-    vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockResolvedValue({ eventId: 'evt-validation-1' });
   });
 
   afterEach(() => {

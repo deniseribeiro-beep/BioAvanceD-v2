@@ -8,7 +8,6 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 
 const app = require('../../app');
 const sampleService = require('../../src/services/sample.service');
-const LineageRepository = require('../../src/infrastructure/database/neo4j/LineageRepository');
 const sessionService = require('../../src/services/session.service');
 const env = require('../../src/config/env');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
@@ -98,12 +97,10 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
     app.locals.neo4jQuarantineService = null;
   });
 
-  it('deve retornar contrato observável em PERMISSIVE com fallback (202)', async () => {
+  it('deve retornar contrato PERMISSIVE com projeção assíncrona (201)', async () => {
     // Given
     const enqueueTopologicalTransaction = vi.fn().mockResolvedValue(undefined);
     app.locals.topologicalQuarantine = { enqueueTopologicalTransaction };
-
-    vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockRejectedValue(new Error('Neo4j offline'));
 
     // When
     const response = await whenRegisterSample(
@@ -115,22 +112,21 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
     );
 
     // Then
-    expect(response.status).toBe(202);
+    expect(response.status).toBe(201);
     expect(response.body.success).toBe(true);
-    expect(response.body.partialSuccess).toBe(true);
+    expect(response.body.partialSuccess).toBe(false);
     expect(response.body.data.operationMode).toBe('PERMISSIVE');
     expect(response.body.data.topology.synced).toBe(false);
-    expect(response.body.data.topology.fallbackQueued).toBe(true);
+    expect(response.body.data.topology.fallbackQueued).toBe(false);
+    expect(enqueueTopologicalTransaction).not.toHaveBeenCalled();
     expect(typeof response.body.data.sampleID).toBe('string');
     expect(patientsCollectionMock.updateOne).not.toHaveBeenCalled();
   });
 
-  it('deve bloquear em STRICT_MODE_BLOCKED na rota alternativa (403)', async () => {
+  it('deve manter sucesso STRICT na rota alternativa sem write gate de projeção', async () => {
     // Given
     const enqueueTopologicalTransaction = vi.fn().mockResolvedValue(undefined);
     app.locals.topologicalQuarantine = { enqueueTopologicalTransaction };
-
-    vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockRejectedValue(new Error('Neo4j offline'));
 
     // When
     const response = await whenRegisterSample(
@@ -141,9 +137,11 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
     );
 
     // Then
-    expect(response.status).toBe(403);
-    expect(response.body.success).toBe(false);
-    expect(response.body.error).toBe('STRICT_MODE_BLOCKED');
+    expect(response.status).toBe(201);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.operationMode).toBe('STRICT');
+    expect(response.body.data.topology.synced).toBe(false);
+    expect(response.body.data.topology.fallbackQueued).toBe(false);
     expect(enqueueTopologicalTransaction).not.toHaveBeenCalled();
   });
 });

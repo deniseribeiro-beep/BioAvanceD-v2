@@ -121,9 +121,8 @@ describe('import-async.service', () => {
 
     // #773: fieldMapping's two patientID-targeting entries (patientid,
     // idpaciente) were repointed to the canonical name. Two independent
-    // sources settle it: contracts/canonical/v1/index.js declares
-    // participantId as a required canonical field, and
-    // sample.routes.js:378-384 already 422s a payload carrying patientID as
+    // sources settle it: the canonical v2 Participant contract declares
+    // participantId, and the sample API boundary already 422s a payload carrying patientID as
     // NON_CANONICAL_FIELD. Pinned explicitly here so a future revert to the
     // legacy name is caught.
     it('maps patientId aliases to the canonical participantId name (#773)', () => {

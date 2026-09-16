@@ -8,7 +8,6 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 
 const app = require('../../app');
 const sampleService = require('../../src/services/sample.service');
-const LineageRepository = require('../../src/infrastructure/database/neo4j/LineageRepository');
 const auditLogger = require('../../src/utils/auditLogger');
 const sessionService = require('../../src/services/session.service');
 const env = require('../../src/config/env');
@@ -45,7 +44,7 @@ function buildPayload(overrides = {}) {
   };
 }
 
-describe('POST /api/samples - matriz STRICT/PERMISSIVE e contrato de resposta', () => {
+describe('POST /api/samples - matriz de risco e contrato de projeção assíncrona v2', () => {
   let previousLineageMode;
 
   beforeEach(() => {
@@ -95,7 +94,6 @@ describe('POST /api/samples - matriz STRICT/PERMISSIVE e contrato de resposta', 
   });
 
   it('deve manter contrato de resposta no sucesso STRICT (201)', async () => {
-    vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockResolvedValue({ eventId: 'evt-contract-1' });
 
     const response = await request(app)
       .post('/api/samples')
@@ -112,68 +110,66 @@ describe('POST /api/samples - matriz STRICT/PERMISSIVE e contrato de resposta', 
     expect(['STRICT', 'PERMISSIVE']).toContain(response.body.data.operationMode);
     expect(response.body.data.operationMode).toBe('STRICT');
     expect(typeof response.body.data.topology.synced).toBe('boolean');
-    expect(typeof response.body.data.topology.fallbackQueued).toBe('boolean');
+    expect(response.body.data.topology.synced).toBe(false);
+    expect(response.body.data.topology.fallbackQueued).toBe(false);
   });
 
-  it('deve operar em PERMISSIVE com fallback e sucesso parcial (202)', async () => {
+  it('deve operar em PERMISSIVE com sucesso operacional e projeção via outbox (201)', async () => {
     const enqueueTopologicalTransaction = vi.fn().mockResolvedValue(undefined);
     app.locals.topologicalQuarantine = { enqueueTopologicalTransaction };
-
-    vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockRejectedValue(new Error('Neo4j offline'));
 
     const response = await request(app)
       .post('/api/samples')
       .set('Authorization', `Bearer ${createAuthToken()}`)
       .send(buildPayload({ isRareDisease: false, riskLevel: 'low', riskScore: 2 }));
 
-    expect(response.status).toBe(202);
+    expect(response.status).toBe(201);
     expect(response.body.success).toBe(true);
-    expect(response.body.partialSuccess).toBe(true);
+    expect(response.body.partialSuccess).toBe(false);
     expect(response.body.data.operationMode).toBe('PERMISSIVE');
     expect(response.body.data.topology.synced).toBe(false);
-    expect(response.body.data.topology.fallbackQueued).toBe(true);
-    expect(enqueueTopologicalTransaction).toHaveBeenCalledTimes(1);
+    expect(response.body.data.topology.fallbackQueued).toBe(false);
+    expect(enqueueTopologicalTransaction).not.toHaveBeenCalled();
   });
 
-  it('deve bloquear em STRICT por riskScore alto quando Neo4j falha (403)', async () => {
+  it('deve manter sucesso operacional STRICT para riskScore alto (201)', async () => {
     const enqueueTopologicalTransaction = vi.fn().mockResolvedValue(undefined);
     app.locals.topologicalQuarantine = { enqueueTopologicalTransaction };
-
-    vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockRejectedValue(new Error('Neo4j offline'));
 
     const response = await request(app)
       .post('/api/samples')
       .set('Authorization', `Bearer ${createAuthToken()}`)
       .send(buildPayload({ isRareDisease: false, riskScore: 9 }));
 
-    expect(response.status).toBe(403);
-    expect(response.body.success).toBe(false);
-    expect(response.body.error).toBe('STRICT_MODE_BLOCKED');
+    expect(response.status).toBe(201);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.operationMode).toBe('STRICT');
+    expect(response.body.data.topology.synced).toBe(false);
+    expect(response.body.data.topology.fallbackQueued).toBe(false);
     expect(enqueueTopologicalTransaction).not.toHaveBeenCalled();
   });
 
-  it('deve bloquear em fail-closed mesmo sem marcadores de risco (403)', async () => {
+  it('deve resolver fail-closed como modo STRICT sem acoplar a escrita à projeção', async () => {
     env.LINEAGE_MODE = 'fail-closed';
 
     const enqueueTopologicalTransaction = vi.fn().mockResolvedValue(undefined);
     app.locals.topologicalQuarantine = { enqueueTopologicalTransaction };
-
-    vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockRejectedValue(new Error('Neo4j offline'));
 
     const response = await request(app)
       .post('/api/samples')
       .set('Authorization', `Bearer ${createAuthToken()}`)
       .send(buildPayload({ isRareDisease: false, riskLevel: 'low', riskScore: 1 }));
 
-    expect(response.status).toBe(403);
-    expect(response.body.success).toBe(false);
-    expect(response.body.error).toBe('STRICT_MODE_BLOCKED');
+    expect(response.status).toBe(201);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.operationMode).toBe('STRICT');
+    expect(response.body.data.topology.synced).toBe(false);
+    expect(response.body.data.topology.fallbackQueued).toBe(false);
     expect(enqueueTopologicalTransaction).not.toHaveBeenCalled();
   });
 
-  it('deve permanecer 201 sem partialSuccess quando quarentena não está disponível', async () => {
+  it('deve permanecer 201 sem partialSuccess independentemente de quarentena legada', async () => {
     app.locals.topologicalQuarantine = null;
-    vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockRejectedValue(new Error('Neo4j offline'));
 
     const response = await request(app)
       .post('/api/samples')

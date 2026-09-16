@@ -8,7 +8,6 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 
 const app = require('../../app');
 const sampleService = require('../../src/services/sample.service');
-const LineageRepository = require('../../src/infrastructure/database/neo4j/LineageRepository');
 const auditLogger = require('../../src/utils/auditLogger');
 const sessionService = require('../../src/services/session.service');
 const { buildRbacCollections } = require('../factories/rbac.factory');
@@ -27,7 +26,7 @@ function createAuthToken() {
   );
 }
 
-describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
+describe('POST /api/samples - modo de risco e projeção assíncrona v2', () => {
   beforeEach(() => {
     const genericCollection = {
       deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
@@ -64,8 +63,7 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
     app.locals.neo4jQuarantineService = null;
   });
 
-  it('Teste 1 (Smart Blocking): retorna operationMode STRICT quando isRareDisease=true', async () => {
-    vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockResolvedValue({ eventId: 'evt-1' });
+  it('retorna operationMode STRICT sem transformar a projeção derivada em write gate', async () => {
 
     const response = await request(app)
       .post('/api/samples')
@@ -93,15 +91,13 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
     expect(response.status).toBe(201);
     expect(response.body.success).toBe(true);
     expect(response.body.data.operationMode).toBe('STRICT');
-    expect(response.body.data.topology.synced).toBe(true);
+    expect(response.body.data.topology.synced).toBe(false);
     expect(response.body.data.topology.fallbackQueued).toBe(false);
   });
 
-  it('Teste 2 (Topological Quarantine): em falha Neo4j, enfileira no Redis e retorna sucesso parcial', async () => {
+  it('mantém sucesso PERMISSIVE enquanto a projeção derivada segue pelo outbox', async () => {
     const enqueueTopologicalTransaction = vi.fn().mockResolvedValue(undefined);
     app.locals.topologicalQuarantine = { enqueueTopologicalTransaction };
-
-    vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockRejectedValue(new Error('Neo4j offline'));
 
     const response = await request(app)
       .post('/api/samples')
@@ -126,19 +122,17 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
         },
       });
 
-    expect([201, 202]).toContain(response.status);
+    expect(response.status).toBe(201);
     expect(response.body.success).toBe(true);
     expect(response.body.data.operationMode).toBe('PERMISSIVE');
     expect(response.body.data.topology.synced).toBe(false);
-    expect(response.body.data.topology.fallbackQueued).toBe(true);
-    expect(enqueueTopologicalTransaction).toHaveBeenCalledTimes(1);
+    expect(response.body.data.topology.fallbackQueued).toBe(false);
+    expect(enqueueTopologicalTransaction).not.toHaveBeenCalled();
   });
 
-  it('Teste 3 (STRICT_MODE_BLOCKED): em Doença Rara com Neo4j offline, deve bloquear com HTTP 403', async () => {
+  it('mantém sucesso STRICT sem rollback operacional por indisponibilidade da projeção', async () => {
     const enqueueTopologicalTransaction = vi.fn().mockResolvedValue(undefined);
     app.locals.topologicalQuarantine = { enqueueTopologicalTransaction };
-
-    vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockRejectedValue(new Error('Neo4j offline'));
 
     const response = await request(app)
       .post('/api/samples')
@@ -163,10 +157,11 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
         },
       });
 
-    expect(response.status).toBe(403);
-    expect(response.body.success).toBe(false);
-    expect(response.body.error).toBe('STRICT_MODE_BLOCKED');
-    expect(String(response.body.message || '')).toContain('STRICT_MODE_BLOCKED');
+    expect(response.status).toBe(201);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.operationMode).toBe('STRICT');
+    expect(response.body.data.topology.synced).toBe(false);
+    expect(response.body.data.topology.fallbackQueued).toBe(false);
     expect(enqueueTopologicalTransaction).not.toHaveBeenCalled();
   });
 
@@ -184,7 +179,6 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
   // the canonical value.
   describe('#795: RF004 audit trail and 201 body carry the participant identifier', () => {
     async function createSample() {
-      vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockResolvedValue({ eventId: 'evt-795' });
 
       return request(app)
         .post('/api/samples')
