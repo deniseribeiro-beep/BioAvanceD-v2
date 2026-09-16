@@ -20,13 +20,13 @@ jobs:
           ref: stabilize/v2.0.0-prototype
           fetch-depth: 0
 
-      - name: Apply batch 3 canonical reconciliation
-        run: python .github/scripts/item7_reconcile_batch3.py
+      - name: Apply consent v2 reconciliation batch
+        run: python .github/scripts/item7_reconcile_batch4.py
 
       - name: Validate diff
         run: git diff --check
 
-      - name: Commit canonical reconciliation batch 3
+      - name: Commit consent v2 reconciliation batch
         shell: bash
         run: |
           if git diff --quiet; then
@@ -35,15 +35,8 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add api/backend/src/services/equipment-sensor-quarantine.service.js \
-            api/backend/tests/unit/cold-chain-quarantine.service.test.js \
-            api/backend/tests/unit/equipment-sensor-quarantine.service.test.js \
-            api/backend/tests/integration/incidents.api.node.test.js \
-            api/backend/tests/unit/NotificationService.test.js \
-            api/backend/tests/unit/staging-import.service.test.js \
-            api/backend/tests/unit/portManager.test.js \
-            api/backend/src/interface/routes/sample.routes.js \
-            api/backend/tests/unit/sample.routes.test.js \
-            api/backend/tests/unit/infrastructure/services/TelemetryMonitor.test.js
-          git commit -m 'test(v2): replace legacy physical and infrastructure fixtures'
+          git add api/backend/src/services/consent-v2.service.js \
+            api/backend/tests/unit/consent.service.unit.test.js \
+            api/backend/tests/unit/sample.service.test.js
+          git commit -m 'test(consent): reconcile normalized v2 consent fixtures'
           git push origin HEAD:stabilize/v2.0.0-prototype
