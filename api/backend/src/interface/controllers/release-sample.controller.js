@@ -9,7 +9,12 @@ const VALIDATION_ERROR_PATTERNS = [
   'não possui localização de armazenamento'
 ];
 
-function createReleaseSampleController() {
+function createReleaseSampleController({
+  ReleaseSampleUseCaseClass = ReleaseSampleUseCase,
+  StorageRepositoryClass = MongoStorageRepository,
+  AuditRepositoryClass = MongoAuditRepository,
+  LineageRepositoryClass = MongoLineageRepository
+} = {}) {
   return async function releaseSampleController(req, res) {
     try {
       const db = req.app.locals.db;
@@ -23,10 +28,10 @@ function createReleaseSampleController() {
 
       const { specimenId } = req.params;
 
-      const useCase = new ReleaseSampleUseCase({
-        storageRepository: new MongoStorageRepository(db),
-        auditRepository: new MongoAuditRepository(db),
-        lineageRepository: new MongoLineageRepository(db)
+      const useCase = new ReleaseSampleUseCaseClass({
+        storageRepository: new StorageRepositoryClass(db),
+        auditRepository: new AuditRepositoryClass(db),
+        lineageRepository: new LineageRepositoryClass(db)
       });
 
       const result = await useCase.execute({
