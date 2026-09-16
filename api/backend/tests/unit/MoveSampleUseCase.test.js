@@ -130,4 +130,128 @@ describe('MoveSampleUseCase canonical v2', () => {
     const { useCase } = deps({ transactionImpl: async () => { throw new Error('mongo write conflict'); } });
     await expect(useCase.execute(command())).rejects.toThrow('mongo write conflict');
   });
+
+  it.each([
+    [null, 'Comando de movimentação inválido'],
+    [{}, 'specimenId é obrigatório'],
+    [{ specimenId: 'sample-1' }, 'targetBoxId é obrigatório'],
+    [{ specimenId: 'sample-1', targetBoxId: 'box-dest' }, 'targetPosition é obrigatório'],
+    [{ specimenId: 'sample-1', targetBoxId: 'box-dest', targetPosition: 2 }, 'targetPosition é obrigatório'],
+    [{ specimenId: 'sample-1', targetBoxId: 'box-dest', targetPosition: '123' }, 'targetPosition deve seguir formato Letra+Número']
+  ])('rejects each malformed move command before persistence', async (invalidCommand, message) => {
+    const { useCase, storageRepository } = deps();
+    await expect(useCase.execute(invalidCommand)).rejects.toThrow(message);
+    expect(storageRepository.findSampleById).not.toHaveBeenCalled();
+    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing specimen before opening a transaction', async () => {
+    const { useCase, storageRepository } = deps({ specimen: null });
+    await expect(useCase.execute(command())).rejects.toThrow('Amostra não encontrada');
+    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ boxId: null, positionCode: 'A1' }],
+    [{ boxId: 'box-src', positionCode: null }]
+  ])('requires both canonical source-placement pointers', async (currentStoragePlacement) => {
+    const { useCase, storageRepository } = deps({
+      specimen: sample({ currentStoragePlacement })
+    });
+    await expect(useCase.execute(command())).rejects.toThrow('posicionamento físico de origem');
+    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a destination equal to the current canonical position', async () => {
+    const { useCase, storageRepository } = deps();
+    const input = command();
+    input.targetBoxId = 'box-src';
+    input.targetPosition = 'a1';
+
+    await expect(useCase.execute(input)).rejects.toThrow(
+      'A posição de destino deve ser diferente da posição atual'
+    );
+    expect(storageRepository.findBoxById).not.toHaveBeenCalled();
+    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('fails atomically when the target box disappears inside the transaction', async () => {
+    const { useCase, storageRepository } = deps();
+    storageRepository.findBoxById
+      .mockResolvedValueOnce({ _id: 'box-dest' })
+      .mockResolvedValueOnce(null);
+
+    await expect(useCase.execute(command())).rejects.toThrow('Caixa de destino não encontrada');
+    expect(storageRepository.moveSamplePosition).not.toHaveBeenCalled();
+  });
+
+  it('keeps validation, custody outbox, canonical move, and audit ordered in one session', async () => {
+    const order = [];
+    const { useCase, storageRepository, auditRepository, lineageRepository } = deps();
+    lineageRepository.validateBeforePersistence.mockImplementation(async () => { order.push('validate'); });
+    lineageRepository.recordCustodyEvent.mockImplementation(async () => {
+      order.push('outbox');
+      return { eventId: 'evt-ordered', queued: true };
+    });
+    storageRepository.moveSamplePosition.mockImplementation(async () => { order.push('move'); });
+    auditRepository.appendImmutableAudit.mockImplementation(async () => {
+      order.push('audit');
+      return { movementID: 42 };
+    });
+
+    await useCase.execute(command());
+
+    expect(order).toEqual(['validate', 'outbox', 'move', 'audit']);
+  });
+
+  it('fail-open preserves the canonical move when lineage validation fails', async () => {
+    env.LINEAGE_MODE = 'fail-open';
+    const { useCase, storageRepository, lineageRepository } = deps();
+    lineageRepository.validateBeforePersistence.mockRejectedValueOnce(new Error('consent unavailable'));
+
+    const result = await useCase.execute(command());
+
+    expect(result).toMatchObject({
+      success: true,
+      lineageValidated: false,
+      lineagePersisted: false,
+      lineageQueued: false,
+      lineageEventId: null
+    });
+    expect(storageRepository.moveSamplePosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('case-insensitive fail-closed blocks the move when custody outbox append fails', async () => {
+    env.LINEAGE_MODE = 'FAIL-CLOSED';
+    const { useCase, storageRepository, lineageRepository } = deps();
+    lineageRepository.recordCustodyEvent.mockRejectedValueOnce(new Error('outbox unavailable'));
+
+    await expect(useCase.execute(command())).rejects.toThrow(
+      'RF023_LINEAGE_VALIDATION_FAILED: outbox unavailable'
+    );
+    expect(storageRepository.moveSamplePosition).not.toHaveBeenCalled();
+  });
+
+  it('preserves null payload fallbacks without restoring legacy storage contracts', async () => {
+    const { useCase, lineageRepository } = deps({
+      specimen: sample({ barcode: null })
+    });
+    const input = command();
+    delete input.actor;
+    delete input.reason;
+
+    await useCase.execute(input);
+
+    expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        barcode: null,
+        actorId: null,
+        reason: null,
+        from: { boxId: 'box-src', position: 'A1' },
+        to: { boxId: 'box-dest', position: 'B2' }
+      }),
+      'session-1'
+    );
+  });
+
 });

@@ -113,4 +113,102 @@ describe('ReleaseSampleUseCase canonical v2', () => {
     const { useCase } = deps({ transactionImpl: async () => { throw new Error('mongo release failed'); } });
     await expect(useCase.execute(command)).rejects.toThrow('mongo release failed');
   });
+
+  it.each([undefined, null, {}, { specimenId: '' }])(
+    'rejects a missing specimenId before any storage read',
+    async (invalidCommand) => {
+      const { useCase, storageRepository } = deps();
+      await expect(useCase.execute(invalidCommand)).rejects.toThrow('specimenId é obrigatório');
+      expect(storageRepository.findSampleById).not.toHaveBeenCalled();
+      expect(storageRepository.withTransaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects a missing specimen before opening a transaction', async () => {
+    const { useCase, storageRepository } = deps({ sample: null });
+    await expect(useCase.execute(command)).rejects.toThrow('Amostra não encontrada');
+    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ boxId: null, positionCode: 'A1' }],
+    [{ boxId: 'box-1', positionCode: null }]
+  ])('requires both canonical active-placement pointers', async (currentStoragePlacement) => {
+    const { useCase, storageRepository } = deps({
+      sample: specimen({ currentStoragePlacement })
+    });
+    await expect(useCase.execute(command)).rejects.toThrow('Amostra não possui posicionamento físico ativo');
+    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('keeps validation, custody outbox, canonical release, and audit ordered in one session', async () => {
+    const order = [];
+    const { useCase, storageRepository, auditRepository, lineageRepository } = deps();
+    lineageRepository.validateBeforePersistence.mockImplementation(async () => { order.push('validate'); });
+    lineageRepository.recordCustodyEvent.mockImplementation(async () => {
+      order.push('outbox');
+      return { eventId: 'evt-ordered', queued: true };
+    });
+    storageRepository.releaseSamplePosition.mockImplementation(async () => {
+      order.push('release');
+      return { from: { boxId: 'box-1', position: 'A1' } };
+    });
+    auditRepository.appendImmutableAudit.mockImplementation(async () => {
+      order.push('audit');
+      return { movementID: 3 };
+    });
+
+    await useCase.execute(command);
+
+    expect(order).toEqual(['validate', 'outbox', 'release', 'audit']);
+  });
+
+  it('fail-open preserves release when lineage validation fails', async () => {
+    env.LINEAGE_MODE = 'fail-open';
+    const { useCase, storageRepository, lineageRepository } = deps();
+    lineageRepository.validateBeforePersistence.mockRejectedValueOnce(new Error('consent unavailable'));
+
+    const result = await useCase.execute(command);
+
+    expect(result).toMatchObject({
+      success: true,
+      lineageValidated: false,
+      lineagePersisted: false,
+      lineageQueued: false,
+      lineageEventId: null
+    });
+    expect(storageRepository.releaseSamplePosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats fail-closed mode case-insensitively', async () => {
+    env.LINEAGE_MODE = 'FAIL-CLOSED';
+    const { useCase, storageRepository } = deps({ lineage: false });
+
+    await expect(useCase.execute(command)).rejects.toThrow('Repositório canônico de linhagem ausente');
+    expect(storageRepository.releaseSamplePosition).not.toHaveBeenCalled();
+  });
+
+  it('preserves null payload and missing eventId fallbacks on the v2 outbox contract', async () => {
+    const { useCase, lineageRepository } = deps({
+      sample: specimen({ barcode: null })
+    });
+    lineageRepository.recordCustodyEvent.mockResolvedValueOnce({ queued: true });
+    const input = { specimenId: 'sample-1' };
+
+    const result = await useCase.execute(input);
+
+    expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        barcode: null,
+        actorId: null,
+        reason: 'release',
+        from: { boxId: 'box-1', position: 'A1' },
+        to: null
+      }),
+      'session-1'
+    );
+    expect(result.lineageEventId).toBeNull();
+    expect(result.lineageQueued).toBe(true);
+  });
+
 });

@@ -135,4 +135,102 @@ describe('AllocateSampleUseCase canonical v2', () => {
     const { useCase } = makeDeps({ transactionImpl: async () => { throw failure; } });
     await expect(useCase.execute(command())).rejects.toThrow('mongo transaction failed');
   });
+
+  it.each([
+    [{ boxId: 'box-new', position: 'A1' }, 'specimenId'],
+    [{ specimenId: 'sample-1', position: 'A1' }, 'boxId'],
+    [{ specimenId: 'sample-1', boxId: 'box-new' }, 'position']
+  ])('rejects allocation when %s omits a required field (%s)', async (invalidCommand) => {
+    const { useCase, storageRepository } = makeDeps();
+    await expect(useCase.execute(invalidCommand)).rejects.toThrow(
+      'specimenId, boxId e position são obrigatórios'
+    );
+    expect(storageRepository.findSampleById).not.toHaveBeenCalled();
+    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('preserves payload null fallbacks without recreating an embedded storage snapshot', async () => {
+    const { useCase, lineageRepository } = makeDeps({
+      sample: makeSample({ barcode: null, currentStoragePlacement: null })
+    });
+    const input = command();
+    delete input.actor;
+
+    await useCase.execute(input);
+
+    expect(lineageRepository.validateBeforePersistence).toHaveBeenCalledWith(
+      expect.objectContaining({
+        specimenId: 'sample-1',
+        barcode: null,
+        from: null,
+        to: { boxId: 'box-new', position: 'B2' },
+        actorId: null
+      }),
+      'session-1'
+    );
+  });
+
+  it('keeps validation, custody outbox, canonical allocation, and audit ordered inside one transaction', async () => {
+    const order = [];
+    const { useCase, storageRepository, auditRepository, lineageRepository } = makeDeps();
+    lineageRepository.validateBeforePersistence.mockImplementation(async () => { order.push('validate'); });
+    lineageRepository.recordCustodyEvent.mockImplementation(async () => {
+      order.push('outbox');
+      return { eventId: 'evt-ordered', queued: true };
+    });
+    storageRepository.allocateSamplePosition.mockImplementation(async () => {
+      order.push('allocate');
+      return placement;
+    });
+    auditRepository.appendImmutableAudit.mockImplementation(async () => {
+      order.push('audit');
+      return { movementID: 1 };
+    });
+
+    await useCase.execute(command());
+
+    expect(order).toEqual(['validate', 'outbox', 'allocate', 'audit']);
+  });
+
+  it('fail-open preserves allocation when lineage validation fails', async () => {
+    env.LINEAGE_MODE = 'fail-open';
+    const { useCase, storageRepository, lineageRepository } = makeDeps();
+    lineageRepository.validateBeforePersistence.mockRejectedValueOnce(new Error('consent unavailable'));
+
+    const result = await useCase.execute(command());
+
+    expect(result).toMatchObject({
+      success: true,
+      lineageValidated: false,
+      lineagePersisted: false,
+      lineageQueued: false,
+      lineageEventId: null
+    });
+    expect(storageRepository.allocateSamplePosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('case-insensitive fail-closed blocks allocation when the outbox append fails', async () => {
+    env.LINEAGE_MODE = 'FAIL-CLOSED';
+    const { useCase, storageRepository, lineageRepository } = makeDeps();
+    lineageRepository.recordCustodyEvent.mockRejectedValueOnce(new Error('outbox unavailable'));
+
+    await expect(useCase.execute(command())).rejects.toThrow(
+      'RF023_LINEAGE_VALIDATION_FAILED: outbox unavailable'
+    );
+    expect(storageRepository.allocateSamplePosition).not.toHaveBeenCalled();
+  });
+
+  it('reports an explicit non-queued result without weakening the canonical transaction', async () => {
+    const { useCase, storageRepository, lineageRepository } = makeDeps();
+    lineageRepository.recordCustodyEvent.mockResolvedValueOnce({ eventId: 'evt-not-queued', queued: false });
+
+    const result = await useCase.execute(command());
+
+    expect(result.lineageValidated).toBe(true);
+    expect(result.lineagePersisted).toBe(true);
+    expect(result.lineageQueued).toBe(false);
+    expect(result.lineageEventId).toBe('evt-not-queued');
+    expect(storageRepository.allocateSamplePosition).toHaveBeenCalledTimes(1);
+  });
+
 });
