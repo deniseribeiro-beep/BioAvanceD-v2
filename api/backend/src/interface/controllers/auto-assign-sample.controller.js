@@ -63,4 +63,3 @@ function createAutoAssignSampleController() {
 }
 
 module.exports = { createAutoAssignSampleController };
-// Item 7 validation trigger; remove after functional reconciliation.
