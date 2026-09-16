@@ -15,7 +15,12 @@ const VALIDATION_ERROR_PATTERNS = [
 
 const LOCATION_BLOCKED_PATTERNS = ['está retirada de uso', 'Localização indisponível'];
 
-function createMoveSampleController() {
+function createMoveSampleController({
+  MoveSampleUseCaseClass = MoveSampleUseCase,
+  StorageRepositoryClass = MongoStorageRepository,
+  AuditRepositoryClass = MongoAuditRepository,
+  LineageRepositoryClass = MongoLineageRepository
+} = {}) {
   return async function moveSampleController(req, res) {
     try {
       const db = req.app.locals.db;
@@ -29,11 +34,11 @@ function createMoveSampleController() {
 
       const { specimenId, targetBoxId, targetPosition, reason, notes } = req.body || {};
 
-      const storageRepository = new MongoStorageRepository(db);
-      const auditRepository = new MongoAuditRepository(db);
-      const lineageRepository = new MongoLineageRepository(db);
+      const storageRepository = new StorageRepositoryClass(db);
+      const auditRepository = new AuditRepositoryClass(db);
+      const lineageRepository = new LineageRepositoryClass(db);
 
-      const useCase = new MoveSampleUseCase({
+      const useCase = new MoveSampleUseCaseClass({
         storageRepository,
         auditRepository,
         lineageRepository
