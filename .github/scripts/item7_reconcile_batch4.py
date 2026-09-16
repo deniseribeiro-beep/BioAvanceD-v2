@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 
 def read(path):
@@ -10,20 +9,15 @@ def write(path, text):
     Path(path).write_text(text, encoding='utf-8')
 
 
-def replace(path, old, new, required=True, count=-1):
-    text = read(path)
-    if old in text:
-        write(path, text.replace(old, new, count))
-        return
-    if new in text:
-        return
-    if required:
-        raise SystemExit(f'expected snippet not found in {path}: {old[:180]!r}')
+def replace_once(text, old, new, label):
+    if old not in text:
+        raise SystemExit(f'{label} not found')
+    return text.replace(old, new, 1)
 
 
 # ---------------------------------------------------------------------------
-# Consent v2 production: status-aware policy history + idempotent revocation
-# notification. These are current v2 behaviors already exercised by the suite.
+# Consent v2 production: status-aware policy-history search and idempotent
+# notification dispatch for an already-recorded revocation.
 # ---------------------------------------------------------------------------
 p = 'api/backend/src/services/consent-v2.service.js'
 text = read(p)
@@ -31,10 +25,11 @@ old = """    else if (search) {
       const escaped = search.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
       const regex = new RegExp(escaped, 'i');
       filter.$or = [
-        { title: regex },
-        { caae: regex },
-        { version: regex },
-        { revisionType: regex }
+        { title: { $regex: regex } },
+        { version: { $regex: regex } },
+        { caae: { $regex: regex } },
+        { htmlContent: { $regex: regex } },
+        { 'permissions.key': { $regex: regex } }
       ];
     }
 """
@@ -42,10 +37,11 @@ new = """    else if (search) {
       const escaped = search.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
       const regex = new RegExp(escaped, 'i');
       const searchFilter = [
-        { title: regex },
-        { caae: regex },
-        { version: regex },
-        { revisionType: regex }
+        { title: { $regex: regex } },
+        { version: { $regex: regex } },
+        { caae: { $regex: regex } },
+        { htmlContent: { $regex: regex } },
+        { 'permissions.key': { $regex: regex } }
       ];
       const normalizedSearch = search.toLowerCase();
       const activeFilter = ['ativo', 'active'].includes(normalizedSearch)
@@ -57,106 +53,116 @@ new = """    else if (search) {
       else filter.$and = [{ active: activeFilter }, { $or: searchFilter }];
     }
 """
-if old not in text:
-    raise SystemExit('getPoliciesHistory search block not found')
-text = text.replace(old, new, 1)
-
+text = replace_once(text, old, new, 'getPoliciesHistory search block')
 old = """    void notificationDispatchService.dispatchNotification(db, {
       eventType: 'consent_revoked',
       sourceEventType: 'ConsentRevocation',
       sourceEventId: result.revocation.consentRevocationId,
-      payload: {
-        participantId: result.consent.participantId,
-        consentId: result.consent.consentId
-      }
-    }).catch((error) => {
-      logger.error('[NOTIFICATION_DISPATCH] Falha ao processar evento consent_revoked:', error.message || error);
-    });
+      payload: { participantId: result.consent.participantId, consentId: result.consent.consentId }
+    }).catch((error) => logger.error('[NOTIFICATION_DISPATCH] Falha ao notificar revogação:', error.message || error));
 """
 new = """    if (!result.alreadyRevoked) {
       void notificationDispatchService.dispatchNotification(db, {
         eventType: 'consent_revoked',
         sourceEventType: 'ConsentRevocation',
         sourceEventId: result.revocation.consentRevocationId,
-        payload: {
-          participantId: result.consent.participantId,
-          consentId: result.consent.consentId
-        }
-      }).catch((error) => {
-        logger.error('[NOTIFICATION_DISPATCH] Falha ao processar evento consent_revoked:', error.message || error);
-      });
+        payload: { participantId: result.consent.participantId, consentId: result.consent.consentId }
+      }).catch((error) => logger.error('[NOTIFICATION_DISPATCH] Falha ao notificar revogação:', error.message || error));
     }
 """
-if old not in text:
-    raise SystemExit('revoke notification block not found')
-text = text.replace(old, new, 1)
+text = replace_once(text, old, new, 'revoke notification block')
 write(p, text)
 
 # ---------------------------------------------------------------------------
-# Consent v2 tests: make Mongo doubles match the normalized repository and
-# replace assertions that still described the retired monolithic consent row.
+# Consent v2 tests: normalized Mongo doubles and assertions.
 # ---------------------------------------------------------------------------
 p = 'api/backend/tests/unit/consent.service.unit.test.js'
 text = read(p)
-text = text.replace(
-    "    insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),\n",
-    "    insertOne: vi.fn(async (doc) => { const insertedId = doc?._id || new ObjectId(); if (doc && doc._id === undefined) doc._id = insertedId; return { insertedId }; }),\n    insertMany: vi.fn(async (docs = []) => ({ insertedCount: docs.length })),\n",
-    1,
+text = replace_once(
+    text,
+    """    insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
+""",
+    """    insertOne: vi.fn(async (doc) => {
+      const insertedId = doc?._id || new ObjectId();
+      if (doc && doc._id === undefined) doc._id = insertedId;
+      return { insertedId };
+    }),
+    insertMany: vi.fn(async (docs = []) => ({ insertedCount: docs.length })),
+    updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
+""",
+    'makeCollection insertMany support',
 )
-text = text.replace(
+text = replace_once(
+    text,
     "    expect(result.permissions).toEqual([{ key: 'analytics', label: 'Analytics', required: false }]);",
     "    expect(result.permissions).toEqual([{ key: 'analytics', permissionCode: 'analytics', label: 'Analytics', required: false, purposeCode: 'analytics' }]);",
-    1,
+    'updateTemplate canonical permissions',
 )
-text = text.replace(
+text = replace_once(
+    text,
     ").rejects.toThrow('ID do TCLE para atualização é inválido');",
     ").rejects.toThrow('ID do template de consentimento inválido');",
-    1,
+    'createPolicy invalid id message',
 )
-text = text.replace(
+text = replace_once(
+    text,
     "    expect(result.granularPermissions).toEqual([{ key: 'analytics', label: 'Analytics', required: false }]);",
     "    expect(result.granularPermissions).toEqual([{ key: 'analytics', permissionCode: 'analytics', label: 'Analytics', required: false, purposeCode: 'analytics' }]);",
-    1,
+    'createPolicy canonical permissions',
 )
-text = text.replace(
+text = replace_once(
+    text,
     ").rejects.toThrow('consentTemplateId inválido');",
     ").rejects.toThrow('ID do template de consentimento inválido');",
-    1,
+    'createPatientConsent invalid template message',
 )
-
-old = """    expect(result._id).toBeDefined();
+text = replace_once(
+    text,
+    """    expect(result._id).toBeDefined();
     expect(result.status).toBe('ACTIVE');
     expect(consents.updateMany).toHaveBeenCalledWith(
       { participantId: '12345678', status: 'ACTIVE' },
       expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED' }) })
     );
-"""
-new = """    expect(result.consentId).toBeTruthy();
+""",
+    """    expect(result.consentId).toBeTruthy();
     expect(result.participantId).toBe('12345678');
     expect(result.status).toBe('ACTIVE');
     expect(consents.insertOne).toHaveBeenCalledWith(
       expect.objectContaining({ participantId: '12345678', currentStateDerived: 'active' }),
       expect.objectContaining({ session: expect.anything() })
     );
-"""
-if old not in text:
-    raise SystemExit('createPatientConsent primary assertion block not found')
-text = text.replace(old, new, 1)
-
-text = text.replace(
-    "    expect(result.signatureName).toBeNull();\n    expect(result.signatureImageBase64).toBeNull();\n    expect(result.signatureHash).toBeNull();\n    expect(result.signatureMimeType).toBeNull();\n    // Origin evidence is still captured (RF010 AC#4's \"origem\").\n    expect(result.ipAddress).toBe('203.0.113.7');\n    expect(result.userAgent).toBe('Mozilla/5.0');",
-    "    expect(result.signatureName).toBeUndefined();\n    expect(result.signatureImageBase64).toBeUndefined();\n    expect(result.signatureHash).toBeUndefined();\n    expect(result.signatureMimeType).toBeUndefined();",
-    1,
+""",
+    'createPatientConsent normalized write assertion',
 )
-text = text.replace(
+text = replace_once(
+    text,
+    """    expect(result.signatureName).toBeNull();
+    expect(result.signatureImageBase64).toBeNull();
+    expect(result.signatureHash).toBeNull();
+    expect(result.signatureMimeType).toBeNull();
+    // Origin evidence is still captured (RF010 AC#4's \"origem\").
+    expect(result.ipAddress).toBe('203.0.113.7');
+    expect(result.userAgent).toBe('Mozilla/5.0');
+""",
+    """    expect(result.signatureName).toBeUndefined();
+    expect(result.signatureImageBase64).toBeUndefined();
+    expect(result.signatureHash).toBeUndefined();
+    expect(result.signatureMimeType).toBeUndefined();
+""",
+    'signature-less compatibility view',
+)
+text = replace_once(
+    text,
     "    expect(result.signatureImageBase64).toBeNull();",
     "    expect(result.signatureImageBase64).toBeUndefined();",
-    1,
+    'empty signature compatibility view',
 )
-# Two canonical-success tests used Mongo _id as if it were the consent identity.
-text = text.replace("    expect(result._id).toBeDefined();\n", "    expect(result.consentId).toBeTruthy();\n", 2)
+# Replace the next two success assertions that treated Mongo _id as consent identity.
+for _ in range(2):
+    text = replace_once(text, "    expect(result._id).toBeDefined();", "    expect(result.consentId).toBeTruthy();", 'canonical consent identity')
 
-# Replace the old direct PatientConsent revocation suite with normalized v2 rows.
 start = text.index("describe('ConsentService.revokeConsent', () => {")
 end = text.index("\n// FHIR is a pure serialization boundary", start)
 revocation_suite = r'''describe('ConsentService.revokeConsent canonical v2', () => {
@@ -193,13 +199,12 @@ revocation_suite = r'''describe('ConsentService.revokeConsent canonical v2', () 
       consentPermissions,
       graphProjectionOutbox
     });
-    return { db, consents, consentRevocations, consentDecisionEvents, consentCommunicationEvents };
+    return { db, consents, consentRevocations };
   }
 
-  it('revokes an active canonical consent and derives the legacy response from normalized state', async () => {
+  it('revokes an active canonical consent and derives the response from normalized state', async () => {
     const consent = canonicalConsent();
     const { db, consents, consentRevocations } = buildRevocationDb(consent);
-
     const result = await consentService.revokeConsent(db, consent._id.toString());
 
     expect(result.status).toBe('REVOKED');
@@ -215,7 +220,7 @@ revocation_suite = r'''describe('ConsentService.revokeConsent canonical v2', () 
     );
   });
 
-  it('is idempotent when a canonical revocation already exists', async () => {
+  it('is idempotent and does not re-notify when a canonical revocation already exists', async () => {
     const consent = canonicalConsent({ currentStateDerived: 'revoked' });
     const existingRevocation = {
       consentRevocationId: 'consent-revocation:existing',
@@ -225,7 +230,6 @@ revocation_suite = r'''describe('ConsentService.revokeConsent canonical v2', () 
     };
     const { db, consentRevocations } = buildRevocationDb(consent, { existingRevocation });
     const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
-
     const result = await consentService.revokeConsent(db, consent._id.toString());
 
     expect(result.status).toBe('REVOKED');
@@ -237,7 +241,6 @@ revocation_suite = r'''describe('ConsentService.revokeConsent canonical v2', () 
     const consent = canonicalConsent({ participantId: 'PART-1', consentId: 'CONSENT-1' });
     const { db } = buildRevocationDb(consent);
     const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
-
     await consentService.revokeConsent(db, consent._id.toString());
 
     expect(dispatchSpy).toHaveBeenCalledWith(db, {
@@ -253,7 +256,6 @@ revocation_suite = r'''describe('ConsentService.revokeConsent canonical v2', () 
     const { db } = buildRevocationDb(consent);
     vi.spyOn(notificationDispatchService, 'dispatchNotification').mockRejectedValue(new Error('notificationRules lookup failed'));
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
-
     await consentService.revokeConsent(db, consent._id.toString());
 
     await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledWith(
@@ -265,7 +267,6 @@ revocation_suite = r'''describe('ConsentService.revokeConsent canonical v2', () 
   it('returns null when the consent does not exist', async () => {
     const consents = makeCollection({ findOne: vi.fn(async () => null) });
     const db = makeDb({ consents });
-
     const result = await consentService.revokeConsent(db, new ObjectId().toString());
     expect(result).toBeNull();
   });
@@ -273,15 +274,15 @@ revocation_suite = r'''describe('ConsentService.revokeConsent canonical v2', () 
   it('treats a non-ObjectId consentId as a canonical consentId lookup and returns null when absent', async () => {
     const consents = makeCollection({ findOne: vi.fn(async () => null) });
     const db = makeDb({ consents });
-
     await expect(consentService.revokeConsent(db, 'not-an-object-id')).resolves.toBeNull();
     expect(consents.findOne).toHaveBeenCalledWith({ consentId: 'not-an-object-id' }, expect.anything());
   });
 });
 '''
 text = text[:start] + revocation_suite + text[end:]
-
-old = """  it('returns the most recent consent from the collection', async () => {
+text = replace_once(
+    text,
+    """  it('returns the most recent consent from the collection', async () => {
     const legacyConsent = { _id: 'legacy-1', status: 'ACTIVE' };
     const consents = makeCollection({ find: vi.fn(() => makeCursor([legacyConsent])) });
     const db = makeDb({ consents: consents });
@@ -289,8 +290,8 @@ old = """  it('returns the most recent consent from the collection', async () =>
     const result = await consentService.getPatientConsent(db, '12345678');
     expect(result).toBe(legacyConsent);
   });
-"""
-new = """  it('returns the most recent canonical consent through the compatibility response view', async () => {
+""",
+    """  it('returns the most recent canonical consent through the compatibility response view', async () => {
     const canonicalConsent = {
       _id: 'mongo-1',
       consentId: 'CONSENT-1',
@@ -316,20 +317,20 @@ new = """  it('returns the most recent canonical consent through the compatibili
       responses: {}
     }));
   });
-"""
-if old not in text:
-    raise SystemExit('getPatientConsent legacy assertion block not found')
-text = text.replace(old, new, 1)
+""",
+    'getPatientConsent canonical view',
+)
 write(p, text)
 
-# The one remaining SampleService expectation describes the retired locationID
-# as absent, while the current Sample read model carries a null compatibility
-# default. The custody invariant is already asserted by currentStoragePlacement.
+# Existing current read model returns a null compatibility default for this
+# non-authoritative field; physical custody itself remains asserted only via
+# currentStoragePlacement.
 p = 'api/backend/tests/unit/sample.service.test.js'
 text = read(p)
-text = text.replace(
+text = replace_once(
+    text,
     "      expect(result.locationID).toBeUndefined();",
     "      expect(result.locationID).toBeNull();",
-    1,
+    'sample service locationID compatibility default',
 )
 write(p, text)
