@@ -199,7 +199,7 @@ describe('storage.routes canonical v2', () => {
   it('POST /allocate/auto uses the same canonical placement response contract', async () => {
     const res = await request(buildApp())
       .post('/api/storage/allocate/auto')
-      .send({ sampleId: 'SPEC-1', boxId: 'box-1' });
+      .send({ specimenId: 'SPEC-1', boxId: 'box-1' });
     expect(res.status).toBe(201);
     expect(res.body.currentStoragePlacement).toEqual(placement);
     expect(res.body.data).toEqual(placement);
