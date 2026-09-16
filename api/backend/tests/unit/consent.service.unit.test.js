@@ -227,7 +227,7 @@ describe('ConsentService.createTemplate', () => {
       permissions: [{ key: 'analytics', label: 'Analytics' }],
     });
 
-    expect(result.consentId).toBeTruthy();
+    expect(result._id).toBeTruthy();
     expect(result.title).toBe('My Template');
     expect(result.active).toBe(true);
     expect(templates.updateMany).toHaveBeenCalledWith(
@@ -250,7 +250,7 @@ describe('ConsentService.createTemplate', () => {
       permissions: [{ key: 'analytics', label: 'Analytics' }],
     });
 
-    expect(result.consentId).toBeTruthy();
+    expect(result._id).toBeTruthy();
     expect(templates.insertOne).toHaveBeenCalled();
   });
 
@@ -1501,7 +1501,7 @@ describe('ConsentService.createPatientConsent', () => {
       ...validSignature,
     });
 
-    expect(result._id).toBeDefined();
+    expect(result.consentId).toMatch(/^consent:/);
   });
 
   it('rejects when a required permission response is missing (#63)', async () => {
@@ -1599,7 +1599,7 @@ describe('ConsentService.createPatientConsent', () => {
       signatureBase64: Buffer.from('sig-via-alias').toString('base64'),
     });
 
-    expect(result._id).toBeDefined();
+    expect(result.consentId).toMatch(/^consent:/);
     expect(result.signatureHash).toBeDefined();
   });
 

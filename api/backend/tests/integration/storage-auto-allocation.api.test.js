@@ -84,10 +84,11 @@ function ledgerCollections() {
 
 function buildAutoAllocationDb({ accessType = 2, boxFull = false, specimenMissing = false } = {}) {
   const specimenObjectId = new ObjectId();
+  const canonicalSpecimenId = 'SP-1006-AUTO';
   const boxId = new ObjectId();
   const specimen = specimenMissing ? null : {
     _id: specimenObjectId,
-    specimenId: 'SP-1006-AUTO',
+    specimenId: canonicalSpecimenId,
     participantId: 'PART-1006',
     barcode: 'BIO-1006-AUTO',
     specimenStatus: 'available',
@@ -154,7 +155,7 @@ function buildAutoAllocationDb({ accessType = 2, boxFull = false, specimenMissin
   };
 
   const db = createDbMock(collections);
-  return { db, specimenObjectId, boxId, collections };
+  return { db, specimenObjectId, canonicalSpecimenId, boxId, collections };
 }
 
 beforeEach(() => {
@@ -166,26 +167,26 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('POST /api/storage/allocate/auto (#1006)', () => {
   it('enforces manageStorageAllocation server-side', async () => {
-    const { db, specimenObjectId, boxId } = buildAutoAllocationDb({ accessType: 1 });
+    const { db, canonicalSpecimenId, boxId } = buildAutoAllocationDb({ accessType: 1 });
     app.locals.db = db;
 
     const res = await request(app)
       .post('/api/storage/allocate/auto')
       .set('Authorization', `Bearer ${makeToken(1)}`)
-      .send({ specimenId: String(specimenObjectId), boxId: String(boxId) });
+      .send({ specimenId: canonicalSpecimenId, boxId: String(boxId) });
 
     expect(res.status).toBe(403);
     expect(db.client.startSession).not.toHaveBeenCalled();
   });
 
   it('returns 404 before transaction when the specimen does not exist', async () => {
-    const { db, specimenObjectId, boxId } = buildAutoAllocationDb({ specimenMissing: true });
+    const { db, canonicalSpecimenId, boxId } = buildAutoAllocationDb({ specimenMissing: true });
     app.locals.db = db;
 
     const res = await request(app)
       .post('/api/storage/allocate/auto')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ specimenId: String(specimenObjectId), boxId: String(boxId) });
+      .send({ specimenId: canonicalSpecimenId, boxId: String(boxId) });
 
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('SAMPLE_NOT_FOUND');
@@ -193,13 +194,13 @@ describe('POST /api/storage/allocate/auto (#1006)', () => {
   });
 
   it('returns 409 before transaction when the box has no free position', async () => {
-    const { db, specimenObjectId, boxId } = buildAutoAllocationDb({ boxFull: true });
+    const { db, canonicalSpecimenId, boxId } = buildAutoAllocationDb({ boxFull: true });
     app.locals.db = db;
 
     const res = await request(app)
       .post('/api/storage/allocate/auto')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ specimenId: String(specimenObjectId), boxId: String(boxId) });
+      .send({ specimenId: canonicalSpecimenId, boxId: String(boxId) });
 
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('BOX_FULL');
@@ -207,18 +208,18 @@ describe('POST /api/storage/allocate/auto (#1006)', () => {
   });
 
   it('uses one Mongo session for normalized placement, audit and graph outbox', async () => {
-    const { db, specimenObjectId, boxId, collections } = buildAutoAllocationDb();
+    const { db, canonicalSpecimenId, boxId, collections } = buildAutoAllocationDb();
     app.locals.db = db;
 
     const res = await request(app)
       .post('/api/storage/allocate/auto')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ specimenId: String(specimenObjectId), boxId: String(boxId) });
+      .send({ specimenId: canonicalSpecimenId, boxId: String(boxId) });
 
     expect(res.status).toBe(201);
     expect(res.body.success).toBe(true);
     expect(res.body.currentStoragePlacement).toEqual(expect.objectContaining({
-      specimenId: String(specimenObjectId),
+      specimenId: canonicalSpecimenId,
       positionCode: 'A1'
     }));
     expect(res.body.projectionQueued).toBe(true);
