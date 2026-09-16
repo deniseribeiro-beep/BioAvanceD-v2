@@ -20,13 +20,13 @@ jobs:
           ref: stabilize/v2.0.0-prototype
           fetch-depth: 0
 
-      - name: Apply consent v2 reconciliation batch
-        run: python .github/scripts/item7_reconcile_batch4.py
+      - name: Apply normalized auto-allocation fixture batch
+        run: python .github/scripts/item7_reconcile_storage_auto.py
 
       - name: Validate diff
         run: git diff --check
 
-      - name: Commit consent v2 reconciliation batch
+      - name: Commit normalized auto-allocation fixture batch
         shell: bash
         run: |
           if git diff --quiet; then
@@ -35,8 +35,6 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add api/backend/src/services/consent-v2.service.js \
-            api/backend/tests/unit/consent.service.unit.test.js \
-            api/backend/tests/unit/sample.service.test.js
-          git commit -m 'test(consent): reconcile normalized v2 consent fixtures'
+          git add api/backend/tests/integration/storage-auto-allocation.api.test.js
+          git commit -m 'test(storage): persist normalized auto-allocation fixture state'
           git push origin HEAD:stabilize/v2.0.0-prototype
