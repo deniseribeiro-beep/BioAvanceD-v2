@@ -36,7 +36,7 @@ stale as slices land and as source files change. Keep it honest:
   bucket-list line; when it's a partial, replace the old note with a
   single line stating the new isolated number and where the commit is,
   not a paragraph. `COVERAGE_HISTORY.md` was deleted 2026-07-22 for the
-  same reason (`dyeallpies-skills-pack#95`); this file drifted back into
+  same reason; this file drifted back into
   the same pattern once (895 lines by 2026-07-24) and was re-compacted —
   if it's creeping up again, compact it, don't add a second history file.
 
@@ -93,8 +93,7 @@ that file's own test(s) alone with `--coverage.include="<path>"` first**
 if it has both a unit and an integration test file — don't trust the
 merged number for those. Also check whether a service is exercised
 across *more than two* test files (a 3-way+ split, not just
-unit/integration) before trusting an isolated single-file run — see
-`dyeallpies-skills-pack#112`.
+unit/integration) before trusting an isolated single-file run.
 
 Recurring dead-code pattern to check before treating a branch gap as a
 real test gap: a route's own `if (!db)` 503 guard is often pre-empted by

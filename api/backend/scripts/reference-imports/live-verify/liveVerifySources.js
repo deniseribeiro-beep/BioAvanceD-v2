@@ -242,7 +242,7 @@ module.exports = {
   },
   // #557: confirmed live on 2026-08-13, closing out §7.4 step 6's "LOINC e
   // UCUM" pair. Checked robots.txt first this time (per LOINC's own
-  // lesson, filed as dyeallpies-skills-pack#269) — ucum.org's is a plain
+  // lesson) — ucum.org's is a plain
   // `Disallow: /wp/wp-admin/` only, no AI-crawler-specific block, and
   // Node's own fetch() 200s the spec page directly with no Cloudflare
   // challenge (unlike loinc.org, despite sharing the same steward —

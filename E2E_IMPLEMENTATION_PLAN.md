@@ -201,9 +201,8 @@ every spec above instead (per the diagrams' `«include»` pattern).
 
 ## Skills/docs that will need updating once this lands
 
-Same Rule 0 situation as last session — flag via a pack-repo issue
-(`DyeAllPies/dyeallpies-skills-pack`), don't edit the junctioned skill
-directly:
+Same Rule 0 situation as last session — flag them upstream, don't edit the
+junctioned skill directly:
 - `bioavanced-v2-testing-conventions`'s "CI map" section is stale (claims
   3 jobs; there's 1, and it doesn't run Playwright) — needs a rewrite
   once this phase's findings are final, not before (it may change again
