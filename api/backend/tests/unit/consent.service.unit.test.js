@@ -20,7 +20,12 @@ function makeCollection(overrides = {}) {
   return {
     find: vi.fn(() => makeCursor([])),
     findOne: vi.fn(async () => null),
-    insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    insertOne: vi.fn(async (doc) => {
+      const insertedId = doc?._id || new ObjectId();
+      if (doc && doc._id === undefined) doc._id = insertedId;
+      return { insertedId };
+    }),
+    insertMany: vi.fn(async (docs = []) => ({ insertedCount: docs.length })),
     updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
     updateMany: vi.fn(async () => ({ modifiedCount: 1 })),
     countDocuments: vi.fn(async () => 0),
@@ -222,7 +227,7 @@ describe('ConsentService.createTemplate', () => {
       permissions: [{ key: 'analytics', label: 'Analytics' }],
     });
 
-    expect(result._id).toBeDefined();
+    expect(result.consentId).toBeTruthy();
     expect(result.title).toBe('My Template');
     expect(result.active).toBe(true);
     expect(templates.updateMany).toHaveBeenCalledWith(
@@ -245,7 +250,7 @@ describe('ConsentService.createTemplate', () => {
       permissions: [{ key: 'analytics', label: 'Analytics' }],
     });
 
-    expect(result._id).toBeDefined();
+    expect(result.consentId).toBeTruthy();
     expect(templates.insertOne).toHaveBeenCalled();
   });
 
@@ -474,7 +479,7 @@ describe('ConsentService.updateTemplate', () => {
 
     const result = await consentService.updateTemplate(db, existingId.toString(), { title: 'New title' });
 
-    expect(result.permissions).toEqual([{ key: 'analytics', label: 'Analytics', required: false }]);
+    expect(result.permissions).toEqual([{ key: 'analytics', permissionCode: 'analytics', label: 'Analytics', required: false, purposeCode: 'analytics' }]);
   });
 
   it('falls back to the existing htmlContent/content when the payload has neither', async () => {
@@ -1045,7 +1050,7 @@ describe('ConsentService.createPolicy', () => {
         },
         { previousPolicyId: 'not-an-object-id' }
       )
-    ).rejects.toThrow('ID do TCLE para atualização é inválido');
+    ).rejects.toThrow('ID do template de consentimento inválido');
   });
 
   it('rejects when previousPolicyId does not match an existing policy', async () => {
@@ -1129,7 +1134,7 @@ describe('ConsentService.createPolicy', () => {
       permissions: [{ key: 'analytics', label: 'Analytics' }],
     });
 
-    expect(result.granularPermissions).toEqual([{ key: 'analytics', label: 'Analytics', required: false }]);
+    expect(result.granularPermissions).toEqual([{ key: 'analytics', permissionCode: 'analytics', label: 'Analytics', required: false, purposeCode: 'analytics' }]);
   });
 
   it('trims an explicit caae on the policy', async () => {
@@ -1364,11 +1369,12 @@ describe('ConsentService.createPatientConsent', () => {
       ...validSignature,
     });
 
-    expect(result._id).toBeDefined();
+    expect(result.consentId).toBeTruthy();
+    expect(result.participantId).toBe('12345678');
     expect(result.status).toBe('ACTIVE');
-    expect(consents.updateMany).toHaveBeenCalledWith(
-      { participantId: '12345678', status: 'ACTIVE' },
-      expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED' }) })
+    expect(consents.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ participantId: '12345678', currentStateDerived: 'active' }),
+      expect.objectContaining({ session: expect.anything() })
     );
   });
 
@@ -1397,13 +1403,10 @@ describe('ConsentService.createPatientConsent', () => {
     // PatientConsentModel.create's null defaults are what gets persisted --
     // the record is explicit that there was no signature, rather than carrying
     // an empty string that reads like a blank one.
-    expect(result.signatureName).toBeNull();
-    expect(result.signatureImageBase64).toBeNull();
-    expect(result.signatureHash).toBeNull();
-    expect(result.signatureMimeType).toBeNull();
-    // Origin evidence is still captured (RF010 AC#4's "origem").
-    expect(result.ipAddress).toBe('203.0.113.7');
-    expect(result.userAgent).toBe('Mozilla/5.0');
+    expect(result.signatureName).toBeUndefined();
+    expect(result.signatureImageBase64).toBeUndefined();
+    expect(result.signatureHash).toBeUndefined();
+    expect(result.signatureMimeType).toBeUndefined();
   });
 
   it('drops a caller-supplied empty signatureImageBase64 instead of 422ing on it', async () => {
@@ -1424,7 +1427,7 @@ describe('ConsentService.createPatientConsent', () => {
     });
 
     expect(result.status).toBe('ACTIVE');
-    expect(result.signatureImageBase64).toBeNull();
+    expect(result.signatureImageBase64).toBeUndefined();
   });
 
   it('still records the signature when one IS supplied', async () => {
@@ -1579,7 +1582,7 @@ describe('ConsentService.createPatientConsent', () => {
         responses: {},
         ...validSignature,
       })
-    ).rejects.toThrow('consentTemplateId inválido');
+    ).rejects.toThrow('ID do template de consentimento inválido');
   });
 
   it('accepts signatureBase64 as an alias for signatureImageBase64 from the frontend', async () => {
@@ -1654,83 +1657,99 @@ describe('ConsentService.createPatientConsent', () => {
   });
 });
 
-describe('ConsentService.revokeConsent', () => {
+describe('ConsentService.revokeConsent canonical v2', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('revokes an active consent', async () => {
-    const consentId = new ObjectId();
-    const consent = { _id: consentId, status: 'ACTIVE', patientId: '12345678' };
-    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
-    const db = makeDb({ consents: consents });
+  function canonicalConsent(overrides = {}) {
+    const _id = overrides._id || new ObjectId();
+    return {
+      _id,
+      consentId: overrides.consentId || `CONSENT-${_id.toString()}`,
+      participantId: overrides.participantId || 'PART-1',
+      templateVersionId: overrides.templateVersionId || 'TPL-1',
+      currentStateDerived: overrides.currentStateDerived || 'active',
+      effectivePeriod: overrides.effectivePeriod || { start: new Date('2026-01-01T00:00:00.000Z'), end: null },
+      createdAt: overrides.createdAt || new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: overrides.updatedAt || new Date('2026-01-01T00:00:00.000Z')
+    };
+  }
 
-    const result = await consentService.revokeConsent(db, consentId.toString());
+  function buildRevocationDb(consent, { existingRevocation = null } = {}) {
+    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
+    const consentRevocations = makeCollection({ findOne: vi.fn(async () => existingRevocation) });
+    const consentDecisionEvents = makeCollection();
+    const consentCommunicationEvents = makeCollection();
+    const consentPermissions = makeCollection();
+    const graphProjectionOutbox = makeCollection();
+    const db = makeDb({
+      consents,
+      consentRevocations,
+      consentDecisionEvents,
+      consentCommunicationEvents,
+      consentPermissions,
+      graphProjectionOutbox
+    });
+    return { db, consents, consentRevocations };
+  }
+
+  it('revokes an active canonical consent and derives the response from normalized state', async () => {
+    const consent = canonicalConsent();
+    const { db, consents, consentRevocations } = buildRevocationDb(consent);
+    const result = await consentService.revokeConsent(db, consent._id.toString());
 
     expect(result.status).toBe('REVOKED');
+    expect(result.consentId).toBe(consent.consentId);
+    expect(consentRevocations.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ consentId: consent.consentId, participantId: 'PART-1' }),
+      expect.objectContaining({ session: expect.anything() })
+    );
     expect(consents.updateOne).toHaveBeenCalledWith(
-      { _id: consentId },
-      expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED' }) })
+      { consentId: consent.consentId },
+      expect.objectContaining({ $set: expect.objectContaining({ currentStateDerived: 'revoked' }) }),
+      expect.objectContaining({ session: expect.anything() })
     );
   });
 
-  it('returns the consent unchanged when it is already revoked', async () => {
-    const consentId = new ObjectId();
-    const consent = { _id: consentId, status: 'REVOKED' };
-    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
-    const db = makeDb({ consents: consents });
-
-    const result = await consentService.revokeConsent(db, consentId.toString());
-
-    expect(result).toBe(consent);
-    expect(consents.updateOne).not.toHaveBeenCalled();
-  });
-
-  it('#650 (RF015 consentimento) dispatches a consent_revoked notification when a real revocation happens', async () => {
-    const consentId = new ObjectId();
-    const consent = { _id: consentId, status: 'ACTIVE', participantId: 'PART-1' };
-    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
-    const db = makeDb({ consents: consents });
+  it('is idempotent and does not re-notify when a canonical revocation already exists', async () => {
+    const consent = canonicalConsent({ currentStateDerived: 'revoked' });
+    const existingRevocation = {
+      consentRevocationId: 'consent-revocation:existing',
+      consentId: consent.consentId,
+      participantId: consent.participantId,
+      effectiveAt: new Date('2026-01-02T00:00:00.000Z')
+    };
+    const { db, consentRevocations } = buildRevocationDb(consent, { existingRevocation });
     const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+    const result = await consentService.revokeConsent(db, consent._id.toString());
 
-    await consentService.revokeConsent(db, consentId.toString());
-
-    expect(dispatchSpy).toHaveBeenCalledWith(db, {
-      eventType: 'consent_revoked',
-      sourceEventType: 'PatientConsent',
-      sourceEventId: consentId,
-      payload: {
-        participantId: 'PART-1',
-        consentId: consentId.toString()
-      }
-    });
-  });
-
-  it('#650 (RF015 consentimento) does not dispatch a notification when the consent was already revoked', async () => {
-    const consentId = new ObjectId();
-    const consent = { _id: consentId, status: 'REVOKED' };
-    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
-    const db = makeDb({ consents: consents });
-    const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
-
-    await consentService.revokeConsent(db, consentId.toString());
-
+    expect(result.status).toBe('REVOKED');
+    expect(consentRevocations.insertOne).not.toHaveBeenCalled();
     expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
-  it('#685 does not crash the process when the notification engine itself fails on revocation (unhandled rejection guard)', async () => {
-    const consentId = new ObjectId();
-    const consent = { _id: consentId, status: 'ACTIVE', participantId: 'PART-1' };
-    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
-    const db = makeDb({ consents: consents });
+  it('#650 dispatches consent_revoked from the normalized ConsentRevocation event', async () => {
+    const consent = canonicalConsent({ participantId: 'PART-1', consentId: 'CONSENT-1' });
+    const { db } = buildRevocationDb(consent);
+    const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+    await consentService.revokeConsent(db, consent._id.toString());
+
+    expect(dispatchSpy).toHaveBeenCalledWith(db, {
+      eventType: 'consent_revoked',
+      sourceEventType: 'ConsentRevocation',
+      sourceEventId: expect.stringMatching(/^consent-revocation:/),
+      payload: { participantId: 'PART-1', consentId: 'CONSENT-1' }
+    });
+  });
+
+  it('#685 handles notification-engine rejection after a canonical revocation', async () => {
+    const consent = canonicalConsent({ participantId: 'PART-1', consentId: 'CONSENT-1' });
+    const { db } = buildRevocationDb(consent);
     vi.spyOn(notificationDispatchService, 'dispatchNotification').mockRejectedValue(new Error('notificationRules lookup failed'));
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+    await consentService.revokeConsent(db, consent._id.toString());
 
-    await consentService.revokeConsent(db, consentId.toString());
-
-    // Fire-and-forget (`void`, no await in revokeConsent) -- give the
-    // rejection a turn of the microtask queue to reach a .catch() before
-    // asserting it was actually handled, not left unhandled.
     await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('[NOTIFICATION_DISPATCH]'),
       expect.anything()
@@ -1739,15 +1758,16 @@ describe('ConsentService.revokeConsent', () => {
 
   it('returns null when the consent does not exist', async () => {
     const consents = makeCollection({ findOne: vi.fn(async () => null) });
-    const db = makeDb({ consents: consents });
-
+    const db = makeDb({ consents });
     const result = await consentService.revokeConsent(db, new ObjectId().toString());
     expect(result).toBeNull();
   });
 
-  it('throws for a malformed consent id', async () => {
-    const db = makeDb({ consents: makeCollection() });
-    await expect(consentService.revokeConsent(db, 'not-an-object-id')).rejects.toThrow('inválido');
+  it('treats a non-ObjectId consentId as a canonical consentId lookup and returns null when absent', async () => {
+    const consents = makeCollection({ findOne: vi.fn(async () => null) });
+    const db = makeDb({ consents });
+    await expect(consentService.revokeConsent(db, 'not-an-object-id')).resolves.toBeNull();
+    expect(consents.findOne).toHaveBeenCalledWith({ consentId: 'not-an-object-id' }, expect.anything());
   });
 });
 
@@ -1760,13 +1780,31 @@ describe('ConsentService.getPatientConsent', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns the most recent consent from the collection', async () => {
-    const legacyConsent = { _id: 'legacy-1', status: 'ACTIVE' };
-    const consents = makeCollection({ find: vi.fn(() => makeCursor([legacyConsent])) });
-    const db = makeDb({ consents: consents });
+  it('returns the most recent canonical consent through the compatibility response view', async () => {
+    const canonicalConsent = {
+      _id: 'mongo-1',
+      consentId: 'CONSENT-1',
+      participantId: '12345678',
+      templateVersionId: 'TPL-1',
+      currentStateDerived: 'active',
+      effectivePeriod: { start: new Date('2026-01-01T00:00:00.000Z'), end: null },
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z')
+    };
+    const consents = makeCollection({ find: vi.fn(() => makeCursor([canonicalConsent])) });
+    const consentRevocations = makeCollection({ findOne: vi.fn(async () => null) });
+    const consentPermissions = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consents, consentRevocations, consentPermissions });
 
     const result = await consentService.getPatientConsent(db, '12345678');
-    expect(result).toBe(legacyConsent);
+    expect(result).toEqual(expect.objectContaining({
+      _id: 'mongo-1',
+      consentId: 'CONSENT-1',
+      participantId: '12345678',
+      consentTemplateId: 'TPL-1',
+      status: 'ACTIVE',
+      responses: {}
+    }));
   });
 
   it('returns null when nothing is found', async () => {

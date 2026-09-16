@@ -321,13 +321,21 @@ class ConsentV2Service {
     else if (search) {
       const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(escaped, 'i');
-      filter.$or = [
+      const searchFilter = [
         { title: { $regex: regex } },
         { version: { $regex: regex } },
         { caae: { $regex: regex } },
         { htmlContent: { $regex: regex } },
         { 'permissions.key': { $regex: regex } }
       ];
+      const normalizedSearch = search.toLowerCase();
+      const activeFilter = ['ativo', 'active'].includes(normalizedSearch)
+        ? true
+        : ['inativo', 'inactive'].includes(normalizedSearch)
+          ? false
+          : null;
+      if (activeFilter === null) filter.$or = searchFilter;
+      else filter.$and = [{ active: activeFilter }, { $or: searchFilter }];
     }
     const collection = await getCollection(db, 'consentTemplates');
     const [items, total] = await Promise.all([
@@ -413,12 +421,14 @@ class ConsentV2Service {
     }, session));
     if (!result) return null;
 
-    void notificationDispatchService.dispatchNotification(db, {
-      eventType: 'consent_revoked',
-      sourceEventType: 'ConsentRevocation',
-      sourceEventId: result.revocation.consentRevocationId,
-      payload: { participantId: result.consent.participantId, consentId: result.consent.consentId }
-    }).catch((error) => logger.error('[NOTIFICATION_DISPATCH] Falha ao notificar revogação:', error.message || error));
+    if (!result.alreadyRevoked) {
+      void notificationDispatchService.dispatchNotification(db, {
+        eventType: 'consent_revoked',
+        sourceEventType: 'ConsentRevocation',
+        sourceEventId: result.revocation.consentRevocationId,
+        payload: { participantId: result.consent.participantId, consentId: result.consent.consentId }
+      }).catch((error) => logger.error('[NOTIFICATION_DISPATCH] Falha ao notificar revogação:', error.message || error));
+    }
 
     const permissions = await repository.listPermissions(result.consent.consentId);
     return repository.toLegacyView(result.consent, permissions);

@@ -267,7 +267,7 @@ describe('sample.service', () => {
 
       expect(insertedSample.currentStoragePlacement).toBeUndefined();
       expect(result.currentStoragePlacement).toEqual(currentCanonicalPlacement);
-      expect(result.locationID).toBeUndefined();
+      expect(result.locationID).toBeNull();
     });
 
     it('delegates initial physical custody to AllocateSampleUseCase using the canonical box/position command', async () => {
