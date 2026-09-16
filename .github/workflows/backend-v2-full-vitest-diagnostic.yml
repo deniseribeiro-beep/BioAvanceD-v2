@@ -14,7 +14,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: backend-v2-full-vitest-diagnostic-${{ github.ref }}
@@ -47,61 +46,158 @@ jobs:
           const families = ['unit', 'integration', 'compliance'];
           const pattern = /\.(test|spec)\.(js|cjs|mjs|ts|tsx)$/;
           let total = 0;
-          for (const family of families) {
+          const walk = directory => {
             const files = [];
-            const walk = directory => {
-              for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-                const target = path.join(directory, entry.name);
-                if (entry.isDirectory()) walk(target);
-                else if (pattern.test(entry.name)) files.push(target);
-              }
-            };
-            walk(path.join(root, family));
-            files.sort();
+            for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+              const target = path.join(directory, entry.name);
+              if (entry.isDirectory()) files.push(...walk(target));
+              else if (pattern.test(entry.name)) files.push(target);
+            }
+            return files;
+          };
+          for (const family of families) {
+            const files = walk(path.join(root, family)).sort();
             total += files.length;
             console.log(`${family}: ${files.length}`);
             for (const file of files) console.log(file);
           }
+          const rootFiles = fs.readdirSync(root, { withFileTypes: true })
+            .filter(entry => entry.isFile() && pattern.test(entry.name) && entry.name !== 'setup.test.js')
+            .map(entry => path.join(root, entry.name))
+            .sort();
+          total += rootFiles.length;
+          console.log(`root: ${rootFiles.length}`);
+          for (const file of rootFiles) console.log(file);
           console.log(`total: ${total}`);
+          console.log('excluded-by-config: api/backend/tests/setup.test.js');
+          console.log('separate-runner: api/backend/tests/architecture/**');
+          console.log('excluded-e2e: api/backend/tests/e2e/**');
           NODE
+
+      - name: Start Full Vitest Compose dependencies
+        run: |
+          docker compose -f compose.test.yml up -d --wait mongodb-test neo4j-test redis-test influxdb-test smtp-test tsa-test witness-test
+          docker compose -f compose.test.yml run --rm mongo-rs-init-test
+          docker compose -f compose.test.yml ps | tee /tmp/item7-compose-ps.txt
 
       - name: Run Full Vitest
         id: full_vitest
         continue-on-error: true
         working-directory: api/backend
         run: |
-          set -o pipefail
-          docker compose -f ../../compose.test.yml run --rm --no-deps \
-            -v "$PWD/tests/unit:/app/tests/unit" \
-            -v "$PWD/tests/integration:/app/tests/integration" \
-            -e MONGO_URI= -e REDIS_URL= -e NEO4J_URI= \
+          set +e
+          docker compose -f ../../compose.test.yml run --rm \
+            -v "$PWD/tests/unit:/app/tests/unit:ro" \
+            -v "$PWD/tests/integration:/app/tests/integration:ro" \
+            -v "/tmp:/diagnostics" \
+            -e NO_COLOR=1 \
+            -e FORCE_COLOR=0 \
             backend-unit-runner \
-            sh -lc 'ROLLUP_VERSION="$(node -p "require(\"./node_modules/rollup/package.json\").version")"; ROLLUP_TARBALL="$(npm pack "@rollup/rollup-linux-x64-musl@$ROLLUP_VERSION" --ignore-scripts --silent --pack-destination /tmp)"; mkdir -p node_modules/@rollup/rollup-linux-x64-musl; tar -xzf "/tmp/$ROLLUP_TARBALL" -C node_modules/@rollup/rollup-linux-x64-musl --strip-components=1; npx vitest run --reporter=default' \
-            2>&1 | tee /tmp/item7-full-vitest.log
+            sh -lc 'ROLLUP_VERSION="$(node -p "require(\"./node_modules/rollup/package.json\").version")"; ROLLUP_TARBALL="$(npm pack "@rollup/rollup-linux-x64-musl@$ROLLUP_VERSION" --ignore-scripts --silent --pack-destination /tmp)"; mkdir -p node_modules/@rollup/rollup-linux-x64-musl; tar -xzf "/tmp/$ROLLUP_TARBALL" -C node_modules/@rollup/rollup-linux-x64-musl --strip-components=1; NO_COLOR=1 FORCE_COLOR=0 npx vitest run --reporter=default --reporter=json --outputFile=/diagnostics/item7-vitest.json' \
+            2>&1 | tee /tmp/item7-full-vitest.raw.log
+          vitest_status=${PIPESTATUS[0]}
+          set -e
+          node <<'NODE'
+          const fs = require('fs');
+          const source = '/tmp/item7-full-vitest.raw.log';
+          const target = '/tmp/item7-full-vitest.log';
+          if (fs.existsSync(source)) {
+            const ansi = /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+            fs.writeFileSync(target, fs.readFileSync(source, 'utf8').replace(ansi, ''));
+          }
+          NODE
+          exit "${vitest_status}"
 
       - name: Build diagnostic summary
         if: always()
         env:
           FULL_VITEST_OUTCOME: ${{ steps.full_vitest.outcome }}
         run: |
-          {
-            echo "## Backend v2 Full Vitest — item 7 diagnostic"
-            echo
-            echo "- SHA: \`${GITHUB_SHA}\`"
-            echo "- Runner: \`backend-unit-runner\` from \`compose.test.yml\`"
-            echo "- Compose config: valid"
-            echo "- Outcome: \`${FULL_VITEST_OUTCOME}\`"
-            echo
-            echo "### Candidate-file inventory"
-            echo '~~~text'
-            grep -E '^(unit|integration|compliance|total):' /tmp/item7-test-inventory.txt || true
-            echo '~~~'
-            echo
-            echo "### Vitest totals"
-            echo '~~~text'
-            grep -E '^( Test Files|      Tests|   Start at|   Duration)' /tmp/item7-full-vitest.log || true
-            echo '~~~'
-          } | tee /tmp/item7-summary.md
+          node <<'NODE'
+          const fs = require('fs');
+          const logPath = '/tmp/item7-full-vitest.log';
+          const rawLogPath = '/tmp/item7-full-vitest.raw.log';
+          const vitestJsonPath = '/tmp/item7-vitest.json';
+          const inventoryPath = '/tmp/item7-test-inventory.txt';
+          const summaryPath = '/tmp/item7-summary.md';
+          const resultPath = '/tmp/item7-vitest-result.json';
+          const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : fs.existsSync(rawLogPath) ? fs.readFileSync(rawLogPath, 'utf8') : '';
+          const inventoryText = fs.existsSync(inventoryPath) ? fs.readFileSync(inventoryPath, 'utf8') : '';
+          const inventory = {};
+          for (const line of inventoryText.split(/\r?\n/)) {
+            const match = line.match(/^(unit|integration|compliance|root|total):\s+(\d+)$/);
+            if (match) inventory[match[1]] = Number(match[2]);
+          }
+          function parseStatusLine(label) {
+            const lines = log.split(/\r?\n/).filter(line => line.includes(label));
+            const line = lines.at(-1)?.trim() || '';
+            const result = { line };
+            for (const match of line.matchAll(/(\d+)\s+(failed|passed|skipped|todo)/g)) result[match[2]] = Number(match[1]);
+            const totalMatch = line.match(/\((\d+)\)/);
+            if (totalMatch) result.total = Number(totalMatch[1]);
+            return result;
+          }
+          const parsedFiles = parseStatusLine('Test Files');
+          const parsedTests = parseStatusLine('Tests');
+          const durationLine = log.split(/\r?\n/).filter(line => line.includes('Duration')).at(-1)?.trim() || '';
+          const startLine = log.split(/\r?\n/).filter(line => line.includes('Start at')).at(-1)?.trim() || '';
+          let rawVitest = null;
+          if (fs.existsSync(vitestJsonPath)) {
+            try { rawVitest = JSON.parse(fs.readFileSync(vitestJsonPath, 'utf8')); }
+            catch (error) { rawVitest = { parseError: error.message }; }
+          }
+          const prefer = (primary, fallback) => Number.isFinite(primary) ? primary : fallback;
+          const normalized = {
+            sha: process.env.GITHUB_SHA,
+            outcome: process.env.FULL_VITEST_OUTCOME || 'unknown',
+            runner: 'backend-unit-runner',
+            composeFile: 'compose.test.yml',
+            coverage: false,
+            environment: { inheritedComposeTestEnvironment: true, databaseUrlOverrides: false, mongoReplicaSetInitialized: true },
+            candidateInventory: inventory,
+            vitestJsonProduced: fs.existsSync(vitestJsonPath),
+            testFiles: {
+              total: prefer(rawVitest?.numTotalTestSuites, parsedFiles.total),
+              passed: prefer(rawVitest?.numPassedTestSuites, parsedFiles.passed),
+              failed: prefer(rawVitest?.numFailedTestSuites, parsedFiles.failed),
+              skipped: prefer(rawVitest?.numPendingTestSuites, parsedFiles.skipped)
+            },
+            tests: {
+              total: prefer(rawVitest?.numTotalTests, parsedTests.total),
+              passed: prefer(rawVitest?.numPassedTests, parsedTests.passed),
+              failed: prefer(rawVitest?.numFailedTests, parsedTests.failed),
+              skipped: prefer(rawVitest?.numPendingTests, parsedTests.skipped),
+              todo: prefer(rawVitest?.numTodoTests, parsedTests.todo)
+            },
+            startLine,
+            durationLine,
+            jsonTestResultFiles: Array.isArray(rawVitest?.testResults) ? rawVitest.testResults.length : 0
+          };
+          fs.writeFileSync(resultPath, JSON.stringify(normalized, null, 2));
+          const fmt = value => Number.isFinite(value) ? String(value) : 'unavailable';
+          const summary = [
+            '## Backend v2 Full Vitest — item 7 diagnostic', '',
+            `- SHA: \`${process.env.GITHUB_SHA}\``,
+            '- Runner: `backend-unit-runner` from `compose.test.yml`',
+            '- Coverage: disabled',
+            '- Compose test environment: inherited; MongoDB/Redis/Neo4j URLs not overridden',
+            '- MongoDB replica set initializer: executed before Full Vitest',
+            `- Outcome: \`${normalized.outcome}\``, '',
+            '### Candidate-file inventory', '~~~text',
+            `unit: ${fmt(inventory.unit)}`, `integration: ${fmt(inventory.integration)}`, `compliance: ${fmt(inventory.compliance)}`, `root: ${fmt(inventory.root)}`, `total: ${fmt(inventory.total)}`,
+            'excluded-by-config: api/backend/tests/setup.test.js',
+            'separate-runner: api/backend/tests/architecture/**',
+            'excluded-e2e: api/backend/tests/e2e/**', '~~~', '',
+            '### Vitest totals', '~~~text',
+            `Test Files: ${fmt(normalized.testFiles.failed)} failed | ${fmt(normalized.testFiles.passed)} passed | ${fmt(normalized.testFiles.total)} total`,
+            `Tests: ${fmt(normalized.tests.failed)} failed | ${fmt(normalized.tests.passed)} passed | ${fmt(normalized.tests.total)} total`,
+            startLine || 'Start at: unavailable', durationLine || 'Duration: unavailable', '~~~', '',
+            `- Structured Vitest JSON produced: ${normalized.vitestJsonProduced ? 'yes' : 'no'}`,
+            '- Normalized result: `item7-vitest-result.json`'
+          ].join('\n');
+          fs.writeFileSync(summaryPath, `${summary}\n`);
+          process.stdout.write(`${summary}\n`);
+          NODE
           cat /tmp/item7-summary.md >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload diagnostic evidence
@@ -111,17 +207,15 @@ jobs:
           name: backend-v2-full-vitest-${{ github.sha }}
           path: |
             /tmp/item7-compose-config.yml
+            /tmp/item7-compose-ps.txt
             /tmp/item7-test-inventory.txt
+            /tmp/item7-full-vitest.raw.log
             /tmp/item7-full-vitest.log
+            /tmp/item7-vitest.json
+            /tmp/item7-vitest-result.json
             /tmp/item7-summary.md
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
-
-      - name: Publish diagnostic to issue 228
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh issue comment 228 --repo "${GITHUB_REPOSITORY}" --body-file /tmp/item7-summary.md
 
       - name: Tear down diagnostic Compose project
         if: always()
