@@ -23,7 +23,7 @@ function createDb({ patients = {}, consents = {} } = {}) {
 
   const collection = vi.fn((name) => {
     if (name === 'patients') return patientsCollection;
-    if (name === 'patientConsents') return consentsCollection;
+    if (name === 'consents') return consentsCollection;
     throw new Error(`Unexpected collection name: ${name}`);
   });
 

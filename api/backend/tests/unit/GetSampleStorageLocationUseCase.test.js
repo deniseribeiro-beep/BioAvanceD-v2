@@ -2,9 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 
 const GetSampleStorageLocationUseCase = require('../../src/core/use-cases/GetSampleStorageLocationUseCase');
 
-function makeUseCase(getSampleStorageLocationImpl) {
+function makeUseCase(getSamplePhysicalPlacementImpl) {
   const storageRepository = {
-    getSampleStorageLocation: vi.fn(getSampleStorageLocationImpl)
+    getSamplePhysicalPlacement: vi.fn(getSamplePhysicalPlacementImpl)
   };
   const useCase = new GetSampleStorageLocationUseCase({ storageRepository });
   return { useCase, storageRepository };
@@ -20,8 +20,8 @@ describe('GetSampleStorageLocationUseCase', () => {
     const result = await useCase.execute({ specimenId: 'sample-1' });
 
     expect(result).toBe(location);
-    expect(storageRepository.getSampleStorageLocation).toHaveBeenCalledTimes(1);
-    expect(storageRepository.getSampleStorageLocation).toHaveBeenCalledWith({
+    expect(storageRepository.getSamplePhysicalPlacement).toHaveBeenCalledTimes(1);
+    expect(storageRepository.getSamplePhysicalPlacement).toHaveBeenCalledWith({
       specimenId: 'sample-1'
     });
   });
@@ -32,7 +32,7 @@ describe('GetSampleStorageLocationUseCase', () => {
     );
 
     await expect(useCase.execute({})).rejects.toThrow('specimenId é obrigatório');
-    expect(storageRepository.getSampleStorageLocation).not.toHaveBeenCalled();
+    expect(storageRepository.getSamplePhysicalPlacement).not.toHaveBeenCalled();
   });
 
   it('throws when the query object itself is missing', async () => {
@@ -41,6 +41,6 @@ describe('GetSampleStorageLocationUseCase', () => {
     );
 
     await expect(useCase.execute(undefined)).rejects.toThrow('specimenId é obrigatório');
-    expect(storageRepository.getSampleStorageLocation).not.toHaveBeenCalled();
+    expect(storageRepository.getSamplePhysicalPlacement).not.toHaveBeenCalled();
   });
 });
