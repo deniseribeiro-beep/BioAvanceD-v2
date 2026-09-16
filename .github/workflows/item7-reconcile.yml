@@ -20,13 +20,13 @@ jobs:
           ref: stabilize/v2.0.0-prototype
           fetch-depth: 0
 
-      - name: Apply deterministic notification persistence double
-        run: python .github/scripts/item7_reconcile_notification.py
+      - name: Reconcile final Full Vitest failures against canonical v2
+        run: python .github/scripts/item7_reconcile_final5.py
 
       - name: Validate diff
         run: git diff --check
 
-      - name: Commit notification persistence reconciliation
+      - name: Commit final functional reconciliation batch
         shell: bash
         run: |
           if git diff --quiet; then
@@ -35,7 +35,7 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add api/backend/src/services/NotificationService.js \
-            api/backend/tests/unit/NotificationService.test.js
-          git commit -m 'test(notification): inject deterministic compliance persistence double'
+          git add api/backend/tests/integration/storage-auto-allocation.api.test.js \
+            api/backend/tests/unit/consent.service.unit.test.js
+          git commit -m 'test(item7): align final assertions with canonical v2 identities'
           git push origin HEAD:stabilize/v2.0.0-prototype
