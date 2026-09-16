@@ -21,7 +21,7 @@ function createReleaseSampleController() {
         });
       }
 
-      const { sampleId } = req.params;
+      const { specimenId } = req.params;
 
       const useCase = new ReleaseSampleUseCase({
         storageRepository: new MongoStorageRepository(db),
@@ -30,7 +30,7 @@ function createReleaseSampleController() {
       });
 
       const result = await useCase.execute({
-        specimenId: sampleId,
+        specimenId,
         actor: {
           userId: req.user?.id || req.user?._id?.toString() || req.user?.userID || null,
           userName: req.user?.name || req.user?.username || null,

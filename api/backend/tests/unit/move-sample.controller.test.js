@@ -28,7 +28,7 @@ describe('move-sample.controller', () => {
 
   it('passes a command that satisfies the real MoveSampleUseCase.validateCommand (regression: #487)', async () => {
     // Exercises the real validateCommand instead of a mocked execute(), so a
-    // controller/use-case field-name mismatch (sampleId vs specimenId) fails
+    // controller/use-case field-name mismatch (specimenId vs specimenId) fails
     // this test instead of silently 400ing on every real request.
     const validateSpy = vi.spyOn(MoveSampleUseCase.prototype, 'validateCommand');
     vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockImplementation(function (command) {
@@ -37,7 +37,7 @@ describe('move-sample.controller', () => {
     });
 
     const req = buildReq({
-      body: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' }
+      body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' }
     });
     const res = buildRes();
 
@@ -67,9 +67,9 @@ describe('move-sample.controller', () => {
   it('returns 200 with the use-case result on success', async () => {
     const executeSpy = vi
       .spyOn(MoveSampleUseCase.prototype, 'execute')
-      .mockResolvedValue({ sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' });
+      .mockResolvedValue({ specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' });
     const req = buildReq({
-      body: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1', reason: 'relocation', notes: 'n/a' },
+      body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1', reason: 'relocation', notes: 'n/a' },
       user: { id: 'u1', name: 'Alice', roleName: 'admin' },
       ip: '10.0.0.1',
       headers: { 'user-agent': 'test-agent' }
@@ -95,7 +95,7 @@ describe('move-sample.controller', () => {
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
-      data: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' },
+      data: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' },
       message: 'Amostra movida com sucesso'
     });
   });
@@ -103,7 +103,7 @@ describe('move-sample.controller', () => {
   it('falls back to alternate user identity fields and headers when primary fields are absent', async () => {
     const executeSpy = vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockResolvedValue({});
     const req = buildReq({
-      body: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' },
+      body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' },
       user: { _id: { toString: () => 'u2' }, username: 'bob', role: 'tech' },
       headers: { 'x-forwarded-for': '1.2.3.4' },
       connection: { remoteAddress: '9.9.9.9' }
@@ -128,7 +128,7 @@ describe('move-sample.controller', () => {
 
   it('defaults actor fields to null when req.user is absent and no ip/agent info is present', async () => {
     const executeSpy = vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockResolvedValue({});
-    const req = buildReq({ body: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
+    const req = buildReq({ body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
     const res = buildRes();
 
     await controller(req, res);
@@ -165,7 +165,7 @@ describe('move-sample.controller', () => {
 
   it('returns 404 when the use case throws a "não encontrada" error', async () => {
     vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('Amostra não encontrada'));
-    const req = buildReq({ body: { sampleId: 'missing', targetBoxId: 'B1', targetPosition: 'A1' } });
+    const req = buildReq({ body: { specimenId: 'missing', targetBoxId: 'B1', targetPosition: 'A1' } });
     const res = buildRes();
 
     await controller(req, res);
@@ -180,7 +180,7 @@ describe('move-sample.controller', () => {
 
   it('returns 409 when the use case throws a STORAGE_COLLISION error', async () => {
     vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('STORAGE_COLLISION: position occupied'));
-    const req = buildReq({ body: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
+    const req = buildReq({ body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
     const res = buildRes();
 
     await controller(req, res);
@@ -195,7 +195,7 @@ describe('move-sample.controller', () => {
 
   it('returns 400 when the use case throws a known validation error', async () => {
     vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('targetBoxId é obrigatório'));
-    const req = buildReq({ body: { sampleId: 'S1' } });
+    const req = buildReq({ body: { specimenId: 'S1' } });
     const res = buildRes();
 
     await controller(req, res);
@@ -212,7 +212,7 @@ describe('move-sample.controller', () => {
     vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(
       new Error('StorageBox 507f1f77bcf86cd799439099 está retirada de uso (status: RETIRED)')
     );
-    const req = buildReq({ body: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
+    const req = buildReq({ body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
     const res = buildRes();
 
     await controller(req, res);
@@ -229,7 +229,7 @@ describe('move-sample.controller', () => {
     vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(
       new Error('Localização indisponível: FREEZER "Freezer 3" está com status MAINTENANCE')
     );
-    const req = buildReq({ body: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
+    const req = buildReq({ body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
     const res = buildRes();
 
     await controller(req, res);
@@ -244,7 +244,7 @@ describe('move-sample.controller', () => {
 
   it('returns 500 for an unrecognized use-case error message instead of masking it as a 400 (issue #54)', async () => {
     vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('targetPosition is required'));
-    const req = buildReq({ body: { sampleId: 'S1', targetBoxId: 'B1' } });
+    const req = buildReq({ body: { specimenId: 'S1', targetBoxId: 'B1' } });
     const res = buildRes();
 
     await controller(req, res);
@@ -259,7 +259,7 @@ describe('move-sample.controller', () => {
 
   it('falls back to the default error message with a 500 when the thrown error has no message (issue #54)', async () => {
     vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error());
-    const req = buildReq({ body: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
+    const req = buildReq({ body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
     const res = buildRes();
 
     await controller(req, res);

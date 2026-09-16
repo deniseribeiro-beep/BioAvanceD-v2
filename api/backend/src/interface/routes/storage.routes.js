@@ -73,7 +73,7 @@ async function auditTopologyCreate(req, resourceType, resourceId, payload) {
 // ==================== CONSULTA ====================
 router.get('/freezers', createListFreezersController());
 router.get('/samples/search', createSearchSamplesController());
-router.get('/sample/:sampleId', createGetSampleLocationController());
+router.get('/specimen/:specimenId', createGetSampleLocationController());
 router.get('/box/:boxId/available', createGetAvailablePositionsController());
 router.get('/validate/:boxId/:position', createValidatePositionController());
 router.get('/freezer/:freezerId/stats', createGetFreezerStatsController());
@@ -121,7 +121,7 @@ router.post('/topology/boxes', requirePermission('manageStorageTopology'), async
 router.post('/allocate', requirePermission('manageStorageAllocation'), createAllocateSampleController());
 router.post('/allocate/auto', requirePermission('manageStorageAllocation'), createAutoAssignSampleController());
 router.post('/move', requirePermission('manageStorageAllocation'), createMoveSampleController());
-router.delete('/release/:sampleId', requirePermission('manageStorageAllocation'), createReleaseSampleController());
+router.delete('/release/:specimenId', requirePermission('manageStorageAllocation'), createReleaseSampleController());
 
 // ==================== ASSOCIAÇÃO FREEZER -> ROOM ====================
 router.patch('/freezer/:freezerId/room', requirePermission('manageStorageTopology'), async (req, res) => {

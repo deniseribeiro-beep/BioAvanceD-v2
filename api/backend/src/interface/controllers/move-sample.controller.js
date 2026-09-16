@@ -27,7 +27,7 @@ function createMoveSampleController() {
         });
       }
 
-      const { sampleId, targetBoxId, targetPosition, reason, notes } = req.body || {};
+      const { specimenId, targetBoxId, targetPosition, reason, notes } = req.body || {};
 
       const storageRepository = new MongoStorageRepository(db);
       const auditRepository = new MongoAuditRepository(db);
@@ -40,7 +40,7 @@ function createMoveSampleController() {
       });
 
       const result = await useCase.execute({
-        specimenId: sampleId,
+        specimenId,
         targetBoxId,
         targetPosition,
         reason,

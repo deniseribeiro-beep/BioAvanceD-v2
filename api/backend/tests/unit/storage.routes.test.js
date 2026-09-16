@@ -152,16 +152,16 @@ describe('storage.routes canonical v2', () => {
     expect(currentSearchSamples).toHaveBeenCalledWith({ query: 'BC-1' });
   });
 
-  it('GET /sample/:sampleId exposes the canonical placement projection', async () => {
-    const res = await request(buildApp()).get('/api/storage/sample/SPEC-1');
+  it('GET /sample/:specimenId exposes the canonical placement projection', async () => {
+    const res = await request(buildApp()).get('/api/storage/specimen/SPEC-1');
     expect(res.status).toBe(200);
     expect(res.body.data.canonicalPlacement).toEqual(placement);
     expect(currentGetPlacement).toHaveBeenCalledWith({ specimenId: 'SPEC-1' });
   });
 
-  it('GET /sample/:sampleId maps a missing specimen to 404', async () => {
+  it('GET /sample/:specimenId maps a missing specimen to 404', async () => {
     currentGetPlacement.mockResolvedValueOnce({ found: false, error: 'SAMPLE_NOT_FOUND', message: 'Amostra não encontrada' });
-    const res = await request(buildApp()).get('/api/storage/sample/missing');
+    const res = await request(buildApp()).get('/api/storage/specimen/missing');
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('SAMPLE_NOT_FOUND');
   });
@@ -180,7 +180,7 @@ describe('storage.routes canonical v2', () => {
     };
     const res = await request(buildApp())
       .post('/api/storage/allocate')
-      .send({ sampleId: 'SPEC-1', boxId: 'box-1', position: 'A1' });
+      .send({ specimenId: 'SPEC-1', boxId: 'box-1', position: 'A1' });
     expect(res.status).toBe(403);
     expect(currentAllocate).not.toHaveBeenCalled();
   });
@@ -188,7 +188,7 @@ describe('storage.routes canonical v2', () => {
   it('POST /allocate returns CurrentStoragePlacement and projection evidence', async () => {
     const res = await request(buildApp())
       .post('/api/storage/allocate')
-      .send({ sampleId: 'SPEC-1', boxId: 'box-1', position: 'A1' });
+      .send({ specimenId: 'SPEC-1', boxId: 'box-1', position: 'A1' });
     expect(res.status).toBe(201);
     expect(res.body.currentStoragePlacement).toEqual(placement);
     expect(res.body.data).toEqual(placement);
@@ -210,14 +210,14 @@ describe('storage.routes canonical v2', () => {
   it('POST /move keeps route/controller mapping while returning the governed move result', async () => {
     const res = await request(buildApp())
       .post('/api/storage/move')
-      .send({ sampleId: 'SPEC-1', targetBoxId: 'box-2', targetPosition: 'B2', reason: 'relocation' });
+      .send({ specimenId: 'SPEC-1', targetBoxId: 'box-2', targetPosition: 'B2', reason: 'relocation' });
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.data.to).toEqual({ boxId: 'box-2', position: 'B2' });
     expect(currentMove).toHaveBeenCalledWith(expect.objectContaining({ specimenId: 'SPEC-1', targetBoxId: 'box-2', targetPosition: 'B2' }));
   });
 
-  it('DELETE /release/:sampleId returns release evidence without any direct graph persistence flag', async () => {
+  it('DELETE /release/:specimenId returns release evidence without any direct graph persistence flag', async () => {
     const res = await request(buildApp()).delete('/api/storage/release/SPEC-1');
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ specimenId: 'SPEC-1', boxId: 'box-1', position: 'A1' });

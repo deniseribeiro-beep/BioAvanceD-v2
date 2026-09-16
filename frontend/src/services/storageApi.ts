@@ -77,9 +77,9 @@ class StorageApiService {
     }
   }
 
-  async allocateSample(sampleId: string, boxId: string, position: string): Promise<AllocateResponse> {
+  async allocateSample(specimenId: string, boxId: string, position: string): Promise<AllocateResponse> {
     try {
-      const response = await api.post(`${API_STORAGE_BASE}/allocate`, { sampleId, boxId, position });
+      const response = await api.post(`${API_STORAGE_BASE}/allocate`, { specimenId, boxId, position });
       return response.data;
     } catch (error: any) {
       return {
@@ -104,7 +104,7 @@ class StorageApiService {
   }
 
   async moveSample(
-    sampleId: string,
+    specimenId: string,
     targetBoxId: string,
     targetPosition: string,
     reason?: string,
@@ -112,7 +112,7 @@ class StorageApiService {
   ): Promise<AllocateResponse> {
     try {
       const response = await api.post(`${API_STORAGE_BASE}/move`, {
-        sampleId,
+        specimenId,
         targetBoxId,
         targetPosition,
         reason,
@@ -128,9 +128,9 @@ class StorageApiService {
     }
   }
 
-  async releaseSample(sampleId: string): Promise<ReleaseResponse> {
+  async releaseSample(specimenId: string): Promise<ReleaseResponse> {
     try {
-      const response = await api.delete(`${API_STORAGE_BASE}/release/${sampleId}`);
+      const response = await api.delete(`${API_STORAGE_BASE}/release/${specimenId}`);
       return response.data;
     } catch (error: any) {
       return {
@@ -141,9 +141,9 @@ class StorageApiService {
     }
   }
 
-  async getCurrentStoragePlacement(sampleId: string): Promise<CurrentStoragePlacementResponse> {
+  async getCurrentStoragePlacement(specimenId: string): Promise<CurrentStoragePlacementResponse> {
     try {
-      const response = await api.get(`${API_STORAGE_BASE}/sample/${sampleId}`);
+      const response = await api.get(`${API_STORAGE_BASE}/specimen/${specimenId}`);
       return response.data;
     } catch (error: any) {
       return { success: false, error: error.response?.data?.error || 'PLACEMENT_ERROR' };

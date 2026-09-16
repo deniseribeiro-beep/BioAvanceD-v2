@@ -259,7 +259,7 @@ describe('storage transactional routes canonical v2 (#1006)', () => {
     const res = await request(app)
       .post('/api/storage/allocate')
       .set('Authorization', `Bearer ${makeToken(1)}`)
-      .send({ sampleId: String(SAMPLE_ID), boxId: String(SOURCE_BOX_ID), position: 'A1' });
+      .send({ specimenId: String(SAMPLE_ID), boxId: String(SOURCE_BOX_ID), position: 'A1' });
     expect(res.status).toBe(403);
     expect(db.client.startSession).not.toHaveBeenCalled();
   });
@@ -270,7 +270,7 @@ describe('storage transactional routes canonical v2 (#1006)', () => {
     const res = await request(app)
       .post('/api/storage/allocate')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ sampleId: String(SAMPLE_ID), boxId: String(SOURCE_BOX_ID), position: 'A1' });
+      .send({ specimenId: String(SAMPLE_ID), boxId: String(SOURCE_BOX_ID), position: 'A1' });
 
     expect(res.status).toBe(201);
     expect(res.body.currentStoragePlacement).toMatchObject({ boxId: String(SOURCE_BOX_ID), positionCode: 'A1' });
@@ -303,7 +303,7 @@ describe('storage transactional routes canonical v2 (#1006)', () => {
     const res = await request(app)
       .post('/api/storage/move')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ sampleId: String(SAMPLE_ID), targetBoxId: String(TARGET_BOX_ID), targetPosition: 'B2', reason: 'integration' });
+      .send({ specimenId: String(SAMPLE_ID), targetBoxId: String(TARGET_BOX_ID), targetPosition: 'B2', reason: 'integration' });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -317,7 +317,7 @@ describe('storage transactional routes canonical v2 (#1006)', () => {
     expect(collections.sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
   });
 
-  it('DELETE /release/:sampleId closes the normalized placement and writes immutable audit in the same session', async () => {
+  it('DELETE /release/:specimenId closes the normalized placement and writes immutable audit in the same session', async () => {
     const { db, collections } = buildDb({ withPlacement: true });
     app.locals.db = db;
     const res = await request(app)

@@ -38,7 +38,7 @@ describe('allocate-sample.controller', () => {
     vi.spyOn(AllocateSampleUseCase.prototype, 'execute').mockResolvedValue({ sampleLocation });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
-      body: { sampleId: 's1', boxId: 'box-1', position: 'A1' },
+      body: { specimenId: 's1', boxId: 'box-1', position: 'A1' },
       headers: {}
     };
     const res = buildRes();
@@ -53,12 +53,12 @@ describe('allocate-sample.controller', () => {
     });
   });
 
-  it('maps the wire-contract sampleId onto the use case command as specimenId (#482)', async () => {
+  it('maps the wire-contract specimenId onto the use case command as specimenId (#482)', async () => {
     const executeSpy = vi.spyOn(AllocateSampleUseCase.prototype, 'execute')
       .mockResolvedValue({ sampleLocation: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
-      body: { sampleId: 's1', boxId: 'box-1', position: 'A1' },
+      body: { specimenId: 's1', boxId: 'box-1', position: 'A1' },
       headers: {}
     };
     const res = buildRes();
@@ -77,7 +77,7 @@ describe('allocate-sample.controller', () => {
       .mockResolvedValue({ sampleLocation: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
-      body: { sampleId: 's1', boxId: 'b1', position: 'A1' },
+      body: { specimenId: 's1', boxId: 'b1', position: 'A1' },
       user: { id: 'user-1', name: 'Alice', roleName: 'admin' },
       ip: '10.0.0.1',
       headers: { 'user-agent': 'test-agent' }
@@ -102,7 +102,7 @@ describe('allocate-sample.controller', () => {
       .mockResolvedValue({ sampleLocation: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
-      body: { sampleId: 's1', boxId: 'b1', position: 'A1' },
+      body: { specimenId: 's1', boxId: 'b1', position: 'A1' },
       user: { _id: { toString: () => 'id-from-_id' }, username: 'bob', role: 'tech' },
       headers: { 'x-forwarded-for': '192.168.1.1' },
       connection: { remoteAddress: '127.0.0.1' }
@@ -127,7 +127,7 @@ describe('allocate-sample.controller', () => {
       .mockResolvedValue({ sampleLocation: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
-      body: { sampleId: 's1', boxId: 'b1', position: 'A1' },
+      body: { specimenId: 's1', boxId: 'b1', position: 'A1' },
       user: { userID: 'id-from-userID' },
       headers: {},
       connection: { remoteAddress: '127.0.0.1' }
@@ -152,7 +152,7 @@ describe('allocate-sample.controller', () => {
       .mockResolvedValue({ sampleLocation: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
-      body: { sampleId: 's1', boxId: 'b1', position: 'A1' },
+      body: { specimenId: 's1', boxId: 'b1', position: 'A1' },
       headers: {}
     };
     const res = buildRes();
@@ -311,7 +311,7 @@ describe('release-sample.controller', () => {
   it('releases and returns 200 with the expected response shape', async () => {
     const releasedFrom = { boxId: 'box-1', position: 'A1' };
     vi.spyOn(ReleaseSampleUseCase.prototype, 'execute').mockResolvedValue({ releasedFrom });
-    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { sampleId: 's1' }, headers: {} };
+    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { specimenId: 's1' }, headers: {} };
     const res = buildRes();
 
     await controller(req, res);
@@ -324,12 +324,12 @@ describe('release-sample.controller', () => {
     });
   });
 
-  it('maps the wire-contract sampleId onto the use case command as specimenId (#321)', async () => {
+  it('maps the wire-contract specimenId onto the use case command as specimenId (#321)', async () => {
     const executeSpy = vi.spyOn(ReleaseSampleUseCase.prototype, 'execute')
       .mockResolvedValue({ releasedFrom: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
-      params: { sampleId: 's1' },
+      params: { specimenId: 's1' },
       headers: {}
     };
     const res = buildRes();
@@ -346,7 +346,7 @@ describe('release-sample.controller', () => {
       .mockResolvedValue({ releasedFrom: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
-      params: { sampleId: 's1' },
+      params: { specimenId: 's1' },
       user: { id: 'user-1', name: 'Alice', roleName: 'admin' },
       ip: '10.0.0.1',
       headers: { 'user-agent': 'test-agent' }
@@ -372,7 +372,7 @@ describe('release-sample.controller', () => {
       .mockResolvedValue({ releasedFrom: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
-      params: { sampleId: 's1' },
+      params: { specimenId: 's1' },
       user: { _id: { toString: () => 'id-from-_id' }, username: 'bob', role: 'tech' },
       headers: { 'x-forwarded-for': '192.168.1.1' },
       connection: { remoteAddress: '127.0.0.1' }
@@ -397,7 +397,7 @@ describe('release-sample.controller', () => {
       .mockResolvedValue({ releasedFrom: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
-      params: { sampleId: 's1' },
+      params: { specimenId: 's1' },
       headers: {}
     };
     const res = buildRes();
@@ -417,7 +417,7 @@ describe('release-sample.controller', () => {
 
   it('returns 404 when execute rejects with a "não encontrada" message', async () => {
     vi.spyOn(ReleaseSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('Amostra não encontrada'));
-    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { sampleId: 's1' }, headers: {} };
+    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { specimenId: 's1' }, headers: {} };
     const res = buildRes();
 
     await controller(req, res);
@@ -432,7 +432,7 @@ describe('release-sample.controller', () => {
 
   it('returns 409 when execute rejects with a STORAGE_COLLISION message, matching allocate-sample.controller', async () => {
     vi.spyOn(ReleaseSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('STORAGE_COLLISION: slot occupied'));
-    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { sampleId: 's1' }, headers: {} };
+    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { specimenId: 's1' }, headers: {} };
     const res = buildRes();
 
     await controller(req, res);
@@ -447,7 +447,7 @@ describe('release-sample.controller', () => {
 
   it('returns 500 for an unrecognised/infra-shaped error message (#987)', async () => {
     vi.spyOn(ReleaseSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('generic failure'));
-    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { sampleId: 's1' }, headers: {} };
+    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { specimenId: 's1' }, headers: {} };
     const res = buildRes();
 
     await controller(req, res);
@@ -462,7 +462,7 @@ describe('release-sample.controller', () => {
 
   it('falls back to the default Portuguese message (and 500) when the thrown error has no usable message (#987)', async () => {
     vi.spyOn(ReleaseSampleUseCase.prototype, 'execute').mockRejectedValue(new Error(''));
-    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { sampleId: 's1' }, headers: {} };
+    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { specimenId: 's1' }, headers: {} };
     const res = buildRes();
 
     await controller(req, res);
@@ -477,7 +477,7 @@ describe('release-sample.controller', () => {
 
   it('returns 400 for a validation-shaped message ("obrigatório") (#987)', async () => {
     vi.spyOn(ReleaseSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('specimenId é obrigatório'));
-    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { sampleId: 's1' }, headers: {} };
+    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { specimenId: 's1' }, headers: {} };
     const res = buildRes();
 
     await controller(req, res);
@@ -492,7 +492,7 @@ describe('release-sample.controller', () => {
 
   it('returns 400 for a validation-shaped message ("não possui localização de armazenamento") (#987)', async () => {
     vi.spyOn(ReleaseSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('Amostra não possui localização de armazenamento'));
-    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { sampleId: 's1' }, headers: {} };
+    const req = { app: { locals: { db: { collection: vi.fn() } } }, params: { specimenId: 's1' }, headers: {} };
     const res = buildRes();
 
     await controller(req, res);

@@ -25,7 +25,7 @@ function createAllocateSampleController() {
         });
       }
 
-      const { sampleId, boxId, position } = req.body || {};
+      const { specimenId, boxId, position } = req.body || {};
 
       const useCase = new AllocateSampleUseCase({
         storageRepository: new MongoStorageRepository(db),
@@ -34,7 +34,7 @@ function createAllocateSampleController() {
       });
 
       const result = await useCase.execute({
-        specimenId: sampleId,
+        specimenId,
         boxId,
         position,
         actor: {

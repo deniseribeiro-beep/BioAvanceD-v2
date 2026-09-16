@@ -86,7 +86,7 @@ describe('storage-query.controller.searchSamplesController', () => {
   it('passes req.query.q through to the use case and returns 200', async () => {
     const executeSpy = vi
       .spyOn(SearchAllocatableSamplesUseCase.prototype, 'execute')
-      .mockResolvedValue([{ sampleId: 'S1' }]);
+      .mockResolvedValue([{ specimenId: 'S1' }]);
     const req = buildReq({ query: { q: 'blood' } });
     const res = buildRes();
 
@@ -94,7 +94,7 @@ describe('storage-query.controller.searchSamplesController', () => {
 
     expect(executeSpy).toHaveBeenCalledWith({ query: 'blood' });
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: [{ sampleId: 'S1' }] });
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: [{ specimenId: 'S1' }] });
   });
 
   it('defaults query to an empty string when req.query.q is absent', async () => {
@@ -146,7 +146,7 @@ describe('storage-query.controller.getSampleLocationController', () => {
       found: true,
       location: { boxId: 'B1', position: 'A1' }
     });
-    const req = buildReq({ params: { sampleId: 'sample-1' } });
+    const req = buildReq({ params: { specimenId: 'sample-1' } });
     const res = buildRes();
 
     await controller(req, res);
@@ -155,12 +155,12 @@ describe('storage-query.controller.getSampleLocationController', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true, data: { boxId: 'B1', position: 'A1' } });
   });
 
-  it('calls the use case with specimenId (#456: use case requires specimenId, not sampleId)', async () => {
+  it('calls the use case with specimenId (#456: use case requires specimenId, not specimenId)', async () => {
     const executeSpy = vi.spyOn(GetSampleStorageLocationUseCase.prototype, 'execute').mockResolvedValue({
       found: true,
       location: { boxId: 'B1', position: 'A1' }
     });
-    const req = buildReq({ params: { sampleId: 'sample-1' } });
+    const req = buildReq({ params: { specimenId: 'sample-1' } });
     const res = buildRes();
 
     await controller(req, res);
@@ -173,7 +173,7 @@ describe('storage-query.controller.getSampleLocationController', () => {
       found: false,
       error: 'SAMPLE_NOT_FOUND'
     });
-    const req = buildReq({ params: { sampleId: 'missing' } });
+    const req = buildReq({ params: { specimenId: 'missing' } });
     const res = buildRes();
 
     await controller(req, res);
@@ -187,7 +187,7 @@ describe('storage-query.controller.getSampleLocationController', () => {
       found: false,
       error: 'INVALID_SAMPLE_ID'
     });
-    const req = buildReq({ params: { sampleId: '' } });
+    const req = buildReq({ params: { specimenId: '' } });
     const res = buildRes();
 
     await controller(req, res);
@@ -197,7 +197,7 @@ describe('storage-query.controller.getSampleLocationController', () => {
 
   it('returns 500 with error message when the use case throws', async () => {
     vi.spyOn(GetSampleStorageLocationUseCase.prototype, 'execute').mockRejectedValue(new Error('boom'));
-    const req = buildReq({ params: { sampleId: 's1' } });
+    const req = buildReq({ params: { specimenId: 's1' } });
     const res = buildRes();
 
     await controller(req, res);
@@ -212,7 +212,7 @@ describe('storage-query.controller.getSampleLocationController', () => {
 
   it('returns 500 instead of crashing when the use case rejects with a non-Error value', async () => {
     vi.spyOn(GetSampleStorageLocationUseCase.prototype, 'execute').mockRejectedValue('plain string rejection');
-    const req = buildReq({ params: { sampleId: 's1' } });
+    const req = buildReq({ params: { specimenId: 's1' } });
     const res = buildRes();
 
     await controller(req, res);
