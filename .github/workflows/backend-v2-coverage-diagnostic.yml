@@ -49,17 +49,15 @@ jobs:
         working-directory: api/backend
         run: |
           rm -rf /tmp/item8-coverage
-          mkdir -p /tmp/item8-coverage
           set +e
           docker compose -f ../../compose.test.yml run --rm \
             -v "$PWD/tests/unit:/app/tests/unit" \
             -v "$PWD/tests/integration:/app/tests/integration" \
             -v "/tmp:/diagnostics" \
-            -v "/tmp/item8-coverage:/app/coverage" \
             -e NO_COLOR=1 \
             -e FORCE_COLOR=0 \
             backend-unit-runner \
-            sh -lc 'ROLLUP_VERSION="$(node -p "require(\"./node_modules/rollup/package.json\").version")"; ROLLUP_TARBALL="$(npm pack "@rollup/rollup-linux-x64-musl@$ROLLUP_VERSION" --ignore-scripts --silent --pack-destination /tmp)"; mkdir -p node_modules/@rollup/rollup-linux-x64-musl; tar -xzf "/tmp/$ROLLUP_TARBALL" -C node_modules/@rollup/rollup-linux-x64-musl --strip-components=1; NO_COLOR=1 FORCE_COLOR=0 npx vitest run --coverage --reporter=default --reporter=json --outputFile=/diagnostics/item8-vitest.json' \
+            sh -lc 'ROLLUP_VERSION="$(node -p "require(\"./node_modules/rollup/package.json\").version")"; ROLLUP_TARBALL="$(npm pack "@rollup/rollup-linux-x64-musl@$ROLLUP_VERSION" --ignore-scripts --silent --pack-destination /tmp)"; mkdir -p node_modules/@rollup/rollup-linux-x64-musl; tar -xzf "/tmp/$ROLLUP_TARBALL" -C node_modules/@rollup/rollup-linux-x64-musl --strip-components=1; VITEST_VERSION="$(node -p "require(\"./node_modules/vitest/package.json\").version")"; npm install --no-save --package-lock=false "@vitest/coverage-v8@$VITEST_VERSION" >/dev/null; printf "vitest=%s\ncoverage-v8=%s\n" "$VITEST_VERSION" "$(node -p "require(\"./node_modules/@vitest/coverage-v8/package.json\").version")" > /diagnostics/item8-tool-versions.txt; rm -rf coverage; NO_COLOR=1 FORCE_COLOR=0 npx vitest run --coverage --reporter=default --reporter=json --outputFile=/diagnostics/item8-vitest.json; status=$?; rm -rf /diagnostics/item8-coverage; if [ -d coverage ]; then cp -R coverage /diagnostics/item8-coverage; fi; exit "$status"' \
             2>&1 | tee /tmp/item8-coverage.raw.log
           coverage_status=${PIPESTATUS[0]}
           set -e
@@ -83,10 +81,12 @@ jobs:
           const fs = require('fs');
           const summaryPath = '/tmp/item8-coverage/coverage-summary.json';
           const vitestJsonPath = '/tmp/item8-vitest.json';
+          const versionsPath = '/tmp/item8-tool-versions.txt';
           const resultPath = '/tmp/item8-result.json';
           const markdownPath = '/tmp/item8-summary.md';
           const coverage = fs.existsSync(summaryPath) ? JSON.parse(fs.readFileSync(summaryPath, 'utf8')) : null;
           const vitest = fs.existsSync(vitestJsonPath) ? JSON.parse(fs.readFileSync(vitestJsonPath, 'utf8')) : null;
+          const versions = fs.existsSync(versionsPath) ? fs.readFileSync(versionsPath, 'utf8').trim() : 'unavailable';
           const metric = name => {
             const item = coverage?.total?.[name];
             return item ? { pct: item.pct, covered: item.covered, total: item.total, skipped: item.skipped } : null;
@@ -97,6 +97,7 @@ jobs:
             runner: 'backend-unit-runner',
             composeFile: 'compose.test.yml',
             mongoReplicaSetInitialized: true,
+            toolVersions: versions,
             tests: {
               total: vitest?.numTotalTests ?? null,
               passed: vitest?.numPassedTests ?? null,
@@ -118,6 +119,7 @@ jobs:
             `- SHA: \`${process.env.GITHUB_SHA}\``,
             '- Runner: `backend-unit-runner` from `compose.test.yml`',
             '- MongoDB replica set initializer: executed before coverage',
+            `- Tool versions: ${versions.replace(/\n/g, ', ')}`,
             `- Coverage run outcome: \`${normalized.outcome}\``,
             `- Tests: ${normalized.tests.failed ?? 'unavailable'} failed | ${normalized.tests.passed ?? 'unavailable'} passed | ${normalized.tests.total ?? 'unavailable'} total`, '',
             '### Coverage totals', '',
@@ -140,6 +142,7 @@ jobs:
           path: |
             /tmp/item8-compose-config.yml
             /tmp/item8-compose-ps.txt
+            /tmp/item8-tool-versions.txt
             /tmp/item8-coverage.raw.log
             /tmp/item8-coverage.log
             /tmp/item8-vitest.json
