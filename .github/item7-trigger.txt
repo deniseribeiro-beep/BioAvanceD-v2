@@ -1,0 +1,2 @@
+Item 7 functional reconciliation trigger for SHA 2f9cdbba65fb7113b0088fb9a58be36a336d2ed4.
+Temporary file; remove after reconciliation.
