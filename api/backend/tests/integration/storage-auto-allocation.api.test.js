@@ -44,11 +44,11 @@ function ledgerCollections() {
   };
 }
 
-function buildAutoAllocationDb({ accessType = 2, boxFull = false, sampleMissing = false } = {}) {
-  const sampleId = new ObjectId();
+function buildAutoAllocationDb({ accessType = 2, boxFull = false, specimenMissing = false } = {}) {
+  const specimenObjectId = new ObjectId();
   const boxId = new ObjectId();
-  const sample = sampleMissing ? null : {
-    _id: sampleId,
+  const specimen = specimenMissing ? null : {
+    _id: specimenObjectId,
     specimenId: 'SP-1006-AUTO',
     participantId: 'PART-1006',
     barcode: 'BIO-1006-AUTO',
@@ -64,7 +64,7 @@ function buildAutoAllocationDb({ accessType = 2, boxFull = false, sampleMissing 
     canonicalStorageRackId: String(boxId),
   };
 
-  const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
+  const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(specimen) });
   const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(box) });
   const storagePaths = createCollectionMock({
     findOne: vi.fn().mockResolvedValue({ boxId, rackId: 'rack-config', shelfId: 'shelf-config', freezerId: 'freezer-config' }),
@@ -112,7 +112,7 @@ function buildAutoAllocationDb({ accessType = 2, boxFull = false, sampleMissing 
   };
 
   const db = createDbMock(collections);
-  return { db, sampleId, boxId, collections };
+  return { db, specimenObjectId, boxId, collections };
 }
 
 beforeEach(() => {
@@ -124,26 +124,26 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('POST /api/storage/allocate/auto (#1006)', () => {
   it('enforces manageStorageAllocation server-side', async () => {
-    const { db, sampleId, boxId } = buildAutoAllocationDb({ accessType: 1 });
+    const { db, specimenObjectId, boxId } = buildAutoAllocationDb({ accessType: 1 });
     app.locals.db = db;
 
     const res = await request(app)
       .post('/api/storage/allocate/auto')
       .set('Authorization', `Bearer ${makeToken(1)}`)
-      .send({ sampleId: String(sampleId), boxId: String(boxId) });
+      .send({ specimenId: String(specimenObjectId), boxId: String(boxId) });
 
     expect(res.status).toBe(403);
     expect(db.client.startSession).not.toHaveBeenCalled();
   });
 
   it('returns 404 before transaction when the specimen does not exist', async () => {
-    const { db, sampleId, boxId } = buildAutoAllocationDb({ sampleMissing: true });
+    const { db, specimenObjectId, boxId } = buildAutoAllocationDb({ specimenMissing: true });
     app.locals.db = db;
 
     const res = await request(app)
       .post('/api/storage/allocate/auto')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ sampleId: String(sampleId), boxId: String(boxId) });
+      .send({ specimenId: String(specimenObjectId), boxId: String(boxId) });
 
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('SAMPLE_NOT_FOUND');
@@ -151,13 +151,13 @@ describe('POST /api/storage/allocate/auto (#1006)', () => {
   });
 
   it('returns 409 before transaction when the box has no free position', async () => {
-    const { db, sampleId, boxId } = buildAutoAllocationDb({ boxFull: true });
+    const { db, specimenObjectId, boxId } = buildAutoAllocationDb({ boxFull: true });
     app.locals.db = db;
 
     const res = await request(app)
       .post('/api/storage/allocate/auto')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ sampleId: String(sampleId), boxId: String(boxId) });
+      .send({ specimenId: String(specimenObjectId), boxId: String(boxId) });
 
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('BOX_FULL');
@@ -165,13 +165,13 @@ describe('POST /api/storage/allocate/auto (#1006)', () => {
   });
 
   it('uses one Mongo session for normalized placement, audit and graph outbox', async () => {
-    const { db, sampleId, boxId, collections } = buildAutoAllocationDb();
+    const { db, specimenObjectId, boxId, collections } = buildAutoAllocationDb();
     app.locals.db = db;
 
     const res = await request(app)
       .post('/api/storage/allocate/auto')
       .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ sampleId: String(sampleId), boxId: String(boxId) });
+      .send({ specimenId: String(specimenObjectId), boxId: String(boxId) });
 
     expect(res.status).toBe(201);
     expect(res.body.success).toBe(true);
