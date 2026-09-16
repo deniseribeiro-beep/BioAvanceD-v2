@@ -90,9 +90,9 @@ class StorageApiService {
     }
   }
 
-  async autoAssignSampleToBox(sampleId: string, boxId: string): Promise<AllocateResponse> {
+  async autoAssignSampleToBox(specimenId: string, boxId: string): Promise<AllocateResponse> {
     try {
-      const response = await api.post(`${API_STORAGE_BASE}/allocate/auto`, { sampleId, boxId });
+      const response = await api.post(`${API_STORAGE_BASE}/allocate/auto`, { specimenId, boxId });
       return response.data;
     } catch (error: any) {
       return {
