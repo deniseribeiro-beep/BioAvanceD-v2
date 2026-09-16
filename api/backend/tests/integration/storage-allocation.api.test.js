@@ -11,6 +11,17 @@ const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 
+function cloneBsonValue(value) {
+  if (value instanceof ObjectId) return new ObjectId(value.toHexString());
+  if (value instanceof Date) return new Date(value.getTime());
+  if (Buffer.isBuffer(value)) return Buffer.from(value);
+  if (Array.isArray(value)) return value.map(cloneBsonValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneBsonValue(item)]));
+  }
+  return value;
+}
+
 function sameValue(a, b) {
   if (a instanceof Date || b instanceof Date) return new Date(a).getTime() === new Date(b).getTime();
   if (a instanceof ObjectId || b instanceof ObjectId) return String(a) === String(b);
@@ -61,7 +72,7 @@ function matches(doc, filter = {}) {
 }
 
 function createStatefulCollection(initial = []) {
-  const docs = initial.map((doc) => structuredClone(doc));
+  const docs = initial.map(cloneBsonValue);
   const cursorFor = (rows) => ({
     sort: vi.fn((criteria = {}) => {
       const [[field, direction = 1]] = Object.entries(criteria);
@@ -86,13 +97,13 @@ function createStatefulCollection(initial = []) {
     find: vi.fn((filter = {}) => cursorFor(docs.filter((doc) => matches(doc, filter)))),
     countDocuments: vi.fn(async (filter = {}) => docs.filter((doc) => matches(doc, filter)).length),
     insertOne: vi.fn(async (doc) => {
-      const stored = structuredClone(doc);
+      const stored = cloneBsonValue(doc);
       if (!stored._id) stored._id = new ObjectId();
       docs.push(stored);
       return { insertedId: stored._id };
     }),
     insertMany: vi.fn(async (rows) => {
-      rows.forEach((row) => docs.push(structuredClone(row)));
+      rows.forEach((row) => docs.push(cloneBsonValue(row)));
       return { insertedCount: rows.length };
     }),
     updateOne: vi.fn(async (filter, update, options = {}) => {
@@ -101,14 +112,14 @@ function createStatefulCollection(initial = []) {
       if (!doc && options.upsert) {
         doc = {};
         for (const [key, value] of Object.entries(filter)) {
-          if (!key.startsWith('$') && (value === null || typeof value !== 'object' || value instanceof ObjectId)) setPath(doc, key, value);
+          if (!key.startsWith('$') && (value === null || typeof value !== 'object' || value instanceof ObjectId)) setPath(doc, key, cloneBsonValue(value));
         }
         docs.push(doc);
         upserted = true;
       }
       if (!doc) return { matchedCount: 0, modifiedCount: 0 };
-      if (upserted && update.$setOnInsert) Object.entries(update.$setOnInsert).forEach(([key, value]) => setPath(doc, key, structuredClone(value)));
-      if (update.$set) Object.entries(update.$set).forEach(([key, value]) => setPath(doc, key, structuredClone(value)));
+      if (upserted && update.$setOnInsert) Object.entries(update.$setOnInsert).forEach(([key, value]) => setPath(doc, key, cloneBsonValue(value)));
+      if (update.$set) Object.entries(update.$set).forEach(([key, value]) => setPath(doc, key, cloneBsonValue(value)));
       if (update.$unset) Object.keys(update.$unset).forEach((key) => unsetPath(doc, key));
       if (update.$inc) Object.entries(update.$inc).forEach(([key, value]) => setPath(doc, key, Number(getPath(doc, key) || 0) + Number(value)));
       return { matchedCount: upserted ? 0 : 1, modifiedCount: 1, upsertedCount: upserted ? 1 : 0 };
