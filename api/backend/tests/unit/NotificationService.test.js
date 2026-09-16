@@ -12,6 +12,8 @@ describe('NotificationService', () => {
   let originalAdminEmail;
   let originalResendClient;
   let originalEmailFrom;
+  let originalSmtpTransport;
+  let originalNotificationQueue;
 
   beforeEach(() => {
     originalEnv = { ...process.env };
@@ -19,6 +21,17 @@ describe('NotificationService', () => {
     originalAdminEmail = notificationService.adminEmail;
     originalResendClient = notificationService.resendClient;
     originalEmailFrom = notificationService.emailFrom;
+    originalSmtpTransport = notificationService.smtpTransport;
+    originalNotificationQueue = notificationService.notificationQueue;
+    delete process.env.SMTP_HOST;
+    delete process.env.SMTP_PORT;
+    delete process.env.MONGO_URI;
+    delete process.env.REDIS_HOST;
+    delete process.env.REDIS_PORT;
+    delete process.env.REDIS_PASSWORD;
+    delete process.env.REDIS_URL;
+    notificationService.smtpTransport = null;
+    notificationService.notificationQueue = null;
   });
 
   afterEach(() => {
@@ -27,6 +40,8 @@ describe('NotificationService', () => {
     notificationService.adminEmail = originalAdminEmail;
     notificationService.resendClient = originalResendClient;
     notificationService.emailFrom = originalEmailFrom;
+    notificationService.smtpTransport = originalSmtpTransport;
+    notificationService.notificationQueue = originalNotificationQueue;
     notificationService.io = null;
     vi.restoreAllMocks();
   });

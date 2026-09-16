@@ -198,70 +198,31 @@ describe('TelemetryMonitor', () => {
   });
 
   describe('runCycle()', () => {
-    it('logs a warning and returns early without calling getNeo4jDriver when db is falsy', async () => {
-      const getNeo4jDriver = vi.fn();
-      const monitor = new TelemetryMonitor({ db: null, getNeo4jDriver });
-
-      await monitor.runCycle();
-
+    it('logs a warning and returns early when db is unavailable', async () => {
+      const monitor = new TelemetryMonitor({ db: null });
+      await expect(monitor.runCycle()).resolves.toEqual({ processed: 0 });
       expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Banco Mongo indisponível'));
-      expect(getNeo4jDriver).not.toHaveBeenCalled();
     });
 
-    it('logs a warning and returns early without calling findCriticalFreezers when neo4j driver is falsy', async () => {
-      const getNeo4jDriver = vi.fn().mockResolvedValue(null);
-      const monitor = new TelemetryMonitor({ db: {}, getNeo4jDriver });
-      monitor.findCriticalFreezers = vi.fn();
-
-      await monitor.runCycle();
-
-      expect(getNeo4jDriver).toHaveBeenCalledTimes(1);
-      expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Neo4j indisponível'));
-      expect(monitor.findCriticalFreezers).not.toHaveBeenCalled();
-    });
-
-    it('returns early (without calling propagateCompromise) when findCriticalFreezers returns an empty array', async () => {
-      const neo4jDriver = { session: vi.fn() };
-      const getNeo4jDriver = vi.fn().mockResolvedValue(neo4jDriver);
-      const monitor = new TelemetryMonitor({ db: {}, getNeo4jDriver });
+    it('does not propagate when no critical freezer is found', async () => {
+      const monitor = new TelemetryMonitor({ db: {} });
+      monitor.checkMissingReadings = vi.fn().mockResolvedValue([]);
       monitor.findCriticalFreezers = vi.fn().mockResolvedValue([]);
       monitor.propagateCompromise = vi.fn();
-
-      await monitor.runCycle();
-
-      expect(monitor.findCriticalFreezers).toHaveBeenCalledTimes(1);
+      await expect(monitor.runCycle()).resolves.toEqual({ processed: 0, criticalFreezers: 0 });
       expect(monitor.propagateCompromise).not.toHaveBeenCalled();
     });
 
-    it('calls propagateCompromise once per critical freezer entry with mapped fields', async () => {
-      const neo4jDriver = { session: vi.fn() };
-      const getNeo4jDriver = vi.fn().mockResolvedValue(neo4jDriver);
-      const monitor = new TelemetryMonitor({ db: {}, getNeo4jDriver });
-
-      const entries = [
-        { rootSampleId: 'sample-1', freezerKey: 'freezer-A', breachedSince: 'ts-1', maxObservedTemp: -50 },
-        { rootSampleId: 'sample-2', freezerKey: 'freezer-B', breachedSince: 'ts-2', maxObservedTemp: -40 }
-      ];
-      monitor.findCriticalFreezers = vi.fn().mockResolvedValue(entries);
-      monitor.propagateCompromise = vi.fn().mockResolvedValue(undefined);
-
-      await monitor.runCycle();
-
+    it('propagates each canonical root specimen from a critical freezer', async () => {
+      const monitor = new TelemetryMonitor({ db: {} });
+      monitor.checkMissingReadings = vi.fn().mockResolvedValue([]);
+      monitor.findCriticalFreezers = vi.fn().mockResolvedValue([{ freezerKey: 'sensor-A', rootSampleIds: ['SPEC-1', 'SPEC-2'], breachedSince: new Date('2026-01-01T00:00:00Z'), maxObservedTemp: -50 }]);
+      monitor.propagateCompromise = vi.fn().mockResolvedValue({ summarized: 1 });
+      const result = await monitor.runCycle();
+      expect(result).toEqual({ processed: 2, criticalFreezers: 1 });
       expect(monitor.propagateCompromise).toHaveBeenCalledTimes(2);
-      expect(monitor.propagateCompromise).toHaveBeenNthCalledWith(1, {
-        neo4jDriver,
-        rootSampleId: 'sample-1',
-        freezerKey: 'freezer-A',
-        breachedSince: 'ts-1',
-        maxObservedTemp: -50
-      });
-      expect(monitor.propagateCompromise).toHaveBeenNthCalledWith(2, {
-        neo4jDriver,
-        rootSampleId: 'sample-2',
-        freezerKey: 'freezer-B',
-        breachedSince: 'ts-2',
-        maxObservedTemp: -40
-      });
+      expect(monitor.propagateCompromise).toHaveBeenNthCalledWith(1, expect.objectContaining({ freezerKey: 'sensor-A', rootSampleId: 'SPEC-1' }));
+      expect(monitor.propagateCompromise).toHaveBeenNthCalledWith(2, expect.objectContaining({ freezerKey: 'sensor-A', rootSampleId: 'SPEC-2' }));
     });
   });
 
@@ -338,14 +299,17 @@ describe('TelemetryMonitor', () => {
 
       const result = await monitor.findCriticalFreezers();
 
-      expect(result).toEqual([
-        {
-          freezerKey: 'sensor-A',
-          rootSampleId: 'sample-1',
-          breachedSince: new Date('2026-01-01T03:00:00Z'),
-          maxObservedTemp: -60
-        }
-      ]);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual(expect.objectContaining({
+        freezerKey: 'sensor-A',
+        rootSampleId: 'sample-1',
+        rootSampleIds: ['sample-1'],
+        breachedSince: new Date('2026-01-01T03:00:00Z'),
+        maxObservedTemp: -60,
+        observationCount: 3,
+        sourceQueryHash: expect.stringMatching(/^sha256:/),
+        sourceReadingSetHash: expect.stringMatching(/^sha256:/)
+      }));
     });
 
     it('does not flag a sensor whose streak has not yet lasted criticalDurationHours', async () => {
@@ -578,174 +542,111 @@ describe('TelemetryMonitor', () => {
   });
 
   describe('resolveRootSamples()', () => {
-    function fakeCollection(docsByFind) {
-      return { find: vi.fn((query) => ({ toArray: async () => docsByFind(query) })) };
-    }
-
-    function buildDb({ sensor, shelves = [], racks = [], boxes = [] }) {
-      const sensorMetadata = { findOne: vi.fn().mockResolvedValue(sensor) };
-      const storageContainers = fakeCollection((query) => {
-        if (query.containerType === 'SHELF') return shelves;
-        if (query.containerType === 'RACK') return racks;
-        return [];
-      });
-      const storageBoxes = fakeCollection(() => boxes);
-
-      return {
-        collection: vi.fn((name) => {
-          if (name === 'sensorMetadata') return sensorMetadata;
-          if (name === 'storageContainers') return storageContainers;
-          if (name === 'storageBoxes') return storageBoxes;
-          throw new Error(`unexpected collection: ${name}`);
-        }),
-        sensorMetadata,
-        storageContainers,
-        storageBoxes
+    function cursor(rows) { return { toArray: vi.fn().mockResolvedValue(rows) }; }
+    function buildDb({ sensor = null, rackAssignments = [], positions = [], positionAssignments = [], specimenAssignments = [] } = {}) {
+      const collections = {
+        sensorMetadata: { findOne: vi.fn().mockResolvedValue(sensor) },
+        rackLocationAssignments: { find: vi.fn(() => cursor(rackAssignments)) },
+        storagePositions: { find: vi.fn(() => cursor(positions)) },
+        containerPositionAssignments: { find: vi.fn(() => cursor(positionAssignments)) },
+        specimenContainerAssignments: { find: vi.fn(() => cursor(specimenAssignments)) },
       };
+      return { collections, collection: vi.fn((name) => {
+        if (!collections[name]) throw new Error(`unexpected collection: ${name}`);
+        return collections[name];
+      }) };
     }
 
-    it('returns [] when no sensorMetadata doc matches the freezerKey (sensorId)', async () => {
-      const db = buildDb({ sensor: null });
+    it('returns [] when sensor metadata is absent', async () => {
+      const db = buildDb();
       const monitor = new TelemetryMonitor({ db });
-
-      const result = await monitor.resolveRootSamples('sensor-unknown');
-
-      expect(db.sensorMetadata.findOne).toHaveBeenCalledWith({ sensorId: 'sensor-unknown' });
-      expect(result).toEqual([]);
+      await expect(monitor.resolveRootSamples('sensor-unknown')).resolves.toEqual([]);
     });
 
-    it('returns [] when the matched sensor has no storageContainer link', async () => {
+    it('returns [] when sensor metadata has no storageContainer link', async () => {
       const db = buildDb({ sensor: { sensorId: 'sensor-A', storageContainer: null } });
       const monitor = new TelemetryMonitor({ db });
-
-      const result = await monitor.resolveRootSamples('sensor-A');
-
-      expect(result).toEqual([]);
+      await expect(monitor.resolveRootSamples('sensor-A')).resolves.toEqual([]);
     });
 
-    it('returns [] when the freezer container has no shelves/racks/boxes under it', async () => {
-      const db = buildDb({ sensor: { sensorId: 'sensor-A', storageContainer: 'freezer-1' }, shelves: [] });
-      const monitor = new TelemetryMonitor({ db });
-
-      const result = await monitor.resolveRootSamples('sensor-A');
-
-      expect(result).toEqual([]);
-    });
-
-    it('walks FREEZER -> SHELF -> RACK -> StorageBox and returns samples whose storageLocation.boxId matches', async () => {
+    it('walks RackLocationAssignment -> StoragePosition -> ContainerPositionAssignment -> SpecimenContainerAssignment', async () => {
       const db = buildDb({
-        sensor: { sensorId: 'sensor-A', storageContainer: 'freezer-1' },
-        shelves: [{ _id: 'shelf-1' }],
-        racks: [{ _id: 'rack-1' }],
-        boxes: [{ _id: 'box-1' }, { _id: 'box-2' }]
+        sensor: { sensorId: 'sensor-A', storageContainer: 'LOC-1' },
+        rackAssignments: [{ storageRackId: 'RACK-1', storageLocationId: 'LOC-1', removedAt: null }],
+        positions: [{ storagePositionId: 'RACK-1:A1', storageRackId: 'RACK-1' }],
+        positionAssignments: [{ containerId: 'CONT-1', storagePositionId: 'RACK-1:A1', removedAt: null }],
+        specimenAssignments: [
+          { specimenId: 'SPEC-1', containerId: 'CONT-1', releasedAt: null },
+          { specimenId: 'SPEC-1', containerId: 'CONT-1', releasedAt: null },
+        ],
       });
-      getCollectionSpy.mockReturnValue({
-        find: vi.fn(() => ({ toArray: async () => [{ _id: 'sample-1' }, { _id: 'sample-2' }] }))
-      });
-
       const monitor = new TelemetryMonitor({ db });
-      const result = await monitor.resolveRootSamples('sensor-A');
-
-      expect(db.storageContainers.find).toHaveBeenCalledWith({ parent_id: 'freezer-1', containerType: 'SHELF' });
-      expect(db.storageContainers.find).toHaveBeenCalledWith({ parent_id: { $in: ['shelf-1'] }, containerType: 'RACK' });
-      expect(db.storageBoxes.find).toHaveBeenCalledWith({ parent_id: { $in: ['rack-1'] } });
-      expect(getCollectionSpy).toHaveBeenCalledWith(db, 'samples');
-      expect(result).toEqual(['sample-1', 'sample-2']);
+      await expect(monitor.resolveRootSamples('sensor-A')).resolves.toEqual(['SPEC-1']);
+      expect(db.collection).toHaveBeenCalledWith('rackLocationAssignments');
+      expect(db.collection).toHaveBeenCalledWith('specimenContainerAssignments');
     });
   });
 
   describe('propagateCompromise()', () => {
-    function fakeSession(records) {
+    function transactionalDb(telemetryCollection) {
+      const session = {
+        withTransaction: vi.fn(async (handler) => handler()),
+        endSession: vi.fn().mockResolvedValue(undefined),
+      };
+      const client = {
+        db: vi.fn(() => ({ command: vi.fn().mockResolvedValue({ setName: 'rs0', isWritablePrimary: true }) })),
+        startSession: vi.fn(() => session),
+      };
       return {
-        run: vi.fn().mockResolvedValue({ records }),
-        close: vi.fn().mockResolvedValue(undefined)
+        client,
+        session,
+        collection: vi.fn((name) => {
+          if (name === 'telemetryExposureSummaries') return telemetryCollection;
+          throw new Error(`unexpected collection ${name}`);
+        }),
       };
     }
 
-    function fakeRecord(compromisedCount) {
-      return { get: vi.fn((key) => (key === 'compromisedCount' ? { toNumber: () => compromisedCount } : undefined)) };
-    }
-
-    it('logs the expected message shape and returns undefined', async () => {
-      const session = fakeSession([fakeRecord(2)]);
-      const neo4jDriver = { session: vi.fn().mockReturnValue(session) };
-      const monitor = new TelemetryMonitor({});
-      const args = {
-        neo4jDriver,
-        rootSampleId: 'sample-1',
-        freezerKey: 'freezer-A',
-        breachedSince: '2026-01-01T00:00:00.000Z',
-        maxObservedTemp: -50
-      };
-
-      await expect(monitor.propagateCompromise(args)).resolves.toBeUndefined();
-      expect(loggerInfoSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Propagando comprometimento: freezer=freezer-A, sample=sample-1')
-      );
+    it('returns summarized=0 when no root specimen was resolved', async () => {
+      const monitor = new TelemetryMonitor({ db: {} });
+      await expect(monitor.propagateCompromise({ rootSampleId: null, freezerKey: 'sensor-A' })).resolves.toEqual({ summarized: 0 });
     });
 
-    it('opens a Neo4j session against the configured database and marks the root + descendant Sample nodes COMPROMISED', async () => {
-      const session = fakeSession([fakeRecord(3)]);
-      const neo4jDriver = { session: vi.fn().mockReturnValue(session) };
-      const monitor = new TelemetryMonitor({ database: 'neo4j' });
+    it('persists the exposure summary and enqueues the graph projection in one Mongo transaction', async () => {
+      const telemetryCollection = { updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }) };
+      const db = transactionalDb(telemetryCollection);
+      const root = { _id: 'mongo-1', specimenId: 'SPEC-1', parentSpecimenIds: [] };
+      const samples = {
+        findOne: vi.fn().mockResolvedValue(root),
+        find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })),
+      };
+      getCollectionSpy.mockResolvedValue(samples);
+      const physicalStore = { findCurrentBySpecimen: vi.fn().mockResolvedValue({ specimenContainerAssignmentId: 'SCA-1', containerPositionAssignmentId: 'CPA-1', rackLocationAssignmentId: 'RLA-1' }) };
+      const graphProjectionService = { appendTelemetryExposureSummaryEvent: vi.fn().mockResolvedValue({ eventId: 'evt-1' }) };
+      const monitor = new TelemetryMonitor({ db, physicalStore, graphProjectionService });
 
-      await monitor.propagateCompromise({
-        neo4jDriver,
-        rootSampleId: 'sample-1',
-        freezerKey: 'freezer-A',
-        breachedSince: '2026-01-01T00:00:00.000Z',
-        maxObservedTemp: -50
+      const result = await monitor.propagateCompromise({
+        rootSampleId: 'SPEC-1', freezerKey: 'sensor-A',
+        breachedSince: new Date('2026-01-01T00:00:00Z'), windowEnd: new Date('2026-01-01T01:00:00Z'),
+        minimumValue: -70, maxObservedTemp: -60, meanValue: -65,
+        observationCount: 5, timeOutsideThresholdSeconds: 3600, coverageRatio: 1,
+        sourceQueryHash: 'sha256:q', sourceReadingSetHash: 'sha256:r'
       });
 
-      expect(neo4jDriver.session).toHaveBeenCalledWith({ database: 'neo4j' });
-      expect(session.run).toHaveBeenCalledWith(
-        expect.stringContaining('SET sample.status = \'COMPROMISED\''),
-        {
-          rootSampleId: 'sample-1',
-          freezerKey: 'freezer-A',
-          breachedSince: '2026-01-01T00:00:00.000Z',
-          maxObservedTemp: -50
-        }
+      expect(result).toEqual({ summarized: 1 });
+      expect(db.client.startSession).toHaveBeenCalledTimes(1);
+      expect(db.session.withTransaction).toHaveBeenCalledTimes(1);
+      expect(telemetryCollection.updateOne).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ $setOnInsert: expect.objectContaining({ specimenId: 'SPEC-1' }) }),
+        expect.objectContaining({ upsert: true, session: db.session })
       );
-      expect(session.close).toHaveBeenCalled();
-    });
-
-    it('closes the session even when the write throws', async () => {
-      const session = {
-        run: vi.fn().mockRejectedValue(new Error('boom')),
-        close: vi.fn().mockResolvedValue(undefined)
-      };
-      const neo4jDriver = { session: vi.fn().mockReturnValue(session) };
-      const monitor = new TelemetryMonitor({});
-
-      await expect(
-        monitor.propagateCompromise({
-          neo4jDriver,
-          rootSampleId: 'sample-1',
-          freezerKey: 'freezer-A',
-          breachedSince: null,
-          maxObservedTemp: -50
-        })
-      ).rejects.toThrow('boom');
-
-      expect(session.close).toHaveBeenCalled();
-    });
-
-    it('skips the Neo4j write entirely when rootSampleId is null (no root sample resolved for the freezer)', async () => {
-      const neo4jDriver = { session: vi.fn() };
-      const monitor = new TelemetryMonitor({});
-
-      await expect(
-        monitor.propagateCompromise({
-          neo4jDriver,
-          rootSampleId: null,
-          freezerKey: 'freezer-A',
-          breachedSince: null,
-          maxObservedTemp: -50
-        })
-      ).resolves.toBeUndefined();
-
-      expect(neo4jDriver.session).not.toHaveBeenCalled();
+      expect(graphProjectionService.appendTelemetryExposureSummaryEvent).toHaveBeenCalledWith(
+        db,
+        expect.objectContaining({ specimenId: 'SPEC-1', sourceService: 'telemetry-monitor-v2' }),
+        { session: db.session }
+      );
     });
   });
+
 });

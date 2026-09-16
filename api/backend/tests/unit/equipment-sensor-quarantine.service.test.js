@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const collectionResolverModule = require('../../src/utils/collectionResolver');
 const sampleMovementLedgerModule = require('../../src/utils/sampleMovementLedger');
 const SampleMovementModel = require('../../src/models/SampleMovement');
+const NormalizedPhysicalStorageStore = require('../../src/infrastructure/persistence/mongo/NormalizedPhysicalStorageStore');
 
 // Spies must be set before first require of the service so its module-scope
 // destructuring captures the spied versions (CJS require caches the binding).
@@ -98,11 +99,13 @@ describe('equipment-sensor-quarantine.service', () => {
 
       const sample = {
         _id: 'S1',
+        specimenId: 'SPEC-S1',
         barcode: 'BC-1',
         currentQuantity: 5,
         unit: 'mL',
-        storageLocation: { boxId, position: 'A1' }
+        specimenStatus: 'available'
       };
+      vi.spyOn(NormalizedPhysicalStorageStore.prototype, 'findSpecimenIdsByLocation').mockResolvedValue(['SPEC-S1']);
       const samplesCursor = { toArray: vi.fn(async () => [sample]) };
       const samplesCollection = {
         find: vi.fn(() => samplesCursor),
@@ -138,7 +141,7 @@ describe('equipment-sensor-quarantine.service', () => {
       expect(samplesCollection.find).toHaveBeenCalledWith(
         expect.objectContaining({
           $and: expect.arrayContaining([
-            { 'storageLocation.boxId': { $in: [boxId] } },
+            { specimenId: { $in: ['SPEC-S1'] } },
             // #540: the "not already quarantined" guard reads the canonical
             // specimenStatus field now, not the legacy status/currentStatus pair.
             { specimenStatus: { $ne: 'quarantined' } }
@@ -167,7 +170,7 @@ describe('equipment-sensor-quarantine.service', () => {
 
       expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
         expect.objectContaining({
-          specimenIds: ['S1'],
+          specimenIds: ['SPEC-S1'],
           reasonCodes: ['equipment'],
           actionStatus: 'active'
         }),
@@ -178,7 +181,7 @@ describe('equipment-sensor-quarantine.service', () => {
       expect(sampleMovementLedgerModule.appendMovementWithHashChain).toHaveBeenCalledWith(
         movementsCollection,
         expect.objectContaining({
-          sampleID: 'S1',
+          specimenId: 'SPEC-S1',
           type: 'adjust',
           purpose: 'sensor_equipment_quarantine',
           quantity: 5
@@ -264,7 +267,8 @@ describe('equipment-sensor-quarantine.service', () => {
         }))
       };
 
-      const sample = { _id: 'S9', quantity: 3 };
+      const sample = { _id: 'S9', specimenId: 'SPEC-S9', specimenStatus: 'available', quantity: 3 };
+      vi.spyOn(NormalizedPhysicalStorageStore.prototype, 'findSpecimenIdsByLocation').mockResolvedValue(['SPEC-S9']);
       const samplesCursor = { toArray: vi.fn(async () => [sample]) };
       const samplesCollection = {
         find: vi.fn(() => samplesCursor),

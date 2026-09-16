@@ -232,8 +232,8 @@ function buildLocationLineFromPlacement(placement) {
   return parts.join(' / ') || null;
 }
 
-function buildZplPrintJob({ sampleId, barcode, location }) {
-  const safeSampleId = escapeZpl(sampleId);
+function buildZplPrintJob({ specimenId, barcode, location }) {
+  const safeSpecimenId = escapeZpl(specimenId);
   const safeBarcode = escapeZpl(barcode);
   const safeLocation = location ? escapeZpl(location).slice(0, 44) : '';
 
@@ -243,7 +243,7 @@ function buildZplPrintJob({ sampleId, barcode, location }) {
     '^PW600',
     '^LL320',
     '^FO35,28^A0N,30,30^FDBioAvanceD^FS',
-    `^FO35,70^A0N,28,28^FDAmostra: ${safeSampleId}^FS`,
+    `^FO35,70^A0N,28,28^FDAmostra: ${safeSpecimenId}^FS`,
     `^FO35,110^BCN,80,Y,N,N^FD${safeBarcode}^FS`,
     safeLocation ? `^FO35,220^A0N,24,24^FD${safeLocation}^FS` : null,
     '^XZ',
@@ -253,13 +253,13 @@ function buildZplPrintJob({ sampleId, barcode, location }) {
 async function recordLabelGeneration(db, { sample, formats, req }) {
   const { getUserAnonId } = require('../../utils/userAnonymization');
   const labelGenerationsCollection = await getCollection(db, 'labelGenerations');
-  const sampleId = String(sample._id);
+  const specimenId = String(sample.specimenId || sample._id);
 
-  const priorGeneration = await labelGenerationsCollection.findOne({ specimenId: sampleId });
+  const priorGeneration = await labelGenerationsCollection.findOne({ specimenId });
   const isReprint = Boolean(priorGeneration);
 
   await labelGenerationsCollection.insertOne({
-    specimenId: sampleId,
+    specimenId,
     barcode: sample.barcode || null,
     formats,
     reprint: isReprint,
@@ -277,9 +277,9 @@ async function recordLabelGeneration(db, { sample, formats, req }) {
       status: 'success',
       severity: 'info',
       message: isReprint
-        ? `Etiqueta reimpressa para amostra ${sampleId} (${formats.join(', ')})`
-        : `Etiqueta gerada para amostra ${sampleId} (${formats.join(', ')})`,
-      payload: { specimenId: sampleId, barcode: sample.barcode || null, formats, reprint: isReprint, generatedByAnonId },
+        ? `Etiqueta reimpressa para amostra ${specimenId} (${formats.join(', ')})`
+        : `Etiqueta gerada para amostra ${specimenId} (${formats.join(', ')})`,
+      payload: { specimenId, barcode: sample.barcode || null, formats, reprint: isReprint, generatedByAnonId },
       req,
       module: 'Amostras'
     });
@@ -670,14 +670,14 @@ router.get('/:id/label/print-job', authenticate, requireOrganizationScope, async
       specimenId: sample.specimenId || sample._id
     });
     const location = buildLocationLineFromPlacement(placementResult.found ? placementResult.placement : null);
-    const zpl = buildZplPrintJob({ sampleId: sampleIdentifier, barcode: sample.barcode, location });
+    const zpl = buildZplPrintJob({ specimenId: sampleIdentifier, barcode: sample.barcode, location });
 
     const { reprint } = await recordLabelGeneration(db, { sample, formats: ['zpl'], req });
 
     return res.status(200).json({
       success: true,
       data: {
-        sampleId: sampleIdentifier,
+        specimenId: sampleIdentifier,
         barcode: sample.barcode,
         format: 'zpl',
         printerLanguage: 'ZPL',

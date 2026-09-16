@@ -24,9 +24,8 @@ function setCachedModule(modulePath, exportsObject) {
 // #464: equipment-sensor-quarantine.service.js resolves sensor.locationID
 // as an equipment identifier matched against a FREEZER StorageContainer's
 // containerID, then walks FREEZER -> SHELF -> RACK -> StorageBox and
-// filters samples on storageLocation.boxId -- the direct successor to
-// #430's now-retired `locations`-collection lookup this fixture used to
-// seed.
+// resolves the affected specimen through the normalized v2 physical chain.
+// No embedded Sample.storageLocation compatibility path is seeded.
 const FREEZER_CONTAINER_ID = 321;
 const FREEZER_ID = 'FRZ-INC-1';
 const SHELF_ID = 'SHF-INC-1';
@@ -37,12 +36,9 @@ function buildMongoCollections(seedIncidents = []) {
   const incidents = [...seedIncidents];
   const samples = [{
     _id: '507f1f77bcf86cd799439088',
-    sampleID: 'BIO-INC-001',
+    specimenId: 'BIO-INC-001',
     barcode: 'BC-INC-001',
-    storageLocation: { boxId: BOX_ID, position: 'A1' },
-    status: 'AVAILABLE',
-    currentStatus: 'Available',
-    availabilityStatus: 'AVAILABLE',
+    specimenStatus: 'available',
     quantity: 1,
     unit: 'mL',
   }];
@@ -140,16 +136,39 @@ function buildMongoCollections(seedIncidents = []) {
     })),
   };
 
+  const storagePositionsCollection = {
+    createIndex: vi.fn().mockResolvedValue('idx'),
+    find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([
+      { storagePositionId: `${BOX_ID}:A1`, storageRackId: String(BOX_ID), positionCode: 'A1' },
+    ]) })),
+  };
+  const containerPositionAssignmentsCollection = {
+    createIndex: vi.fn().mockResolvedValue('idx'),
+    find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([
+      { containerId: 'container:BIO-INC-001', storagePositionId: `${BOX_ID}:A1`, assignmentStatus: 'active' },
+    ]) })),
+  };
+  const specimenContainerAssignmentsCollection = {
+    createIndex: vi.fn().mockResolvedValue('idx'),
+    find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([
+      { specimenId: 'BIO-INC-001', containerId: 'container:BIO-INC-001', assignmentStatus: 'active' },
+    ]) })),
+  };
+  const emptyCanonicalCollection = () => ({
+    createIndex: vi.fn().mockResolvedValue('idx'),
+    find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })),
+  });
+
   const samplesCollection = {
     find: vi.fn().mockImplementation((filter = {}) => {
       const coldChainIncidentId = filter?.coldChainIncidentId;
       const specimenStatus = filter?.specimenStatus;
-      const boxIdFilter = filter?.$and?.find((clause) => clause?.['storageLocation.boxId'])?.['storageLocation.boxId'];
+      const specimenIdFilter = filter?.$and?.find((clause) => clause?.specimenId)?.specimenId;
       let results;
       if (coldChainIncidentId) {
         results = samples.filter((sample) => sample.coldChainIncidentId === String(coldChainIncidentId) && (!specimenStatus || sample.specimenStatus === specimenStatus));
-      } else if (boxIdFilter) {
-        results = samples.filter((sample) => boxIdFilter.$in.includes(sample.storageLocation?.boxId) && sample.status !== 'QUARANTINED');
+      } else if (specimenIdFilter) {
+        results = samples.filter((sample) => specimenIdFilter.$in.includes(sample.specimenId) && sample.specimenStatus !== 'quarantined');
       } else {
         results = [];
       }
@@ -241,6 +260,10 @@ function buildMongoCollections(seedIncidents = []) {
       if (name === 'sensorMetadata') return sensorMetadataCollection;
       if (name === 'storageContainers') return storageContainersCollection;
       if (name === 'storageBoxes') return storageBoxesCollection;
+      if (name === 'storagePositions') return storagePositionsCollection;
+      if (name === 'containerPositionAssignments') return containerPositionAssignmentsCollection;
+      if (name === 'specimenContainerAssignments') return specimenContainerAssignmentsCollection;
+      if (name === 'containers' || name === 'storageRacks' || name === 'rackLocationAssignments') return emptyCanonicalCollection();
       if (name === 'samples') return samplesCollection;
       if (name === 'sampleMovements') return sampleMovementsCollection;
       if (name === 'sample_movements') return sampleMovementsCollection;

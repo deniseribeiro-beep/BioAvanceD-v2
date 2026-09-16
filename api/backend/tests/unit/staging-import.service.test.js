@@ -26,6 +26,7 @@ describe('staging-import.service', () => {
     vi.spyOn(queueModule, 'getQueue').mockReturnValue(null);
     vi.spyOn(logger, 'info').mockImplementation(() => {});
     vi.spyOn(logger, 'error').mockImplementation(() => {});
+    vi.spyOn(stagingImportIndexes, 'ensureStagingImportIndexes').mockResolvedValue(undefined);
     stagingImportService = reloadService();
   });
 
@@ -197,9 +198,9 @@ describe('staging-import.service', () => {
       // Spy BEFORE reloading: the service destructures the helper at require
       // time, so a spy installed after load would not be seen. Same order the
       // suite's own beforeEach uses for connectMongoDB/getQueue.
-      const ensureSpy = vi
-        .spyOn(stagingImportIndexes, 'ensureStagingImportIndexes')
-        .mockResolvedValue(undefined);
+      const ensureSpy = stagingImportIndexes.ensureStagingImportIndexes;
+      ensureSpy.mockClear();
+      ensureSpy.mockResolvedValue(undefined);
       stagingImportService = reloadService();
 
       vi.spyOn(StagingImport, 'create').mockResolvedValue({

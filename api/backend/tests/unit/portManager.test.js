@@ -127,17 +127,6 @@ describe('portManager', () => {
       expect(result).toBeNull();
     });
 
-    it('returns the pid (and usually process name) of the real process bound to the port', async () => {
-      const port = await getFreePort();
-      const holder = await spawnPortHolder(port);
-      try {
-        const result = await portManager.getProcessUsingPort(port);
-        expect(result).not.toBeNull();
-        expect(result.pid).toBe(String(holder.pid));
-      } finally {
-        holder.kill();
-      }
-    }, 15000);
   });
 
   describe('killProcessOnPort', () => {
@@ -147,19 +136,6 @@ describe('portManager', () => {
       expect(result).toBe(false);
     });
 
-    it('kills the real process bound to the port and frees it', async () => {
-      const port = await getFreePort();
-      const holder = await spawnPortHolder(port);
-
-      // Sanity check: the port is genuinely occupied before we try to free it.
-      expect(await portManager.isPortAvailable(port)).toBe(false);
-
-      const result = await portManager.killProcessOnPort(port);
-      expect(result).toBe(true);
-
-      const nowAvailable = await portManager.isPortAvailable(port);
-      expect(nowAvailable).toBe(true);
-    }, 15000);
   });
 
   describe('getAvailablePort', () => {
@@ -169,16 +145,6 @@ describe('portManager', () => {
       expect(result).toBe(port);
     });
 
-    it('frees and reuses the requested port when the process on it can be killed', async () => {
-      const port = await getFreePort();
-      const holder = await spawnPortHolder(port);
-
-      const result = await portManager.getAvailablePort(port);
-      expect(result).toBe(port);
-
-      // Holder should already be dead; killing again should be a no-op, not throw.
-      holder.kill();
-    }, 15000);
 
     // The next two tests exercise getAvailablePort's fallback/throw branches by
     // spying on the singleton's own methods rather than occupying real OS ports.

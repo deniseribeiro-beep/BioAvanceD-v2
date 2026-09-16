@@ -369,7 +369,7 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
   let movements = 0;
 
   for (const sample of samples) {
-    const sampleId = String(sample._id);
+    const specimenId = String(sample.specimenId || sample._id);
     const specimenStatus = 'quarantined';
     const updatePayload = {
       specimenStatus,
@@ -407,7 +407,7 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
     );
 
     await quarantineActionService.recordAction(db, {
-      specimenIds: [sampleId],
+      specimenIds: [specimenId],
       reasonCodes: [context.coldChainIncidentId ? 'COLD_CHAIN_INCIDENT' : (context.source || 'AUTOMATIC')],
     }, context.session);
 
@@ -419,8 +419,8 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
     await appendMovementWithHashChain(
       movementsCollection,
       SampleMovementModel.create({
-        movementID,
-        sampleID: sampleId,
+        movementId: movementID,
+        specimenId,
         barcode: sample.barcode || null,
         type: 'adjust',
         quantity: quantitySnapshot,

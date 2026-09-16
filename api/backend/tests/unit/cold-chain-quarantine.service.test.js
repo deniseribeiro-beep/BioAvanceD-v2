@@ -98,6 +98,18 @@ function buildDb(collections) {
  * shape — returns the box `_id` so a test can put it on a sample's
  * `storageLocation.boxId`.
  */
+function seedCanonicalPlacement(collections, boxId, specimenId, positionCode = 'A1') {
+  const storageRackId = String(boxId);
+  const storagePositionId = `${storageRackId}:${String(positionCode).toUpperCase()}`;
+  const containerId = `container:${specimenId}`;
+  collections.containers = makeCollection([{ containerId, status: 'active' }]);
+  collections.storageRacks = makeCollection([{ storageRackId, status: 'active' }]);
+  collections.storagePositions = makeCollection([{ storagePositionId, storageRackId, positionCode: String(positionCode).toUpperCase(), status: 'available' }]);
+  collections.containerPositionAssignments = makeCollection([{ containerPositionAssignmentId: `cpa:${specimenId}`, containerId, storagePositionId, assignmentStatus: 'active' }]);
+  collections.specimenContainerAssignments = makeCollection([{ specimenContainerAssignmentId: `sca:${specimenId}`, specimenId, containerId, assignmentStatus: 'active' }]);
+  collections.rackLocationAssignments = makeCollection([]);
+}
+
 function seedStorageHierarchy(collections, containerID) {
   const freezerId = new ObjectId();
   const shelfId = new ObjectId();
@@ -119,7 +131,7 @@ function seedStorageHierarchy(collections, containerID) {
 }
 
 describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
-  it('quarentena amostra vinculada por sensor -> storageLocation.boxId e registra movimento', async () => {
+  it('quarentena amostra vinculada por sensor -> cadeia fisica v2 e registra movimento', async () => {
     const incidentId = new ObjectId();
     const collections = {
       sensors: makeCollection([{ sensorId: 'sensor-cold-001', locationID: 9001 }]),
@@ -129,14 +141,13 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       counters: makeCollection([]),
     };
     const { boxId } = seedStorageHierarchy(collections, 9001);
+    const specimenId = 'BIO-SAMPLE-001';
+    seedCanonicalPlacement(collections, boxId, specimenId);
     collections.samples = makeCollection([{
       _id: new ObjectId(),
-      sampleID: 'BIO-SAMPLE-001',
+      specimenId,
       barcode: 'BC-COLD-001',
-      storageLocation: { boxId, position: 'A1' },
-      status: 'AVAILABLE',
-      currentStatus: 'Available',
-      availabilityStatus: 'AVAILABLE',
+      specimenStatus: 'available',
       quantity: 1,
       unit: 'mL',
     }]);
@@ -193,13 +204,13 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       counters: makeCollection([]),
     };
     const { boxId } = seedStorageHierarchy(collections, 9100);
+    const specimenId = 'BIO-SAMPLE-002';
+    seedCanonicalPlacement(collections, boxId, specimenId);
     collections.samples = makeCollection([{
       _id: new ObjectId(),
-      sampleID: 'BIO-SAMPLE-002',
+      specimenId,
       barcode: 'BC-COLD-002',
-      storageLocation: { boxId, position: 'A1' },
-      status: 'AVAILABLE',
-      currentStatus: 'Available',
+      specimenStatus: 'available',
       quantity: 1,
       unit: 'mL',
     }]);
@@ -443,7 +454,9 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       counters: makeCollection([]),
     };
     const { boxId } = seedStorageHierarchy(collections, 66);
-    collections.samples = makeCollection([{ _id: new ObjectId(), storageLocation: { boxId, position: 'A1' }, status: 'AVAILABLE', quantity: 2 }]);
+    const specimenId = 'BIO-SESSION-2';
+    seedCanonicalPlacement(collections, boxId, specimenId);
+    collections.samples = makeCollection([{ _id: new ObjectId(), specimenId, specimenStatus: 'available', quantity: 2 }]);
     const db = buildDb(collections);
     await quarantineService.quarantineByColdChainIncident(db, {
       sensorKey: 'sensor-session-2',
@@ -483,7 +496,9 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       counters: makeCollection([]),
     };
     const { boxId } = seedStorageHierarchy(collections, 55);
-    collections.samples = makeCollection([{ _id: new ObjectId(), storageLocation: { boxId, position: 'A1' }, status: 'AVAILABLE' }]);
+    const specimenId = 'BIO-QTY-55';
+    seedCanonicalPlacement(collections, boxId, specimenId);
+    collections.samples = makeCollection([{ _id: new ObjectId(), specimenId, specimenStatus: 'available' }]);
     const db = buildDb(collections);
     const result = await quarantineService.quarantineByColdChainIncident(db, {
       sensorKey: 'sensor-qty',

@@ -845,10 +845,7 @@ describe('sample.routes', () => {
       expect(createSample).toHaveBeenCalledWith(
         expect.anything(),
         { participantId: VALID_PAYLOAD.participantId },
-        // #474: the route's sampleRepository.create wrapper now also
-        // forwards neo4jDriver so createSample can pass it through to
-        // AllocateSampleUseCase's lineage repository.
-        { neo4jDriver: null }
+        {}
       );
       expect(deleteOne).toHaveBeenCalledTimes(2);
     });
@@ -1864,8 +1861,8 @@ describe('sample.routes', () => {
       const { router } = loadRoute({ sampleServiceOverrides: { getBarcodeIndustrialAssets } });
       const { db, labelGenerations } = statefulDb({
         samples: [
-          { _id: 's1', sampleID: 's1', barcode: 'BC-1' },
-          { _id: 's2', sampleID: 's2', barcode: 'BC-2' },
+          { _id: 's1', specimenId: 's1', barcode: 'BC-1' },
+          { _id: 's2', specimenId: 's2', barcode: 'BC-2' },
         ],
       });
       const app = buildApp(router, db);
@@ -1888,7 +1885,7 @@ describe('sample.routes', () => {
         canonicalValue: barcode, code128: {}, dataMatrix: {}, qr: {},
       }));
       const { router } = loadRoute({ sampleServiceOverrides: { getBarcodeIndustrialAssets } });
-      const { db } = statefulDb({ samples: [{ _id: 's1', sampleID: 's1', barcode: 'BC-1' }] });
+      const { db } = statefulDb({ samples: [{ _id: 's1', specimenId: 's1', barcode: 'BC-1' }] });
       const app = buildApp(router, db);
 
       const first = await request(app).post('/api/samples/labels/batch').send({ specimenIds: ['s1'] });
@@ -1903,7 +1900,7 @@ describe('sample.routes', () => {
         canonicalValue: barcode, code128: {}, dataMatrix: {}, qr: {},
       }));
       const { router } = loadRoute({ sampleServiceOverrides: { getBarcodeIndustrialAssets } });
-      const { db } = statefulDb({ samples: [{ _id: 's1', sampleID: 's1', barcode: 'BC-1' }] });
+      const { db } = statefulDb({ samples: [{ _id: 's1', specimenId: 's1', barcode: 'BC-1' }] });
       const app = buildApp(router, db);
 
       const res = await request(app).post('/api/samples/labels/batch').send({ specimenIds: ['s1', 'missing'] });
@@ -1928,7 +1925,7 @@ describe('sample.routes', () => {
         },
       });
       const { db } = statefulDb({
-        samples: [{ _id: 's1', sampleID: 's1', barcode: 'BC-1', collectionSite: 'org-9' }],
+        samples: [{ _id: 's1', specimenId: 's1', barcode: 'BC-1', collectionSite: 'org-9' }],
       });
       const app = buildApp(router, db);
 
@@ -2603,7 +2600,7 @@ describe('sample.routes', () => {
         }),
       });
       const findOne = vi.fn().mockResolvedValue({
-        sampleID: 42,
+        specimenId: 'SPEC-42',
         barcode: 'BC1',
       });
       const labelGenerations = { findOne: vi.fn().mockResolvedValue(null), insertOne: vi.fn().mockResolvedValue({ insertedId: 'lg1' }) };
@@ -2616,7 +2613,7 @@ describe('sample.routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual(
         expect.objectContaining({
-          sampleId: '42',
+          specimenId: 'SPEC-42',
           barcode: 'BC1',
           format: 'zpl',
           printerLanguage: 'ZPL',
