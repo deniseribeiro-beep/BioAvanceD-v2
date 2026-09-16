@@ -1,0 +1,160 @@
+name: Backend v2 Coverage diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - stabilize/v2.0.0-prototype
+    paths:
+      - .github/workflows/backend-v2-coverage-diagnostic.yml
+      - api/backend/src/**
+      - api/backend/tests/**
+      - api/backend/package.json
+      - api/backend/package-lock.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-v2-coverage-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Coverage in backend-unit-runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      COMPOSE_PROJECT_NAME: bioavanced-item8-${{ github.run_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Compose configuration
+        run: docker compose -f compose.test.yml config > /tmp/item8-compose-config.yml
+
+      - name: Build backend-unit-runner
+        run: docker compose -f compose.test.yml build backend-unit-runner
+
+      - name: Start coverage Compose dependencies
+        run: |
+          docker compose -f compose.test.yml up -d --wait mongodb-test neo4j-test redis-test influxdb-test smtp-test tsa-test witness-test
+          docker compose -f compose.test.yml run --rm mongo-rs-init-test
+          docker compose -f compose.test.yml ps | tee /tmp/item8-compose-ps.txt
+
+      - name: Run instrumented coverage
+        id: coverage
+        continue-on-error: true
+        working-directory: api/backend
+        run: |
+          rm -rf /tmp/item8-coverage
+          mkdir -p /tmp/item8-coverage
+          set +e
+          docker compose -f ../../compose.test.yml run --rm \
+            -v "$PWD/tests/unit:/app/tests/unit" \
+            -v "$PWD/tests/integration:/app/tests/integration" \
+            -v "/tmp:/diagnostics" \
+            -v "/tmp/item8-coverage:/app/coverage" \
+            -e NO_COLOR=1 \
+            -e FORCE_COLOR=0 \
+            backend-unit-runner \
+            sh -lc 'ROLLUP_VERSION="$(node -p "require(\"./node_modules/rollup/package.json\").version")"; ROLLUP_TARBALL="$(npm pack "@rollup/rollup-linux-x64-musl@$ROLLUP_VERSION" --ignore-scripts --silent --pack-destination /tmp)"; mkdir -p node_modules/@rollup/rollup-linux-x64-musl; tar -xzf "/tmp/$ROLLUP_TARBALL" -C node_modules/@rollup/rollup-linux-x64-musl --strip-components=1; NO_COLOR=1 FORCE_COLOR=0 npx vitest run --coverage --reporter=default --reporter=json --outputFile=/diagnostics/item8-vitest.json' \
+            2>&1 | tee /tmp/item8-coverage.raw.log
+          coverage_status=${PIPESTATUS[0]}
+          set -e
+          node <<'NODE'
+          const fs = require('fs');
+          const source = '/tmp/item8-coverage.raw.log';
+          const target = '/tmp/item8-coverage.log';
+          if (fs.existsSync(source)) {
+            const ansi = /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+            fs.writeFileSync(target, fs.readFileSync(source, 'utf8').replace(ansi, ''));
+          }
+          NODE
+          exit "${coverage_status}"
+
+      - name: Build coverage summary
+        if: always()
+        env:
+          COVERAGE_OUTCOME: ${{ steps.coverage.outcome }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const summaryPath = '/tmp/item8-coverage/coverage-summary.json';
+          const vitestJsonPath = '/tmp/item8-vitest.json';
+          const resultPath = '/tmp/item8-result.json';
+          const markdownPath = '/tmp/item8-summary.md';
+          const coverage = fs.existsSync(summaryPath) ? JSON.parse(fs.readFileSync(summaryPath, 'utf8')) : null;
+          const vitest = fs.existsSync(vitestJsonPath) ? JSON.parse(fs.readFileSync(vitestJsonPath, 'utf8')) : null;
+          const metric = name => {
+            const item = coverage?.total?.[name];
+            return item ? { pct: item.pct, covered: item.covered, total: item.total, skipped: item.skipped } : null;
+          };
+          const normalized = {
+            sha: process.env.GITHUB_SHA,
+            outcome: process.env.COVERAGE_OUTCOME || 'unknown',
+            runner: 'backend-unit-runner',
+            composeFile: 'compose.test.yml',
+            mongoReplicaSetInitialized: true,
+            tests: {
+              total: vitest?.numTotalTests ?? null,
+              passed: vitest?.numPassedTests ?? null,
+              failed: vitest?.numFailedTests ?? null,
+              skipped: vitest?.numPendingTests ?? null,
+              todo: vitest?.numTodoTests ?? null
+            },
+            coverage: {
+              statements: metric('statements'),
+              branches: metric('branches'),
+              functions: metric('functions'),
+              lines: metric('lines')
+            }
+          };
+          fs.writeFileSync(resultPath, JSON.stringify(normalized, null, 2));
+          const fmt = item => item ? `${item.pct}% (${item.covered}/${item.total})` : 'unavailable';
+          const body = [
+            '## Backend v2 Coverage — item 8 diagnostic', '',
+            `- SHA: \`${process.env.GITHUB_SHA}\``,
+            '- Runner: `backend-unit-runner` from `compose.test.yml`',
+            '- MongoDB replica set initializer: executed before coverage',
+            `- Coverage run outcome: \`${normalized.outcome}\``,
+            `- Tests: ${normalized.tests.failed ?? 'unavailable'} failed | ${normalized.tests.passed ?? 'unavailable'} passed | ${normalized.tests.total ?? 'unavailable'} total`, '',
+            '### Coverage totals', '',
+            `- Statements: **${fmt(normalized.coverage.statements)}**`,
+            `- Branches: **${fmt(normalized.coverage.branches)}**`,
+            `- Functions: **${fmt(normalized.coverage.functions)}**`,
+            `- Lines: **${fmt(normalized.coverage.lines)}**`, '',
+            'Target for item 8: >=95% in all four dimensions.'
+          ].join('\n');
+          fs.writeFileSync(markdownPath, `${body}\n`);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${body}\n`);
+          process.stdout.write(`${body}\n`);
+          NODE
+
+      - name: Upload coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-v2-coverage-${{ github.sha }}
+          path: |
+            /tmp/item8-compose-config.yml
+            /tmp/item8-compose-ps.txt
+            /tmp/item8-coverage.raw.log
+            /tmp/item8-coverage.log
+            /tmp/item8-vitest.json
+            /tmp/item8-result.json
+            /tmp/item8-summary.md
+            /tmp/item8-coverage/coverage-summary.json
+            /tmp/item8-coverage/coverage-final.json
+            /tmp/item8-coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Tear down diagnostic Compose project
+        if: always()
+        run: docker compose -f compose.test.yml down --volumes --remove-orphans
+
+      - name: Preserve coverage-run test result
+        if: always() && steps.coverage.outcome != 'success'
+        run: exit 1
