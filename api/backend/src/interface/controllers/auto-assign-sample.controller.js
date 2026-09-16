@@ -13,6 +13,8 @@ function createAutoAssignSampleController() {
         });
       }
 
+      // Canonical v2 boundary: specimenId is the only specimen identity accepted here;
+      // the retired sampleId alias is intentionally not mapped or tolerated.
       const { specimenId, boxId } = req.body || {};
       if (!specimenId || !boxId) {
         return res.status(400).json({
