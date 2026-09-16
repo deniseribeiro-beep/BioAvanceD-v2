@@ -20,13 +20,13 @@ jobs:
           ref: stabilize/v2.0.0-prototype
           fetch-depth: 0
 
-      - name: Apply normalized auto-allocation fixture batch
-        run: python .github/scripts/item7_reconcile_storage_auto.py
+      - name: Restore complete sample route and apply canonical label audit fix
+        run: python .github/scripts/item7_restore_sample_routes.py
 
       - name: Validate diff
         run: git diff --check
 
-      - name: Commit normalized auto-allocation fixture batch
+      - name: Commit safe sample route correction
         shell: bash
         run: |
           if git diff --quiet; then
@@ -35,6 +35,6 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add api/backend/tests/integration/storage-auto-allocation.api.test.js
-          git commit -m 'test(storage): persist normalized auto-allocation fixture state'
+          git add api/backend/src/interface/routes/sample.routes.js
+          git commit -m 'fix(labels): use canonical specimenId in label audit'
           git push origin HEAD:stabilize/v2.0.0-prototype
