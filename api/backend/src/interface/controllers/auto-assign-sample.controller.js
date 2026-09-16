@@ -13,17 +13,17 @@ function createAutoAssignSampleController() {
         });
       }
 
-      const { sampleId, boxId } = req.body || {};
-      if (!sampleId || !boxId) {
+      const { specimenId, boxId } = req.body || {};
+      if (!specimenId || !boxId) {
         return res.status(400).json({
           success: false,
           error: 'INVALID_INPUT',
-          message: 'sampleId e boxId são obrigatórios'
+          message: 'specimenId e boxId são obrigatórios'
         });
       }
 
       const storageService = new StorageService(db);
-      const result = await storageService.autoAssignSampleToBox(sampleId, boxId);
+      const result = await storageService.autoAssignSampleToBox(specimenId, boxId);
 
       if (!result.success) {
         const statusCode =
