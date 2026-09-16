@@ -7,7 +7,7 @@ const { createAutoAssignSampleController } = require('../../src/interface/contro
 const StorageService = require('../../src/services/storageService');
 const logger = require('../../src/utils/logger');
 
-function createReq({ db = {}, neo4jDriver = null, body = { sampleId: 's1', boxId: 'b1' } } = {}) {
+function createReq({ db = { collection: vi.fn() }, neo4jDriver = null, body = { sampleId: 's1', boxId: 'b1' } } = {}) {
   return {
     app: {
       locals: {
@@ -76,12 +76,13 @@ describe('auto-assign-sample.controller', () => {
     });
   });
 
-  it('returns 201 with sampleLocation, interpolated message and graphPersisted true on success', async () => {
-    const sampleLocation = { position: 'A1', sampleId: 's1', boxId: 'b1' };
+  it('returns 201 with the canonical placement and queued projection evidence', async () => {
+    const currentStoragePlacement = { positionCode: 'A1', specimenId: 's1', boxId: 'b1' };
     vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
       success: true,
-      sampleLocation,
-      graphPersisted: true
+      currentStoragePlacement,
+      projectionQueued: true,
+      projectionEventId: 'evt-1'
     });
 
     const controller = createAutoAssignSampleController();
@@ -93,18 +94,20 @@ describe('auto-assign-sample.controller', () => {
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
-      data: sampleLocation,
+      data: currentStoragePlacement,
+      currentStoragePlacement,
       message: 'Amostra alocada automaticamente na Posição A1',
-      graphPersisted: true
+      projectionQueued: true,
+      projectionEventId: 'evt-1'
     });
   });
 
-  it('coerces a truthy-but-not-strictly-true graphPersisted value to false', async () => {
-    const sampleLocation = { position: 'B2' };
+  it('coerces a truthy-but-not-strictly-true projectionQueued value to false', async () => {
+    const currentStoragePlacement = { positionCode: 'B2' };
     vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
       success: true,
-      sampleLocation,
-      graphPersisted: 1
+      currentStoragePlacement,
+      projectionQueued: 1
     });
 
     const controller = createAutoAssignSampleController();
@@ -116,7 +119,7 @@ describe('auto-assign-sample.controller', () => {
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
-        graphPersisted: false
+        projectionQueued: false
       })
     );
   });

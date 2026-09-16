@@ -72,8 +72,9 @@ jobs:
         run: |
           set -o pipefail
           docker compose -f ../../compose.test.yml run --rm --no-deps \
-            -v "$PWD/tests/unit:/app/tests/unit:ro" \
-            -v "$PWD/tests/integration:/app/tests/integration:ro" \
+            -v "$PWD/tests/unit:/app/tests/unit" \
+            -v "$PWD/tests/integration:/app/tests/integration" \
+            -e MONGO_URI= -e REDIS_URL= -e NEO4J_URI= \
             backend-unit-runner \
             sh -lc 'npm install --no-save --ignore-scripts @rollup/rollup-linux-x64-musl && npx vitest run --reporter=default' \
             2>&1 | tee /tmp/item7-full-vitest.log
