@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 
-// IMPORTANT: daily-merkle.job.js calls scheduleNextRun() at module top-level on require(),
-// which calls setTimeout(...). We must use fake timers BEFORE the first require of the
-// module anywhere in this file, or a real timer callback gets scheduled in the test process.
+// Use fake timers before loading the job. The production module only auto-starts when
+// executed directly (`require.main === module`), but fake timers also keep this suite
+// fail-safe if that guard ever regresses and a scheduler is registered during require().
 vi.useFakeTimers();
 vi.setSystemTime(new Date('2026-07-02T10:00:00.000Z'));
 
@@ -53,9 +53,11 @@ vi.spyOn(logger, 'info').mockImplementation(() => {});
 vi.spyOn(logger, 'warn').mockImplementation(() => {});
 vi.spyOn(logger, 'error').mockImplementation(() => {});
 
-// Single require: this is where the module's top-level auto scheduleNextRun() fires,
-// captured harmlessly by fake timers (see the dedicated test below for that assertion).
+// Single require. Capture the job-specific scheduling log immediately so the guard test
+// does not depend on Vitest's global fake-timer count, which coverage instrumentation can
+// legitimately affect independently of this module.
 const job = require('../../src/workers/jobs/daily-merkle.job');
+const moduleLoadInfoMessages = logger.info.mock.calls.map(([message]) => String(message));
 
 function resetAllMocks() {
   mongo.connectDB.mockClear().mockResolvedValue({ __fakeDb: true });
@@ -86,12 +88,10 @@ describe('daily-merkle.job', () => {
   });
 
   it('module load side effect: require.main !== module in a test context, so the top-level auto-start guard does not fire', () => {
-    // daily-merkle.job.js gates its top-level scheduleNextRun() call behind
-    // `if (require.main === module)` (Denise's 8b0bf61e, replacing an env-var flag)
-    // specifically so it only auto-starts when run directly as the process entry point.
-    // Under vitest, require.main is the test runner's own entry script, not this module,
-    // so the guard is false and require()'ing the module registers no timer at all.
-    expect(vi.getTimerCount()).toBe(0);
+    // scheduleNextRun() always emits this job-specific message before registering its timer.
+    // Pinning that observable side effect is stronger and less noisy than asserting the
+    // process-wide fake-timer count, which can include timers owned by coverage/runtime code.
+    expect(moduleLoadInfoMessages.some((message) => message.includes('[daily-merkle] Próxima execução'))).toBe(false);
   });
 
   describe('runOnce', () => {
@@ -286,9 +286,14 @@ describe('daily-merkle.job', () => {
       const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
 
       job.scheduleNextRun();
+      const scheduledCall = setTimeoutSpy.mock.calls[setTimeoutSpy.mock.calls.length - 1];
+      const scheduledCallback = scheduledCall[0];
       const callCountBeforeFire = setTimeoutSpy.mock.calls.length;
 
-      await vi.runOnlyPendingTimersAsync();
+      // Invoke exactly the callback registered by scheduleNextRun. Driving all pending
+      // fake timers is unsafe here because this callback intentionally schedules the next
+      // daily timer again; coverage/runtime timers must not be swept into this unit test.
+      await scheduledCallback();
 
       // runOnce should have executed (connectDB called) and a new setTimeout should
       // have been scheduled again (reschedule-always behavior), even though runOnce's
