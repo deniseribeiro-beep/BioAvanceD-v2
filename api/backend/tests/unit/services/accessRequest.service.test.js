@@ -55,7 +55,7 @@ function createFakeDb({ samples = [], consents = [], terminologyConcepts = [], s
   const collections = {
     accessRequests: createFakeCollection(),
     samples: createFakeCollection(samples),
-    patientConsents: createFakeCollection(consents),
+    consents: createFakeCollection(consents),
     terminologyConcepts: createFakeCollection(terminologyConcepts),
     studies: createFakeCollection(studies),
     sample_files: createFakeCollection(sampleFiles),

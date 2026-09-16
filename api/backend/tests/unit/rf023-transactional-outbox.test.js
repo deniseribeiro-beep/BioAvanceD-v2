@@ -92,7 +92,7 @@ describe('RF023 transactional graph outbox', () => {
       from: { storagePositionId: 'pos-a1' },
       to: { storagePositionId: 'pos-b1' },
     });
-    await service.appendStorageAssignmentEvent({}, {
+    await service.appendSpecimenContainerAssignmentEvent({}, {
       specimenContainerAssignmentId: 'sca-1',
       specimenId: 'specimen-1',
       containerId: 'container-1',
@@ -109,7 +109,7 @@ describe('RF023 transactional graph outbox', () => {
       schemaVersion: 2,
     });
     expect(outbox.appendEvent.mock.calls[1][1]).toMatchObject({
-      eventType: 'STORAGE_ASSIGNMENT_UPSERTED',
+      eventType: 'SPECIMEN_CONTAINER_ASSIGNMENT_UPSERTED',
       aggregateType: 'SpecimenContainerAssignment',
       schemaVersion: 2,
     });

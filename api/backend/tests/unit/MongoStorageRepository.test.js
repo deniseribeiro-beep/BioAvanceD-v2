@@ -301,7 +301,10 @@ describe('MongoStorageRepository canonical v2', () => {
     it('runs the handler through one session and always ends the session', async () => {
       const endSession = vi.fn().mockResolvedValue(undefined);
       const session = { withTransaction: vi.fn(async (fn) => fn()), endSession };
-      const client = { startSession: vi.fn(() => session) };
+      const client = {
+        db: vi.fn(() => ({ command: vi.fn().mockResolvedValue({ setName: 'rs0' }) })),
+        startSession: vi.fn(() => session)
+      };
       const { repo } = makeRepo({ client });
       const handler = vi.fn(async () => 'ok');
 

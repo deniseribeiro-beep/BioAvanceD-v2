@@ -12,6 +12,9 @@ describe('FoundationDataRunModel', () => {
     configurationChecksum: 'sha256:config',
     dictionaryChecksum: 'sha256:dictionary',
     initiatedBy: 'system:foundation-data-pipeline',
+    canonicalModelReleaseId: 'canonical-v2.0.0',
+    migrationPlanId: 'foundation-data-v2',
+    reportUri: 'urn:bioavanced:foundation-data:test',
   };
 
   describe('validate', () => {
@@ -45,7 +48,7 @@ describe('FoundationDataRunModel', () => {
     it('rejects a non-array steps', () => {
       const result = FoundationDataRunModel.validate({ ...validData, steps: 'nope' });
       expect(result.isValid).toBe(false);
-      expect(result.errors).toContain('steps deve ser um array');
+      expect(result.errors).toContain('steps deve ser um array não vazio');
     });
 
     it('rejects a non-object validationSummary', () => {

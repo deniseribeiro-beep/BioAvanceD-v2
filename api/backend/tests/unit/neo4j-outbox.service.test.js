@@ -41,7 +41,7 @@ describe('Neo4jOutboxService', () => {
     // #941: appendEvent now ensures the outbox indexes (including the
     // eventId unique index) on its own write path, not only from the
     // manual rebuild script.
-    expect(indexes.length).toBe(3);
+    expect(indexes.length).toBe(4);
   });
 
   it('reschedules abandoned processing events back to retrying', async () => {
@@ -99,11 +99,12 @@ describe('Neo4jOutboxService', () => {
     const result = await service.ensureIndexes(db);
 
     expect(result).toBe(true);
-    expect(indexes).toHaveLength(3);
+    expect(indexes).toHaveLength(4);
     expect(indexes[0][0]).toEqual({ eventId: 1 });
     expect(indexes[0][1]).toMatchObject({ unique: true, name: 'graph_projection_outbox_eventId_unique' });
-    expect(indexes[1][1]).toMatchObject({ name: 'graph_projection_outbox_status_aggregate_idx' });
-    expect(indexes[2][1]).toMatchObject({ name: 'graph_projection_outbox_lease_idx' });
+    expect(indexes[1][1]).toMatchObject({ name: 'graph_projection_outbox_idempotency_idx' });
+    expect(indexes[2][1]).toMatchObject({ name: 'graph_projection_outbox_status_aggregate_idx' });
+    expect(indexes[3][1]).toMatchObject({ name: 'graph_projection_outbox_lease_idx' });
   });
 
   // #941: ensureIndexes (including the eventId unique index that makes
@@ -136,13 +137,15 @@ describe('Neo4jOutboxService', () => {
 
       await service.appendEvent(db, { eventId: 'e1', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
 
-      expect(collection.indexes).toHaveLength(3);
+      expect(collection.indexes).toHaveLength(4);
       expect(collection.indexes[0][0]).toEqual({ eventId: 1 });
       expect(collection.indexes[0][1]).toEqual({ unique: true, name: 'graph_projection_outbox_eventId_unique' });
-      expect(collection.indexes[1][0]).toEqual({ status: 1, aggregateType: 1, aggregateId: 1, occurredAt: 1 });
-      expect(collection.indexes[1][1]).toEqual({ name: 'graph_projection_outbox_status_aggregate_idx' });
-      expect(collection.indexes[2][0]).toEqual({ leaseUntil: 1, status: 1, occurredAt: 1 });
-      expect(collection.indexes[2][1]).toEqual({ name: 'graph_projection_outbox_lease_idx' });
+      expect(collection.indexes[1][0]).toEqual({ idempotencyKey: 1 });
+      expect(collection.indexes[1][1]).toMatchObject({ name: 'graph_projection_outbox_idempotency_idx' });
+      expect(collection.indexes[2][0]).toEqual({ status: 1, aggregateType: 1, aggregateId: 1, occurredAt: 1 });
+      expect(collection.indexes[2][1]).toEqual({ name: 'graph_projection_outbox_status_aggregate_idx' });
+      expect(collection.indexes[3][0]).toEqual({ leaseUntil: 1, status: 1, occurredAt: 1 });
+      expect(collection.indexes[3][1]).toEqual({ name: 'graph_projection_outbox_lease_idx' });
     });
 
     it('builds the indexes only once per process across multiple appendEvent calls and service instances', async () => {
@@ -157,7 +160,7 @@ describe('Neo4jOutboxService', () => {
       await first.appendEvent(db, { eventId: 'e2', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
       await second.appendEvent(db, { eventId: 'e3', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
 
-      expect(collection.indexes).toHaveLength(3);
+      expect(collection.indexes).toHaveLength(4);
       expect(collection.updates).toHaveLength(3);
     });
 
@@ -171,7 +174,7 @@ describe('Neo4jOutboxService', () => {
       await serviceA.appendEvent(db, { eventId: 'e1', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
       await serviceB.appendEvent(db, { eventId: 'e2', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
 
-      expect(collection.indexes).toHaveLength(6);
+      expect(collection.indexes).toHaveLength(8);
     });
 
     // #941: appendEvent must NOT propagate an index-build failure. The index

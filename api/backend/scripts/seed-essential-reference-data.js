@@ -116,6 +116,11 @@ async function runSeed({ db, args, environment, deploymentId }) {
   const steps = [];
   const dictionaryCompleteness = await canonicalDictionary.checkCompleteness();
   const dictionaryChecksum = await canonicalDictionary.dictionaryChecksum();
+  const canonicalRunMetadata = {
+    canonicalModelReleaseId: `canonical-v${canonicalDictionary.DICTIONARY_VERSION}`,
+    migrationPlanId: `foundation-data-${pipelineVersion}`,
+    reportUri: `urn:bioavanced:foundation-data:${deploymentId}`
+  };
 
   if (!dictionaryCompleteness.verified) {
     const error = new Error('Canonical dictionary v2.0.0 completeness gate failed before Foundation data preparation.');
@@ -150,6 +155,7 @@ async function runSeed({ db, args, environment, deploymentId }) {
       validationSummary: { passed: steps.length, failed: 1, dictionaryCompleteness },
       errorSummary: { fatal: 1, message: String(error.message || error).slice(0, 300) },
       initiatedBy: 'system:foundation-data-pipeline',
+      ...canonicalRunMetadata,
       previousRunId: previousRun ? previousRun.foundationDataRunId : null,
     });
     await runs.insertOne(failedRun);
@@ -170,6 +176,7 @@ async function runSeed({ db, args, environment, deploymentId }) {
     steps,
     validationSummary: { passed: steps.length, failed: 0, dictionaryCompleteness },
     initiatedBy: 'system:foundation-data-pipeline',
+    ...canonicalRunMetadata,
     previousRunId: previousRun ? previousRun.foundationDataRunId : null,
   });
   await runs.insertOne(completedRun);
