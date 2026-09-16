@@ -237,7 +237,7 @@ describe('requireBootstrapEnv', () => {
 describe('createFirstAdmin sem options.db (conexao propria)', () => {
   // O source destrutura { connectDB, closeConnection } no escopo de modulo,
   // entao os fakes precisam estar em vigor ANTES de um re-require do script
-  // (ver .claude/skills/bioavanced-v2-testing-conventions/references/cjs-mocking.md).
+  // (ver as notas de mocking CommonJS do projeto).
   const mongoPath = require.resolve('../../src/database/mongo');
   const scriptPath = require.resolve('../../src/scripts/createFirstAdmin');
   const realMongo = require('../../src/database/mongo');

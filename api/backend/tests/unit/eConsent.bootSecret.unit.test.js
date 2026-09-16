@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url);
 // first.
 //
 // The refusal is right; the SHAPE was wrong. The remedy is the one
-// `bioavanced-v2-conventions` already names for this exact class -- lazy
+// the project's conventions already name for this exact class -- lazy
 // initialization in the module plus a loud, logged boot check -- and the
 // repo already had the pattern: fhir-import-staging.service.js's
 // getConsentSecret() reads and validates at call time.

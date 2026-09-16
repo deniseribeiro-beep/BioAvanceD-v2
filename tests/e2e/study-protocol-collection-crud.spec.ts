@@ -164,7 +164,7 @@ test.describe('organizations create+list (#325)', () => {
   });
 });
 
-// #578 (RF021, narrowed) -> #587 rabbit-hole tracker -> #590 (split into
+// #578 (RF021, narrowed) -> #587 tracker -> #590 (split into
 // #593/#594) -> #596. Study/consent/participant linkage (#593/#594) already
 // has unit coverage but no real-backend proof; this covers both the
 // existence-must-resolve requirement (#593/#594's own scope) and the

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
 
-// Real-backend proof for #608 (RF020, rabbit-hole tracker #605, seed #576):
+// Real-backend proof for #608 (RF020, tracker #605, seed #576):
 // #606/#607 built the Organizations/Collections CRUD UI in
 // SystemManagementPage.tsx, but the only prior coverage
 // (study-protocol-collection-crud.spec.ts) drives the API directly, never
