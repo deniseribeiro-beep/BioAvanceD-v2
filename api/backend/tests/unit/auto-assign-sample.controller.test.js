@@ -7,7 +7,7 @@ const { createAutoAssignSampleController } = require('../../src/interface/contro
 const StorageService = require('../../src/services/storageService');
 const logger = require('../../src/utils/logger');
 
-function createReq({ db = { collection: vi.fn() }, neo4jDriver = null, body = { sampleId: 's1', boxId: 'b1' } } = {}) {
+function createReq({ db = { collection: vi.fn() }, neo4jDriver = null, body = { specimenId: 's1', boxId: 'b1' } } = {}) {
   return {
     app: {
       locals: {
@@ -46,7 +46,7 @@ describe('auto-assign-sample.controller', () => {
     });
   });
 
-  it('returns 400 INVALID_INPUT when sampleId is missing', async () => {
+  it('returns 400 INVALID_INPUT when specimenId is missing', async () => {
     const controller = createAutoAssignSampleController();
     const req = createReq({ body: { boxId: 'b1' } });
     const res = createRes();
@@ -57,13 +57,14 @@ describe('auto-assign-sample.controller', () => {
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'INVALID_INPUT',
-      message: 'sampleId e boxId são obrigatórios'
+      message: 'specimenId e boxId são obrigatórios'
     });
   });
 
-  it('returns 400 INVALID_INPUT when boxId is missing', async () => {
+  it('rejects the legacy sampleId alias at the canonical v2 boundary', async () => {
+    const serviceSpy = vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox');
     const controller = createAutoAssignSampleController();
-    const req = createReq({ body: { sampleId: 's1' } });
+    const req = createReq({ body: { sampleId: 'legacy-s1', boxId: 'b1' } });
     const res = createRes();
 
     await controller(req, res);
@@ -72,7 +73,23 @@ describe('auto-assign-sample.controller', () => {
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'INVALID_INPUT',
-      message: 'sampleId e boxId são obrigatórios'
+      message: 'specimenId e boxId são obrigatórios'
+    });
+    expect(serviceSpy).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 INVALID_INPUT when boxId is missing', async () => {
+    const controller = createAutoAssignSampleController();
+    const req = createReq({ body: { specimenId: 's1' } });
+    const res = createRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'INVALID_INPUT',
+      message: 'specimenId e boxId são obrigatórios'
     });
   });
 
@@ -91,6 +108,7 @@ describe('auto-assign-sample.controller', () => {
 
     await controller(req, res);
 
+    expect(StorageService.prototype.autoAssignSampleToBox).toHaveBeenCalledWith('s1', 'b1');
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
