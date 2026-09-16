@@ -1461,17 +1461,7 @@ describe('sample.routes', () => {
         samples: [{ participantId: '00000000' }],
         total: 1,
       });
-      const { router } = loadRoute({
-        sampleServiceOverrides: { listSamples },
-        resolvePhysicalPlacementsForSamples: async () => new Map([[
-          'sample-1',
-          {
-            canonicalPlacement: { boxId, positionCode: 'A1' },
-            box: { boxId, boxName: 'Box A', position: 'A1' },
-            path: 'Freezer1/Shelf1/Rack1/BoxA',
-          },
-        ]]),
-      });
+      const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
 
       const patientsCollection = { findOne: vi.fn().mockResolvedValue(null) };
       const consentsCollection = { findOne: vi.fn(), countDocuments: vi.fn() };
@@ -1631,7 +1621,7 @@ describe('sample.routes', () => {
       expect(res.status).toBe(500);
     });
 
-    it('embeds resolvedStorageLocation and currentSpecimenPreanalytics per sample, batched (#517)', async () => {
+    it('embeds currentStoragePlacement and currentSpecimenPreanalytics per sample, batched (#517)', async () => {
       const boxId = 'box-1';
       const listSamples = vi.fn().mockResolvedValue({
         samples: [{
@@ -1642,7 +1632,17 @@ describe('sample.routes', () => {
         }],
         total: 1,
       });
-      const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { listSamples },
+        resolvePhysicalPlacementsForSamples: async () => new Map([[
+          'sample-1',
+          {
+            canonicalPlacement: { boxId, positionCode: 'A1' },
+            box: { boxId, boxName: 'Box A', position: 'A1' },
+            path: 'Freezer1/Shelf1/Rack1/BoxA',
+          },
+        ]]),
+      });
 
       const patientsCollection = { findOne: vi.fn().mockResolvedValue(null) };
       const patientConsentsCollection = { findOne: vi.fn(), countDocuments: vi.fn() };
@@ -1672,7 +1672,7 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(200);
       expect(specimenPreanalyticsFind).toHaveBeenCalledTimes(1);
-      expect(res.body.data[0].resolvedStorageLocation).toEqual(
+      expect(res.body.data[0].currentStoragePlacement).toEqual(
         expect.objectContaining({ path: 'Freezer1/Shelf1/Rack1/BoxA' })
       );
       expect(res.body.data[0].currentSpecimenPreanalytics).toEqual(
@@ -1680,7 +1680,7 @@ describe('sample.routes', () => {
       );
     });
 
-    it('maps resolvedStorageLocation/currentSpecimenPreanalytics to null when a sample has no location or profile', async () => {
+    it('maps currentStoragePlacement/currentSpecimenPreanalytics to null when a sample has no location or profile', async () => {
       const listSamples = vi.fn().mockResolvedValue({
         samples: [{ _id: 'sample-2', participantId: '53117577', specimenId: 'SPEC-2' }],
         total: 1,
@@ -1705,7 +1705,7 @@ describe('sample.routes', () => {
       const res = await request(app).get('/api/samples');
 
       expect(res.status).toBe(200);
-      expect(res.body.data[0].resolvedStorageLocation).toBeNull();
+      expect(res.body.data[0].currentStoragePlacement).toBeNull();
       expect(res.body.data[0].currentSpecimenPreanalytics).toBeNull();
     });
 
