@@ -20,12 +20,11 @@ jobs:
           ref: stabilize/v2.0.0-prototype
           fetch-depth: 0
 
-      - name: Apply reports fix and canonical specimenId boundary
+      - name: Reconcile canonical v2 tests and doubles
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
 
           def read(path):
               return Path(path).read_text(encoding='utf-8')
@@ -36,137 +35,139 @@ jobs:
           def replace(path, old, new, required=True):
               text = read(path)
               if old in text:
-                  text = text.replace(old, new)
-                  write(path, text)
+                  write(path, text.replace(old, new))
                   return
               if new in text:
                   return
               if required:
-                  raise SystemExit(f'expected snippet not found in {path}: {old!r}')
+                  raise SystemExit(f'expected snippet not found in {path}: {old[:120]!r}')
 
-          # Item 1: objective reports regression.
-          path = 'api/backend/src/interface/routes/reports.routes.js'
-          text = read(path)
-          mongodb_import = "const { ObjectId } = require('mongodb');"
-          if mongodb_import not in text:
-              anchor = "const express = require('express');\n"
-              if anchor not in text:
-                  raise SystemExit('reports.routes.js express import anchor not found')
-              text = text.replace(anchor, anchor + mongodb_import + "\n", 1)
-              write(path, text)
-
-          # Item 2: canonical physical boundary uses specimenId only.
+          # 1) sample.service test doubles must positively prove replica-set capability.
           replace(
-              'api/backend/src/interface/controllers/allocate-sample.controller.js',
-              'const { sampleId, boxId, position } = req.body || {};',
-              'const { specimenId, boxId, position } = req.body || {};'
-          )
-          replace(
-              'api/backend/src/interface/controllers/allocate-sample.controller.js',
-              'specimenId: sampleId,',
-              'specimenId,'
+              'api/backend/tests/unit/sample.service.test.js',
+              "    client: {\n      startSession: vi.fn(() => session)\n    },",
+              "    client: {\n      db: vi.fn(() => ({ command: vi.fn().mockResolvedValue({ setName: 'rs0', isWritablePrimary: true }) })),\n      startSession: vi.fn(() => session)\n    },"
           )
 
+          # Keep CurrentStoragePlacement as a response/read model; do not mutate the object handed to insertOne.
           replace(
-              'api/backend/src/interface/controllers/move-sample.controller.js',
-              'const { sampleId, targetBoxId, targetPosition, reason, notes } = req.body || {};',
-              'const { specimenId, targetBoxId, targetPosition, reason, notes } = req.body || {};'
+              'api/backend/src/services/sample.service.js',
+              "      sample.currentStoragePlacement = await new MongoStorageRepository(db)\n        .findCurrentStoragePlacement(sample.specimenId);",
+              "      const currentStoragePlacement = await new MongoStorageRepository(db)\n        .findCurrentStoragePlacement(sample.specimenId);"
           )
           replace(
-              'api/backend/src/interface/controllers/move-sample.controller.js',
-              'specimenId: sampleId,',
-              'specimenId,'
-          )
-
-          replace(
-              'api/backend/src/interface/controllers/release-sample.controller.js',
-              'const { sampleId } = req.params;',
-              'const { specimenId } = req.params;'
-          )
-          replace(
-              'api/backend/src/interface/controllers/release-sample.controller.js',
-              'specimenId: sampleId,',
-              'specimenId,'
+              'api/backend/src/services/sample.service.js',
+              "      return {\n        _id: result.insertedId,\n        ...sample\n      };",
+              "      return {\n        _id: result.insertedId,\n        ...sample,\n        currentStoragePlacement\n      };"
           )
 
+          # 2) Sample entity must not preserve the retired embedded storageLocation alias.
           replace(
-              'api/backend/src/interface/controllers/storage-query.controller.js',
-              'req.params.sampleId',
-              'req.params.specimenId'
+              'api/backend/tests/unit/sample.model.gaps.test.js',
+              "  it('passes through storageLocation when provided, defaults to null otherwise', () => {\n    const withLocation = Sample.create({ ...validData, storageLocation: { boxId: 'box1', position: 'A1' } });\n    expect(withLocation.storageLocation).toEqual({ boxId: 'box1', position: 'A1' });\n\n    const withoutLocation = Sample.create({ ...validData });\n    expect(withoutLocation.storageLocation).toBeNull();\n  });",
+              "  it('does not persist the retired embedded storageLocation alias', () => {\n    const sample = Sample.create({ ...validData, storageLocation: { boxId: 'box1', position: 'A1' } });\n    expect(sample.storageLocation).toBeUndefined();\n  });"
           )
 
+          # 3) Auto-allocation fixture: a query for a non-operational ancestor must return null
+          # when all configured ancestors are OPERATIONAL.
           replace(
-              'api/backend/src/interface/routes/storage.routes.js',
-              "router.get('/sample/:sampleId', createGetSampleLocationController());",
-              "router.get('/specimen/:specimenId', createGetSampleLocationController());"
-          )
-          replace(
-              'api/backend/src/interface/routes/storage.routes.js',
-              "router.delete('/release/:sampleId', requirePermission('manageStorageAllocation'), createReleaseSampleController());",
-              "router.delete('/release/:specimenId', requirePermission('manageStorageAllocation'), createReleaseSampleController());"
+              'api/backend/tests/integration/storage-auto-allocation.api.test.js',
+              "  const storageContainers = createCollectionMock({\n    findOne: vi.fn().mockResolvedValue({ _id: 'freezer-config', containerType: 'FREEZER', roomId: null, status: 'OPERATIONAL' }),\n  });",
+              "  const operationalFreezer = { _id: 'freezer-config', containerType: 'FREEZER', roomId: null, status: 'OPERATIONAL' };\n  const storageContainers = createCollectionMock({\n    findOne: vi.fn(async (query = {}) => {\n      if (query?.status?.$ne === 'OPERATIONAL') return null;\n      return operationalFreezer;\n    }),\n  });"
           )
 
-          # Frontend service keeps positional API but names/payloads canonical.
-          p = 'frontend/src/services/storageApi.ts'
+          # 4) Reports location filters resolve through the normalized physical store, never Sample.storageLocation.
+          replace(
+              'api/backend/tests/integration/reports.routes.gaps.test.js',
+              "    it('localizacao: storageBoxId vira um ObjectId em storageLocation.boxId', async () => {\n      const { db, capturedQueries } = buildCollectionDb({ samples: [{ specimenId: 'SPEC-1' }] });\n      const testApp = appWithDb(db);\n\n      const response = await request(testApp)\n        .post('/api/reports/samples/preview')\n        .send({ filters: { storageBoxId: '507f1f77bcf86cd799439011', storagePosition: 'A1' } });\n\n      expect(response.status).toBe(200);\n      const locationCondition = capturedQueries.samples.$and.find((part) => part['storageLocation.boxId']);\n      expect(locationCondition).toBeDefined();\n      expect(String(locationCondition['storageLocation.boxId'])).toBe('507f1f77bcf86cd799439011');\n      expect(capturedQueries.samples.$and).toEqual(\n        expect.arrayContaining([{ 'storageLocation.position': 'A1' }])\n      );\n    });",
+              "    it('localizacao: storageBoxId e storagePosition resolvem para specimenId pela cadeia fisica v2', async () => {\n      const { db, capturedQueries } = buildCollectionDb({\n        samples: [{ specimenId: 'SPEC-LOC-1' }],\n        storagePositions: [{ storagePositionId: 'pos-1', storageRackId: 'rack-1', positionCode: 'A1' }],\n        containerPositionAssignments: [{ containerId: 'container-1', storagePositionId: 'pos-1', assignmentStatus: 'active' }],\n        specimenContainerAssignments: [{ specimenId: 'SPEC-LOC-1', containerId: 'container-1', assignmentStatus: 'active' }],\n      });\n      const testApp = appWithDb(db);\n\n      const response = await request(testApp)\n        .post('/api/reports/samples/preview')\n        .send({ filters: { storageBoxId: '507f1f77bcf86cd799439011', storagePosition: 'A1' } });\n\n      expect(response.status).toBe(200);\n      expect(capturedQueries.samples.$and).toEqual(\n        expect.arrayContaining([{ specimenId: { $in: ['SPEC-LOC-1'] } }])\n      );\n    });"
+          )
+          replace(
+              'api/backend/tests/integration/reports.routes.gaps.test.js',
+              "      expect(capturedQueries.samples.$and).toEqual(\n        expect.arrayContaining([{ 'storageLocation.boxId': { $in: [] } }])\n      );",
+              "      expect(capturedQueries.samples.$and).toEqual(\n        expect.arrayContaining([{ specimenId: { $in: [] } }])\n      );"
+          )
+
+          # 5) Storage query controller returns result.placement.
+          p = 'api/backend/tests/unit/storage-query.controller.test.js'
           text = read(p)
-          text = text.replace('async allocateSample(sampleId: string, boxId: string, position: string)',
-                              'async allocateSample(specimenId: string, boxId: string, position: string)')
-          text = text.replace("api.post(`${API_STORAGE_BASE}/allocate`, { sampleId, boxId, position })",
-                              "api.post(`${API_STORAGE_BASE}/allocate`, { specimenId, boxId, position })")
-          text = text.replace('    sampleId: string,\n    targetBoxId: string,',
-                              '    specimenId: string,\n    targetBoxId: string,')
-          text = text.replace('        sampleId,\n        targetBoxId,',
-                              '        specimenId,\n        targetBoxId,')
-          text = text.replace('async releaseSample(sampleId: string)', 'async releaseSample(specimenId: string)')
-          text = text.replace('`${API_STORAGE_BASE}/release/${sampleId}`', '`${API_STORAGE_BASE}/release/${specimenId}`')
-          text = text.replace('async getCurrentStoragePlacement(sampleId: string)', 'async getCurrentStoragePlacement(specimenId: string)')
-          text = text.replace('`${API_STORAGE_BASE}/sample/${sampleId}`', '`${API_STORAGE_BASE}/specimen/${specimenId}`')
+          text = text.replace("found: true,\n      location: { boxId: 'B1', position: 'A1' }", "found: true,\n      placement: { boxId: 'B1', position: 'A1' }")
+          text = text.replace("use case requires specimenId, not specimenId", "use case receives the canonical specimenId")
           write(p, text)
 
-          # Reconcile only tests that exercise the physical boundary. Do not touch E2E here.
-          test_paths = [
-              'api/backend/tests/integration/storage-allocation.api.test.js',
+          # 6) Allocate controller success response uses CurrentStoragePlacement and projection evidence.
+          replace(
               'api/backend/tests/unit/allocate-release-sample.controller.test.js',
-              'api/backend/tests/unit/move-sample.controller.test.js',
-              'api/backend/tests/unit/storage-query.controller.test.js',
-              'api/backend/tests/unit/storage.routes.test.js',
-          ]
-          for p in test_paths:
-              text = read(p)
-              text = re.sub(r'\bsampleId\b', 'specimenId', text)
-              text = text.replace('/api/storage/sample/', '/api/storage/specimen/')
-              text = text.replace('/release/:sampleId', '/release/:specimenId')
-              write(p, text)
+              "    const sampleLocation = { boxId: 'box-1', position: 'A1' };\n    vi.spyOn(AllocateSampleUseCase.prototype, 'execute').mockResolvedValue({ sampleLocation });",
+              "    const currentStoragePlacement = { specimenId: 's1', boxId: 'box-1', positionCode: 'A1' };\n    vi.spyOn(AllocateSampleUseCase.prototype, 'execute').mockResolvedValue({\n      currentStoragePlacement,\n      lineageQueued: true,\n      lineageEventId: 'evt-allocate'\n    });"
+          )
+          replace(
+              'api/backend/tests/unit/allocate-release-sample.controller.test.js',
+              "    expect(res.json).toHaveBeenCalledWith({\n      success: true,\n      data: sampleLocation,\n      message: 'Amostra alocada com sucesso em A1'\n    });",
+              "    expect(res.json).toHaveBeenCalledWith({\n      success: true,\n      data: currentStoragePlacement,\n      currentStoragePlacement,\n      projectionQueued: true,\n      projectionEventId: 'evt-allocate',\n      message: 'Amostra alocada com sucesso em A1'\n    });"
+          )
+          replace(
+              'api/backend/tests/unit/allocate-release-sample.controller.test.js',
+              "maps the wire-contract specimenId onto the use case command as specimenId (#482)",
+              "passes the canonical specimenId to the allocation use case"
+          )
 
-          # Fail if executable canonical physical boundary still exposes sampleId.
-          boundary_paths = [
-              'api/backend/src/interface/controllers/allocate-sample.controller.js',
-              'api/backend/src/interface/controllers/move-sample.controller.js',
-              'api/backend/src/interface/controllers/release-sample.controller.js',
-              'api/backend/src/interface/controllers/storage-query.controller.js',
-              'api/backend/src/interface/routes/storage.routes.js',
-              'frontend/src/services/storageApi.ts',
-          ]
-          offenders = []
-          for p in boundary_paths:
-              if re.search(r'\bsampleId\b', read(p)):
-                  offenders.append(p)
-          if offenders:
-              raise SystemExit('sampleId remains in canonical physical boundary: ' + ', '.join(offenders))
+          # 7) Eliminate CJS cache contamination in the move-controller unit suite.
+          p = 'api/backend/tests/unit/move-sample.controller.test.js'
+          text = read(p)
+          old = "const { createMoveSampleController } = require('../../src/interface/controllers/move-sample.controller');\nconst MoveSampleUseCase = require('../../src/core/use-cases/MoveSampleUseCase');"
+          new = "const moveUseCasePath = require.resolve('../../src/core/use-cases/MoveSampleUseCase');\nconst moveControllerPath = require.resolve('../../src/interface/controllers/move-sample.controller');\ndelete require.cache[moveUseCasePath];\ndelete require.cache[moveControllerPath];\nconst MoveSampleUseCase = require(moveUseCasePath);\nconst { createMoveSampleController } = require(moveControllerPath);"
+          if old not in text and new not in text:
+              raise SystemExit('move controller import block not found')
+          text = text.replace(old, new)
+          text = text.replace('field-name mismatch (specimenId vs specimenId)', 'field-name mismatch at the canonical specimenId boundary')
+          write(p, text)
+
+          # 8) Storage route suite: force controller modules to load after its stable doubles,
+          # then release cache entries so the doubles cannot leak into other files.
+          p = 'api/backend/tests/unit/storage.routes.test.js'
+          text = read(p)
+          marker = "const getAvailablePath = require.resolve('../../src/core/use-cases/GetBoxAvailablePositionsUseCase');\n"
+          injection = marker + "const controllerPaths = [\n  require.resolve('../../src/interface/controllers/allocate-sample.controller'),\n  require.resolve('../../src/interface/controllers/auto-assign-sample.controller'),\n  require.resolve('../../src/interface/controllers/move-sample.controller'),\n  require.resolve('../../src/interface/controllers/release-sample.controller'),\n  require.resolve('../../src/interface/controllers/storage-query.controller'),\n];\n"
+          if 'const controllerPaths = [' not in text:
+              if marker not in text: raise SystemExit('storage.routes controller marker not found')
+              text = text.replace(marker, injection)
+          old = "const router = require(routePath);"
+          new = "for (const controllerPath of controllerPaths) delete require.cache[controllerPath];\ndelete require.cache[routePath];\nconst router = require(routePath);\n\n// The router/controllers retain the stable doubles above. Release global CJS cache\n// entries immediately so this test file cannot contaminate adjacent suites.\nfor (const modulePath of [allocatePath, movePath, releasePath, storageServicePath, listFreezersPath, searchSamplesPath, getPlacementPath, getAvailablePath, ...controllerPaths, routePath]) {\n  delete require.cache[modulePath];\n}"
+          if new not in text:
+              if old not in text: raise SystemExit('storage.routes router require not found')
+              text = text.replace(old, new)
+          text = text.replace('GET /sample/:specimenId', 'GET /specimen/:specimenId')
+          text = text.replace('DELETE /release/:sampleId', 'DELETE /release/:specimenId')
+          write(p, text)
+
+          # 9) Topology repository integrity tests use the normalized placement read model.
+          p = 'api/backend/tests/unit/MongoStorageTopologyReadRepository.test.js'
+          text = read(p)
+          import_line = "const MongoStorageTopologyReadRepository = require('../../src/infrastructure/persistence/mongo/MongoStorageTopologyReadRepository');\n"
+          if 'NormalizedPhysicalStorageStore' not in text:
+              text = text.replace(import_line, import_line + "const NormalizedPhysicalStorageStore = require('../../src/infrastructure/persistence/mongo/NormalizedPhysicalStorageStore');\n")
+          old = "      const sample = {\n        _id: sampleId,\n        storageLocation: { boxId: boxId, position: 'A1' }\n      };"
+          new = "      const sample = { _id: sampleId, specimenId: 'SPEC-INTEGRITY-1' };\n      vi.spyOn(NormalizedPhysicalStorageStore.prototype, 'findCurrentBySpecimen').mockResolvedValue({\n        specimenId: 'SPEC-INTEGRITY-1',\n        boxId,\n        positionCode: 'A1'\n      });"
+          text = text.replace(old, new)
+          old2 = "      const sample = {\n        _id: sampleId,\n        storageLocation: { boxId: otherBoxId, position: 'B2' }\n      };"
+          new2 = "      const sample = { _id: sampleId, specimenId: 'SPEC-INTEGRITY-2' };\n      vi.spyOn(NormalizedPhysicalStorageStore.prototype, 'findCurrentBySpecimen').mockResolvedValue({\n        specimenId: 'SPEC-INTEGRITY-2',\n        boxId: otherBoxId,\n        positionCode: 'B2'\n      });"
+          text = text.replace(old2, new2)
+          write(p, text)
+
+          # Enforce no embedded placement alias in the reconciled files.
+          for p in [
+              'api/backend/tests/unit/sample.model.gaps.test.js',
+              'api/backend/tests/integration/reports.routes.gaps.test.js',
+              'api/backend/tests/unit/MongoStorageTopologyReadRepository.test.js',
+          ]:
+              if "storageLocation.boxId" in read(p):
+                  raise SystemExit(f'legacy storageLocation.boxId remains in {p}')
           PY
 
           git diff --check
-          git diff -- api/backend/src/interface/routes/reports.routes.js \
-            api/backend/src/interface/controllers \
-            api/backend/src/interface/routes/storage.routes.js \
-            frontend/src/services/storageApi.ts \
-            api/backend/tests/integration/storage-allocation.api.test.js \
-            api/backend/tests/unit/allocate-release-sample.controller.test.js \
-            api/backend/tests/unit/move-sample.controller.test.js \
-            api/backend/tests/unit/storage-query.controller.test.js \
-            api/backend/tests/unit/storage.routes.test.js
 
-      - name: Commit canonical reconciliation
+      - name: Commit canonical test reconciliation batch
         shell: bash
         run: |
           if git diff --quiet; then
@@ -175,17 +176,15 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add api/backend/src/interface/routes/reports.routes.js \
-            api/backend/src/interface/controllers/allocate-sample.controller.js \
-            api/backend/src/interface/controllers/move-sample.controller.js \
-            api/backend/src/interface/controllers/release-sample.controller.js \
-            api/backend/src/interface/controllers/storage-query.controller.js \
-            api/backend/src/interface/routes/storage.routes.js \
-            frontend/src/services/storageApi.ts \
-            api/backend/tests/integration/storage-allocation.api.test.js \
+          git add api/backend/src/services/sample.service.js \
+            api/backend/tests/unit/sample.service.test.js \
+            api/backend/tests/unit/sample.model.gaps.test.js \
+            api/backend/tests/integration/storage-auto-allocation.api.test.js \
+            api/backend/tests/integration/reports.routes.gaps.test.js \
+            api/backend/tests/unit/storage-query.controller.test.js \
             api/backend/tests/unit/allocate-release-sample.controller.test.js \
             api/backend/tests/unit/move-sample.controller.test.js \
-            api/backend/tests/unit/storage-query.controller.test.js \
-            api/backend/tests/unit/storage.routes.test.js
-          git commit -m 'fix(v2): canonicalize specimen storage boundary'
+            api/backend/tests/unit/storage.routes.test.js \
+            api/backend/tests/unit/MongoStorageTopologyReadRepository.test.js
+          git commit -m 'test(v2): reconcile canonical storage and transaction doubles'
           git push origin HEAD:stabilize/v2.0.0-prototype
