@@ -25,7 +25,8 @@ function isLoopbackHostname(hostname) {
 }
 
 class NotificationService {
-  constructor() {
+  constructor({ connectDatabase = connectDB } = {}) {
+    this.connectDatabase = connectDatabase;
     this.resendClient = null;
     this.smtpTransport = null;
     this.emailFrom = String(process.env.EMAIL_FROM || '').trim();
@@ -171,7 +172,7 @@ class NotificationService {
 
   async persistComplianceLog(payload) {
     try {
-      const db = await connectDB();
+      const db = await this.connectDatabase();
       await db.collection('notification_compliance_logs').insertOne({
         provider: 'resend',
         ...payload,

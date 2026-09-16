@@ -14,6 +14,7 @@ describe('NotificationService', () => {
   let originalEmailFrom;
   let originalSmtpTransport;
   let originalNotificationQueue;
+  let originalConnectDatabase;
 
   beforeEach(() => {
     originalEnv = { ...process.env };
@@ -23,6 +24,7 @@ describe('NotificationService', () => {
     originalEmailFrom = notificationService.emailFrom;
     originalSmtpTransport = notificationService.smtpTransport;
     originalNotificationQueue = notificationService.notificationQueue;
+    originalConnectDatabase = notificationService.connectDatabase;
     delete process.env.SMTP_HOST;
     delete process.env.SMTP_PORT;
     delete process.env.MONGO_URI;
@@ -42,6 +44,7 @@ describe('NotificationService', () => {
     notificationService.emailFrom = originalEmailFrom;
     notificationService.smtpTransport = originalSmtpTransport;
     notificationService.notificationQueue = originalNotificationQueue;
+    notificationService.connectDatabase = originalConnectDatabase;
     notificationService.io = null;
     vi.restoreAllMocks();
   });
@@ -194,11 +197,13 @@ describe('NotificationService', () => {
   });
 
   describe('persistComplianceLog', () => {
-    it('swallows persistence errors and logs them instead of throwing (no MONGO_URI configured in tests)', async () => {
+    it('swallows a deterministic Mongo persistence failure and logs it instead of throwing', async () => {
+      notificationService.connectDatabase = vi.fn().mockRejectedValue(new Error('mongo unavailable'));
       const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
       await expect(
         notificationService.persistComplianceLog({ messageId: 'm1', notificationType: 'x' })
       ).resolves.toBeUndefined();
+      expect(notificationService.connectDatabase).toHaveBeenCalledTimes(1);
       expect(errorSpy).toHaveBeenCalled();
     });
   });
