@@ -13,7 +13,12 @@ const VALIDATION_ERROR_PATTERNS = [
 
 const LOCATION_BLOCKED_PATTERNS = ['está retirada de uso', 'Localização indisponível'];
 
-function createAllocateSampleController() {
+function createAllocateSampleController({
+  AllocateSampleUseCaseClass = AllocateSampleUseCase,
+  StorageRepositoryClass = MongoStorageRepository,
+  AuditRepositoryClass = MongoAuditRepository,
+  LineageRepositoryClass = MongoLineageRepository
+} = {}) {
   return async function allocateSampleController(req, res) {
     try {
       const db = req.app.locals.db;
@@ -27,10 +32,10 @@ function createAllocateSampleController() {
 
       const { specimenId, boxId, position } = req.body || {};
 
-      const useCase = new AllocateSampleUseCase({
-        storageRepository: new MongoStorageRepository(db),
-        auditRepository: new MongoAuditRepository(db),
-        lineageRepository: new MongoLineageRepository(db)
+      const useCase = new AllocateSampleUseCaseClass({
+        storageRepository: new StorageRepositoryClass(db),
+        auditRepository: new AuditRepositoryClass(db),
+        lineageRepository: new LineageRepositoryClass(db)
       });
 
       const result = await useCase.execute({
