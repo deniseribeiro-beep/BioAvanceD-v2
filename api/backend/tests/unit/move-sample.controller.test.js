@@ -1,11 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-const moveUseCasePath = require.resolve('../../src/core/use-cases/MoveSampleUseCase');
-const moveControllerPath = require.resolve('../../src/interface/controllers/move-sample.controller');
-delete require.cache[moveUseCasePath];
-delete require.cache[moveControllerPath];
-const MoveSampleUseCase = require(moveUseCasePath);
-const { createMoveSampleController } = require(moveControllerPath);
+const MoveSampleUseCase = require('../../src/core/use-cases/MoveSampleUseCase');
+const { createMoveSampleController } = require('../../src/interface/controllers/move-sample.controller');
 
 function buildRes() {
   const res = {};
@@ -16,30 +12,64 @@ function buildRes() {
 
 function buildReq(overrides = {}) {
   return {
-    app: { locals: { db: {} } },
+    app: { locals: { db: { marker: 'db-v2' } } },
     body: {},
     headers: {},
     ...overrides
   };
 }
 
+function buildController({ executeImpl } = {}) {
+  const execute = vi.fn(executeImpl || (async () => ({})));
+  const constructed = {};
+
+  class StorageRepositoryDouble {
+    constructor(db) {
+      constructed.storageDb = db;
+    }
+  }
+  class AuditRepositoryDouble {
+    constructor(db) {
+      constructed.auditDb = db;
+    }
+  }
+  class LineageRepositoryDouble {
+    constructor(db) {
+      constructed.lineageDb = db;
+    }
+  }
+  class MoveSampleUseCaseDouble {
+    constructor(dependencies) {
+      constructed.useCaseDependencies = dependencies;
+    }
+
+    execute(command) {
+      return execute(command);
+    }
+  }
+
+  const controller = createMoveSampleController({
+    MoveSampleUseCaseClass: MoveSampleUseCaseDouble,
+    StorageRepositoryClass: StorageRepositoryDouble,
+    AuditRepositoryClass: AuditRepositoryDouble,
+    LineageRepositoryClass: LineageRepositoryDouble
+  });
+
+  return { controller, execute, constructed };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('move-sample.controller', () => {
-  const controller = createMoveSampleController();
-
-  it('passes a command that satisfies the real MoveSampleUseCase.validateCommand (regression: #487)', async () => {
-    // Exercises the real validateCommand instead of a mocked execute(), so a
-    // controller/use-case field-name mismatch at the canonical specimenId boundary fails
-    // this test instead of silently 400ing on every real request.
-    const validateSpy = vi.spyOn(MoveSampleUseCase.prototype, 'validateCommand');
-    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockImplementation(function (command) {
-      this.validateCommand(command);
-      return Promise.resolve({});
+describe('move-sample.controller canonical v2', () => {
+  it('passes specimenId/targetBoxId/targetPosition in a command accepted by the real v2 validator', async () => {
+    const { controller } = buildController({
+      executeImpl: async (command) => {
+        MoveSampleUseCase.prototype.validateCommand(command);
+        return { validated: true };
+      }
     });
-
     const req = buildReq({
       body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' }
     });
@@ -47,14 +77,16 @@ describe('move-sample.controller', () => {
 
     await controller(req, res);
 
-    expect(validateSpy).toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ success: true })
-    );
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: { validated: true },
+      message: 'Amostra movida com sucesso'
+    });
   });
 
-  it('returns 503 when the db is not available', async () => {
+  it('returns 503 when MongoDB is unavailable before constructing repositories', async () => {
+    const { controller, execute, constructed } = buildController();
     const req = buildReq({ app: { locals: {} } });
     const res = buildRes();
 
@@ -66,12 +98,13 @@ describe('move-sample.controller', () => {
       error: 'DATABASE_UNAVAILABLE',
       message: 'Banco de dados não disponível'
     });
+    expect(execute).not.toHaveBeenCalled();
+    expect(constructed.storageDb).toBeUndefined();
   });
 
-  it('returns 200 with the use-case result on success', async () => {
-    const executeSpy = vi
-      .spyOn(MoveSampleUseCase.prototype, 'execute')
-      .mockResolvedValue({ specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' });
+  it('constructs canonical repositories from the request db and returns the governed move result', async () => {
+    const result = { specimenId: 'S1', to: { boxId: 'B1', position: 'A1' }, lineageQueued: true };
+    const { controller, execute, constructed } = buildController({ executeImpl: async () => result });
     const req = buildReq({
       body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1', reason: 'relocation', notes: 'n/a' },
       user: { id: 'u1', name: 'Alice', roleName: 'admin' },
@@ -82,7 +115,15 @@ describe('move-sample.controller', () => {
 
     await controller(req, res);
 
-    expect(executeSpy).toHaveBeenCalledWith({
+    expect(constructed.storageDb).toBe(req.app.locals.db);
+    expect(constructed.auditDb).toBe(req.app.locals.db);
+    expect(constructed.lineageDb).toBe(req.app.locals.db);
+    expect(constructed.useCaseDependencies).toEqual({
+      storageRepository: expect.anything(),
+      auditRepository: expect.anything(),
+      lineageRepository: expect.anything()
+    });
+    expect(execute).toHaveBeenCalledWith({
       specimenId: 'S1',
       targetBoxId: 'B1',
       targetPosition: 'A1',
@@ -97,15 +138,11 @@ describe('move-sample.controller', () => {
       }
     });
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({
-      success: true,
-      data: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' },
-      message: 'Amostra movida com sucesso'
-    });
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: result, message: 'Amostra movida com sucesso' });
   });
 
-  it('falls back to alternate user identity fields and headers when primary fields are absent', async () => {
-    const executeSpy = vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockResolvedValue({});
+  it('uses alternate actor identity fields without changing the specimenId boundary', async () => {
+    const { controller, execute } = buildController();
     const req = buildReq({
       body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' },
       user: { _id: { toString: () => 'u2' }, username: 'bob', role: 'tech' },
@@ -116,153 +153,76 @@ describe('move-sample.controller', () => {
 
     await controller(req, res);
 
-    expect(executeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        specimenId: 'S1',
-        actor: {
-          userId: 'u2',
-          userName: 'bob',
-          userRole: 'tech',
-          ipAddress: '1.2.3.4',
-          userAgent: null
-        }
-      })
-    );
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      specimenId: 'S1',
+      actor: {
+        userId: 'u2',
+        userName: 'bob',
+        userRole: 'tech',
+        ipAddress: '1.2.3.4',
+        userAgent: null
+      }
+    }));
   });
 
-  it('defaults actor fields to null when req.user is absent and no ip/agent info is present', async () => {
-    const executeSpy = vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockResolvedValue({});
+  it('defaults actor fields to null when no authenticated actor metadata is present', async () => {
+    const { controller, execute } = buildController();
     const req = buildReq({ body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
     const res = buildRes();
 
     await controller(req, res);
 
-    expect(executeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actor: {
-          userId: null,
-          userName: null,
-          userRole: null,
-          ipAddress: null,
-          userAgent: null
-        }
-      })
-    );
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      actor: {
+        userId: null,
+        userName: null,
+        userRole: null,
+        ipAddress: null,
+        userAgent: null
+      }
+    }));
   });
 
-  it('handles a missing req.body without throwing, passing undefined fields through', async () => {
-    const executeSpy = vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockResolvedValue({});
+  it('passes missing body fields as undefined so the v2 use case remains the validation authority', async () => {
+    const { controller, execute } = buildController();
     const req = buildReq({ body: undefined });
     const res = buildRes();
 
     await controller(req, res);
 
-    expect(executeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        specimenId: undefined,
-        targetBoxId: undefined,
-        targetPosition: undefined
-      })
-    );
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      specimenId: undefined,
+      targetBoxId: undefined,
+      targetPosition: undefined
+    }));
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
-  it('returns 404 when the use case throws a "não encontrada" error', async () => {
-    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('Amostra não encontrada'));
-    const req = buildReq({ body: { specimenId: 'missing', targetBoxId: 'B1', targetPosition: 'A1' } });
-    const res = buildRes();
-
-    await controller(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(404);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      error: 'MOVE_SAMPLE_ERROR',
-      message: 'Amostra não encontrada'
-    });
-  });
-
-  it('returns 409 when the use case throws a STORAGE_COLLISION error', async () => {
-    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('STORAGE_COLLISION: position occupied'));
+  it.each([
+    ['Amostra não encontrada', 404],
+    ['STORAGE_COLLISION: position occupied', 409],
+    ['targetBoxId é obrigatório', 400],
+    ['StorageBox B1 está retirada de uso (status: RETIRED)', 400],
+    ['Localização indisponível: FREEZER "Freezer 3" está com status MAINTENANCE', 400],
+    ['RF023_LINEAGE_VALIDATION_FAILED: outbox recusado', 422],
+    ['targetPosition is required', 500]
+  ])('maps governed move error "%s" to HTTP %i', async (message, expectedStatus) => {
+    const { controller } = buildController({ executeImpl: async () => { throw new Error(message); } });
     const req = buildReq({ body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
     const res = buildRes();
 
     await controller(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.status).toHaveBeenCalledWith(expectedStatus);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'MOVE_SAMPLE_ERROR',
-      message: 'STORAGE_COLLISION: position occupied'
+      message
     });
   });
 
-  it('returns 400 when the use case throws a known validation error', async () => {
-    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('targetBoxId é obrigatório'));
-    const req = buildReq({ body: { specimenId: 'S1' } });
-    const res = buildRes();
-
-    await controller(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      error: 'MOVE_SAMPLE_ERROR',
-      message: 'targetBoxId é obrigatório'
-    });
-  });
-
-  it('returns 400 when checkLocationBlocked rejects a RETIRED destination box (#646 RF017 AC#7)', async () => {
-    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(
-      new Error('StorageBox 507f1f77bcf86cd799439099 está retirada de uso (status: RETIRED)')
-    );
-    const req = buildReq({ body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
-    const res = buildRes();
-
-    await controller(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      error: 'MOVE_SAMPLE_ERROR',
-      message: 'StorageBox 507f1f77bcf86cd799439099 está retirada de uso (status: RETIRED)'
-    });
-  });
-
-  it('returns 400 when checkLocationBlocked rejects a non-OPERATIONAL ancestor container (#646 RF017 AC#7)', async () => {
-    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(
-      new Error('Localização indisponível: FREEZER "Freezer 3" está com status MAINTENANCE')
-    );
-    const req = buildReq({ body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
-    const res = buildRes();
-
-    await controller(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      error: 'MOVE_SAMPLE_ERROR',
-      message: 'Localização indisponível: FREEZER "Freezer 3" está com status MAINTENANCE'
-    });
-  });
-
-  it('returns 500 for an unrecognized use-case error message instead of masking it as a 400 (issue #54)', async () => {
-    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('targetPosition is required'));
-    const req = buildReq({ body: { specimenId: 'S1', targetBoxId: 'B1' } });
-    const res = buildRes();
-
-    await controller(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(500);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      error: 'MOVE_SAMPLE_ERROR',
-      message: 'targetPosition is required'
-    });
-  });
-
-  it('falls back to the default error message with a 500 when the thrown error has no message (issue #54)', async () => {
-    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error());
+  it('falls back to the canonical generic move error for a thrown Error without message', async () => {
+    const { controller } = buildController({ executeImpl: async () => { throw new Error(); } });
     const req = buildReq({ body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
     const res = buildRes();
 
