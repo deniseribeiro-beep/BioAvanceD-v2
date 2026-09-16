@@ -20,13 +20,13 @@ jobs:
           ref: stabilize/v2.0.0-prototype
           fetch-depth: 0
 
-      - name: Restore complete sample route and apply canonical label audit fix
-        run: python .github/scripts/item7_restore_sample_routes.py
+      - name: Apply deterministic notification persistence double
+        run: python .github/scripts/item7_reconcile_notification.py
 
       - name: Validate diff
         run: git diff --check
 
-      - name: Commit safe sample route correction
+      - name: Commit notification persistence reconciliation
         shell: bash
         run: |
           if git diff --quiet; then
@@ -35,6 +35,7 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add api/backend/src/interface/routes/sample.routes.js
-          git commit -m 'fix(labels): use canonical specimenId in label audit'
+          git add api/backend/src/services/NotificationService.js \
+            api/backend/tests/unit/NotificationService.test.js
+          git commit -m 'test(notification): inject deterministic compliance persistence double'
           git push origin HEAD:stabilize/v2.0.0-prototype
