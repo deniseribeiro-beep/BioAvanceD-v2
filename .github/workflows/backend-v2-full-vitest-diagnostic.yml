@@ -1,0 +1,128 @@
+name: Backend v2 Full Vitest diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - stabilize/v2.0.0-prototype
+    paths:
+      - .github/workflows/backend-v2-full-vitest-diagnostic.yml
+      - api/backend/src/**
+      - api/backend/tests/**
+      - api/backend/package.json
+      - api/backend/package-lock.json
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: backend-v2-full-vitest-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  full-vitest:
+    name: Full Vitest in backend-unit-runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      COMPOSE_PROJECT_NAME: bioavanced-item7-${{ github.run_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Compose configuration
+        run: docker compose -f compose.test.yml config > /tmp/item7-compose-config.yml
+
+      - name: Build backend-unit-runner
+        run: docker compose -f compose.test.yml build backend-unit-runner
+
+      - name: Inventory candidate test files
+        run: |
+          node <<'NODE' | tee /tmp/item7-test-inventory.txt
+          const fs = require('fs');
+          const path = require('path');
+          const root = 'api/backend/tests';
+          const families = ['unit', 'integration', 'compliance'];
+          const pattern = /\.(test|spec)\.(js|cjs|mjs|ts|tsx)$/;
+          let total = 0;
+          for (const family of families) {
+            const files = [];
+            const walk = directory => {
+              for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+                const target = path.join(directory, entry.name);
+                if (entry.isDirectory()) walk(target);
+                else if (pattern.test(entry.name)) files.push(target);
+              }
+            };
+            walk(path.join(root, family));
+            files.sort();
+            total += files.length;
+            console.log(`${family}: ${files.length}`);
+            for (const file of files) console.log(file);
+          }
+          console.log(`total: ${total}`);
+          NODE
+
+      - name: Run Full Vitest
+        id: full_vitest
+        continue-on-error: true
+        working-directory: api/backend
+        run: |
+          set -o pipefail
+          docker compose -f ../../compose.test.yml run --rm --no-deps backend-unit-runner \
+            npx vitest run tests/unit tests/integration tests/compliance --reporter=default \
+            2>&1 | tee /tmp/item7-full-vitest.log
+
+      - name: Build diagnostic summary
+        if: always()
+        env:
+          FULL_VITEST_OUTCOME: ${{ steps.full_vitest.outcome }}
+        run: |
+          {
+            echo "## Backend v2 Full Vitest — item 7 diagnostic"
+            echo
+            echo "- SHA: \`${GITHUB_SHA}\`"
+            echo "- Runner: \`backend-unit-runner\` from \`compose.test.yml\`"
+            echo "- Compose config: valid"
+            echo "- Outcome: \`${FULL_VITEST_OUTCOME}\`"
+            echo
+            echo "### Candidate-file inventory"
+            echo '~~~text'
+            grep -E '^(unit|integration|compliance|total):' /tmp/item7-test-inventory.txt || true
+            echo '~~~'
+            echo
+            echo "### Vitest totals"
+            echo '~~~text'
+            grep -E '^( Test Files|      Tests|   Start at|   Duration)' /tmp/item7-full-vitest.log || true
+            echo '~~~'
+          } | tee /tmp/item7-summary.md
+          cat /tmp/item7-summary.md >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-v2-full-vitest-${{ github.sha }}
+          path: |
+            /tmp/item7-compose-config.yml
+            /tmp/item7-test-inventory.txt
+            /tmp/item7-full-vitest.log
+            /tmp/item7-summary.md
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish diagnostic to issue 228
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment 228 --repo "${GITHUB_REPOSITORY}" --body-file /tmp/item7-summary.md
+
+      - name: Tear down diagnostic Compose project
+        if: always()
+        run: docker compose -f compose.test.yml down --volumes --remove-orphans
+
+      - name: Preserve Full Vitest result
+        if: always() && steps.full_vitest.outcome != 'success'
+        run: exit 1
