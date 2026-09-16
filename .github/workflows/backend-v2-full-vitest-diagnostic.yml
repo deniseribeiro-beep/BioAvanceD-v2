@@ -76,7 +76,7 @@ jobs:
             -v "$PWD/tests/integration:/app/tests/integration" \
             -e MONGO_URI= -e REDIS_URL= -e NEO4J_URI= \
             backend-unit-runner \
-            sh -lc 'ROLLUP_VERSION="$(node -p "require(\047rollup/package.json\047).version")"; ROLLUP_TARBALL="$(npm pack "@rollup/rollup-linux-x64-musl@$ROLLUP_VERSION" --ignore-scripts --silent --pack-destination /tmp)"; mkdir -p node_modules/@rollup/rollup-linux-x64-musl; tar -xzf "/tmp/$ROLLUP_TARBALL" -C node_modules/@rollup/rollup-linux-x64-musl --strip-components=1; npx vitest run --reporter=default' \
+            sh -lc 'ROLLUP_VERSION="$(node -p "require(\\\"./node_modules/rollup/package.json\\\").version")"; ROLLUP_TARBALL="$(npm pack "@rollup/rollup-linux-x64-musl@$ROLLUP_VERSION" --ignore-scripts --silent --pack-destination /tmp)"; mkdir -p node_modules/@rollup/rollup-linux-x64-musl; tar -xzf "/tmp/$ROLLUP_TARBALL" -C node_modules/@rollup/rollup-linux-x64-musl --strip-components=1; npx vitest run --reporter=default' \
             2>&1 | tee /tmp/item7-full-vitest.log
 
       - name: Build diagnostic summary
