@@ -86,7 +86,7 @@ parent of type `RACK` or `DRAWER`. This slice only touches the schema — the
 service-layer consumer migration (`sample.service.js`, `intakeWizard.js`,
 `equipment-sensor-quarantine.service.js`) and the backfill script are
 carried forward as separate #458-family follow-ups (too large for one
-build-loop iteration alongside the schema change).
+build iteration alongside the schema change).
 
 **Landed 2026-08-06 (#461, backfill script):**
 `api/backend/src/services/location-storage-backfill.service.js` exports
@@ -110,7 +110,7 @@ no box dimensions — real dimensions land whenever a consumer migration
 (#462-#464) next writes that box. Re-running is a no-op: containers/boxes
 are found-or-created by their deterministic key, and an already-open
 `StorageAssignment` for the same specimen/box/position is not duplicated.
-Proven with the strongest native-only bar this repo's build-loop overlay
+Proven with the strongest native-only bar this repo's conventions
 recognizes: an in-memory collection fake with real `$in`/exact-match
 query-matching semantics, not a stub returning canned data
 (`tests/unit/services/location-storage-backfill.service.test.js`, 7 cases).
@@ -242,7 +242,7 @@ in hand, and post-migration samples (no `location` object set by
 `createSample`/`intakeWizard` since #462/#463) already take the
 `locationStatus` branch correctly without any change here.
 
-Proven with the strongest native-only bar this repo's build-loop overlay
+Proven with the strongest native-only bar this repo's conventions
 recognizes: a fixture that seeds a real FREEZER->SHELF->RACK->StorageBox
 chain in an in-memory collection fake with `$in`/exact-match query
 semantics (not a stub returning canned data), asserting the hierarchy

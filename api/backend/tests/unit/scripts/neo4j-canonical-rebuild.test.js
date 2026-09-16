@@ -7,7 +7,7 @@ const { seedCanonicalOutbox } = require('../../../scripts/neo4j-canonical-rebuil
 /**
  * Real query-matching fake (exact-match filter + sort + $in), not a canned
  * stub — proves seedCanonicalOutbox's RcsAssessment resolution actually
- * scopes by specimenId, per build-loop's native-only "real backend" proof
+ * scopes by specimenId, per this repo's native-only "real backend" proof
  * bar.
  */
 function createFakeCollection() {

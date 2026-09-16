@@ -633,8 +633,8 @@ class SampleService {
       // #647 (same shape as #645's sensor-list bug): no sort meant Mongo's
       // natural (insertion) order decided which samples landed on the
       // default 50-item page -- once the collection passed that default
-      // (e2e fixtures accumulate across sessions, see docker-workflow's
-      // local-env), a freshly created sample silently never appeared in
+      // (e2e fixtures accumulate across sessions in the test stack's named
+      // volumes), a freshly created sample silently never appeared in
       // the list, so SampleDetailsPage's client-side find-by-id came up
       // empty for a sample that had just been created. Newest-first makes
       // a just-created record always land on page 1 regardless of backlog.

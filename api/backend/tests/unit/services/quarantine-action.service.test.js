@@ -8,7 +8,7 @@ const { recordAction, getActionsForSpecimen, releaseActiveAction, markPendingRev
  * Real query-matching fake — a scalar filter value against an array field
  * matches array-containment (Mongo's actual semantics for
  * `{ specimenIds: 'X' }` against `specimenIds: ['X', 'Y']`), not a stub
- * that returns canned data regardless of query, per build-loop's
+ * that returns canned data regardless of query, per this repo's
  * native-only "real backend" proof bar.
  */
 function createFakeCollection() {

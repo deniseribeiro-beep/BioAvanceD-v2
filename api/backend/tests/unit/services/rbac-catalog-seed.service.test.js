@@ -7,7 +7,7 @@ const { seedRolesAndPermissions, PERMISSION_CATALOG } = require('../../../src/se
 /**
  * Real query-matching fake (findOne exact-match, insertOne), not a canned
  * stub — proves the seed's upsert-by-business-key idempotency actually
- * depends on querying by roleCode/permissionCode, per build-loop's
+ * depends on querying by roleCode/permissionCode, per this repo's
  * native-only "real backend" proof bar.
  */
 function createFakeCollection() {

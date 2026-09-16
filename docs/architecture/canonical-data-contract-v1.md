@@ -506,7 +506,7 @@ for the full reasoning and the two acknowledged gaps (dict-02's
 `specimenStatus` equivalent and needs a local extension).
 
 **Landed in #406 (entity + read path only — foundational slice, chunked
-per `divide-and-conquer`):** the `quarantineActions` collection/entity
+from the full scope):** the `quarantineActions` collection/entity
 exists (`api/backend/src/models/QuarantineAction.js`,
 `api/backend/src/services/quarantine-action.service.js`), mirroring the
 `RcsAssessment`/`SpecimenPreanalytics` referenced-and-versioned pattern

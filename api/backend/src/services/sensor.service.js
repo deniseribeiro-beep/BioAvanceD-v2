@@ -163,8 +163,8 @@ class SensorService {
 
       // #645: no sort meant Mongo's natural (insertion) order decided which
       // page-1 sensors were visible -- once the collection passed the
-      // default limit of 50 (e2e fixtures accumulate across sessions, see
-      // docker-workflow's local-env), a freshly created sensor silently
+      // default limit of 50 (e2e fixtures accumulate across sessions in the
+      // test stack's named volumes), a freshly created sensor silently
       // never appeared in the default list/UI at all, read from a real
       // Playwright run as a "flaky locator timeout" (#645) rather than the
       // deterministic pagination bug it actually is. Newest-first makes the

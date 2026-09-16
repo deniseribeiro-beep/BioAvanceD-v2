@@ -6,7 +6,7 @@ const { backfillSealedSnapshotPins } = require('../../../src/services/sealed-sna
 
 /**
  * Real query-matching fake — exact-match on scalar fields plus a sort-by-date
- * `find().sort().toArray()` chain, per build-loop's native-only "real
+ * `find().sort().toArray()` chain, per this repo's native-only "real
  * backend" proof bar (this repo has no live-Mongo tier). Mirrors
  * location-storage-backfill.service.test.js's fake shape.
  */

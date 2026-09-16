@@ -375,7 +375,7 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
       expect(await read.json()).toMatchObject({ success: false });
     } finally {
       // This fixture is not created by any import, so nothing else will clean
-      // it up -- the named volumes persist across sessions (docker-workflow).
+      // it up -- the named volumes persist across sessions.
       await removeForeignImportBatch(fhirBatchId);
     }
   });

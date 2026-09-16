@@ -10,7 +10,7 @@ import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocatio
 // testDir *is* tests/e2e, discovered by CI's bare `playwright test`) never
 // picks this file up. Run with:
 //   npx playwright test --config=playwright.showcase.config.ts
-// against a live compose stack — see docker-workflow's local-env overlay for
+// against a live compose stack — see the project's Docker conventions for
 // the startup recipe. Produces a .webm under test-results/; convert to mp4
 // with ffmpeg.
 //
@@ -149,8 +149,8 @@ test.describe('Human-paced e2e showcase reel — Wave 2 (#331)', () => {
 // them rather than demo an unproven flow live. RF017's storage-topology
 // sub-flow (InlineStorageMovementPanel) is also skipped: its freezer
 // dropdown has no data-testid coverage and is blocked by the known
-// seedStorageBoxLocation() fixture gap (#598, see this skill's local-env
-// overlay) -- the equipment sub-domain alone is what's demoed for RF017.
+// seedStorageBoxLocation() fixture gap (#598) -- the equipment sub-domain
+// alone is what's demoed for RF017.
 test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
   test.afterAll(async () => {
     await closeSeedDb();

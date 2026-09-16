@@ -8,7 +8,7 @@ const { evaluateAccessState, DUO_SYSTEM_URI } = accessRequestService;
 
 /**
  * Real query-matching fake (exact-match findOne/find/sort, insertOne,
- * updateOne $set), not a canned stub — per build-loop's native-only "real
+ * updateOne $set), not a canned stub — per this repo's native-only "real
  * backend" proof bar, this proves the service's query logic itself is
  * correct rather than trusting whatever a stub was told to return.
  */

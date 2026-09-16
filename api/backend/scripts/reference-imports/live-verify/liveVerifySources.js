@@ -4,7 +4,7 @@
 // reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
 // ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, DCB, ATC, DUO, UBERON,
 // NCBITAX, CL, and EDAM (#557) — all 16 Fase 2 sources are now populated,
-// closing out RF028's live-verify build-loop (per docs-7-31-2026/3-
+// closing out RF028's live-verify loop (per docs-7-31-2026/3-
 // Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem recomendada da
 // Fase 2").
 //

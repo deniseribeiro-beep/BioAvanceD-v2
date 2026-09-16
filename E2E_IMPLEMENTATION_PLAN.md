@@ -21,7 +21,7 @@ traceability doc:
    script; rich audit infra with RFC3161 timestamping and external
    witnesses) — and *less* built-out in others that matter for this
    plan specifically: **no Playwright e2e job runs in CI today** (the
-   `bioavanced-v2-testing-conventions` skill's "3 CI jobs" description
+   project's testing conventions' "3 CI jobs" description
    is stale — current `ci-pipeline.yml` has one job, never invokes
    Playwright), and **the real-backend login path is dead scaffolding**
    (`compose.test.yml` sets `PLAYWRIGHT_USE_REAL_LOGIN`/`TEST_USER`/
@@ -170,7 +170,7 @@ how to execute them for real):
    same commit as the spec that changes them — it's the living tracker,
    same discipline as `COVERAGE_NOTES.md`.
 6. **File a GitHub issue for any RED gap the moment its test proves the
-   gap** (per `bioavanced-v2-conventions`) — the failing test is the
+   gap** (per the project's conventions) — the failing test is the
    evidence, link it in the issue.
 
 ## Spec file plan (unchanged from the traceability doc, restated for reference)
@@ -194,18 +194,18 @@ every spec above instead (per the diagrams' `«include»` pattern).
   temporarily breaking it once per new helper usage — same "verify
   before trusting" discipline as any new assertion.
 - End of each wave: run the full new-spec set together once
-  (`--reporter=dot`, per `bioavanced-v2-testing-conventions`' context-economy rule) against a fresh stack (`compose down --volumes` between runs so seed state doesn't leak across waves).
+  (`--reporter=dot`, per the project's testing conventions' context-economy rule) against a fresh stack (`compose down --volumes` between runs so seed state doesn't leak across waves).
 - Don't run the backend's own Docker unit-test gate
   (`backend-unit-runner`) as part of this work unless backend code
   changed that session — it's a separate, already-passing gate.
 
 ## Skills/docs that will need updating once this lands
 
-Same Rule 0 situation as last session — flag them upstream, don't edit the
-junctioned skill directly:
-- `bioavanced-v2-testing-conventions`'s "CI map" section is stale (claims
+As last session, flag these upstream rather than editing the shared
+conventions directly:
+- The project's testing conventions' "CI map" section is stale (claims
   3 jobs; there's 1, and it doesn't run Playwright) — needs a rewrite
   once this phase's findings are final, not before (it may change again
   once the CI-wiring milestone lands).
-- Once `realAuth.ts` exists, `playwright-specs`' "no real-login global
-  setup" note is resolved — update it to point at the new helper.
+- Once `realAuth.ts` exists, the Playwright conventions' "no real-login
+  global setup" note is resolved — update it to point at the new helper.

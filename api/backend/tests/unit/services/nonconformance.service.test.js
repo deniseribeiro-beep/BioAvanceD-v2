@@ -10,7 +10,7 @@ afterEach(() => { vi.restoreAllMocks(); });
 /**
  * Real query-matching fake (exact-match findOne/find/sort, insertOne,
  * updateOne $set), not a canned stub -- same pattern as
- * accessRequest.service.test.js's own fake, per build-loop's native-only
+ * accessRequest.service.test.js's own fake, per this repo's native-only
  * "real backend" proof bar.
  */
 function createFakeCollection() {

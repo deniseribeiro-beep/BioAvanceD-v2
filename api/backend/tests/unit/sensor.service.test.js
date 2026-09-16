@@ -304,8 +304,8 @@ describe('sensor.service (non-quarantine paths)', () => {
     });
 
     // #645: real-backend Playwright run against compose.test.yml
-    // (e2e fixtures accumulate across sessions per docker-workflow's
-    // local-env) hit exactly this shape -- 51 pre-existing sensors, no sort
+    // (e2e fixtures accumulate across sessions in the named
+    // volumes) hit exactly this shape -- 51 pre-existing sensors, no sort
     // applied, default limit 50 -- and the just-created sensor from a real
     // UI submission silently never appeared in the list, misread as a
     // flaky Playwright locator timeout rather than a deterministic

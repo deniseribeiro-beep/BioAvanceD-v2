@@ -80,7 +80,7 @@ separate from the fixture-only importers above, per the same
 `reference-import-boundary.arch.test.js` boundary — runs a
 `workflow_dispatch`-only verify job against each source's real upstream:
 `liveVerifySources.js` is now a 16-entry registry (all Fase 2 sources
-populated, closing out RF028's live-verify build-loop), and
+populated, closing out RF028's live-verify loop), and
 `verify-live-release.js` supports the different verification shapes those
 16 sources actually need (GitHub releases API, a stable direct-download
 URL, a redirect-to-latest-version page, a fixed-edition browse page, a

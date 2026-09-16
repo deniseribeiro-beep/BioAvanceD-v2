@@ -136,7 +136,7 @@ const VALID_PAYLOAD = {
  * the intake wizard's own already-collected payload -- proves AC4-6's
  * structured-coding requirement is satisfied by a real write path, not just
  * schema-complete (#689-#692). Native-only proof (real query-matching
- * fakes, not canned stubs) is this repo's own build-loop overlay bar for a
+ * fakes, not canned stubs) is this repo's own proof bar for a
  * backend-internal slice; the literal real-backend Playwright e2e proof is
  * tracked separately (see #693's close comment for the follow-up number).
  */

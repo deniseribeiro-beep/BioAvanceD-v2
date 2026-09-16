@@ -32,7 +32,7 @@ const ORPHA_SYSTEM_URI = 'http://www.orpha.net';
 const OMIM_SYSTEM_URI = 'https://www.omim.org';
 // "CID" in this wizard's own field names is the Brazilian Portuguese
 // abbreviation for ICD -- dict-01_FONTES.md's own SRC_ICD10/SRC_ICD11 rows
-// use the English abbreviation instead (see build-loop's overlay, #255).
+// use the English abbreviation instead (search the dictionary for ICD).
 // Mapped to ICD-10 here since this wizard's diagnosisCidCode field has
 // always meant CID-10 in this repo's existing terminology (no ICD-11
 // picker exists in this wizard).

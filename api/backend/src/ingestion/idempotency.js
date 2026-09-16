@@ -17,8 +17,8 @@ const { CANONICAL_COLLECTIONS } = require('../config/collections');
  * `$setOnInsert`+`upsert:true` shape avoids the TOCTOU gap a separate
  * find-then-insert pair would have under concurrent identical requests.
  * `result.upsertedCount` (not just checking `existing` afterward) is what
- * tells this call apart from a losing concurrent racer — see vitest-specs'
- * overlay on why a hand-rolled collection mock must replicate this.
+ * tells this call apart from a losing concurrent racer, which is why a
+ * hand-rolled collection mock must replicate this.
  *
  * Returns `{ idempotent: false }` when this call won the claim (caller
  * should proceed and eventually call recordIdempotentResult), or

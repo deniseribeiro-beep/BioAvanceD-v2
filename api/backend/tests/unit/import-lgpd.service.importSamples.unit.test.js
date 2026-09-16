@@ -485,7 +485,7 @@ describe('ImportLGPDService.importSamples', () => {
   // #499: import-lgpd's own RCS-computing CSV parse logic never called
   // rcsAssessmentService.recordAssessment — the canonical, referenced
   // RcsAssessment snapshot import.service.js's CSV/XLSX branch already
-  // writes. Real-enough proof per the build-loop overlay's backend-internal
+  // writes. Real-enough proof per this repo's backend-internal
   // proof bar: an in-memory collection mock, asserting the actual
   // specimenId/certificationResult shape passed through, not a stub.
   it('records a referenced RcsAssessment snapshot alongside the embedded copy (#499)', async () => {

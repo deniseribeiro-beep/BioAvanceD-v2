@@ -3,7 +3,7 @@
  * gaps left after that file's initial pass: the `(req.t && req.t(key)) ||
  * '<pt fallback>'` truthy branch (never exercised there because no i18n
  * middleware sets req.t — same class of gap closed for
- * sample-file.controller.js in test-loop session 11), plus a few real
+ * sample-file.controller.js in coverage session 11), plus a few real
  * logic branches (login's mfaCode compat fallback, logout skipping the
  * session-invalidate block when db/token are absent, and the
  * sessionId-matches-current-session cookie-clear branch).

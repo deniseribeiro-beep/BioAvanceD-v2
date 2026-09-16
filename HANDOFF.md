@@ -44,7 +44,7 @@ origin. `main` untouched and still frozen.
   `app.js`/`env.js` are imported by nearly everything. That is the correct
   answer for a central module, not a stale base ref. Its refusal message
   tells you to run `npm run test:unit`, which is a bare `vitest run` that
-  `full-suite-guard` blocks — filed as pack #858.
+  `full-suite-guard` blocks — reported upstream.
 
 ## Read this before the next Docker gate
 
@@ -95,7 +95,7 @@ This is a fresh instance of open **#1060**, commented there.
   #1074's shippable half shipped in `58779c2c`; #1089 carries a complete
   pre-deferral analysis ending in four dictionary-level questions. The
   previous handoff recommended #1089 as needing someone and cost me a full
-  re-derivation cycle; filed as pack #857. **Read an issue's comments before
+  re-derivation cycle; reported upstream. **Read an issue's comments before
   picking it up.**
 - **#823's body claim "no rate limiting anywhere in the backend" was false
   when written**, and the reason generalises: its sweep was scoped to
@@ -115,7 +115,7 @@ This is a fresh instance of open **#1060**, commented there.
 **None queued by name.** Dennis named no specific issue.
 
 1. **#1127** — small, direction settled, and it is this sitting's own debt.
-2. **`ship-integration-branch`** — still Dennis's call, never yours. The
+2. **Shipping the integration branch** — still Dennis's call, never yours. The
    backend suite is now green on the whole tree; the **frontend** suite is
    the one that has not run since before the previous sitting.
 3. **#1118** remains the live member of the temperature-policy cluster —

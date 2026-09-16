@@ -15,7 +15,7 @@ function reloadBackfillService() {
 }
 
 /**
- * Real query-matching fake — exact-match on scalar fields, per build-loop's
+ * Real query-matching fake — exact-match on scalar fields, per this repo's
  * native-only "real backend" proof bar (this repo has no live-Mongo tier).
  */
 function createFakeCollection(name) {

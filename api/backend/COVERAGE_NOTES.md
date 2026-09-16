@@ -1,6 +1,6 @@
 # Backend coverage tracker
 
-Purpose: let `test-loop` pick the next slice by reading this file instead
+Purpose: let a coverage session pick the next slice from this file instead
 of running `npx vitest run --coverage` (~2-3 min, 258 files) at the start
 of every session. This file is a snapshot, not a live number — it goes
 stale as slices land and as source files change. Keep it honest:
@@ -50,7 +50,7 @@ passed, 0 failures** — the previously-tracked 1 pre-existing failure in
 Statements **94.24%** (17467/18534), Branches **88.74%** (14584/16434),
 Functions **92.74%** (2084/2247), Lines **94.53%** (16768/17737).
 **Three of four dimensions (statements/functions/lines) remain past the
-90% milestone** (`bioavanced-v2-conventions`); branches is still the
+90% milestone** (the project's conventions); branches is still the
 sole laggard, up slightly from 88.2% at the prior (2026-07-24) reconcile.
 
 ## Branch-focused priority list toward the 90% branches milestone
@@ -256,7 +256,7 @@ full reconcile regenerates this if needed). Ask for a fresh
 
 ## Maintaining this file
 
-If `test-loop` finds this file stale (a listed file turns out
+If a coverage session finds this file stale (a listed file turns out
 already well-tested, or vice versa), fix the entry in the same commit —
 don't just work around it. If the reconcile cadence above stops making
 sense (too frequent/rare), update it and say why in the session's
