@@ -85,6 +85,8 @@ jobs:
           const resultPath = '/tmp/item8-result.json';
           const markdownPath = '/tmp/item8-summary.md';
           const coverage = fs.existsSync(summaryPath) ? JSON.parse(fs.readFileSync(summaryPath, 'utf8')) : null;
+          const coverageFinalPath = '/tmp/item8-coverage/coverage-final.json';
+          const coverageFinal = fs.existsSync(coverageFinalPath) ? JSON.parse(fs.readFileSync(coverageFinalPath, 'utf8')) : null;
           const vitest = fs.existsSync(vitestJsonPath) ? JSON.parse(fs.readFileSync(vitestJsonPath, 'utf8')) : null;
           const versions = fs.existsSync(versionsPath) ? fs.readFileSync(versionsPath, 'utf8').trim() : 'unavailable';
           const metric = name => {
@@ -135,6 +137,41 @@ jobs:
               left.file.localeCompare(right.file)
             ) : [];
           normalized.topUncoveredFiles = fileMetrics.slice(0, 50);
+          const targetSuffixes = [
+            '/src/services/import-lgpd.service.js',
+            '/src/infrastructure/persistence/mongo/MongoStorageRepository.js',
+            '/src/interface/routes/user.routes.js',
+            '/src/services/patient.service.js',
+            '/src/services/graphProjection.service.js'
+          ];
+          normalized.targetBranchDeficits = {};
+          if (coverageFinal) {
+            for (const [file, entry] of Object.entries(coverageFinal)) {
+              const suffix = targetSuffixes.find(item => file.endsWith(item));
+              if (!suffix) continue;
+              const byLocation = new Map();
+              for (const [branchId, counts] of Object.entries(entry.b || {})) {
+                const missing = counts
+                  .map((count, index) => count === 0 ? index : -1)
+                  .filter(index => index >= 0);
+                if (!missing.length) continue;
+                const meta = entry.branchMap?.[branchId] || {};
+                const line = meta.loc?.start?.line || meta.line || null;
+                const key = String(line) + ':' + String(meta.type || 'unknown');
+                const current = byLocation.get(key) || {
+                  line,
+                  type: meta.type || 'unknown',
+                  missingPaths: 0,
+                  branchIds: []
+                };
+                current.missingPaths += missing.length;
+                current.branchIds.push({ id: branchId, missing, counts });
+                byLocation.set(key, current);
+              }
+              normalized.targetBranchDeficits[suffix] = [...byLocation.values()]
+                .sort((left, right) => (left.line || 0) - (right.line || 0));
+            }
+          }
           fs.writeFileSync(resultPath, JSON.stringify(normalized, null, 2));
           const fmt = item => item ? `${item.pct}% (${item.covered}/${item.total})` : 'unavailable';
           const body = [
@@ -152,6 +189,8 @@ jobs:
             `- Lines: **${fmt(normalized.coverage.lines)}**`, '',
             '### Top uncovered files (branch deficit first)', '',
             ...normalized.topUncoveredFiles.map(item => '- `' + item.file + '`: branches ' + item.uncovered.branches + '; statements ' + item.uncovered.statements + '; functions ' + item.uncovered.functions + '; lines ' + item.uncovered.lines), '',
+            '### Target branch locations', '',
+            '```json', JSON.stringify(normalized.targetBranchDeficits, null, 2), '```', '',
             'Target for item 8: >=95% in all four dimensions.'
           ].join('\n');
           fs.writeFileSync(markdownPath, `${body}\n`);
