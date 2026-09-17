@@ -233,5 +233,3 @@ jobs:
       - name: Preserve Full Vitest result
         if: always() && steps.full_vitest.outcome != 'success'
         run: exit 1
-
-# Temporary Item 7 verification trigger; removed in the next commit.
