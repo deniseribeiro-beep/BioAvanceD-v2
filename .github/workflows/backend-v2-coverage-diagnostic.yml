@@ -151,7 +151,7 @@ jobs:
             `- Functions: **${fmt(normalized.coverage.functions)}**`,
             `- Lines: **${fmt(normalized.coverage.lines)}**`, '',
             '### Top uncovered files (branch deficit first)', '',
-            ...normalized.topUncoveredFiles.map(item => `- `${item.file}`: branches ${item.uncovered.branches}; statements ${item.uncovered.statements}; functions ${item.uncovered.functions}; lines ${item.uncovered.lines}`), '',
+            ...normalized.topUncoveredFiles.map(item => '- `' + item.file + '`: branches ' + item.uncovered.branches + '; statements ' + item.uncovered.statements + '; functions ' + item.uncovered.functions + '; lines ' + item.uncovered.lines), '',
             'Target for item 8: >=95% in all four dimensions.'
           ].join('\n');
           fs.writeFileSync(markdownPath, `${body}\n`);
