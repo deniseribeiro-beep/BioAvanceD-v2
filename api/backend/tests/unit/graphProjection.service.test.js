@@ -330,7 +330,16 @@ describe('graphProjection.service', () => {
         aggregateId: 'specimen-1',
         sourceService: 'custody-service',
         traceId: 'trace-custody',
-        payload: supplied,
+        payload: {
+          specimenId: 'specimen-1',
+          custodyEventId: 'custody-1',
+          eventType: 'TRANSFER',
+          happenedAt: '2026-09-17T11:00:00Z',
+          actorId: 'actor-1',
+          reason: 'approved-transfer',
+          from: { containerId: 'c-1' },
+          to: { containerId: 'c-2' },
+        },
       });
 
       await service.appendCustodyEvent({}, { aggregateId: 'aggregate-only' });
@@ -371,10 +380,17 @@ describe('graphProjection.service', () => {
         sourceService: 'storage-service',
         traceId: 'trace-storage',
         payload: {
-          ...assignment,
-          sourceService: undefined,
-          traceId: undefined,
+          specimenContainerAssignmentId: 'sca-1',
+          specimenId: 'specimen-1',
+          containerId: 'container-1',
+          containerPositionAssignmentId: 'cpa-1',
+          storagePositionId: 'position-1',
+          rackLocationAssignmentId: 'rla-1',
+          storageRackId: 'rack-1',
+          storageLocationId: 'location-1',
+          assignedAt: 'assigned',
           releasedAt: null,
+          placedAt: 'placed',
           removedAt: null,
         },
       });
