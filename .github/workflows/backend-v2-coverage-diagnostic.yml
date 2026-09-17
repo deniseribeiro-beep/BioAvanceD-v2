@@ -133,7 +133,7 @@ jobs:
               (right.uncovered.branches - left.uncovered.branches) ||
               (right.uncovered.statements - left.uncovered.statements) ||
               left.file.localeCompare(right.file)
-            );
+            ) : [];
           normalized.topUncoveredFiles = fileMetrics.slice(0, 50);
           fs.writeFileSync(resultPath, JSON.stringify(normalized, null, 2));
           const fmt = item => item ? `${item.pct}% (${item.covered}/${item.total})` : 'unavailable';
