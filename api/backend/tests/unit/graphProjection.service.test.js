@@ -222,4 +222,318 @@ describe('graphProjection.service', () => {
       expect(call.payload.sourceConceptId).toBe('tc-source');
     });
   });
+
+  describe('canonical v2 projection branch matrix', () => {
+    function setup() {
+      const outbox = createFakeOutbox();
+      return {
+        outbox,
+        service: new GraphProjectionService({ outbox }),
+        eventAt(index = -1) {
+          const calls = outbox.appendEvent.mock.calls;
+          return calls[index < 0 ? calls.length - 1 : index][1];
+        },
+      };
+    }
+
+    it('normalizes consent aliases, status casing and governed defaults', async () => {
+      const { service, outbox, eventAt } = setup();
+      const options = { session: { id: 'tx-consent' } };
+
+      await service.appendConsentEvent({}, {
+        aggregateId: ' consent-aggregate ',
+        participantId: ' participant-1 ',
+        status: ' granted ',
+        consentTemplateId: 'template-1',
+        revokedAt: '2026-09-17T10:00:00Z',
+      }, options);
+
+      const event = eventAt();
+      expect(event).toMatchObject({
+        eventType: 'CONSENT_UPSERTED',
+        aggregateId: 'consent-aggregate',
+        sourceService: 'graph-projection-service',
+        traceId: null,
+      });
+      expect(event.payload).toMatchObject({
+        participantId: 'participant-1',
+        ethicalConsentId: 'consent-aggregate',
+        consentTemplateId: 'template-1',
+        status: 'GRANTED',
+        revokedAt: '2026-09-17T10:00:00Z',
+      });
+      expect(event.payload.signedAt).toBeInstanceOf(Date);
+      expect(outbox.appendEvent).toHaveBeenCalledWith({}, event, options);
+    });
+
+    it('covers specimen parent arrays, singular fallback and null-safe projection fields', async () => {
+      const { service, eventAt } = setup();
+
+      await service.appendSpecimenEvent({}, {
+        specimenId: 'specimen-1',
+        participantId: 'participant-1',
+        parentSpecimenIds: ['parent-1', 'parent-2'],
+        barcode: 'BC-1',
+        specimenStatus: 'available',
+        sourceService: 'specimen-service',
+        traceId: 'trace-specimen',
+      });
+      expect(eventAt().payload).toEqual({
+        specimenId: 'specimen-1',
+        participantId: 'participant-1',
+        parentSpecimenId: null,
+        parentSpecimenIds: ['parent-1', 'parent-2'],
+        barcode: 'BC-1',
+        specimenStatus: 'available',
+      });
+
+      await service.appendSpecimenEvent({}, {
+        aggregateId: 'specimen-2',
+        parentSpecimenId: 'parent-only',
+        status: 'reserved',
+      });
+      expect(eventAt()).toMatchObject({
+        aggregateId: 'specimen-2',
+        sourceService: 'graph-projection-service',
+        traceId: null,
+        payload: {
+          specimenId: null,
+          participantId: null,
+          parentSpecimenId: 'parent-only',
+          parentSpecimenIds: ['parent-only'],
+          barcode: null,
+          specimenStatus: 'reserved',
+        },
+      });
+
+      await service.appendSpecimenEvent({}, {});
+      expect(eventAt().payload.parentSpecimenIds).toEqual([]);
+      expect(eventAt().aggregateId).toBe('');
+    });
+
+    it('projects custody with supplied evidence and auditable defaults', async () => {
+      const { service, eventAt } = setup();
+      const supplied = {
+        specimenId: 'specimen-1',
+        custodyEventId: 'custody-1',
+        eventType: 'TRANSFER',
+        happenedAt: '2026-09-17T11:00:00Z',
+        actorId: 'actor-1',
+        reason: 'approved-transfer',
+        from: { containerId: 'c-1' },
+        to: { containerId: 'c-2' },
+        sourceService: 'custody-service',
+        traceId: 'trace-custody',
+      };
+      await service.appendCustodyEvent({}, supplied);
+      expect(eventAt()).toMatchObject({
+        aggregateId: 'specimen-1',
+        sourceService: 'custody-service',
+        traceId: 'trace-custody',
+        payload: supplied,
+      });
+
+      await service.appendCustodyEvent({}, { aggregateId: 'aggregate-only' });
+      const defaults = eventAt();
+      expect(defaults.aggregateId).toBe('aggregate-only');
+      expect(defaults.payload.happenedAt).toBeInstanceOf(Date);
+      expect(defaults.payload).toMatchObject({
+        specimenId: null,
+        custodyEventId: null,
+        eventType: null,
+        actorId: null,
+        reason: null,
+        from: null,
+        to: null,
+      });
+    });
+
+    it('distinguishes assignment upsert from release without reintroducing storage snapshots', async () => {
+      const { service, eventAt } = setup();
+      const assignment = {
+        specimenContainerAssignmentId: 'sca-1',
+        specimenId: 'specimen-1',
+        containerId: 'container-1',
+        containerPositionAssignmentId: 'cpa-1',
+        storagePositionId: 'position-1',
+        rackLocationAssignmentId: 'rla-1',
+        storageRackId: 'rack-1',
+        storageLocationId: 'location-1',
+        assignedAt: 'assigned',
+        placedAt: 'placed',
+        sourceService: 'storage-service',
+        traceId: 'trace-storage',
+      };
+      await service.appendSpecimenContainerAssignmentEvent({}, assignment);
+      expect(eventAt()).toMatchObject({
+        eventType: 'SPECIMEN_CONTAINER_ASSIGNMENT_UPSERTED',
+        aggregateId: 'sca-1',
+        sourceService: 'storage-service',
+        traceId: 'trace-storage',
+        payload: {
+          ...assignment,
+          sourceService: undefined,
+          traceId: undefined,
+          releasedAt: null,
+          removedAt: null,
+        },
+      });
+
+      await service.appendSpecimenContainerAssignmentEvent({}, {
+        aggregateId: 'sca-2',
+        releasedAt: 'released',
+        removedAt: 'removed',
+      });
+      expect(eventAt()).toMatchObject({
+        eventType: 'SPECIMEN_CONTAINER_ASSIGNMENT_RELEASED',
+        aggregateId: 'sca-2',
+        payload: {
+          specimenContainerAssignmentId: null,
+          specimenId: null,
+          containerId: null,
+          containerPositionAssignmentId: null,
+          storagePositionId: null,
+          rackLocationAssignmentId: null,
+          storageRackId: null,
+          storageLocationId: null,
+          assignedAt: null,
+          releasedAt: 'released',
+          placedAt: null,
+          removedAt: 'removed',
+        },
+      });
+    });
+
+    it('covers lineage, quality and telemetry fallback identities and defaults', async () => {
+      const { service, eventAt } = setup();
+
+      await service.appendLineageEvent({}, { aggregateId: 'lineage-aggregate' });
+      expect(eventAt()).toMatchObject({
+        aggregateId: 'lineage-aggregate',
+        sourceService: 'graph-projection-service',
+        traceId: null,
+        payload: { specimenId: null, parentSpecimenId: null },
+      });
+
+      await service.appendQualityEvent({}, { aggregateId: 'quality-aggregate' });
+      expect(eventAt().payload).toMatchObject({
+        specimenId: null,
+        qualityAssessmentId: null,
+        status: 'UNKNOWN',
+        score: null,
+      });
+      expect(eventAt().payload.evaluatedAt).toBeInstanceOf(Date);
+
+      await service.appendTelemetryEvent({}, { aggregateId: 'telemetry-aggregate' });
+      expect(eventAt().payload).toMatchObject({
+        specimenId: null,
+        telemetryIncidentId: null,
+        severity: 'UNKNOWN',
+        status: 'OPEN',
+      });
+      expect(eventAt().payload.occurredAt).toBeInstanceOf(Date);
+    });
+
+    it('projects complete and defaulted telemetry exposure summaries deterministically', async () => {
+      const { service, eventAt } = setup();
+      await service.appendTelemetryExposureSummaryEvent({}, {
+        telemetryExposureSummaryId: 'summary-1',
+        specimenId: 'specimen-1',
+        specimenContainerAssignmentId: 'sca-1',
+        containerPositionAssignmentId: 'cpa-1',
+        rackLocationAssignmentId: 'rla-1',
+        exposurePathHash: 'path-hash',
+        datastreamIds: ['stream-1'],
+        windowStart: 'start',
+        windowEnd: 'end',
+        observationCount: 4,
+        minimumValue: 0,
+        maximumValue: 8,
+        meanValue: 4,
+        timeOutsideThresholdSeconds: 0,
+        excursionCount: 2,
+        coverageRatio: 0,
+        sourceQueryHash: 'query-hash',
+        sourceReadingSetHash: 'reading-hash',
+        calculationVersion: '2.0.0',
+        calculatedAt: 'calculated',
+        sourceService: 'telemetry-service',
+        traceId: 'trace-summary',
+      });
+      expect(eventAt().payload).toMatchObject({
+        datastreamIds: ['stream-1'],
+        observationCount: 4,
+        minimumValue: 0,
+        maximumValue: 8,
+        meanValue: 4,
+        timeOutsideThresholdSeconds: 0,
+        excursionCount: 2,
+        coverageRatio: 0,
+        calculationVersion: '2.0.0',
+        calculatedAt: 'calculated',
+      });
+
+      await service.appendTelemetryExposureSummaryEvent({}, { aggregateId: 'summary-defaults' });
+      const event = eventAt();
+      expect(event.aggregateId).toBe('summary-defaults');
+      expect(event.payload).toMatchObject({
+        telemetryExposureSummaryId: null,
+        specimenId: null,
+        specimenContainerAssignmentId: null,
+        containerPositionAssignmentId: null,
+        rackLocationAssignmentId: null,
+        exposurePathHash: null,
+        datastreamIds: [],
+        windowStart: null,
+        windowEnd: null,
+        observationCount: 0,
+        minimumValue: null,
+        maximumValue: null,
+        meanValue: null,
+        timeOutsideThresholdSeconds: 0,
+        excursionCount: 0,
+        coverageRatio: null,
+        sourceQueryHash: null,
+        sourceReadingSetHash: null,
+        calculationVersion: '1.0.0',
+      });
+      expect(event.payload.calculatedAt).toBeInstanceOf(Date);
+    });
+
+    it('covers terminology identity fallbacks, governed defaults and optional fields', async () => {
+      const { service, eventAt } = setup();
+
+      await service.appendTerminologyConceptEvent({}, { aggregateId: 'concept-defaults' });
+      expect(eventAt()).toMatchObject({
+        aggregateId: 'concept-defaults',
+        sourceService: 'graph-projection-service',
+        traceId: null,
+        payload: {
+          terminologyConceptId: null,
+          systemUri: null,
+          code: null,
+          version: null,
+          display: null,
+          conceptStatus: 'active',
+          referenceDatasetReleaseId: null,
+        },
+      });
+
+      await service.appendTerminologyRelationEvent({}, { aggregateId: 'relation-defaults' });
+      expect(eventAt()).toMatchObject({
+        aggregateId: 'relation-defaults',
+        sourceService: 'graph-projection-service',
+        traceId: null,
+        payload: {
+          terminologyRelationId: null,
+          sourceConceptId: null,
+          targetConceptId: null,
+          relationType: null,
+          relationVersion: null,
+          referenceDatasetReleaseId: null,
+        },
+      });
+    });
+  });
+
 });
