@@ -516,6 +516,25 @@ describe('graphProjection.service', () => {
       expect(event.payload.calculatedAt).toBeInstanceOf(Date);
     });
 
+    it('uses an explicit empty aggregate identity when optional producer identifiers are absent', async () => {
+      const { service, eventAt } = setup();
+      const appenders = [
+        () => service.appendCustodyEvent({}, {}),
+        () => service.appendSpecimenContainerAssignmentEvent({}, {}),
+        () => service.appendLineageEvent({}, {}),
+        () => service.appendQualityEvent({}, {}),
+        () => service.appendTelemetryEvent({}, {}),
+        () => service.appendTelemetryExposureSummaryEvent({}, {}),
+        () => service.appendTerminologyConceptEvent({}, {}),
+        () => service.appendTerminologyRelationEvent({}, {}),
+      ];
+
+      for (const append of appenders) {
+        await append();
+        expect(eventAt().aggregateId).toBe('');
+      }
+    });
+
     it('covers terminology identity fallbacks, governed defaults and optional fields', async () => {
       const { service, eventAt } = setup();
 
