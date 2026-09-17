@@ -845,7 +845,12 @@ describe('MongoStorageRepository canonical v2', () => {
         withTransaction: vi.fn(async (callback) => callback()),
         endSession: vi.fn().mockResolvedValue(undefined)
       };
-      const client = { startSession: vi.fn(() => session) };
+      const client = {
+        db: vi.fn(() => ({
+          command: vi.fn().mockResolvedValue({ setName: 'rs0' })
+        })),
+        startSession: vi.fn(() => session)
+      };
       const { repo } = makeRepo({ client });
 
       await expect(repo.withTransaction(async (activeSession) => {
