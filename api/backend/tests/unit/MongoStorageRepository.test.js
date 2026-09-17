@@ -495,7 +495,6 @@ describe('MongoStorageRepository canonical v2', () => {
       });
       const boxes = makeCollection({
         findOne: vi.fn()
-          .mockResolvedValueOnce({ _id: boxId, dimension: { rows: 1, cols: 1 } })
           .mockResolvedValueOnce(null)
           .mockResolvedValue({ _id: boxId, dimension: { rows: 1, cols: 1 } })
       });
@@ -566,7 +565,7 @@ describe('MongoStorageRepository canonical v2', () => {
       const { repo } = makeRepo({ collections: { samples, storageBoxes: boxes } });
       vi.spyOn(repo, 'findCurrentStoragePlacement')
         .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ boxId: fromBoxId, positionCode: 'A1' });
+        .mockResolvedValue({ boxId: fromBoxId, positionCode: 'A1' });
       vi.spyOn(repo, 'checkLocationBlocked').mockResolvedValue({ blocked: false });
 
       const move = { specimenId: sampleId, fromBoxId, fromPosition: 'A1', toBoxId, toPosition: 'B1' };
