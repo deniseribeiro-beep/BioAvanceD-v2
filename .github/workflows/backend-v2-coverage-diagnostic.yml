@@ -112,6 +112,29 @@ jobs:
               lines: metric('lines')
             }
           };
+          const fileMetrics = coverage ? Object.entries(coverage)
+            .filter(([name]) => name !== 'total')
+            .map(([name, metrics]) => {
+              const deficit = metricName => {
+                const item = metrics?.[metricName];
+                return item ? item.total - item.covered : 0;
+              };
+              return {
+                file: name.replace(process.cwd() + '/', ''),
+                uncovered: {
+                  statements: deficit('statements'),
+                  branches: deficit('branches'),
+                  functions: deficit('functions'),
+                  lines: deficit('lines')
+                }
+              };
+            })
+            .sort((left, right) =>
+              (right.uncovered.branches - left.uncovered.branches) ||
+              (right.uncovered.statements - left.uncovered.statements) ||
+              left.file.localeCompare(right.file)
+            );
+          normalized.topUncoveredFiles = fileMetrics.slice(0, 50);
           fs.writeFileSync(resultPath, JSON.stringify(normalized, null, 2));
           const fmt = item => item ? `${item.pct}% (${item.covered}/${item.total})` : 'unavailable';
           const body = [
@@ -127,6 +150,8 @@ jobs:
             `- Branches: **${fmt(normalized.coverage.branches)}**`,
             `- Functions: **${fmt(normalized.coverage.functions)}**`,
             `- Lines: **${fmt(normalized.coverage.lines)}**`, '',
+            '### Top uncovered files (branch deficit first)', '',
+            ...normalized.topUncoveredFiles.map(item => `- `${item.file}`: branches ${item.uncovered.branches}; statements ${item.uncovered.statements}; functions ${item.uncovered.functions}; lines ${item.uncovered.lines}`), '',
             'Target for item 8: >=95% in all four dimensions.'
           ].join('\n');
           fs.writeFileSync(markdownPath, `${body}\n`);
