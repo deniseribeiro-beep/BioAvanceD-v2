@@ -1354,5 +1354,83 @@ describe('backup.service', () => {
         await fs.promises.rm(baseDir, { recursive: true, force: true });
       }
     });
+
+    it('encrypts a real nested mongodump tree and decrypts it only in the disposable restore copy', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/mydb';
+      env.MONGO_DB = 'mydb';
+      const os = require('os');
+      const baseDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-item8-mongodump-'));
+      env.BACKUP_DIR = baseDir;
+
+      const originalEncryptionKey = process.env.ENCRYPTION_KEY;
+      process.env.ENCRYPTION_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+
+      const plaintext = Buffer.from('SYNTHETIC-BSON-PAYLOAD-ITEM8');
+      let restoredBytes = null;
+      let restoreSourcePath = null;
+
+      try {
+        vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+          if (command.startsWith('mongodump ')) {
+            const outMatch = command.match(/--out="([^"]+)"/);
+            if (!outMatch) return cb(new Error('missing mongodump output path'), '', '');
+            const dumpDbDir = path.join(outMatch[1], 'mydb');
+            fs.mkdirSync(dumpDbDir, { recursive: true });
+            fs.writeFileSync(path.join(dumpDbDir, 'patients.bson'), plaintext);
+            fs.writeFileSync(path.join(dumpDbDir, 'patients.metadata.json'), '{"indexes":[]}');
+            return cb(null, 'dumped', '');
+          }
+
+          if (command.startsWith('mongorestore ')) {
+            const sourceMatch = command.match(/"([^"]+)"\s*$/);
+            if (!sourceMatch) return cb(new Error('missing restore source path'), '', '');
+            restoreSourcePath = sourceMatch[1];
+            restoredBytes = fs.readFileSync(path.join(restoreSourcePath, 'mydb', 'patients.bson'));
+            return cb(null, 'restored', '');
+          }
+
+          return cb(new Error(`unexpected command: ${command}`), '', '');
+        });
+
+        const backupService = freshBackupService();
+        const backupResult = await backupService.runBackup(makeAppDbWithPolicy(true));
+
+        expect(backupResult.success).toBe(true);
+        expect(backupResult.mode).toBe('mongodump');
+
+        const manifest = JSON.parse(
+          await fs.promises.readFile(path.join(backupResult.path, 'manifest.json'), 'utf8')
+        );
+        expect(manifest.encrypted).toBe(true);
+        expect(manifest.encryptedFiles).toHaveLength(2);
+        expect(manifest.encryptedFiles.map((entry) => entry.file).sort()).toEqual([
+          'mydb/patients.bson',
+          'mydb/patients.metadata.json',
+        ]);
+
+        const encryptedBson = await fs.promises.readFile(
+          path.join(backupResult.path, 'mydb', 'patients.bson')
+        );
+        expect(encryptedBson.equals(plaintext)).toBe(false);
+
+        const restoreResult = await backupService.restoreBackup(backupResult.path);
+        expect(restoreResult).toMatchObject({ success: true, mode: 'mongorestore' });
+        expect(restoredBytes).not.toBeNull();
+        expect(restoredBytes.equals(plaintext)).toBe(true);
+        expect(restoreSourcePath).toContain('.restore-scratch');
+        expect(restoreSourcePath).not.toBe(backupResult.path);
+
+        const originalStillEncrypted = await fs.promises.readFile(
+          path.join(backupResult.path, 'mydb', 'patients.bson')
+        );
+        expect(originalStillEncrypted.equals(plaintext)).toBe(false);
+        expect(fs.existsSync(restoreSourcePath)).toBe(false);
+      } finally {
+        if (originalEncryptionKey === undefined) delete process.env.ENCRYPTION_KEY;
+        else process.env.ENCRYPTION_KEY = originalEncryptionKey;
+        await fs.promises.rm(baseDir, { recursive: true, force: true });
+      }
+    });
+
   });
 });
