@@ -526,10 +526,17 @@ describe('ImportLGPDService reader item 8 unknown-error fallbacks', () => {
 
     try {
       const freshService = require2(importLgpdServicePath);
-      const filePath = writeTmpFile('stream-error-no-message.csv', 'patientName,birthDate\nJoão Silva,25/12/1990\n');
+      // Keep this source file outside tmpFiles: the fake parser emits its
+      // error before fs.createReadStream finishes opening the file. Removing
+      // it in the global afterEach races that pending open and creates an
+      // unrelated ENOENT unhandled error after the assertion has passed.
+      const filePath = path.join(os.tmpdir(), `import-lgpd-item8-stream-${Date.now()}-${Math.random().toString(36).slice(2)}.csv`);
+      fs.writeFileSync(filePath, 'patientName,birthDate\nJoão Silva,25/12/1990\n');
       await expect(freshService.readCSV(filePath)).rejects.toThrow(
         'Erro ao processar arquivo CSV: Erro desconhecido'
       );
+      await new Promise((resolve) => setImmediate(resolve));
+      try { fs.unlinkSync(filePath); } catch (_) { void 0; }
     } finally {
       delete require2.cache[csvParserPath];
       delete require2.cache[importLgpdServicePath];
