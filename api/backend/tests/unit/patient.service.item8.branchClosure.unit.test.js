@@ -577,3 +577,161 @@ describe('PatientService item 8 branch closure - canonical residual matrix', () 
     )).resolves.toEqual({ success: true });
   });
 });
+
+
+describe('PatientService item 8 branch closure - residual canonical outcomes', () => {
+  function validPatient(overrides = {}) {
+    return {
+      participantId: '12345678',
+      patientName: 'Paciente Sintético',
+      birthDate: '1990-06-15',
+      sex: 'F',
+      email: 'synthetic@example.test',
+      consentTemplateId: '507f1f77bcf86cd799439011',
+      ...overrides
+    };
+  }
+
+  function creationDb() {
+    const template = makeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
+    });
+    const patients = makeCollection();
+    const identities = makeCollection({
+      find: vi.fn().mockReturnValue(makeCursor([]))
+    });
+    return {
+      db: makeDb({
+        patients,
+        participantIdentities: identities,
+        consentTemplates: template,
+        consent_templates: template,
+        organizations: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
+        studies: makeCollection()
+      }),
+      patients,
+      identities
+    };
+  }
+
+  it('short-circuits index setup after a collection name is registered', async () => {
+    const collection = makeCollection({ collectionName: 'patients-item8-index-once' });
+    await patientService.ensurePatientIndexes(collection, collection.collectionName);
+    await patientService.ensurePatientIndexes(collection, collection.collectionName);
+    expect(collection.createIndex).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses the canonical patients fallback name and non-duplicate phone outcomes', async () => {
+    const patients = makeCollection({ collectionName: '' });
+    const db = makeDb({ patients });
+    await expect(patientService.listPatients(db)).resolves.toMatchObject({ total: 0 });
+    expect(patientService.handlePhoneUniqueConstraint(null)).toBeUndefined();
+    expect(() => patientService.handlePhoneUniqueConstraint({
+      keyPattern: { phone: 1 },
+      keyValue: { phone: '11999999999' }
+    })).toThrow('Telefone 11999999999 já cadastrado');
+  });
+
+  it('normalizes nullable clinical and representative identity inputs', () => {
+    expect(patientService.normalizeClinicalUnit(null)).toBeNull();
+    expect(patientService.normalizerepresentativeIdentityDocument(null)).toBeNull();
+    expect(patientService.normalizeEmail(null)).toBeNull();
+    expect(patientService.normalizePhone(null)).toBeNull();
+  });
+
+  it('rejects each governed deceased-representative invalid shape', () => {
+    const base = {
+      isDeceased: true,
+      representativeName: 'Representante',
+      representativeEmail: 'rep@example.test',
+      representativeIdentityDocument: '52998224725',
+      representativePhone: '11988887777'
+    };
+    expect(() => patientService.applyDeceasedRepresentativeRules({
+      ...base,
+      representativeEmail: 'invalido'
+    })).toThrow('Email do representante legal inválido');
+    expect(() => patientService.applyDeceasedRepresentativeRules({
+      ...base,
+      representativeIdentityDocument: '123'
+    })).toThrow('identityDocument do representante legal inválido');
+    expect(() => patientService.applyDeceasedRepresentativeRules({
+      ...base,
+      representativePhone: '123'
+    })).toThrow('Telefone do representante legal inválido');
+  });
+
+  it('checks duplicate identity using Date input and blind-index candidates', async () => {
+    const raw = { participantId: 'dup-date' };
+    const identities = makeCollection({
+      find: vi.fn().mockReturnValue(makeCursor([raw]))
+    });
+    vi.spyOn(participantIdentityService, 'computeBlindIndexCandidates').mockReturnValue(['hash-date']);
+    vi.spyOn(participantIdentityService, 'decryptIdentity').mockReturnValue({
+      patientName: 'Paciente Sintético',
+      birthDate: new Date(1990, 5, 15)
+    });
+    await expect(patientService.checkDuplicatePatient(
+      makeDb({ participantIdentities: identities }),
+      { patientName: 'Paciente Sintético', birthDate: new Date(1990, 5, 15) }
+    )).resolves.toBe(raw);
+    expect(identities.find).toHaveBeenCalledWith({
+      $or: [{ birthDateHash: { $in: ['hash-date'] } }]
+    });
+  });
+
+  it('folds top-level Fabry values into the canonical dadosEspecificos shape', async () => {
+    const { db, patients } = creationDb();
+    vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://example.test/consent');
+    vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+    await patientService.createPatient(db, validPatient({
+      alphaGal: 1.2,
+      dadosEspecificos: [{ tipo: 'Fabry', dados: { lysoGb3: 2.3 } }]
+    }), { skipConsentNotification: true });
+    const persisted = patients.insertOne.mock.calls[0][0];
+    expect(persisted.dadosEspecificos).toEqual([
+      { tipo: 'Fabry', dados: { lysoGb3: 2.3, alphaGal: 1.2 } }
+    ]);
+    expect(persisted).not.toHaveProperty('alphaGal');
+  });
+
+  it('rejects invalid canonical model data after civil identity checks', async () => {
+    const { db } = creationDb();
+    await expect(patientService.createPatient(
+      db,
+      validPatient({ sex: 'INVALID' }),
+      { skipConsentNotification: true }
+    )).rejects.toThrow();
+  });
+
+  it('formats both supported identifier-conflict messages', async () => {
+    for (const conflict of [
+      { field: 'identityDocument', value: '52998224725' },
+      { field: 'recordNumber', value: 'SYN-001' }
+    ]) {
+      const { db } = creationDb();
+      vi.spyOn(patientService, 'checkIdentifierConflict').mockResolvedValueOnce(conflict);
+      await expect(patientService.createPatient(
+        db,
+        validPatient(),
+        { skipConsentNotification: true }
+      )).rejects.toMatchObject({ statusCode: 409 });
+    }
+  });
+
+  it('covers malformed hyphenated search date and identity sync absence', async () => {
+    const patients = makeCollection({
+      find: vi.fn().mockReturnValue(makeCursor([])),
+      countDocuments: vi.fn().mockResolvedValue(0),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+      findOne: vi.fn().mockResolvedValue({})
+    });
+    const identities = makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) });
+    const db = makeDb({ patients, participantIdentities: identities });
+    await patientService.searchPatients(db, '2020-invalid-date');
+    await expect(patientService.updatePatient(db, '12345678', {
+      patientName: 'Identidade Sintética'
+    })).resolves.toEqual({ success: true });
+    expect(identities.updateOne).not.toHaveBeenCalled();
+  });
+});
