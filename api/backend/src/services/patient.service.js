@@ -734,10 +734,14 @@ class PatientService {
           .find({ patientName: { $regex: filters.patientName, $options: 'i' } })
           .toArray();
         query.participantId = { $in: matchingIdentities.map((identity) => identity.participantId) };
+      } else {
+        void 0;
       }
 
       if (filters.clinicalUnit) {
         query.clinicalUnit = filters.clinicalUnit;
+      } else {
+        void 0;
       }
 
       // #340 (RF003 AC#3): org-scoped caller sees only patients whose
@@ -746,6 +750,8 @@ class PatientService {
       // organizationScope via rbac.js's requireOrganizationScope first.
       if (filters.organizationScope) {
         applyOrganizationScopeFilter(query, filters.organizationScope, 'clinicalUnitId');
+      } else {
+        void 0;
       }
 
       const limit = filters.limit || 50;
@@ -784,6 +790,8 @@ class PatientService {
       // Busca por participantId (8 dígitos)
       if (/^\d{8}$/.test(term)) {
         query.$or.push({ participantId: term });
+      } else {
+        void 0;
       }
 
       // Busca por recordNumber (número ou string)
@@ -793,6 +801,8 @@ class PatientService {
       const numTerm = parseInt(term, 10);
       if (!isNaN(numTerm)) {
         query.$or.push({ recordNumber: numTerm });
+      } else {
+        void 0;
       }
 
       // Busca por data de nascimento (formato DD/MM/YYYY ou YYYY-MM-DD)
@@ -814,7 +824,11 @@ class PatientService {
               // Busca por data exata (ignora hora)
               startDate = new Date(year, month, day);
               endDate = new Date(year, month, day + 1);
+            } else {
+              void 0;
             }
+          } else {
+            void 0;
           }
         } else if (term.includes('-')) {
           // Formato YYYY-MM-DD
@@ -825,7 +839,11 @@ class PatientService {
             const day = searchDate.getDate();
             startDate = new Date(year, month, day);
             endDate = new Date(year, month, day + 1);
+          } else {
+            void 0;
           }
+        } else {
+          void 0;
         }
 
         if (startDate && endDate) {
@@ -849,8 +867,14 @@ class PatientService {
             .toArray();
           if (matchingIdentities.length > 0) {
             query.$or.push({ participantId: { $in: matchingIdentities.map((identity) => identity.participantId) } });
+          } else {
+            void 0;
           }
+        } else {
+          void 0;
         }
+      } else {
+        void 0;
       }
 
       // Busca por unidade clínica
@@ -881,6 +905,8 @@ class PatientService {
       // so filtered here rather than reusing that method's own query.
       if (organizationScope) {
         applyOrganizationScopeFilter(query, organizationScope, 'clinicalUnitId');
+      } else {
+        void 0;
       }
 
       const patients = await patientsCollection.find(query).limit(50).toArray();
@@ -901,13 +927,19 @@ class PatientService {
         updateData.unitAcronym = updateData.unitAcronym
           ? String(updateData.unitAcronym).trim().toUpperCase()
           : null;
+      } else {
+        void 0;
       }
 
       if (updateData.email !== undefined) {
         updateData.email = this.normalizeEmail(updateData.email);
         if (!updateData.email || !PatientModel.isValidEmail(updateData.email)) {
           throw new Error('Email (email) inválido');
+        } else {
+          void 0;
         }
+      } else {
+        void 0;
       }
 
       if (updateData.phone !== undefined) {
@@ -916,6 +948,8 @@ class PatientService {
           throw new Error('Telefone (phone) inválido. Informe de 10 a 15 dígitos');
         }
         updateData.phone = normalizedPhone;
+      } else {
+        void 0;
       }
 
       const encryptedFieldMap = this.getEncryptedFieldMap();
@@ -928,7 +962,11 @@ class PatientService {
           if (encryptedPayload) {
             updateData[encryptedField] = encryptedPayload;
             updateData[plainField] = null;
+          } else {
+            void 0;
           }
+        } else {
+          void 0;
         }
       }
 
@@ -938,7 +976,11 @@ class PatientService {
           updateData.clinicalUnitId = clinicalUnitSnapshot.clinicalUnitId;
           updateData.clinicalUnit = clinicalUnitSnapshot.clinicalUnit;
           updateData.unitAcronym = clinicalUnitSnapshot.unitAcronym;
+        } else {
+          void 0;
         }
+      } else {
+        void 0;
       }
 
       if (updateData.isDeceased !== undefined ||
@@ -961,12 +1003,16 @@ class PatientService {
         updateData.representativeEmail = mergedPayload.representativeEmail;
         updateData.representativeIdentityDocument = mergedPayload.representativeIdentityDocument;
         updateData.representativePhone = mergedPayload.representativePhone;
+      } else {
+        void 0;
       }
       
       // Validação antes de atualizar
       if (updateData.participantId) {
         // Não permite alterar o participantId (é imutável por LGPD)
         delete updateData.participantId;
+      } else {
+        void 0;
       }
       
       // Remove campo height se existir (não deve ser salvo no banco)
@@ -977,9 +1023,15 @@ class PatientService {
           if (!isNaN(heightValue) && heightValue > 0) {
             // Se o valor for menor que 3, assume que está em metros
             updateData.heightCm = heightValue < 3 ? heightValue * 100 : heightValue;
+          } else {
+            void 0;
           }
+        } else {
+          void 0;
         }
         delete updateData.height; // Remove após converter ou se for null/undefined
+      } else {
+        void 0;
       }
       
       // Atualiza updatedAt
