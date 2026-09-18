@@ -200,6 +200,12 @@ class PatientService {
     return PatientModel.fillAcronym(resolvedName);
   }
 
+  resolveClinicalUnitName(value) {
+    const normalized = this.normalizeOptionalClinicalText(value);
+    if (!normalized) return null;
+    return normalized;
+  }
+
   async resolveClinicalUnitSnapshot(db, payload = {}) {
     const hasClinicalUnitId = payload.clinicalUnitId !== undefined;
     const hasClinicalUnitName = payload.clinicalUnit !== undefined;
@@ -241,7 +247,7 @@ class PatientService {
       const resolvedName = this.normalizeOptionalClinicalText(organization.officialName);
       return {
         clinicalUnitId: String(organization.organizationId),
-        clinicalUnit: resolvedName || null,
+        clinicalUnit: this.resolveClinicalUnitName(resolvedName),
         unitAcronym: this.resolveClinicalUnitAcronym(organization.acronym, resolvedName)
       };
     }
