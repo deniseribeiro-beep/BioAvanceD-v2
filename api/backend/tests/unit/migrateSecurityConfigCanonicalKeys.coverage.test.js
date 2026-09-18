@@ -17,14 +17,17 @@ function restoreEnv() {
 }
 
 function loadScriptWithClient(fakeClient) {
-  const originalCtor = mongodb.MongoClient;
-  mongodb.MongoClient = vi.fn(function MongoClientMock(uri) {
+  // mongodb@6 exposes MongoClient through an accessor, so direct assignment
+  // fails in the real backend-unit-runner. Spy on the exported getter before
+  // requiring the script fresh; its top-level destructuring then captures
+  // this deterministic constructor for the test.
+  const ctorSpy = vi.spyOn(mongodb, 'MongoClient').mockImplementation(function MongoClientMock(uri) {
     fakeClient.uri = uri;
     return fakeClient;
   });
   delete require.cache[scriptPath];
   const mod = require(scriptPath);
-  mongodb.MongoClient = originalCtor;
+  ctorSpy.mockRestore();
   return mod;
 }
 
