@@ -414,3 +414,165 @@ describe('PatientService item 8 branch closure - consent and deletion', () => {
     }
   });
 });
+
+
+describe('PatientService item 8 branch closure - canonical residual matrix', () => {
+  function validPatient(overrides = {}) {
+    return {
+      patientName: 'Paciente Sintético',
+      birthDate: '1990-06-15',
+      sex: 'F',
+      email: 'synthetic@example.test',
+      consentTemplateId: '507f1f77bcf86cd799439011',
+      ...overrides
+    };
+  }
+
+  function creationDb() {
+    const template = makeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
+    });
+    const patients = makeCollection();
+    const identities = makeCollection({
+      find: vi.fn().mockReturnValue(makeCursor([]))
+    });
+    const organizations = makeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    return {
+      db: makeDb({
+        patients,
+        participantIdentities: identities,
+        consentTemplates: template,
+        consent_templates: template,
+        organizations
+      }),
+      patients,
+      identities
+    };
+  }
+
+  it('reports a phone-key duplicate even when Mongo omits keyValue.phone', () => {
+    expect(() => patientService.handlePhoneUniqueConstraint({
+      keyPattern: { phone: 1 },
+      keyValue: {}
+    })).toThrow('Telefone  já cadastrado');
+  });
+
+  it('normalizes an explicitly undefined clinicalUnitId with a valid name fallback', async () => {
+    const organizations = makeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    await expect(patientService.resolveClinicalUnitSnapshot(
+      makeDb({ organizations }),
+      { clinicalUnitId: undefined, clinicalUnit: ' Unidade Sintética ' }
+    )).resolves.toMatchObject({
+      clinicalUnitId: null,
+      clinicalUnit: 'UNIDADE SINTÉTICA'
+    });
+  });
+
+  it('accepts a complete deceased representative and preserves normalized civil identity', () => {
+    const payload = {
+      isDeceased: true,
+      representativeName: ' Representante Sintético ',
+      representativeEmail: ' REP@example.test ',
+      representativeIdentityDocument: '529.982.247-25',
+      representativePhone: '(11) 98888-7777'
+    };
+    patientService.applyDeceasedRepresentativeRules(payload);
+    expect(payload).toMatchObject({
+      isDeceased: true,
+      representativeName: 'Representante Sintético',
+      representativeEmail: 'rep@example.test',
+      representativeIdentityDocument: '52998224725',
+      representativePhone: '11988887777'
+    });
+  });
+
+  it('returns no record-number conflict when the canonical patient collection has no match', async () => {
+    const patients = makeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    await expect(patientService.checkIdentifierConflict(
+      makeDb({ patients }),
+      { recordNumber: ' SYN-001 ' }
+    )).resolves.toBeNull();
+  });
+
+  it('creates a synthetic patient with default options and keeps civil identity segregated', async () => {
+    const { db, patients, identities } = creationDb();
+    vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://example.test/consent');
+    vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+    const result = await patientService.createPatient(db, validPatient());
+
+    expect(result.status).toBe('PENDING_CONSENT');
+    const persisted = patients.insertOne.mock.calls[0][0];
+    expect(persisted).not.toHaveProperty('patientName');
+    expect(persisted).not.toHaveProperty('birthDate');
+    expect(identities.insertOne).toHaveBeenCalledOnce();
+  });
+
+  it('rejects missing civil identity fields only after resolving a valid consent template', async () => {
+    {
+      const { db } = creationDb();
+      await expect(patientService.createPatient(
+        db,
+        validPatient({ patientName: '' }),
+        { skipConsentNotification: true }
+      )).rejects.toThrow('patientName é obrigatório');
+    }
+    {
+      const { db } = creationDb();
+      await expect(patientService.createPatient(
+        db,
+        validPatient({ birthDate: null }),
+        { skipConsentNotification: true }
+      )).rejects.toThrow('birthDate é obrigatório');
+    }
+  });
+
+  it('lists using the default filter object and exercises all governed filters', async () => {
+    const patients = makeCollection({
+      find: vi.fn().mockReturnValue(makeCursor([])),
+      countDocuments: vi.fn().mockResolvedValue(0)
+    });
+    const identities = makeCollection({
+      find: vi.fn().mockReturnValue(makeCursor([{ participantId: '12345678' }]))
+    });
+    const db = makeDb({ patients, participantIdentities: identities });
+
+    await expect(patientService.listPatients(db)).resolves.toMatchObject({ total: 0, limit: 50, skip: 0 });
+    await expect(patientService.listPatients(db, {
+      patientName: 'Sintético',
+      clinicalUnit: 'UNIT TEST',
+      organizationScope: { type: 'global' },
+      limit: 10,
+      skip: 2
+    })).resolves.toMatchObject({ limit: 10, skip: 2 });
+  });
+
+  it('searches participant, numeric, slash, ISO and invalid date branches with segregated identity matches', async () => {
+    const patients = makeCollection({
+      find: vi.fn().mockReturnValue(makeCursor([])),
+      countDocuments: vi.fn().mockResolvedValue(0)
+    });
+    const identities = makeCollection({
+      find: vi.fn().mockReturnValue(makeCursor([{ participantId: '12345678' }]))
+    });
+    const db = makeDb({ patients, participantIdentities: identities });
+
+    await patientService.searchPatients(db, '12345678');
+    await patientService.searchPatients(db, '15/06/1990');
+    await patientService.searchPatients(db, '1990-06-15');
+    await patientService.searchPatients(db, 'invalid-date');
+    expect(patients.find).toHaveBeenCalledTimes(4);
+  });
+
+  it('updates with default options and no optional mutation fields', async () => {
+    const patients = makeCollection({
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678' })
+    });
+    await expect(patientService.updatePatient(
+      makeDb({ patients }),
+      '12345678',
+      {}
+    )).resolves.toEqual({ success: true });
+  });
+});
