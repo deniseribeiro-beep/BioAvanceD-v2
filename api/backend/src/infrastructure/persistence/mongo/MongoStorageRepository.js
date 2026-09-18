@@ -317,6 +317,8 @@ class MongoStorageRepository {
           storageLocationId: released.storageLocationId
         }
       }, session);
+    } else {
+      void 0;
     }
     return released;
   }
@@ -498,7 +500,11 @@ class MongoStorageRepository {
       void 0;
     }
     const locationCheck = await this.checkLocationBlocked(targetBox, session);
-    if (locationCheck.blocked) throw new Error(locationCheck.message);
+    if (locationCheck.blocked) {
+      throw new Error(locationCheck.message);
+    } else {
+      void 0;
+    }
     const toPosition = String(input.toPosition).toUpperCase();
     const target = await boxes.updateOne(
       { _id: toBoxObjId, [`occupancyGrid.${toPosition}`]: { $exists: false } },
