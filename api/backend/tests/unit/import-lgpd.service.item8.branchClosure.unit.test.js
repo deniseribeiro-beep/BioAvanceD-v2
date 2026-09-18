@@ -79,6 +79,10 @@ describe('ImportLGPDService item 8 branch closure - storage helpers', () => {
     equipment.findOne.mockResolvedValueOnce({ equipmentID: 42, status: 'Active' });
     sensors.find.mockReturnValueOnce(cursor([{ operationalStatus: 'Active' }]));
     await expect(service.isPlacementReady(db, { containerID: 42 })).resolves.toBe(true);
+
+    equipment.findOne.mockResolvedValueOnce({ equipmentID: 'EQ-EMPTY', status: 'Active' });
+    sensors.find.mockReturnValueOnce(cursor([{}]));
+    await expect(service.isPlacementReady(db, { containerID: 'EQ-EMPTY' })).resolves.toBe(true);
   });
 
   it('covers box availability gates', () => {
