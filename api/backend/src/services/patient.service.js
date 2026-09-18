@@ -206,7 +206,8 @@ class PatientService {
     return normalized;
   }
 
-  async resolveClinicalUnitSnapshot(db, payload = {}) {
+  async resolveClinicalUnitSnapshot(db, payload) {
+    payload = Object(payload);
     const hasClinicalUnitId = payload.clinicalUnitId !== undefined;
     const hasClinicalUnitName = payload.clinicalUnit !== undefined;
 
