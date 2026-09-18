@@ -17,14 +17,17 @@ function restoreEnv() {
 }
 
 function loadScriptWithClient(fakeClient) {
-  // mongodb@6 exposes MongoClient through an accessor, so direct assignment
-  // fails in the real backend-unit-runner. Spy on the exported getter before
+  // mongodb@6 exports MongoClient through an accessor. Spy on the getter
+  // itself (rather than on the constructor returned by that getter) before
   // requiring the script fresh; its top-level destructuring then captures
   // this deterministic constructor for the test.
-  const ctorSpy = vi.spyOn(mongodb, 'MongoClient').mockImplementation(function MongoClientMock(uri) {
+  const MongoClientMock = function MongoClientMock(uri) {
     fakeClient.uri = uri;
     return fakeClient;
-  });
+  };
+  const ctorSpy = vi
+    .spyOn(mongodb, 'MongoClient', 'get')
+    .mockReturnValue(MongoClientMock);
   delete require.cache[scriptPath];
   const mod = require(scriptPath);
   ctorSpy.mockRestore();
