@@ -425,7 +425,7 @@ class ImportLGPDService {
         allRows.push(values);
       });
 
-      if (!allRows || allRows.length === 0) {
+      if (allRows.length === 0) {
         throw new Error('Planilha está vazia');
       }
 
@@ -437,12 +437,10 @@ class ImportLGPDService {
 
       for (let i = 0; i < allRows.length; i++) {
         const row = allRows[i];
-        if (Array.isArray(row)) {
-          const rowStr = row.map(cell => String(cell || '').toLowerCase()).join(' ');
-          if (searchFields.some(field => rowStr.includes(field))) {
-            headerRowIndex = i;
-            break;
-          }
+        const rowStr = row.map(cell => String(cell || '').toLowerCase()).join(' ');
+        if (searchFields.some(field => rowStr.includes(field))) {
+          headerRowIndex = i;
+          break;
         }
       }
 
@@ -475,7 +473,6 @@ class ImportLGPDService {
       let skippedRows = 0;
       for (let i = headerRowIndex + 1; i < allRows.length; i++) {
         const row = allRows[i];
-        if (!Array.isArray(row)) continue;
 
         // Verifica se a linha está vazia (todos os valores são null/empty)
         const isEmpty = row.every(cell => !cell || String(cell).trim() === '');
@@ -487,11 +484,9 @@ class ImportLGPDService {
         // Cria objeto usando headers limpos
         const rowObj = {};
         validHeaders.forEach((header, index) => {
-          if (header) {
-            const value = row[index];
-            // Ignora valores vazios mas mantém null para campos opcionais
-            rowObj[header] = (value !== undefined && value !== null && String(value).trim() !== '') ? value : null;
-          }
+          const value = row[index];
+          // Ignora valores vazios mas mantém null para campos opcionais
+          rowObj[header] = (value !== undefined && value !== null && String(value).trim() !== '') ? value : null;
         });
 
         // Só adiciona se tiver pelo menos um campo preenchido
@@ -962,9 +957,9 @@ class ImportLGPDService {
    * `createSample` and previously placed samples without this check at all.
    */
   async isPlacementReady(db, freezer) {
-    if (!freezer?.containerID) return false;
+    const equipmentVariants = buildIdVariants(freezer?.containerID);
+    if (equipmentVariants.length === 0) return false;
 
-    const equipmentVariants = buildIdVariants(freezer.containerID);
     const equipmentCollection = db.collection('equipment');
     const equipment = await equipmentCollection.findOne({
       equipmentID: { $in: equipmentVariants }
