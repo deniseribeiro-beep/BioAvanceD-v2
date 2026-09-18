@@ -168,21 +168,22 @@ class PatientService {
   }
 
   handlePhoneUniqueConstraint(error) {
-    const keyPattern = Object(error && error.keyPattern);
-    const keyValue = Object(error && error.keyValue);
+    error = Object(error);
+    const keyPattern = Object(error.keyPattern);
+    const keyValue = Object(error.keyValue);
     let isPhoneDuplicate = Boolean(keyPattern.phone);
     if (!isPhoneDuplicate) {
       isPhoneDuplicate = Object.prototype.hasOwnProperty.call(keyValue, 'phone');
     }
     if (!isPhoneDuplicate) return;
 
-    const duplicateError = new Error(`Telefone ${String(keyValue.phone || '').trim()} já cadastrado no sistema.`);
+    const duplicateError = new Error(`Telefone ${String(keyValue.phone ?? '').trim()} já cadastrado no sistema.`);
     duplicateError.statusCode = 409;
     throw duplicateError;
   }
 
   normalizeClinicalUnit(value) {
-    if (value === undefined || value === null) return null;
+    if (value == null) return null;
     const normalized = String(value).trim().toUpperCase();
     return normalized || null;
   }
@@ -268,7 +269,7 @@ class PatientService {
   }
 
   normalizerepresentativeIdentityDocument(value) {
-    if (value === undefined || value === null) return null;
+    if (value == null) return null;
     const normalized = String(value).replace(/\D/g, '').trim();
     return normalized || null;
   }
@@ -296,7 +297,13 @@ class PatientService {
     const representativeIdentityDocument = this.normalizerepresentativeIdentityDocument(payload.representativeIdentityDocument);
     const representativePhone = this.normalizeRepresentativePhone(payload.representativePhone);
 
-    if (!representativeName || !representativeEmail || !representativeIdentityDocument || !representativePhone) {
+    const hasCompleteRepresentative = [
+      representativeName,
+      representativeEmail,
+      representativeIdentityDocument,
+      representativePhone
+    ].every(Boolean);
+    if (!hasCompleteRepresentative) {
       throw new Error('Para paciente falecido, nome, e-mail, identityDocument e telefone do representante legal são obrigatórios');
     }
 
@@ -454,9 +461,12 @@ class PatientService {
       // (#1102) -- keeping it would make this query a collection scan forever.
       // The keyless branch below still queries the plaintext, which is the only
       // thing a stack with no ENCRYPTION_KEY writes (#1083).
-      const dateOrConditions = birthDateHashes.length
-        ? [{ birthDateHash: { $in: birthDateHashes } }]
-        : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
+      let dateOrConditions = [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
+      if (birthDateHashes.length) {
+        dateOrConditions = [{ birthDateHash: { $in: birthDateHashes } }];
+      } else {
+        void 0;
+      }
       const allIdentities = await identityCollection.find({ $or: dateOrConditions }).toArray();
 
       // Verifica se alguma identidade tem o mesmo nome normalizado
