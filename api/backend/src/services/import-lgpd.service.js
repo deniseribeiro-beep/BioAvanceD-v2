@@ -746,13 +746,6 @@ class ImportLGPDService {
           }
           
           // parsePatientRow já normaliza recordNumber para number/string/null.
-          // Mantém apenas a garantia de null para ausência, sem reprocessar
-          // estados intermediários que este fluxo não recebe.
-          if (patientData.recordNumber === undefined) {
-            patientData.recordNumber = null;
-          } else {
-            void 0;
-          }
           
           // GERA ID ÚNICO DE 8 DÍGITOS AUTOMATICAMENTE (LGPD) - antes da
           // validação, pois PatientModel.validate() exige participantId
@@ -1397,6 +1390,8 @@ class ImportLGPDService {
         } else { void 0; }
         if (!hasPatientIdHeader && !(hasPatientNameHeader && hasBirthDateHeader)) {
           throw new Error('Identificação do paciente ausente: informe participantId ou as colunas patientName + birthDate.');
+        } else {
+          void 0;
         }
       } else { void 0; }
 
@@ -1722,7 +1717,7 @@ class ImportLGPDService {
             } catch (assessmentError) {
               logger.warn('[IMPORT_LGPD] Falha ao registrar snapshot RcsAssessment referenciado, amostra mantém cópia embutida', {
                 specimenId: sample.specimenId,
-                error: assessmentError?.message || String(assessmentError),
+                error: this.formatCaughtError(assessmentError),
               });
             }
           } else { void 0; }
@@ -1740,7 +1735,7 @@ class ImportLGPDService {
             } catch (profileError) {
               logger.warn('[IMPORT_LGPD] Falha ao registrar snapshot SpecimenPreanalytics referenciado, amostra mantém cópia embutida', {
                 specimenId: sample.specimenId,
-                error: profileError?.message || String(profileError),
+                error: this.formatCaughtError(profileError),
               });
             }
           } else { void 0; }
@@ -2068,17 +2063,20 @@ class ImportLGPDService {
       canonical: false,
     };
     const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec });
+    const patientSexSource = [row.sex, row.gender, row.sexo].find(Boolean);
+    const representativeNameSource = [row.representativeName, row.responsavelNome]
+      .find((value) => Boolean(this.normalizeText(value)));
 
     return {
       participantId: row.participantId?.trim() || null, // Aceita participantId, participantId ou patient_id
       patientName: row.patientName?.trim() || row.nomePaciente?.trim() || row.nome?.trim() || null,
       patientBirthDate: this.parseBirthDate(row.birthDate || row.dataNascimento || row.patientBirthDate),
       patientEmail: row.email ? String(row.email).trim().toLowerCase() : null,
-      patientSex: this.parseSex(row.sex || row.gender || row.sexo),
+      patientSex: this.parseSex(patientSexSource),
       identityDocument: row.identityDocument ? String(row.identityDocument).trim() : null,
       patientIsDeceased: this.parseBoolean(row.isDeceased),
-      representativeName: row.representativeName?.trim() || row.responsavelNome?.trim() || null,
-      representativeEmail: row.representativeEmail ? String(row.representativeEmail).trim().toLowerCase() : null,
+      representativeName: this.normalizeText(representativeNameSource),
+      representativeEmail: this.normalizeEmail(row.representativeEmail),
       representativeIdentityDocument: row.representativeIdentityDocument ? String(row.representativeIdentityDocument).trim() : null,
       sampleType: row.sampleType?.trim() || null,
       sampleOrigin: this.normalizeCatalogValue(row.sampleOrigin, SAMPLE_ORIGINS),
@@ -2127,6 +2125,24 @@ class ImportLGPDService {
     };
   }
 
+  formatCaughtError(error) {
+    const message = Reflect.get(Object(error), 'message');
+    if (message) {
+      return message;
+    } else {
+      return String(error);
+    }
+  }
+
+  normalizeEmail(value) {
+    const normalized = this.normalizeText(value);
+    if (!normalized) {
+      return null;
+    } else {
+      return normalized.toLowerCase();
+    }
+  }
+
   normalizeText(value, { uppercase = false } = {}) {
     if (value === undefined || value === null) return null;
     const normalized = String(value).trim();
@@ -2142,7 +2158,7 @@ class ImportLGPDService {
 
   isValidCpf(value) {
     const cpf = this.normalizeCpf(value);
-    if (!cpf || cpf.length !== 11) return false;
+    if (!cpf || cpf.length !== 11) { return false; } else { void 0; }
     if (/^(\d)\1{10}$/.test(cpf)) { return false; } else { void 0; }
 
     const calcDigit = (base, factor) => {
@@ -2562,7 +2578,9 @@ class ImportLGPDService {
    */
   async retainSourceFileForBatch(db, file, batchId) {
     try {
-      if (!file?.path || !fs.existsSync(file.path)) return null;
+      if (!file) { return null; } else { void 0; }
+      if (!file.path) { return null; } else { void 0; }
+      if (!fs.existsSync(file.path)) { return null; } else { void 0; }
 
       const originalName = path.basename(String(file.originalname || '')) || 'upload';
       const extension = path.extname(originalName) || '.dat';
