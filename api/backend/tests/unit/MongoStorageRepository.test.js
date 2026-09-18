@@ -1239,6 +1239,35 @@ describe('MongoStorageRepository canonical v2', () => {
           {}
         );
       }
+
+      {
+        const fallbackSampleId = new ObjectId();
+        const storageBoxes = makeCollection({
+          findOne: vi.fn().mockResolvedValue({
+            _id: boxId,
+            status: 'OPERATIONAL',
+            dimension: { rows: 1, cols: 1 },
+            occupancyGrid: {},
+            currentOccupancy: 0
+          }),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+        });
+        const samples = makeCollection({
+          findOne: vi.fn().mockResolvedValue({ _id: fallbackSampleId }),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+        });
+        const { repo } = makeRepo({ collections: { storageBoxes, samples } });
+        vi.spyOn(repo, 'checkLocationBlocked').mockResolvedValue({ blocked: false });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue(null);
+        vi.spyOn(repo, 'assignCanonicalPhysicalPlacement').mockResolvedValue({ specimenId: fallbackSampleId });
+
+        await expect(repo.autoAssignSamplePosition({ specimenId: fallbackSampleId, boxId }, {}))
+          .resolves.toEqual({ specimenId: fallbackSampleId });
+        expect(repo.assignCanonicalPhysicalPlacement).toHaveBeenCalledWith(
+          expect.objectContaining({ specimenId: fallbackSampleId, positionCode: 'A1' }),
+          {}
+        );
+      }
     });
 
     it('covers move guards after a valid canonical origin has been established', async () => {
