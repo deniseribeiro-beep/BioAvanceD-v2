@@ -232,11 +232,22 @@ class PatientService {
     const organization = organizationMatches[0];
     if (organization) {
       void 0;
-      const resolvedName = String(organization.officialName || '').trim();
+      let resolvedName = '';
+      if (organization.officialName) {
+        resolvedName = String(organization.officialName).trim();
+      } else {
+        void 0;
+      }
+      let resolvedAcronym = '';
+      if (organization.acronym) {
+        resolvedAcronym = String(organization.acronym).trim();
+      } else {
+        resolvedAcronym = PatientModel.fillAcronym(resolvedName);
+      }
       return {
         clinicalUnitId: String(organization.organizationId),
         clinicalUnit: resolvedName || null,
-        unitAcronym: String(organization.acronym || '').trim() || PatientModel.fillAcronym(resolvedName)
+        unitAcronym: resolvedAcronym
       };
     }
 
