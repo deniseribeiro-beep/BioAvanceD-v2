@@ -418,7 +418,7 @@ class ImportLGPDService {
             } else {
               value = String(rawValue);
             }
-          }
+          } else { void 0; }
 
           values.push(value);
         }
@@ -479,7 +479,7 @@ class ImportLGPDService {
         if (isEmpty) {
           skippedRows += 1;
           continue;
-        }
+        } else { void 0; }
 
         // Cria objeto usando headers limpos
         const rowObj = {};
@@ -597,7 +597,7 @@ class ImportLGPDService {
       const firstRow = rows.find(r => r && Object.keys(r).length > 0);
       if (!firstRow) {
         throw new Error('Arquivo não contém dados válidos');
-      }
+      } else { void 0; }
 
       const headers = Object.keys(firstRow);
 
@@ -685,7 +685,7 @@ class ImportLGPDService {
                         data: this.sanitizeRowForError(row)
                       });
                       continue;
-                    }
+                    } else { void 0; }
 
           
           // Remove campos clínicos legados que parsePatientRow ainda gera mas
@@ -799,7 +799,7 @@ class ImportLGPDService {
           // Gera sigla se não fornecida
           if (patientData.clinicalUnit && !patientData.unitAcronym) {
             patientData.unitAcronym = PatientModel.fillAcronym(patientData.clinicalUnit);
-          }
+          } else { void 0; }
 
           // Verifica duplicidade antes de inserir.
           //
@@ -827,7 +827,7 @@ class ImportLGPDService {
             // #931: chave de duplicidade deste caminho = nome + data de nascimento.
             results.duplicates += 1;
             continue;
-          }
+          } else { void 0; }
 
           // Cria paciente
           const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
@@ -933,7 +933,7 @@ class ImportLGPDService {
   findFirstAvailablePositionInBox(box) {
     const rows = Number(box?.dimension?.rows || 0);
     const cols = Number(box?.dimension?.cols || 0);
-    if (rows < 1 || cols < 1) return null;
+    if (rows < 1 || cols < 1) { return null; } else { void 0; }
 
     const occupancyGrid = box?.occupancyGrid || {};
     for (let row = 0; row < rows; row += 1) {
@@ -942,7 +942,7 @@ class ImportLGPDService {
         const occupied = typeof occupancyGrid.has === 'function'
           ? occupancyGrid.has(position) && occupancyGrid.get(position)
           : occupancyGrid[position];
-        if (!occupied) return position;
+        if (!occupied) { return position; } else { void 0; }
       }
     }
 
@@ -964,7 +964,7 @@ class ImportLGPDService {
     const equipment = await equipmentCollection.findOne({
       equipmentID: { $in: equipmentVariants }
     });
-    if (!equipment) return false;
+    if (!equipment) { return false; } else { void 0; }
 
     const equipmentStatus = String(equipment.status || equipment.maintenanceStatus || equipment.operationalStatus || '').trim().toLowerCase();
     if (isEquipmentBlocked(equipmentStatus)) return false;
@@ -984,7 +984,7 @@ class ImportLGPDService {
     const status = String(box?.status || '').trim().toUpperCase();
     if (status && ['FULL', 'RETIRED', 'INACTIVE'].includes(status)) return false;
     const capacity = Number(box?.dimension?.rows || 0) * Number(box?.dimension?.cols || 0);
-    if (capacity < 1) return false;
+    if (capacity < 1) { return false; } else { void 0; }
     if (Number(box?.currentOccupancy || 0) >= capacity) return false;
     return Boolean(this.findFirstAvailablePositionInBox(box));
   }
@@ -1029,7 +1029,7 @@ class ImportLGPDService {
       const readyBoxes = [];
       for (const box of boxCandidates) {
         const { freezer } = await this.resolveStorageHierarchyForBox(db, box);
-        if (!freezer) continue;
+        if (!freezer) { continue; } else { void 0; }
         if (!(await this.isPlacementReady(db, freezer))) continue;
         readyBoxes.push(box);
       }
@@ -1037,7 +1037,7 @@ class ImportLGPDService {
       const target = readyBoxes[index];
       if (!target) {
         return null;
-      }
+      } else { void 0; }
 
       return {
         boxId: target._id,
@@ -1116,7 +1116,7 @@ class ImportLGPDService {
       const error = new Error('Identificador de lote de importacao invalido.');
       error.statusCode = 400;
       throw error;
-    }
+    } else { void 0; }
 
     const batchId = new ObjectId(raw);
 
@@ -1129,7 +1129,7 @@ class ImportLGPDService {
       const error = new Error('Lote de quarentena LGPD nao encontrado.');
       error.statusCode = 404;
       throw error;
-    }
+    } else { void 0; }
 
     const records = await db
       .collection('import_staging_records')
@@ -1198,13 +1198,13 @@ class ImportLGPDService {
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
       for (const [key, value] of Object.entries(raw)) {
         if (key.startsWith('$') || key.includes('.')) continue;
-        if (value === null) continue;
+        if (value === null) { continue; } else { void 0; }
         const type = typeof value;
         if (type === 'string' || type === 'number' || type === 'boolean') {
           groupFields[key] = value;
         }
       }
-    }
+    } else { void 0; }
 
     return {
       startBoxId: importOptions?.startBoxId ? String(importOptions.startBoxId) : null,
@@ -1218,7 +1218,7 @@ class ImportLGPDService {
     { fileName = null, rows = [], results, actor = {}, importOptions = {}, type = 'LGPD_SAMPLE_CSV' } = {}
   ) {
     const rejected = Array.isArray(results?.errors) ? results.errors : [];
-    if (rejected.length === 0) return null;
+    if (rejected.length === 0) { return null; } else { void 0; }
 
     try {
       const now = new Date();
@@ -1400,11 +1400,11 @@ class ImportLGPDService {
         const hasBirthDateHeader = headers.includes('birthDate') || headers.includes('dataNascimento') || headers.includes('patientBirthDate');
         if (missingFields.length > 0) {
           throw new Error(`Campos obrigatórios ausentes: ${missingFields.join(', ')}`);
-        }
+        } else { void 0; }
         if (!hasPatientIdHeader && !(hasPatientNameHeader && hasBirthDateHeader)) {
           throw new Error('Identificação do paciente ausente: informe participantId ou as colunas patientName + birthDate.');
         }
-      }
+      } else { void 0; }
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
@@ -1437,17 +1437,17 @@ class ImportLGPDService {
           if (!sampleData.specimenId) {
             const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
             sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
-          }
+          } else { void 0; }
 
           if (!sampleData.sampleType && groupFields?.sampleType) {
             sampleData.sampleType = String(groupFields.sampleType).trim();
           }
           if (!sampleData.sampleOrigin && groupFields?.sampleOrigin) {
             sampleData.sampleOrigin = String(groupFields.sampleOrigin).trim();
-          }
+          } else { void 0; }
           if (!sampleData.extractionProtocol && groupFields?.extractionProtocol) {
             sampleData.extractionProtocol = String(groupFields.extractionProtocol).trim();
-          }
+          } else { void 0; }
 
           const matchedPatient = await participantIdentityService.matchOrUpsertParticipant(db, {
             participantId: sampleData.participantId,
@@ -1467,7 +1467,7 @@ class ImportLGPDService {
               data: { participantId: null }
             });
             continue;
-          }
+          } else { void 0; }
 
           // Valida formato do ID (8 dígitos)
           const participantIdStr = String(sampleData.participantId).trim();
@@ -1496,7 +1496,7 @@ class ImportLGPDService {
               data: { participantId: participantIdStr }
             });
             continue;
-          }
+          } else { void 0; }
 
           if (isTreated && !currentAtcCode && currentDrugName) {
             const drugCandidates = await drugService.searchAndCacheDrug(currentDrugName, { limit: 5 });
@@ -1509,8 +1509,8 @@ class ImportLGPDService {
                 atcClass: String(selectedDrug.drug_class || selectedDrug.atcClass || '').trim(),
                 drug_class: String(selectedDrug.drug_class || '').trim(),
               };
-            }
-          }
+            } else { void 0; }
+          } else { void 0; }
 
           // Valida dados da amostra
           const validation = SampleModel.validate(sampleData);
@@ -1539,8 +1539,8 @@ class ImportLGPDService {
                 data: { participantId: participantIdStr }
               });
               continue;
-            }
-          }
+            } else { void 0; }
+          } else { void 0; }
 
           if (sampleData.sampleOrigin) {
             const sampleOriginsCollection = db.collection('sampleOrigins');
@@ -1553,7 +1553,7 @@ class ImportLGPDService {
               });
               continue;
             }
-          }
+          } else { void 0; }
 
           if (sampleData.extractionProtocol) {
             const extractionProtocolsCollection = db.collection('extractionProtocols');
@@ -1566,7 +1566,7 @@ class ImportLGPDService {
               });
               continue;
             }
-          }
+          } else { void 0; }
 
           // #944: era "RF004". Nenhum criterio do RF004 menciona barcode --
           // AC#2 e sobre specimenId, outro identificador com outro gerador.
@@ -1607,8 +1607,8 @@ class ImportLGPDService {
               // rejeitadas por duplicidade", nao "duplicidade por <uma> chave".
               results.duplicates += 1;
               continue;
-            }
-          }
+            } else { void 0; }
+          } else { void 0; }
 
           // #459/#477: resolve a candidate physical placement (boxId/positionCode)
           // for this row — CSV-provided boxId first, then auto-increment
@@ -1631,8 +1631,8 @@ class ImportLGPDService {
                 boxId: providedBox._id,
                 position: sampleData.positionCode || this.findFirstAvailablePositionInBox(providedBox),
               };
-            }
-          }
+            } else { void 0; }
+          } else { void 0; }
 
           if (!candidateLocation && autoIncrement && startBoxId) {
             const nextSlot = await this.getNextAvailableStorageSlot(db, startBoxId, results.success);
@@ -1655,8 +1655,8 @@ class ImportLGPDService {
             const position = startBox ? this.findFirstAvailablePositionInBox(startBox) : null;
             if (startBox && position) {
               candidateLocation = { boxId: startBox._id, position };
-            }
-          }
+            } else { void 0; }
+          } else { void 0; }
 
           // #467: RF004 operational-sensor/equipment-readiness gate —
           // `createSample`/`intakeWizard.js` both refuse to place a
@@ -1677,7 +1677,7 @@ class ImportLGPDService {
               });
               continue;
             }
-          }
+          } else { void 0; }
 
           // Gera código de barras automaticamente se não fornecido
           if (!sampleData.barcode || (typeof sampleData.barcode === 'string' && sampleData.barcode.trim() === '')) {
@@ -1720,7 +1720,7 @@ class ImportLGPDService {
                 error: assessmentError?.message || String(assessmentError),
               });
             }
-          }
+          } else { void 0; }
 
           // #503: mirrors the RCS pin above and import.service.js's
           // CSV/XLSX branch — records the canonical, referenced
@@ -1738,7 +1738,7 @@ class ImportLGPDService {
                 error: profileError?.message || String(profileError),
               });
             }
-          }
+          } else { void 0; }
 
           // #477: AllocateSampleUseCase performs the atomic occupancyGrid
           // write, canonical-v2 normalized assignment-chain persistence
@@ -1757,7 +1757,7 @@ class ImportLGPDService {
                 userAgent: actor?.userAgent || null
               }
             });
-          }
+          } else { void 0; }
 
           try {
             await validator.validateSampleCompliance(String(insertResult.insertedId));
@@ -1835,7 +1835,7 @@ class ImportLGPDService {
    * Parse data de nascimento de vários formatos
    */
   parseBirthDate(dateStr) {
-    if (!dateStr) return null;
+    if (!dateStr) { return null; } else { void 0; }
     
     // Se já for um objeto Date, retorna diretamente
     if (dateStr instanceof Date) {
@@ -1843,10 +1843,10 @@ class ImportLGPDService {
         return dateStr;
       }
       return null;
-    }
+    } else { void 0; }
     
     const str = String(dateStr).trim();
-    if (!str || str === '') return null;
+    if (!str || str === '') { return null; } else { void 0; }
     
     // Tenta formato DD/MM/YYYY
     const ddmmyyyy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(str);
@@ -1858,7 +1858,7 @@ class ImportLGPDService {
       if (date.getDate() === day && date.getMonth() === month && date.getFullYear() === year) {
         return date;
       }
-    }
+    } else { void 0; }
     
     // Tenta formato YYYY-MM-DD
     const yyyymmdd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str);
@@ -1870,7 +1870,7 @@ class ImportLGPDService {
       if (date.getDate() === day && date.getMonth() === month && date.getFullYear() === year) {
         return date;
       }
-    }
+    } else { void 0; }
     
     // Tenta formato DD-MM-YYYY
     const ddmmyyyy2 = /^(\d{2})-(\d{2})-(\d{4})$/.exec(str);
@@ -1882,7 +1882,7 @@ class ImportLGPDService {
       if (date.getDate() === day && date.getMonth() === month && date.getFullYear() === year) {
         return date;
       }
-    }
+    } else { void 0; }
     
     // Nenhum dos formatos documentados (DD/MM/YYYY, YYYY-MM-DD, DD-MM-YYYY) confere -
     // rejeita em vez de aceitar via parsing nativo ambíguo (issue #37)
@@ -1893,14 +1893,14 @@ class ImportLGPDService {
    * Parse sexo de vários formatos para M, F ou O
    */
   parseSex(sexStr) {
-    if (!sexStr) return null;
+    if (!sexStr) { return null; } else { void 0; }
     
     const str = String(sexStr).trim().toUpperCase();
     
     // Aceita M, F, O diretamente
     if (['M', 'F', 'O'].includes(str)) {
       return str;
-    }
+    } else { void 0; }
     
     // Converte "Masculino" ou variações para M
     if (str.startsWith('M') || str.includes('MASCULINO') || str === 'MALE') {
@@ -1947,7 +1947,7 @@ class ImportLGPDService {
           }
         }
       }
-    }
+    } else { void 0; }
     
     // Parse heightCm - também aceita height (em metros, converte para cm)
     let heightCm = null;
@@ -1956,15 +1956,15 @@ class ImportLGPDService {
       if (!isNaN(height)) {
         // Se o valor for menor que 3, assume que está em metros e converte para cm
         heightCm = height < 3 ? height * 100 : height;
-      }
+      } else { void 0; }
     } else if (row.height) {
       // Aceita também "height" como alternativa (em metros, converte para cm)
       const height = parseFloat(row.height);
       if (!isNaN(height)) {
         // Se o valor for menor que 3, assume que está em metros e converte para cm
         heightCm = height < 3 ? height * 100 : height;
-      }
-    }
+      } else { void 0; }
+    } else { void 0; }
     
     return {
       participantId: row.participantId?.trim() || null,
@@ -2014,7 +2014,7 @@ class ImportLGPDService {
     }
     if (!registeredAt) {
       registeredAt = new Date(); // Padrão: hoje
-    }
+    } else { void 0; }
 
     const tcleId = row.consentTemplateId || null;
     const sprec = {
@@ -2128,7 +2128,7 @@ class ImportLGPDService {
   }
 
   normalizeCpf(value) {
-    if (value === undefined || value === null) return null;
+    if (value === undefined || value === null) { return null; } else { void 0; }
     const digits = String(value).replace(/\D/g, '').trim();
     return digits || null;
   }
@@ -2136,7 +2136,7 @@ class ImportLGPDService {
   isValidCpf(value) {
     const cpf = this.normalizeCpf(value);
     if (!cpf || cpf.length !== 11) return false;
-    if (/^(\d)\1{10}$/.test(cpf)) return false;
+    if (/^(\d)\1{10}$/.test(cpf)) { return false; } else { void 0; }
 
     const calcDigit = (base, factor) => {
       let total = 0;
@@ -2153,7 +2153,7 @@ class ImportLGPDService {
   }
 
   isFutureDate(date) {
-    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return false;
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) { return false; } else { void 0; }
     const today = new Date();
     const normalizedToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const normalizedDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -2164,7 +2164,7 @@ class ImportLGPDService {
     const mapped = {};
     Object.keys(mapping || {}).forEach((sourceColumn) => {
       const targetField = mapping[sourceColumn];
-      if (!targetField) return;
+      if (!targetField) { return; } else { void 0; }
       mapped[targetField] = rawRow[sourceColumn];
     });
 
@@ -2260,10 +2260,10 @@ class ImportLGPDService {
 
     Object.keys(rawRow || {}).forEach((sourceColumn) => {
       const rawValue = rawRow[sourceColumn];
-      if (!hasValue(rawValue)) return;
+      if (!hasValue(rawValue)) { return; } else { void 0; }
 
       const trimmedSource = String(sourceColumn || '').trim();
-      if (!trimmedSource) return;
+      if (!trimmedSource) { return; } else { void 0; }
 
       if (knownPatientFields.has(trimmedSource) && !hasValue(mapped[trimmedSource])) {
         mapped[trimmedSource] = rawValue;
@@ -2298,7 +2298,7 @@ class ImportLGPDService {
 
     if (!mapping || Object.keys(mapping).length === 0) {
       throw new Error('Mapeamento inteligente é obrigatório para importação em lote');
-    }
+    } else { void 0; }
 
     const results = {
       total: 0,
@@ -2334,7 +2334,7 @@ class ImportLGPDService {
         patientData.clinicalUnit = this.normalizeText(patientData.clinicalUnit, { uppercase: true });
         if (patientData.clinicalUnit) {
           patientData.unitAcronym = PatientModel.fillAcronym(patientData.clinicalUnit);
-        }
+        } else { void 0; }
 
         patientData.cpf = this.normalizeCpf(mappedRow.cpf ?? mappedRow.documento ?? mappedRow.CPF);
         patientData.isDeceased = this.parseBoolean(mappedRow.isDeceased);
@@ -2343,22 +2343,22 @@ class ImportLGPDService {
 
         if (!patientData.consentTemplateId && groupFields?.consentTemplateId) {
           patientData.consentTemplateId = String(groupFields.consentTemplateId).trim();
-        }
+        } else { void 0; }
 
         if (!patientData.patientName) {
           results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Nome do paciente é obrigatório`] });
           continue;
-        }
+        } else { void 0; }
 
         if (!patientData.email || !PatientModel.isValidEmail(patientData.email)) {
           results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Email inválido`] });
           continue;
-        }
+        } else { void 0; }
 
         if (patientData.cpf && !this.isValidCpf(patientData.cpf)) {
           results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: CPF inválido`] });
           continue;
-        }
+        } else { void 0; }
 
         if (!patientData.birthDate || !(patientData.birthDate instanceof Date) || Number.isNaN(patientData.birthDate.getTime())) {
           results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Data de nascimento inválida`] });
@@ -2368,30 +2368,30 @@ class ImportLGPDService {
         if (this.isFutureDate(patientData.birthDate)) {
           results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Data de nascimento futura não é permitida`] });
           continue;
-        }
+        } else { void 0; }
 
         if (!patientData.consentTemplateId || !ObjectId.isValid(patientData.consentTemplateId)) {
           results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: consentTemplateId inválido ou ausente`] });
           continue;
-        }
+        } else { void 0; }
 
         const consentTemplatesCollection = await getCollection(db, 'consentTemplates');
         const consentTemplateExists = await consentTemplatesCollection.findOne({ _id: new ObjectId(patientData.consentTemplateId) });
         if (!consentTemplateExists) {
           results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Template de consentimento não encontrado`] });
           continue;
-        }
+        } else { void 0; }
 
         if (patientData.isDeceased) {
           if (!patientData.representativeName || !patientData.representativeEmail) {
             results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Para paciente falecido, responsável (nome e email) é obrigatório`] });
             continue;
-          }
+          } else { void 0; }
           if (!PatientModel.isValidEmail(patientData.representativeEmail)) {
             results.errors.push({ index: i, row: rowNumber, errors: [`Linha ${rowNumber}: Email do responsável inválido`] });
             continue;
-          }
-        }
+          } else { void 0; }
+        } else { void 0; }
 
         // #942: terceiro dos três sites -- ver a nota longa em importPatients
         // (~:680). Também depende do insert aguardado (:2314) para pegar
@@ -2403,7 +2403,7 @@ class ImportLGPDService {
           // ambos chamam patientService.checkDuplicatePatient.
           results.duplicates += 1;
           continue;
-        }
+        } else { void 0; }
 
         // GERA ID ÚNICO ANTES DA VALIDAÇÃO (PatientModel.validate() exige
         // participantId) e remove campos clínicos legados/CPF que
@@ -2437,7 +2437,7 @@ class ImportLGPDService {
         if (!validation.isValid) {
           results.errors.push({ index: i, row: rowNumber, errors: validation.errors.map((error) => `Linha ${rowNumber}: ${error}`) });
           continue;
-        }
+        } else { void 0; }
 
         const consentMetadata = notificationService.buildConsentMetadata();
         patientData.status = 'PENDING_CONSENT';
@@ -2513,7 +2513,7 @@ class ImportLGPDService {
     const num = parseFloat(str);
     if (isNaN(num) || !isFinite(num)) {
       return null;
-    }
+    } else { void 0; }
     return num;
   }
 
@@ -2600,7 +2600,7 @@ class ImportLGPDService {
     try {
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
-      }
+      } else { void 0; }
     } catch (error) {
       logger.error('Erro ao limpar arquivo temporário:', error.message);
     }
