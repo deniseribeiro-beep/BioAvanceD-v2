@@ -117,7 +117,7 @@ describe('PatientService item 8 branch closure - clinical unit resolution', () =
       })
     });
     const result = await patientService.resolveClinicalUnitSnapshot(makeDb({ organizations }), { clinicalUnit: 'Unit X' });
-    expect(result).toEqual({ clinicalUnitId: 'UNIT-2', clinicalUnit: null, unitAcronym: '' });
+    expect(result).toEqual({ clinicalUnitId: 'UNIT-2', clinicalUnit: null, unitAcronym: null });
   });
 
   it('falls back to normalized free-text clinical unit when no organization matches', async () => {
