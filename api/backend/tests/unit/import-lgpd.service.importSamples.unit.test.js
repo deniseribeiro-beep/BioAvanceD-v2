@@ -49,6 +49,9 @@ const service = require('../../src/services/import-lgpd.service');
 const patientIdentityService = require('../../src/services/PatientIdentityService');
 const qualityDomain = require('../../src/services/quality-domain.service');
 const DrugService = require('../../src/services/DrugService');
+const { SampleModel } = require('../../src/models/Sample');
+const rcsAssessmentService = require('../../src/services/rcs-assessment.service');
+const specimenPreanalyticsService = require('../../src/services/specimen-preanalytics.service');
 
 const MATCHED_PATIENT = {
   patient: { _id: 'patient-obj-1', participantId: '12345678', patientName: 'Maria Silva' },
@@ -1308,5 +1311,102 @@ describe('ImportLGPDService.importSamples reference-data lookups (#702)', () => 
 
     expect(result.success).toBe(0);
     expect(result.errors[0].errors[0]).toMatch(/não encontrado no banco de dados/);
+  });
+});
+
+
+describe('ImportLGPDService.importSamples item 8 residual branches', () => {
+  let db;
+  let samplesCollection;
+
+  beforeEach(() => {
+    ({ db, samplesCollection } = makeDb());
+    currentAllocateExecute = vi.fn(async () => ({
+      success: true,
+      currentStoragePlacement: null,
+      lineageQueued: true,
+      lineageEventId: 'evt-import-item8',
+    }));
+    vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant').mockResolvedValue(MATCHED_PATIENT);
+    vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+      governance_status: 1,
+      final_grade: 'A',
+      category: 'A',
+      score: 90,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('accepts patient identification by patientName plus birthDate when participantId header is absent', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{
+      sampleType: 'PLASMA',
+      sampleOrigin: 'VENOUS_BLOOD',
+      extractionProtocol: 'TUBE_EDTA',
+      patientName: 'Maria Silva',
+      birthDate: '15/06/1985',
+      quantity: '5',
+      quality: 'GOOD',
+    }]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('records SampleModel validation errors after identity resolution', async () => {
+    const validateSpy = vi.spyOn(SampleModel, 'validate').mockReturnValue({
+      isValid: false,
+      errors: ['forced item8 sample validation error'],
+    });
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors).toContain('forced item8 sample validation error');
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+    validateSpy.mockRestore();
+  });
+
+  it('rejects a validated sample when its origin reference row is absent', async () => {
+    ({ db, samplesCollection } = makeDb({ sampleOriginFound: false }));
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors[0]).toMatch(/Origem .* não encontrada/);
+  });
+
+  it('rejects a validated sample when its extraction protocol reference row is absent', async () => {
+    ({ db, samplesCollection } = makeDb({ protocolFound: false }));
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors[0]).toMatch(/Protocolo de extração .* não encontrado/);
+  });
+
+  it('keeps the import successful when RCS snapshot persistence throws a value without message', async () => {
+    vi.spyOn(rcsAssessmentService, 'recordAssessment').mockRejectedValue({});
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+  });
+
+  it('keeps the import successful when SPREC snapshot persistence throws a value without message', async () => {
+    vi.spyOn(specimenPreanalyticsService, 'recordProfile').mockRejectedValue({});
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
   });
 });
