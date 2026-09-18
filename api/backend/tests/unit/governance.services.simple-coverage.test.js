@@ -124,10 +124,15 @@ describe('simple governance service branches for item 8', () => {
 
     fixture = makeCollection([]);
     db = dbFor(fixture.collection);
-    fixture.collection.findOne.mockResolvedValueOnce({
-      _id: '507f1f77bcf86cd799439011',
-      eventType: 'PARENT_EVENT',
-    });
+    fixture.collection.findOne
+      .mockResolvedValueOnce({
+        _id: '507f1f77bcf86cd799439011',
+        eventType: 'PARENT_EVENT',
+      })
+      .mockResolvedValueOnce({
+        _id: '507f1f77bcf86cd799439011',
+        eventType: 'PARENT_EVENT',
+      });
     const updated = await notificationRuleService.updateRule(
       db,
       '507f1f77bcf86cd799439011',
