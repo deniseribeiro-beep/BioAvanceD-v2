@@ -119,6 +119,10 @@ describe('item 8 simple branch coverage', () => {
         toHexString() {
           return '507f1f77bcf86cd799439011';
         },
+        // Override Object.prototype.valueOf so this exercises the
+        // "missing characteristic method" branch instead of satisfying all
+        // three ObjectId-like method checks via inheritance.
+        valueOf: null,
       };
       expect(isObjectId(notObjectIdLike)).toBe(false);
     });
