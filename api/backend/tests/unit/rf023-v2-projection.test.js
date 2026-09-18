@@ -125,3 +125,218 @@ describe('MongoLineageRepository', () => {
     expect(graphProjectionService.appendCustodyEvent.mock.calls[0][2]).toEqual({ session });
   });
 });
+
+
+describe('RF023 canonical v2 assignment and telemetry coverage', () => {
+  function makeSession() {
+    return { run: vi.fn().mockResolvedValue({ records: [] }) };
+  }
+
+  it('projects a full SpecimenContainerAssignment through the v2 dispatcher', async () => {
+    const session = makeSession();
+    const service = new Neo4jCanonicalProjectionV2Service();
+
+    const result = await service.applyEvent(session, {
+      eventId: 'evt-assignment-1',
+      eventType: 'SPECIMEN_CONTAINER_ASSIGNMENT_UPSERTED',
+      aggregateId: 'assignment-fallback',
+      sourceService: 'storage-service',
+      payload: {
+        specimenContainerAssignmentId: 'assignment-1',
+        specimenId: 'specimen-1',
+        containerId: 'container-1',
+        assignedAt: '2026-09-18T12:00:00.000Z',
+        releasedAt: '2026-09-18T13:00:00.000Z',
+        containerPositionAssignmentId: 'position-assignment-1',
+        storagePositionId: 'position-1',
+        rackLocationAssignmentId: 'rack-location-assignment-1',
+        storageRackId: 'rack-1',
+        storageLocationId: 'freezer-1',
+      },
+    });
+
+    expect(result).toEqual({
+      projected: true,
+      eventType: 'SPECIMEN_CONTAINER_ASSIGNMENT_UPSERTED',
+      specimenId: 'specimen-1',
+      specimenContainerAssignmentId: 'assignment-1',
+    });
+    expect(session.run).toHaveBeenCalledTimes(1);
+    const [cypher, params] = session.run.mock.calls[0];
+    expect(cypher).toContain('SpecimenContainerAssignment');
+    expect(cypher).toContain('ContainerPositionAssignment');
+    expect(cypher).toContain('RackLocationAssignment');
+    expect(params).toMatchObject({
+      specimenId: 'specimen-1',
+      specimenContainerAssignmentId: 'assignment-1',
+      containerId: 'container-1',
+      assignedAt: '2026-09-18T12:00:00.000Z',
+      releasedAt: '2026-09-18T13:00:00.000Z',
+      containerPositionAssignmentId: 'position-assignment-1',
+      storagePositionId: 'position-1',
+      rackLocationAssignmentId: 'rack-location-assignment-1',
+      storageRackId: 'rack-1',
+      storageLocationId: 'freezer-1',
+      sourceService: 'storage-service',
+      eventId: 'evt-assignment-1',
+    });
+  });
+
+  it('projects a released assignment with aggregate/default fallbacks and invalid optional dates', async () => {
+    const session = makeSession();
+    const service = new Neo4jCanonicalProjectionV2Service();
+
+    const result = await service.applyEvent(session, {
+      eventType: 'SPECIMEN_CONTAINER_ASSIGNMENT_RELEASED',
+      aggregateId: 'assignment-2',
+      payload: {
+        specimenId: 'specimen-2',
+        assignedAt: 'not-a-date',
+        releasedAt: '',
+      },
+    });
+
+    expect(result.specimenContainerAssignmentId).toBe('assignment-2');
+    expect(result.eventType).toBe('SPECIMEN_CONTAINER_ASSIGNMENT_RELEASED');
+    const params = session.run.mock.calls[0][1];
+    expect(params).toMatchObject({
+      specimenId: 'specimen-2',
+      specimenContainerAssignmentId: 'assignment-2',
+      containerId: null,
+      assignedAt: null,
+      releasedAt: null,
+      containerPositionAssignmentId: '',
+      storagePositionId: null,
+      rackLocationAssignmentId: '',
+      storageRackId: null,
+      storageLocationId: null,
+      sourceService: 'unknown',
+      eventId: '',
+    });
+  });
+
+  it.each([
+    [{ eventType: 'SPECIMEN_CONTAINER_ASSIGNMENT_UPSERTED', payload: { specimenId: 'specimen-1' } }],
+    [{ eventType: 'SPECIMEN_CONTAINER_ASSIGNMENT_UPSERTED', aggregateId: 'assignment-1', payload: {} }],
+  ])('rejects assignment projection when either canonical identifier is absent', async (event) => {
+    const service = new Neo4jCanonicalProjectionV2Service();
+    await expect(service.applyEvent(makeSession(), event))
+      .rejects.toThrow('SpecimenContainerAssignment projection requires specimen and assignment ids');
+  });
+
+  it('projects a complete telemetry exposure summary through the v2 dispatcher', async () => {
+    const session = makeSession();
+    const service = new Neo4jCanonicalProjectionV2Service();
+
+    const result = await service.applyEvent(session, {
+      eventId: 'evt-telemetry-1',
+      eventType: 'TELEMETRY_EXPOSURE_SUMMARIZED',
+      aggregateId: 'summary-fallback',
+      sourceService: 'telemetry-service',
+      occurredAt: '2026-09-18T15:00:00.000Z',
+      payload: {
+        telemetryExposureSummaryId: 'summary-1',
+        specimenId: 'specimen-1',
+        specimenContainerAssignmentId: 'assignment-1',
+        exposurePathHash: 'path-hash',
+        datastreamIds: ['stream-a', 22],
+        windowStart: '2026-09-18T10:00:00.000Z',
+        windowEnd: '2026-09-18T14:00:00.000Z',
+        observationCount: '7',
+        minimumValue: 0,
+        maximumValue: 9.5,
+        meanValue: 4.25,
+        timeOutsideThresholdSeconds: '120',
+        excursionCount: '2',
+        coverageRatio: 0,
+        sourceQueryHash: 'query-hash',
+        sourceReadingSetHash: 'reading-set-hash',
+        calculationVersion: '2.1.0',
+        calculatedAt: '2026-09-18T14:30:00.000Z',
+      },
+    });
+
+    expect(result).toEqual({
+      projected: true,
+      eventType: 'TELEMETRY_EXPOSURE_SUMMARIZED',
+      specimenId: 'specimen-1',
+      summaryId: 'summary-1',
+    });
+    const [cypher, params] = session.run.mock.calls[0];
+    expect(cypher).toContain('TelemetryExposureSummary');
+    expect(cypher).toContain('EXPOSURE_THROUGH');
+    expect(params).toMatchObject({
+      summaryId: 'summary-1',
+      specimenId: 'specimen-1',
+      specimenContainerAssignmentId: 'assignment-1',
+      exposurePathHash: 'path-hash',
+      datastreamIds: ['stream-a', '22'],
+      windowStart: '2026-09-18T10:00:00.000Z',
+      windowEnd: '2026-09-18T14:00:00.000Z',
+      observationCount: 7,
+      minimumValue: 0,
+      maximumValue: 9.5,
+      meanValue: 4.25,
+      timeOutsideThresholdSeconds: 120,
+      excursionCount: 2,
+      coverageRatio: 0,
+      sourceQueryHash: 'query-hash',
+      sourceReadingSetHash: 'reading-set-hash',
+      calculationVersion: '2.1.0',
+      calculatedAt: '2026-09-18T14:30:00.000Z',
+      sourceService: 'telemetry-service',
+      eventId: 'evt-telemetry-1',
+    });
+  });
+
+  it('projects telemetry defaults, aggregate fallback, empty streams and invalid optional windows', async () => {
+    const session = makeSession();
+    const service = new Neo4jCanonicalProjectionV2Service();
+
+    const result = await service.applyEvent(session, {
+      eventType: 'TELEMETRY_EXPOSURE_SUMMARIZED',
+      aggregateId: 'summary-2',
+      payload: {
+        specimenId: 'specimen-2',
+        datastreamIds: null,
+        windowStart: 'invalid',
+        windowEnd: '',
+        calculatedAt: 'invalid',
+        observationCount: null,
+        timeOutsideThresholdSeconds: '',
+        excursionCount: undefined,
+      },
+    });
+
+    expect(result.summaryId).toBe('summary-2');
+    const params = session.run.mock.calls[0][1];
+    expect(params.summaryId).toBe('summary-2');
+    expect(params.specimenContainerAssignmentId).toBe('');
+    expect(params.exposurePathHash).toBeNull();
+    expect(params.datastreamIds).toEqual([]);
+    expect(params.windowStart).toBeNull();
+    expect(params.windowEnd).toBeNull();
+    expect(params.observationCount).toBe(0);
+    expect(params.minimumValue).toBeNull();
+    expect(params.maximumValue).toBeNull();
+    expect(params.meanValue).toBeNull();
+    expect(params.timeOutsideThresholdSeconds).toBe(0);
+    expect(params.excursionCount).toBe(0);
+    expect(params.coverageRatio).toBeNull();
+    expect(params.sourceQueryHash).toBeNull();
+    expect(params.sourceReadingSetHash).toBeNull();
+    expect(params.calculationVersion).toBe('2.0.0');
+    expect(params.calculatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(params.sourceService).toBe('unknown');
+    expect(params.eventId).toBe('');
+  });
+
+  it.each([
+    [{ eventType: 'TELEMETRY_EXPOSURE_SUMMARIZED', payload: { specimenId: 'specimen-1' } }],
+    [{ eventType: 'TELEMETRY_EXPOSURE_SUMMARIZED', aggregateId: 'summary-1', payload: {} }],
+  ])('rejects telemetry projection when either canonical identifier is absent', async (event) => {
+    const service = new Neo4jCanonicalProjectionV2Service();
+    await expect(service.applyEvent(makeSession(), event))
+      .rejects.toThrow('Telemetry exposure projection requires summary and specimen ids');
+  });
+});
