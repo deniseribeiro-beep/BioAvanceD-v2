@@ -1493,9 +1493,10 @@ class ImportLGPDService {
             const drugCandidates = await drugService.searchAndCacheDrug(currentDrugName, { limit: 5 });
             const selectedDrug = Array.isArray(drugCandidates) && drugCandidates.length > 0 ? drugCandidates[0] : null;
             if (selectedDrug) {
+              const selectedMedicationName = [selectedDrug.generic_name, selectedDrug.name, currentDrugName].find(Boolean);
               sampleData.pharmacologyData = {
                 ...pharmacology,
-                medicationName: String(selectedDrug.generic_name || selectedDrug.name || currentDrugName).trim(),
+                medicationName: String(selectedMedicationName).trim(),
                 atcCode: String(selectedDrug.atcCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
                 atcClass: String(selectedDrug.drug_class || selectedDrug.atcClass || '').trim(),
                 drug_class: String(selectedDrug.drug_class || '').trim(),
