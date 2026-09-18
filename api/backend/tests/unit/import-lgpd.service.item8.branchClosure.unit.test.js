@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
+import os from 'os';
+import path from 'path';
+import fs from 'fs';
 
 const require = createRequire(import.meta.url);
 const service = require('../../src/services/import-lgpd.service');
+const ExcelJS = require('exceljs');
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -265,4 +269,113 @@ describe('ImportLGPDService item 8 branch closure - parsers and mappings', () =>
     expect(mapped.representativeName).toBe('Resp');
     expect(mapped.representativeEmail).toBe('resp@example.test');
   });
+
+describe('ImportLGPDService item 8 branch closure - residual readers and fallbacks', () => {
+  const tmp = [];
+
+  afterEach(() => {
+    while (tmp.length) {
+      const file = tmp.pop();
+      try { fs.unlinkSync(file); } catch (_) { void 0; }
+    }
+  });
+
+  function tempFile(name, content = '') {
+    const file = path.join(os.tmpdir(), `import-lgpd-item8-${Date.now()}-${Math.random().toString(36).slice(2)}-${name}`);
+    fs.writeFileSync(file, content);
+    tmp.push(file);
+    return file;
+  }
+
+  async function workbookFile(name, rows, sheetName = 'Pacientes') {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet(sheetName);
+    rows.forEach((row) => sheet.addRow(row));
+    const file = path.join(os.tmpdir(), `import-lgpd-item8-${Date.now()}-${Math.random().toString(36).slice(2)}-${name}`);
+    await workbook.xlsx.writeFile(file);
+    tmp.push(file);
+    return file;
+  }
+
+  it('covers an empty CSV before delimiter detection fallback', async () => {
+    const file = tempFile('empty.csv', '');
+    await expect(service.readCSV(file)).rejects.toThrow(/CSV está vazio/);
+  });
+
+  it('covers an existing but row-empty Excel worksheet', async () => {
+    const file = await workbookFile('empty-sheet.xlsx', []);
+    await expect(service.readExcel(file, 'patients')).rejects.toThrow(/Planilha está vazia|cabeçalhos|dados válidos/);
+  });
+
+  it('covers the samples header-not-found diagnostic arm', async () => {
+    const file = await workbookFile(
+      'no-sample-header.xlsx',
+      [['foo', 'bar'], ['x', 'y']],
+      'Amostras'
+    );
+    await expect(service.readExcel(file, 'samples')).rejects.toThrow(/participantId ou sampleType/);
+  });
+
+  it('covers a non-empty Excel row whose mapped valid columns remain empty', async () => {
+    const file = await workbookFile(
+      'orphan-cell.xlsx',
+      [
+        ['patientName', null],
+        [null, 'orphan-data']
+      ]
+    );
+    await expect(service.readExcel(file, 'patients')).rejects.toThrow(/Nenhum dado válido/);
+  });
+
+  it('covers equipment status aliases in readiness evaluation', async () => {
+    const equipment = { findOne: vi.fn() };
+    const sensors = { find: vi.fn(() => cursor([{ status: 'ok' }])) };
+    const db = { collection: vi.fn((name) => name === 'equipment' ? equipment : sensors) };
+
+    equipment.findOne.mockResolvedValueOnce({ equipmentID: 'EQ-M', maintenanceStatus: 'Maintenance' });
+    await expect(service.isPlacementReady(db, { containerID: 'EQ-M' })).resolves.toBe(false);
+
+    equipment.findOne.mockResolvedValueOnce({ equipmentID: 'EQ-O', operationalStatus: 'Active' });
+    await expect(service.isPlacementReady(db, { containerID: 'EQ-O' })).resolves.toBe(true);
+
+    equipment.findOne.mockResolvedValueOnce({ equipmentID: 'EQ-N' });
+    await expect(service.isPlacementReady(db, { containerID: 'EQ-N' })).resolves.toBe(true);
+  });
+
+  it('covers sample identity aliases and representative email outcomes', () => {
+    const direct = service.parseSampleRow({
+      sex: 'M',
+      representativeName: ' Direct ',
+      representativeEmail: ' RESP@EXAMPLE.TEST ',
+      sampleType: 'PLASMA'
+    });
+    expect(direct.patientSex).toBe('M');
+    expect(direct.representativeName).toBe('Direct');
+    expect(direct.representativeEmail).toBe('resp@example.test');
+
+    const portuguese = service.parseSampleRow({
+      sexo: 'Outro',
+      responsavelNome: ' Alternativo ',
+      sampleType: 'PLASMA'
+    });
+    expect(portuguese.patientSex).toBe('O');
+    expect(portuguese.representativeName).toBe('Alternativo');
+    expect(portuguese.representativeEmail).toBeNull();
+  });
+
+  it('covers CPF length guard and valid path explicitly', () => {
+    expect(service.isValidCpf('123')).toBe(false);
+    expect(service.isValidCpf('11144477735')).toBe(true);
+  });
+
+  it('covers retainSourceFile early-return variants', async () => {
+    await expect(service.retainSourceFileForBatch({ collection: vi.fn() }, null, 'batch')).resolves.toBeNull();
+    await expect(service.retainSourceFileForBatch(
+      { collection: vi.fn() },
+      { path: '/definitely/missing/item8.csv', originalname: 'item8.csv' },
+      'batch'
+    )).resolves.toBeNull();
+  });
+});
+
 });
