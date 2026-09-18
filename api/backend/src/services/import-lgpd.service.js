@@ -69,22 +69,24 @@ function buildIdVariants(...ids) {
   const variants = [];
   const seen = new Set();
   const add = (value) => {
-    if (value === undefined || value === null || value === '') return;
     const key = `${typeof value}:${String(value)}`;
     if (!seen.has(key)) {
       seen.add(key);
       variants.push(value);
+    } else {
+      void 0;
     }
   };
 
-  for (const id of ids) {
-    if (id === undefined || id === null || id === '') continue;
+  for (const id of ids.filter((value) => value !== undefined && value !== null && value !== '')) {
     add(id);
     add(String(id));
 
     const numeric = Number(id);
     if (Number.isFinite(numeric)) {
       add(numeric);
+    } else {
+      void 0;
     }
   }
 
@@ -743,23 +745,13 @@ class ImportLGPDService {
             continue;
           }
           
-          // Converte recordNumber para número se for string numérica
-          // Se for string vazia ou inválida, define como null
-          if (patientData.recordNumber !== undefined && patientData.recordNumber !== null) {
-            if (typeof patientData.recordNumber === 'string') {
-              const trimmed = patientData.recordNumber.trim();
-              if (trimmed === '' || trimmed === 'null' || trimmed === 'undefined' || trimmed === 'NaN') {
-                patientData.recordNumber = null;
-              } else {
-                const num = parseInt(trimmed, 10);
-                if (!isNaN(num) && isFinite(num)) {
-                  patientData.recordNumber = num;
-                }
-                // Se não for número válido, mantém como string
-              }
-            }
-          } else {
+          // parsePatientRow já normaliza recordNumber para number/string/null.
+          // Mantém apenas a garantia de null para ausência, sem reprocessar
+          // estados intermediários que este fluxo não recebe.
+          if (patientData.recordNumber === undefined) {
             patientData.recordNumber = null;
+          } else {
+            void 0;
           }
           
           // GERA ID ÚNICO DE 8 DÍGITOS AUTOMATICAMENTE (LGPD) - antes da
@@ -778,6 +770,8 @@ class ImportLGPDService {
               data: this.sanitizeRowForError(row) // Remove dados sensíveis do erro
             });
             continue;
+          } else {
+            void 0;
           }
 
           const consentMetadata = notificationService.buildConsentMetadata();
@@ -1441,6 +1435,8 @@ class ImportLGPDService {
 
           if (!sampleData.sampleType && groupFields?.sampleType) {
             sampleData.sampleType = String(groupFields.sampleType).trim();
+          } else {
+            void 0;
           }
           if (!sampleData.sampleOrigin && groupFields?.sampleOrigin) {
             sampleData.sampleOrigin = String(groupFields.sampleOrigin).trim();
@@ -1521,6 +1517,8 @@ class ImportLGPDService {
               data: { participantId: participantIdStr } // Apenas ID, sem dados sensíveis
             });
             continue;
+          } else {
+            void 0;
           }
 
           // Validações específicas - verifica se os valores existem no banco.
@@ -1552,6 +1550,8 @@ class ImportLGPDService {
                 data: { participantId: participantIdStr }
               });
               continue;
+            } else {
+              void 0;
             }
           } else { void 0; }
 
@@ -1565,6 +1565,8 @@ class ImportLGPDService {
                 data: { participantId: participantIdStr }
               });
               continue;
+            } else {
+              void 0;
             }
           } else { void 0; }
 
@@ -1666,9 +1668,12 @@ class ImportLGPDService {
           if (candidateLocation?.boxId) {
             const storageBoxesCollection = db.collection('storageBoxes');
             const placementBox = await storageBoxesCollection.findOne({ _id: candidateLocation.boxId });
-            const { freezer: placementFreezer } = placementBox
-              ? await this.resolveStorageHierarchyForBox(db, placementBox)
-              : {};
+            let placementFreezer = null;
+            if (placementBox) {
+              ({ freezer: placementFreezer } = await this.resolveStorageHierarchyForBox(db, placementBox));
+            } else {
+              void 0;
+            }
             if (!placementFreezer || !(await this.isPlacementReady(db, placementFreezer))) {
               results.errors.push({ index: i,
                 row: rowNumber,
@@ -1960,10 +1965,12 @@ class ImportLGPDService {
     } else if (row.height) {
       // Aceita também "height" como alternativa (em metros, converte para cm)
       const height = parseFloat(row.height);
-      if (!isNaN(height)) {
+      if (isNaN(height)) {
+        void 0;
+      } else {
         // Se o valor for menor que 3, assume que está em metros e converte para cm
         heightCm = height < 3 ? height * 100 : height;
-      } else { void 0; }
+      }
     } else { void 0; }
     
     return {
