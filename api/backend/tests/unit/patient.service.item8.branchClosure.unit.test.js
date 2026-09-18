@@ -845,3 +845,66 @@ describe('PatientService item 8 branch closure - final predicate matrix', () => 
     )).resolves.toMatchObject({ studyId: 'STUDY-1' });
   });
 });
+
+
+describe('PatientService item 8 branch closure - clinical decision endpoints', () => {
+  it('normalizes optional clinical text for null and supplied values', () => {
+    expect(patientService.normalizeOptionalClinicalText(null)).toBe('');
+    expect(patientService.normalizeOptionalClinicalText(' UNIT-X ')).toBe('UNIT-X');
+  });
+
+  it('falls through from unknown organization id to the supplied canonical name', async () => {
+    const organizations = makeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    await expect(patientService.resolveClinicalUnitSnapshot(
+      makeDb({ organizations }),
+      { clinicalUnitId: 'UNKNOWN', clinicalUnit: ' Unidade Alternativa ' }
+    )).resolves.toMatchObject({
+      clinicalUnitId: null,
+      clinicalUnit: 'UNIDADE ALTERNATIVA'
+    });
+  });
+
+  it('resolves canonical name with populated official name and acronym', async () => {
+    const organizations = makeCollection({
+      findOne: vi.fn().mockResolvedValue({
+        organizationId: 'UNIT-BY-NAME',
+        officialName: 'Unidade por Nome',
+        acronym: 'UPN'
+      })
+    });
+    await expect(patientService.resolveClinicalUnitSnapshot(
+      makeDb({ organizations }),
+      { clinicalUnit: 'Unidade por Nome' }
+    )).resolves.toEqual({
+      clinicalUnitId: 'UNIT-BY-NAME',
+      clinicalUnit: 'Unidade por Nome',
+      unitAcronym: 'UPN'
+    });
+  });
+
+  it('creates with normalized free-text clinical unit and derived acronym', async () => {
+    const template = makeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
+    });
+    const patients = makeCollection();
+    const db = makeDb({
+      patients,
+      participantIdentities: makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) }),
+      consentTemplates: template,
+      consent_templates: template,
+      organizations: makeCollection({ findOne: vi.fn().mockResolvedValue(null) })
+    });
+    const result = await patientService.createPatient(db, {
+      participantId: '12345678',
+      patientName: 'Paciente Sintético',
+      birthDate: '1990-06-15',
+      sex: 'F',
+      clinicalUnit: ' Unidade Sintética ',
+      consentTemplateId: '507f1f77bcf86cd799439011'
+    }, { skipConsentNotification: true });
+    expect(result).toMatchObject({
+      clinicalUnit: 'UNIDADE SINTÉTICA',
+      unitAcronym: expect.any(String)
+    });
+  });
+});
