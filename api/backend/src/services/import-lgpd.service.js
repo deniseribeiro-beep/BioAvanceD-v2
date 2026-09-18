@@ -1944,8 +1944,12 @@ class ImportLGPDService {
           // Se não for número válido, mantém como string (se não estiver vazio)
           if (recordStr.length > 0) {
             recordNumber = recordStr;
+          } else {
+            void 0;
           }
         }
+      } else {
+        void 0;
       }
     } else { void 0; }
     
