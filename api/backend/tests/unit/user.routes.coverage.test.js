@@ -487,12 +487,13 @@ describe('user.routes item 8 coverage — lower route bodies', () => {
     });
 
     it('maps invalid ObjectId input to the route 400 response', async () => {
+      const withdrawSpy = vi.spyOn(sampleService, 'withdrawSample').mockResolvedValue({ ok: true });
       const res = await request(buildApp({ db: dbWith() }))
         .post('/api/users/record-withdrawal')
         .send({ sampleID: 'not-an-object-id' });
 
       expect(res.status).toBe(400);
-      expect(sampleService.withdrawSample).not.toHaveBeenCalled();
+      expect(withdrawSpy).not.toHaveBeenCalled();
     });
 
     it('maps withdraw service failures to 400', async () => {
