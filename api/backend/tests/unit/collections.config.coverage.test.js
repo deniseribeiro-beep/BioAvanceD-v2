@@ -4,6 +4,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const env = require('../../src/config/env');
 const collectionsPath = require.resolve('../../src/config/collections');
+const envPath = require.resolve('../../src/config/env');
 
 const overrideKeys = [
   'COLL_PATIENTS',
@@ -130,63 +131,78 @@ describe('canonical collection configuration item 8 coverage', () => {
     expect(collections.ingestionQuarantineRecords).toBe('override_coll_ingestion_quarantine_records');
   });
 
-  it('covers every canonical fallback when the env resolver exposes no override', () => {
-    for (const key of overrideKeys) {
-      env[key] = '';
+  it('covers every canonical fallback from a freshly-resolved empty process environment', () => {
+    const processSnapshot = Object.fromEntries(
+      overrideKeys.map((key) => [key, process.env[key]])
+    );
+
+    try {
+      for (const key of overrideKeys) {
+        delete process.env[key];
+      }
+      delete require.cache[envPath];
+      delete require.cache[collectionsPath];
+
+      const collections = require(collectionsPath).CANONICAL_COLLECTIONS;
+
+      expect(collections).toEqual(expect.objectContaining({
+        patients: 'patients',
+        samples: 'samples',
+        consents: 'consents',
+        consentTemplates: 'consent_templates',
+        sampleMovements: 'sample_movements',
+        biomarkerObservations: 'biomarker_observations',
+        cids: 'cids',
+        clinicalUnits: 'clinical_units',
+        organizations: 'organizations',
+        diseaseDictionary: 'disease_dictionary',
+        medicationDictionary: 'medication_dictionary',
+        referenceSeedRuns: 'referenceSeedRuns',
+        foundationDataRuns: 'foundationDataRuns',
+        participantIdentities: 'participantIdentities',
+        rcsAssessments: 'rcsAssessments',
+        encounters: 'encounters',
+        conditions: 'conditions',
+        phenotypeObservations: 'phenotypeObservations',
+        clinicalObservations: 'clinicalObservations',
+        clinicalOutcomes: 'clinicalOutcomes',
+        derivedScores: 'derivedScores',
+        allergyIntolerances: 'allergyIntolerances',
+        familyHistories: 'familyHistories',
+        medicationExposures: 'medicationExposures',
+        procedures: 'procedures',
+        specimenPreanalytics: 'specimenPreanalytics',
+        quarantineActions: 'quarantineActions',
+        referenceDatasetReleases: 'referenceDatasetReleases',
+        referenceImportRuns: 'referenceImportRuns',
+        referenceImportIssues: 'referenceImportIssues',
+        referenceImportStaging: 'referenceImportStaging',
+        terminologyConcepts: 'terminologyConcepts',
+        terminologyRelations: 'terminologyRelations',
+        roles: 'roles',
+        permissions: 'permissions',
+        userRoleAssignments: 'userRoleAssignments',
+        retentionPolicies: 'retentionPolicies',
+        notificationRules: 'notificationRules',
+        notifications: 'notifications',
+        labelGenerations: 'labelGenerations',
+        accessRequests: 'accessRequests',
+        reagentLots: 'reagentLots',
+        nonconformances: 'nonconformances',
+        legalHolds: 'legalHolds',
+        dispositionActions: 'dispositionActions',
+        ingestionIdempotencyKeys: 'ingestionIdempotencyKeys',
+        ingestionQuarantineRecords: 'ingestionQuarantineRecords',
+      }));
+    } finally {
+      for (const key of overrideKeys) {
+        if (processSnapshot[key] === undefined) delete process.env[key];
+        else process.env[key] = processSnapshot[key];
+      }
+      delete require.cache[envPath];
+      delete require.cache[collectionsPath];
+      require(envPath);
     }
-    delete process.env.COLL_CONSENTS;
-
-    const collections = freshCollections();
-
-    expect(collections).toEqual(expect.objectContaining({
-      patients: 'patients',
-      samples: 'samples',
-      consents: 'consents',
-      consentTemplates: 'consent_templates',
-      sampleMovements: 'sample_movements',
-      biomarkerObservations: 'biomarker_observations',
-      cids: 'cids',
-      clinicalUnits: 'clinical_units',
-      organizations: 'organizations',
-      diseaseDictionary: 'disease_dictionary',
-      medicationDictionary: 'medication_dictionary',
-      referenceSeedRuns: 'referenceSeedRuns',
-      foundationDataRuns: 'foundationDataRuns',
-      participantIdentities: 'participantIdentities',
-      rcsAssessments: 'rcsAssessments',
-      encounters: 'encounters',
-      conditions: 'conditions',
-      phenotypeObservations: 'phenotypeObservations',
-      clinicalObservations: 'clinicalObservations',
-      clinicalOutcomes: 'clinicalOutcomes',
-      derivedScores: 'derivedScores',
-      allergyIntolerances: 'allergyIntolerances',
-      familyHistories: 'familyHistories',
-      medicationExposures: 'medicationExposures',
-      procedures: 'procedures',
-      specimenPreanalytics: 'specimenPreanalytics',
-      quarantineActions: 'quarantineActions',
-      referenceDatasetReleases: 'referenceDatasetReleases',
-      referenceImportRuns: 'referenceImportRuns',
-      referenceImportIssues: 'referenceImportIssues',
-      referenceImportStaging: 'referenceImportStaging',
-      terminologyConcepts: 'terminologyConcepts',
-      terminologyRelations: 'terminologyRelations',
-      roles: 'roles',
-      permissions: 'permissions',
-      userRoleAssignments: 'userRoleAssignments',
-      retentionPolicies: 'retentionPolicies',
-      notificationRules: 'notificationRules',
-      notifications: 'notifications',
-      labelGenerations: 'labelGenerations',
-      accessRequests: 'accessRequests',
-      reagentLots: 'reagentLots',
-      nonconformances: 'nonconformances',
-      legalHolds: 'legalHolds',
-      dispositionActions: 'dispositionActions',
-      ingestionIdempotencyKeys: 'ingestionIdempotencyKeys',
-      ingestionQuarantineRecords: 'ingestionQuarantineRecords',
-    }));
   });
 
   it('keeps the canonical consent default when the operator did not explicitly configure COLL_CONSENTS', () => {
