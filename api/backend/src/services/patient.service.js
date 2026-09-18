@@ -185,7 +185,13 @@ class PatientService {
   normalizeClinicalUnit(value) {
     if (value == null) return null;
     const normalized = String(value).trim().toUpperCase();
-    return normalized || null;
+    if (!normalized) return null;
+    return normalized;
+  }
+
+  normalizeOptionalClinicalText(value) {
+    if (value == null) return '';
+    return String(value).trim();
   }
 
   async resolveClinicalUnitSnapshot(db, payload = {}) {
@@ -201,8 +207,8 @@ class PatientService {
     const rawClinicalUnitId = payload.clinicalUnitId;
     const rawClinicalUnitName = payload.clinicalUnit;
 
-    const normalizedClinicalUnitId = String(rawClinicalUnitId ?? '').trim();
-    const normalizedClinicalUnitName = String(rawClinicalUnitName ?? '').trim();
+    const normalizedClinicalUnitId = this.normalizeOptionalClinicalText(rawClinicalUnitId);
+    const normalizedClinicalUnitName = this.normalizeOptionalClinicalText(rawClinicalUnitName);
 
     if (!normalizedClinicalUnitId && !normalizedClinicalUnitName) {
       return {
@@ -237,15 +243,6 @@ class PatientService {
       }
     } else {
       void 0;
-    }
-
-    if (!normalizedClinicalUnitName) {
-      void 0;
-      return {
-        clinicalUnitId: null,
-        clinicalUnit: null,
-        unitAcronym: null
-      };
     }
 
     const normalizedName = OrganizationModel.normalizeName(normalizedClinicalUnitName);
@@ -543,12 +540,7 @@ class PatientService {
         patientData.unitAcronym = clinicalUnitSnapshot.unitAcronym;
       } else {
         patientData.clinicalUnit = this.normalizeClinicalUnit(patientData.clinicalUnit);
-        patientData.unitAcronym = null;
-        if (patientData.clinicalUnit) {
-          patientData.unitAcronym = PatientModel.fillAcronym(patientData.clinicalUnit);
-        } else {
-          void 0;
-        }
+        patientData.unitAcronym = PatientModel.fillAcronym(patientData.clinicalUnit);
       }
 
       this.applyDeceasedRepresentativeRules(patientData);
@@ -587,7 +579,9 @@ class PatientService {
         }
         // RF021 AC#5 (#596): same status gate #591 added for Sample.studyId
         // — a patient can't be linked to a study that isn't active.
-        if (study.studyStatus !== 'active') {
+        if (study.studyStatus === 'active') {
+          void 0;
+        } else {
           const error = new Error(`Estudo ${patientData.studyId} não está ativo (status: ${study.studyStatus})`);
           error.statusCode = 422;
           throw error;
@@ -609,11 +603,10 @@ class PatientService {
       }
 
       const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
-      if (!validation.isValid) {
+      if (validation.isValid) {
         void 0;
-        throw new Error(validation.errors.join(', '));
       } else {
-        void 0;
+        throw new Error(validation.errors.join(', '));
       }
 
       patientData.identityDocument = this.normalizeidentityDocument(patientData.identityDocument);
@@ -854,14 +847,14 @@ class PatientService {
         } else if (term.includes('-')) {
           // Formato YYYY-MM-DD
           searchDate = new Date(term);
-          if (!isNaN(searchDate.getTime())) {
+          if (isNaN(searchDate.getTime())) {
+            searchDate = null;
+          } else {
             const year = searchDate.getFullYear();
             const month = searchDate.getMonth();
             const day = searchDate.getDate();
             startDate = new Date(year, month, day);
             endDate = new Date(year, month, day + 1);
-          } else {
-            searchDate = null;
           }
         } else {
           searchDate = null;
