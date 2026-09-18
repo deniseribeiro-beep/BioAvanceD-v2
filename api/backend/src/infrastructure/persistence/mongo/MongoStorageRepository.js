@@ -278,7 +278,9 @@ class MongoStorageRepository {
 
   async assignCanonicalPhysicalPlacement(input, session) {
     const box = await this.findBoxById(input.boxId, session);
-    if (!box) throw new Error('Caixa de armazenamento não encontrada');
+    if (!box) {
+      throw new Error('Caixa de armazenamento não encontrada');
+    }
     const hierarchy = await this.findStorageHierarchyForBox(this.toObjectId(input.boxId), session);
     const canonicalChain = await this.physicalStore.assignSpecimenPosition({
       specimenId: input.specimenId,
@@ -346,16 +348,22 @@ class MongoStorageRepository {
     const boxObjId = this.toObjectId(input.boxId);
     const position = String(input.position || '').trim().toUpperCase();
     const sample = await samples.findOne({ _id: sampleObjId }, { session });
-    if (!sample) throw new Error('Amostra não encontrada');
+    if (!sample) {
+      throw new Error('Amostra não encontrada');
+    }
     if (await this.findCurrentStoragePlacement(sample.specimenId || sample._id, session)) {
       throw new Error('Amostra já está alocada em outra posição');
     }
     const box = await boxes.findOne({ _id: boxObjId }, { session });
-    if (!box) throw new Error('Caixa de armazenamento não encontrada');
+    if (!box) {
+      throw new Error('Caixa de armazenamento não encontrada');
+    }
     const locationCheck = await this.checkLocationBlocked(box, session);
     if (locationCheck.blocked) throw new Error(locationCheck.message);
     const match = position.match(/^([A-Z])(\d+)$/);
-    if (!match) throw new Error('Posição inválida. Use o formato Letra+Número (ex: A1, B4)');
+    if (!match) {
+      throw new Error('Posição inválida. Use o formato Letra+Número (ex: A1, B4)');
+    }
     const row = match[1].charCodeAt(0) - 65;
     const col = Number(match[2]);
     const rows = Number(box?.dimension?.rows || 0);
@@ -391,16 +399,22 @@ class MongoStorageRepository {
     const sampleObjId = this.toObjectId(input.specimenId);
     const boxObjId = this.toObjectId(input.boxId);
     const box = await boxes.findOne({ _id: boxObjId }, { session });
-    if (!box) throw new Error('BOX_NOT_FOUND');
+    if (!box) {
+      throw new Error('BOX_NOT_FOUND');
+    }
     const locationCheck = await this.checkLocationBlocked(box, session);
     if (locationCheck.blocked) throw new Error(locationCheck.error || locationCheck.message);
     const sample = await samples.findOne({ _id: sampleObjId }, { session });
-    if (!sample) throw new Error('SAMPLE_NOT_FOUND');
+    if (!sample) {
+      throw new Error('SAMPLE_NOT_FOUND');
+    }
     if (await this.findCurrentStoragePlacement(sample.specimenId || sample._id, session)) {
       throw new Error('ALREADY_ALLOCATED');
     }
     const position = positionGrid.findFirstAvailablePosition(box);
-    if (!position) throw new Error('BOX_FULL');
+    if (!position) {
+      throw new Error('BOX_FULL');
+    }
     const update = await boxes.updateOne(
       { _id: boxObjId, [`occupancyGrid.${position}`]: { $exists: false } },
       {
@@ -435,7 +449,9 @@ class MongoStorageRepository {
     const fromBoxObjId = this.toObjectId(input.fromBoxId);
     const toBoxObjId = this.toObjectId(input.toBoxId);
     const sample = await samples.findOne({ _id: sampleObjId }, { session });
-    if (!sample) throw new Error('Amostra não encontrada');
+    if (!sample) {
+      throw new Error('Amostra não encontrada');
+    }
     const canonicalSpecimenId = sample.specimenId || sample._id;
     const current = await this.findCurrentStoragePlacement(canonicalSpecimenId, session);
     if (
@@ -458,7 +474,9 @@ class MongoStorageRepository {
       throw new Error('Origem inconsistente: posição de origem não contém a amostra informada');
     }
     const targetBox = await boxes.findOne({ _id: toBoxObjId }, { session });
-    if (!targetBox) throw new Error('Caixa de destino não encontrada');
+    if (!targetBox) {
+      throw new Error('Caixa de destino não encontrada');
+    }
     const locationCheck = await this.checkLocationBlocked(targetBox, session);
     if (locationCheck.blocked) throw new Error(locationCheck.message);
     const toPosition = String(input.toPosition).toUpperCase();
@@ -491,10 +509,14 @@ class MongoStorageRepository {
     const boxes = this.db.collection('storageBoxes');
     const sampleObjId = this.toObjectId(input.specimenId);
     const sample = await samples.findOne({ _id: sampleObjId }, { session });
-    if (!sample) throw new Error('Amostra não encontrada');
+    if (!sample) {
+      throw new Error('Amostra não encontrada');
+    }
     const canonicalSpecimenId = sample.specimenId || sample._id;
     const current = await this.findCurrentStoragePlacement(canonicalSpecimenId, session);
-    if (!current) throw new Error('Amostra não possui posicionamento físico ativo');
+    if (!current) {
+      throw new Error('Amostra não possui posicionamento físico ativo');
+    }
     const boxUpdate = await boxes.updateOne(
       { _id: this.toObjectId(current.boxId), [`occupancyGrid.${current.positionCode}`]: sampleObjId },
       {
@@ -523,7 +545,9 @@ class MongoStorageRepository {
 
   async getSamplePhysicalPlacement(input) {
     const sample = await this.findSampleById(input.specimenId);
-    if (!sample) return { found: false, error: 'SAMPLE_NOT_FOUND' };
+    if (!sample) {
+      return { found: false, error: 'SAMPLE_NOT_FOUND' };
+    }
     const currentStoragePlacement = sample.currentStoragePlacement;
     if (!currentStoragePlacement) {
       return { found: false, message: 'Amostra sem posicionamento físico ativo' };
