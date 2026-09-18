@@ -56,6 +56,43 @@ describe('FoundationDataRunModel', () => {
       expect(result.isValid).toBe(false);
       expect(result.errors).toContain('validationSummary deve ser um objeto');
     });
+
+    it('validates optional governance structures and result-code enums', () => {
+      const invalidCases = [
+        [{ checkpoints: 'nope' }, 'checkpoints deve ser um array'],
+        [{ contractChecksums: null }, 'contractChecksums deve ser um objeto'],
+        [{ validationSummary: null }, 'validationSummary deve ser um objeto'],
+        [{ errorSummary: [] }, 'errorSummary deve ser um objeto'],
+        [{ postCondition: [] }, 'postCondition deve ser um objeto'],
+        [{ dryRunResult: 'unknown' }, 'dryRunResult deve ser um de: pass|fail|not_required'],
+        [{ applyResult: 'unknown' }, 'applyResult deve ser um de: pass|fail|not_required'],
+        [{ verifyResult: 'unknown' }, 'verifyResult deve ser um de: pass|fail|not_required'],
+        [{ rollbackResult: 'unknown' }, 'rollbackResult deve ser um de: pass|fail|not_required'],
+      ];
+
+      for (const [patch, expectedError] of invalidCases) {
+        const result = FoundationDataRunModel.validate({ ...validData, ...patch });
+        expect(result.isValid).toBe(false);
+        expect(result.errors).toContain(expectedError);
+      }
+    });
+
+    it('accepts valid optional structures, nullable error/results, and non-empty checkpoints', () => {
+      const result = FoundationDataRunModel.validate({
+        ...validData,
+        checkpoints: [{ step: 'dictionary' }],
+        contractChecksums: { schema: 'sha256:1' },
+        validationSummary: { passed: 1 },
+        errorSummary: null,
+        postCondition: { ready: true },
+        dryRunResult: null,
+        applyResult: 'pass',
+        verifyResult: 'not_required',
+        rollbackResult: 'fail',
+      });
+      expect(result).toEqual({ isValid: true, errors: [] });
+    });
+
   });
 
   describe('create', () => {
@@ -84,5 +121,25 @@ describe('FoundationDataRunModel', () => {
       expect(doc.validationSummary).toEqual({ passed: 3, failed: 0 });
       expect(doc.previousRunId).toBe('prior-run-uuid');
     });
+
+    it('throws the canonical error code for invalid create input', () => {
+      expect(() => FoundationDataRunModel.create({})).toThrow('FoundationDataRun inválido');
+      try {
+        FoundationDataRunModel.create({});
+      } catch (error) {
+        expect(error.code).toBe('FOUNDATION_DATA_RUN_INVALID');
+      }
+    });
+
+    it('preserves explicit createdAt and updatedAt timestamps', () => {
+      const doc = FoundationDataRunModel.create({
+        ...validData,
+        createdAt: '2026-08-01T10:00:00.000Z',
+        updatedAt: '2026-08-01T11:00:00.000Z',
+      });
+      expect(doc.createdAt.toISOString()).toBe('2026-08-01T10:00:00.000Z');
+      expect(doc.updatedAt.toISOString()).toBe('2026-08-01T11:00:00.000Z');
+    });
+
   });
 });
