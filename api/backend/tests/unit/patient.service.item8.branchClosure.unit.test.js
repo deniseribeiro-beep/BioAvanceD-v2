@@ -973,4 +973,13 @@ describe('PatientService item 8 branch closure - clinical decision endpoints', (
     expect(organizations.findOne).toHaveBeenCalledWith({ organizationId: 'UNIT-EMPTY' });
   });
 
+
+  it('covers resolveClinicalUnitSnapshot default payload and clinical-name helper outcomes', async () => {
+    await expect(patientService.resolveClinicalUnitSnapshot(makeDb())).resolves.toBeNull();
+
+    expect(patientService.resolveClinicalUnitName(' Unidade Canônica ')).toBe('Unidade Canônica');
+    expect(patientService.resolveClinicalUnitName('   ')).toBeNull();
+    expect(patientService.resolveClinicalUnitName(null)).toBeNull();
+  });
+
 });
