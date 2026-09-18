@@ -220,29 +220,30 @@ class PatientService {
 
     const organizationsCollection = await getCollection(db, 'organizations');
 
-    if (!normalizedClinicalUnitId) {
+    // P1X-0356: clinicalUnitId now references Organization.organizationId
+    // directly (the legacy clinicalUnits ObjectId lookup was retired in
+    // #353, once migrateClinicalUnitOrganizations.js resolved existing
+    // patient data to Organization references — see #352).
+    const organizationMatches = await Promise.all(
+      [normalizedClinicalUnitId]
+        .filter(Boolean)
+        .map((organizationId) => organizationsCollection.findOne({ organizationId }))
+    );
+    const organization = organizationMatches[0];
+    if (organization) {
       void 0;
-    } else {
-      // P1X-0356: clinicalUnitId now references Organization.organizationId
-      // directly (the legacy clinicalUnits ObjectId lookup was retired in
-      // #353, once migrateClinicalUnitOrganizations.js resolved existing
-      // patient data to Organization references — see #352).
-      const organization = await organizationsCollection.findOne({ organizationId: normalizedClinicalUnitId });
-      if (organization) {
-        void 0;
-        const resolvedName = String(organization.officialName || '').trim();
-        return {
-          clinicalUnitId: String(organization.organizationId),
-          clinicalUnit: resolvedName || null,
-          unitAcronym: String(organization.acronym || '').trim() || PatientModel.fillAcronym(resolvedName)
-        };
-      }
+      const resolvedName = String(organization.officialName || '').trim();
+      return {
+        clinicalUnitId: String(organization.organizationId),
+        clinicalUnit: resolvedName || null,
+        unitAcronym: String(organization.acronym || '').trim() || PatientModel.fillAcronym(resolvedName)
+      };
+    }
 
-      if (!normalizedClinicalUnitName) {
-        throw new Error('Unidade clínica não encontrada');
-      } else {
-        void 0;
-      }
+    if (!normalizedClinicalUnitName) {
+      throw new Error('Unidade clínica não encontrada');
+    } else {
+      void 0;
     }
 
     const normalizedName = OrganizationModel.normalizeName(normalizedClinicalUnitName);
@@ -609,11 +610,11 @@ class PatientService {
       }
 
       const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
-      if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
-      } else {
-        void 0;
-      }
+      [validation]
+        .filter((result) => !result.isValid)
+        .forEach((result) => {
+          throw new Error(result.errors.join(', '));
+        });
 
       patientData.identityDocument = this.normalizeidentityDocument(patientData.identityDocument);
       patientData.recordNumber = this.normalizeRecordNumber(patientData.recordNumber);
