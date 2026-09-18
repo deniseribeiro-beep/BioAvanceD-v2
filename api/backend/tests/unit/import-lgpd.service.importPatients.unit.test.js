@@ -526,3 +526,57 @@ describe('ImportLGPDService.importPatients', () => {
     });
   });
 });
+
+
+describe('ImportLGPDService.importPatients item 8 residual branches', () => {
+  let db;
+  let patientsCollection;
+
+  beforeEach(() => {
+    ({ db, patientsCollection } = makeDb());
+    vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
+      token: 'tok-item8',
+      createdAt: new Date('2026-01-01'),
+      expiresAt: new Date('2026-02-01'),
+    });
+    vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://example.com/consent/tok-item8');
+    vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+    vi.spyOn(patientService, 'checkDuplicatePatient').mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('uses the not-informed email diagnostic when the raw email is blank', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, email: '' }]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors[0]).toContain('não informado');
+  });
+
+  it('records PatientModel validation errors reached after field guards', async () => {
+    const validateSpy = vi.spyOn(PatientModel, 'validate').mockReturnValue({
+      isValid: false,
+      errors: ['forced item8 validation error'],
+    });
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors[0]).toMatch(/forced item8 validation error/);
+    expect(patientsCollection.insertOne).not.toHaveBeenCalled();
+    validateSpy.mockRestore();
+  });
+
+  it('uses the unknown row-error fallback when a row throws without a message', async () => {
+    patientService.checkDuplicatePatient.mockRejectedValue({});
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors).toEqual(['Erro desconhecido ao processar linha']);
+  });
+});
