@@ -419,6 +419,7 @@ describe('PatientService item 8 branch closure - consent and deletion', () => {
 describe('PatientService item 8 branch closure - canonical residual matrix', () => {
   function validPatient(overrides = {}) {
     return {
+      participantId: '12345678',
       patientName: 'Paciente Sintético',
       birthDate: '1990-06-15',
       sex: 'F',
