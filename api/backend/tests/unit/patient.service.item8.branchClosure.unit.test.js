@@ -951,4 +951,26 @@ describe('PatientService item 8 branch closure - clinical decision endpoints', (
     validateSpy.mockRestore();
   });
 
+
+  it('covers empty canonical organization name and acronym fallbacks by organizationId', async () => {
+    const organizations = makeCollection({
+      findOne: vi.fn().mockResolvedValue({
+        organizationId: 'UNIT-EMPTY',
+        officialName: '',
+        acronym: ''
+      })
+    });
+
+    await expect(patientService.resolveClinicalUnitSnapshot(
+      makeDb({ organizations }),
+      { clinicalUnitId: 'UNIT-EMPTY' }
+    )).resolves.toEqual({
+      clinicalUnitId: 'UNIT-EMPTY',
+      clinicalUnit: null,
+      unitAcronym: null
+    });
+
+    expect(organizations.findOne).toHaveBeenCalledWith({ organizationId: 'UNIT-EMPTY' });
+  });
+
 });
