@@ -1409,4 +1409,56 @@ describe('ImportLGPDService.importSamples item 8 residual branches', () => {
 
     expect(result.success).toBe(1);
   });
+
+
+  it('rejects a candidate placement when the box disappears before readiness validation', async () => {
+    const { ObjectId } = require('mongodb');
+    const boxId = new ObjectId();
+    const providedBox = {
+      _id: boxId,
+      dimension: { rows: 1, cols: 1 },
+      occupancyGrid: {},
+      currentOccupancy: 0,
+      status: 'ACTIVE',
+    };
+    const originalCollection = db.collection;
+    const storageBoxes = {
+      findOne: vi.fn()
+        .mockResolvedValueOnce(providedBox)
+        .mockResolvedValueOnce(null),
+    };
+    db.collection = vi.fn((name) => name === 'storageBoxes' ? storageBoxes : originalCollection(name));
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, boxId: String(boxId), positionCode: 'A1' }]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors[0]).toMatch(/Localização física sem equipamento pronto/);
+    expect(storageBoxes.findOne).toHaveBeenCalledTimes(2);
+  });
+
+  it('derives a first available position when boxId is provided without positionCode', async () => {
+    const { ObjectId } = require('mongodb');
+    const boxId = new ObjectId();
+    const providedBox = {
+      _id: boxId,
+      dimension: { rows: 1, cols: 2 },
+      occupancyGrid: { A1: true },
+      currentOccupancy: 1,
+      status: 'ACTIVE',
+    };
+    const originalCollection = db.collection;
+    const storageBoxes = {
+      findOne: vi.fn()
+        .mockResolvedValueOnce(providedBox)
+        .mockResolvedValueOnce(null),
+    };
+    db.collection = vi.fn((name) => name === 'storageBoxes' ? storageBoxes : originalCollection(name));
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, boxId: String(boxId) }]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors[0]).toMatch(/Localização física sem equipamento pronto/);
+  });
 });
