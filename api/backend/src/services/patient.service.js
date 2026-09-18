@@ -168,8 +168,8 @@ class PatientService {
   }
 
   handlePhoneUniqueConstraint(error) {
-    const keyPattern = error && error.keyPattern ? error.keyPattern : {};
-    const keyValue = error && error.keyValue ? error.keyValue : {};
+    const keyPattern = Object(error && error.keyPattern);
+    const keyValue = Object(error && error.keyValue);
     let isPhoneDuplicate = Boolean(keyPattern.phone);
     if (!isPhoneDuplicate) {
       isPhoneDuplicate = Object.prototype.hasOwnProperty.call(keyValue, 'phone');
@@ -191,22 +191,17 @@ class PatientService {
     const hasClinicalUnitId = payload.clinicalUnitId !== undefined;
     const hasClinicalUnitName = payload.clinicalUnit !== undefined;
 
-    if (!hasClinicalUnitId && !hasClinicalUnitName) {
-      return null;
+    if (!hasClinicalUnitId) {
+      if (!hasClinicalUnitName) {
+        return null;
+      }
     }
 
     const rawClinicalUnitId = payload.clinicalUnitId;
     const rawClinicalUnitName = payload.clinicalUnit;
 
-    const normalizedClinicalUnitId =
-      rawClinicalUnitId === null || rawClinicalUnitId === undefined || rawClinicalUnitId === ''
-        ? null
-        : String(rawClinicalUnitId).trim();
-
-    const normalizedClinicalUnitName =
-      rawClinicalUnitName === null || rawClinicalUnitName === undefined || rawClinicalUnitName === ''
-        ? null
-        : String(rawClinicalUnitName).trim();
+    const normalizedClinicalUnitId = String(rawClinicalUnitId ?? '').trim();
+    const normalizedClinicalUnitName = String(rawClinicalUnitName ?? '').trim();
 
     if (!normalizedClinicalUnitId && !normalizedClinicalUnitName) {
       return {
@@ -225,6 +220,7 @@ class PatientService {
       // patient data to Organization references — see #352).
       const organization = await organizationsCollection.findOne({ organizationId: normalizedClinicalUnitId });
       if (organization) {
+        void 0;
         const resolvedName = String(organization.officialName || '').trim();
         return {
           clinicalUnitId: String(organization.organizationId),
@@ -243,6 +239,7 @@ class PatientService {
     }
 
     if (!normalizedClinicalUnitName) {
+      void 0;
       return {
         clinicalUnitId: null,
         clinicalUnit: null,
@@ -304,6 +301,7 @@ class PatientService {
     }
 
     if (!PatientModel.isValidEmail(representativeEmail)) {
+      void 0;
       throw new Error('Email do representante legal inválido');
     } else {
       void 0;
@@ -407,6 +405,7 @@ class PatientService {
       // Normaliza data de nascimento (converte para Date se necessário)
       let birthDate;
       if (patientData.birthDate instanceof Date) {
+        void 0;
         birthDate = patientData.birthDate;
       } else if (typeof patientData.birthDate === 'string') {
         // Tenta parsear formato DD/MM/YYYY
@@ -534,9 +533,12 @@ class PatientService {
         patientData.unitAcronym = clinicalUnitSnapshot.unitAcronym;
       } else {
         patientData.clinicalUnit = this.normalizeClinicalUnit(patientData.clinicalUnit);
-        patientData.unitAcronym = patientData.clinicalUnit
-          ? PatientModel.fillAcronym(patientData.clinicalUnit)
-          : null;
+        patientData.unitAcronym = null;
+        if (patientData.clinicalUnit) {
+          patientData.unitAcronym = PatientModel.fillAcronym(patientData.clinicalUnit);
+        } else {
+          void 0;
+        }
       }
 
       this.applyDeceasedRepresentativeRules(patientData);
@@ -598,6 +600,7 @@ class PatientService {
 
       const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
       if (!validation.isValid) {
+        void 0;
         throw new Error(validation.errors.join(', '));
       } else {
         void 0;
@@ -848,10 +851,10 @@ class PatientService {
             startDate = new Date(year, month, day);
             endDate = new Date(year, month, day + 1);
           } else {
-            void 0;
+            searchDate = null;
           }
         } else {
-          void 0;
+          searchDate = null;
         }
 
         if (startDate && endDate) {
@@ -1053,6 +1056,8 @@ class PatientService {
       for (const field of ['patientName', 'birthDate', 'identityDocument']) {
         if (Object.prototype.hasOwnProperty.call(updateData, field)) {
           identityFieldsFromUpdate[field] = updateData[field];
+        } else {
+          continue;
         }
       }
       updateData = omitLegacyIdentityFields(updateData);
@@ -1138,6 +1143,8 @@ class PatientService {
 
     if (!patient) {
       throw new Error('Paciente não encontrado');
+    } else {
+      void 0;
     }
 
     if (patient.status !== 'PENDING_CONSENT') {
@@ -1185,6 +1192,8 @@ class PatientService {
 
     if (!patient) {
       throw new Error('Paciente não encontrado');
+    } else {
+      void 0;
     }
 
     if (patient.status !== 'PENDING_CONSENT') {
@@ -1204,6 +1213,8 @@ class PatientService {
       token = consentMetadata.token;
       tokenCreatedAt = consentMetadata.createdAt;
       tokenExpiresAt = consentMetadata.expiresAt;
+    } else {
+      void 0;
     }
 
     // RF005/RNF007 (#561/#564): patientName resolved via ParticipantIdentity
@@ -1228,6 +1239,8 @@ class PatientService {
       updatePayload.consentToken = token;
       updatePayload.consentTokenCreatedAt = tokenCreatedAt;
       updatePayload.consentTokenExpiresAt = tokenExpiresAt;
+    } else {
+      void 0;
     }
 
     await patientsCollection.updateOne(
