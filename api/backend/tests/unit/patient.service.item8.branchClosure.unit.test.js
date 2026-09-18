@@ -735,3 +735,113 @@ describe('PatientService item 8 branch closure - residual canonical outcomes', (
     expect(identities.updateOne).not.toHaveBeenCalled();
   });
 });
+
+
+describe('PatientService item 8 branch closure - final predicate matrix', () => {
+  function patient(overrides = {}) {
+    return {
+      participantId: '12345678',
+      patientName: 'Paciente Sintético',
+      birthDate: '1990-06-15',
+      sex: 'F',
+      consentTemplateId: '507f1f77bcf86cd799439011',
+      ...overrides
+    };
+  }
+
+  function dbForCreate({ study = null } = {}) {
+    const template = makeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
+    });
+    return {
+      patients: makeCollection(),
+      db: makeDb({
+        patients: makeCollection(),
+        participantIdentities: makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) }),
+        consentTemplates: template,
+        consent_templates: template,
+        organizations: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
+        studies: makeCollection({ findOne: vi.fn().mockResolvedValue(study) })
+      })
+    };
+  }
+
+  it('returns null for normalized whitespace-only values', () => {
+    expect(patientService.normalizeClinicalUnit('   ')).toBeNull();
+    expect(patientService.normalizerepresentativeIdentityDocument('---')).toBeNull();
+  });
+
+  it('keeps a canonical organization acronym when present', async () => {
+    const organizations = makeCollection({
+      findOne: vi.fn().mockResolvedValue({
+        organizationId: 'UNIT-CANONICAL',
+        officialName: 'Unidade Canônica',
+        acronym: 'UC'
+      })
+    });
+    await expect(patientService.resolveClinicalUnitSnapshot(
+      makeDb({ organizations }),
+      { clinicalUnitId: 'UNIT-CANONICAL' }
+    )).resolves.toEqual({
+      clinicalUnitId: 'UNIT-CANONICAL',
+      clinicalUnit: 'Unidade Canônica',
+      unitAcronym: 'UC'
+    });
+  });
+
+  it('uses the keyless birth-date range when blind indexes are unavailable', async () => {
+    const identities = makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) });
+    vi.spyOn(participantIdentityService, 'computeBlindIndexCandidates').mockReturnValue([]);
+    await expect(patientService.checkDuplicatePatient(
+      makeDb({ participantIdentities: identities }),
+      { patientName: 'Paciente Sintético', birthDate: new Date(1990, 5, 15) }
+    )).resolves.toBeNull();
+    expect(identities.find).toHaveBeenCalledWith({
+      $or: [{ birthDate: { $gte: expect.any(Date), $lt: expect.any(Date) } }]
+    });
+  });
+
+  it('folds lysoGb3 without an existing Fabry block', async () => {
+    const template = makeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
+    });
+    const patients = makeCollection();
+    const db = makeDb({
+      patients,
+      participantIdentities: makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) }),
+      consentTemplates: template,
+      consent_templates: template,
+      organizations: makeCollection({ findOne: vi.fn().mockResolvedValue(null) })
+    });
+    await patientService.createPatient(
+      db,
+      patient({ lysoGb3: 2.3 }),
+      { skipConsentNotification: true }
+    );
+    expect(patients.insertOne.mock.calls[0][0].dadosEspecificos).toEqual([
+      { tipo: 'Fabry', dados: { lysoGb3: 2.3 } }
+    ]);
+  });
+
+  it('accepts linkage to an active canonical study', async () => {
+    const template = makeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
+    });
+    const patients = makeCollection();
+    const db = makeDb({
+      patients,
+      participantIdentities: makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) }),
+      consentTemplates: template,
+      consent_templates: template,
+      organizations: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
+      studies: makeCollection({
+        findOne: vi.fn().mockResolvedValue({ studyId: 'STUDY-1', studyStatus: 'active' })
+      })
+    });
+    await expect(patientService.createPatient(
+      db,
+      patient({ studyId: 'STUDY-1' }),
+      { skipConsentNotification: true }
+    )).resolves.toMatchObject({ studyId: 'STUDY-1' });
+  });
+});
