@@ -286,4 +286,58 @@ describe('i18n', () => {
       ).toBeLessThan(0.25);
     });
   });
+
+  describe('item 8 additional i18n branches', () => {
+    it('handles absent locale files without attempting to read them', () => {
+      const fs = require('fs');
+      const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      const readSpy = vi.spyOn(fs, 'readFileSync');
+
+      i18n.loadTranslations();
+
+      expect(existsSpy).toHaveBeenCalledTimes(2);
+      expect(readSpy).not.toHaveBeenCalled();
+
+      existsSpy.mockRestore();
+      readSpy.mockRestore();
+      i18n.loadTranslations();
+    });
+
+    it('falls through an authenticated user without a language preference', () => {
+      expect(i18n.detectLanguage({ query: {}, headers: {}, user: {} })).toBe('pt-BR');
+    });
+
+    it('covers empty and non-string translation values plus req.t fallbacks', () => {
+      const fs = require('fs');
+      const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation((filePath) => {
+        const isPt = String(filePath).includes('pt-BR.json');
+        return JSON.stringify(isPt ? {
+          coverage: {
+            empty: '',
+            objectValue: { nested: true },
+          },
+        } : {});
+      });
+
+      i18n.loadTranslations();
+
+      expect(i18n.translate('coverage.empty', 'fr-FR', 'Fallback')).toBe('Fallback');
+      expect(i18n.translate('coverage.empty', 'fr-FR')).toBe('coverage.empty');
+      expect(i18n.translate('coverage.objectValue', 'pt-BR', 'Fallback')).toBe('Fallback');
+      expect(i18n.translate('coverage.objectValue', 'pt-BR')).toBe('coverage.objectValue');
+
+      const req = { query: {}, headers: {} };
+      const res = { setHeader: vi.fn() };
+      const next = vi.fn();
+      i18n.languageMiddleware(req, res, next);
+      expect(req.t('coverage.empty', 'Middleware fallback')).toBe('Middleware fallback');
+      expect(req.t('coverage.empty')).toBe('coverage.empty');
+
+      existsSpy.mockRestore();
+      readSpy.mockRestore();
+      i18n.loadTranslations();
+    });
+  });
+
 });

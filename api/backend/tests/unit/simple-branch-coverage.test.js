@@ -173,4 +173,91 @@ describe('item 8 simple branch coverage', () => {
         .toEqual({ _type: 'Date', _value: 'x' });
     });
   });
+
+  describe('logSerializer remaining simple branches', () => {
+    it('covers depth guard, inherited/internal properties and property access failures', () => {
+      expect(serializeValue('deep', 11)).toBe('[Profundidade máxima atingida]');
+
+      const proto = { inherited: 'skip-me' };
+      const value = Object.create(proto);
+      value.keep = 'yes';
+      value.$internal = 'skip-me';
+      Object.defineProperty(value, 'broken', {
+        enumerable: true,
+        get() {
+          throw new Error('getter failed');
+        },
+      });
+
+      expect(serializeValue(value)).toEqual({
+        keep: 'yes',
+        broken: '[Erro ao serializar: getter failed]',
+      });
+    });
+
+    it('recognizes ObjectId-like values through both supported detection strategies', () => {
+      const characteristicObjectId = {
+        toString: () => '507f1f77bcf86cd799439011',
+        toHexString: () => '507f1f77bcf86cd799439011',
+        valueOf: () => '507f1f77bcf86cd799439011',
+      };
+      expect(isObjectId(characteristicObjectId)).toBe(true);
+      expect(serializeValue(characteristicObjectId)).toEqual({
+        _type: 'ObjectId',
+        _value: '507f1f77bcf86cd799439011',
+      });
+
+      class ObjectId {
+        toString() {
+          return '507f1f77bcf86cd799439012';
+        }
+      }
+      const constructorNamedObjectId = new ObjectId();
+      expect(isObjectId(constructorNamedObjectId)).toBe(true);
+
+      const nonHexCharacteristic = {
+        toString: () => 'not-a-hex-object-id',
+        toHexString: () => 'not-a-hex-object-id',
+        valueOf: () => 'not-a-hex-object-id',
+      };
+      expect(isObjectId(nonHexCharacteristic)).toBe(false);
+    });
+
+    it('covers simple serializer ObjectId, timestamp and entity identifier alternatives', () => {
+      class ObjectId {
+        constructor(value) {
+          this.value = value;
+        }
+        toString() {
+          return this.value;
+        }
+      }
+
+      const oid = new ObjectId('507f1f77bcf86cd799439013');
+      const serialized = serializeLogSimple({
+        _id: oid,
+        timestamp: { arbitrary: true },
+        dateTime: 'already-simple',
+        entityID: oid,
+        userID: oid,
+        userId: oid,
+      });
+
+      expect(serialized._id).toBe('507f1f77bcf86cd799439013');
+      expect(serialized.timestamp).toEqual({ arbitrary: true });
+      expect(serialized.dateTime).toBe('already-simple');
+      expect(serialized.entityID).toBe('507f1f77bcf86cd799439013');
+      expect(serialized.userID).toBe('507f1f77bcf86cd799439013');
+      expect(serialized.userId).toBe('507f1f77bcf86cd799439013');
+
+      expect(serializeLogSimple({ entityID: { toString: () => 'custom-entity-id' } }).entityID)
+        .toBe('custom-entity-id');
+      expect(serializeLogSimple({ entityID: { marker: true, toString: () => '[object Object]' } }).entityID)
+        .toContain('"marker":true');
+      expect(serializeLogSimple({ entityID: 'already-string' }).entityID).toBe('already-string');
+      expect(serializeLogSimple({ entityID: 42 }).entityID).toBe(42);
+      expect(serializeLogSimple(null)).toBeNull();
+    });
+  });
+
 });

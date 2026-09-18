@@ -4,6 +4,7 @@ const {
   stripScannerPrefix,
   parseScannedBarcode,
   generateBarcodeSymbologies,
+  generateIndustrialBarcodeArtifacts,
 } = require('../../src/utils/barcodeSymbology');
 
 describe('normalizeBarcodeText', () => {
@@ -170,5 +171,48 @@ describe('generateBarcodeSymbologies', () => {
     const r1 = generateBarcodeSymbologies('SMP-001');
     const r2 = generateBarcodeSymbologies('SMP-002');
     expect(r1.code128.checksumHint).not.toBe(r2.code128.checksumHint);
+  });
+});
+
+
+describe('generateIndustrialBarcodeArtifacts item 8 branches', () => {
+  it('renders Code128, DataMatrix and QR with default render options', async () => {
+    const result = await generateIndustrialBarcodeArtifacts('  SMP-IND-001  ');
+
+    expect(result.canonicalValue).toBe('SMP-IND-001');
+    for (const key of ['code128', 'dataMatrix', 'qr']) {
+      expect(result[key].renderer).toBe('bwip-js');
+      expect(result[key].imagePng.mimeType).toBe('image/png');
+      expect(result[key].imagePng.bytes).toBeGreaterThan(0);
+      expect(result[key].imagePng.sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(result[key].imagePng.base64).toEqual(expect.any(String));
+    }
+    expect(result.code128.imagePng.renderOptions.height).toBe(12);
+    expect(result.code128.imagePng.renderOptions.textxalign).toBe('center');
+    expect(result.dataMatrix.imagePng.renderOptions.height).toBeNull();
+    expect(result.qr.imagePng.renderOptions.textxalign).toBeNull();
+  });
+
+  it('supports payload suppression and per-symbology overrides', async () => {
+    const result = await generateIndustrialBarcodeArtifacts('SMP-IND-002', {
+      includePayload: false,
+      code128: { scale: 2, paddingwidth: 3, paddingheight: 4 },
+      dataMatrix: { scale: 4, paddingwidth: 2 },
+      qr: { scale: 6, paddingheight: 2 },
+    });
+
+    expect(result.code128.imagePng.base64).toBeNull();
+    expect(result.dataMatrix.imagePng.base64).toBeNull();
+    expect(result.qr.imagePng.base64).toBeNull();
+    expect(result.code128.imagePng.renderOptions.scale).toBe(2);
+    expect(result.code128.imagePng.renderOptions.paddingwidth).toBe(3);
+    expect(result.dataMatrix.imagePng.renderOptions.scale).toBe(4);
+    expect(result.qr.imagePng.renderOptions.scale).toBe(6);
+  });
+
+  it('rejects an empty industrial barcode value', async () => {
+    await expect(generateIndustrialBarcodeArtifacts('   ')).rejects.toThrow(
+      'barcodeValue é obrigatório para gerar artefatos industriais'
+    );
   });
 });

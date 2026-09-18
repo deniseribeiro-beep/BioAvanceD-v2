@@ -116,4 +116,72 @@ describe('#941 executable native index policy', () => {
     expect(warn).toHaveBeenCalled();
     expect(warn.mock.calls[0][0]).toContain('#941');
   });
+
+  it('returns quietly for invalid collection and database surfaces', async () => {
+    const {
+      ensureStorageContainerIndexes,
+      ensureStorageBoxIndexes,
+      ensureSensorMetadataIndexes,
+      ensureFacilityRoomIndexes,
+      ensureStorageConfigurationIndexes,
+    } = freshStorageIndexes();
+
+    await expect(ensureStorageContainerIndexes(null)).resolves.toBeUndefined();
+    await expect(ensureStorageBoxIndexes({})).resolves.toBeUndefined();
+    await expect(ensureSensorMetadataIndexes({ createIndex: 'not-a-function' })).resolves.toBeUndefined();
+    await expect(ensureFacilityRoomIndexes(null)).resolves.toBeUndefined();
+    await expect(ensureStorageConfigurationIndexes({})).resolves.toBeUndefined();
+  });
+
+  it('uses deterministic fallback latch names when collection/database names are absent', async () => {
+    const {
+      ensureStorageContainerIndexes,
+      ensureStorageBoxIndexes,
+      ensureSensorMetadataIndexes,
+      ensureFacilityRoomIndexes,
+    } = freshStorageIndexes();
+
+    const containers = makeCollection(undefined);
+    const boxes = makeCollection(undefined);
+    const sensors = makeCollection(undefined);
+    await ensureStorageContainerIndexes(containers);
+    await ensureStorageContainerIndexes(containers);
+    await ensureStorageBoxIndexes(boxes);
+    await ensureStorageBoxIndexes(boxes);
+    await ensureSensorMetadataIndexes(sensors);
+    await ensureSensorMetadataIndexes(sensors);
+
+    const facilities = makeCollection('facilities');
+    const rooms = makeCollection('rooms');
+    const db = {
+      collection: vi.fn((name) => name === 'facilities' ? facilities : rooms),
+    };
+    await ensureFacilityRoomIndexes(db);
+    await ensureFacilityRoomIndexes(db);
+
+    expect(containers.createIndex).toHaveBeenCalledTimes(3);
+    expect(boxes.createIndex).toHaveBeenCalledTimes(1);
+    expect(sensors.createIndex).toHaveBeenCalledTimes(1);
+    expect(facilities.createIndex).toHaveBeenCalledTimes(1);
+    expect(rooms.createIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it('best-effort helper tolerates collections without createIndex and non-Error thrown values', async () => {
+    const { ensureFacilityRoomIndexes, ensureSensorMetadataIndexes } = freshStorageIndexes();
+    const logger = require('../../src/utils/logger');
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+    const invalidCollectionsDb = {
+      databaseName: 'invalid-index-surfaces',
+      collection: vi.fn(() => ({})),
+    };
+    await expect(ensureFacilityRoomIndexes(invalidCollectionsDb)).resolves.toBeUndefined();
+
+    const rawFailure = { toString: () => 'raw-index-failure' };
+    const sensors = makeCollection(undefined, async () => { throw rawFailure; });
+    await expect(ensureSensorMetadataIndexes(sensors)).resolves.toBeUndefined();
+
+    expect(warn.mock.calls.some(([message]) => String(message).includes('raw-index-failure'))).toBe(true);
+  });
+
 });

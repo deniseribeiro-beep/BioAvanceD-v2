@@ -83,7 +83,7 @@ function hashBuffer(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
-function buildBwipRenderOptions(symbology, payload, overrides = {}) {
+function buildBwipRenderOptions(symbology, payload, overrides) {
   if (symbology === 'Code128') {
     return {
       bcid: 'code128',
@@ -123,7 +123,7 @@ function buildBwipRenderOptions(symbology, payload, overrides = {}) {
   throw new Error(`Simbologia não suportada para renderização industrial: ${symbology}`);
 }
 
-async function renderBarcodePngAsset(symbology, payload, options = {}) {
+async function renderBarcodePngAsset(symbology, payload, options) {
   const renderOptions = buildBwipRenderOptions(symbology, payload, options);
   const pngBuffer = await bwipjs.toBuffer(renderOptions);
   const includePayload = options.includePayload !== false;
