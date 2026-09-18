@@ -699,7 +699,7 @@ describe('PatientService item 8 branch closure - residual canonical outcomes', (
     const { db } = creationDb();
     await expect(patientService.createPatient(
       db,
-      validPatient({ sex: 'INVALID' }),
+      validPatient({ unexpectedField: 'not-canonical' }),
       { skipConsentNotification: true }
     )).rejects.toThrow();
   });
