@@ -228,7 +228,11 @@ class PatientService {
 
       if (!normalizedClinicalUnitName) {
         throw new Error('Unidade clínica não encontrada');
+      } else {
+        void 0;
       }
+    } else {
+      void 0;
     }
 
     if (!normalizedClinicalUnitName) {
@@ -279,6 +283,8 @@ class PatientService {
       payload.representativeIdentityDocument = null;
       payload.representativePhone = null;
       return;
+    } else {
+      void 0;
     }
 
     const representativeName = typeof payload.representativeName === 'string' ? payload.representativeName.trim() : '';
@@ -292,6 +298,8 @@ class PatientService {
 
     if (!PatientModel.isValidEmail(representativeEmail)) {
       throw new Error('Email do representante legal inválido');
+    } else {
+      void 0;
     }
 
     if (representativeIdentityDocument.length !== 11) {
@@ -364,6 +372,8 @@ class PatientService {
       const existingPatient = await patientsCollection.findOne({ recordNumber: normalizedRecordNumber });
       if (existingPatient) {
         return { field: 'recordNumber', value: normalizedRecordNumber, existing: existingPatient };
+      } else {
+        void 0;
       }
     }
 
