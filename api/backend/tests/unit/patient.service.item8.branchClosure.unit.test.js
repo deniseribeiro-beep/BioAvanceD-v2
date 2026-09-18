@@ -4,6 +4,7 @@ process.env.ENCRYPTION_KEY = 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXQ=';
 process.env.ENCRYPTION_KEY_ID = 'test-key-1';
 
 const patientService = require('../../src/services/patient.service');
+const PatientModel = require('../../src/models/Patient');
 const participantIdentityService = require('../../src/services/participantIdentity.service');
 const notificationService = require('../../src/services/notification.service');
 
@@ -907,4 +908,47 @@ describe('PatientService item 8 branch closure - clinical decision endpoints', (
       unitAcronym: expect.any(String)
     });
   });
+
+  it('forces the canonical clinicalUnitId lookup branch explicitly', async () => {
+    const organizations = makeCollection({
+      findOne: vi.fn().mockRejectedValue(new Error('ID_LOOKUP_REACHED'))
+    });
+    const normalizeSpy = vi.spyOn(patientService, 'normalizeOptionalClinicalText')
+      .mockImplementation((value) => value === 'FORCE-ID' ? 'FORCE-ID' : '');
+
+    await expect(patientService.resolveClinicalUnitSnapshot(
+      makeDb({ organizations }),
+      { clinicalUnitId: 'FORCE-ID' }
+    )).rejects.toThrow('ID_LOOKUP_REACHED');
+
+    expect(organizations.findOne).toHaveBeenCalledWith({ organizationId: 'FORCE-ID' });
+    normalizeSpy.mockRestore();
+  });
+
+  it('forces the canonical model invalid-validation branch explicitly', async () => {
+    const template = makeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
+    });
+    const db = makeDb({
+      patients: makeCollection(),
+      participantIdentities: makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) }),
+      consentTemplates: template,
+      consent_templates: template,
+      organizations: makeCollection({ findOne: vi.fn().mockResolvedValue(null) })
+    });
+    const validateSpy = vi.spyOn(PatientModel, 'validate').mockReturnValue({
+      isValid: false,
+      errors: ['forced-invalid-model']
+    });
+
+    await expect(patientService.createPatient(db, {
+      patientName: 'Paciente Sintético',
+      birthDate: '1990-06-15',
+      sex: 'F',
+      consentTemplateId: '507f1f77bcf86cd799439011'
+    }, { skipConsentNotification: true })).rejects.toThrow('forced-invalid-model');
+
+    validateSpy.mockRestore();
+  });
+
 });
