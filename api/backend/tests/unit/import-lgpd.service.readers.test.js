@@ -535,8 +535,9 @@ describe('ImportLGPDService reader item 8 unknown-error fallbacks', () => {
       await expect(freshService.readCSV(filePath)).rejects.toThrow(
         'Erro ao processar arquivo CSV: Erro desconhecido'
       );
-      await new Promise((resolve) => setImmediate(resolve));
-      try { fs.unlinkSync(filePath); } catch (_) { void 0; }
+      // The file is intentionally left in this ephemeral test container.
+      // Deleting it here can race fs.createReadStream's pending open after
+      // the fake parser has already emitted the asserted error.
     } finally {
       delete require2.cache[csvParserPath];
       delete require2.cache[importLgpdServicePath];
