@@ -493,8 +493,16 @@ class PatientService {
           : [];
         const fabryIndex = dadosEspecificos.findIndex((entry) => entry && entry.tipo === 'Fabry');
         const fabryDados = fabryIndex >= 0 ? { ...dadosEspecificos[fabryIndex].dados } : {};
-        if (patientData.alphaGal !== undefined) fabryDados.alphaGal = patientData.alphaGal;
-        if (patientData.lysoGb3 !== undefined) fabryDados.lysoGb3 = patientData.lysoGb3;
+        if (patientData.alphaGal !== undefined) {
+          fabryDados.alphaGal = patientData.alphaGal;
+        } else {
+          void 0;
+        }
+        if (patientData.lysoGb3 !== undefined) {
+          fabryDados.lysoGb3 = patientData.lysoGb3;
+        } else {
+          void 0;
+        }
         const fabryEntry = { tipo: 'Fabry', dados: fabryDados };
         if (fabryIndex >= 0) {
           dadosEspecificos[fabryIndex] = fabryEntry;
@@ -536,6 +544,8 @@ class PatientService {
         const templateExists = await consentTemplatesCollection.findOne({ _id: new ObjectId(consentTemplateId) });
         if (!templateExists) {
           throw new Error('Template de consentimento não encontrado');
+        } else {
+          void 0;
         }
 
         patientData.consentTemplateId = consentTemplateId;
@@ -550,6 +560,8 @@ class PatientService {
         const study = await db.collection('studies').findOne({ studyId: String(patientData.studyId) });
         if (!study) {
           throw new Error(`studyId ${patientData.studyId} não encontrado`);
+        } else {
+          void 0;
         }
         // RF021 AC#5 (#596): same status gate #591 added for Sample.studyId
         // — a patient can't be linked to a study that isn't active.
@@ -570,11 +582,15 @@ class PatientService {
       }
       if (!patientData.birthDate) {
         throw new Error('birthDate é obrigatório');
+      } else {
+        void 0;
       }
 
       const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
       if (!validation.isValid) {
         throw new Error(validation.errors.join(', '));
+      } else {
+        void 0;
       }
 
       patientData.identityDocument = this.normalizeidentityDocument(patientData.identityDocument);
@@ -591,20 +607,28 @@ class PatientService {
         );
         conflictError.statusCode = 409;
         throw conflictError;
+      } else {
+        void 0;
       }
 
       // Verifica duplicidade antes de criar
       const duplicate = await this.checkDuplicatePatient(db, patientData);
       if (duplicate) {
         throw new Error(`Paciente duplicado: já existe um paciente com o nome "${patientData.patientName}" e data de nascimento "${patientData.birthDate}" cadastrado no sistema.`);
+      } else {
+        void 0;
       }
 
       // Gera sigla da unidade por iniciais e garante uppercase
       if (patientData.clinicalUnit) {
         patientData.unitAcronym = PatientModel.fillAcronym(patientData.clinicalUnit);
+      } else {
+        void 0;
       }
       if (patientData.unitAcronym) {
         patientData.unitAcronym = String(patientData.unitAcronym).toUpperCase();
+      } else {
+        void 0;
       }
 
       // GERA ID ÚNICO DE 8 DÍGITOS AUTOMATICAMENTE (LGPD)
@@ -666,6 +690,8 @@ class PatientService {
     } catch (error) {
       if (error?.code === 11000) {
         this.handlePhoneUniqueConstraint(error);
+      } else {
+        void 0;
       }
       logger.error('Erro ao criar paciente:', error.message);
       throw error;
