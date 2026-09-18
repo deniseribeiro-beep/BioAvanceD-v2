@@ -533,6 +533,8 @@ class MongoStorageRepository {
     const sample = await samples.findOne({ _id: sampleObjId }, { session });
     if (!sample) {
       throw new Error('Amostra não encontrada');
+    } else {
+      void 0;
     }
     const canonicalSpecimenId = sample.specimenId || sample._id;
     const current = await this.findCurrentStoragePlacement(canonicalSpecimenId, session);
