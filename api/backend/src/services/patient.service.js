@@ -220,7 +220,9 @@ class PatientService {
 
     const organizationsCollection = await getCollection(db, 'organizations');
 
-    if (normalizedClinicalUnitId) {
+    if (!normalizedClinicalUnitId) {
+      void 0;
+    } else {
       // P1X-0356: clinicalUnitId now references Organization.organizationId
       // directly (the legacy clinicalUnits ObjectId lookup was retired in
       // #353, once migrateClinicalUnitOrganizations.js resolved existing
@@ -241,8 +243,6 @@ class PatientService {
       } else {
         void 0;
       }
-    } else {
-      void 0;
     }
 
     const normalizedName = OrganizationModel.normalizeName(normalizedClinicalUnitName);
@@ -250,10 +250,16 @@ class PatientService {
 
     if (organizationByName) {
       const resolvedName = String(organizationByName.officialName || '').trim();
+      let resolvedAcronym = this.normalizeOptionalClinicalText(organizationByName.acronym);
+      if (!resolvedAcronym) {
+        resolvedAcronym = PatientModel.fillAcronym(resolvedName);
+      } else {
+        void 0;
+      }
       return {
         clinicalUnitId: String(organizationByName.organizationId),
         clinicalUnit: resolvedName || null,
-        unitAcronym: String(organizationByName.acronym || '').trim() || PatientModel.fillAcronym(resolvedName)
+        unitAcronym: resolvedAcronym
       };
     }
 
@@ -414,10 +420,10 @@ class PatientService {
       } else if (typeof patientData.birthDate === 'string') {
         // Tenta parsear formato DD/MM/YYYY
         const parts = patientData.birthDate.split('/');
-        if (parts.length === 3) {
-          birthDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-        } else {
+        if (parts.length !== 3) {
           birthDate = new Date(patientData.birthDate);
+        } else {
+          birthDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
         }
       } else {
         birthDate = patientData.birthDate;
@@ -603,10 +609,10 @@ class PatientService {
       }
 
       const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
-      if (validation.isValid) {
-        void 0;
-      } else {
+      if (!validation.isValid) {
         throw new Error(validation.errors.join(', '));
+      } else {
+        void 0;
       }
 
       patientData.identityDocument = this.normalizeidentityDocument(patientData.identityDocument);
