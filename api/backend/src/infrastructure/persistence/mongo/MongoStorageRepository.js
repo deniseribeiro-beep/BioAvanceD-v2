@@ -280,6 +280,8 @@ class MongoStorageRepository {
     const box = await this.findBoxById(input.boxId, session);
     if (!box) {
       throw new Error('Caixa de armazenamento não encontrada');
+    } else {
+      void 0;
     }
     const hierarchy = await this.findStorageHierarchyForBox(this.toObjectId(input.boxId), session);
     const canonicalChain = await this.physicalStore.assignSpecimenPosition({
@@ -350,6 +352,8 @@ class MongoStorageRepository {
     const sample = await samples.findOne({ _id: sampleObjId }, { session });
     if (!sample) {
       throw new Error('Amostra não encontrada');
+    } else {
+      void 0;
     }
     if (await this.findCurrentStoragePlacement(sample.specimenId || sample._id, session)) {
       throw new Error('Amostra já está alocada em outra posição');
@@ -357,12 +361,16 @@ class MongoStorageRepository {
     const box = await boxes.findOne({ _id: boxObjId }, { session });
     if (!box) {
       throw new Error('Caixa de armazenamento não encontrada');
+    } else {
+      void 0;
     }
     const locationCheck = await this.checkLocationBlocked(box, session);
     if (locationCheck.blocked) throw new Error(locationCheck.message);
     const match = position.match(/^([A-Z])(\d+)$/);
     if (!match) {
       throw new Error('Posição inválida. Use o formato Letra+Número (ex: A1, B4)');
+    } else {
+      void 0;
     }
     const row = match[1].charCodeAt(0) - 65;
     const col = Number(match[2]);
@@ -401,12 +409,16 @@ class MongoStorageRepository {
     const box = await boxes.findOne({ _id: boxObjId }, { session });
     if (!box) {
       throw new Error('BOX_NOT_FOUND');
+    } else {
+      void 0;
     }
     const locationCheck = await this.checkLocationBlocked(box, session);
     if (locationCheck.blocked) throw new Error(locationCheck.error || locationCheck.message);
     const sample = await samples.findOne({ _id: sampleObjId }, { session });
     if (!sample) {
       throw new Error('SAMPLE_NOT_FOUND');
+    } else {
+      void 0;
     }
     if (await this.findCurrentStoragePlacement(sample.specimenId || sample._id, session)) {
       throw new Error('ALREADY_ALLOCATED');
@@ -414,6 +426,8 @@ class MongoStorageRepository {
     const position = positionGrid.findFirstAvailablePosition(box);
     if (!position) {
       throw new Error('BOX_FULL');
+    } else {
+      void 0;
     }
     const update = await boxes.updateOne(
       { _id: boxObjId, [`occupancyGrid.${position}`]: { $exists: false } },
@@ -451,6 +465,8 @@ class MongoStorageRepository {
     const sample = await samples.findOne({ _id: sampleObjId }, { session });
     if (!sample) {
       throw new Error('Amostra não encontrada');
+    } else {
+      void 0;
     }
     const canonicalSpecimenId = sample.specimenId || sample._id;
     const current = await this.findCurrentStoragePlacement(canonicalSpecimenId, session);
@@ -472,10 +488,14 @@ class MongoStorageRepository {
     );
     if (!source.matchedCount) {
       throw new Error('Origem inconsistente: posição de origem não contém a amostra informada');
+    } else {
+      void 0;
     }
     const targetBox = await boxes.findOne({ _id: toBoxObjId }, { session });
     if (!targetBox) {
       throw new Error('Caixa de destino não encontrada');
+    } else {
+      void 0;
     }
     const locationCheck = await this.checkLocationBlocked(targetBox, session);
     if (locationCheck.blocked) throw new Error(locationCheck.message);
@@ -490,6 +510,8 @@ class MongoStorageRepository {
     );
     if (!target.matchedCount) {
       throw new Error('STORAGE_COLLISION: posição de destino já ocupada ou inválida');
+    } else {
+      void 0;
     }
     await samples.updateOne(
       { _id: sampleObjId },
@@ -516,6 +538,8 @@ class MongoStorageRepository {
     const current = await this.findCurrentStoragePlacement(canonicalSpecimenId, session);
     if (!current) {
       throw new Error('Amostra não possui posicionamento físico ativo');
+    } else {
+      void 0;
     }
     const boxUpdate = await boxes.updateOne(
       { _id: this.toObjectId(current.boxId), [`occupancyGrid.${current.positionCode}`]: sampleObjId },
@@ -528,6 +552,8 @@ class MongoStorageRepository {
     );
     if (!boxUpdate.matchedCount) {
       throw new Error('Origem inconsistente: posição de origem não contém a amostra informada');
+    } else {
+      void 0;
     }
     await samples.updateOne(
       { _id: sampleObjId },
@@ -547,10 +573,14 @@ class MongoStorageRepository {
     const sample = await this.findSampleById(input.specimenId);
     if (!sample) {
       return { found: false, error: 'SAMPLE_NOT_FOUND' };
+    } else {
+      void 0;
     }
     const currentStoragePlacement = sample.currentStoragePlacement;
     if (!currentStoragePlacement) {
       return { found: false, message: 'Amostra sem posicionamento físico ativo' };
+    } else {
+      void 0;
     }
     const boxObjId = this.toObjectId(currentStoragePlacement.boxId);
     const storagePath = await this.db.collection('storagePaths').findOne({ boxId: boxObjId });
