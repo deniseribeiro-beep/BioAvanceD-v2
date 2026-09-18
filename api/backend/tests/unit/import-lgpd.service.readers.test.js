@@ -502,3 +502,76 @@ describe('ImportLGPDService.readExcel', () => {
     expect(rows).toEqual([{ patientName: 'João Silva', birthDate: '1990-12-25T00:00:00.000Z' }]);
   });
 });
+
+
+describe('ImportLGPDService reader item 8 unknown-error fallbacks', () => {
+  it('uses the CSV unknown-error message when the parser emits a value without message', async () => {
+    const originalCsv = require2.cache[csvParserPath];
+    const originalService = require2.cache[importLgpdServicePath];
+    delete require2.cache[csvParserPath];
+    delete require2.cache[importLgpdServicePath];
+
+    require2.cache[csvParserPath] = {
+      id: csvParserPath,
+      filename: csvParserPath,
+      loaded: true,
+      exports: () => {
+        const t = new Transform({
+          transform(chunk, enc, cb) { cb(); },
+        });
+        process.nextTick(() => t.emit('error', {}));
+        return t;
+      },
+    };
+
+    try {
+      const freshService = require2(importLgpdServicePath);
+      const filePath = writeTmpFile('stream-error-no-message.csv', 'patientName,birthDate\nJoão Silva,25/12/1990\n');
+      await expect(freshService.readCSV(filePath)).rejects.toThrow(
+        'Erro ao processar arquivo CSV: Erro desconhecido'
+      );
+    } finally {
+      delete require2.cache[csvParserPath];
+      delete require2.cache[importLgpdServicePath];
+      if (originalCsv) require2.cache[csvParserPath] = originalCsv;
+      if (originalService) require2.cache[importLgpdServicePath] = originalService;
+    }
+  });
+
+  it('uses the Excel unknown-error message when xlsx.readFile rejects without message', async () => {
+    const excelPath = require2.resolve('exceljs');
+    const originalExcel = require2.cache[excelPath];
+    const originalService = require2.cache[importLgpdServicePath];
+    const filePath = writeTmpFile('excel-no-message.xlsx', 'placeholder');
+
+    class FailingWorkbook {
+      constructor() {
+        this.worksheets = [];
+        this.xlsx = {
+          readFile: async () => { throw {}; },
+        };
+      }
+    }
+
+    delete require2.cache[excelPath];
+    delete require2.cache[importLgpdServicePath];
+    require2.cache[excelPath] = {
+      id: excelPath,
+      filename: excelPath,
+      loaded: true,
+      exports: { Workbook: FailingWorkbook },
+    };
+
+    try {
+      const freshService = require2(importLgpdServicePath);
+      await expect(freshService.readExcel(filePath, 'patients')).rejects.toThrow(
+        'Erro ao processar arquivo Excel: Erro desconhecido'
+      );
+    } finally {
+      delete require2.cache[excelPath];
+      delete require2.cache[importLgpdServicePath];
+      if (originalExcel) require2.cache[excelPath] = originalExcel;
+      if (originalService) require2.cache[importLgpdServicePath] = originalService;
+    }
+  });
+});
