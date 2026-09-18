@@ -111,7 +111,9 @@ class PatientService {
   }
 
   async ensurePatientIndexes(collection, collectionName) {
-    if (!collection || !collectionName || indexedPatientCollections.has(collectionName)) return;
+    if (!collection) return;
+    if (!collectionName) return;
+    if (indexedPatientCollections.has(collectionName)) return;
 
     const indexDefinitions = [
       [
@@ -158,15 +160,20 @@ class PatientService {
 
   async getPatientsCollection(db) {
     const patientsCollection = await getCollection(db, 'patients');
-    const collectionName = patientsCollection?.collectionName || 'patients';
+    const collectionName = patientsCollection && patientsCollection.collectionName
+      ? patientsCollection.collectionName
+      : 'patients';
     await this.ensurePatientIndexes(patientsCollection, collectionName);
     return patientsCollection;
   }
 
   handlePhoneUniqueConstraint(error) {
-    const keyPattern = error?.keyPattern || {};
-    const keyValue = error?.keyValue || {};
-    const isPhoneDuplicate = Boolean(keyPattern.phone || Object.prototype.hasOwnProperty.call(keyValue, 'phone'));
+    const keyPattern = error && error.keyPattern ? error.keyPattern : {};
+    const keyValue = error && error.keyValue ? error.keyValue : {};
+    let isPhoneDuplicate = Boolean(keyPattern.phone);
+    if (!isPhoneDuplicate) {
+      isPhoneDuplicate = Object.prototype.hasOwnProperty.call(keyValue, 'phone');
+    }
     if (!isPhoneDuplicate) return;
 
     const duplicateError = new Error(`Telefone ${String(keyValue.phone || '').trim()} já cadastrado no sistema.`);
@@ -470,6 +477,8 @@ class PatientService {
               existingDate.getTime() === normalizedBirthDate.getTime()) {
             return rawIdentity;
           }
+        } else {
+          void 0;
         }
       }
 
@@ -480,7 +489,8 @@ class PatientService {
     }
   }
 
-  async createPatient(db, patientData, options = {}) {
+  async createPatient(db, patientData, options) {
+    options = Object(options);
     try {
       // PatientModel no longer folds alphaGal/lysoGb3 into dadosEspecificos itself
       // (dropped in e2549bee's canonicalization rewrite), so a caller submitting them
@@ -598,13 +608,10 @@ class PatientService {
 
       const identifierConflict = await this.checkIdentifierConflict(db, patientData);
       if (identifierConflict) {
-        const conflictError = new Error(
-          identifierConflict.field === 'identityDocument'
-            ? `identityDocument ${identifierConflict.value} já cadastrado no sistema.`
-            : identifierConflict.field === 'recordNumber'
-              ? `Prontuário ${identifierConflict.value} já cadastrado no sistema.`
-              : 'Paciente com identificadores já cadastrado no sistema.'
-        );
+        const conflictMessage = identifierConflict.field === 'identityDocument'
+          ? `identityDocument ${identifierConflict.value} já cadastrado no sistema.`
+          : `Prontuário ${identifierConflict.value} já cadastrado no sistema.`;
+        const conflictError = new Error(conflictMessage);
         conflictError.statusCode = 409;
         throw conflictError;
       } else {
@@ -721,7 +728,8 @@ class PatientService {
     }
   }
 
-  async listPatients(db, filters = {}) {
+  async listPatients(db, filters) {
+    filters = Object(filters);
     try {
       const patientsCollection = await this.getPatientsCollection(db);
       const query = {};
@@ -919,7 +927,7 @@ class PatientService {
     }
   }
 
-  async updatePatient(db, participantId, updateData, options = {}) {
+  async updatePatient(db, participantId, updateData, options) {
     try {
       const patientsCollection = await this.getPatientsCollection(db);
 
