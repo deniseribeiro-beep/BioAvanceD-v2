@@ -194,6 +194,12 @@ class PatientService {
     return String(value).trim();
   }
 
+  resolveClinicalUnitAcronym(value, resolvedName) {
+    const normalized = this.normalizeOptionalClinicalText(value);
+    if (normalized) return normalized;
+    return PatientModel.fillAcronym(resolvedName);
+  }
+
   async resolveClinicalUnitSnapshot(db, payload = {}) {
     const hasClinicalUnitId = payload.clinicalUnitId !== undefined;
     const hasClinicalUnitName = payload.clinicalUnit !== undefined;
@@ -232,22 +238,11 @@ class PatientService {
     const organization = organizationMatches[0];
     if (organization) {
       void 0;
-      let resolvedName = '';
-      if (organization.officialName) {
-        resolvedName = String(organization.officialName).trim();
-      } else {
-        void 0;
-      }
-      let resolvedAcronym = '';
-      if (organization.acronym) {
-        resolvedAcronym = String(organization.acronym).trim();
-      } else {
-        resolvedAcronym = PatientModel.fillAcronym(resolvedName);
-      }
+      const resolvedName = this.normalizeOptionalClinicalText(organization.officialName);
       return {
         clinicalUnitId: String(organization.organizationId),
         clinicalUnit: resolvedName || null,
-        unitAcronym: resolvedAcronym
+        unitAcronym: this.resolveClinicalUnitAcronym(organization.acronym, resolvedName)
       };
     }
 
