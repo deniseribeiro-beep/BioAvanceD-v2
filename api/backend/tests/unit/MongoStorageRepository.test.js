@@ -1341,4 +1341,299 @@ describe('MongoStorageRepository canonical v2', () => {
   });
 
 
+  describe('item 8 MongoStorageRepository exhaustive residual branches', () => {
+    it('returns null when canonical release has nothing active to release', async () => {
+      const physicalStore = makePhysicalStore({
+        releaseSpecimenPosition: vi.fn().mockResolvedValue(null)
+      });
+      const projectionService = makeProjectionService();
+      const { repo } = makeRepo({ physicalStore, projectionService });
+
+      await expect(repo.releaseCanonicalPhysicalPlacement({ specimenId: 'SPEC-NONE' }, {}))
+        .resolves.toBeNull();
+      expect(projectionService.appendSpecimenContainerAssignmentEvent).not.toHaveBeenCalled();
+    });
+
+    it('covers allocate fallback, already-allocated, blocked, bounds and collision branches', async () => {
+      const sampleId = new ObjectId();
+      const boxId = new ObjectId();
+      const sample = { _id: sampleId, specimenId: 'SPEC-A' };
+      const validBox = {
+        _id: boxId,
+        status: 'OPERATIONAL',
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: {},
+        currentOccupancy: 0
+      };
+
+      {
+        const samples = makeCollection({ findOne: vi.fn().mockResolvedValue(sample) });
+        const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValue(validBox) });
+        const { repo } = makeRepo({ collections: { samples, storageBoxes } });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue(null);
+        vi.spyOn(repo, 'checkLocationBlocked').mockResolvedValue({ blocked: false });
+
+        await expect(repo.allocateSamplePosition({ specimenId: sampleId, boxId }, {}))
+          .rejects.toThrow('Posição inválida');
+      }
+
+      {
+        const samples = makeCollection({ findOne: vi.fn().mockResolvedValue(sample) });
+        const { repo } = makeRepo({ collections: { samples } });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue({ boxId, positionCode: 'A1' });
+
+        await expect(repo.allocateSamplePosition({ specimenId: sampleId, boxId, position: 'A1' }, {}))
+          .rejects.toThrow('Amostra já está alocada');
+      }
+
+      {
+        const samples = makeCollection({ findOne: vi.fn().mockResolvedValue(sample) });
+        const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValue(validBox) });
+        const { repo } = makeRepo({ collections: { samples, storageBoxes } });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue(null);
+        vi.spyOn(repo, 'checkLocationBlocked').mockResolvedValue({ blocked: true, message: 'blocked-location' });
+
+        await expect(repo.allocateSamplePosition({ specimenId: sampleId, boxId, position: 'A1' }, {}))
+          .rejects.toThrow('blocked-location');
+      }
+
+      {
+        const samples = makeCollection({ findOne: vi.fn().mockResolvedValue(sample) });
+        const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValue(validBox) });
+        const { repo } = makeRepo({ collections: { samples, storageBoxes } });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue(null);
+        vi.spyOn(repo, 'checkLocationBlocked').mockResolvedValue({ blocked: false });
+
+        await expect(repo.allocateSamplePosition({ specimenId: sampleId, boxId, position: 'B2' }, {}))
+          .rejects.toThrow('Posição fora dos limites');
+      }
+
+      {
+        const samples = makeCollection({
+          findOne: vi.fn().mockResolvedValue(sample),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+        });
+        const storageBoxes = makeCollection({
+          findOne: vi.fn().mockResolvedValue(validBox),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 })
+        });
+        const { repo } = makeRepo({ collections: { samples, storageBoxes } });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue(null);
+        vi.spyOn(repo, 'checkLocationBlocked').mockResolvedValue({ blocked: false });
+
+        await expect(repo.allocateSamplePosition({ specimenId: sampleId, boxId, position: 'A1' }, {}))
+          .rejects.toThrow('STORAGE_COLLISION');
+      }
+    });
+
+    it('covers auto-allocation blocked, already-allocated and successful branches', async () => {
+      const sampleId = new ObjectId();
+      const boxId = new ObjectId();
+      const sample = { _id: sampleId, specimenId: 'SPEC-AUTO' };
+      const box = {
+        _id: boxId,
+        status: 'OPERATIONAL',
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: {},
+        currentOccupancy: 0
+      };
+
+      {
+        const samples = makeCollection({ findOne: vi.fn().mockResolvedValue(sample) });
+        const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValue(box) });
+        const { repo } = makeRepo({ collections: { samples, storageBoxes } });
+        vi.spyOn(repo, 'checkLocationBlocked').mockResolvedValue({ blocked: true, error: 'LOCATION_UNAVAILABLE' });
+
+        await expect(repo.autoAssignSamplePosition({ specimenId: sampleId, boxId }, {}))
+          .rejects.toThrow('LOCATION_UNAVAILABLE');
+      }
+
+      {
+        const samples = makeCollection({ findOne: vi.fn().mockResolvedValue(sample) });
+        const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValue(box) });
+        const { repo } = makeRepo({ collections: { samples, storageBoxes } });
+        vi.spyOn(repo, 'checkLocationBlocked').mockResolvedValue({ blocked: false });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue({ boxId, positionCode: 'A1' });
+
+        await expect(repo.autoAssignSamplePosition({ specimenId: sampleId, boxId }, {}))
+          .rejects.toThrow('ALREADY_ALLOCATED');
+      }
+
+      {
+        const samples = makeCollection({
+          findOne: vi.fn().mockResolvedValue(sample),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+        });
+        const storageBoxes = makeCollection({
+          findOne: vi.fn().mockResolvedValue(box),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+        });
+        const { repo } = makeRepo({ collections: { samples, storageBoxes } });
+        vi.spyOn(repo, 'checkLocationBlocked').mockResolvedValue({ blocked: false });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue(null);
+        vi.spyOn(repo, 'assignCanonicalPhysicalPlacement').mockResolvedValue({
+          specimenId: 'SPEC-AUTO',
+          boxId,
+          positionCode: 'A1'
+        });
+
+        await expect(repo.autoAssignSamplePosition({ specimenId: sampleId, boxId }, {}))
+          .resolves.toMatchObject({ specimenId: 'SPEC-AUTO', positionCode: 'A1' });
+      }
+    });
+
+    it('covers move source mismatch, blocked target, collision and success branches', async () => {
+      const sampleId = new ObjectId();
+      const fromBoxId = new ObjectId();
+      const toBoxId = new ObjectId();
+      const sample = { _id: sampleId, specimenId: 'SPEC-MOVE' };
+      const targetBox = { _id: toBoxId, status: 'OPERATIONAL' };
+      const move = {
+        specimenId: sampleId,
+        fromBoxId,
+        fromPosition: 'A1',
+        toBoxId,
+        toPosition: 'B1'
+      };
+
+      {
+        const samples = makeCollection({ findOne: vi.fn().mockResolvedValue(sample) });
+        const storageBoxes = makeCollection({
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 })
+        });
+        const { repo } = makeRepo({ collections: { samples, storageBoxes } });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue({
+          boxId: fromBoxId,
+          positionCode: 'A1'
+        });
+
+        await expect(repo.moveSamplePosition(move, {}))
+          .rejects.toThrow('posição de origem não contém');
+      }
+
+      {
+        const samples = makeCollection({ findOne: vi.fn().mockResolvedValue(sample) });
+        const storageBoxes = makeCollection({
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+          findOne: vi.fn().mockResolvedValue(targetBox)
+        });
+        const { repo } = makeRepo({ collections: { samples, storageBoxes } });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue({
+          boxId: fromBoxId,
+          positionCode: 'A1'
+        });
+        vi.spyOn(repo, 'checkLocationBlocked').mockResolvedValue({ blocked: true, message: 'target-blocked' });
+
+        await expect(repo.moveSamplePosition(move, {}))
+          .rejects.toThrow('target-blocked');
+      }
+
+      {
+        const samples = makeCollection({ findOne: vi.fn().mockResolvedValue(sample) });
+        const storageBoxes = makeCollection({
+          updateOne: vi.fn()
+            .mockResolvedValueOnce({ matchedCount: 1 })
+            .mockResolvedValueOnce({ matchedCount: 0 }),
+          findOne: vi.fn().mockResolvedValue(targetBox)
+        });
+        const { repo } = makeRepo({ collections: { samples, storageBoxes } });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue({
+          boxId: fromBoxId,
+          positionCode: 'A1'
+        });
+        vi.spyOn(repo, 'checkLocationBlocked').mockResolvedValue({ blocked: false });
+
+        await expect(repo.moveSamplePosition(move, {}))
+          .rejects.toThrow('STORAGE_COLLISION');
+      }
+
+      {
+        const samples = makeCollection({
+          findOne: vi.fn().mockResolvedValue(sample),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+        });
+        const storageBoxes = makeCollection({
+          updateOne: vi.fn()
+            .mockResolvedValueOnce({ matchedCount: 1 })
+            .mockResolvedValueOnce({ matchedCount: 1 }),
+          findOne: vi.fn().mockResolvedValue(targetBox)
+        });
+        const { repo } = makeRepo({ collections: { samples, storageBoxes } });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue({
+          boxId: fromBoxId,
+          positionCode: 'A1'
+        });
+        vi.spyOn(repo, 'checkLocationBlocked').mockResolvedValue({ blocked: false });
+        vi.spyOn(repo, 'releaseCanonicalPhysicalPlacement').mockResolvedValue({});
+        vi.spyOn(repo, 'assignCanonicalPhysicalPlacement').mockResolvedValue({
+          specimenId: 'SPEC-MOVE',
+          boxId: toBoxId,
+          positionCode: 'B1'
+        });
+
+        await expect(repo.moveSamplePosition(move, {}))
+          .resolves.toMatchObject({ specimenId: 'SPEC-MOVE', positionCode: 'B1' });
+      }
+    });
+
+    it('covers release grid mismatch, successful release and physical lookup no-placement branches', async () => {
+      const sampleId = new ObjectId();
+      const boxId = new ObjectId();
+      const sample = {
+        _id: sampleId,
+        specimenId: 'SPEC-REL',
+        barcode: 'BC-REL',
+        quantity: 5,
+        unit: 'mL'
+      };
+      const placement = { boxId, positionCode: 'A1' };
+
+      {
+        const samples = makeCollection({ findOne: vi.fn().mockResolvedValue(sample) });
+        const storageBoxes = makeCollection({
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 })
+        });
+        const { repo } = makeRepo({ collections: { samples, storageBoxes } });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue(placement);
+
+        await expect(repo.releaseSamplePosition({ specimenId: sampleId }, {}))
+          .rejects.toThrow('posição de origem não contém');
+      }
+
+      {
+        const samples = makeCollection({
+          findOne: vi.fn().mockResolvedValue(sample),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+        });
+        const storageBoxes = makeCollection({
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+        });
+        const { repo } = makeRepo({ collections: { samples, storageBoxes } });
+        vi.spyOn(repo, 'findCurrentStoragePlacement').mockResolvedValue(placement);
+        vi.spyOn(repo, 'releaseCanonicalPhysicalPlacement').mockResolvedValue({});
+
+        await expect(repo.releaseSamplePosition({ specimenId: sampleId }, {}))
+          .resolves.toEqual({
+            from: { boxId: String(boxId), position: 'A1' },
+            barcode: 'BC-REL',
+            quantity: 5,
+            unit: 'mL'
+          });
+      }
+
+      {
+        const { repo } = makeRepo();
+        vi.spyOn(repo, 'findSampleById').mockResolvedValue({
+          _id: sampleId,
+          specimenId: 'SPEC-REL',
+          currentStoragePlacement: null
+        });
+
+        await expect(repo.getSamplePhysicalPlacement({ specimenId: sampleId }))
+          .resolves.toEqual({ found: false, message: 'Amostra sem posicionamento físico ativo' });
+      }
+    });
+  });
+
+
 });
