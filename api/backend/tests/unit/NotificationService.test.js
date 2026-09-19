@@ -1224,4 +1224,89 @@ describe('NotificationService', () => {
       await expect(notificationService.notifyJobProgress('u1', { percent: 10 })).resolves.toBeUndefined();
     });
   });
+
+  describe('item 8 residual transport and fallback branches', () => {
+    it('creates and caches the real SMTP transport lazily without sending', () => {
+      process.env.SMTP_HOST = 'smtp.example.test';
+      process.env.SMTP_PORT = '2525';
+      notificationService.smtpTransport = null;
+
+      const first = notificationService.getSmtpTransport();
+      const second = notificationService.getSmtpTransport();
+
+      expect(first).toBeTruthy();
+      expect(second).toBe(first);
+      expect(first.options).toEqual(expect.objectContaining({
+        host: 'smtp.example.test',
+        port: 2525,
+        secure: false,
+      }));
+      if (typeof first.close === 'function') first.close();
+    });
+
+    it('records validation failure when EMAIL_FROM is missing before recipient resolution', async () => {
+      notificationService.isDevelopment = false;
+      notificationService.emailFrom = '';
+      const complianceSpy = vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
+
+      await expect(
+        notificationService.sendEmail({ to: 'patient@example.com', subject: 'Hello', text: 'body' })
+      ).rejects.toThrow('EMAIL_FROM é obrigatório');
+
+      expect(complianceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          originalTo: 'patient@example.com',
+          deliveryStatus: 'DELIVERY_FAILED',
+          errorCode: 'VALIDATION_FAILED',
+        })
+      );
+    });
+
+    it('records validation failure when development recipient redirection cannot resolve ADMIN_EMAIL', async () => {
+      notificationService.isDevelopment = true;
+      notificationService.adminEmail = '';
+      notificationService.emailFrom = 'notifications@example.com';
+      const complianceSpy = vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
+
+      await expect(
+        notificationService.sendEmail({ to: 'patient@example.com', subject: 'Hello', text: 'body' })
+      ).rejects.toThrow('ADMIN_EMAIL é obrigatório');
+
+      expect(complianceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          originalTo: 'patient@example.com',
+          deliveryStatus: 'DELIVERY_FAILED',
+          errorCode: 'VALIDATION_FAILED',
+        })
+      );
+    });
+
+    it('normalizes absent queue-count keys to zero and the rejected-channel reason fallback to failed', async () => {
+      vi.spyOn(notificationService, 'getNotificationQueue').mockReturnValue({
+        getJobCounts: vi.fn().mockResolvedValue({}),
+      });
+
+      await expect(notificationService.getConsentQueueStats()).resolves.toEqual({
+        available: true,
+        counts: { waiting: 0, delayed: 0, active: 0, failed: 0 },
+        totalQueued: 0,
+        active: 0,
+      });
+
+      vi.spyOn(notificationService, 'sendConsentEmail').mockRejectedValue(undefined);
+      vi.spyOn(notificationService, 'sendConsentWhatsappFallback').mockResolvedValue({
+        channel: 'whatsapp',
+        success: true,
+      });
+
+      const results = await notificationService.notifyPatientConsent(
+        { participantId: '12345678' },
+        'https://app.example.test/consent'
+      );
+
+      expect(results[0]).toEqual({ channel: 'unknown', success: false, reason: 'failed' });
+      expect(results[1]).toEqual({ channel: 'whatsapp', success: true });
+    });
+  });
+
 });
