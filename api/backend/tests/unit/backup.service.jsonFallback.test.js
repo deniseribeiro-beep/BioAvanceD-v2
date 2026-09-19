@@ -168,6 +168,73 @@ describe('#738: JSON-fallback backup round trip preserves BSON types', () => {
     });
   });
 
+  describe('item 8 wrapper-shape branch closure', () => {
+    it('recognizes the remaining well-formed EJSON wrapper shapes without degrading them to legacy JSON', () => {
+      const raw = JSON.stringify([{
+        uuid: { $uuid: '00112233-4455-6677-8899-aabbccddeeff' },
+        symbol: { $symbol: 'BIO' },
+        numberDouble: { $numberDouble: '1.25' },
+        minKey: { $minKey: 1 },
+        maxKey: { $maxKey: 1 },
+        regex: { $regex: '^BIO$', $options: 'i' },
+        regularExpression: { $regularExpression: { pattern: '^ADV$', options: 'i' } },
+        timestamp: { $timestamp: { t: 10, i: 2 } },
+        undefinedValue: { $undefined: true },
+        code: { $code: 'return x;', $scope: { x: { $numberInt: '1' } } },
+        dbPointer: {
+          $dbPointer: {
+            $ref: 'samples',
+            $id: { $oid: '507f1f77bcf86cd799439011' }
+          }
+        }
+      }]);
+
+      const expected = BSON.EJSON.parse(raw, { relaxed: false });
+      const docs = backupService.parseBackupDocs(raw);
+
+      expect(docs).toEqual(expected);
+    });
+
+    it('keeps malformed wrapper collisions plain while exercising every shape guard fail-closed', () => {
+      const malformed = {
+        oid: { $oid: 'not-an-object-id' },
+        binary: { $binary: { base64: '*not-base64*', subType: 'zz' } },
+        uuid: { $uuid: 'not-a-uuid' },
+        symbol: { $symbol: 42 },
+        numberInt: { $numberInt: '2147483648' },
+        numberDecimal: { $numberDecimal: 'not-a-number' },
+        numberDouble: { $numberDouble: 'not-a-number' },
+        numberLong: { $numberLong: '9223372036854775808' },
+        minKey: { $minKey: 0 },
+        maxKey: { $maxKey: 0 },
+        regex: { $regex: '^BIO$', $options: 'q' },
+        regularExpression: { $regularExpression: { pattern: '^BIO$', options: 'q' } },
+        timestamp: { $timestamp: { t: '10', i: 2 } },
+        undefinedValue: { $undefined: false },
+        date: { $date: 'not-a-date' },
+        code: { $code: 'return x;', $scope: 'not-an-object' },
+        dbPointer: { $dbPointer: { $ref: 'samples' } },
+      };
+
+      const docs = backupService.parseBackupDocs(JSON.stringify([{ malformed }]));
+
+      expect(docs).toEqual([{ malformed }]);
+    });
+
+    it('keeps objects with unknown or extra dollar keys plain instead of selecting a near-match wrapper', () => {
+      const rawDoc = {
+        unknown: { $bioavanced: 'value' },
+        extra: { $oid: '507f1f77bcf86cd799439011', $extra: true },
+        codeExtra: { $code: 'return 1;', $scope: {}, ordinarySibling: true },
+        dbRefMissingId: { $ref: 'samples', ordinarySibling: true },
+      };
+
+      const docs = backupService.parseBackupDocs(JSON.stringify([rawDoc]));
+
+      expect(docs).toEqual([rawDoc]);
+    });
+  });
+
   // Canonical mode wraps plain numbers in Int32/Double rather than
   // returning native JS numbers. That is deliberate and must not be
   // "simplified" to `relaxed: true`: relaxed parsing returns native numbers
