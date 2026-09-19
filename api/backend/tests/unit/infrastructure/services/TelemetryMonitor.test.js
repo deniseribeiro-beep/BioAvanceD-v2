@@ -649,4 +649,267 @@ describe('TelemetryMonitor', () => {
     });
   });
 
+
+  describe('item 8 residual canonical telemetry branches', () => {
+    it('logs a raw scheduled-cycle rejection without stopping the cron task', async () => {
+      const monitor = new TelemetryMonitor({ db: {} });
+      monitor.runCycle = vi.fn().mockRejectedValue('raw scheduled failure');
+      monitor.start();
+
+      const scheduled = cronScheduleSpy.mock.calls[0][1];
+      await scheduled();
+
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Erro no ciclo do monitor'),
+        'raw scheduled failure'
+      );
+    });
+
+    it('continues after raw missing-reading failure, skips cooldown-blocked freezers and uses rootSampleId fallback', async () => {
+      const monitor = new TelemetryMonitor({ db: {} });
+      monitor.checkMissingReadings = vi.fn().mockRejectedValue('raw missing failure');
+      monitor.findCriticalFreezers = vi.fn().mockResolvedValue([
+        { freezerKey: 'skip', rootSampleIds: ['SPEC-SKIP'] },
+        { freezerKey: 'single', rootSampleId: 'SPEC-ONE' },
+      ]);
+      monitor.shouldTrigger = vi.fn((key) => key === 'single');
+      monitor.propagateCompromise = vi.fn().mockResolvedValue({ summarized: 1 });
+
+      const result = await monitor.runCycle();
+
+      expect(result.processed).toBe(1);
+      expect(monitor.propagateCompromise).toHaveBeenCalledWith(expect.objectContaining({ rootSampleId: 'SPEC-ONE' }));
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Falha ao verificar leituras ausentes'),
+        'raw missing failure'
+      );
+    });
+
+    it('uses default duration values when db is unavailable and when sensor metadata has no bound policy', async () => {
+      const noDb = new TelemetryMonitor({ db: null, criticalDurationHours: 3 });
+      await expect(noDb.resolveCriticalDurationMinutesBySensor(['S1'])).resolves.toEqual(new Map([['S1', 180]]));
+
+      const sensorMetadata = { find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ sensorId: 'S2' }]) })) };
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'sensorMetadata') return sensorMetadata;
+          if (name === 'temperaturePolicies') return { find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })) };
+          throw new Error(`unexpected collection ${name}`);
+        }),
+      };
+      const monitor = new TelemetryMonitor({ db, criticalDurationHours: 4 });
+      await expect(monitor.resolveCriticalDurationMinutesBySensor(['S2'])).resolves.toEqual(new Map([['S2', 240]]));
+    });
+
+    it('returns [] at every incomplete normalized physical-lineage hop', async () => {
+      const cursor = (rows) => ({ toArray: vi.fn().mockResolvedValue(rows) });
+      const cases = [
+        { racks: [], positions: [], placements: [] },
+        { racks: [{ storageRackId: 'R1' }], positions: [], placements: [] },
+        { racks: [{ storageRackId: 'R1' }], positions: [{ storagePositionId: 'P1' }], placements: [] },
+      ];
+      for (const item of cases) {
+        const collections = {
+          sensorMetadata: { findOne: vi.fn().mockResolvedValue({ sensorId: 'S', storageContainer: 'LOC' }) },
+          rackLocationAssignments: { find: vi.fn(() => cursor(item.racks)) },
+          storagePositions: { find: vi.fn(() => cursor(item.positions)) },
+          containerPositionAssignments: { find: vi.fn(() => cursor(item.placements)) },
+          specimenContainerAssignments: { find: vi.fn(() => cursor([])) },
+        };
+        const db = { collection: vi.fn((name) => collections[name]) };
+        const monitor = new TelemetryMonitor({ db });
+        await expect(monitor.resolveRootSamples('S')).resolves.toEqual([]);
+      }
+    });
+
+    it('returns [] from missing-reading discovery when there are no configured sensors', async () => {
+      const db = { collection: vi.fn(() => ({ find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })) })) };
+      const monitor = new TelemetryMonitor({ db });
+      await expect(monitor.findSensorsWithMissingReadings()).resolves.toEqual([]);
+      expect(connectInfluxDBSpy).not.toHaveBeenCalled();
+    });
+
+    it('detects missing readings with no linked device, an old reading and a recent reading', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-09-19T20:00:00.000Z'));
+      const sensors = [
+        { sensorId: 'no-device' },
+        { sensorId: 'old', device: 'D1' },
+        { sensorId: 'recent', device: 'D2' },
+      ];
+      const collections = {
+        sensorMetadata: { find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue(sensors) })) },
+        devices: { find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ _id: 'D1', deviceId: 'DEVICE-1' }, { _id: 'D2', deviceId: 'DEVICE-2' }]) })) },
+      };
+      const db = { collection: vi.fn((name) => collections[name]) };
+      const monitor = new TelemetryMonitor({ db, expectedReadingIntervalMinutes: 15 });
+      getInfluxQueryApiSpy.mockReturnValue({
+        collectRows: vi.fn().mockResolvedValue([
+          { sensorId: 'old', _time: '2026-09-19T19:00:00.000Z' },
+          { sensorId: 'recent', _time: '2026-09-19T19:55:00.000Z' },
+        ]),
+      });
+
+      const missing = await monitor.findSensorsWithMissingReadings();
+      expect(missing).toEqual([
+        { sensorId: 'no-device', deviceId: null, lastReadingAt: null },
+        { sensorId: 'old', deviceId: 'DEVICE-1', lastReadingAt: new Date('2026-09-19T19:00:00.000Z') },
+      ]);
+    });
+
+    it('does not query devices when configured sensors have no device links', async () => {
+      const sensorMetadata = { find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ sensorId: 'S1' }]) })) };
+      const db = { collection: vi.fn((name) => {
+        if (name === 'sensorMetadata') return sensorMetadata;
+        throw new Error('devices should not be queried');
+      }) };
+      const monitor = new TelemetryMonitor({ db });
+      getInfluxQueryApiSpy.mockReturnValue({ collectRows: vi.fn().mockResolvedValue([]) });
+
+      await expect(monitor.findSensorsWithMissingReadings()).resolves.toEqual([
+        { sensorId: 'S1', deviceId: null, lastReadingAt: null },
+      ]);
+    });
+
+    it('updates an existing missing-reading excursion and inserts a new one', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-09-19T20:00:00.000Z'));
+      const excursions = {
+        findOne: vi.fn()
+          .mockResolvedValueOnce({ _id: 'EX-1' })
+          .mockResolvedValueOnce(null),
+        updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+        insertOne: vi.fn().mockResolvedValue({ insertedId: 'EX-2' }),
+      };
+      const empty = { find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })) };
+      const db = { collection: vi.fn((name) => {
+        if (name === 'environmentalExcursions') return excursions;
+        if (name === 'sensors' || name === 'sensorMetadata') return empty;
+        if (name === 'storageContainers' || name === 'storageBoxes') return empty;
+        if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue(null) };
+        throw new Error(`unexpected collection ${name}`);
+      }) };
+      const monitor = new TelemetryMonitor({ db, expectedReadingIntervalMinutes: 15 });
+
+      await monitor.upsertMissingReadingExcursion({ sensorId: 'S1', deviceId: 'D1', lastReadingAt: new Date('2026-09-19T19:00:00.000Z') });
+      expect(excursions.updateOne).toHaveBeenCalled();
+
+      await monitor.upsertMissingReadingExcursion({ sensorId: 'S2', deviceId: 'D2', lastReadingAt: null });
+      expect(excursions.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        equipmentId: 'D2',
+        excursionType: 'missing_reading',
+        excursionStatus: 'open',
+      }));
+    });
+
+    it('skips missing-reading excursion creation for sensors without deviceId', async () => {
+      const monitor = new TelemetryMonitor({ db: {} });
+      monitor.findSensorsWithMissingReadings = vi.fn().mockResolvedValue([
+        { sensorId: 'S1', deviceId: null },
+        { sensorId: 'S2', deviceId: 'D2' },
+      ]);
+      monitor.upsertMissingReadingExcursion = vi.fn().mockResolvedValue();
+
+      const result = await monitor.checkMissingReadings();
+      expect(result).toHaveLength(2);
+      expect(monitor.upsertMissingReadingExcursion).toHaveBeenCalledOnce();
+      expect(monitor.upsertMissingReadingExcursion).toHaveBeenCalledWith(expect.objectContaining({ sensorId: 'S2' }));
+    });
+
+    it('normalizes ObjectId, ObjectId string, arbitrary string and numeric specimen identifiers', () => {
+      const { ObjectId } = require('mongodb');
+      const monitor = new TelemetryMonitor({});
+      const objectId = new ObjectId();
+      const hex = new ObjectId().toHexString();
+
+      expect(monitor.normalizeSpecimenLookupId(objectId)).toBe(objectId);
+      expect(monitor.normalizeSpecimenLookupId(hex)).toBeInstanceOf(ObjectId);
+      expect(monitor.normalizeSpecimenLookupId('SPEC-1')).toBe('SPEC-1');
+      expect(monitor.normalizeSpecimenLookupId(42)).toBe(42);
+    });
+
+    it('deduplicates descendant traversal and supports roots without specimenId', async () => {
+      const root = { _id: 'ROOT' };
+      const samples = {
+        findOne: vi.fn().mockResolvedValue(root),
+        find: vi.fn(({ parentSpecimenIds }) => ({
+          toArray: vi.fn(async () => parentSpecimenIds.$in.includes('ROOT')
+            ? [{ _id: 'CHILD' }, { _id: 'CHILD' }]
+            : []),
+        })),
+      };
+      getCollectionSpy.mockResolvedValue(samples);
+      const monitor = new TelemetryMonitor({ db: {} });
+
+      const result = await monitor.resolveDescendantSpecimens('ROOT', null);
+      expect(result.map((item) => item._id)).toEqual(['ROOT', 'CHILD']);
+    });
+
+    it('builds an unassigned exposure summary using all optional metric defaults', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-09-19T20:00:00.000Z'));
+      const monitor = new TelemetryMonitor({});
+      const summary = monitor.buildExposureSummary({
+        specimen: { _id: 'SPEC-MONGO' },
+        assignment: null,
+        freezerKey: 'SENSOR',
+        breachedSince: '2026-09-19T18:00:00.000Z',
+      });
+
+      expect(summary).toMatchObject({
+        specimenId: 'SPEC-MONGO',
+        specimenContainerAssignmentId: null,
+        containerPositionAssignmentId: null,
+        rackLocationAssignmentId: null,
+        observationCount: 0,
+        minimumValue: null,
+        maximumValue: null,
+        meanValue: null,
+        timeOutsideThresholdSeconds: 0,
+        coverageRatio: null,
+        sourceQueryHash: null,
+        sourceReadingSetHash: null,
+      });
+      expect(summary.windowEnd).toEqual(new Date('2026-09-19T20:00:00.000Z'));
+    });
+
+    it('persists exposure summaries without a physicalStore using the unassigned path', async () => {
+      const telemetryCollection = { updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }) };
+      const session = {
+        withTransaction: vi.fn(async (handler) => handler()),
+        endSession: vi.fn().mockResolvedValue(),
+      };
+      const db = {
+        client: {
+          db: vi.fn(() => ({ command: vi.fn().mockResolvedValue({ setName: 'rs0', isWritablePrimary: true }) })),
+          startSession: vi.fn(() => session),
+        },
+        collection: vi.fn((name) => {
+          if (name === 'telemetryExposureSummaries') return telemetryCollection;
+          throw new Error(`unexpected collection ${name}`);
+        }),
+      };
+      const samples = {
+        findOne: vi.fn().mockResolvedValue({ _id: 'ROOT', specimenId: 'SPEC-ROOT' }),
+        find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })),
+      };
+      getCollectionSpy.mockResolvedValue(samples);
+      const graphProjectionService = { appendTelemetryExposureSummaryEvent: vi.fn().mockResolvedValue({ eventId: 'E1' }) };
+      const monitor = new TelemetryMonitor({ db, graphProjectionService });
+      monitor.physicalStore = null;
+
+      await expect(monitor.propagateCompromise({
+        rootSampleId: 'SPEC-ROOT',
+        freezerKey: 'SENSOR',
+        breachedSince: new Date('2026-09-19T18:00:00.000Z'),
+      })).resolves.toEqual({ summarized: 1 });
+
+      expect(telemetryCollection.updateOne).toHaveBeenCalledWith(
+        expect.anything(),
+        { $setOnInsert: expect.objectContaining({ containerPositionAssignmentId: null }) },
+        expect.objectContaining({ upsert: true, session })
+      );
+    });
+  });
+
 });
