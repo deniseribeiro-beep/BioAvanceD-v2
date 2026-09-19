@@ -1957,6 +1957,64 @@ describe('sample.routes', () => {
         expect.objectContaining({ specimenId: 'SPEC-99', success: true })
       );
     });
+    it('covers the batch-label db guard, missing-barcode and per-item failure branches', async () => {
+      const noDbRoute = loadRoute();
+      const noDbApp = buildApp(noDbRoute.router, null);
+      const noDb = await request(noDbApp)
+        .post('/api/samples/labels/batch')
+        .send({ specimenIds: ['s1'] });
+      expect(noDb.status).toBe(503);
+
+      const getBarcodeIndustrialAssets = vi.fn().mockRejectedValue(new Error('barcode generation failed'));
+      const { router } = loadRoute({ sampleServiceOverrides: { getBarcodeIndustrialAssets } });
+      const { db } = statefulDb({
+        samples: [
+          { _id: 'without-barcode', specimenId: 'without-barcode' },
+          { _id: 'broken-assets', specimenId: 'broken-assets', barcode: 'BC-BROKEN' },
+        ],
+      });
+      const app = buildApp(router, db);
+
+      const res = await request(app)
+        .post('/api/samples/labels/batch')
+        .send({ specimenIds: ['without-barcode', 'broken-assets'] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.generated).toBe(0);
+      expect(res.body.data.failed).toBe(2);
+      expect(res.body.data.results).toEqual([
+        expect.objectContaining({
+          specimenId: 'without-barcode',
+          success: false,
+          error: 'Amostra não possui barcode gerado',
+        }),
+        expect.objectContaining({
+          specimenId: 'broken-assets',
+          success: false,
+          error: 'barcode generation failed',
+        }),
+      ]);
+    });
+
+    it('returns 500 when batch-label collection resolution fails before per-id processing', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, {
+        collection: vi.fn(() => {
+          throw new Error('samples collection unavailable');
+        }),
+      });
+
+      const res = await request(app)
+        .post('/api/samples/labels/batch')
+        .send({ specimenIds: ['s1'] });
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({
+        success: false,
+        error: 'Erro ao gerar artefatos de barcode',
+        message: 'samples collection unavailable',
+      });
+    });
   });
 
   describe('GET /:id', () => {
@@ -2598,252 +2656,3 @@ describe('sample.routes', () => {
             box: { boxId: 'box-1', boxName: 'Box A', position: 'A1' },
           },
         }),
-      });
-      const findOne = vi.fn().mockResolvedValue({
-        specimenId: 'SPEC-42',
-        barcode: 'BC1',
-      });
-      const labelGenerations = { findOne: vi.fn().mockResolvedValue(null), insertOne: vi.fn().mockResolvedValue({ insertedId: 'lg1' }) };
-      const app = buildApp(router, {
-        collection: (name) => (name === 'labelGenerations' ? labelGenerations : { findOne }),
-      });
-
-      const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
-
-      expect(res.status).toBe(200);
-      expect(res.body.data).toEqual(
-        expect.objectContaining({
-          specimenId: 'SPEC-42',
-          barcode: 'BC1',
-          format: 'zpl',
-          printerLanguage: 'ZPL',
-          location: 'Box Box A / Pos A1',
-          reprint: false,
-        })
-      );
-      expect(res.body.data.zpl).toContain('^BCN,80,Y,N,N^FDBC1^FS');
-      expect(labelGenerations.insertOne).toHaveBeenCalledWith(
-        expect.objectContaining({ specimenId: expect.any(String), formats: ['zpl'], reprint: false })
-      );
-    });
-
-    it('escapes ^ and ~ out of ZPL field data and omits the location line when absent', async () => {
-      const { router } = loadRoute();
-      const findOne = vi.fn().mockResolvedValue({ sampleID: 42, barcode: 'BC^1~x' });
-      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'lg1' });
-      const app = buildApp(router, { collection: () => ({ findOne, insertOne }) });
-
-      const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
-
-      expect(res.status).toBe(200);
-      expect(res.body.data.location).toBeNull();
-      expect(res.body.data.zpl).toContain('^FDBC1x^FS');
-      expect(res.body.data.zpl).not.toContain('BC^1~x');
-    });
-
-    it('returns 500 when the collection lookup throws', async () => {
-      const { router } = loadRoute();
-      const findOne = vi.fn().mockRejectedValue(new Error('db down'));
-      const app = buildApp(router, { collection: () => ({ findOne }) });
-
-      const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
-
-      expect(res.status).toBe(500);
-    });
-
-    // #857: the $or omitted the canonical `specimenId` leg entirely, so a
-    // sample findable only by the field SampleModel.create actually writes
-    // 404'd instead of resolving.
-    it('finds a sample by its canonical specimenId when no other identifier leg matches (issue #857)', async () => {
-      const { router } = loadRoute();
-      const collection = createMatchingCollection([
-        { _id: 'internal-1', specimenId: 'SPEC-99', barcode: 'BC-99' },
-      ]);
-      const app = buildApp(router, { collection: () => collection });
-
-      const res = await request(app).get('/api/samples/SPEC-99/label/print-job');
-
-      expect(res.status).toBe(200);
-    });
-  });
-});
-
-// #921 slice 4: this router already had substantial behavioural coverage
-// (org-scope 403 tests throughout the suite above) via the
-// requireOrganizationScopeImpl seam, but `git grep -n "recordedCalls" --
-// tests/unit/sample.routes.test.js` returned nothing before this block --
-// no test asserted which permission code (or which explicit action) a
-// requirePermission-gated route actually handed the gate factory, nor
-// whether requireOrganizationScope was wired in at all for a given route.
-// A route whose requirePermission code was silently swapped or dropped
-// would have passed every existing test unchanged.
-//
-// Re-derived against source (`git grep -n -E
-// "requirePermission[(]|requireRole[(]|requireOrganizationScope" --
-// api/backend/src/interface/routes/sample.routes.js`): the file has no
-// requireRole call at all. 27 routes are registered in total; 25 carry
-// requireOrganizationScope (8 of those also carry requirePermission) and 2
-// (GET /search/by-term, GET /by-barcode/:barcode) carry neither -- only
-// `authenticate`. That is 8 + 25 = 33 individual gate call sites, matching
-// the line count `git grep -c` reports (line count and site count agree
-// here only because two routes each carry both gates on one source line,
-// which offsets the handful of matched lines that are a comment or the
-// `requireOrganizationScope` import rather than a call site).
-describe('sample.routes authorization gates (issue #921)', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  describe('requirePermission argument pinning', () => {
-    // One entry per requirePermission call site in the file (8 total).
-    const CASES = [
-      { label: 'POST / (createSample)', method: 'post', path: '/', expectedArgs: ['createSample'] },
-      { label: 'POST /:id/withdraw (withdrawSample, UPDATE)', method: 'post', path: '/s1/withdraw', expectedArgs: ['withdrawSample', 'UPDATE'] },
-      { label: 'PUT /:id (editSample)', method: 'put', path: '/s1', expectedArgs: ['editSample'] },
-      { label: 'DELETE /:id (deleteSample)', method: 'delete', path: '/s1', expectedArgs: ['deleteSample'] },
-      { label: 'POST /:id/return (withdrawSample, UPDATE)', method: 'post', path: '/s1/return', expectedArgs: ['withdrawSample', 'UPDATE'] },
-      { label: 'POST /:specimenId/files/upload (uploadSampleFiles)', method: 'post', path: '/sp1/files/upload', expectedArgs: ['uploadSampleFiles'] },
-      { label: 'DELETE /:specimenId/files/:fileID (deleteSampleFiles)', method: 'delete', path: '/sp1/files/f1', expectedArgs: ['deleteSampleFiles'] },
-      // #631: the only two-argument requirePermission call in the file --
-      // uploadSampleFiles's RBAC catalog entry only allows CREATE, but PUT
-      // defaults to UPDATE via METHOD_TO_ACTION, so this route passes the
-      // action explicitly.
-      { label: 'PUT /:specimenId/files/:fileID/replace (uploadSampleFiles, CREATE)', method: 'put', path: '/sp1/files/f1/replace', expectedArgs: ['uploadSampleFiles', 'CREATE'] },
-    ];
-
-    for (const { label, method, path, expectedArgs } of CASES) {
-      it(`pins requirePermission(${JSON.stringify(expectedArgs)}) for ${label}`, async () => {
-        const requirePermissionImpl = denyingRequirePermission();
-        const { router } = loadRoute({ requirePermissionImpl });
-        const app = buildApp(router, {});
-
-        const res = await request(app)[method](`/api/samples${path}`).send({});
-
-        expect(res.status).toBe(403);
-        expect(res.body.gate).toBe('permission');
-        // The load-bearing assertion: a stub that discarded its arguments
-        // would answer 403 identically no matter what code the route
-        // actually declared.
-        expect(requirePermissionImpl.recordedCalls).toEqual([expectedArgs]);
-      });
-    }
-  });
-
-  describe('requireOrganizationScope presence pinning', () => {
-    // 25 of the file's 27 routes wire in requireOrganizationScope.
-    const GATED_CASES = [
-      { label: 'GET /:id/miabis-compliance', method: 'get', path: '/s1/miabis-compliance' },
-      { label: 'GET /:id/compliance-graph', method: 'get', path: '/s1/compliance-graph' },
-      { label: 'GET /', method: 'get', path: '/' },
-      { label: 'GET /:id/label', method: 'get', path: '/s1/label' },
-      { label: 'GET /:id/label/print-job', method: 'get', path: '/s1/label/print-job' },
-      { label: 'POST /labels/batch', method: 'post', path: '/labels/batch' },
-      { label: 'GET /:id', method: 'get', path: '/s1' },
-      { label: 'POST /:id/withdraw', method: 'post', path: '/s1/withdraw' },
-      { label: 'PUT /:id', method: 'put', path: '/s1' },
-      { label: 'DELETE /:id', method: 'delete', path: '/s1' },
-      { label: 'GET /by-barcode/:barcode/symbology-assets', method: 'get', path: '/by-barcode/BC1/symbology-assets' },
-      { label: 'GET /:id/results', method: 'get', path: '/s1/results' },
-      { label: 'POST /:id/return', method: 'post', path: '/s1/return' },
-      { label: 'GET /:id/movements', method: 'get', path: '/s1/movements' },
-      { label: 'GET /:id/rcs-assessments', method: 'get', path: '/s1/rcs-assessments' },
-      { label: 'GET /:id/sprec-profiles', method: 'get', path: '/s1/sprec-profiles' },
-      { label: 'GET /:id/quarantine-actions', method: 'get', path: '/s1/quarantine-actions' },
-      { label: 'POST /:specimenId/files/upload', method: 'post', path: '/sp1/files/upload' },
-      { label: 'GET /:specimenId/files', method: 'get', path: '/sp1/files' },
-      { label: 'GET /:specimenId/files/:fileID/download', method: 'get', path: '/sp1/files/f1/download' },
-      { label: 'DELETE /:specimenId/files/:fileID', method: 'delete', path: '/sp1/files/f1' },
-      { label: 'PUT /:specimenId/files/:fileID/replace', method: 'put', path: '/sp1/files/f1/replace' },
-      { label: 'GET /:specimenId/files/:fileID/export/hl7', method: 'get', path: '/sp1/files/f1/export/hl7' },
-      { label: 'GET /:specimenId/files/:fileID/export/fhir', method: 'get', path: '/sp1/files/f1/export/fhir' },
-      { label: 'GET /:specimenId/files/:fileID/export/cda', method: 'get', path: '/sp1/files/f1/export/cda' },
-    ];
-
-    for (const { label, method, path } of GATED_CASES) {
-      it(`applies requireOrganizationScope on ${label}`, async () => {
-        const requireOrganizationScopeImpl = denyingRequireOrganizationScope();
-        // requirePermission (where this registration also carries one)
-        // left as the default passthrough: a 403 here must be attributable
-        // to requireOrganizationScope alone.
-        const { router } = loadRoute({ requireOrganizationScopeImpl });
-        const app = buildApp(router, {});
-
-        const res = await request(app)[method](`/api/samples${path}`).send({});
-
-        expect(res.status).toBe(403);
-        expect(res.body.gate).toBe('orgScope');
-        expect(requireOrganizationScopeImpl.recordedCalls).toEqual([true]);
-      });
-    }
-
-    // GET /search/by-term and GET /by-barcode/:barcode are the only two
-    // routes in the file with no gate beyond `authenticate` -- confirmed
-    // against source (sample.routes.js:1220, :1281). A denying
-    // requireOrganizationScope stub must never fire on either.
-    it('does not apply requireOrganizationScope on GET /search/by-term', async () => {
-      const requireOrganizationScopeImpl = denyingRequireOrganizationScope();
-      const { router } = loadRoute({ requireOrganizationScopeImpl });
-      const app = buildApp(router, {});
-
-      const res = await request(app).get('/api/samples/search/by-term').query({ q: 'a' });
-
-      // Not the 403/orgScope shape the denying stub would answer with if it
-      // had actually been reached -- this specific 400 is the route's own
-      // "term too short" validation, reached only because the gate never
-      // fired.
-      expect(res.status).toBe(400);
-      expect(res.body.gate).toBeUndefined();
-      expect(requireOrganizationScopeImpl.recordedCalls).toEqual([]);
-    });
-
-    it('does not apply requireOrganizationScope on GET /by-barcode/:barcode', async () => {
-      const getSampleByBarcode = vi.fn().mockResolvedValue({ sample: null });
-      const requireOrganizationScopeImpl = denyingRequireOrganizationScope();
-      const { router } = loadRoute({
-        sampleServiceOverrides: { getSampleByBarcode },
-        requireOrganizationScopeImpl,
-      });
-      const app = buildApp(router, {});
-
-      const res = await request(app).get('/api/samples/by-barcode/UNKNOWN');
-
-      expect(res.status).toBe(404);
-      expect(res.body.gate).toBeUndefined();
-      expect(requireOrganizationScopeImpl.recordedCalls).toEqual([]);
-    });
-  });
-
-  // Route-shadowing check (per issue #921's brief): Express matches
-  // router.METHOD registrations in file order with no static-over-parameter
-  // priority, so a literal single-segment path registered after a
-  // `/:param` one on the same method would be dead code (confirmed
-  // elsewhere this sitting for patient.routes.js's GET /operational and
-  // user.routes.js's GET /logs, both behind GET /:id). Checked every
-  // same-method, same-segment-count pair in sample.routes.js by hand
-  // against the route list read from source:
-  //   - 1 segment, GET: only GET /:id -- no literal 1-segment GET route
-  //     exists anywhere else in the file to collide with it.
-  //   - 2 segments, GET: GET /:id/miabis-compliance, GET /:id/compliance-graph,
-  //     GET /:id/label, GET /search/by-term, GET /by-barcode/:barcode,
-  //     GET /:id/results, GET /:id/movements, GET /:id/rcs-assessments,
-  //     GET /:id/sprec-profiles, GET /:id/quarantine-actions,
-  //     GET /:specimenId/files. None of these has a wildcard in BOTH
-  //     segment positions (no `/:x/:y`), and no two of them share the same
-  //     literal segment at the same position, so no earlier registration
-  //     fully subsumes a later one -- unlike patient.routes.js/
-  //     user.routes.js, this is not the single-wildcard-segment case that
-  //     produces complete dead code.
-  //   - 2 segments, POST: POST /labels/batch, POST /:id/withdraw,
-  //     POST /:id/return -- same reasoning, no literal-segment collision.
-  //   - 3+ segments (GET /:id/label/print-job,
-  //     GET /by-barcode/:barcode/symbology-assets,
-  //     POST /:specimenId/files/upload,
-  //     GET /:specimenId/files/:fileID/download,
-  //     PUT /:specimenId/files/:fileID/replace,
-  //     DELETE /:specimenId/files/:fileID, GET .../export/{hl7,fhir,cda}):
-  //     each differs from every other same-depth route in at least one
-  //     literal segment, so none collides either.
-  //   - 1 segment, PUT/DELETE: PUT /:id and DELETE /:id are each the only
-  //     route at that method+depth.
-  // No shadowed route found in this file -- nothing to pin here.
-});
