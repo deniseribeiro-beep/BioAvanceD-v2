@@ -9,6 +9,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 // require order below is deliberate.
 const connectionModule = require('../../src/infrastructure/database/mongodb/connection');
 const sendIncidentAlertEmailModule = require('../../src/services/sendIncidentAlertEmail');
+const coldChainQuarantineService = require('../../src/services/equipment-sensor-quarantine.service');
 
 function buildRes() {
   const res = {};
@@ -322,6 +323,49 @@ describe('incident.controller.createOrUpdateIncident', () => {
       details: 'mongo exploded',
     });
   });
+
+  it('returns a non-fatal quarantine result when cold-chain quarantine rejects with Error or primitive reasons', async () => {
+    const existingIncident = {
+      _id: 'existing-quarantine',
+      sensorKey: 'sensor-quarantine',
+      maxTemperature: 8,
+      minTemperature: 1,
+      samplesOutOfRange: 1,
+    };
+    tempCollection.findOne.mockResolvedValue(existingIncident);
+    tempCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const req = {
+      body: {
+        sensorKey: 'sensor-quarantine',
+        sensorName: 'Freezer Quarantine',
+        currentTemperature: 12,
+        maxTemperature: 12,
+        minTemperature: 1,
+        samplesOutOfRange: 2,
+      },
+    };
+
+    const quarantineSpy = vi.spyOn(coldChainQuarantineService, 'quarantineByColdChainIncident');
+
+    quarantineSpy.mockRejectedValueOnce(new Error('quarantine error'));
+    let res = buildRes();
+    await incidentController.createOrUpdateIncident(req, res);
+    expect(res.json.mock.calls[0][0].quarantine).toEqual({
+      triggered: false,
+      error: 'quarantine error',
+    });
+
+    quarantineSpy.mockRejectedValueOnce('primitive quarantine error');
+    res = buildRes();
+    await incidentController.createOrUpdateIncident(req, res);
+    expect(res.json.mock.calls[0][0].quarantine).toEqual({
+      triggered: false,
+      error: 'primitive quarantine error',
+    });
+
+    quarantineSpy.mockRestore();
+  });
 });
 
 describe('incident.controller.getIncidents', () => {
@@ -531,6 +575,89 @@ describe('incident.controller.resolveIncident', () => {
     expect(res.status).toHaveBeenCalledWith(200);
     const payload = res.json.mock.calls[0][0];
     expect(payload.environmentalExcursion).toBeNull();
+  });
+
+  it('#301: returns null when sensor metadata points to a device without deviceId', async () => {
+    tempCollection.findOne.mockResolvedValue({ _id: '507f1f77bcf86cd799439011', sensorKey: 's1' });
+    tempCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+    sensorMetadataCollection.findOne.mockResolvedValue({ sensorId: 's1', device: 'device-oid-no-id' });
+    deviceCollection.findOne.mockResolvedValue({ _id: 'device-oid-no-id' });
+
+    const res = buildRes();
+    await incidentController.resolveIncident(
+      { params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } },
+      res
+    );
+
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.environmentalExcursion).toBeNull();
+    expect(excursionCollection.findOne).not.toHaveBeenCalled();
+  });
+
+  it('#301: returns null when the linked device has no open environmental excursion', async () => {
+    tempCollection.findOne.mockResolvedValue({ _id: '507f1f77bcf86cd799439011', sensorKey: 's1' });
+    tempCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+    sensorMetadataCollection.findOne.mockResolvedValue({ sensorId: 's1', device: 'device-oid-1' });
+    deviceCollection.findOne.mockResolvedValue({ _id: 'device-oid-1', deviceId: 'device-1' });
+    excursionCollection.findOne.mockResolvedValue(null);
+
+    const res = buildRes();
+    await incidentController.resolveIncident(
+      { params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } },
+      res
+    );
+
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.environmentalExcursion).toBeNull();
+    expect(excursionCollection.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('keeps resolution successful when post-incident review rejects with Error or primitive reasons', async () => {
+    tempCollection.findOne.mockResolvedValue({ _id: '507f1f77bcf86cd799439011', sensorKey: 's1' });
+    tempCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const reviewSpy = vi.spyOn(coldChainQuarantineService, 'markColdChainIncidentSamplesForReview');
+
+    reviewSpy.mockRejectedValueOnce(new Error('review error'));
+    let res = buildRes();
+    await incidentController.resolveIncident(
+      { params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } },
+      res
+    );
+    expect(res.json.mock.calls[0][0].postIncidentReview).toEqual({
+      reviewRequired: false,
+      error: 'review error',
+    });
+
+    reviewSpy.mockRejectedValueOnce('primitive review error');
+    res = buildRes();
+    await incidentController.resolveIncident(
+      { params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } },
+      res
+    );
+    expect(res.json.mock.calls[0][0].postIncidentReview).toEqual({
+      reviewRequired: false,
+      error: 'primitive review error',
+    });
+
+    reviewSpy.mockRestore();
+  });
+
+  it('#301: swallows a primitive excursion lookup failure and preserves the successful incident resolution', async () => {
+    tempCollection.findOne.mockResolvedValue({ _id: '507f1f77bcf86cd799439011', sensorKey: 's1' });
+    tempCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+    sensorMetadataCollection.findOne.mockResolvedValue({ sensorId: 's1', device: 'device-oid-1' });
+    deviceCollection.findOne.mockResolvedValue({ _id: 'device-oid-1', deviceId: 'device-1' });
+    excursionCollection.findOne.mockRejectedValue('excursion lookup failed');
+
+    const res = buildRes();
+    await incidentController.resolveIncident(
+      { params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } },
+      res
+    );
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json.mock.calls[0][0].environmentalExcursion).toBeNull();
   });
 });
 
