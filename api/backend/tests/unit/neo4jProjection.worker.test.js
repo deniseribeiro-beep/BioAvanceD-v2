@@ -382,6 +382,7 @@ describe('neo4jProjection.worker item 8 governance branches', () => {
     });
 
     expect(projector.applyEvent).toHaveBeenCalledOnce();
-    expect(result).toEqual({ processed: 0, projected: 0, failed: 0 });
+    expect(outboxService.leaseNextBatch).toHaveBeenCalledTimes(1);
+    expect(result).toBeUndefined();
   });
 });

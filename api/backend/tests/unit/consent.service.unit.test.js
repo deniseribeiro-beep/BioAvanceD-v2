@@ -2035,7 +2035,7 @@ describe('ConsentService item 8 canonical-governance residual branches', () => {
     await expect(consentService.createPatientConsent(db, {
       participantId: '12345678',
       consentTemplateId: new ObjectId().toString(),
-      responses: { invalid: 'not-boolean' },
+      responses: 'not-an-object',
     })).rejects.toMatchObject({ statusCode: 422 });
 
     expect(patients.findOne).not.toHaveBeenCalled();
