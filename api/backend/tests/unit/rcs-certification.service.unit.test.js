@@ -268,3 +268,123 @@ describe('RcsCertificationService constants', () => {
     expect(Array.isArray(AXES.solid)).toBe(true);
   });
 });
+
+
+describe('RcsCertificationService item 8 residual governance branches', () => {
+  const { RcsCertificationService } = rcsCertificationService;
+  const referenceData = require('../../src/services/rcs-reference-data');
+
+  it('returns the canonical not-scored result when no severity candidate exists', () => {
+    const result = rcsCertificationService.resolveSeverity({}, 'fluid', 'Ppre', 'NO-MAPPING');
+    expect(result).toEqual({
+      is_scored: false,
+      severity_value: null,
+      governance_action: 'governance_failure',
+      failure_reason: 'Not scored SPREC condition',
+    });
+  });
+
+  it('matches a seeded conditional severity when workflow context is explicitly supplied', () => {
+    const result = rcsCertificationService.resolveSeverity({
+      workflow_context: {
+        Pcent2: { workflow_rule: 'pcent2_required_low_cell' },
+      },
+    }, 'fluid', 'Pcent2', 'N');
+
+    expect(result.is_scored).toBe(true);
+    expect(result.workflow_rule).toBe('pcent2_required_low_cell');
+  });
+
+  it('resolves workflow rules from camelCase axis context and direct payload aliases', () => {
+    expect(rcsCertificationService.resolveWorkflowRule({
+      workflowContext: {
+        pcent2: { workflowRule: 'PCENT2_REQUIRED_LOW_CELL' },
+      },
+    }, 'Pcent2', 'N')).toBe('pcent2_required_low_cell');
+
+    expect(rcsCertificationService.resolveWorkflowRule({
+      Pcent2_workflow_rule: 'PCENT2_REQUIRED_LOW_CELL',
+    }, 'Pcent2', 'N')).toBe('pcent2_required_low_cell');
+
+    expect(rcsCertificationService.resolveWorkflowRule({
+      Pcent2WorkflowRule: 'PCENT2_REQUIRED_LOW_CELL',
+    }, 'Pcent2', 'N')).toBe('pcent2_required_low_cell');
+  });
+
+  it('reports matrix/axis incompatibility through direct governance evaluation', () => {
+    const sprec = {
+      matrix_type: 'fluid',
+      sampleType: 'TIS',
+      primaryContainer: 'SST',
+      preCentrifugation: 'A',
+      centrifugation: 'A',
+      secondCentrifugation: 'A',
+      postCentrifugationDelay: 'A',
+      longTermStorage: 'C',
+    };
+    const result = rcsCertificationService.evaluateGovernance({}, sprec, 'fluid');
+
+    expect(result.status).toBe(0);
+    expect(result.reasons).toContain('SPREC code incompatible with matrix or axis');
+  });
+
+  it('fills missing governance trace rule codes from reason and default reason', () => {
+    const result = rcsCertificationService.governanceFailureResult(
+      'fluid',
+      ['Unknown SPREC code', 'Unknown SPREC code'],
+      { preCentrifugation: 'X' },
+      [
+        { reason: 'Unknown SPREC code' },
+        {},
+      ]
+    );
+
+    expect(result.governance_failure_reasons).toEqual(['Unknown SPREC code']);
+    expect(result.calculation_trace.governance_trace[0].rule_code).toBe('UNKNOWN_SPREC_CODE');
+    expect(result.calculation_trace.governance_trace[1].rule_code).toBe('NOT_SCORED');
+  });
+
+  it('falls back to the canonical not-scored reason when a severity record is deliberately unscored without failure_reason', () => {
+    const severityMappings = referenceData.severityMappings.map((item) => {
+      if (
+        item.matrix_type === 'fluid'
+        && item.axis_code === 'Ppre'
+        && Array.isArray(item.sprec_codes)
+        && item.sprec_codes.includes('A')
+        && !item.requires_workflow_context
+      ) {
+        const clone = { ...item, is_scored: false, severity_value: null };
+        delete clone.failure_reason;
+        return clone;
+      }
+      return item;
+    });
+    const service = new RcsCertificationService({ ...referenceData, severityMappings });
+
+    const result = service.certify({
+      matrixType: 'fluid',
+      sprec: {
+        sampleType: 'BLD',
+        primaryContainer: 'SST',
+        preCentrifugation: 'A',
+        centrifugation: 'A',
+        secondCentrifugation: 'A',
+        postCentrifugationDelay: 'A',
+        longTermStorage: 'C',
+      },
+    });
+
+    expect(result.governance_status).toBe(0);
+    expect(result.governance_failure_reasons).toContain('Not scored SPREC condition');
+    expect(result.governance_rule_codes).toContain('NOT_SCORED');
+  });
+
+  it('covers threshold boundary predicates directly', () => {
+    expect(rcsCertificationService.gradeFromScore(100)).toBe('A');
+    expect(rcsCertificationService.gradeFromScore(0)).toBe('E');
+  });
+
+  it('returns the field name when no canonical axis mapping exists', () => {
+    expect(rcsCertificationService.axisCodeForField('fluid', 'customField')).toBe('customField');
+  });
+});
