@@ -5,6 +5,9 @@ import request from 'supertest';
 
 const require = createRequire(import.meta.url);
 
+const { StorageTopologyAuthoringService } = require('../../src/services/storage-topology-authoring.service');
+const auditLogger = require('../../src/utils/auditLogger');
+
 const authPath = require.resolve('../../src/infrastructure/middleware/auth');
 const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac');
 const routePath = require.resolve('../../src/interface/routes/storage.routes.js');
@@ -200,3 +203,229 @@ describe('storage.routes canonical v2', () => {
     expect(findRoute('/release/:sampleId', 'delete')).toBeUndefined();
   });
 });
+
+describe('storage.routes item 8 topology authoring and freezer-room residuals', () => {
+  const FREEZER_ID = '507f1f77bcf86cd799439011';
+  const ROOM_ID = '507f191e810c19729de860ea';
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetDoubles();
+  });
+
+  it('creates a governed container layout using the resolved actor identity and audits the configuration write', async () => {
+    currentAuth = (req, _res, next) => {
+      req.user = { userId: 'author-1' };
+      next();
+    };
+    const created = {
+      _id: 'container-object-1',
+      containerType: 'FREEZER',
+      parent_id: null,
+      roomId: ROOM_ID,
+      containerID: 'FREEZER-A',
+    };
+    const createSpy = vi.spyOn(StorageTopologyAuthoringService.prototype, 'createContainer').mockResolvedValue(created);
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const auditSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+
+    const res = await request(buildApp({}))
+      .post('/api/storage/topology/containers')
+      .send({ containerType: 'FREEZER', name: 'Freezer A' });
+
+    expect(res.status).toBe(201);
+    expect(createSpy).toHaveBeenCalledWith(
+      { containerType: 'FREEZER', name: 'Freezer A' },
+      'author-1'
+    );
+    expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'CREATE',
+      resourceType: 'StorageContainerLayout',
+      resourceId: 'container-object-1',
+      payload: {
+        containerType: 'FREEZER',
+        parentId: null,
+        roomId: ROOM_ID,
+        equipmentId: 'FREEZER-A',
+      },
+    }));
+  });
+
+  it('creates a governed box layout and preserves its canonical layout metadata in the audit payload', async () => {
+    const created = {
+      _id: 'box-object-1',
+      parent_id: FREEZER_ID,
+      dimension: { rows: 8, cols: 12 },
+      capacity: 96,
+    };
+    const createSpy = vi.spyOn(StorageTopologyAuthoringService.prototype, 'createBox').mockResolvedValue(created);
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const auditSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+
+    const res = await request(buildApp({}))
+      .post('/api/storage/topology/boxes')
+      .send({ parent_id: FREEZER_ID, name: 'Box A', dimension: { rows: 8, cols: 12 } });
+
+    expect(res.status).toBe(201);
+    expect(createSpy).toHaveBeenCalledWith(
+      { parent_id: FREEZER_ID, name: 'Box A', dimension: { rows: 8, cols: 12 } },
+      null
+    );
+    expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({
+      resourceType: 'StorageBoxLayout',
+      payload: {
+        parentId: FREEZER_ID,
+        dimension: { rows: 8, cols: 12 },
+        capacity: 96,
+      },
+    }));
+  });
+
+  it('maps governed topology service errors to their documented status/code and unexpected errors to 500', async () => {
+    const governed = Object.assign(new Error('layout inválido'), {
+      statusCode: 422,
+      code: 'INVALID_LAYOUT',
+    });
+    vi.spyOn(StorageTopologyAuthoringService.prototype, 'createContainer').mockRejectedValueOnce(governed);
+
+    const invalid = await request(buildApp({}))
+      .post('/api/storage/topology/containers')
+      .send({ name: 'bad' });
+    expect(invalid.status).toBe(422);
+    expect(invalid.body).toEqual({
+      success: false,
+      error: 'INVALID_LAYOUT',
+      message: 'layout inválido',
+    });
+
+    vi.spyOn(StorageTopologyAuthoringService.prototype, 'createBox').mockRejectedValueOnce(new Error('unexpected'));
+    const failed = await request(buildApp({}))
+      .post('/api/storage/topology/boxes')
+      .send({ name: 'Box' });
+    expect(failed.status).toBe(500);
+    expect(failed.body).toMatchObject({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: 'unexpected',
+    });
+  });
+
+  it('validates freezer and room identifiers before writing any room assignment', async () => {
+    const storageContainers = {
+      findOne: vi.fn(),
+      updateOne: vi.fn(),
+    };
+    const rooms = { findOne: vi.fn() };
+    const db = {
+      collection: vi.fn((name) => name === 'storageContainers' ? storageContainers : rooms),
+    };
+
+    const invalidFreezer = await request(buildApp(db))
+      .patch('/api/storage/freezer/not-an-id/room')
+      .send({ roomId: ROOM_ID });
+    expect(invalidFreezer.status).toBe(400);
+    expect(storageContainers.findOne).not.toHaveBeenCalled();
+
+    storageContainers.findOne.mockResolvedValueOnce({ _id: FREEZER_ID, containerType: 'FREEZER' });
+    const invalidRoom = await request(buildApp(db))
+      .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
+      .send({ roomId: 'not-an-id' });
+    expect(invalidRoom.status).toBe(400);
+    expect(invalidRoom.body.error).toBe('roomId inválido');
+    expect(storageContainers.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes missing containers, non-freezers and missing rooms', async () => {
+    const storageContainers = {
+      findOne: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ _id: FREEZER_ID, containerType: 'RACK' })
+        .mockResolvedValueOnce({ _id: FREEZER_ID, containerType: 'FREEZER' }),
+      updateOne: vi.fn(),
+    };
+    const rooms = { findOne: vi.fn().mockResolvedValue(null) };
+    const db = {
+      collection: vi.fn((name) => name === 'storageContainers' ? storageContainers : rooms),
+    };
+
+    const missingFreezer = await request(buildApp(db))
+      .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
+      .send({ roomId: ROOM_ID });
+    expect(missingFreezer.status).toBe(404);
+    expect(missingFreezer.body.error).toBe('FREEZER_NOT_FOUND');
+
+    const wrongType = await request(buildApp(db))
+      .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
+      .send({ roomId: ROOM_ID });
+    expect(wrongType.status).toBe(400);
+    expect(wrongType.body.error).toBe('NOT_A_FREEZER');
+
+    const missingRoom = await request(buildApp(db))
+      .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
+      .send({ roomId: ROOM_ID });
+    expect(missingRoom.status).toBe(404);
+    expect(missingRoom.body.error).toBe('ROOM_NOT_FOUND');
+  });
+
+  it('assigns and clears roomId through the canonical storageContainers configuration document', async () => {
+    const storageContainers = {
+      findOne: vi.fn()
+        .mockResolvedValue({ _id: FREEZER_ID, containerType: 'FREEZER' }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    };
+    const rooms = { findOne: vi.fn().mockResolvedValue({ _id: ROOM_ID, deletedAt: null }) };
+    const db = {
+      collection: vi.fn((name) => name === 'storageContainers' ? storageContainers : rooms),
+    };
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const auditSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+
+    const assigned = await request(buildApp(db))
+      .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
+      .send({ roomId: ROOM_ID });
+    expect(assigned.status).toBe(200);
+    expect(storageContainers.updateOne).toHaveBeenCalledWith(
+      expect.any(Object),
+      { $set: { roomId: expect.any(Object), updatedAt: expect.any(Date) } }
+    );
+    expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'UPDATE',
+      resourceType: 'StorageContainer',
+      payload: { roomId: ROOM_ID },
+    }));
+
+    rooms.findOne.mockClear();
+    storageContainers.updateOne.mockClear();
+    const cleared = await request(buildApp(db))
+      .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
+      .send({});
+    expect(cleared.status).toBe(200);
+    expect(rooms.findOne).not.toHaveBeenCalled();
+    expect(storageContainers.updateOne).toHaveBeenCalledWith(
+      expect.any(Object),
+      { $set: { roomId: null, updatedAt: expect.any(Date) } }
+    );
+  });
+
+  it('returns 500 when room assignment persistence fails', async () => {
+    const storageContainers = {
+      findOne: vi.fn().mockResolvedValue({ _id: FREEZER_ID, containerType: 'FREEZER' }),
+      updateOne: vi.fn().mockRejectedValue(new Error('mongo write failed')),
+    };
+    const db = {
+      collection: vi.fn((name) => name === 'storageContainers' ? storageContainers : { findOne: vi.fn() }),
+    };
+
+    const res = await request(buildApp(db))
+      .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
+      .send({});
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: 'mongo write failed',
+    });
+  });
+});
+
