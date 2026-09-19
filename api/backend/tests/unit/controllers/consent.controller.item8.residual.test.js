@@ -3,11 +3,11 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
-const controller = require('../../src/controllers/consent.controller');
-const consentService = require('../../src/services/consent.service');
-const patientService = require('../../src/services/patient.service');
-const participantIdentityService = require('../../src/services/participantIdentity.service');
-const auditLogger = require('../../src/utils/auditLogger');
+const controller = require('../../../src/controllers/consent.controller');
+const consentService = require('../../../src/services/consent.service');
+const patientService = require('../../../src/services/patient.service');
+const participantIdentityService = require('../../../src/services/participantIdentity.service');
+const auditLogger = require('../../../src/utils/auditLogger');
 
 function responseMock() {
   return {
