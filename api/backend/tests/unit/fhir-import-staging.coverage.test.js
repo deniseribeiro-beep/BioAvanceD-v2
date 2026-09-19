@@ -7,6 +7,8 @@ const jwt = require('jsonwebtoken');
 const fhirImportStagingService = require('../../src/services/fhir-import-staging.service');
 const notificationService = require('../../src/services/NotificationService');
 const qualityDomain = require('../../src/services/quality-domain.service');
+const rcsAssessmentService = require('../../src/services/rcs-assessment.service');
+const specimenPreanalyticsService = require('../../src/services/specimen-preanalytics.service');
 const logger = require('../../src/utils/logger');
 
 function createCursor(items) {
@@ -277,6 +279,204 @@ describe('fhir-import-staging item 8 canonical boundary branches', () => {
     });
     expect(record.normalized.rcsPreview.axis_penalties).toEqual([]);
     expect(record.normalized.rcsPreview.calculation_trace).toEqual({});
+  });
+
+  it('covers valid FHIR R4 fallback representations and project-level validation errors', async () => {
+    const db = createDb();
+    vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+      model_version: 'RCS-GOV-1.0',
+      input_status: 'valid',
+      input_errors: [],
+      governance_status: 1,
+      governance_outcome: 'admissible',
+      governance_failure_reasons: [],
+      governance_rule_codes: [],
+      rcs_score: 90,
+      p_bio: 10,
+      final_grade: 'A',
+      grade_route: 'score',
+      axis_penalties: [],
+      calculation_trace: {},
+    });
+
+    const result = await fhirImportStagingService.stageBundle(db, {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-FALLBACK',
+            identifier: [{ system: 'urn:mrn', value: 'DOC-FALLBACK' }],
+            name: [{ text: 'Paciente Fallback' }],
+            telecom: [{ system: 'email', value: 'email-invalido' }],
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Condition',
+            subject: { reference: 'Patient/P-FALLBACK' },
+            code: {
+              coding: [{
+                system: 'https://omim.org',
+                code: '123456',
+                display: 'OMIM fallback disease',
+              }],
+            },
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Observation',
+            specimen: { reference: 'Specimen/SPEC-FALLBACK' },
+            code: { coding: [{ code: 'BIO-CODE' }] },
+            valueQuantity: { code: 'mg/L' },
+            valueCodeableConcept: { text: 'positive' },
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Specimen',
+            id: 'SPEC-FALLBACK',
+            subject: { reference: 'Patient/P-FALLBACK' },
+            type: { coding: [{ code: 'SERUM-CODE' }] },
+            extension: [
+              { url: 'urn:bioavanced:storage-temperature', valueDecimal: -79.5 },
+              { url: 'urn:bioavanced:rcs-gov-required', valueBoolean: false },
+            ],
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Specimen',
+            subject: { reference: 'Patient/P-FALLBACK' },
+            type: { coding: [{ code: 'PLASMA-CODE' }] },
+          },
+        },
+      ],
+    });
+
+    expect(result.records).toHaveLength(2);
+
+    const fallback = result.records.find((record) => record.normalized.specimenId === 'SPEC-FALLBACK');
+    expect(fallback.status).toBe(fhirImportStagingService.STATUS.ERROR);
+    expect(fallback.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'patientEmail', code: 'INVALID_EMAIL' }),
+    ]));
+    expect(fallback.normalized.sampleType).toBe('SERUM-CODE');
+    expect(fallback.normalized.storageTemperature).toBe('-79.5');
+    expect(fallback.normalized.diseases[0]).toMatchObject({
+      diseaseName: 'OMIM fallback disease',
+      omimCode: '123456',
+    });
+    expect(fallback.normalized.biomarkers[0]).toMatchObject({
+      biomarkerType: 'BIO-CODE',
+      value: 'positive',
+      unit: 'mg/L',
+    });
+
+    const missingId = result.records.find((record) => !record.normalized.specimenId);
+    expect(missingId.status).toBe(fhirImportStagingService.STATUS.ERROR);
+    expect(missingId.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'specimenId' }),
+      expect.objectContaining({ field: 'patientEmail', code: 'INVALID_EMAIL' }),
+    ]));
+  });
+
+  it('uses the default consent URL and reports an unsent valid-email record as pending consent', async () => {
+    const db = createDb();
+    const batchId = await seedFhirBatch(db, [{
+      _id: 'default-consent-url',
+      normalized: {
+        participantId: 'P-DEFAULT',
+        patientName: 'Paciente Default',
+        patientEmail: 'default@example.org',
+        consentSigned: false,
+      },
+    }]);
+
+    delete process.env.FRONTEND_URL;
+
+    const beforeSend = await fhirImportStagingService.getConsentStatus(db, batchId);
+    expect(beforeSend.records[0]).toMatchObject({
+      consentStatus: 'PENDING',
+      quarantineStatus: 'QUARANTINED',
+      quarantineReason: 'CONSENT_PENDING',
+      availabilityStatus: 'BLOCKED',
+      workflowStatus: 'PENDING_CONSENT',
+    });
+
+    const emailSpy = vi.spyOn(notificationService, 'sendConsentEmail').mockResolvedValue({
+      success: true,
+      provider: 'test',
+      messageId: 'msg-default',
+    });
+
+    await fhirImportStagingService.sendConsents(db, batchId);
+
+    expect(emailSpy).toHaveBeenCalledTimes(1);
+    expect(emailSpy.mock.calls[0][1]).toMatch(/^http:\/\/localhost:5173\/patient\/e-consent\/import\//);
+  });
+
+  it('keeps a FHIR commit successful when versioned RCS/SPREC snapshot persistence rejects with raw errors', async () => {
+    const db = createDb();
+    const batchId = await seedFhirBatch(db, [{
+      _id: 'snapshot-best-effort',
+      status: fhirImportStagingService.STATUS.READY_TO_COMMIT,
+      errors: [],
+      normalized: {
+        participantId: 'P-SNAPSHOT',
+        patientName: 'Paciente Snapshot',
+        patientDocument: 'DOC-SNAPSHOT',
+        patientEmail: 'snapshot@example.org',
+        consentSigned: true,
+        specimenId: 'SPEC-SNAPSHOT',
+        sampleType: 'serum',
+        rcsPreview: {
+          model_version: 'RCS-GOV-1.0',
+          input_status: 'valid',
+          governance_status: 1,
+          governance_outcome: 'admissible',
+          governance_failure_reasons: [],
+          governance_rule_codes: [],
+          rcs_score: 90,
+          p_bio: 10,
+          final_grade: 'A',
+          grade_route: 'score',
+          axis_penalties: [],
+          calculation_trace: {},
+          sprec: {
+            matrixType: 'fluid',
+            sampleType: 'SER',
+            primaryContainer: 'A',
+            preCentrifugation: 'B',
+            centrifugation: 'C',
+            secondCentrifugation: 'D',
+            postCentrifugationDelay: 'E',
+            longTermStorage: 'F',
+          },
+        },
+      },
+    }]);
+
+    vi.spyOn(rcsAssessmentService, 'recordAssessment').mockRejectedValue('raw assessment failure');
+    vi.spyOn(specimenPreanalyticsService, 'recordProfile').mockRejectedValue('raw profile failure');
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+    const result = await fhirImportStagingService.commitBatch(db, batchId);
+
+    expect(result.committed).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('RcsAssessment'),
+      'raw assessment failure'
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('SpecimenPreanalytics'),
+      'raw profile failure'
+    );
+    const sample = db.collections.samples.docs.find((item) => item.specimenId === 'SPEC-SNAPSHOT');
+    expect(sample).toBeTruthy();
+    expect(sample.sealedRcsAssessmentId).toBeUndefined();
+    expect(sample.sealedSpecimenPreanalyticsId).toBeUndefined();
   });
 
   it('revalidates every governed staging status and warning branch without mutating terminal records', async () => {
