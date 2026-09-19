@@ -167,6 +167,8 @@ describe('ImportService.validateCSVStructure', () => {
     } finally {
       fs.unlinkSync(filePath);
     }
+  });
+
   it('rejects when the CSV parser stream itself emits an error', async () => {
     const handlers = {};
     const parserStream = {
@@ -187,8 +189,6 @@ describe('ImportService.validateCSVStructure', () => {
     ).rejects.toThrow('synthetic csv stream failure');
 
     expect(handlers.error).toBeInstanceOf(Function);
-  });
-
   });
 });
 
