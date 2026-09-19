@@ -1815,3 +1815,282 @@ describe('ConsentService.getPatientConsent', () => {
     expect(result).toBeNull();
   });
 });
+
+
+describe('ConsentService item 8 canonical-governance residual branches', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('normalizes non-array permissions to an empty list', () => {
+    expect(consentService.normalizePermissions('not-an-array')).toEqual([]);
+    expect(consentService.normalizePermissions()).toEqual([]);
+  });
+
+  it('normalizes permissionCode aliases, label fallback and nested purpose code', () => {
+    expect(consentService.normalizePermissions([
+      {
+        permissionCode: 'research-use',
+        purpose: { code: 'RESEARCH' },
+        required: 1,
+      },
+    ])).toEqual([
+      expect.objectContaining({
+        key: 'research-use',
+        permissionCode: 'research-use',
+        label: 'research-use',
+        required: true,
+        purposeCode: 'RESEARCH',
+      }),
+    ]);
+  });
+
+  it('rejects a permission without key or permissionCode', () => {
+    expect(() => consentService.normalizePermissions([{ label: 'Missing key' }]))
+      .toThrow('Chave de permissão obrigatória');
+  });
+
+  it('validates response maps whose template uses permissionCode instead of key', () => {
+    const template = {
+      permissions: [
+        { permissionCode: 'research-use', required: true },
+        { permissionCode: 'sharing', required: false },
+      ],
+    };
+    expect(() => consentService.validateResponsesAgainstTemplate(template, {
+      'research-use': true,
+      sharing: false,
+    })).not.toThrow();
+  });
+
+  it('treats a non-array template permissions value as no declared permissions', () => {
+    expect(() => consentService.validateResponsesAgainstTemplate({ permissions: 'invalid' }, {}))
+      .not.toThrow();
+  });
+
+  it('covers updateTemplate fallback precedence from existing title and payload content', async () => {
+    const existingId = new ObjectId();
+    const existing = {
+      _id: existingId,
+      title: 'Existing title',
+      content: 'Existing content',
+      htmlContent: '',
+      version: 'not-versioned',
+      active: true,
+      permissions: [],
+    };
+    const templates = makeCollection({ findOne: vi.fn(async () => existing) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.updateTemplate(db, existingId.toString(), {
+      title: '',
+      content: 'Updated plain content',
+      active: false,
+    });
+
+    expect(result.title).toBe('Existing title');
+    expect(result.content).toBe('Updated plain content');
+    expect(result.htmlContent).toBe('Updated plain content');
+    expect(result.version).toBe('v1');
+    expect(result.versionGroupId).toBe(String(existingId));
+  });
+
+  it('covers updateTemplate htmlContent-to-content fallback', async () => {
+    const existingId = new ObjectId();
+    const existing = {
+      _id: existingId,
+      title: 'Existing title',
+      content: '',
+      htmlContent: 'Existing HTML',
+      version: 'v4',
+      active: true,
+      permissions: [],
+    };
+    const templates = makeCollection({ findOne: vi.fn(async () => existing) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.updateTemplate(db, existingId.toString(), {
+      htmlContent: 'New HTML only',
+    });
+
+    expect(result.content).toBe('New HTML only');
+    expect(result.htmlContent).toBe('New HTML only');
+  });
+
+  it('forces the ConsentTemplate model-validation rejection branch after AJV accepts', async () => {
+    const ConsentTemplateModel = require('../../src/models/ConsentTemplate');
+    const validateSpy = vi.spyOn(ConsentTemplateModel, 'validate')
+      .mockReturnValue({ isValid: false, errors: ['canonical template rejection'] });
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+
+    await expect(consentService.createTemplate(db, {
+      title: 'Valid AJV title',
+      content: 'Valid AJV content',
+    })).rejects.toThrow('canonical template rejection');
+
+    expect(validateSpy).toHaveBeenCalled();
+    expect(templates.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('forces the ConsentPolicy model-validation rejection branch', async () => {
+    const ConsentPolicyModel = require('../../src/models/ConsentPolicy');
+    const validateSpy = vi.spyOn(ConsentPolicyModel, 'validate')
+      .mockReturnValue({ isValid: false, errors: ['canonical policy rejection'] });
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+
+    await expect(consentService.createPolicy(db, {
+      title: 'Policy',
+      content: 'Plain policy content',
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validTo: '2999-12-31T23:59:59.000Z',
+      permissions: [],
+    })).rejects.toThrow('canonical policy rejection');
+
+    expect(validateSpy).toHaveBeenCalled();
+    expect(templates.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('returns a clean notification outcome immediately when no lineage exists', async () => {
+    const templates = makeCollection();
+    const patients = makeCollection();
+    const db = makeDb({ consent_templates: templates, patients });
+
+    const result = await consentService.notifyPendingParticipants(db, {
+      insertedId: new ObjectId(),
+      previousPolicyId: '',
+      versionGroupId: '',
+    });
+
+    expect(result).toEqual({ total: 0, notified: 0, failed: 0 });
+    expect(patients.find).not.toHaveBeenCalled();
+  });
+
+  it('uses previousPolicyId directly when no versionGroupId is supplied and no identity exists', async () => {
+    const previousPolicyId = new ObjectId().toString();
+    const patient = {
+      _id: new ObjectId(),
+      participantId: '20202020',
+      status: 'PENDING_CONSENT',
+      consentTemplateId: previousPolicyId,
+    };
+    const templates = makeCollection();
+    const patients = makeCollection({
+      find: vi.fn(() => makeCursor([patient])),
+      updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
+    });
+    const identities = makeCollection({ findOne: vi.fn(async () => null) });
+    const db = makeDb({
+      consent_templates: templates,
+      patients,
+      participantIdentities: identities,
+    });
+    vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
+      token: 'tok-no-identity',
+      createdAt: new Date('2026-09-18T20:00:00.000Z'),
+      expiresAt: new Date('2026-09-19T20:00:00.000Z'),
+    });
+    vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://example.test/consent');
+    const enqueue = vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+    const result = await consentService.notifyPendingParticipants(db, {
+      insertedId: new ObjectId(),
+      previousPolicyId,
+      versionGroupId: '',
+    });
+
+    expect(result).toEqual({ total: 1, notified: 1, failed: 0 });
+    expect(templates.find).not.toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalledWith(patient, 'https://example.test/consent');
+  });
+
+  it('returns null from getLatestTemplate when the collection is empty', async () => {
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+    await expect(consentService.getLatestTemplate(db)).resolves.toBeNull();
+  });
+
+  it('uses versionGroupId alias and clamps pagination bounds', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      countDocuments: vi.fn(async () => 0),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.getPoliciesHistory(db, {
+      page: 0,
+      limit: 1000,
+      versionGroupId: 'alias-group',
+    });
+
+    expect(templates.find).toHaveBeenCalledWith({ versionGroupId: 'alias-group' });
+    expect(result.pagination).toEqual({ page: 1, limit: 100, total: 0, totalPages: 1 });
+  });
+
+  it('returns 422 for AJV-invalid patient consent before participant lookup', async () => {
+    const patients = makeCollection();
+    const db = makeDb({ patients });
+
+    await expect(consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: new ObjectId().toString(),
+      responses: { invalid: 'not-boolean' },
+    })).rejects.toMatchObject({ statusCode: 422 });
+
+    expect(patients.findOne).not.toHaveBeenCalled();
+  });
+
+  it('forces the PatientConsent model-validation rejection branch after AJV accepts', async () => {
+    const PatientConsentModel = require('../../src/models/PatientConsent');
+    const validateSpy = vi.spyOn(PatientConsentModel, 'validate')
+      .mockReturnValue({ isValid: false, errors: ['canonical consent rejection'] });
+    const db = makeDb({ patients: makeCollection() });
+
+    await expect(consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: new ObjectId().toString(),
+      responses: {},
+    })).rejects.toMatchObject({
+      statusCode: 422,
+      message: 'canonical consent rejection',
+    });
+
+    expect(validateSpy).toHaveBeenCalled();
+  });
+
+  it('passes explicit consent model, actor and no-study fallback into canonical persistence', async () => {
+    const templateId = new ObjectId();
+    const activeTemplate = {
+      _id: templateId,
+      active: true,
+      consentModel: 'broad',
+      permissions: [],
+    };
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
+    const consents = makeCollection();
+    const db = makeDb({ patients, consent_templates: templates, consents });
+    const repository = consentService.repository(db);
+    const createSpy = vi.spyOn(repository, 'createConsent');
+    const repositorySpy = vi.spyOn(consentService, 'repository').mockReturnValue(repository);
+
+    await consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
+      consentModel: 'dynamic',
+      actorId: 'ACTOR-1',
+      responses: {},
+    });
+
+    expect(repositorySpy).toHaveBeenCalledWith(db);
+    expect(createSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        consentModel: 'dynamic',
+        studyId: null,
+        actorId: 'ACTOR-1',
+      }),
+      expect.anything()
+    );
+  });
+});
