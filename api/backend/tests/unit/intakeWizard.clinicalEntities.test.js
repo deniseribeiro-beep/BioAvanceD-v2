@@ -659,7 +659,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       expect(collections.medicationExposures.docs).toHaveLength(1);
       expect(collections.medicationExposures.docs[0]).toMatchObject({
         medicationStatus: 'stopped',
-        medicationPeriod: { start: '2026-01-10', end: null },
+        medicationPeriod: { start: new Date('2026-01-10T00:00:00.000Z'), end: null },
       });
 
       expect(collections.allergyIntolerances.docs[0]).toMatchObject({
