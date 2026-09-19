@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'module';
 import fs from 'fs';
 import express from 'express';
@@ -179,5 +179,241 @@ describe('user.routes authorization gates (issue #921)', () => {
     // absence of the /:id shape rather than a specific success status keeps
     // this independent of whatever logService.getLogs does with a stub db.
     expect(res.body.error).not.toBe('users.notFound');
+  });
+});
+
+describe('user.routes item 8 residual branch coverage', () => {
+  it.each([
+    ['post', '/register'],
+    ['get', '/'],
+    ['get', '/logs'],
+    ['get', '/u1'],
+    ['put', '/u1'],
+    ['delete', '/u1'],
+    ['post', '/register-patient'],
+    ['post', '/register-sample'],
+    ['post', '/record-withdrawal'],
+    ['post', '/generate-report'],
+    ['post', '/register-sensor'],
+    ['post', '/u1/reset-mfa'],
+    ['post', '/u1/force-password-reset'],
+    ['post', '/u1/disable-mfa'],
+  ])('fails closed with 503 when the database is unavailable: %s %s', async (method, routePathname) => {
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: null });
+
+    const res = await request(app)[method]('/api/users' + routePathname).send({});
+
+    expect(res.status).toBe(503);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('normalizes optional register fields before delegating to AuthService', async () => {
+    const authService = require('../../src/services/auth.service');
+    const UserModel = require('../../src/models/User');
+    const db = {};
+    const registerSpy = vi.spyOn(authService, 'registerUser')
+      .mockResolvedValue({ _id: 'new-user-1', username: 'normalized-user' });
+
+    const authWithoutUser = (req, res, next) => {
+      req.user = null;
+      req.t = (key) => key;
+      next();
+    };
+    const { router } = loadRoute({ authImpl: authWithoutUser });
+    const app = buildApp(router, { db });
+
+    const formatted = await request(app).post('/api/users/register').send({
+      status: 'Ativo',
+      phone: '(11) 99999-0000',
+      organizationId: '   ',
+    });
+    const emptyPhone = await request(app).post('/api/users/register').send({
+      phone: '---',
+      organizationId: '',
+    });
+    const nullPhone = await request(app).post('/api/users/register').send({
+      phone: null,
+    });
+
+    expect(formatted.status).toBe(201);
+    expect(emptyPhone.status).toBe(201);
+    expect(nullPhone.status).toBe(201);
+    expect(registerSpy).toHaveBeenNthCalledWith(
+      1,
+      db,
+      expect.objectContaining({
+        status: UserModel.normalizeStatus('Ativo'),
+        phone: '11999990000',
+        organizationId: null,
+      }),
+      undefined
+    );
+    expect(registerSpy).toHaveBeenNthCalledWith(
+      2,
+      db,
+      expect.objectContaining({ phone: null, organizationId: null }),
+      undefined
+    );
+    expect(registerSpy).toHaveBeenNthCalledWith(
+      3,
+      db,
+      expect.objectContaining({ phone: null }),
+      undefined
+    );
+
+    registerSpy.mockRestore();
+    loadRoute();
+  });
+
+  it('covers list success without optional status role or id rewrites and the list error response', async () => {
+    const usersCollection = {
+      find: vi.fn()
+        .mockReturnValueOnce({
+          toArray: vi.fn().mockResolvedValue([
+            { _id: 'u1', id: 'already-present', roleName: 'Técnico', name: 'Synthetic User' },
+          ]),
+        })
+        .mockReturnValueOnce({
+          toArray: vi.fn().mockRejectedValue(new Error('list-boom')),
+        }),
+    };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: { collection: () => usersCollection } });
+
+    const ok = await request(app).get('/api/users/');
+    const failed = await request(app).get('/api/users/');
+
+    expect(ok.status).toBe(200);
+    expect(ok.body.data[0]).toEqual(expect.objectContaining({
+      id: 'already-present',
+      roleName: 'Técnico',
+      name: 'Synthetic User',
+    }));
+    expect(failed.status).toBe(500);
+    expect(failed.body.message).toBe('list-boom');
+  });
+
+  it('covers logs success and service failure through the real logs registration', async () => {
+    const logService = require('../../src/services/log.service');
+    const db = {};
+    const getLogs = vi.spyOn(logService, 'getLogs')
+      .mockResolvedValueOnce({ logs: [], total: 0 })
+      .mockRejectedValueOnce(new Error('logs-boom'));
+    const { router } = loadRoute();
+    const app = buildApp(router, { db });
+
+    const ok = await request(app).get('/api/users/logs?limit=10');
+    const failed = await request(app).get('/api/users/logs');
+
+    expect(ok.status).toBe(200);
+    expect(ok.body.data).toEqual({ logs: [], total: 0 });
+    expect(failed.status).toBe(500);
+    expect(failed.body.message).toBe('logs-boom');
+    expect(getLogs).toHaveBeenCalledTimes(2);
+
+    getLogs.mockRestore();
+  });
+
+  it('covers GET by id not found successful no-status response and collection failure', async () => {
+    const findOne = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ _id: 'u1', id: 'u1', roleName: 'Técnico', name: 'Synthetic User' })
+      .mockRejectedValueOnce(new Error('get-user-boom'));
+    const db = { collection: () => ({ findOne }) };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db });
+
+    const missing = await request(app).get('/api/users/missing');
+    const ok = await request(app).get('/api/users/u1');
+    const failed = await request(app).get('/api/users/u2');
+
+    expect(missing.status).toBe(404);
+    expect(ok.status).toBe(200);
+    expect(ok.body.data).toEqual(expect.objectContaining({ id: 'u1', roleName: 'Técnico' }));
+    expect(failed.status).toBe(500);
+    expect(failed.body.message).toBe('get-user-boom');
+  });
+
+  it('covers PUT by id missing target without invoking update semantics', async () => {
+    const usersCollection = {
+      findOne: vi.fn().mockResolvedValue(null),
+      updateOne: vi.fn(),
+    };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: { collection: () => usersCollection } });
+
+    const res = await request(app).put('/api/users/missing').send({ name: 'Ignored' });
+
+    expect(res.status).toBe(404);
+    expect(usersCollection.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('covers reset MFA target lookup failure and handler catch path', async () => {
+    const usersCollection = {
+      findOne: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockRejectedValueOnce(new Error('reset-mfa-boom')),
+      updateOne: vi.fn(),
+    };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: { collection: () => usersCollection } });
+
+    const missing = await request(app).post('/api/users/missing/reset-mfa');
+    const failed = await request(app).post('/api/users/failing/reset-mfa');
+
+    expect(missing.status).toBe(404);
+    expect(failed.status).toBe(500);
+    expect(failed.body.message).toBe('reset-mfa-boom');
+  });
+
+  it('covers force password reset handler failure without changing account state', async () => {
+    const usersCollection = {
+      findOne: vi.fn().mockRejectedValue(new Error('force-reset-boom')),
+      updateOne: vi.fn(),
+    };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: { collection: () => usersCollection } });
+
+    const res = await request(app).post('/api/users/u1/force-password-reset');
+
+    expect(res.status).toBe(500);
+    expect(res.body.message).toBe('force-reset-boom');
+    expect(usersCollection.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('covers disable MFA caller and target denials missing target and handler failure', async () => {
+    const rbacAssignment = require('../../src/services/rbac-assignment.service');
+    const adminSpy = vi.spyOn(rbacAssignment, 'isAdministrator');
+    const usersCollection = {
+      findOne: vi.fn(),
+      updateOne: vi.fn(),
+    };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: { collection: () => usersCollection } });
+
+    adminSpy.mockResolvedValueOnce(false);
+    const callerDenied = await request(app).post('/api/users/u1/disable-mfa');
+    expect(callerDenied.status).toBe(403);
+
+    adminSpy.mockResolvedValueOnce(true);
+    usersCollection.findOne.mockResolvedValueOnce(null);
+    const missing = await request(app).post('/api/users/missing/disable-mfa');
+    expect(missing.status).toBe(404);
+
+    adminSpy
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    usersCollection.findOne.mockResolvedValueOnce({ _id: 'u2', mfaEnabled: true });
+    const targetDenied = await request(app).post('/api/users/u2/disable-mfa');
+    expect(targetDenied.status).toBe(403);
+
+    adminSpy.mockRejectedValueOnce(new Error('disable-mfa-boom'));
+    const failed = await request(app).post('/api/users/u3/disable-mfa');
+    expect(failed.status).toBe(500);
+    expect(failed.body.message).toBe('disable-mfa-boom');
+
+    expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    adminSpy.mockRestore();
   });
 });
