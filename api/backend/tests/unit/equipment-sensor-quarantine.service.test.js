@@ -334,3 +334,270 @@ describe('equipment-sensor-quarantine.service', () => {
     });
   });
 });
+
+
+describe('equipment-sensor-quarantine item 8 canonical storage branches', () => {
+  it('stops the freezer walk when no shelf exists', async () => {
+    const storageContainers = {
+      find: vi.fn((filter) => ({
+        toArray: vi.fn(async () => filter.containerType === 'FREEZER'
+          ? [{ _id: 'FRZ-NO-SHELF', containerID: 'EQ-NO-SHELF' }]
+          : []),
+      })),
+    };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'storageContainers') return storageContainers;
+        if (name === 'storageBoxes') return { find: vi.fn() };
+        throw new Error(`unexpected collection ${name}`);
+      }),
+    };
+
+    const result = await service.quarantineByEquipmentStatus(
+      db,
+      { equipmentID: 'EQ-NO-SHELF' },
+      'offline'
+    );
+
+    expect(result.boxIds).toEqual([]);
+    expect(result.matched).toBe(0);
+    expect(collectionResolverModule.getCollection).not.toHaveBeenCalled();
+  });
+
+  it('stops the freezer walk when shelves exist but no rack exists', async () => {
+    const storageContainers = {
+      find: vi.fn((filter) => ({
+        toArray: vi.fn(async () => {
+          if (filter.containerType === 'FREEZER') {
+            return [{ _id: 'FRZ-NO-RACK', containerID: 'EQ-NO-RACK' }];
+          }
+          if (filter.containerType === 'SHELF') return [{ _id: 'SHELF-ONLY' }];
+          if (filter.containerType === 'RACK') return [];
+          return [];
+        }),
+      })),
+    };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'storageContainers') return storageContainers;
+        if (name === 'storageBoxes') return { find: vi.fn() };
+        throw new Error(`unexpected collection ${name}`);
+      }),
+    };
+
+    const result = await service.quarantineByEquipmentStatus(
+      db,
+      { equipmentID: 'EQ-NO-RACK' },
+      'maintenance'
+    );
+
+    expect(result.boxIds).toEqual([]);
+    expect(result.matched).toBe(0);
+  });
+
+  it('walks sensor metadata/equipment aliases, arrays and drawer boxes, deduplicates boxes and records complete cold-chain context', async () => {
+    const session = { id: 'cold-chain-session' };
+    const freezerId = 'FRZ-COLD';
+    const shelfId = 'SHF-COLD';
+    const rackId = 'RCK-COLD';
+    const drawerId = 'DRW-COLD';
+    const boxId = 'BOX-COLD';
+
+    const storageContainers = {
+      find: vi.fn((filter, options) => ({
+        toArray: vi.fn(async () => {
+          expect(options).toEqual({ session });
+          if (filter.containerType === 'FREEZER') {
+            return [{ _id: freezerId, containerID: 'EQ-1' }];
+          }
+          if (filter.containerType === 'SHELF') return [{ _id: shelfId }];
+          if (filter.containerType === 'RACK') return [{ _id: rackId }];
+          if (filter.containerType === 'DRAWER') return [{ _id: drawerId }];
+          return [];
+        }),
+      })),
+    };
+    const storageBoxes = {
+      find: vi.fn((filter, options) => ({
+        toArray: vi.fn(async () => {
+          expect(options).toEqual({ session });
+          expect(filter.parent_id.$in).toEqual(expect.arrayContaining([rackId, drawerId]));
+          return [{ _id: boxId }];
+        }),
+      })),
+    };
+    const sensors = {
+      find: vi.fn(() => ({
+        toArray: vi.fn(async () => [{ sensorId: 'SEN-COLD', locationId: ['EQ-1', 'EQ-TEXT'] }]),
+      })),
+    };
+    const sensorMetadata = {
+      find: vi.fn(() => ({
+        toArray: vi.fn(async () => [{
+          sensorId: 'SEN-COLD',
+          locationID: ['EQ-1', 'EQ-TEXT'],
+          equipment: 'EQ-TEXT',
+        }]),
+      })),
+    };
+    const equipment = {
+      findOne: vi.fn(async (_filter, options) => {
+        expect(options).toEqual({ session });
+        return { _id: 'mongo-eq-1', equipmentID: 'EQ-1' };
+      }),
+    };
+
+    vi.spyOn(NormalizedPhysicalStorageStore.prototype, 'findSpecimenIdsByLocation')
+      .mockResolvedValue(['SPEC-COLD']);
+
+    const sample = {
+      _id: 'SAMPLE-COLD-ID',
+      quantity: 4,
+      location: { freezer: freezerId, box: boxId },
+      specimenStatus: 'available',
+    };
+    const samplesCollection = {
+      find: vi.fn((_filter, options) => {
+        expect(options).toEqual({ session });
+        return { toArray: vi.fn(async () => [sample]) };
+      }),
+      updateOne: vi.fn(async () => ({ matchedCount: 1, modifiedCount: 1 })),
+    };
+    const movementsCollection = { insertOne: vi.fn() };
+    const quarantineActionsCollection = {
+      insertOne: vi.fn(async () => ({ insertedId: 'QA-COLD' })),
+      findOne: vi.fn(async () => null),
+    };
+
+    collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
+      if (key === 'samples') return samplesCollection;
+      if (key === 'sampleMovements') return movementsCollection;
+      if (key === 'quarantineActions') return quarantineActionsCollection;
+      throw new Error(`unexpected key ${key}`);
+    });
+
+    const quarantineActionService = require(quarantineActionServicePath);
+    const recordActionSpy = vi.spyOn(quarantineActionService, 'recordAction')
+      .mockResolvedValue({ quarantineActionId: 'QA-COLD' });
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'storageContainers') return storageContainers;
+        if (name === 'storageBoxes') return storageBoxes;
+        if (name === 'sensors') return sensors;
+        if (name === 'sensorMetadata') return sensorMetadata;
+        if (name === 'equipment') return equipment;
+        throw new Error(`unexpected collection ${name}`);
+      }),
+    };
+
+    const result = await service.quarantineByColdChainIncident(
+      db,
+      {
+        sensorId: 'SEN-COLD',
+        status: 'acknowledged',
+        currentTemperature: 0,
+      },
+      {
+        session,
+        auditInfo: {
+          userId: 'USR-1',
+          userName: 'Operator',
+          userRole: 'technician',
+          ipAddress: '203.0.113.10',
+          userAgent: 'item8-test',
+        },
+      }
+    );
+
+    expect(result).toMatchObject({
+      triggered: true,
+      matched: 1,
+      quarantined: 1,
+      movements: 1,
+      boxIds: [boxId],
+      incidentId: 'SEN-COLD',
+      sensorKey: 'SEN-COLD',
+    });
+    expect(result.reason).toContain('temperatura=0');
+
+    expect(samplesCollection.updateOne).toHaveBeenCalledWith(
+      { _id: 'SAMPLE-COLD-ID' },
+      {
+        $set: expect.objectContaining({
+          specimenStatus: 'quarantined',
+          quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
+          coldChainIncidentId: 'SEN-COLD',
+          coldChainSensorKey: 'SEN-COLD',
+          coldChainStatus: 'INCIDENT_OPEN',
+          coldChainReviewRequired: true,
+          location: expect.objectContaining({
+            freezer: freezerId,
+            box: boxId,
+            status: 'Quarantine',
+            area: 'Quarentena',
+          }),
+        }),
+      },
+      { session }
+    );
+
+    expect(recordActionSpy).toHaveBeenCalledWith(
+      db,
+      {
+        specimenIds: ['SAMPLE-COLD-ID'],
+        reasonCodes: ['COLD_CHAIN_INCIDENT'],
+      },
+      session
+    );
+
+    expect(SampleMovementModel.create).toHaveBeenCalledWith(expect.objectContaining({
+      specimenId: 'SAMPLE-COLD-ID',
+      barcode: null,
+      quantity: 4,
+      unit: 'µL',
+      purpose: 'cold_chain_incident_quarantine',
+      linkedProject: null,
+      userId: 'USR-1',
+      userName: 'Operator',
+      userRole: 'technician',
+      ipAddress: '203.0.113.10',
+      userAgent: 'item8-test',
+    }));
+    expect(sampleMovementLedgerModule.appendMovementWithHashChain)
+      .toHaveBeenCalledWith(movementsCollection, expect.anything(), { session });
+  });
+
+  it('marks cold-chain samples for review using the sensorID alias and session, including zero-count fallbacks', async () => {
+    const session = { id: 'review-session' };
+    const samplesCollection = {
+      find: vi.fn((_filter, options) => {
+        expect(options).toEqual({ session });
+        return { toArray: vi.fn(async () => [{ _id: 'SAMPLE-REVIEW' }]) };
+      }),
+      updateMany: vi.fn(async () => ({})),
+    };
+    collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
+      if (key === 'samples') return samplesCollection;
+      throw new Error(`unexpected key ${key}`);
+    });
+
+    const quarantineActionService = require(quarantineActionServicePath);
+    const pendingSpy = vi.spyOn(quarantineActionService, 'markPendingReview')
+      .mockResolvedValue({ updated: true });
+
+    const result = await service.markColdChainIncidentSamplesForReview(
+      {},
+      { sensorID: 'SEN-REVIEW' },
+      { session }
+    );
+
+    expect(result).toEqual({
+      matched: 0,
+      modified: 0,
+      reviewRequired: true,
+      incidentId: 'SEN-REVIEW',
+    });
+    expect(pendingSpy).toHaveBeenCalledWith({}, 'SAMPLE-REVIEW', session);
+  });
+});
