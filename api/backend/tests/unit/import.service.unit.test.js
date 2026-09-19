@@ -167,6 +167,28 @@ describe('ImportService.validateCSVStructure', () => {
     } finally {
       fs.unlinkSync(filePath);
     }
+  it('rejects when the CSV parser stream itself emits an error', async () => {
+    const handlers = {};
+    const parserStream = {
+      on: vi.fn((event, callback) => {
+        handlers[event] = callback;
+        if (event === 'error') {
+          queueMicrotask(() => callback(new Error('synthetic csv stream failure')));
+        }
+        return parserStream;
+      }),
+    };
+    vi.spyOn(fs, 'createReadStream').mockReturnValue({
+      pipe: vi.fn(() => parserStream),
+    });
+
+    await expect(
+      importService.validateCSVStructure({ path: '/synthetic/input.csv' }, 'patients')
+    ).rejects.toThrow('synthetic csv stream failure');
+
+    expect(handlers.error).toBeInstanceOf(Function);
+  });
+
   });
 });
 
