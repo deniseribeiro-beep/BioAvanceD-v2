@@ -2396,8 +2396,8 @@ describe('sample.service item 8 residual branch coverage', () => {
 
   it('accepts equipment readiness from maintenanceStatus or operationalStatus fallbacks', async () => {
     for (const equipment of [
-      { equipmentID: 'EQ-1', maintenanceStatus: 'operational' },
-      { equipmentID: 'EQ-1', operationalStatus: 'operational' },
+      { equipmentID: 'EQ-1', maintenanceStatus: 'ok' },
+      { equipmentID: 'EQ-1', operationalStatus: 'ok' },
     ]) {
       const db = makeDb();
       mockOperationalStorage(db);
