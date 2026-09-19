@@ -555,4 +555,240 @@ describe('SampleGraphValidator', () => {
       expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
     });
   });
+
+  describe('item 8 residual canonical branches', () => {
+    it('covers database, ethics and consent identifier guard branches', async () => {
+      await expect(new SampleGraphValidator(null).validateSampleCompliance('SPEC-NO-DB'))
+        .rejects.toThrow('Database não inicializado para SampleGraphValidator');
+
+      const missingIds = buildSample({ consentTemplateId: '', participantId: '' });
+      samplesCollection.findOne.mockResolvedValue(missingIds);
+      const missingIdsReport = await validator.validateSampleCompliance(missingIds._id);
+      expect(missingIdsReport.graphPath.ethics.valid).toBe(false);
+      expect(consentsCollection.findOne).not.toHaveBeenCalled();
+
+      const missingConsent = buildSample();
+      samplesCollection.findOne.mockResolvedValue(missingConsent);
+      consentsCollection.findOne.mockResolvedValueOnce(null);
+      const missingConsentReport = await validator.validateSampleCompliance(missingConsent._id);
+      expect(missingConsentReport.graphPath.ethics.valid).toBe(false);
+
+      const mismatchedParticipant = buildSample();
+      samplesCollection.findOne.mockResolvedValue(mismatchedParticipant);
+      consentsCollection.findOne.mockResolvedValueOnce({ status: 'ACTIVE', participantId: 'OTHER' });
+      const mismatchReport = await validator.validateSampleCompliance(mismatchedParticipant._id);
+      expect(mismatchReport.graphPath.ethics.valid).toBe(false);
+
+      const objectIdConsent = buildSample({ consentTemplateId: '507f1f77bcf86cd799439012' });
+      samplesCollection.findOne.mockResolvedValue(objectIdConsent);
+      consentsCollection.findOne.mockResolvedValueOnce({ status: 'ACTIVE', participantId: '12345678' });
+      const objectIdReport = await validator.validateSampleCompliance(objectIdConsent._id);
+      expect(objectIdReport.graphPath.ethics.valid).toBe(true);
+      expect(consentsCollection.findOne.mock.calls.at(-1)[0].$or[0]._id).toBeTruthy();
+    });
+
+    it('uses default disease requirements when ORPHA is absent or the dictionary has no active entry', async () => {
+      const noOrpha = buildSample({
+        clinicalData: { orphaCode: '', cid: 'E75.2', biomarkerValues: {} },
+        pharmacologyData: { treatmentStatus: 'NAIVE' },
+      });
+      samplesCollection.findOne.mockResolvedValue(noOrpha);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+      const noOrphaReport = await validator.validateSampleCompliance(noOrpha._id);
+      expect(noOrphaReport.disease).toBeNull();
+      expect(noOrphaReport.orphaCode).toBe('');
+      expect(diseaseDictionaryCollection.findOne).not.toHaveBeenCalled();
+
+      const noDictionaryEntry = buildSample({
+        pharmacologyData: { treatmentStatus: 'NAIVE' },
+      });
+      samplesCollection.findOne.mockResolvedValue(noDictionaryEntry);
+      diseaseDictionaryCollection.findOne.mockResolvedValueOnce(null);
+
+      const noDictionaryReport = await validator.validateSampleCompliance(noDictionaryEntry._id);
+      expect(noDictionaryReport.disease).toBeNull();
+      expect(noDictionaryReport.graphPath.clinical.valid).toBe(true);
+      expect(noDictionaryReport.graphPath.pharmacology.valid).toBe(true);
+    });
+
+    it('covers clinical requirement fallbacks, invalid treatment status and required pharmacology fields', async () => {
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+      diseaseDictionaryCollection.findOne.mockResolvedValueOnce({
+        orpha_code: '324',
+        validation_requirements: {
+          miabis: { requireTreatmentStatus: true },
+          biomarkers: { required: 'not-an-array' },
+          pharmacology: { required: 'not-an-array', treatmentStatuses: 'not-an-array' },
+        },
+      });
+      const fallbackArrays = buildSample({
+        clinicalData: { biomarkerValues: 'not-an-object' },
+        pharmacologyData: { treatmentStatus: 'NAIVE' },
+      });
+      samplesCollection.findOne.mockResolvedValue(fallbackArrays);
+      const fallbackReport = await validator.validateSampleCompliance(fallbackArrays._id);
+      expect(fallbackReport.graphPath.clinical.valid).toBe(true);
+      expect(fallbackReport.graphPath.clinical.reason).toBe('Dados clínicos e MIABIS essenciais presentes');
+
+      const missingTreatment = buildSample({ pharmacologyData: { treatmentStatus: '' } });
+      samplesCollection.findOne.mockResolvedValue(missingTreatment);
+      const missingTreatmentReport = await validator.validateSampleCompliance(missingTreatment._id);
+      expect(missingTreatmentReport.graphPath.clinical.reason).toContain('treatment_status');
+      expect(missingTreatmentReport.graphPath.pharmacology.reason).toContain('treatment_status');
+
+      const invalidStatus = buildSample({ pharmacologyData: { treatmentStatus: 'INVALID' } });
+      samplesCollection.findOne.mockResolvedValue(invalidStatus);
+      const invalidStatusReport = await validator.validateSampleCompliance(invalidStatus._id);
+      expect(invalidStatusReport.graphPath.clinical.reason).toContain('inválido');
+
+      diseaseDictionaryCollection.findOne.mockResolvedValueOnce({
+        orpha_code: '324',
+        validation_requirements: {
+          miabis: { requireTreatmentStatus: false },
+          biomarkers: { required: [] },
+          pharmacology: { required: ['medicationName'], treatmentStatuses: ['NAIVE'] },
+        },
+      });
+      const missingRequiredField = buildSample({
+        pharmacologyData: { treatmentStatus: 'NAIVE', medicationName: '' },
+      });
+      samplesCollection.findOne.mockResolvedValue(missingRequiredField);
+      const requiredFieldReport = await validator.validateSampleCompliance(missingRequiredField._id);
+      expect(requiredFieldReport.graphPath.clinical.reason).toContain('campo farmacológico obrigatório');
+    });
+
+    it('covers active-treatment ATC branches without inventing new pharmacology rules', async () => {
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+      const missingAtc = buildSample({
+        pharmacologyData: { treatmentStatus: 'TREATED', atcCode: '' },
+      });
+      samplesCollection.findOne.mockResolvedValue(missingAtc);
+      const missingAtcReport = await validator.validateSampleCompliance(missingAtc._id);
+      expect(missingAtcReport.graphPath.pharmacology.reason).toContain('exige atc_code');
+
+      const unknownMedication = buildSample({
+        pharmacologyData: { treatmentStatus: 'TREATED', atcCode: 'A16AX27' },
+      });
+      samplesCollection.findOne.mockResolvedValue(unknownMedication);
+      medicationDictionaryCollection.findOne.mockResolvedValueOnce(null);
+      const unknownMedicationReport = await validator.validateSampleCompliance(unknownMedication._id);
+      expect(unknownMedicationReport.graphPath.pharmacology.valid).toBe(true);
+
+      diseaseDictionaryCollection.findOne.mockResolvedValueOnce({
+        orpha_code: '324',
+        drug_classes: 'not-an-array',
+        validation_requirements: {
+          miabis: { requireTreatmentStatus: true },
+          biomarkers: { required: [] },
+          pharmacology: { required: ['treatmentStatus'], treatmentStatuses: ['TREATED'] },
+        },
+      });
+      medicationDictionaryCollection.findOne.mockResolvedValueOnce({
+        atc_code: 'A16AX27',
+        drug_class: '',
+        active: true,
+      });
+      const noDiseaseClasses = buildSample({
+        pharmacologyData: { treatmentStatus: 'TREATED', atcCode: 'ATC:A16AX27', atcClass: 'A' },
+      });
+      samplesCollection.findOne.mockResolvedValue(noDiseaseClasses);
+      const noDiseaseClassesReport = await validator.validateSampleCompliance(noDiseaseClasses._id);
+      expect(noDiseaseClassesReport.graphPath.pharmacology.valid).toBe(true);
+    });
+
+    it('covers missing integrity seal and canonical multi-node quarantine reason codes', async () => {
+      const missingRoot = buildSample();
+      delete missingRoot.merkleRoot;
+      samplesCollection.findOne.mockResolvedValue(missingRoot);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+      const missingRootReport = await validator.validateSampleCompliance(missingRoot._id);
+      expect(missingRootReport.graphPath.integrity.valid).toBe(false);
+      expect(missingRootReport.suggestedStatus).toBe('BLOCKED');
+
+      const multiFailure = buildSample({
+        consentTemplateId: '',
+        clinicalData: { orphaCode: 'ORPHA:324', cid: '' },
+        pharmacologyData: { treatmentStatus: '' },
+        sprec: {
+          matrixType: 'fluid',
+          sampleType: 'BLD',
+          primaryContainer: 'SST',
+          preCentrifugation: 'X',
+          centrifugation: 'A',
+          secondCentrifugation: 'A',
+          postCentrifugationDelay: 'A',
+          longTermStorage: 'C',
+        },
+      });
+      delete multiFailure.merkleRoot;
+      samplesCollection.findOne.mockResolvedValue(multiFailure);
+
+      const multiFailureReport = await validator.validateSampleCompliance(multiFailure._id);
+      expect(multiFailureReport.isReleasable).toBe(false);
+      expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reasonCodes: expect.arrayContaining([
+            'COMPLIANCE_GRAPH_ETHICS',
+            'COMPLIANCE_GRAPH_CLINICAL',
+            'COMPLIANCE_GRAPH_PHARMACOLOGY',
+            'COMPLIANCE_GRAPH_INTEGRITY',
+            'COMPLIANCE_GRAPH_QUALITY',
+          ]),
+        }),
+        undefined
+      );
+    });
+
+    it('releases a prior compliance-owned action before escalating to a stronger canonical block', async () => {
+      const sample = buildSample({
+        specimenStatus: 'quarantined',
+        clinicalData: { orphaCode: 'ORPHA:324', cid: '' },
+      });
+      samplesCollection.findOne.mockResolvedValue(sample);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+      quarantineActionsCollection.find.mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([
+            {
+              quarantineActionId: 'qa-owned',
+              actionStatus: 'active',
+              reasonCodes: ['COMPLIANCE_GRAPH_QUALITY'],
+            },
+          ]),
+        }),
+      });
+
+      const report = await validator.validateSampleCompliance(sample._id);
+      expect(report.suggestedStatus).toBe('BLOCKED');
+      expect(quarantineActionsCollection.updateOne).toHaveBeenCalledWith(
+        { quarantineActionId: 'qa-owned' },
+        expect.objectContaining({ $set: expect.objectContaining({ actionStatus: 'released' }) }),
+        undefined
+      );
+      expect(quarantineActionsCollection.insertOne).toHaveBeenCalled();
+    });
+
+    it('preserves an existing stronger status when no active compliance-owned action authorizes downgrade', async () => {
+      const sample = buildSample({ specimenStatus: 'unavailable' });
+      samplesCollection.findOne.mockResolvedValue(sample);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+      quarantineActionsCollection.find.mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([
+            { quarantineActionId: 'released-old', actionStatus: 'released', reasonCodes: ['COMPLIANCE_GRAPH_QUALITY'] },
+          ]),
+        }),
+      });
+
+      const report = await validator.validateSampleCompliance(sample._id);
+      expect(report.suggestedStatus).toBe('AVAILABLE');
+      const [, update] = samplesCollection.updateOne.mock.calls[0];
+      expect(update.$set.specimenStatus).toBeUndefined();
+    });
+  });
+
 });
