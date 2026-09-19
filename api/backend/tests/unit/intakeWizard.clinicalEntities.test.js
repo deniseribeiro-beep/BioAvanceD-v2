@@ -626,4 +626,128 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       'PhenotypeObservation',
     ]);
   });
+
+  describe('item 8 residual clinical branch closure', () => {
+    it('covers alternate medication status/period and optional clinical display branches', async () => {
+      const payload = {
+        ...VALID_PAYLOAD,
+        clinical: {
+          ...VALID_PAYLOAD.clinical,
+          diseasePhenotypes: [
+            { hpoId: '', label: 'ignored' },
+            { hpoId: 'HP:0000822', label: '' },
+          ],
+          pharmacologyData: {
+            treatmentStatus: 'WASHOUT',
+            medicationName: 'Metformin',
+            atcCode: 'A10BA02',
+            washoutStartDate: '2026-01-10',
+          },
+          allergies: [{ allergenName: '', allergenCode: '03730', reaction: '' }],
+          familyHistories: [{ relationship: 'father', conditionName: '', orphaCode: '', onset: '' }],
+          procedures: [{ procedureName: '', procedureCode: 'LOCAL-002', performed: '2026-01-15', bodySite: '' }],
+          observationRecords: [{ testName: '', loincCode: '718-7', value: '', unit: '', effectiveDate: '2026-01-15' }],
+        },
+      };
+
+      const { res, collections } = await runIntake(payload);
+
+      expect(res.status).toBe(200);
+      expect(collections.phenotypeObservations.docs).toHaveLength(1);
+      expect(collections.phenotypeObservations.docs[0].hpoCoding.display).toBeUndefined();
+
+      expect(collections.medicationExposures.docs).toHaveLength(1);
+      expect(collections.medicationExposures.docs[0]).toMatchObject({
+        medicationStatus: 'stopped',
+        medicationPeriod: { start: '2026-01-10', end: null },
+      });
+
+      expect(collections.allergyIntolerances.docs[0]).toMatchObject({
+        allergenCoding: { code: '03730' },
+        reaction: [],
+      });
+      expect(collections.allergyIntolerances.docs[0].allergenCoding.display).toBeUndefined();
+
+      expect(collections.familyHistories.docs[0]).toMatchObject({
+        relationship: 'father',
+        familyCondition: [],
+      });
+
+      expect(collections.procedures.docs[0]).toMatchObject({
+        performed: '2026-01-15',
+        bodySite: [],
+      });
+      expect(collections.procedures.docs[0].procedureCoding[0].display).toBeUndefined();
+
+      expect(collections.clinicalObservations.docs[0]).toMatchObject({
+        value: null,
+        unit: null,
+      });
+      expect(collections.clinicalObservations.docs[0].observationCoding.display).toBeUndefined();
+    });
+
+    it('covers the medication unknown/no-period branch without inventing a treatment state', async () => {
+      const payload = {
+        ...VALID_PAYLOAD,
+        clinical: {
+          ...VALID_PAYLOAD.clinical,
+          pharmacologyData: {
+            treatmentStatus: 'NAIVE',
+            medicationName: 'Metformin',
+            atcCode: 'A10BA02',
+          },
+        },
+      };
+
+      const { res, collections } = await runIntake(payload);
+
+      expect(res.status).toBe(200);
+      expect(collections.medicationExposures.docs).toHaveLength(1);
+      expect(collections.medicationExposures.docs[0]).toMatchObject({
+        medicationStatus: 'unknown',
+        medicationPeriod: null,
+      });
+    });
+
+    it('reports failures for each additive clinical entity branch that previously had no executed catch path', async () => {
+      const payload = {
+        ...VALID_PAYLOAD,
+        clinical: {
+          ...VALID_PAYLOAD.clinical,
+          allergies: [{ allergenName: 'Dipirona', allergenCode: '03730', reaction: 'Urticária' }],
+          familyHistories: [{ relationship: 'mother', conditionName: 'Marfan syndrome', orphaCode: 'ORPHA:558', onset: '30 anos' }],
+          procedures: [{ procedureName: 'Liver biopsy', procedureCode: 'LOCAL-001', performed: '2026-01-15', bodySite: 'Liver' }],
+          observationRecords: [{ testName: 'Hemoglobina', loincCode: '718-7', value: '13.2', unit: 'g/dL', effectiveDate: '2026-01-15' }],
+          clinicalOutcomes: [{ outcomeType: 'remission', outcomeDate: '2026-02-01' }],
+          charlsonConditions: ['copd'],
+        },
+      };
+
+      const { res } = await runIntake(payload, {
+        failCollections: [
+          'allergyIntolerances',
+          'familyHistories',
+          'procedures',
+          'clinicalObservations',
+          'clinicalOutcomes',
+          'derivedScores',
+        ],
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.clinicalEntities.failed.map((entry) => entry.entity)).toEqual(
+        expect.arrayContaining([
+          'AllergyIntolerance',
+          'FamilyHistory',
+          'Procedure',
+          'ClinicalObservation',
+          'ClinicalOutcome',
+          'DerivedScore',
+        ])
+      );
+      expect(res.body.clinicalEntities.failed).toHaveLength(6);
+    });
+  });
+
 });
