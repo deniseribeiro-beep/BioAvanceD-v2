@@ -287,3 +287,274 @@ describe('createLinkedFileController', () => {
     });
   });
 });
+
+describe('createLinkedFileController item 8 residual request branches', () => {
+  beforeEach(() => {
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('fails closed with 503 on every public handler that requires a database', async () => {
+    const controller = buildController();
+    const calls = [
+      ['uploadFile', { params: { widgetId: 'w-1' }, file: { path: '/tmp/x.csv', originalname: 'x.csv', size: 1 } }],
+      ['listFiles', { params: { widgetId: 'w-1' } }],
+      ['downloadFile', { params: { widgetId: 'w-1', fileID: new ObjectId().toString() } }],
+      ['deleteFile', { params: { widgetId: 'w-1', fileID: new ObjectId().toString() } }],
+      ['replaceFile', { params: { widgetId: 'w-1', fileID: new ObjectId().toString() }, file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 1 } }],
+    ];
+
+    for (const [method, partialReq] of calls) {
+      const req = { app: { locals: {} }, ...partialReq };
+      const res = createRes();
+      await controller[method](req, res);
+      expect(res.status, method).toHaveBeenCalledWith(503);
+    }
+  });
+
+  it('listFiles enforces the optional organization hook and never queries files after denial', async () => {
+    const checkOrgScope = vi.fn().mockResolvedValue(false);
+    const controller = buildController({ checkOrgScope });
+    const find = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) });
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1', organizationId: 'org-b' }) },
+      widgetFiles: { find },
+    });
+    const req = {
+      app: { locals: { db } },
+      params: { widgetId: 'w-1' },
+      organizationScope: { scope: 'organization', organizationIds: ['org-a'] },
+    };
+    const res = createRes();
+
+    await controller.listFiles(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(checkOrgScope).toHaveBeenCalledTimes(1);
+    expect(find).not.toHaveBeenCalled();
+  });
+
+  it('listFiles returns 500 when file enumeration fails after the parent is resolved', async () => {
+    const controller = buildController();
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+      widgetFiles: { find: vi.fn(() => ({ toArray: vi.fn().mockRejectedValue(new Error('list down')) })) },
+    });
+    const res = createRes();
+
+    await controller.listFiles({ app: { locals: { db } }, params: { widgetId: 'w-1' } }, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'list down' }));
+  });
+
+  it('downloadFile rejects an invalid file id before parent lookup', async () => {
+    const controller = buildController();
+    const widgetsFindOne = vi.fn().mockResolvedValue({ widgetId: 'w-1' });
+    const db = createDb({
+      widgets: { findOne: widgetsFindOne },
+      widgetFiles: { findOne: vi.fn() },
+    });
+    const res = createRes();
+
+    await controller.downloadFile(
+      { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: 'not-an-object-id' } },
+      res
+    );
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(widgetsFindOne).not.toHaveBeenCalled();
+  });
+
+  it('downloadFile returns 404 when the linked record exists but its file is absent on disk', async () => {
+    const controller = buildController();
+    const fileId = new ObjectId();
+    const fileRecord = { _id: fileId, widgetId: 'w-1', fileName: 'a.csv', storagePath: '/missing/a.csv' };
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+      widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+    const res = createRes();
+
+    await controller.downloadFile(
+      { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: fileId.toString() } },
+      res
+    );
+
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('downloadFile enforces the optional organization hook after link validation', async () => {
+    const checkOrgScope = vi.fn().mockResolvedValue(false);
+    const controller = buildController({ checkOrgScope });
+    const fileId = new ObjectId();
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1', organizationId: 'org-b' }) },
+      widgetFiles: { findOne: vi.fn().mockResolvedValue({ _id: fileId, widgetId: 'w-1', storagePath: '/tmp/a.csv' }) },
+    });
+    const res = createRes();
+
+    await controller.downloadFile(
+      {
+        app: { locals: { db } },
+        params: { widgetId: 'w-1', fileID: fileId.toString() },
+        organizationScope: { scope: 'organization', organizationIds: ['org-a'] },
+      },
+      res
+    );
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(checkOrgScope).toHaveBeenCalledTimes(1);
+  });
+
+  it('downloadFile returns 500 instead of corrupted bytes when encrypted content cannot be decrypted', async () => {
+    const controller = buildController();
+    const fileId = new ObjectId();
+    const fileRecord = {
+      _id: fileId,
+      widgetId: 'w-1',
+      fileName: 'a.csv',
+      storagePath: '/tmp/a.csv',
+      encryptionAlgorithm: 'aes-256-gcm',
+      encryptionKeyId: 'vitest-key-001',
+      encryptionIv: Buffer.alloc(12).toString('base64'),
+      encryptionTag: Buffer.alloc(16).toString('base64'),
+    };
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+      widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('corrupt ciphertext'));
+    const res = createRes();
+
+    await controller.downloadFile(
+      { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: fileId.toString() } },
+      res
+    );
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.send).not.toHaveBeenCalled();
+  });
+
+  it('deleteFile keeps the database deletion when physical cleanup fails', async () => {
+    const controller = buildController();
+    const fileId = new ObjectId();
+    const deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+      widgetFiles: {
+        findOne: vi.fn().mockResolvedValue({ _id: fileId, widgetId: 'w-1', fileName: 'a.csv', storagePath: '/tmp/a.csv' }),
+        deleteOne,
+      },
+    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(() => { throw new Error('locked'); });
+    const res = createRes();
+
+    await controller.deleteFile(
+      { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: fileId.toString() } },
+      res
+    );
+
+    expect(deleteOne).toHaveBeenCalledWith({ _id: fileId });
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('deleteFile returns 500 when the linked database deletion fails', async () => {
+    const controller = buildController();
+    const fileId = new ObjectId();
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+      widgetFiles: {
+        findOne: vi.fn().mockResolvedValue({ _id: fileId, widgetId: 'w-1', fileName: 'a.csv', storagePath: '/tmp/a.csv' }),
+        deleteOne: vi.fn().mockRejectedValue(new Error('delete down')),
+      },
+    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+    const res = createRes();
+
+    await controller.deleteFile(
+      { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: fileId.toString() } },
+      res
+    );
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'delete down' }));
+  });
+
+  it('replaceFile rejects a missing upload before resolving the linked record', async () => {
+    const controller = buildController();
+    const fileFindOne = vi.fn();
+    const db = createDb({ widgetFiles: { findOne: fileFindOne } });
+    const res = createRes();
+
+    await controller.replaceFile(
+      { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: new ObjectId().toString() } },
+      res
+    );
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(fileFindOne).not.toHaveBeenCalled();
+  });
+
+  it('replaceFile cleans the newly uploaded file when link validation fails', async () => {
+    const controller = buildController();
+    const db = createDb({ widgetFiles: { findOne: vi.fn().mockResolvedValue(null) } });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+    const req = {
+      app: { locals: { db } },
+      params: { widgetId: 'w-1', fileID: new ObjectId().toString() },
+      file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 2 },
+    };
+    const res = createRes();
+
+    await controller.replaceFile(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(unlink).toHaveBeenCalledWith('/tmp/new.csv');
+  });
+
+  it('replaceFile tolerates failure removing the previous version after the new encrypted file is ready', async () => {
+    const controller = buildController();
+    const fileId = new ObjectId();
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+      widgetFiles: {
+        findOne: vi.fn().mockResolvedValue({
+          _id: fileId,
+          widgetId: 'w-1',
+          fileName: 'old.csv',
+          storagePath: '/tmp/old.csv',
+          checksum: 'old-checksum',
+        }),
+        updateOne,
+      },
+    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new content'));
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(() => { throw new Error('old file locked'); });
+    const res = createRes();
+
+    await controller.replaceFile(
+      {
+        app: { locals: { db } },
+        params: { widgetId: 'w-1', fileID: fileId.toString() },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 11 },
+      },
+      res
+    );
+
+    expect(updateOne).toHaveBeenCalledTimes(1);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+});
+
