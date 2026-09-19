@@ -37,6 +37,7 @@ require.cache[mongoStorageRepositoryPath] = {
 
 const sampleService = require('../../src/services/sample.service');
 const qualityDomain = require('../../src/services/quality-domain.service');
+const rcsReferenceData = require('../../src/services/rcs-reference-data');
 const { ObjectId } = require('mongodb');
 
 const BOX_ID = new ObjectId();
@@ -140,6 +141,15 @@ function makeDb(overrides = {}) {
     },
     session
   };
+}
+
+function completeGovernanceEvidence(overrides = {}) {
+  return Object.fromEntries(
+    rcsReferenceData.governanceEvidenceCategories.map(({ key }) => [
+      key,
+      Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : 'satisfied',
+    ])
+  );
 }
 
 function validSampleData(overrides = {}) {
@@ -650,10 +660,31 @@ describe('sample.service', () => {
           calculation_trace: {}
         });
 
-        const sprec = { matrixType: 'PLASMA', sampleType: 'PLASMA' };
-        const result = await sampleService.createSample(db, validSampleData({ sprec }));
+        const sprec = {
+          matrixType: 'fluid',
+          sampleType: 'BLD',
+          primaryContainer: 'SST',
+          preCentrifugation: 'A',
+          centrifugation: 'A',
+          secondCentrifugation: 'A',
+          postCentrifugationDelay: 'A',
+          longTermStorage: 'C',
+        };
+        const governanceEvidence = completeGovernanceEvidence();
+        const input = validSampleData({
+          matrixType: 'fluid',
+          sprec,
+          governanceEvidence,
+        });
+        const result = await sampleService.createSample(db, input);
 
-        expect(qualityDomain.resolveMethodologicalQuality).toHaveBeenCalledWith({ sprec });
+        expect(qualityDomain.resolveMethodologicalQuality).toHaveBeenCalledWith(
+          expect.objectContaining({
+            matrixType: 'fluid',
+            sprec,
+            governanceEvidence,
+          })
+        );
         expect(db.collections.rcsAssessments.insertOne).toHaveBeenCalledTimes(1);
         const recorded = db.collections.rcsAssessments.insertOne.mock.calls[0][0];
         expect(recorded.specimenId).toBe(String(result.specimenId));

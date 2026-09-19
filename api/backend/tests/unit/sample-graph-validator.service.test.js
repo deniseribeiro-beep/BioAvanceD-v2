@@ -1,6 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 const SampleGraphValidator = require('../../src/services/SampleGraphValidator');
 const { generateSampleHash } = require('../../src/services/MerkleService');
+const rcsReferenceData = require('../../src/services/rcs-reference-data');
+
+function completeGovernanceEvidence(overrides = {}) {
+  return Object.fromEntries(
+    rcsReferenceData.governanceEvidenceCategories.map(({ key }) => [
+      key,
+      Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : 'satisfied',
+    ])
+  );
+}
 
 function buildSample(overrides = {}) {
   const sample = {
@@ -9,6 +19,7 @@ function buildSample(overrides = {}) {
     participantId: '12345678',
     consentTemplateId: 'tcle-001',
     quality_category: 'A',
+    governanceEvidence: completeGovernanceEvidence(),
     sprec: {
       matrixType: 'fluid',
       sampleType: 'BLD',

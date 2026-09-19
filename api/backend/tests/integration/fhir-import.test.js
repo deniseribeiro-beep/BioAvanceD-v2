@@ -8,6 +8,7 @@ const fhirImportStagingService = require('../../src/services/fhir-import-staging
 const notificationService = require('../../src/services/NotificationService');
 const qualityDomain = require('../../src/services/quality-domain.service');
 const fhirImportStagingController = require('../../src/controllers/fhir-import-staging.controller');
+const rcsReferenceData = require('../../src/services/rcs-reference-data');
 
 function createCursor(items) {
   let current = [...items];
@@ -91,6 +92,27 @@ function createJsonRes() {
       return this;
     }),
   };
+}
+
+function completeGovernanceEvidence(overrides = {}) {
+  return Object.fromEntries(
+    rcsReferenceData.governanceEvidenceCategories.map(({ key }) => [
+      key,
+      Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : 'satisfied',
+    ])
+  );
+}
+
+function certifyStagedRecordAsAdmissible(record) {
+  const sprec = record?.normalized?.rcsPreview?.sprec || {};
+  const matrixType = sprec.matrixType || sprec.matrix_type;
+  const assessment = qualityDomain.resolveMethodologicalQuality({
+    matrixType,
+    sprec,
+    governanceEvidence: completeGovernanceEvidence(),
+  });
+  record.normalized.rcsPreview = { ...assessment, sprec };
+  return assessment;
 }
 
 const signedBundle = {
@@ -394,11 +416,22 @@ describe('FHIR import staging', () => {
     const preview = result.records[0].normalized.rcsPreview;
 
     expect(preview.model_version).toBe('RCS-GOV-1.0');
-    expect(preview.final_grade).toBe('E');
-    expect(preview.governance_status).toBe(0);
-    expect(preview.governance_failure_reasons).toContain('Unknown SPREC code');
-    expect(preview.axis_penalties).toEqual([]);
-    expect(preview.calculation_trace.governance_trace).not.toEqual(
+    expect(preview.input_status).toBe('invalid');
+    expect(preview.governance_status).toBeNull();
+    expect(preview.final_grade).toBeNull();
+    expect(preview.input_errors).toContain('Explicit governance evidence is required');
+
+    const governedPreview = qualityDomain.resolveMethodologicalQuality({
+      matrixType: preview.sprec.matrixType || preview.sprec.matrix_type,
+      sprec: preview.sprec,
+      governanceEvidence: completeGovernanceEvidence(),
+    });
+
+    expect(governedPreview.final_grade).toBe('E');
+    expect(governedPreview.governance_status).toBe(0);
+    expect(governedPreview.governance_failure_reasons).toContain('Unknown SPREC code');
+    expect(governedPreview.axis_penalties).toEqual([]);
+    expect(governedPreview.calculation_trace.governance_trace).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ severity_value: 0 })])
     );
   });
@@ -409,7 +442,12 @@ describe('FHIR import staging', () => {
     await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
 
     expect(spy).toHaveBeenCalled();
-    expect(db.collections.import_staging_records.docs[0].normalized.rcsPreview.final_grade).toBe('A');
+    expect(db.collections.import_staging_records.docs[0].normalized.rcsPreview).toMatchObject({
+      input_status: 'invalid',
+      governance_status: null,
+      final_grade: null,
+      grade_route: 'Invalid input',
+    });
   });
 
   it('controller retorna 400 controlado, nunca 500, para erro de validação', async () => {
@@ -654,6 +692,14 @@ describe('FHIR import staging', () => {
 
   it('commit salva somente registros READY_TO_COMMIT', async () => {
     const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+    const stagedRecord = db.collections.import_staging_records.docs.find((doc) => String(doc.batchId) === String(staged.batch._id));
+    const admissible = certifyStagedRecordAsAdmissible(stagedRecord);
+    expect(admissible).toMatchObject({
+      input_status: 'valid',
+      governance_status: 1,
+      governance_outcome: 'admissible',
+      final_grade: 'A',
+    });
     const result = await fhirImportStagingService.commitBatch(db, staged.batch._id);
 
     expect(result.committed).toBe(1);
@@ -670,6 +716,10 @@ describe('FHIR import staging', () => {
 
   it('#526: registra RcsAssessment e SpecimenPreanalytics referenciados ao comitar amostra nova', async () => {
     const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+    const stagedRecord = db.collections.import_staging_records.docs.find((doc) => String(doc.batchId) === String(staged.batch._id));
+    const admissible = certifyStagedRecordAsAdmissible(stagedRecord);
+    expect(admissible.governance_status).toBe(1);
+    expect(admissible.governance_outcome).toBe('admissible');
     const result = await fhirImportStagingService.commitBatch(db, staged.batch._id);
 
     expect(result.committed).toBe(1);
