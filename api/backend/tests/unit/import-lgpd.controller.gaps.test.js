@@ -948,4 +948,150 @@ describe('import-lgpd.controller gaps', () => {
       );
     });
   });
+
+  describe('item 8 quarantine controller branch closure', () => {
+    it('widens readable quarantine types only when createPatient is granted and fails closed on resolver errors', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const rbacAssignment = require('../../src/services/rbac-assignment.service');
+      const permissionSpy = vi.spyOn(rbacAssignment, 'userHasPermission');
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const db = {};
+      const req = { user: { userID: 'u1' } };
+
+      permissionSpy.mockResolvedValueOnce(true);
+      const widened = await controller.resolveReadableQuarantineTypes(db, req);
+      expect(widened).toEqual([
+        importLGPDService.QUARANTINE_BATCH_TYPES.SAMPLE,
+        importLGPDService.QUARANTINE_BATCH_TYPES.PATIENT,
+      ]);
+
+      permissionSpy.mockRejectedValueOnce(new Error('rbac unavailable'));
+      const closed = await controller.resolveReadableQuarantineTypes(db, req);
+      expect(closed).toEqual([importLGPDService.QUARANTINE_BATCH_TYPES.SAMPLE]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('mantendo apenas lotes de amostra'),
+        'rbac unavailable'
+      );
+    });
+
+    it('covers getQuarantineBatch db guard, success, domain error and server-error branches', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const rbacAssignment = require('../../src/services/rbac-assignment.service');
+      vi.spyOn(rbacAssignment, 'userHasPermission').mockResolvedValue(false);
+      const getSpy = vi.spyOn(importLGPDService, 'getQuarantineBatch');
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      const noDbRes = createRes();
+      await controller.getQuarantineBatch(
+        { app: { locals: {} }, params: { batchId: 'batch-0' }, user: { userID: 'u1' } },
+        noDbRes
+      );
+      expect(noDbRes.status).toHaveBeenCalledWith(503);
+
+      const db = {};
+      getSpy.mockResolvedValueOnce({
+        batch: { _id: 'batch-1', type: importLGPDService.QUARANTINE_BATCH_TYPES.SAMPLE },
+        records: [{ row: 1 }],
+      });
+      const okRes = createRes();
+      await controller.getQuarantineBatch(
+        { app: { locals: { db } }, params: { batchId: 'batch-1' }, user: { userID: 'u1' } },
+        okRes
+      );
+      expect(okRes.status).toHaveBeenCalledWith(200);
+      expect(getSpy).toHaveBeenLastCalledWith(
+        db,
+        'batch-1',
+        { types: [importLGPDService.QUARANTINE_BATCH_TYPES.SAMPLE] }
+      );
+
+      const domainError = new Error('lote não encontrado');
+      domainError.statusCode = 404;
+      getSpy.mockRejectedValueOnce(domainError);
+      const domainRes = createRes();
+      await controller.getQuarantineBatch(
+        { app: { locals: { db } }, params: { batchId: 'missing' }, user: { userID: 'u1' } },
+        domainRes
+      );
+      expect(domainRes.status).toHaveBeenCalledWith(404);
+      expect(domainRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'lote não encontrado',
+      });
+
+      getSpy.mockRejectedValueOnce(new Error('mongo unavailable'));
+      const failedRes = createRes();
+      await controller.getQuarantineBatch(
+        { app: { locals: { db } }, params: { batchId: 'batch-2' }, user: { userID: 'u1' } },
+        failedRes
+      );
+      expect(failedRes.status).toHaveBeenCalledWith(500);
+      expect(failedRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Erro ao ler lote de quarentena',
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Erro ao ler lote de quarentena LGPD:',
+        'mongo unavailable'
+      );
+    });
+
+    it('covers listQuarantineBatches db guard, success pagination forwarding and failure response', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const rbacAssignment = require('../../src/services/rbac-assignment.service');
+      vi.spyOn(rbacAssignment, 'userHasPermission').mockResolvedValue(false);
+      const listSpy = vi.spyOn(importLGPDService, 'listQuarantineBatches');
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      const noDbRes = createRes();
+      await controller.listQuarantineBatches(
+        { app: { locals: {} }, query: {}, user: { userID: 'u1' } },
+        noDbRes
+      );
+      expect(noDbRes.status).toHaveBeenCalledWith(503);
+
+      const db = {};
+      listSpy.mockResolvedValueOnce({
+        batches: [{ _id: 'batch-1' }],
+        page: 2,
+        limit: 5,
+        total: 6,
+        totalPages: 2,
+      });
+      const okRes = createRes();
+      await controller.listQuarantineBatches(
+        { app: { locals: { db } }, query: { page: '2', limit: '5' }, user: { userID: 'u1' } },
+        okRes
+      );
+      expect(listSpy).toHaveBeenLastCalledWith(db, {
+        page: '2',
+        limit: '5',
+        types: [importLGPDService.QUARANTINE_BATCH_TYPES.SAMPLE],
+      });
+      expect(okRes.status).toHaveBeenCalledWith(200);
+      expect(okRes.json).toHaveBeenCalledWith({
+        success: true,
+        data: [{ _id: 'batch-1' }],
+        pagination: { page: 2, limit: 5, total: 6, totalPages: 2 },
+      });
+
+      listSpy.mockRejectedValueOnce(new Error('list failed'));
+      const failedRes = createRes();
+      await controller.listQuarantineBatches(
+        { app: { locals: { db } }, query: {}, user: { userID: 'u1' } },
+        failedRes
+      );
+      expect(failedRes.status).toHaveBeenCalledWith(500);
+      expect(failedRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Erro ao listar lotes de quarentena',
+        message: 'list failed',
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Erro ao listar lotes de quarentena LGPD:',
+        'list failed'
+      );
+    });
+  });
+
 });
