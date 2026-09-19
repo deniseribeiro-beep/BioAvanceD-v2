@@ -134,7 +134,7 @@ describe('StorageService item 8 residual canonical branches', () => {
     const liveId = new ObjectId();
     const grid = new Map([['A1', null], ['A2', orphanId], ['A3', liveId]]);
     const storageBoxes = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue({ _id: boxId, occupancyGrid: grid, currentOccupancy: 99 }),
+      findOne: vi.fn().mockResolvedValue({ _id: boxId, dimension: { rows: 1, cols: 3 }, occupancyGrid: grid, currentOccupancy: 99 }),
     });
     const samples = createCollectionMock({
       findOne: vi.fn(async ({ _id }) => String(_id) === String(orphanId) ? null : { _id: liveId }),

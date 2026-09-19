@@ -76,8 +76,11 @@ describe('NormalizedPhysicalStorageStore item 8 canonical coverage', () => {
     db.collections.storageRacks.createIndex = undefined;
     const store = new NormalizedPhysicalStorageStore(db);
     const first = store.ensureIndexes();
-    expect(store.ensureIndexes()).toBe(first);
-    await first;
+    const memoized = store.indexesPromise;
+    const second = store.ensureIndexes();
+    expect(store.indexesPromise).toBe(memoized);
+    await Promise.all([first, second]);
+    expect(db.collections.containers.createIndex).toHaveBeenCalledTimes(1);
 
     const retryDb = makeDb();
     retryDb.collections.containers.createIndex

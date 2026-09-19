@@ -67,6 +67,7 @@ describe('TelemetryMonitor', () => {
   let getInfluxConfigSpy;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     cronScheduleSpy = vi.spyOn(cron, 'schedule').mockImplementation(() => ({ stop: vi.fn() }));
     loggerInfoSpy = vi.spyOn(logger, 'info').mockImplementation(() => {});
     loggerWarnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});

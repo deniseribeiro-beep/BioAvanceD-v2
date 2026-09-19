@@ -3,12 +3,26 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const fs = require('fs');
-const mqtt = require('mqtt');
+const mqttModulePath = require.resolve('mqtt');
+const originalMqttCacheEntry = require.cache[mqttModulePath];
+const mqtt = { connect: vi.fn() };
+require.cache[mqttModulePath] = {
+  id: mqttModulePath,
+  filename: mqttModulePath,
+  loaded: true,
+  exports: mqtt,
+};
 const logger = require('../../src/utils/logger');
 const iotStreamingService = require('../../src/services/iot-streaming.service');
 const mqttSignatureService = require('../../src/services/mqtt-signature.service');
 const mqttIngestionAuditService = require('../../src/services/mqtt-ingestion-audit.service');
 const service = require('../../src/services/mqtt-telemetry.service');
+
+if (originalMqttCacheEntry) {
+  require.cache[mqttModulePath] = originalMqttCacheEntry;
+} else {
+  delete require.cache[mqttModulePath];
+}
 
 function fakeClient() {
   const handlers = {};
@@ -21,6 +35,7 @@ function fakeClient() {
 }
 
 afterEach(() => {
+  mqtt.connect.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   service.client = null;
@@ -38,7 +53,7 @@ describe('mqtt telemetry item 8 residual canonical branches', () => {
     vi.stubEnv('MQTT_KEY_PATH', '/key');
     vi.spyOn(fs, 'readFileSync').mockImplementation((file) => Buffer.from(String(file)));
     const client = fakeClient();
-    vi.spyOn(mqtt, 'connect').mockReturnValue(client);
+    mqtt.connect.mockReturnValue(client);
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
     const handleSpy = vi.spyOn(service, 'handleMessage').mockResolvedValue();
 
@@ -66,7 +81,7 @@ describe('mqtt telemetry item 8 residual canonical branches', () => {
   it('contains a raw synchronous mqtt.connect failure without starting the service', async () => {
     vi.stubEnv('MQTT_ENABLED', 'true');
     vi.stubEnv('MQTT_URL', 'mqtt://broker');
-    vi.spyOn(mqtt, 'connect').mockImplementation(() => { throw 'raw connect failure'; });
+    mqtt.connect.mockImplementation(() => { throw 'raw connect failure'; });
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
 
     await service.start({});
