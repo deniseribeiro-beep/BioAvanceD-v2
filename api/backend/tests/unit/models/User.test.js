@@ -403,3 +403,105 @@ describe('UserModel - Unit Tests', () => {
     });
   });
 });
+
+describe('UserModel item 8 residual canonical account-governance branches', () => {
+  const validBase = () => ({
+    name: 'Usuário V2',
+    email: 'user.v2@example.test',
+    username: 'user-v2',
+    password: 'Senha@123',
+    status: 'active',
+  });
+
+  it('validates account lock expiry only when a non-null value is supplied', () => {
+    const invalid = validBase();
+    invalid.accountLockedUntil = 'not-a-date';
+    expect(UserModel.validate(invalid).errors).toContain('accountLockedUntil deve ser uma data válida');
+
+    const valid = validBase();
+    valid.accountLockedUntil = '2026-10-01T10:00:00.000Z';
+    expect(UserModel.validate(valid).isValid).toBe(true);
+
+    const explicitlyUnlocked = validBase();
+    explicitlyUnlocked.accountLockedUntil = null;
+    expect(UserModel.validate(explicitlyUnlocked).isValid).toBe(true);
+  });
+
+  it('validates role validity dates and refuses an interval whose end is not after its start', () => {
+    const invalidFrom = validBase();
+    invalidFrom.roleValidFrom = 'bad-date';
+    expect(UserModel.validate(invalidFrom).errors).toContain('roleValidFrom deve ser uma data válida');
+
+    const invalidUntil = validBase();
+    invalidUntil.roleValidUntil = 'bad-date';
+    expect(UserModel.validate(invalidUntil).errors).toContain('roleValidUntil deve ser uma data válida');
+
+    const reversed = validBase();
+    reversed.roleValidFrom = '2026-10-02T00:00:00.000Z';
+    reversed.roleValidUntil = '2026-10-01T00:00:00.000Z';
+    expect(UserModel.validate(reversed).errors).toContain('roleValidUntil deve ser posterior a roleValidFrom');
+
+    const validRange = validBase();
+    validRange.roleValidFrom = '2026-10-01T00:00:00.000Z';
+    validRange.roleValidUntil = '2026-10-02T00:00:00.000Z';
+    expect(UserModel.validate(validRange).isValid).toBe(true);
+  });
+
+  it('rejects mixed organizationIds while accepting explicit valid security-state values', () => {
+    const mixed = validBase();
+    mixed.organizationIds = ['org-1', 2];
+    expect(UserModel.validate(mixed).errors).toContain('organizationIds deve ser um array de strings');
+
+    const explicit = validBase();
+    explicit.forceReset = false;
+    explicit.failedLoginAttempts = 0;
+    explicit.organizationIds = [];
+    expect(UserModel.validate(explicit).isValid).toBe(true);
+  });
+
+  it('exercises the email validator directly on valid and invalid canonical account identifiers', () => {
+    expect(UserModel.isValidEmail('valid@example.test')).toBe(true);
+    expect(UserModel.isValidEmail('invalid-email')).toBe(false);
+  });
+
+  it('creates the optional lock/role scope fields with dates and preserves supplied organizationIds', () => {
+    const user = UserModel.create({
+      ...validBase(),
+      accountLockedUntil: '2026-10-01T10:00:00.000Z',
+      roleValidFrom: '2026-09-01T00:00:00.000Z',
+      roleValidUntil: '2026-12-01T00:00:00.000Z',
+      organizationIds: ['org-1', 'org-2'],
+    });
+
+    expect(user.accountLockedUntil).toBeInstanceOf(Date);
+    expect(user.roleValidFrom).toBeInstanceOf(Date);
+    expect(user.roleValidUntil).toBeInstanceOf(Date);
+    expect(user.organizationIds).toEqual(['org-1', 'org-2']);
+  });
+
+  it('strips credentials from single users and arrays without removing non-secret security state', () => {
+    const input = {
+      _id: 'u1',
+      username: 'user',
+      password: 'hash',
+      mfaSecret: 'legacy-secret',
+      mfaSecretCiphertext: { ciphertext: 'secret-envelope' },
+      passwordHistory: ['old-hash'],
+      passwordResetTokenHash: 'reset-hash',
+      mfaEnabled: true,
+      mfaLocked: false,
+    };
+
+    expect(UserModel.stripSecrets(null)).toBeNull();
+
+    const [safe] = UserModel.stripSecrets([input]);
+    expect(safe).toEqual({
+      _id: 'u1',
+      username: 'user',
+      mfaEnabled: true,
+      mfaLocked: false,
+    });
+    expect(UserModel.stripSecrets(input)).toEqual(safe);
+  });
+});
+
