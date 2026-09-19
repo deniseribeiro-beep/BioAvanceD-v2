@@ -560,7 +560,7 @@ describe('user.routes item 8 PUT residual branch closure', () => {
       expect.objectContaining({ auditorRole: false })
     );
 
-    expect(spies.isAdministrator).toHaveBeenCalledTimes(4);
+    expect(spies.isAdministrator).toHaveBeenCalledTimes(5);
     expect(spies.resolveRoleDisplayName).toHaveBeenCalledTimes(3);
 
     vi.restoreAllMocks();
