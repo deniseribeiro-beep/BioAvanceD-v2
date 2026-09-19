@@ -169,6 +169,25 @@ describe('sensor.service (non-quarantine paths)', () => {
       expect(result.metadataLinked).toBe(true);
     });
 
+
+    it('keeps a non-ObjectId storageContainer identifier when linking sensor metadata', async () => {
+      const { db } = makeDb();
+      const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
+      const sensorMetadataCollection = { updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }) };
+      db.collection = vi.fn((name) => (name === 'sensorMetadata' ? sensorMetadataCollection : sensorsCollection));
+
+      const result = await sensorService.createSensor(db, {
+        sensorId: 'S-RAW',
+        sensorType: 'temperature',
+        macAddress: 'AA:BB:CC:00:00:02',
+        storageContainer: 'container-external-key'
+      });
+
+      const [, update] = sensorMetadataCollection.updateOne.mock.calls[0];
+      expect(update.$set.storageContainer).toBe('container-external-key');
+      expect(result.metadataLinked).toBe(true);
+    });
+
     it('does not throw when the sensorMetadata upsert fails, but surfaces metadataLinked: false (#313)', async () => {
       const { db } = makeDb();
       const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
@@ -247,6 +266,23 @@ describe('sensor.service (non-quarantine paths)', () => {
         $or: [
           { locationId: { $in: ['LOC-1'] } },
           { locationID: { $in: ['LOC-1'] } }
+        ]
+      });
+    });
+
+
+    it('accepts the locationID alias and includes both string and numeric lookup variants', async () => {
+      const { db, collection } = makeDb();
+      const chain = makeFindChain([]);
+      collection.find = chain.find;
+      collection.countDocuments.mockResolvedValue(0);
+
+      await sensorService.listSensors(db, { locationID: '42' });
+
+      expect(chain.find).toHaveBeenCalledWith({
+        $or: [
+          { locationId: { $in: ['42', 42] } },
+          { locationID: { $in: ['42', 42] } }
         ]
       });
     });
@@ -408,6 +444,29 @@ describe('sensor.service (non-quarantine paths)', () => {
     // overwrite identity fields. Only Sensor.create()'s own fields (minus
     // sensorId/sensorID, which are identity and part of the lookup query)
     // may reach $set.
+
+    it('normalizes sensorStatus/locationID/policyID aliases onto the allowed canonical update fields', async () => {
+      const { db, collection } = makeDb();
+      collection.findOne.mockResolvedValue({ sensorId: 'S-1', maintenanceStatus: 'operational' });
+      collection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+      await sensorService.updateSensor(db, 'S-1', {
+        sensorStatus: 'maintenance',
+        locationID: 'LOC-LEGACY',
+        policyID: 'POL-LEGACY'
+      });
+
+      expect(collection.updateOne).toHaveBeenCalledWith(
+        { $or: [{ sensorId: 'S-1' }, { _id: 'S-1' }] },
+        { $set: expect.objectContaining({
+          maintenanceStatus: 'maintenance',
+          locationId: 'LOC-LEGACY',
+          policyId: 'POL-LEGACY',
+          updatedAt: expect.any(Date)
+        }) }
+      );
+    });
+
     it('#875: filters $set to the SensorModel allowlist, dropping injected/identity keys', async () => {
       const { db, collection } = makeDb();
       const existing = { sensorId: 'S-1', maintenanceStatus: 'operational' };
@@ -456,7 +515,28 @@ describe('sensor.service (non-quarantine paths)', () => {
     });
   });
 
-  describe('deleteSensor', () => {
+
+    it('falls back to policyID when policyId is absent', async () => {
+      const { db, collection } = makeDb();
+      collection.findOne.mockResolvedValue({
+        sensorId: 'S-10',
+        sensorType: 'temperature',
+        locationId: 'LOC-10',
+        policyID: 'POL-LEGACY'
+      });
+
+      const reading = await sensorService.collectReading(db, 'S-10');
+
+      expect(reading).toEqual({
+        sensorId: 'S-10',
+        sensorType: 'temperature',
+        locationId: 'LOC-10',
+        policyId: 'POL-LEGACY',
+        ready: true
+      });
+    });
+
+    describe('deleteSensor', () => {
     it('returns true when deletedCount > 0', async () => {
       const { db, collection } = makeDb();
       collection.deleteOne.mockResolvedValue({ deletedCount: 1 });
@@ -571,6 +651,62 @@ describe('sensor.service (non-quarantine paths)', () => {
         movements: 1,
         reason: 'status:offline'
       });
+    });
+
+
+    it('derives quarantine status from an existing legacy status and logs with sensorID fallback', async () => {
+      const { db, collection } = makeDb();
+      const existing = { sensorID: 'S-LEGACY', status: 'offline' };
+      collection.findOne.mockResolvedValue(existing);
+      collection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+      const quarantineBySensorStatus = vi.fn().mockResolvedValue({
+        triggered: true,
+        matched: 2,
+        quarantined: 2,
+        movements: 2,
+        reason: 'status:offline'
+      });
+      sensorService.setQuarantineService({
+        isQuarantineTriggerStatus: vi.fn((status) => status === 'offline'),
+        quarantineBySensorStatus
+      });
+
+      const result = await sensorService.updateSensor(db, 'lookup-id', { sensorModel: 'legacy-model' });
+
+      expect(quarantineBySensorStatus).toHaveBeenCalledWith(
+        db,
+        expect.objectContaining({ sensorID: 'S-LEGACY', sensorModel: 'legacy-model' }),
+        'offline',
+        expect.objectContaining({ updateData: expect.objectContaining({ sensorModel: 'legacy-model' }) })
+      );
+      expect(result.quarantine).toEqual(expect.objectContaining({
+        triggered: true,
+        matched: 2,
+        quarantined: 2,
+        movements: 2
+      }));
+    });
+
+    it('derives quarantine status from existing sensorStatus when newer status fields are absent', async () => {
+      const { db, collection } = makeDb();
+      collection.findOne.mockResolvedValue({ sensorId: 'S-OLD', sensorStatus: 'offline' });
+      collection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+      const quarantineBySensorStatus = vi.fn().mockResolvedValue({ triggered: false });
+      sensorService.setQuarantineService({
+        isQuarantineTriggerStatus: vi.fn((status) => status === 'offline'),
+        quarantineBySensorStatus
+      });
+
+      await sensorService.updateSensor(db, 'S-OLD', { sensorModel: 'model-2' });
+
+      expect(quarantineBySensorStatus).toHaveBeenCalledWith(
+        db,
+        expect.objectContaining({ sensorStatus: 'offline' }),
+        'offline',
+        expect.any(Object)
+      );
     });
 
     // #951: `typeof client.startSession === 'function'` is true on a real
