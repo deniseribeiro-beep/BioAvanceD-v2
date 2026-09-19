@@ -924,3 +924,68 @@ describe('#939 GET /batch/quarantine/:id route registration', () => {
     userHasPermissionSpy.mockRestore();
   });
 });
+
+describe('batch-validation-engine.service item 8 attempt/progress residuals', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('records a non-final failed attempt without prematurely marking the import failed', async () => {
+    const updateOne = vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+
+    await batchValidationEngine.recordAttemptFailure('job-retry', {
+      attemptNumber: 1,
+      attemptsAllowed: 3,
+      message: 'temporary database failure',
+    });
+
+    expect(updateOne).toHaveBeenCalledWith(
+      { jobId: 'job-retry' },
+      {
+        $set: {
+          status: 'processing',
+          updatedAt: expect.any(Date),
+        },
+        $push: {
+          importErrors: {
+            message: 'Tentativa 1/3 falhou: temporary database failure',
+            occurredAt: expect.any(Date),
+          },
+        },
+      }
+    );
+  });
+
+  it('marks the last allowed attempt failed and preserves the fallback error message', async () => {
+    const updateOne = vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+
+    await batchValidationEngine.recordAttemptFailure('job-final', {
+      attemptNumber: 3,
+      attemptsAllowed: 3,
+    });
+
+    expect(updateOne).toHaveBeenCalledWith(
+      { jobId: 'job-final' },
+      expect.objectContaining({
+        $set: expect.objectContaining({ status: 'failed' }),
+        $push: {
+          importErrors: expect.objectContaining({
+            message: 'Tentativa 3/3 falhou: erro desconhecido',
+            occurredAt: expect.any(Date),
+          }),
+        },
+      })
+    );
+  });
+
+  it('returns null without persistence when rejected rows exist but no database handle is available', async () => {
+    const result = await batchValidationEngine.quarantineRejectedRows(null, {
+      jobId: 'job-no-db',
+      dataType: 'samples',
+      rejected: [{ rowNumber: 2, row: { sampleType: '' }, errors: ['sampleType é obrigatório'] }],
+    });
+
+    expect(result).toBeNull();
+  });
+});
+
