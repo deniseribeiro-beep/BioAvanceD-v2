@@ -417,3 +417,153 @@ describe('user.routes item 8 residual branch coverage', () => {
     adminSpy.mockRestore();
   });
 });
+
+describe('user.routes item 8 PUT residual branch closure', () => {
+  function installUpdateSpies() {
+    const UserModel = require('../../src/models/User');
+    const rbacAssignment = require('../../src/services/rbac-assignment.service');
+    const auditLogger = require('../../src/utils/auditLogger');
+
+    const validate = vi.spyOn(UserModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+    const isAdministrator = vi.spyOn(rbacAssignment, 'isAdministrator').mockResolvedValue(false);
+    const resolveRoleDisplayName = vi.spyOn(rbacAssignment, 'resolveRoleDisplayName').mockResolvedValue('Técnico');
+    const revokeAdditionalRole = vi.spyOn(rbacAssignment, 'revokeAdditionalRole').mockResolvedValue({ revoked: true });
+    const auditInit = vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const auditPermission = vi.spyOn(auditLogger, 'logPermissionChange').mockResolvedValue(undefined);
+    const auditUpdate = vi.spyOn(auditLogger, 'logUpdate').mockResolvedValue(undefined);
+
+    return {
+      UserModel,
+      validate,
+      isAdministrator,
+      resolveRoleDisplayName,
+      revokeAdditionalRole,
+      auditInit,
+      auditPermission,
+      auditUpdate,
+    };
+  }
+
+  it('covers PUT validation, normalization, update-result and auditor-role residual branches', async () => {
+    const spies = installUpdateSpies();
+    const target = {
+      _id: 'u1',
+      name: 'Synthetic User',
+      email: 'synthetic@example.test',
+      username: 'synthetic',
+      status: 'inactive',
+      organizationId: null,
+    };
+    const updatedActive = {
+      ...target,
+      status: 'active',
+      phone: null,
+      roleValidFrom: new Date('2026-01-01T00:00:00.000Z'),
+      roleValidUntil: null,
+    };
+    const updatedDates = {
+      ...target,
+      phone: null,
+      roleValidFrom: null,
+      roleValidUntil: new Date('2027-01-01T00:00:00.000Z'),
+    };
+    const updatedAuditor = { ...target };
+
+    const findOne = vi.fn()
+      // invalid validation request
+      .mockResolvedValueOnce(target)
+      // normalized request: target + updated
+      .mockResolvedValueOnce(target)
+      .mockResolvedValueOnce(updatedActive)
+      // null-phone/date-alternative request: target + updated
+      .mockResolvedValueOnce(target)
+      .mockResolvedValueOnce(updatedDates)
+      // matchedCount=0 request: target only
+      .mockResolvedValueOnce(target)
+      // updated-user-missing request: target + null
+      .mockResolvedValueOnce(target)
+      .mockResolvedValueOnce(null)
+      // auditor revoke request: target + updated
+      .mockResolvedValueOnce(target)
+      .mockResolvedValueOnce(updatedAuditor);
+
+    const updateOne = vi.fn()
+      .mockResolvedValueOnce({ matchedCount: 1 })
+      .mockResolvedValueOnce({ matchedCount: 1 })
+      .mockResolvedValueOnce({ matchedCount: 0 })
+      .mockResolvedValueOnce({ matchedCount: 1 })
+      .mockResolvedValueOnce({ matchedCount: 1 });
+
+    const usersCollection = { findOne, updateOne };
+    const db = { collection: () => usersCollection };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db });
+
+    spies.validate.mockReturnValueOnce({ isValid: false, errors: ['invalid synthetic update'] });
+    const invalid = await request(app).put('/api/users/u1').send({ name: 42 });
+    expect(invalid.status).toBe(422);
+    expect(invalid.body.message).toContain('invalid synthetic update');
+
+    const normalized = await request(app).put('/api/users/u1').send({
+      status: 'Ativo',
+      phone: '---',
+      roleValidFrom: '2026-01-01T00:00:00.000Z',
+      roleValidUntil: '',
+    });
+    expect(normalized.status).toBe(200);
+    const normalizedSet = updateOne.mock.calls[0][1].$set;
+    expect(normalizedSet.status).toBe(spies.UserModel.normalizeStatus('Ativo'));
+    expect(normalizedSet.phone).toBeNull();
+    expect(normalizedSet.roleValidFrom).toBeInstanceOf(Date);
+    expect(normalizedSet.roleValidUntil).toBeNull();
+    expect(spies.auditPermission).toHaveBeenCalledWith(
+      expect.anything(),
+      'u1',
+      expect.objectContaining({
+        status: expect.objectContaining({ from: 'inactive', to: spies.UserModel.normalizeStatus('Ativo') }),
+      })
+    );
+
+    const alternateValues = await request(app).put('/api/users/u1').send({
+      phone: null,
+      roleValidFrom: null,
+      roleValidUntil: '2027-01-01T00:00:00.000Z',
+    });
+    expect(alternateValues.status).toBe(200);
+    const alternateSet = updateOne.mock.calls[1][1].$set;
+    expect(alternateSet.phone).toBeNull();
+    expect(alternateSet.roleValidFrom).toBeNull();
+    expect(alternateSet.roleValidUntil).toBeInstanceOf(Date);
+    expect(spies.auditUpdate).toHaveBeenCalled();
+
+    const unmatched = await request(app).put('/api/users/u1').send({ name: 'Still Synthetic' });
+    expect(unmatched.status).toBe(404);
+    expect(unmatched.body.error).toBe('Usuário não encontrado');
+
+    const missingAfterUpdate = await request(app).put('/api/users/u1').send({ name: 'Synthetic Updated' });
+    expect(missingAfterUpdate.status).toBe(404);
+    expect(missingAfterUpdate.body.error).toBe('users.updateNotFound');
+
+    const auditorRevoked = await request(app).put('/api/users/u1').send({ auditorRole: false });
+    expect(auditorRevoked.status).toBe(200);
+    expect(spies.revokeAdditionalRole).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        userAccountId: 'u1',
+        roleCode: 'auditor',
+        revokedBy: 'user-1',
+      })
+    );
+    expect(spies.auditPermission).toHaveBeenCalledWith(
+      expect.anything(),
+      'u1',
+      expect.objectContaining({ auditorRole: false })
+    );
+
+    expect(spies.isAdministrator).toHaveBeenCalledTimes(4);
+    expect(spies.resolveRoleDisplayName).toHaveBeenCalledTimes(3);
+
+    vi.restoreAllMocks();
+    loadRoute();
+  });
+});
