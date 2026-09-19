@@ -2346,6 +2346,266 @@ describe('sample.service item 8 residual branch coverage', () => {
     await sampleService.getQuarantineActions(db, idWithoutToString);
     expect(actionSpy).toHaveBeenLastCalledWith(db, idWithoutToString);
   });
+
+  it('falls back from a canonical ObjectId lookup to specimenId when the _id lookup misses', async () => {
+    const db = makeDb();
+    const id = '507f1f77bcf86cd799439011';
+    db.collections.samples.findOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ specimenId: id, specimenStatus: 'available' });
+
+    const result = await sampleService.getSample(db, id);
+
+    expect(result.specimenId).toBe(id);
+    expect(db.collections.samples.findOne).toHaveBeenNthCalledWith(1, { _id: expect.any(ObjectId) });
+    expect(db.collections.samples.findOne).toHaveBeenNthCalledWith(2, { specimenId: id });
+  });
+
+  it('resolves a BOX -> DRAWER -> RACK -> SHELF -> FREEZER hierarchy without changing canonical custody semantics', async () => {
+    const db = makeDb();
+    mockOperationalStorage(db);
+    const DRAWER_ID = new ObjectId();
+    const originalImpl = db.collection.getMockImplementation();
+    const storageBoxes = {
+      findOne: vi.fn().mockResolvedValue({ _id: BOX_ID, parent_id: DRAWER_ID, dimension: { rows: 8, cols: 12 } }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
+    };
+    const chain = new Map([
+      [String(DRAWER_ID), { _id: DRAWER_ID, containerType: 'DRAWER', parent_id: RACK_ID }],
+      [String(RACK_ID), { _id: RACK_ID, containerType: 'RACK', parent_id: SHELF_ID }],
+      [String(SHELF_ID), { _id: SHELF_ID, containerType: 'SHELF', parent_id: FREEZER_ID }],
+      [String(FREEZER_ID), { _id: FREEZER_ID, containerType: 'FREEZER', containerID: 'EQ-1' }]
+    ]);
+    const storageContainers = {
+      findOne: vi.fn(({ _id }) => Promise.resolve(chain.get(String(_id)) || null))
+    };
+    db.collection.mockImplementation((name) => {
+      if (name === 'storageBoxes') return storageBoxes;
+      if (name === 'storageContainers') return storageContainers;
+      return originalImpl(name);
+    });
+
+    const result = await sampleService.createSample(db, validSampleData({
+      specimenId: 600020,
+      barcode: 'BR-DRAWER-1',
+    }));
+
+    expect(result).toBeDefined();
+    expect(storageContainers.findOne).toHaveBeenCalledWith({ _id: RACK_ID });
+  });
+
+  it('accepts equipment readiness from maintenanceStatus or operationalStatus fallbacks', async () => {
+    for (const equipment of [
+      { equipmentID: 'EQ-1', maintenanceStatus: 'operational' },
+      { equipmentID: 'EQ-1', operationalStatus: 'operational' },
+    ]) {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      const originalImpl = db.collection.getMockImplementation();
+      const equipmentCollection = { findOne: vi.fn().mockResolvedValue(equipment) };
+      db.collection.mockImplementation((name) => (
+        name === 'equipment' ? equipmentCollection : originalImpl(name)
+      ));
+
+      const suffix = equipment.maintenanceStatus ? 'MAINT' : 'OP';
+      const result = await sampleService.createSample(db, validSampleData({
+        specimenId: equipment.maintenanceStatus ? 600021 : 600022,
+        barcode: `BR-EQUIP-${suffix}`,
+      }));
+      expect(result).toBeDefined();
+    }
+  });
+
+  it('covers canonical withdrawal lookup fallbacks and validation guards', async () => {
+    let db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue(null);
+    db.collections.samples.countDocuments.mockResolvedValue(0);
+    db.collections.samples.find.mockReturnValue(makeCursor([]));
+    await expect(sampleService.withdrawSample(db, 'UNKNOWN-BARCODE', {
+      withdrawalType: 'Total',
+      withdrawalResponsible: 'Jane Doe',
+      linkedProject: 'P1',
+    })).rejects.toThrow('Amostra não encontrada');
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({
+      specimenId: 'S-W1', specimenStatus: 'available', quantity: 10, currentQuantity: 10,
+    });
+    await expect(sampleService.withdrawSample(db, 'S-W1', {
+      withdrawalType: 'INVALID',
+      withdrawalResponsible: 'Jane Doe',
+      linkedProject: 'P1',
+    })).rejects.toThrow(/Tipo de retirada inválido/);
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({
+      specimenId: 'S-W2', specimenStatus: 'available', quantity: 10, currentQuantity: 10,
+    });
+    await expect(sampleService.withdrawSample(db, 'S-W2', {
+      withdrawalType: 'Total',
+      withdrawalResponsible: 'Jane',
+      linkedProject: 'P1',
+    })).rejects.toThrow(/nome e sobrenome/i);
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({
+      specimenId: 'S-W3', specimenStatus: 'available', quantity: 10, currentQuantity: 10,
+    });
+    await expect(sampleService.withdrawSample(db, 'S-W3', {
+      withdrawalType: 'Total',
+      withdrawalResponsible: 'Jane Doe',
+      linkedProject: '   ',
+    })).rejects.toThrow(/Projeto vinculado é obrigatório/);
+  });
+
+  it('covers return guards for pending quantity, responsible, condition, observations and excess quantity', async () => {
+    const base = {
+      specimenId: 'S-R',
+      specimenStatus: 'available',
+      quantity: 10,
+      initialQuantity: 10,
+      currentQuantity: 4,
+      totalWithdrawn: 6,
+      totalReturned: 1,
+      unit: 'mL',
+      linkedProject: 'P1',
+    };
+
+    let db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({ ...base, totalWithdrawn: 1, totalReturned: 1 });
+    await expect(sampleService.returnSample(db, 'S-R', {
+      returnResponsible: 'Jane Doe', condition: 'intact', returnType: 'Total',
+    })).rejects.toThrow(/Não há quantidade pendente/);
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    await expect(sampleService.returnSample(db, 'S-R', {
+      returnResponsible: 'J', condition: 'intact', returnType: 'Total',
+    })).rejects.toThrow(/Responsável pela devolução é obrigatório/);
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    await expect(sampleService.returnSample(db, 'S-R', {
+      returnResponsible: 'Jane Doe', condition: 'unknown', returnType: 'Total',
+    })).rejects.toThrow(/Condição da amostra é obrigatória/);
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    await expect(sampleService.returnSample(db, 'S-R', {
+      returnResponsible: 'Jane Doe', condition: 'partially_compromised', returnType: 'Total',
+    })).rejects.toThrow(/Observações são obrigatórias/);
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    await expect(sampleService.returnSample(db, 'S-R', {
+      returnResponsible: 'Jane Doe', condition: 'intact', returnType: 'Parcial',
+    })).rejects.toThrow(/Quantidade a devolver é obrigatória/);
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    await expect(sampleService.returnSample(db, 'S-R', {
+      returnResponsible: 'Jane Doe', condition: 'intact', returnType: 'Parcial', returnQuantity: 99,
+    })).rejects.toThrow(/Quantidade excede o pendente/);
+  });
+
+  it('keeps unusable returned material out of available stock and preserves a non-available computed status', async () => {
+    const db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({
+      specimenId: 'S-R2',
+      specimenStatus: 'depleted',
+      quantity: 10,
+      initialQuantity: 10,
+      currentQuantity: 0,
+      totalWithdrawn: 10,
+      totalReturned: 0,
+      barcode: 'BR-R2',
+      unit: 'mL',
+      linkedProject: 'P1',
+      lastWithdrawalID: 'MOV-1',
+    });
+
+    const result = await sampleService.returnSample(db, 'S-R2', {
+      returnResponsible: 'Jane Doe',
+      condition: 'unusable',
+      observations: 'Material inutilizado durante o uso',
+      returnType: 'Parcial',
+      returnQuantity: 2,
+    });
+
+    expect(result.returnedQuantity).toBe(2);
+    expect(result.newAvailableQuantity).toBe(0);
+  });
+
+  it('covers result lookup, deletion false result and industrial-barcode validation branches', async () => {
+    let db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue(null);
+    await expect(sampleService.getSampleResults(db, 'SPEC-404')).rejects.toThrow('Amostra não encontrada');
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({ specimenId: 'SPEC-1', specimenStatus: 'available' });
+    db.collections.results.find.mockReturnValue(makeCursor([{ resultId: 'R1' }]));
+    const results = await sampleService.getSampleResults(db, 'SPEC-1');
+    expect(results).toEqual([{ resultId: 'R1' }]);
+
+    db = makeDb();
+    db.collections.samples.deleteOne.mockResolvedValue({ deletedCount: 0 });
+    await expect(sampleService.deleteSample(db, 'SPEC-1')).resolves.toBe(false);
+
+    await expect(sampleService.getBarcodeIndustrialAssets('')).rejects.toThrow(/Código de barras inválido/);
+    await expect(sampleService.getBarcodeIndustrialAssets('BR-IND-1', { includePayload: false })).resolves.toBeDefined();
+  });
+
+  it('covers update miss/matchedCount guards and default list pagination', async () => {
+    let db = makeDb();
+    db.collections.samples.findOne.mockResolvedValueOnce(null);
+    await expect(sampleService.updateSample(db, 'SPEC-404', { notes: 'x' })).resolves.toBeNull();
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValueOnce({
+      specimenId: 'SPEC-1',
+      quantity: 10,
+      currentQuantity: 10,
+      specimenStatus: 'available',
+    });
+    db.collections.samples.updateOne.mockResolvedValue({ matchedCount: 0, modifiedCount: 0 });
+    await expect(sampleService.updateSample(db, 'SPEC-1', { notes: 'x' })).resolves.toBeNull();
+
+    db = makeDb();
+    const cursor = makeCursor([]);
+    db.collections.samples.find.mockReturnValue(cursor);
+    const listed = await sampleService.listSamples(db);
+    expect(listed.limit).toBe(50);
+    expect(listed.skip).toBe(0);
+  });
+
+  it('covers resolved and unresolved specimen identifiers for RCS/SPREC history helpers', async () => {
+    const rcsAssessmentService = require('../../src/services/rcs-assessment.service');
+    const specimenPreanalyticsService = require('../../src/services/specimen-preanalytics.service');
+    const rcsSpy = vi.spyOn(rcsAssessmentService, 'getAssessmentsForSpecimen').mockResolvedValue([]);
+    const sprecSpy = vi.spyOn(specimenPreanalyticsService, 'getProfilesForSpecimen').mockResolvedValue([]);
+
+    let db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({ specimenId: 'SPEC-RCS' });
+    await sampleService.getRcsAssessments(db, 'lookup-key');
+    expect(rcsSpy).toHaveBeenLastCalledWith(db, 'SPEC-RCS');
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue(null);
+    await sampleService.getRcsAssessments(db, 12345);
+    expect(rcsSpy).toHaveBeenLastCalledWith(db, '12345');
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({ specimenId: 'SPEC-SPREC' });
+    await sampleService.getSprecProfiles(db, 'lookup-key');
+    expect(sprecSpy).toHaveBeenLastCalledWith(db, 'SPEC-SPREC');
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue(null);
+    const noString = Object.create(null);
+    await sampleService.getSprecProfiles(db, noString);
+    expect(sprecSpy).toHaveBeenLastCalledWith(db, noString);
+  });
+
 });
 
 });
