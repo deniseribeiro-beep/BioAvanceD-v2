@@ -1,6 +1,34 @@
 import { describe, it, expect } from 'vitest';
 const rcsCertificationService = require('../../src/services/rcs-certification.service');
 
+const referenceData = require('../../src/services/rcs-reference-data');
+
+function admissibleGovernanceEvidence(overrides = {}) {
+  return Object.fromEntries(
+    referenceData.governanceEvidenceCategories.map(({ key }) => [
+      key,
+      Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : 'satisfied',
+    ])
+  );
+}
+
+function validFluidPayload(overrides = {}) {
+  return {
+    matrixType: 'fluid',
+    governanceEvidence: admissibleGovernanceEvidence(),
+    sprec: {
+      sampleType: 'BLD',
+      primaryContainer: 'SST',
+      preCentrifugation: 'A',
+      centrifugation: 'A',
+      secondCentrifugation: 'A',
+      postCentrifugationDelay: 'A',
+      longTermStorage: 'C',
+    },
+    ...overrides,
+  };
+}
+
 describe('RcsCertificationService.detectMatrixType', () => {
   it('returns fluid for explicit fluid type', () => {
     expect(rcsCertificationService.detectMatrixType({ matrix_type: 'fluid' })).toBe('fluid');
@@ -60,16 +88,35 @@ describe('RcsCertificationService.normalizeSprec', () => {
 });
 
 describe('RcsCertificationService.certify', () => {
-  it('returns governance_status of 0 for empty payload (missing matrix type)', () => {
+  it('returns an invalid-input result for an empty payload (missing explicit matrix type)', () => {
     const result = rcsCertificationService.certify({});
-    expect(result).toHaveProperty('governance_status');
-    // Missing matrix type → governance failure
-    expect(result.governance_status).toBe(0);
+    expect(result).toMatchObject({
+      input_status: 'invalid',
+      governance_status: null,
+      final_grade: null,
+      grade_route: 'Invalid input',
+    });
+    expect(result.input_errors).toContain('Invalid or missing explicit matrixType');
   });
 
-  it('returns governance_status of 0 when matrix type undetectable', () => {
-    const result = rcsCertificationService.certify({ sample: {} });
-    expect(result.governance_status).toBe(0);
+  it('does not infer a matrix inside the scientific certification path', () => {
+    const result = rcsCertificationService.certify({
+      sample: {
+        sampleType: 'plasma',
+        governanceEvidence: admissibleGovernanceEvidence(),
+        sprec: {
+          sampleType: 'BLD',
+          primaryContainer: 'SST',
+          preCentrifugation: 'A',
+          centrifugation: 'A',
+          secondCentrifugation: 'A',
+          postCentrifugationDelay: 'A',
+          longTermStorage: 'C',
+        },
+      },
+    });
+    expect(result.input_status).toBe('invalid');
+    expect(result.matrix_type).toBe('unknown');
   });
 
   it('returns object with model_version field', () => {
@@ -82,10 +129,11 @@ describe('RcsCertificationService.certify', () => {
     expect(Array.isArray(result.axis_penalties)).toBe(true);
   });
 
-  it('returns governance_failure_reasons as array when failing', () => {
+  it('keeps governance failures separate from invalid scientific input', () => {
     const result = rcsCertificationService.certify({});
     expect(Array.isArray(result.governance_failure_reasons)).toBe(true);
-    expect(result.governance_failure_reasons.length).toBeGreaterThan(0);
+    expect(result.governance_failure_reasons).toEqual([]);
+    expect(result.input_errors.length).toBeGreaterThan(0);
   });
 });
 
@@ -111,6 +159,7 @@ describe('RcsCertificationService.certify with nested sample payload', () => {
     const result = rcsCertificationService.certify({
       sample: {
         matrixType: 'fluid',
+        governanceEvidence: admissibleGovernanceEvidence(),
         sprec: {
           sampleType: 'BLD', primaryContainer: 'SST', preCentrifugation: 'A',
           centrifugation: 'A', secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'C',
@@ -122,68 +171,98 @@ describe('RcsCertificationService.certify with nested sample payload', () => {
   });
 });
 
-describe('RcsCertificationService.evaluateGovernance extra reasons', () => {
-  const validFluid = {
-    matrixType: 'fluid',
-    sprec: {
-      sampleType: 'BLD', primaryContainer: 'SST', preCentrifugation: 'A',
-      centrifugation: 'A', secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'C',
-    },
-  };
+describe('RcsCertificationService explicit governance evidence', () => {
+  it('requires all fourteen evidence categories and never promotes missing evidence to admissible', () => {
+    const evidence = admissibleGovernanceEvidence();
+    delete evidence.traceability;
 
-  it('fails on documentationSufficient === false', () => {
-    const result = rcsCertificationService.certify({ ...validFluid, documentationSufficient: false });
-    expect(result.governance_failure_reasons).toContain('Insufficient documentation');
+    const result = rcsCertificationService.certify(validFluidPayload({ governanceEvidence: evidence }));
+
+    expect(referenceData.governanceEvidenceCategories).toHaveLength(14);
+    expect(result).toMatchObject({
+      input_status: 'invalid',
+      governance_status: null,
+      final_grade: null,
+      grade_route: 'Invalid input',
+    });
+    expect(result.input_errors).toContain('Missing governance evidence: Traceability');
   });
 
-  it('fails on documentation_insufficient === true (snake_case)', () => {
-    const result = rcsCertificationService.certify({ ...validFluid, documentation_insufficient: true });
-    expect(result.governance_failure_reasons).toContain('Insufficient documentation');
+  it.each(['satisfied', 'failed', 'unresolved', 'not_applicable'])(
+    'accepts the documented evidence state %s',
+    (state) => {
+      const evidence = admissibleGovernanceEvidence({ storageMonitoring: state });
+      const governanceOutcome = ['failed', 'unresolved'].includes(state) ? 'review' : undefined;
+      const result = rcsCertificationService.evaluateGovernanceEvidence({
+        governanceEvidence: evidence,
+        governanceOutcome,
+      });
+      expect(result.valid).toBe(true);
+    }
+  );
+
+  it.each(['review', 'restricted', 'quarantined', 'failed'])(
+    'treats the documented non-admissible outcome %s as non-compensable',
+    (governanceOutcome) => {
+      const result = rcsCertificationService.certify(validFluidPayload({
+        governanceEvidence: admissibleGovernanceEvidence({ nonconformityControl: 'failed' }),
+        governanceOutcome,
+      }));
+
+      expect(result).toMatchObject({
+        input_status: 'valid',
+        governance_status: 0,
+        governance_outcome: governanceOutcome,
+        p_bio: null,
+        rcs_score: null,
+        score_based_grade: null,
+        final_grade: 'E',
+        grade_route: 'Governance failure',
+      });
+    }
+  );
+
+  it('requires an explicit disposition when evidence is failed or unresolved', () => {
+    const result = rcsCertificationService.certify(validFluidPayload({
+      governanceEvidence: admissibleGovernanceEvidence({ deviationDocumentation: 'unresolved' }),
+    }));
+
+    expect(result.input_status).toBe('invalid');
+    expect(result.input_errors).toContain(
+      'Explicit governance outcome is required for failed or unresolved evidence'
+    );
   });
 
-  it('fails on traceabilitySufficient === false', () => {
-    const result = rcsCertificationService.certify({ ...validFluid, traceabilitySufficient: false });
-    expect(result.governance_failure_reasons).toContain('Insufficient traceability');
+  it('rejects an admissible outcome that conflicts with failed or unresolved evidence', () => {
+    const result = rcsCertificationService.certify(validFluidPayload({
+      governanceEvidence: admissibleGovernanceEvidence({ metadataCompleteness: 'failed' }),
+      governanceOutcome: 'admissible',
+    }));
+
+    expect(result.input_status).toBe('invalid');
+    expect(result.input_errors).toContain(
+      'Admissible governance outcome conflicts with failed or unresolved evidence'
+    );
   });
 
-  it('fails on traceability_insufficient === true (snake_case)', () => {
-    const result = rcsCertificationService.certify({ ...validFluid, traceability_insufficient: true });
-    expect(result.governance_failure_reasons).toContain('Insufficient traceability');
+  it('rejects an unsupported evidence state', () => {
+    const result = rcsCertificationService.certify(validFluidPayload({
+      governanceEvidence: admissibleGovernanceEvidence({ dataReliability: 'unknown-state' }),
+    }));
+
+    expect(result.input_status).toBe('invalid');
+    expect(result.input_errors).toContain(
+      'Invalid governance evidence state for Data reliability'
+    );
   });
 
-  it('fails on traceabilityBroken === true', () => {
-    const result = rcsCertificationService.certify({ ...validFluid, traceabilityBroken: true });
-    expect(result.governance_failure_reasons).toContain('Insufficient traceability');
-  });
+  it('rejects an unsupported governance outcome', () => {
+    const result = rcsCertificationService.certify(validFluidPayload({
+      governanceOutcome: 'approved',
+    }));
 
-  it('fails on monitoringRequired === true without monitoringPresent', () => {
-    const result = rcsCertificationService.certify({ ...validFluid, monitoringRequired: true });
-    expect(result.governance_failure_reasons).toContain('Missing required monitoring');
-  });
-
-  it('fails on monitoring_required === true (snake_case) without monitoring_present', () => {
-    const result = rcsCertificationService.certify({ ...validFluid, monitoring_required: true });
-    expect(result.governance_failure_reasons).toContain('Missing required monitoring');
-  });
-
-  it('does not fail monitoring when monitoringRequired and monitoringPresent are both true', () => {
-    const result = rcsCertificationService.certify({ ...validFluid, monitoringRequired: true, monitoringPresent: true });
-    expect(result.governance_failure_reasons).not.toContain('Missing required monitoring');
-  });
-
-  it('does not fail monitoring when monitoring_required and monitoring_present are both true (snake_case)', () => {
-    const result = rcsCertificationService.certify({ ...validFluid, monitoring_required: true, monitoring_present: true });
-    expect(result.governance_failure_reasons).not.toContain('Missing required monitoring');
-  });
-
-  it('fails on semanticIncompatibility === true', () => {
-    const result = rcsCertificationService.certify({ ...validFluid, semanticIncompatibility: true });
-    expect(result.governance_failure_reasons).toContain('Semantic incompatibility between matrix, SPREC axis, event, or context');
-  });
-
-  it('fails on semantic_incompatibility === true (snake_case)', () => {
-    const result = rcsCertificationService.certify({ ...validFluid, semantic_incompatibility: true });
-    expect(result.governance_failure_reasons).toContain('Semantic incompatibility between matrix, SPREC axis, event, or context');
+    expect(result.input_status).toBe('invalid');
+    expect(result.input_errors).toContain('Invalid governance outcome');
   });
 });
 
@@ -191,6 +270,7 @@ describe('RcsCertificationService.resolveWorkflowRule implicit acceptability fla
   it('accepts Pcent1=N without workflow context when primaryCentrifugationApplicable is false', () => {
     const result = rcsCertificationService.certify({
       matrixType: 'fluid',
+      governanceEvidence: admissibleGovernanceEvidence(),
       sprec: {
         sampleType: 'BLD', primaryContainer: 'SST', preCentrifugation: 'A',
         centrifugation: 'N', secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'C',
@@ -203,6 +283,7 @@ describe('RcsCertificationService.resolveWorkflowRule implicit acceptability fla
   it('accepts Pcent2=N without workflow context when secondCentrifugationRequired is false', () => {
     const result = rcsCertificationService.certify({
       matrixType: 'fluid',
+      governanceEvidence: admissibleGovernanceEvidence(),
       sprec: {
         sampleType: 'BLD', primaryContainer: 'SST', preCentrifugation: 'A',
         centrifugation: 'A', secondCentrifugation: 'N', postCentrifugationDelay: 'A', longTermStorage: 'C',
@@ -215,13 +296,13 @@ describe('RcsCertificationService.resolveWorkflowRule implicit acceptability fla
 
 describe('RcsCertificationService throws on misconfigured reference data', () => {
   const { RcsCertificationService } = rcsCertificationService;
-  const referenceData = require('../../src/services/rcs-reference-data');
 
   it('findWeight throws when a matrix/axis weight is missing from the seed', () => {
     const brokenData = { ...referenceData, weights: referenceData.weights.filter((w) => !(w.matrix_type === 'fluid' && w.axis_code === 'Ppre')) };
     const service = new RcsCertificationService(brokenData);
     expect(() => service.certify({
       matrixType: 'fluid',
+      governanceEvidence: admissibleGovernanceEvidence(),
       sprec: {
         sampleType: 'BLD', primaryContainer: 'SST', preCentrifugation: 'A',
         centrifugation: 'A', secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'C',
@@ -234,6 +315,7 @@ describe('RcsCertificationService throws on misconfigured reference data', () =>
     const service = new RcsCertificationService(brokenData);
     expect(() => service.certify({
       matrixType: 'fluid',
+      governanceEvidence: admissibleGovernanceEvidence(),
       sprec: {
         sampleType: 'BLD', primaryContainer: 'SST', preCentrifugation: 'A',
         centrifugation: 'A', secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'C',
@@ -246,6 +328,7 @@ describe('RcsCertificationService throws on misconfigured reference data', () =>
     const service = new RcsCertificationService(brokenData);
     expect(() => service.certify({
       matrixType: 'fluid',
+      governanceEvidence: admissibleGovernanceEvidence(),
       sprec: {
         sampleType: 'BLD', primaryContainer: 'SST', preCentrifugation: 'X',
         centrifugation: 'A', secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'C',
@@ -322,9 +405,9 @@ describe('RcsCertificationService item 8 residual governance branches', () => {
       postCentrifugationDelay: 'A',
       longTermStorage: 'C',
     };
-    const result = rcsCertificationService.evaluateGovernance({}, sprec, 'fluid');
+    const result = rcsCertificationService.validateSprecReference(sprec, 'fluid');
 
-    expect(result.status).toBe(0);
+    expect(result.status).toBe('not_scoreable');
     expect(result.reasons).toContain('SPREC code incompatible with matrix or axis');
   });
 
@@ -363,6 +446,7 @@ describe('RcsCertificationService item 8 residual governance branches', () => {
 
     const result = service.certify({
       matrixType: 'fluid',
+      governanceEvidence: admissibleGovernanceEvidence(),
       sprec: {
         sampleType: 'BLD',
         primaryContainer: 'SST',

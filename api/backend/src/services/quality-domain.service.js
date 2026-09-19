@@ -53,11 +53,14 @@ function validateQualityForRelease(sample = {}) {
   const assessment = resolveMethodologicalQuality(sample);
   // final_grade must be A..E and governance_status must be approved (1)
   const valid = assessment.governance_status === 1 && ['A', 'B', 'C', 'D'].includes(String(assessment.final_grade));
+  const invalidInput = assessment.input_status === 'invalid';
   return {
     valid,
     reason: valid
       ? `RCS-GOV ${assessment.final_grade} aprovado (rcs_score ${assessment.rcs_score})`
-      : `RCS-GOV ${assessment.final_grade} bloqueado: ${assessment.grade_route}`,
+      : invalidInput
+        ? `RCS-GOV entrada inválida: ${(assessment.input_errors || []).join('; ')}`
+        : `RCS-GOV ${assessment.final_grade} bloqueado: ${assessment.grade_route}`,
     assessment,
   };
 }

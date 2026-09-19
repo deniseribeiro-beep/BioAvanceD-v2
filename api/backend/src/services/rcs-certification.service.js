@@ -78,6 +78,36 @@ function normalizeWorkflowRule(value) {
   return normalizeString(value).toLowerCase();
 }
 
+function toSnakeCase(value) {
+  return String(value).replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+function normalizeGovernanceToken(value) {
+  return normalizeString(value)
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+}
+
+function normalizeGovernanceOutcome(value) {
+  const normalized = normalizeGovernanceToken(value);
+  if (normalized === 'review_required') return 'review';
+  return normalized;
+}
+
+function readEvidenceValue(source, key) {
+  if (Object.prototype.hasOwnProperty.call(source, key)) return source[key];
+  const snake = toSnakeCase(key);
+  if (Object.prototype.hasOwnProperty.call(source, snake)) return source[snake];
+  return undefined;
+}
+
+function normalizeEvidenceState(value) {
+  const raw = value && typeof value === 'object' && !Array.isArray(value)
+    ? (value.state ?? value.status ?? value.value)
+    : value;
+  return normalizeGovernanceToken(raw);
+}
+
 class RcsCertificationService {
   constructor(data = referenceData) {
     this.data = data;
@@ -89,24 +119,70 @@ class RcsCertificationService {
       ? normalizeObject(normalizedPayload.sample)
       : normalizedPayload;
     const sprec = this.normalizeSprec(samplePayload);
-    const matrixType = this.detectMatrixType(samplePayload, sprec);
-    const governance = this.evaluateGovernance(samplePayload, sprec, matrixType);
+    const matrixType = sprec.matrix_type || null;
 
-    if (governance.status === 0) {
-      return this.governanceFailureResult(matrixType || 'unknown', governance.reasons, sprec, governance.trace);
+    if (!matrixType || !AXES[matrixType]) {
+      return this.invalidInputResult(
+        'unknown',
+        ['Invalid or missing explicit matrixType'],
+        sprec,
+        null
+      );
+    }
+
+    const sprecValidation = this.validateSprecReference(sprec, matrixType);
+    const governance = this.evaluateGovernanceEvidence(samplePayload);
+
+    if (!governance.valid) {
+      return this.invalidInputResult(
+        matrixType,
+        governance.errors,
+        sprec,
+        governance
+      );
+    }
+
+    if (governance.status !== 1) {
+      return this.governanceFailureResult(
+        matrixType,
+        governance.reasons,
+        sprec,
+        governance.trace,
+        {
+          governanceOutcome: governance.outcome,
+          governanceEvidence: governance.evidence,
+        }
+      );
+    }
+
+    if (sprecValidation.status !== 'scoreable') {
+      return this.governanceFailureResult(
+        matrixType,
+        sprecValidation.reasons,
+        sprec,
+        sprecValidation.trace,
+        {
+          governanceOutcome: 'failed',
+          governanceEvidence: governance.evidence,
+        }
+      );
     }
 
     const axisPenalties = [];
     const calculationTrace = {
       model_code: this.data.model_code,
       sprec_version: this.data.sprec_version,
+      scientific_reference: this.data.scientific_reference,
       formula: 'RCS = 100 - Pbio; Pbio = sum(axis_weight * severity)',
       axes: [],
       sources: {
         severity: 'rcs-severity-mapping.RCS-GOV-1.0.json',
         weights: 'rcs-axis-weights.RCS-GOV-1.0.json',
         thresholds: 'rcs-grade-thresholds.RCS-GOV-1.0.json',
+        governance_evidence: 'rcs-governance-evidence.RCS-GOV-1.0.json',
       },
+      governance_outcome: governance.outcome,
+      governance_evidence: governance.evidence,
       governance_trace: governance.trace,
     };
 
@@ -126,7 +202,11 @@ class RcsCertificationService {
             sprec_code: code,
             rule_code: this.ruleCodeForReason(failureReason),
             severity,
-          }]
+          }],
+          {
+            governanceOutcome: 'failed',
+            governanceEvidence: governance.evidence,
+          }
         );
       }
 
@@ -153,8 +233,11 @@ class RcsCertificationService {
 
     return {
       model_version: this.data.model_code,
+      input_status: 'valid',
+      input_errors: [],
       matrix_type: matrixType,
       governance_status: 1,
+      governance_outcome: 'admissible',
       governance_failure_reasons: [],
       governance_rule_codes: [],
       p_bio: pBio,
@@ -169,24 +252,36 @@ class RcsCertificationService {
 
   normalizeSprec(payload = {}) {
     const sprec = normalizeObject(payload.sprec);
-    const matrixType = normalizeString(payload.matrix_type || payload.matrixType || sprec.matrix_type || sprec.matrixType).toLowerCase();
-    const fluidAxes = AXES.fluid;
-    const solidAxes = AXES.solid;
+    const matrixType = normalizeString(
+      payload.matrix_type
+      || payload.matrixType
+      || sprec.matrix_type
+      || sprec.matrixType
+    ).toLowerCase();
     const normalized = {
       matrix_type: ['fluid', 'solid'].includes(matrixType) ? matrixType : '',
       sampleType: normalizeCode(sprec.sampleType),
       primaryContainer: normalizeCode(pickFirst(sprec, ['primaryContainer', 'collectionType'])),
     };
 
-    for (const axis of [...fluidAxes, ...solidAxes]) {
+    for (const axis of [...AXES.fluid, ...AXES.solid]) {
       normalized[axis.field] = normalizeCode(pickFirst(sprec, axis.aliases));
     }
 
     return normalized;
   }
 
+  /**
+   * Compatibility helper only. The scientific certification path does not use
+   * inference: certify() requires an explicit matrixType/matrix_type.
+   */
   detectMatrixType(payload = {}, sprec = {}) {
-    const explicit = normalizeString(payload.matrix_type || payload.matrixType || sprec.matrix_type).toLowerCase();
+    const explicit = normalizeString(
+      payload.matrix_type
+      || payload.matrixType
+      || sprec.matrix_type
+      || sprec.matrixType
+    ).toLowerCase();
     if (explicit === 'fluid' || explicit === 'solid') return explicit;
 
     const sampleText = normalizeString(payload.sampleType || payload.sampleOrigin).toLowerCase();
@@ -201,69 +296,183 @@ class RcsCertificationService {
     return null;
   }
 
-  evaluateGovernance(payload = {}, sprec = {}, matrixType = null) {
+  validateSprecReference(sprec = {}, matrixType = null) {
     const reasons = [];
     const trace = [];
 
     if (!matrixType || !AXES[matrixType]) {
       reasons.push('Missing or invalid matrix type');
       trace.push({ rule_code: 'MISSING_CRITICAL_METADATA', reason: 'Missing or invalid matrix type' });
+      return { status: 'not_scoreable', reasons, trace };
     }
 
-    if (matrixType && AXES[matrixType]) {
-      const requiredAxes = [...METADATA_AXES, ...AXES[matrixType].map((axis) => axis.field)];
-      for (const field of requiredAxes) {
-        const axisCode = this.axisCodeForField(matrixType, field);
-        const code = sprec[field];
-        if (!code) {
-          reasons.push('Missing critical metadata');
-          trace.push({ field, axis_code: axisCode, rule_code: 'MISSING_CRITICAL_METADATA', reason: 'Missing critical metadata' });
-          continue;
-        }
-        if (UNKNOWN_CODES.has(code)) {
-          reasons.push('Unknown SPREC code');
-          trace.push({ field, axis_code: axisCode, sprec_code: code, rule_code: 'UNKNOWN_SPREC_CODE', reason: 'Unknown SPREC code' });
-          continue;
-        }
-        if (OTHER_CODES.has(code)) {
-          reasons.push('Other SPREC code without validated local interpretation');
-          trace.push({ field, axis_code: axisCode, sprec_code: code, rule_code: 'OTHER_WITHOUT_LOCAL_INTERPRETATION', reason: 'Other SPREC code without validated local interpretation' });
-          continue;
-        }
-        if (!/^[A-Z0-9]{1,12}$/.test(code)) {
-          reasons.push('Invalid SPREC code');
-          trace.push({ field, axis_code: axisCode, sprec_code: code, rule_code: 'INVALID_SPREC_CODE', reason: 'Invalid SPREC code' });
-          continue;
-        }
-        if (!this.catalogHas(matrixType, axisCode || field, code)) {
-          reasons.push('SPREC code incompatible with matrix or axis');
-          trace.push({ field, axis_code: axisCode, sprec_code: code, rule_code: 'MATRIX_INCOMPATIBLE_CODE', reason: 'SPREC code incompatible with matrix or axis' });
-        }
+    const requiredAxes = [...METADATA_AXES, ...AXES[matrixType].map((axis) => axis.field)];
+    for (const field of requiredAxes) {
+      const axisCode = this.axisCodeForField(matrixType, field);
+      const code = sprec[field];
+
+      if (!code) {
+        reasons.push('Missing critical metadata');
+        trace.push({
+          field,
+          axis_code: axisCode,
+          rule_code: 'MISSING_CRITICAL_METADATA',
+          reason: 'Missing critical metadata',
+        });
+        continue;
+      }
+
+      if (UNKNOWN_CODES.has(code)) {
+        reasons.push('Unknown SPREC code');
+        trace.push({
+          field,
+          axis_code: axisCode,
+          sprec_code: code,
+          rule_code: 'UNKNOWN_SPREC_CODE',
+          reason: 'Unknown SPREC code',
+        });
+        continue;
+      }
+
+      if (OTHER_CODES.has(code)) {
+        reasons.push('Other SPREC code without validated local interpretation');
+        trace.push({
+          field,
+          axis_code: axisCode,
+          sprec_code: code,
+          rule_code: 'OTHER_WITHOUT_LOCAL_INTERPRETATION',
+          reason: 'Other SPREC code without validated local interpretation',
+        });
+        continue;
+      }
+
+      if (!/^[A-Z0-9]{1,12}$/.test(code)) {
+        reasons.push('Invalid SPREC code');
+        trace.push({
+          field,
+          axis_code: axisCode,
+          sprec_code: code,
+          rule_code: 'INVALID_SPREC_CODE',
+          reason: 'Invalid SPREC code',
+        });
+        continue;
+      }
+
+      if (!this.catalogHas(matrixType, axisCode || field, code)) {
+        reasons.push('SPREC code incompatible with matrix or axis');
+        trace.push({
+          field,
+          axis_code: axisCode,
+          sprec_code: code,
+          rule_code: 'MATRIX_INCOMPATIBLE_CODE',
+          reason: 'SPREC code incompatible with matrix or axis',
+        });
       }
     }
 
-    if (payload.documentationSufficient === false || payload.documentation_insufficient === true) {
-      reasons.push('Insufficient documentation');
-      trace.push({ rule_code: 'INSUFFICIENT_DOCUMENTATION', reason: 'Insufficient documentation' });
-    }
-    if (payload.traceabilitySufficient === false || payload.traceability_insufficient === true || payload.traceabilityBroken === true) {
-      reasons.push('Insufficient traceability');
-      trace.push({ rule_code: 'INSUFFICIENT_TRACEABILITY', reason: 'Insufficient traceability' });
-    }
-    if ((payload.monitoringRequired === true || payload.monitoring_required === true) && !(payload.monitoringPresent === true || payload.monitoring_present === true)) {
-      reasons.push('Missing required monitoring');
-      trace.push({ rule_code: 'MISSING_REQUIRED_MONITORING', reason: 'Missing required monitoring' });
-    }
-    if (payload.semanticIncompatibility === true || payload.semantic_incompatibility === true) {
-      reasons.push('Semantic incompatibility between matrix, SPREC axis, event, or context');
-      trace.push({ rule_code: 'SEMANTIC_INCOMPATIBILITY', reason: 'Semantic incompatibility between matrix, SPREC axis, event, or context' });
-    }
-
     return {
-      status: reasons.length ? 0 : 1,
+      status: reasons.length ? 'not_scoreable' : 'scoreable',
       reasons: unique(reasons),
       trace,
     };
+  }
+
+  evaluateGovernanceEvidence(payload = {}) {
+    const source = normalizeObject(payload.governanceEvidence || payload.governance_evidence);
+    const categories = Array.isArray(this.data.governanceEvidenceCategories)
+      ? this.data.governanceEvidenceCategories
+      : [];
+    const allowedStates = new Set(this.data.governanceEvidenceStates || []);
+    const allowedOutcomes = new Set(this.data.governanceOutcomes || []);
+    const errors = [];
+    const evidence = {};
+    const trace = [];
+
+    if (Object.keys(source).length === 0) {
+      errors.push('Explicit governance evidence is required');
+    }
+
+    for (const category of categories) {
+      const raw = readEvidenceValue(source, category.key);
+      if (raw === undefined || raw === null || normalizeString(raw) === '') {
+        errors.push(`Missing governance evidence: ${category.label}`);
+        continue;
+      }
+
+      const state = normalizeEvidenceState(raw);
+      if (!allowedStates.has(state)) {
+        errors.push(`Invalid governance evidence state for ${category.label}`);
+        continue;
+      }
+
+      evidence[category.key] = state;
+      trace.push({
+        evidence_category: category.key,
+        evidence_label: category.label,
+        evidence_state: state,
+      });
+    }
+
+    let outcome = normalizeGovernanceOutcome(payload.governanceOutcome || payload.governance_outcome);
+    const adverseEvidence = Object.entries(evidence)
+      .filter(([, state]) => state === 'failed' || state === 'unresolved');
+
+    if (outcome && !allowedOutcomes.has(outcome)) {
+      errors.push('Invalid governance outcome');
+    }
+
+    if (!outcome && adverseEvidence.length === 0 && errors.length === 0) {
+      outcome = 'admissible';
+    }
+
+    if (!outcome && adverseEvidence.length > 0) {
+      errors.push('Explicit governance outcome is required for failed or unresolved evidence');
+    }
+
+    if (outcome === 'admissible' && adverseEvidence.length > 0) {
+      errors.push('Admissible governance outcome conflicts with failed or unresolved evidence');
+    }
+
+    if (errors.length > 0) {
+      return {
+        valid: false,
+        status: null,
+        outcome: outcome || null,
+        evidence,
+        errors: unique(errors),
+        reasons: [],
+        trace,
+      };
+    }
+
+    const status = outcome === 'admissible' ? 1 : 0;
+    const reasons = status === 1
+      ? []
+      : unique([
+        ...adverseEvidence.map(([key, state]) => {
+          const category = categories.find((item) => item.key === key);
+          return `${category?.label || key}: ${state}`;
+        }),
+        `Governance outcome: ${outcome}`,
+      ]);
+
+    return {
+      valid: true,
+      status,
+      outcome,
+      evidence,
+      errors: [],
+      reasons,
+      trace,
+    };
+  }
+
+  /**
+   * Backward-compatible method name retained for callers/tests that invoke it
+   * directly. It now evaluates the explicit governance-evidence layer only.
+   */
+  evaluateGovernance(payload = {}) {
+    return this.evaluateGovernanceEvidence(payload);
   }
 
   axisCodeForField(matrixType, field) {
@@ -272,11 +481,15 @@ class RcsCertificationService {
   }
 
   catalogHas(matrixType, axisCode, code) {
-    return this.data.catalogs[matrixType].some((item) => item.axis_code === axisCode && item.sprec_code === code);
+    return this.data.catalogs[matrixType].some(
+      (item) => item.axis_code === axisCode && item.sprec_code === code
+    );
   }
 
   findWeight(matrixType, axisCode) {
-    const weight = this.data.weights.find((item) => item.matrix_type === matrixType && item.axis_code === axisCode);
+    const weight = this.data.weights.find(
+      (item) => item.matrix_type === matrixType && item.axis_code === axisCode
+    );
     if (!weight) throw new Error(`Missing RCS axis weight for ${matrixType}.${axisCode}`);
     return weight;
   }
@@ -311,7 +524,9 @@ class RcsCertificationService {
       };
     }
 
-    const matched = candidates.find((item) => normalizeWorkflowRule(item.workflow_rule) === workflowRule);
+    const matched = candidates.find(
+      (item) => normalizeWorkflowRule(item.workflow_rule) === workflowRule
+    );
     if (matched) return matched;
 
     return {
@@ -325,14 +540,20 @@ class RcsCertificationService {
 
   resolveWorkflowRule(payload = {}, axisCode, code) {
     const workflowContext = normalizeObject(payload.workflow_context || payload.workflowContext);
-    const axisContext = normalizeObject(workflowContext[axisCode] || workflowContext[axisCode.toLowerCase()]);
+    const axisContext = normalizeObject(
+      workflowContext[axisCode] || workflowContext[axisCode.toLowerCase()]
+    );
     return normalizeWorkflowRule(
       axisContext.workflow_rule
         || axisContext.workflowRule
         || payload[`${axisCode}_workflow_rule`]
         || payload[`${axisCode}WorkflowRule`]
-        || (code === 'N' && axisCode === 'Pcent1' && payload.primaryCentrifugationApplicable === false ? 'pcent1_no_centrifugation_acceptable' : '')
-        || (code === 'N' && axisCode === 'Pcent2' && payload.secondCentrifugationRequired === false ? 'pcent2_not_required' : '')
+        || (code === 'N' && axisCode === 'Pcent1' && payload.primaryCentrifugationApplicable === false
+          ? 'pcent1_no_centrifugation_acceptable'
+          : '')
+        || (code === 'N' && axisCode === 'Pcent2' && payload.secondCentrifugationRequired === false
+          ? 'pcent2_not_required'
+          : '')
     );
   }
 
@@ -353,16 +574,79 @@ class RcsCertificationService {
     return ruleCode;
   }
 
-  governanceFailureResult(matrixType, reasons = [], sprec = {}, trace = []) {
-    const governanceRuleCodes = unique(reasons.map((reason) => this.ruleCodeForReason(reason)));
-    const normalizedTrace = trace.map((item) => ({
-      ...item,
-      rule_code: item.rule_code || this.ruleCodeForReason(item.reason || 'Not scored SPREC condition'),
-    }));
+  invalidInputResult(matrixType, errors = [], sprec = {}, governance = null) {
     return {
       model_version: this.data.model_code,
+      input_status: 'invalid',
+      input_errors: unique(errors),
+      matrix_type: matrixType,
+      governance_status: null,
+      governance_outcome: governance?.outcome || null,
+      governance_failure_reasons: [],
+      governance_rule_codes: [],
+      p_bio: null,
+      rcs_score: null,
+      score_based_grade: null,
+      final_grade: null,
+      grade_route: 'Invalid input',
+      axis_penalties: [],
+      calculation_trace: {
+        model_code: this.data.model_code,
+        sprec_version: this.data.sprec_version,
+        scientific_reference: this.data.scientific_reference,
+        formula: 'RCS = 100 - Pbio; invalid input is not scored',
+        sprec,
+        governance_outcome: governance?.outcome || null,
+        governance_evidence: governance?.evidence || {},
+        governance_trace: governance?.trace || [],
+        input_errors: unique(errors),
+      },
+    };
+  }
+
+  governanceFailureResult(
+    matrixType,
+    reasons = [],
+    sprec = {},
+    trace = [],
+    { governanceOutcome = 'failed', governanceEvidence = {} } = {}
+  ) {
+    const governanceRuleCodes = unique([
+      ...reasons
+        .map((reason) => GOVERNANCE_RULE_BY_REASON[reason])
+        .filter(Boolean)
+        .map((ruleCode) => {
+          const seeded = this.data.governanceRules.some((rule) => rule.rule_code === ruleCode);
+          if (!seeded) throw new Error(`Missing seeded governance rule: ${ruleCode}`);
+          return ruleCode;
+        }),
+      ...trace.map((item) => item.rule_code).filter(Boolean),
+    ]);
+
+    const normalizedTrace = trace.map((item) => {
+      if (item.rule_code) return { ...item };
+      if (item.reason && GOVERNANCE_RULE_BY_REASON[item.reason]) {
+        return {
+          ...item,
+          rule_code: this.ruleCodeForReason(item.reason),
+        };
+      }
+      if (!item.reason && !item.evidence_category) {
+        return {
+          ...item,
+          rule_code: this.ruleCodeForReason('Not scored SPREC condition'),
+        };
+      }
+      return { ...item };
+    });
+
+    return {
+      model_version: this.data.model_code,
+      input_status: 'valid',
+      input_errors: [],
       matrix_type: matrixType,
       governance_status: 0,
+      governance_outcome: governanceOutcome,
       governance_failure_reasons: unique(reasons),
       governance_rule_codes: governanceRuleCodes,
       p_bio: null,
@@ -374,16 +658,21 @@ class RcsCertificationService {
       calculation_trace: {
         model_code: this.data.model_code,
         sprec_version: this.data.sprec_version,
+        scientific_reference: this.data.scientific_reference,
         formula: 'RCS = 100 - Pbio; governance failure is non-compensable',
         sprec,
+        governance_outcome: governanceOutcome,
+        governance_evidence: governanceEvidence,
         governance_trace: normalizedTrace,
       },
     };
   }
-
 }
 
 module.exports = new RcsCertificationService();
 module.exports.RcsCertificationService = RcsCertificationService;
 module.exports.referenceData = referenceData;
 module.exports.AXES = AXES;
+module.exports.GOVERNANCE_EVIDENCE_CATEGORIES = referenceData.governanceEvidenceCategories;
+module.exports.GOVERNANCE_EVIDENCE_STATES = referenceData.governanceEvidenceStates;
+module.exports.GOVERNANCE_OUTCOMES = referenceData.governanceOutcomes;

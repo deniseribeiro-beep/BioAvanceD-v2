@@ -9,6 +9,14 @@ const {
   validateQualityForRelease,
 } = require('../../src/services/quality-domain.service');
 
+const referenceData = require('../../src/services/rcs-reference-data');
+
+function admissibleGovernanceEvidence() {
+  return Object.fromEntries(
+    referenceData.governanceEvidenceCategories.map(({ key }) => [key, 'satisfied'])
+  );
+}
+
 const validFluidSprec = {
   sampleType: 'BLD', primaryContainer: 'SST', preCentrifugation: 'A',
   centrifugation: 'A', secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'C',
@@ -119,14 +127,16 @@ describe('calculateMethodologyQualityFromSprec', () => {
     expect(result.matrix_type).toBe('fluid');
   });
 
-  it('normalizes a null context to an empty object instead of throwing', () => {
+  it('does not infer matrix type when a null context omits the explicit matrix', () => {
     const result = calculateMethodologyQualityFromSprec(validFluidSprec, null);
-    expect(result.matrix_type).toBe('solid');
+    expect(result.input_status).toBe('invalid');
+    expect(result.matrix_type).toBe('unknown');
   });
 
-  it('normalizes an array context to an empty object instead of spreading array indices', () => {
+  it('does not infer matrix type when an array context omits the explicit matrix', () => {
     const result = calculateMethodologyQualityFromSprec(validFluidSprec, []);
-    expect(result.matrix_type).toBe('solid');
+    expect(result.input_status).toBe('invalid');
+    expect(result.matrix_type).toBe('unknown');
   });
 });
 
@@ -144,9 +154,25 @@ describe('validateQualityForRelease', () => {
   });
 
   it('returns valid: true with an approved reason when governance passes with grade A-D', () => {
-    const result = validateQualityForRelease({ matrixType: 'fluid', sprec: validFluidSprec });
+    const result = validateQualityForRelease({
+      matrixType: 'fluid',
+      sprec: validFluidSprec,
+      governanceEvidence: admissibleGovernanceEvidence(),
+    });
     expect(result.valid).toBe(true);
     expect(result.reason).toContain('aprovado');
     expect(result.assessment.final_grade).toBe('A');
+  });
+});
+
+
+describe('scientific RCS input reconciliation', () => {
+  it('blocks release when explicit governance evidence is missing', () => {
+    const result = validateQualityForRelease({ matrixType: 'fluid', sprec: validFluidSprec });
+
+    expect(result.valid).toBe(false);
+    expect(result.assessment.input_status).toBe('invalid');
+    expect(result.assessment.final_grade).toBeNull();
+    expect(result.reason).toContain('entrada inválida');
   });
 });

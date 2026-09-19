@@ -6,6 +6,16 @@ const referenceData = require('../../src/services/rcs-reference-data');
 const { buildRcsCatalogDocuments } = require('../../src/services/rcs-reference-data');
 const { SampleModel } = require('../../src/models/Sample');
 
+
+function admissibleGovernanceEvidence(overrides = {}) {
+  return Object.fromEntries(
+    referenceData.governanceEvidenceCategories.map(({ key }) => [
+      key,
+      Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : 'satisfied',
+    ])
+  );
+}
+
 function fluidSprec(overrides = {}) {
   return {
     matrixType: 'fluid',
@@ -35,7 +45,16 @@ function solidSprec(overrides = {}) {
 }
 
 function certify(sprec, extra = {}) {
-  return rcsService.certify({ ...extra, matrixType: sprec.matrixType, sprec });
+  const hasEvidence = Object.prototype.hasOwnProperty.call(extra, 'governanceEvidence')
+    || Object.prototype.hasOwnProperty.call(extra, 'governance_evidence');
+  return rcsService.certify({
+    ...extra,
+    matrixType: sprec.matrixType,
+    governanceEvidence: hasEvidence
+      ? (extra.governanceEvidence || extra.governance_evidence)
+      : admissibleGovernanceEvidence(),
+    sprec,
+  });
 }
 
 describe('RcsCertificationService RCS-GOV 1.0', () => {
@@ -43,7 +62,10 @@ describe('RcsCertificationService RCS-GOV 1.0', () => {
     expect(qualityDomain.QUALITY_RULE_TABLE).toBeUndefined();
     expect(qualityDomain.classifyScore).toBeUndefined();
 
-    const result = qualityDomain.evaluateQuality({ sprec: fluidSprec() });
+    const result = qualityDomain.evaluateQuality({
+      sprec: fluidSprec(),
+      governanceEvidence: admissibleGovernanceEvidence(),
+    });
     expect(result.model_version).toBe('RCS-GOV-1.0');
     expect(result.final_grade).toBe('A');
     expect(result).not.toHaveProperty('category');
@@ -187,10 +209,15 @@ describe('RcsCertificationService RCS-GOV 1.0', () => {
   });
 
   it('bloqueia release de Grade E mesmo com governanca aprovada', () => {
-    const approved = qualityDomain.validateQualityForRelease({ matrixType: 'fluid', sprec: fluidSprec() });
+    const approved = qualityDomain.validateQualityForRelease({
+      matrixType: 'fluid',
+      sprec: fluidSprec(),
+      governanceEvidence: admissibleGovernanceEvidence(),
+    });
     const critical = qualityDomain.validateQualityForRelease({
       matrixType: 'fluid',
       sprec: fluidSprec({ preCentrifugation: 'M', postCentrifugationDelay: 'I', longTermStorage: 'B' }),
+      governanceEvidence: admissibleGovernanceEvidence(),
     });
     expect(approved.valid).toBe(true);
     expect(critical.assessment.governance_status).toBe(1);

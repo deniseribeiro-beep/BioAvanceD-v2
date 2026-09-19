@@ -269,11 +269,14 @@ describe('FHIR import staging', () => {
     });
     expect(record.normalized.rcsPreview).toMatchObject({
       model_version: 'RCS-GOV-1.0',
-      final_grade: 'A',
-      governance_status: 1,
+      input_status: 'invalid',
+      final_grade: null,
+      governance_status: null,
+      grade_route: 'Invalid input',
     });
-    expect(record.normalized.rcsPreview.axis_penalties.length).toBeGreaterThan(0);
-    expect(record.normalized.rcsPreview.calculation_trace.axes.length).toBeGreaterThan(0);
+    expect(record.normalized.rcsPreview.input_errors).toContain('Explicit governance evidence is required');
+    expect(record.normalized.rcsPreview.axis_penalties).toEqual([]);
+    expect(record.normalized.rcsPreview.calculation_trace.governance_evidence).toEqual({});
     expect(record.normalized.diseases[0]).toMatchObject({
       diseaseName: 'Doença rara teste',
       cid10: 'E75.2',

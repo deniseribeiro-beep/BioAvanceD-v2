@@ -97,12 +97,14 @@ describe('intakeWizard helpers', () => {
     expect(document.specimenStatus).toBe('quarantined');
   });
 
-  it('calcularQualidade nao usa mais heuristica legada numerica', () => {
+  it('calcularQualidade nao usa heuristica legada nem promove governanca ausente', () => {
     const result = helpers.calcularQualidade(15, 5);
 
     expect(result.model_version).toBe('RCS-GOV-1.0');
-    expect(result.final_grade).toBe('E');
-    expect(result.grade_route).toBe('Governance failure');
+    expect(result.input_status).toBe('invalid');
+    expect(result.governance_status).toBeNull();
+    expect(result.final_grade).toBeNull();
+    expect(result.grade_route).toBe('Invalid input');
   });
 
   it('buildSampleDocumentFromIntake falls back to fallback quantity when quantity is non-numeric', () => {

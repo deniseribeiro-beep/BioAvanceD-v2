@@ -7,6 +7,14 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
+const referenceData = require('../../src/services/rcs-reference-data');
+
+function admissibleGovernanceEvidence() {
+  return Object.fromEntries(
+    referenceData.governanceEvidenceCategories.map(({ key }) => [key, 'satisfied'])
+  );
+}
+
 
 function createAuthToken() {
   return jwt.sign(
@@ -45,6 +53,7 @@ describe('POST /api/quality/preview RCS-GOV 1.0', () => {
       .post('/api/quality/preview')
       .set('Authorization', `Bearer ${createAuthToken()}`)
       .send({
+        governanceEvidence: admissibleGovernanceEvidence(),
         sprec: {
           matrixType: 'fluid',
           sampleType: 'BLD',
@@ -83,12 +92,42 @@ describe('POST /api/quality/preview RCS-GOV 1.0', () => {
     }));
   });
 
+  it('retorna 422 quando a evidência de governança explícita está ausente', async () => {
+    const response = await request(app)
+      .post('/api/quality/preview')
+      .set('Authorization', `Bearer ${createAuthToken()}`)
+      .send({
+        matrixType: 'fluid',
+        sprec: {
+          matrixType: 'fluid',
+          sampleType: 'BLD',
+          primaryContainer: 'SST',
+          preCentrifugation: 'A',
+          centrifugation: 'A',
+          secondCentrifugation: 'A',
+          postCentrifugationDelay: 'A',
+          longTermStorage: 'C',
+        },
+      });
+
+    expect(response.status).toBe(422);
+    expect(response.body.success).toBe(false);
+    expect(response.body.data).toMatchObject({
+      input_status: 'invalid',
+      governance_status: null,
+      final_grade: null,
+      grade_route: 'Invalid input',
+    });
+    expect(response.body.data.input_errors).toContain('Explicit governance evidence is required');
+  });
+
   it('retorna Grade E por falha de governanca sem calcular score', async () => {
     const response = await request(app)
       .post('/api/quality/preview')
       .set('Authorization', `Bearer ${createAuthToken()}`)
       .send({
         matrixType: 'solid',
+        governanceEvidence: admissibleGovernanceEvidence(),
         sprec: {
           matrixType: 'solid',
           sampleType: 'TIS',

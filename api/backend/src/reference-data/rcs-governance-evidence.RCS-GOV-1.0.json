@@ -1,0 +1,92 @@
+{
+  "model_code": "RCS-GOV-1.0",
+  "sprec_version": "SPREC-2.0",
+  "evidence_states": ["satisfied", "failed", "unresolved", "not_applicable"],
+  "governance_outcomes": ["admissible", "review", "restricted", "quarantined", "failed"],
+  "categories": [
+    {
+      "key": "sampleLevelMetadata",
+      "label": "Sample-level metadata",
+      "source_layer": "MIABIS-derived metadata layer",
+      "model_effect": "Required for specimen identification and matrix assignment"
+    },
+    {
+      "key": "donorSourceLinkage",
+      "label": "Donor or source linkage",
+      "source_layer": "MIABIS-derived metadata layer",
+      "model_effect": "Required for contextual interpretation and traceability"
+    },
+    {
+      "key": "collectionContext",
+      "label": "Collection context",
+      "source_layer": "MIABIS-derived metadata layer",
+      "model_effect": "Required for interoperable specimen qualification"
+    },
+    {
+      "key": "eventLevelMetadata",
+      "label": "Event-level metadata",
+      "source_layer": "MIABIS-derived metadata layer",
+      "model_effect": "Required for reconstructing the specimen trajectory"
+    },
+    {
+      "key": "metadataCompleteness",
+      "label": "Metadata completeness",
+      "source_layer": "MIABIS-derived metadata layer",
+      "model_effect": "Missing critical metadata contributes to governance-gate failure"
+    },
+    {
+      "key": "qualityManagement",
+      "label": "Quality management",
+      "source_layer": "ISO 20387-derived quality and traceability layer",
+      "model_effect": "Supports admissibility and auditability"
+    },
+    {
+      "key": "traceability",
+      "label": "Traceability",
+      "source_layer": "ISO 20387-derived quality and traceability layer",
+      "model_effect": "Required for governance-gate approval"
+    },
+    {
+      "key": "nonconformityControl",
+      "label": "Nonconformity control",
+      "source_layer": "ISO 20387-derived quality and traceability layer",
+      "model_effect": "Critical nonconformities trigger review or restriction"
+    },
+    {
+      "key": "dataReliability",
+      "label": "Data reliability",
+      "source_layer": "ISO 20387-derived quality and traceability layer",
+      "model_effect": "Required for reliable downstream qualification"
+    },
+    {
+      "key": "biospecimenHandling",
+      "label": "Biospecimen handling",
+      "source_layer": "ISBER-informed operational governance layer",
+      "model_effect": "Supports operational admissibility and reproducibility"
+    },
+    {
+      "key": "storageMonitoring",
+      "label": "Storage monitoring",
+      "source_layer": "ISBER-informed operational governance layer",
+      "model_effect": "Required when thermal control is relevant"
+    },
+    {
+      "key": "documentationSops",
+      "label": "Documentation and SOPs",
+      "source_layer": "ISBER-informed operational governance layer",
+      "model_effect": "Supports governance-gate approval and technical review"
+    },
+    {
+      "key": "deviationDocumentation",
+      "label": "Deviation documentation",
+      "source_layer": "ISBER-informed operational governance layer",
+      "model_effect": "Critical deviations may trigger review or quarantine"
+    },
+    {
+      "key": "semanticContextCompatibility",
+      "label": "Semantic validity and context compatibility",
+      "source_layer": "Controlled terminology and context validation",
+      "model_effect": "Invalid, unrecognized, or severely incompatible codes contribute to governance-gate failure or technical review"
+    }
+  ]
+}

@@ -100,6 +100,34 @@ describe('RCS-GOV 1.0 reference contract (Supplementary Tables S1-S3)', () => {
       'OTHER_WITHOUT_LOCAL_INTERPRETATION', 'INSUFFICIENT_DOCUMENTATION', 'INSUFFICIENT_TRACEABILITY',
       'MISSING_REQUIRED_MONITORING', 'SEMANTIC_INCOMPATIBILITY', 'MISSING_ANALYTICAL_WORKFLOW', 'NOT_SCORED',
     ]));
+    expect(referenceData.governanceEvidenceCategories.map(({ key, label }) => [key, label])).toEqual([
+      ['sampleLevelMetadata', 'Sample-level metadata'],
+      ['donorSourceLinkage', 'Donor or source linkage'],
+      ['collectionContext', 'Collection context'],
+      ['eventLevelMetadata', 'Event-level metadata'],
+      ['metadataCompleteness', 'Metadata completeness'],
+      ['qualityManagement', 'Quality management'],
+      ['traceability', 'Traceability'],
+      ['nonconformityControl', 'Nonconformity control'],
+      ['dataReliability', 'Data reliability'],
+      ['biospecimenHandling', 'Biospecimen handling'],
+      ['storageMonitoring', 'Storage monitoring'],
+      ['documentationSops', 'Documentation and SOPs'],
+      ['deviationDocumentation', 'Deviation documentation'],
+      ['semanticContextCompatibility', 'Semantic validity and context compatibility'],
+    ]);
+    expect(referenceData.governanceEvidenceStates).toEqual([
+      'satisfied', 'failed', 'unresolved', 'not_applicable',
+    ]);
+    expect(referenceData.governanceOutcomes).toEqual([
+      'admissible', 'review', 'restricted', 'quarantined', 'failed',
+    ]);
+    expect(referenceData.scientific_reference).toEqual({
+      package_version: '1.0.0',
+      package_commit: '9e10182f00169fa836ccf33b8c68d9f66507569c',
+      doi: '10.5281/zenodo.22776282',
+      computational_reference: 'C11',
+    });
   });
 
   it('executa upsert idempotente sem duplicar chaves logicas', async () => {

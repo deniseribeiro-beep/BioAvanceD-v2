@@ -4,6 +4,7 @@ const severitySeed = require('../reference-data/rcs-severity-mapping.RCS-GOV-1.0
 const weightsSeed = require('../reference-data/rcs-axis-weights.RCS-GOV-1.0.json');
 const thresholdsSeed = require('../reference-data/rcs-grade-thresholds.RCS-GOV-1.0.json');
 const governanceSeed = require('../reference-data/rcs-governance-rules.RCS-GOV-1.0.json');
+const governanceEvidenceSeed = require('../reference-data/rcs-governance-evidence.RCS-GOV-1.0.json');
 
 const MODEL_CODE = 'RCS-GOV-1.0';
 const SPREC_VERSION = 'SPREC-2.0';
@@ -20,6 +21,12 @@ function recordsFromCatalog(seed) {
 const referenceData = Object.freeze({
   model_code: MODEL_CODE,
   sprec_version: SPREC_VERSION,
+  scientific_reference: Object.freeze({
+    package_version: '1.0.0',
+    package_commit: '9e10182f00169fa836ccf33b8c68d9f66507569c',
+    doi: '10.5281/zenodo.22776282',
+    computational_reference: 'C11',
+  }),
   catalogs: Object.freeze({
     fluid: Object.freeze(recordsFromCatalog(fluidCatalogSeed)),
     solid: Object.freeze(recordsFromCatalog(solidCatalogSeed)),
@@ -44,6 +51,11 @@ const referenceData = Object.freeze({
     sprec_version: governanceSeed.sprec_version,
     ...item,
   }))),
+  governanceEvidenceCategories: Object.freeze(
+    governanceEvidenceSeed.categories.map((item) => Object.freeze({ ...item }))
+  ),
+  governanceEvidenceStates: Object.freeze([...governanceEvidenceSeed.evidence_states]),
+  governanceOutcomes: Object.freeze([...governanceEvidenceSeed.governance_outcomes]),
 });
 
 function buildRcsCatalogDocuments({ model_code = MODEL_CODE, sprec_version = SPREC_VERSION, matrix_type, catalog = [] } = {}) {

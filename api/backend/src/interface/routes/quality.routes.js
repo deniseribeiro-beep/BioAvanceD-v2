@@ -6,8 +6,10 @@ const router = express.Router();
 
 router.post('/preview', authenticate, (req, res) => {
   const assessment = qualityDomain.evaluateQuality(req.body);
-  return res.json({
-    success: true,
+  const invalidInput = assessment.input_status === 'invalid';
+
+  return res.status(invalidInput ? 422 : 200).json({
+    success: !invalidInput,
     data: assessment,
   });
 });

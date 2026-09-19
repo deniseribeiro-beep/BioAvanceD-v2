@@ -819,6 +819,23 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
   // directly against req.body — no sample/participant fixture needed,
   // it's a pure scoring endpoint. Codes below are the same seeded fluid
   // catalog used by rcs-certification.service.test.js's fluidSprec().
+  const governanceEvidence = {
+    sampleLevelMetadata: 'satisfied',
+    donorSourceLinkage: 'satisfied',
+    collectionContext: 'satisfied',
+    eventLevelMetadata: 'satisfied',
+    metadataCompleteness: 'satisfied',
+    qualityManagement: 'satisfied',
+    traceability: 'satisfied',
+    nonconformityControl: 'satisfied',
+    dataReliability: 'satisfied',
+    biospecimenHandling: 'satisfied',
+    storageMonitoring: 'satisfied',
+    documentationSops: 'satisfied',
+    deviationDocumentation: 'satisfied',
+    semanticContextCompatibility: 'satisfied',
+  } as const;
+
   function fluidSprec(overrides: Record<string, unknown> = {}) {
     return {
       matrixType: 'fluid',
@@ -839,7 +856,7 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
 
     const response = await request.post(`${apiBaseURL}/api/quality/preview`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { matrixType: sprec.matrixType, sprec },
+      data: { matrixType: sprec.matrixType, sprec, governanceEvidence },
     });
 
     expect(response.status()).toBe(200);
@@ -857,7 +874,7 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
 
     const response = await request.post(`${apiBaseURL}/api/quality/preview`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { matrixType: sprec.matrixType, sprec },
+      data: { matrixType: sprec.matrixType, sprec, governanceEvidence },
     });
 
     expect(response.status()).toBe(200);
@@ -873,7 +890,7 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     const sprec = fluidSprec();
 
     const response = await request.post(`${apiBaseURL}/api/quality/preview`, {
-      data: { matrixType: sprec.matrixType, sprec },
+      data: { matrixType: sprec.matrixType, sprec, governanceEvidence },
     });
 
     expect(response.status()).toBe(401);
