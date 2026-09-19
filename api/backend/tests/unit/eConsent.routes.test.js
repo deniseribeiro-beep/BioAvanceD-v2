@@ -841,3 +841,128 @@ describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
     expect(requirePermissionImpl.recordedCalls).toEqual([['createPatient']]);
   });
 });
+
+describe('eConsent.routes item 8 residual branches', () => {
+  const originalConsentSecret = process.env.CONSENT_SECRET;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearRouteCache();
+    if (originalConsentSecret === undefined) delete process.env.CONSENT_SECRET;
+    else process.env.CONSENT_SECRET = originalConsentSecret;
+  });
+
+  it('reports a missing CONSENT_SECRET as server configuration failure on both token-consuming endpoints', async () => {
+    delete process.env.CONSENT_SECRET;
+    const logger = require('../../src/utils/logger');
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const app = buildApp(loadRealAuthRouter(), {});
+
+    const validate = await request(app).get('/e-consent/validate/token-any');
+    expect(validate.status).toBe(500);
+    expect(validate.body).toMatchObject({
+      error: 'Erro de configuracao do servidor',
+      message: expect.stringContaining('CONSENT_SECRET'),
+    });
+
+    const update = await request(app)
+      .post('/e-consent/update')
+      .send({ token: 'token-any', consents: [] });
+    expect(update.status).toBe(500);
+    expect(update.body.error).toBe('Erro de configuracao do servidor');
+  });
+
+  it('defaults absent template permissions to an empty list and suppresses responses from a non-active consent', async () => {
+    process.env.CONSENT_SECRET = 'test-consent-secret';
+    const patient = { participantId: '12345678', consentToken: 'must-not-leak' };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'patients') return { findOne: vi.fn().mockResolvedValue(patient) };
+        if (name === 'participantIdentities') return { findOne: vi.fn().mockResolvedValue(null) };
+        throw new Error(`unexpected collection: ${name}`);
+      }),
+    };
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue({
+      _id: 'template-1',
+      title: 'TCLE sem permissões explícitas',
+    });
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue({
+      status: 'REVOKED',
+      responses: { general: true },
+    });
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app).get(`/e-consent/validate/${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.template).toEqual({
+      id: 'template-1',
+      title: 'TCLE sem permissões explícitas',
+      permissions: [],
+    });
+    expect(res.body.responses).toEqual({});
+    expect(res.body.patient).not.toHaveProperty('consentToken');
+  });
+
+  it('normalizes absent optional fields on FHIR import consent validation and acceptance responses', async () => {
+    const stagingService = require('../../src/services/fhir-import-staging.service');
+    vi.spyOn(stagingService, 'validateImportConsentToken').mockResolvedValueOnce({
+      record: {
+        status: 'PENDING_CONSENT',
+      },
+    });
+    vi.spyOn(stagingService, 'acceptImportConsentToken').mockResolvedValueOnce({
+      record: {
+        status: 'ACCEPTED',
+      },
+    });
+    const app = buildApp(loadRealAuthRouter(), {});
+
+    const validated = await request(app).get('/e-consent/import/fhir/consent/token-1');
+    expect(validated.status).toBe(200);
+    expect(validated.body).toEqual({
+      success: true,
+      batchId: '',
+      recordId: '',
+      participantId: '',
+      patientName: '',
+      patientEmail: '',
+      status: 'PENDING_CONSENT',
+      consentSigned: false,
+      consentTracking: null,
+    });
+
+    const accepted = await request(app).post('/e-consent/import/fhir/consent/token-1/accept');
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toEqual({
+      success: true,
+      batchId: '',
+      recordId: '',
+      status: 'ACCEPTED',
+      consentSigned: false,
+      consentTracking: null,
+      quarantineStatus: null,
+      quarantineReason: null,
+      availabilityStatus: null,
+    });
+  });
+
+  it('preserves service status codes on FHIR import consent failures', async () => {
+    const stagingService = require('../../src/services/fhir-import-staging.service');
+    const validationError = Object.assign(new Error('token expired'), { statusCode: 410 });
+    const acceptError = Object.assign(new Error('record quarantined'), { statusCode: 409 });
+    vi.spyOn(stagingService, 'validateImportConsentToken').mockRejectedValueOnce(validationError);
+    vi.spyOn(stagingService, 'acceptImportConsentToken').mockRejectedValueOnce(acceptError);
+    const app = buildApp(loadRealAuthRouter(), {});
+
+    const validated = await request(app).get('/e-consent/import/fhir/consent/token-expired');
+    expect(validated.status).toBe(410);
+    expect(validated.body).toEqual({ error: 'token expired' });
+
+    const accepted = await request(app).post('/e-consent/import/fhir/consent/token-quarantined/accept');
+    expect(accepted.status).toBe(409);
+    expect(accepted.body).toEqual({ error: 'record quarantined' });
+  });
+});
+
