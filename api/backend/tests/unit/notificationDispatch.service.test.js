@@ -258,3 +258,188 @@ describe('notificationDispatch.service', () => {
     });
   });
 });
+
+describe('notificationDispatch.service item 8 residual branches', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('delivers email successfully and drops user rows without an email address', async () => {
+    const notificationRules = statefulCollection();
+    const notifications = statefulCollection();
+    const users = createCollectionMock({
+      aggregate: vi.fn(() => ({
+        toArray: vi.fn(async () => [
+          { _id: ADMIN_ID, email: 'admin@example.com' },
+          { _id: new ObjectId(), email: '' },
+        ]),
+      })),
+    });
+    const rbac = buildRbacCollections([{ userAccountId: ADMIN_ID.toString(), accessType: 4 }]);
+    const db = createDbMock({ users, ...rbac, notificationRules: notificationRules.mock, notifications: notifications.mock });
+
+    await notificationRuleService.createRule(db, {
+      eventType: 'governed_event',
+      channels: ['email'],
+      recipientRoleCodes: ['administrator'],
+      sensitiveFieldsAllowlist: ['code'],
+      maxDeliveryMinutes: 5,
+    });
+    const sendSpy = vi.spyOn(notificationServiceV2, 'sendEmail').mockResolvedValue({ success: true });
+
+    const result = await notificationDispatchService.dispatchNotification(db, {
+      eventType: 'governed_event',
+      payload: { code: 'A1' },
+    });
+
+    expect(sendSpy).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'admin@example.com',
+      notificationType: 'rule_notification',
+    }));
+    expect(result.status).toBe('delivered');
+    expect(result.recipients).toEqual(['admin@example.com']);
+    expect(result.sourceEventType).toBe('governed_event');
+    expect(result.sourceEventId).toBeNull();
+  });
+
+  it('supports a rule with no recipient roles for in-app delivery without querying users', async () => {
+    const notificationRules = statefulCollection();
+    const notifications = statefulCollection();
+    const users = createCollectionMock({ aggregate: vi.fn() });
+    const db = createDbMock({ users, notificationRules: notificationRules.mock, notifications: notifications.mock });
+
+    await notificationRuleService.createRule(db, {
+      eventType: 'in_app_only',
+      channels: ['in_app'],
+      recipientRoleCodes: [],
+      sensitiveFieldsAllowlist: [],
+      maxDeliveryMinutes: 2,
+    });
+
+    const result = await notificationDispatchService.dispatchNotification(db, {
+      eventType: 'in_app_only',
+      payload: { privateField: 'discarded' },
+    });
+
+    expect(result.status).toBe('delivered');
+    expect(result.recipients).toEqual([]);
+    expect(users.aggregate).not.toHaveBeenCalled();
+  });
+
+  it('records unsupported channels as failures without inventing a delivery', async () => {
+    const notificationRules = statefulCollection();
+    const notifications = statefulCollection();
+    const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock });
+
+    await notificationRuleService.createRule(db, {
+      eventType: 'unsupported_channel_event',
+      channels: ['fax'],
+      recipientRoleCodes: ['administrator'],
+      sensitiveFieldsAllowlist: [],
+      maxDeliveryMinutes: 2,
+    });
+
+    const result = await notificationDispatchService.dispatchNotification(db, {
+      eventType: 'unsupported_channel_event',
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.attempts).toEqual([
+      expect.objectContaining({
+        channel: 'fax',
+        result: 'failure',
+        reason: 'unsupported_channel:fax',
+      }),
+    ]);
+  });
+
+  it('does not escalate before the configured failure threshold is reached', async () => {
+    const notificationRules = statefulCollection();
+    const notifications = statefulCollection();
+    const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock });
+
+    await notificationRuleService.createRule(db, {
+      eventType: 'threshold_event',
+      channels: ['email'],
+      recipientRoleCodes: ['coordinator'],
+      sensitiveFieldsAllowlist: [],
+      maxDeliveryMinutes: 2,
+      escalation: { enabled: true, afterFailures: 2, channel: 'in_app' },
+    });
+
+    const result = await notificationDispatchService.dispatchNotification(db, {
+      eventType: 'threshold_event',
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.escalated).toBe(false);
+    expect(result.attempts).toHaveLength(1);
+  });
+
+  it('records escalated_failed when both primary and escalation channels fail', async () => {
+    const notificationRules = statefulCollection();
+    const notifications = statefulCollection();
+    const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock });
+
+    await notificationRuleService.createRule(db, {
+      eventType: 'failed_escalation_event',
+      channels: ['email'],
+      recipientRoleCodes: ['coordinator'],
+      sensitiveFieldsAllowlist: [],
+      maxDeliveryMinutes: 2,
+      escalation: { enabled: true, afterFailures: 1, channel: 'pager' },
+    });
+
+    const result = await notificationDispatchService.dispatchNotification(db, {
+      eventType: 'failed_escalation_event',
+    });
+
+    expect(result.status).toBe('escalated_failed');
+    expect(result.escalated).toBe(true);
+    expect(result.deliveredChannel).toBeNull();
+    expect(result.attempts[1]).toMatchObject({
+      channel: 'pager',
+      result: 'failure',
+      reason: 'unsupported_channel:pager',
+      escalation: true,
+    });
+  });
+
+  it('rejects malformed notification ids before updating confirmation state', async () => {
+    const notifications = statefulCollection();
+    const db = createDbMock({ notifications: notifications.mock });
+
+    await expect(
+      notificationDispatchService.confirmNotification(db, 'not-an-object-id')
+    ).rejects.toThrow('ID de notificação inválido');
+
+    expect(notifications.mock.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('filters notification listing by eventType/status and honors both default and explicit limits', async () => {
+    const notifications = statefulCollection();
+    const db = createDbMock({ notifications: notifications.mock });
+
+    await notifications.mock.insertOne({ eventType: 'A', status: 'delivered', createdAt: new Date('2026-01-01') });
+    await notifications.mock.insertOne({ eventType: 'A', status: 'failed', createdAt: new Date('2026-01-02') });
+    await notifications.mock.insertOne({ eventType: 'B', status: 'delivered', createdAt: new Date('2026-01-03') });
+
+    const filtered = await notificationDispatchService.getNotifications(db, {
+      eventType: 'A',
+      status: 'delivered',
+      limit: 1,
+    });
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]).toMatchObject({ eventType: 'A', status: 'delivered' });
+
+    const all = await notificationDispatchService.getNotifications(db);
+    expect(all).toHaveLength(3);
+
+    const limitCalls = notifications.mock.find.mock.results
+      .map((entry) => entry.value?.limit?.mock?.calls?.[0]?.[0])
+      .filter((value) => value !== undefined);
+    expect(limitCalls).toContain(1);
+    expect(limitCalls).toContain(50);
+  });
+});
+
