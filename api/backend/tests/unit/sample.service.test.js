@@ -1808,4 +1808,513 @@ describe('sample.service', () => {
       expect(result).toEqual([{ specimenStatus: 'available' }]);
     });
   });
+
+describe('sample.service item 8 residual branch coverage', () => {
+  it('accepts ObjectId box input and rejects a non-string positionCode', async () => {
+    const db = makeDb();
+
+    await expect(
+      sampleService.createSample(db, validSampleData({ boxId: BOX_ID, positionCode: 12 }))
+    ).rejects.toThrow(/positionCode é obrigatório/);
+  });
+
+  it('rejects an incomplete storage hierarchy when the box has no parent', async () => {
+    const db = makeDb();
+    mockOperationalStorage(db);
+    const originalImpl = db.collection.getMockImplementation();
+    const storageBoxes = {
+      findOne: vi.fn().mockResolvedValue({ _id: BOX_ID, parent_id: null, dimension: { rows: 1, cols: 1 } }),
+    };
+    db.collection.mockImplementation((name) => name === 'storageBoxes' ? storageBoxes : originalImpl(name));
+
+    await expect(sampleService.createSample(db, validSampleData()))
+      .rejects.toThrow(/hierarquia de armazenamento incompleta/);
+  });
+
+  it('rejects a drawer chain whose drawer has no parent rack', async () => {
+    const db = makeDb();
+    mockOperationalStorage(db);
+    const originalImpl = db.collection.getMockImplementation();
+    const storageBoxes = {
+      findOne: vi.fn().mockResolvedValue({ _id: BOX_ID, parent_id: RACK_ID, dimension: { rows: 1, cols: 1 } }),
+    };
+    const storageContainers = {
+      findOne: vi.fn().mockResolvedValue({ _id: RACK_ID, containerType: 'DRAWER', parent_id: null }),
+    };
+    db.collection.mockImplementation((name) => {
+      if (name === 'storageBoxes') return storageBoxes;
+      if (name === 'storageContainers') return storageContainers;
+      return originalImpl(name);
+    });
+
+    await expect(sampleService.createSample(db, validSampleData()))
+      .rejects.toThrow(/hierarquia de armazenamento incompleta/);
+  });
+
+  it('covers the generic validation message when SampleModel reports no detailed errors', async () => {
+    const { SampleModel } = require('../../src/models/Sample');
+    const validateSpy = vi.spyOn(SampleModel, 'validate').mockReturnValue({ isValid: false, errors: [] });
+    const db = makeDb();
+
+    await expect(sampleService.createSample(db, validSampleData()))
+      .rejects.toThrow('Dados da amostra inválidos conforme modelo MIABIS/BioAvanceD');
+
+    validateSpy.mockRestore();
+  });
+
+  it('rejects missing study, protocol and collection references with 404', async () => {
+    let db = makeDb({ studies: makeCollection('studies') });
+    mockOperationalStorage(db);
+    db.collections.studies.findOne.mockResolvedValue(null);
+    await expect(sampleService.createSample(db, validSampleData({ studyId: 'STU-404' })))
+      .rejects.toMatchObject({ statusCode: 404 });
+
+    db = makeDb({ protocols: makeCollection('protocols') });
+    mockOperationalStorage(db);
+    db.collections.protocols.findOne.mockResolvedValue(null);
+    await expect(sampleService.createSample(db, validSampleData({ protocolId: 'PRO-404' })))
+      .rejects.toMatchObject({ statusCode: 404 });
+
+    db = makeDb({ collections: makeCollection('collections') });
+    mockOperationalStorage(db);
+    db.collections.collections.findOne.mockResolvedValue(null);
+    await expect(sampleService.createSample(db, validSampleData({ collectionId: 'COL-404' })))
+      .rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('accepts a registered collection reference and persists it', async () => {
+    const db = makeDb({ collections: makeCollection('collections') });
+    mockOperationalStorage(db);
+    db.collections.collections.findOne.mockResolvedValue({ collectionId: 'COL-1' });
+
+    const result = await sampleService.createSample(db, validSampleData({ collectionId: 'COL-1' }));
+
+    expect(result.collectionId).toBe('COL-1');
+    expect(db.collections.collections.findOne).toHaveBeenCalledWith({ collectionId: 'COL-1' });
+  });
+
+  it('rejects missing equipment and covers maintenanceStatus sensor diagnostics', async () => {
+    let db = makeDb();
+    mockOperationalStorage(db);
+    let originalImpl = db.collection.getMockImplementation();
+    const missingEquipment = { findOne: vi.fn().mockResolvedValue(null) };
+    db.collection.mockImplementation((name) => name === 'equipment' ? missingEquipment : originalImpl(name));
+
+    await expect(sampleService.createSample(db, validSampleData()))
+      .rejects.toThrow(/Equipamento vinculado.*não está cadastrado/);
+
+    db = makeDb();
+    mockOperationalStorage(db);
+    originalImpl = db.collection.getMockImplementation();
+    const maintenanceSensor = { findOne: vi.fn().mockResolvedValue({ maintenanceStatus: 'maintenance' }) };
+    db.collection.mockImplementation((name) => name === 'sensors' ? maintenanceSensor : originalImpl(name));
+
+    await expect(sampleService.createSample(db, validSampleData()))
+      .rejects.toThrow(/status maintenance/);
+  });
+
+  it('accepts operationalStatus-only and blank-status sensors', async () => {
+    for (const sensor of [{ operationalStatus: 'ok' }, {}]) {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      const originalImpl = db.collection.getMockImplementation();
+      const sensors = { findOne: vi.fn().mockResolvedValue(sensor) };
+      db.collection.mockImplementation((name) => name === 'sensors' ? sensors : originalImpl(name));
+
+      const suffix = sensor.operationalStatus ? 'OPERATIONAL' : 'BLANK';
+      const result = await sampleService.createSample(db, validSampleData({
+        specimenId: sensor.operationalStatus ? 600010 : 600011,
+        barcode: `BR-SENSOR-${suffix}`,
+      }));
+      expect(result).toBeDefined();
+    }
+  });
+
+  it('generates a barcode for blank input and normalizes a numeric barcode', async () => {
+    let db = makeDb();
+    mockOperationalStorage(db);
+    let result = await sampleService.createSample(db, validSampleData({
+      specimenId: 600001,
+      barcode: '   ',
+    }));
+    expect(result.barcode).toMatch(/^BR-/);
+
+    db = makeDb();
+    mockOperationalStorage(db);
+    result = await sampleService.createSample(db, validSampleData({
+      specimenId: 600002,
+      barcode: 12345,
+    }));
+    expect(result.barcode).toBe('12345');
+  });
+
+  it('records RCS/SPREC snapshots after successful creation and keeps their ids on the returned sample', async () => {
+    const rcsAssessmentService = require('../../src/services/rcs-assessment.service');
+    const specimenPreanalyticsService = require('../../src/services/specimen-preanalytics.service');
+
+    vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+      model_version: 'RCS-GOV-1.0',
+      matrix_type: 'fluid',
+      governance_status: 1,
+      governance_failure_reasons: null,
+      governance_rule_codes: null,
+      rcs_score: 88,
+      score_based_grade: 'B',
+      final_grade: null,
+      grade_route: 'score',
+      axis_penalties: null,
+      calculation_trace: null,
+    });
+    const assessmentSpy = vi.spyOn(rcsAssessmentService, 'recordAssessment')
+      .mockResolvedValue({ _id: 'assessment-1' });
+    const profileSpy = vi.spyOn(specimenPreanalyticsService, 'recordProfile')
+      .mockResolvedValue({ _id: 'profile-1' });
+
+    const db = makeDb();
+    mockOperationalStorage(db);
+    const result = await sampleService.createSample(db, validSampleData({
+      specimenId: 600003,
+      barcode: 'BR-RCS-1',
+      sprec: { matrixType: 'fluid' },
+    }));
+
+    expect(result.sealedRcsAssessmentId).toBe('assessment-1');
+    expect(result.sealedSpecimenPreanalyticsId).toBe('profile-1');
+    expect(assessmentSpy).toHaveBeenCalled();
+    expect(profileSpy).toHaveBeenCalled();
+  });
+
+  it('keeps RCS/SPREC snapshot persistence best-effort when both secondary writes fail', async () => {
+    const rcsAssessmentService = require('../../src/services/rcs-assessment.service');
+    const specimenPreanalyticsService = require('../../src/services/specimen-preanalytics.service');
+
+    vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+      model_version: 'RCS-GOV-1.0',
+      matrix_type: 'fluid',
+      governance_status: 1,
+      governance_failure_reasons: [],
+      governance_rule_codes: [],
+      rcs_score: 88,
+      score_based_grade: 'B',
+      final_grade: 'B',
+      grade_route: 'score',
+      axis_penalties: [],
+      calculation_trace: {},
+    });
+    vi.spyOn(rcsAssessmentService, 'recordAssessment').mockRejectedValue(new Error('assessment down'));
+    vi.spyOn(specimenPreanalyticsService, 'recordProfile').mockRejectedValue(new Error('profile down'));
+
+    const db = makeDb();
+    mockOperationalStorage(db);
+    const result = await sampleService.createSample(db, validSampleData({
+      specimenId: 600004,
+      barcode: 'BR-RCS-2',
+      sprec: { matrixType: 'fluid' },
+    }));
+
+    expect(result._id).toBe('generated-id');
+    expect(result.sealedRcsAssessmentId).toBeNull();
+    expect(result.sealedSpecimenPreanalyticsId).toBeNull();
+  });
+
+  it('uses actorName fallback for creation audit actor and maps non-collision allocation errors to 422', async () => {
+    let db = makeDb();
+    mockOperationalStorage(db);
+    await sampleService.createSample(db, validSampleData({
+      specimenId: 600005,
+      barcode: 'BR-ACTOR-1',
+    }), { auditInfo: { actorName: 'Fallback Actor' } });
+
+    const birthMovement = db.collections.sample_movements.insertOne.mock.calls[0][0];
+    expect(birthMovement.responsible).toBe('Fallback Actor');
+    expect(currentAllocateExecute.mock.calls[0][0].actor.userName).toBe('Fallback Actor');
+
+    db = makeDb();
+    mockOperationalStorage(db);
+    currentAllocateExecute = vi.fn(async () => {
+      throw { toString: () => 'ordinary allocation failure' };
+    });
+    await expect(sampleService.createSample(db, validSampleData({
+      specimenId: 600006,
+      barcode: 'BR-ALLOC-1',
+    }))).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it('maps the Portuguese already-allocated error wording to 409', async () => {
+    const db = makeDb();
+    mockOperationalStorage(db);
+    currentAllocateExecute = vi.fn(async () => {
+      throw new Error('posição já está alocada');
+    });
+
+    await expect(sampleService.createSample(db, validSampleData({
+      specimenId: 600007,
+      barcode: 'BR-ALLOC-2',
+    }))).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('covers withdrawal blocked status, exhausted quantity and quantity fallback branches', async () => {
+    let db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({
+      specimenId: 'S1', specimenStatus: 'quarantined', quantity: 10, currentQuantity: 10,
+    });
+    await expect(sampleService.withdrawSample(db, 'S1', {
+      withdrawalType: 'Total',
+      withdrawalResponsible: 'Jane Doe',
+      linkedProject: 'P1',
+    })).rejects.toThrow(/não está disponível para retirada/);
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({
+      specimenId: 'S2', specimenStatus: 'available', quantity: 10, currentQuantity: 0, unit: null,
+    });
+    await expect(sampleService.withdrawSample(db, 'S2', {
+      withdrawalType: 'Total',
+      withdrawalResponsible: 'Jane Doe',
+      linkedProject: 'P1',
+    })).rejects.toThrow(/Quantidade indisponível/);
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({
+      specimenId: 'S3', specimenStatus: 'available', quantity: 5, currentQuantity: undefined,
+      totalWithdrawn: null, unit: null, barcode: null,
+    });
+    const result = await sampleService.withdrawSample(db, 'S3', {
+      withdrawalType: 'Total',
+      withdrawalResponsible: 'Jane Doe',
+      linkedProject: 'P1',
+      withdrawalDestination: 'Lab B',
+      justification: 'Assay',
+      notes: 'Synthetic withdrawal',
+    });
+    expect(result.withdrawnQuantity).toBe(5);
+    expect(result.remainingQuantity).toBe(0);
+  });
+
+  it('covers partial-withdrawal missing/excess quantities and fallback destination/purpose fields', async () => {
+    const base = {
+      specimenId: 'S4',
+      specimenStatus: 'available',
+      quantity: 10,
+      currentQuantity: 10,
+      initialQuantity: 10,
+      unit: 'mL',
+      barcode: 'B4',
+      linkedProject: 'stored-project',
+    };
+
+    let db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    await expect(sampleService.withdrawSample(db, 'S4', {
+      withdrawalType: 'Parcial',
+      withdrawalResponsible: 'Jane Doe',
+      linkedProject: 'P1',
+    })).rejects.toThrow(/Quantidade a retirar é obrigatória/);
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    await expect(sampleService.withdrawSample(db, 'S4', {
+      withdrawalType: 'Parcial',
+      withdrawalQuantity: 99,
+      withdrawalResponsible: 'Jane Doe',
+      linkedProject: 'P1',
+    })).rejects.toThrow(/Quantidade indisponível/);
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    const result = await sampleService.withdrawSample(db, 'S4', {
+      withdrawalType: 'Parcial',
+      quantity: 2,
+      withdrawalResponsible: 'Jane Doe',
+      linkedProject: 'P1',
+      withdrawalDestination: 'Lab C',
+      justification: 'Research use',
+      notes: 'fallback notes',
+    }, {
+      userId: 'u1',
+      userName: 'User One',
+      userRole: 'Curator',
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+    });
+    expect(result.withdrawnQuantity).toBe(2);
+    const movement = db.collections.sample_movements.insertOne.mock.calls[0][0];
+    expect(movement.destination).toBe('Lab C');
+    expect(movement.purpose).toBe('Research use');
+    expect(movement.observations).toBe('fallback notes');
+  });
+
+  it('applies every listSamples filter including organization scope', async () => {
+    const db = makeDb();
+    const cursor = makeCursor([{ specimenId: 'S1' }]);
+    db.collections.samples.find.mockReturnValue(cursor);
+    db.collections.samples.countDocuments.mockResolvedValue(1);
+
+    const result = await sampleService.listSamples(db, {
+      participantId: 'P1',
+      specimenStatus: 'available',
+      sampleType: 'PLASMA',
+      organizationScope: { scope: 'organization', organizationIds: ['ORG-1', 'ORG-2'] },
+      limit: 7,
+      skip: 3,
+    });
+
+    expect(db.collections.samples.find).toHaveBeenCalledWith({
+      participantId: 'P1',
+      specimenStatus: 'available',
+      sampleType: 'PLASMA',
+      collectionSite: { $in: ['ORG-1', 'ORG-2'] },
+    });
+    expect(result.limit).toBe(7);
+    expect(result.skip).toBe(3);
+  });
+
+  it('finds samples by exact, case-insensitive, numeric and regex barcode strategies', async () => {
+    for (const setup of [
+      [
+        [{ _id: 'x', barcode: 'ABC', specimenStatus: 'available' }],
+        'ABC',
+      ],
+      [
+        [null, { _id: 'x', barcode: 'ABC', specimenStatus: 'available' }],
+        'abc',
+      ],
+      [
+        [null, null, { _id: 'x', barcode: 123, specimenStatus: 'available' }],
+        '123',
+      ],
+      [
+        [null, null, { _id: 'x', barcode: 'A+B', specimenStatus: 'available' }],
+        'A+B',
+      ],
+    ]) {
+      const [responses, barcode] = setup;
+      const db = makeDb();
+      db.collections.samples.findOne.mockReset();
+      for (const response of responses) {
+        db.collections.samples.findOne.mockResolvedValueOnce(response);
+      }
+      const result = await sampleService.getSampleByBarcode(db, barcode);
+      expect(result.sample).not.toBeNull();
+    }
+  });
+
+  it('returns the explicit not-found barcode shape and logs example barcodes', async () => {
+    const db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue(null);
+    db.collections.samples.countDocuments.mockResolvedValue(2);
+    db.collections.samples.find.mockReturnValue(makeCursor([{ barcode: 'ONE' }, { barcode: 'TWO' }]));
+
+    const result = await sampleService.getSampleByBarcode(db, 'MISSING');
+
+    expect(result).toEqual({ sample: null, participant: null });
+  });
+
+  it('covers participant resolution with no identity, one-word identity and multi-word identity', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+
+    let db = makeDb({ participantIdentities: makeCollection('participantIdentities') });
+    db.collections.samples.findOne.mockResolvedValue({
+      _id: 's1', barcode: 'B1', specimenStatus: 'available', participantId: 'P1',
+    });
+    db.collections.patients.findOne.mockResolvedValue({ participantId: 'P1', recordNumber: 'R1' });
+    db.collections.participantIdentities.findOne.mockResolvedValue(null);
+    let result = await sampleService.getSampleByBarcode(db, 'B1');
+    expect(result.participant.patientName).toBe('***');
+
+    db = makeDb({ participantIdentities: makeCollection('participantIdentities') });
+    db.collections.samples.findOne.mockResolvedValue({
+      _id: 's2', barcode: 'B2', specimenStatus: 'available', participantId: 'P2',
+    });
+    db.collections.patients.findOne.mockResolvedValue({ participantId: 'P2', recordNumber: 'R2' });
+    db.collections.participantIdentities.findOne.mockResolvedValue({ participantId: 'P2' });
+    vi.spyOn(participantIdentityService, 'decryptIdentity').mockReturnValueOnce({ patientName: 'Alice' });
+    result = await sampleService.getSampleByBarcode(db, 'B2');
+    expect(result.participant.patientName).toBe('A***');
+
+    db = makeDb({ participantIdentities: makeCollection('participantIdentities') });
+    db.collections.samples.findOne.mockResolvedValue({
+      _id: 's3', barcode: 'B3', specimenStatus: 'available', participantId: 'P3',
+    });
+    db.collections.patients.findOne.mockResolvedValue({ participantId: 'P3', recordNumber: 'R3' });
+    db.collections.participantIdentities.findOne.mockResolvedValue({ participantId: 'P3' });
+    vi.spyOn(participantIdentityService, 'decryptIdentity').mockReturnValueOnce({ patientName: 'Alice Example' });
+    result = await sampleService.getSampleByBarcode(db, 'B3');
+    expect(result.participant.patientName).toBe('A. E.');
+  });
+
+  it('covers barcode sample branches with no participant id and missing participant record', async () => {
+    let db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({
+      _id: 's1', barcode: 'B1', specimenStatus: 'available',
+    });
+    let result = await sampleService.getSampleByBarcode(db, 'B1');
+    expect(result.participant).toBeNull();
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({
+      _id: 's2', barcode: 'B2', specimenStatus: 'available', participantId: 'P2',
+    });
+    db.collections.patients.findOne.mockResolvedValue(null);
+    result = await sampleService.getSampleByBarcode(db, 'B2');
+    expect(result.participant).toBeNull();
+  });
+
+  it('blocks returns for governed blocked statuses and covers partial quantity fallback', async () => {
+    let db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({
+      specimenId: 'S1',
+      specimenStatus: 'destroyed',
+      totalWithdrawn: 5,
+      totalReturned: 0,
+    });
+    await expect(sampleService.returnSample(db, 'S1', {
+      returnResponsible: 'Jane Doe',
+      condition: 'intact',
+      returnType: 'Total',
+    })).rejects.toThrow(/não está disponível para devolução/);
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({
+      specimenId: 'S2',
+      specimenStatus: 'available',
+      quantity: 10,
+      initialQuantity: 10,
+      currentQuantity: 4,
+      totalWithdrawn: 6,
+      totalReturned: 1,
+      barcode: null,
+      unit: null,
+      linkedProject: 'stored-project',
+    });
+    const result = await sampleService.returnSample(db, 'S2', {
+      returnResponsible: 'Jane Doe',
+      condition: 'intact',
+      returnType: 'Parcial',
+      quantity: 2,
+      linkedProject: '',
+      notes: 'return notes',
+    });
+    expect(result.returnedQuantity).toBe(2);
+    expect(result.newAvailableQuantity).toBe(6);
+  });
+
+  it('uses both resolved and unresolved identifiers when reading quarantine action history', async () => {
+    const quarantineActionService = require('../../src/services/quarantine-action.service');
+    const actionSpy = vi.spyOn(quarantineActionService, 'getActionsForSpecimen')
+      .mockResolvedValue([{ quarantineActionId: 'Q1' }]);
+
+    let db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({ specimenId: 'SPEC-1' });
+    await sampleService.getQuarantineActions(db, 'business-key');
+    expect(actionSpy).toHaveBeenLastCalledWith(db, 'SPEC-1');
+
+    db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue(null);
+    const idWithoutToString = Object.create(null);
+    await sampleService.getQuarantineActions(db, idWithoutToString);
+    expect(actionSpy).toHaveBeenLastCalledWith(db, idWithoutToString);
+  });
+});
+
 });
