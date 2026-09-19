@@ -340,3 +340,140 @@ describe('RF023 canonical v2 assignment and telemetry coverage', () => {
       .rejects.toThrow('Telemetry exposure projection requires summary and specimen ids');
   });
 });
+
+
+describe('RF023 canonical v2 item 8 edge branches', () => {
+  const makeSession = () => ({ run: vi.fn().mockResolvedValue({ records: [] }) });
+
+  it('covers consent id fallbacks, default status/source/schema and Date normalization', async () => {
+    const service = new Neo4jCanonicalProjectionV2Service();
+
+    let session = makeSession();
+    await service.applyEvent(session, {
+      eventType: 'CONSENT_UPSERTED',
+      payload: {
+        participantId: 'participant-2',
+        consentId: 'consent-from-payload',
+        signedAt: new Date('2026-09-18T16:00:00.000Z'),
+      },
+    });
+    let params = session.run.mock.calls[0][1];
+    expect(params).toMatchObject({
+      consentId: 'consent-from-payload',
+      consentStatus: 'ACTIVE',
+      schemaVersion: 2,
+      occurredAt: '2026-09-18T16:00:00.000Z',
+      sourceService: 'unknown',
+      eventId: '',
+      revoked: false,
+    });
+
+    session = makeSession();
+    await service.applyEvent(session, {
+      eventType: 'CONSENT_REVOKED',
+      aggregateId: 'consent-from-aggregate',
+      occurredAt: '2026-09-18T17:00:00.000Z',
+      payload: { participantId: 'participant-2', status: 'REVOKED' },
+    });
+    params = session.run.mock.calls[0][1];
+    expect(params.consentId).toBe('consent-from-aggregate');
+    expect(params.revoked).toBe(true);
+
+    await expect(service.applyEvent(makeSession(), {
+      eventType: 'CONSENT_UPSERTED',
+      payload: { participantId: 'participant-only' },
+    })).rejects.toThrow('Consent projection requires participantId and ethicalConsentId');
+  });
+
+  it('covers specimen aggregate fallback, parent array path, donor absence and required-id guard', async () => {
+    const service = new Neo4jCanonicalProjectionV2Service();
+    const session = makeSession();
+
+    await service.applyEvent(session, {
+      eventType: 'SPECIMEN_UPSERTED',
+      aggregateId: 'specimen-aggregate',
+      payload: {
+        parentSpecimenIds: [' parent-1 ', '', null],
+      },
+    });
+
+    const params = session.run.mock.calls[0][1];
+    expect(params.specimenId).toBe('specimen-aggregate');
+    expect(params.donorId).toBe('');
+    expect(params.parentSpecimenIds).toEqual(['parent-1']);
+    expect(params.barcode).toBeNull();
+    expect(params.specimenStatus).toBeNull();
+    expect(params.sourceService).toBe('unknown');
+
+    await expect(service.applyEvent(makeSession(), {
+      eventType: 'SPECIMEN_UPSERTED',
+      payload: {},
+    })).rejects.toThrow('Specimen projection requires specimenId');
+  });
+
+  it('covers position-key alternatives and custody aggregate/event fallbacks', async () => {
+    const service = new Neo4jCanonicalProjectionV2Service();
+
+    expect(service.positionKey(null)).toBe('');
+    expect(service.positionKey('not-an-object')).toBe('');
+    expect(service.positionKey({ storagePositionId: '  POS-1  ' })).toBe('POS-1');
+    expect(service.positionKey({ boxId: 'box-1' })).toBe('');
+
+    const session = makeSession();
+    await service.applyEvent(session, {
+      eventType: 'CUSTODY_EVENT_RECORDED',
+      aggregateId: 'specimen-custody',
+      eventId: 'custody-from-event',
+      occurredAt: new Date('2026-09-18T18:00:00.000Z'),
+      payload: {
+        eventType: 'move',
+        from: null,
+        to: { storagePositionId: ' position-2 ' },
+      },
+    });
+    const params = session.run.mock.calls[0][1];
+    expect(params).toMatchObject({
+      specimenId: 'specimen-custody',
+      custodyEventId: 'custody-from-event',
+      fromPositionId: '',
+      toPositionId: 'position-2',
+      happenedAt: '2026-09-18T18:00:00.000Z',
+      actorId: null,
+      reason: null,
+      sourceService: 'unknown',
+    });
+
+    await expect(service.applyEvent(makeSession(), {
+      eventType: 'CUSTODY_EVENT_RECORDED',
+      payload: {},
+    })).rejects.toThrow('Custody projection requires specimenId and custodyEventId');
+  });
+
+  it('delegates non-v2 event types to the base projector', async () => {
+    const { Neo4jCanonicalProjectionService } = require('../../src/services/neo4jCanonicalProjection.service');
+    const baseSpy = vi
+      .spyOn(Neo4jCanonicalProjectionService.prototype, 'applyEvent')
+      .mockResolvedValue({ projected: true, delegated: true });
+
+    const service = new Neo4jCanonicalProjectionV2Service();
+    const event = { eventType: 'QUALITY_ASSESSED', aggregateId: 'specimen-1' };
+    const result = await service.applyEvent(makeSession(), event);
+
+    expect(result).toEqual({ projected: true, delegated: true });
+    expect(baseSpy).toHaveBeenCalledWith(expect.anything(), event);
+    baseSpy.mockRestore();
+  });
+
+  it('uses event occurredAt when telemetry calculatedAt is absent', async () => {
+    const service = new Neo4jCanonicalProjectionV2Service();
+    const session = makeSession();
+    await service.applyEvent(session, {
+      eventType: 'TELEMETRY_EXPOSURE_SUMMARIZED',
+      aggregateId: 'summary-occurred',
+      occurredAt: new Date('2026-09-18T19:00:00.000Z'),
+      payload: { specimenId: 'specimen-occurred' },
+    });
+
+    expect(session.run.mock.calls[0][1].calculatedAt).toBe('2026-09-18T19:00:00.000Z');
+  });
+});
