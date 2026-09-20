@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -29,61 +29,66 @@ const {
   loggerWarnMock: vi.fn(),
 }));
 
-vi.mock('../../src/infrastructure/database/mongodb/connection', () => ({
-  connectMongoDB: connectMongoDBMock,
-}));
+// iot.controller.js is CommonJS and captures several dependencies at
+// require-time. Patch the live exports before loading it so this residual
+// suite exercises controller branches rather than Vitest's ESM mock boundary.
+const mongodbConnection = require('../../src/infrastructure/database/mongodb/connection');
+const SensorMetadata = require('../../src/models/SensorMetadata.schema');
+require('../../src/models/TemperaturePolicy.schema');
+require('../../src/models/Device.schema');
+const EnvironmentalExcursion = require('../../src/models/EnvironmentalExcursion');
+const notificationDispatchService = require('../../src/services/notificationDispatch.service');
+const telemetryPointService = require('../../src/services/saveTelemetryPoint');
+const criticalAlertService = require('../../src/services/sendCriticalAlertEmail');
+const quarantineService = require('../../src/services/equipment-sensor-quarantine.service');
+const auditLogger = require('../../src/utils/auditLogger');
+const logger = require('../../src/utils/logger');
 
-vi.mock('../../src/models/SensorMetadata.schema', () => ({
-  default: { findOne: sensorMetadataFindOneMock },
-  findOne: sensorMetadataFindOneMock,
-}));
+const originals = {
+  connectMongoDB: mongodbConnection.connectMongoDB,
+  sensorFindOne: SensorMetadata.findOne,
+  excursionCreate: EnvironmentalExcursion.create,
+  dispatchNotification: notificationDispatchService.dispatchNotification,
+  saveTelemetryPoint: telemetryPointService.saveTelemetryPoint,
+  sendCriticalAlertEmail: criticalAlertService.sendCriticalAlertEmail,
+  quarantineByColdChainIncident: quarantineService.quarantineByColdChainIncident,
+  auditInit: auditLogger.init,
+  auditLog: auditLogger.log,
+  loggerError: logger.error,
+  loggerWarn: logger.warn,
+};
 
-vi.mock('../../src/models/TemperaturePolicy.schema', () => ({}));
-vi.mock('../../src/models/Device.schema', () => ({}));
-
-vi.mock('../../src/models/EnvironmentalExcursion', () => ({
-  default: { create: excursionCreateMock },
-  create: excursionCreateMock,
-}));
-
-vi.mock('../../src/models/TemperatureIncident', () => ({
-  default: { create: vi.fn((payload) => payload) },
-  create: vi.fn((payload) => payload),
-}));
-
-vi.mock('../../src/services/notificationDispatch.service', () => ({
-  dispatchNotification: dispatchNotificationMock,
-}));
-
-vi.mock('../../src/services/saveTelemetryPoint', () => ({
-  saveTelemetryPoint: saveTelemetryPointMock,
-}));
-
-vi.mock('../../src/services/sendCriticalAlertEmail', () => ({
-  sendCriticalAlertEmail: sendCriticalAlertEmailMock,
-}));
-
-vi.mock('../../src/services/equipment-sensor-quarantine.service', () => ({
-  quarantineByColdChainIncident: quarantineByColdChainIncidentMock,
-}));
-
-vi.mock('../../src/utils/auditLogger', () => ({
-  init: auditInitMock,
-  log: auditLogMock,
-}));
-
-vi.mock('../../src/utils/logger', () => ({
-  error: loggerErrorMock,
-  warn: loggerWarnMock,
-  info: vi.fn(),
-  debug: vi.fn(),
-}));
+mongodbConnection.connectMongoDB = connectMongoDBMock;
+SensorMetadata.findOne = sensorMetadataFindOneMock;
+EnvironmentalExcursion.create = excursionCreateMock;
+notificationDispatchService.dispatchNotification = dispatchNotificationMock;
+telemetryPointService.saveTelemetryPoint = saveTelemetryPointMock;
+criticalAlertService.sendCriticalAlertEmail = sendCriticalAlertEmailMock;
+quarantineService.quarantineByColdChainIncident = quarantineByColdChainIncidentMock;
+auditLogger.init = auditInitMock;
+auditLogger.log = auditLogMock;
+logger.error = loggerErrorMock;
+logger.warn = loggerWarnMock;
 
 const {
   ingestTelemetry,
   sensorPolicyCache,
   upsertEnvironmentalExcursion,
 } = require('../../src/controllers/iot.controller');
+
+afterAll(() => {
+  mongodbConnection.connectMongoDB = originals.connectMongoDB;
+  SensorMetadata.findOne = originals.sensorFindOne;
+  EnvironmentalExcursion.create = originals.excursionCreate;
+  notificationDispatchService.dispatchNotification = originals.dispatchNotification;
+  telemetryPointService.saveTelemetryPoint = originals.saveTelemetryPoint;
+  criticalAlertService.sendCriticalAlertEmail = originals.sendCriticalAlertEmail;
+  quarantineService.quarantineByColdChainIncident = originals.quarantineByColdChainIncident;
+  auditLogger.init = originals.auditInit;
+  auditLogger.log = originals.auditLog;
+  logger.error = originals.loggerError;
+  logger.warn = originals.loggerWarn;
+});
 
 function createResponse() {
   return {
