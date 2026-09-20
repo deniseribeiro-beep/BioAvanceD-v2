@@ -827,6 +827,7 @@ describe('SampleGraphValidator', () => {
         active: { $ne: false },
       });
 
+    });
   });
 
 });
