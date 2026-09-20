@@ -980,6 +980,7 @@ describe('user.routes item 8 operational route branches', () => {
 
   it('requires sampleID only after consent validation and records a valid withdrawal through SampleService', async () => {
     const sampleService = require('../../src/services/sample.service');
+    const consentValidator = require('../../src/services/consent.validator');
     const consent = vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
     vi.spyOn(consentValidator, 'init').mockImplementation(() => {});
     const withdraw = vi.spyOn(sampleService, 'withdrawSample').mockResolvedValue({
@@ -1019,6 +1020,7 @@ describe('user.routes item 8 operational route branches', () => {
   });
 
   it('maps consent or withdrawal failures to the established 400 response', async () => {
+    const consentValidator = require('../../src/services/consent.validator');
     vi.spyOn(consentValidator, 'init').mockImplementation(() => {});
     vi.spyOn(consentValidator, 'validateAccess').mockRejectedValue(new Error('consent denied'));
     const sampleService = require('../../src/services/sample.service');
