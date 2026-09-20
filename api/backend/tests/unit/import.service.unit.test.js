@@ -490,7 +490,7 @@ describe('ImportService item 8 legitimate residual branches', () => {
     const worksheet = workbook.addWorksheet('Data');
 
     worksheet.getRow(1).values = ['name', '', 'registeredAt', 'notes'];
-    worksheet.getCell('A2').value = { richText: [{ text: 'Synthetic' }] };
+    worksheet.getCell('A2').value = { text: 'Synthetic', hyperlink: 'https://example.invalid/synthetic' };
     worksheet.getCell('B2').value = 'ignored-under-blank-header';
     worksheet.getCell('C2').value = new Date('2026-01-02T03:04:05.000Z');
     worksheet.getCell('D2').value = null;
