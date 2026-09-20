@@ -479,6 +479,86 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
   });
 });
 
+
+describe('BatchValidationEngine item 8 reader/linkage residuals', () => {
+  it('readXlsxRows ignores whitespace-only headers and rows whose populated cells have no mapped header', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-validation-item8-xlsx-'));
+    const filePath = path.join(tmpDir, 'blank-header.xlsx');
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('BlankHeader');
+    worksheet.addRow(['   ', 'usable']);
+    worksheet.addRow(['unmapped-value', '']);
+    worksheet.addRow(['', 'kept-value']);
+    await workbook.xlsx.writeFile(filePath);
+
+    try {
+      const rows = await engine.readXlsxRows(filePath);
+      expect(rows).toEqual([{ usable: 'kept-value' }]);
+      expect(rows.sourceLines).toEqual([3]);
+      expect(rows.sourceSheets).toEqual(['BlankHeader']);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('findLinkedPatient tries linkage criteria in order and stops at the first real match', async () => {
+    const findOne = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ _id: 'patient-cpf', participantId: '12345678' });
+    const db = { collection: vi.fn(() => ({ findOne })) };
+
+    const result = await engine.findLinkedPatient(db, {}, {
+      patientID: '12345678',
+      cpf: '12345678901',
+      recordNumber: '42',
+    });
+
+    expect(result).toMatchObject({ _id: 'patient-cpf' });
+    expect(findOne).toHaveBeenNthCalledWith(1, { participantId: '12345678' });
+    expect(findOne).toHaveBeenNthCalledWith(2, { cpf: '12345678901' });
+    expect(findOne).toHaveBeenCalledTimes(2);
+  });
+
+  it('findLinkedPatient returns null without database lookups when no stable linkage criterion is available', async () => {
+    const findOne = vi.fn();
+    const db = { collection: vi.fn(() => ({ findOne })) };
+
+    await expect(engine.findLinkedPatient(db, {}, {})).resolves.toBeNull();
+    expect(findOne).not.toHaveBeenCalled();
+  });
+
+  it('warns and skips a named biomarker token that omits its numeric value', () => {
+    const result = engine.buildBiomarkerObservationPayloads(
+      { biomarkers: 'alphaGal' },
+      { patientID: '12345678' },
+      { sampleID: 'S-1' }
+    );
+
+    expect(result.payloads).toEqual([]);
+    expect(result.warnings).toEqual([
+      'Biomarcador alphaGal foi ignorado por não informar valor.',
+    ]);
+  });
+
+  it('uses patientID and barcode fallbacks when internal object identifiers are legitimately absent', () => {
+    const result = engine.buildBiomarkerObservationPayloads(
+      { patientID: '12345678', biomarkers: 'alphaGal:2.5' },
+      {},
+      { barcode: 'BC-ITEM8' }
+    );
+
+    expect(result.payloads[0]).toMatchObject({
+      patientID: '12345678',
+      patientObjectId: null,
+      sampleID: 'BC-ITEM8',
+      specimenId: 'BC-ITEM8',
+      linkedResourceId: '12345678',
+      subject: { reference: 'Patient/12345678' },
+      specimen: { reference: 'Specimen/BC-ITEM8' },
+    });
+  });
+});
+
 describe('BatchValidationEngine.detectDataType', () => {
   it('detects patients type from patient-only hints', () => {
     const result = engine.detectDataType([{ patientName: 'X', cpf: '123' }], 'file.csv');
