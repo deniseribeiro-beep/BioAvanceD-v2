@@ -466,4 +466,90 @@ describe('ImportService.readSpreadsheetRows', () => {
     expect(rows[0].note).toBe('Nota rica');
     expect(rows[0].collectedAt).toBe('2026-01-01T00:00:00.000Z');
   });
+
+describe('ImportService item 8 legitimate residual branches', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('readSpreadsheetRows returns an empty set for a workbook without worksheets', async () => {
+    const filePath = path.join(os.tmpdir(), `import-empty-${Date.now()}.xlsx`);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.writeFile(filePath);
+
+    try {
+      await expect(importService.readSpreadsheetRows(filePath)).resolves.toEqual([]);
+    } finally {
+      fs.unlinkSync(filePath);
+    }
+  });
+
+  it('readSpreadsheetRows normalizes blank cells, rich/text objects, dates and blank headers', async () => {
+    const filePath = path.join(os.tmpdir(), `import-rows-${Date.now()}.xlsx`);
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Data');
+
+    worksheet.getRow(1).values = ['name', '', 'registeredAt', 'notes'];
+    worksheet.getCell('A2').value = { richText: [{ text: 'Synthetic' }] };
+    worksheet.getCell('B2').value = 'ignored-under-blank-header';
+    worksheet.getCell('C2').value = new Date('2026-01-02T03:04:05.000Z');
+    worksheet.getCell('D2').value = null;
+    worksheet.addRow([null, null, null, null]);
+
+    await workbook.xlsx.writeFile(filePath);
+
+    try {
+      const rows = await importService.readSpreadsheetRows(filePath);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        name: 'Synthetic',
+        registeredAt: '2026-01-02T03:04:05.000Z',
+      });
+      expect(rows[0]).not.toHaveProperty('ignored-under-blank-header');
+      expect(rows[0].notes).toBe('');
+    } finally {
+      fs.unlinkSync(filePath);
+    }
+  });
+
+  it('parseSampleCSV parses a valid legacy numeric location and rejects a malformed one without throwing', () => {
+    let parsed = importService.parseSampleCSV({ locationID: '42' });
+    expect(parsed.data.locationID).toBe(42);
+    expect(parsed.parseErrors).toEqual([]);
+
+    parsed = importService.parseSampleCSV({ locationID: 'not-a-number' });
+    expect(parsed.data.locationID).toBeNull();
+    expect(parsed.parseErrors).toEqual(expect.arrayContaining([
+      expect.stringContaining('locationID inválido'),
+    ]));
+  });
+
+  it('parseSampleCSV treats blank numeric/date inputs as absent and preserves explicit linkedProject text', () => {
+    const { data, parseErrors } = importService.parseSampleCSV({
+      quantity: '',
+      rcsScore: '',
+      registeredAt: '',
+      linkedProject: '  Project-Item8  ',
+    });
+
+    expect(parseErrors).toEqual([]);
+    expect(data.quantity).toBeNull();
+    expect(data.externalQualityAssessment.score).toBeNull();
+    expect(data.linkedProject).toBe('Project-Item8');
+    expect(data.registeredAt).toBeInstanceOf(Date);
+  });
+
+  it('validateFHIRFile uses the generic invalid-file diagnostic when a thrown value has no message', () => {
+    const read = vi.spyOn(fs, 'readFileSync').mockImplementation(() => {
+      throw {};
+    });
+
+    const result = importService.validateFHIRFile({ path: '/synthetic/fhir.json' });
+
+    expect(result.valid).toBe(false);
+    expect(result.issues[0].diagnostics).toBe('Arquivo JSON inválido');
+    expect(read).toHaveBeenCalled();
+  });
+});
+
 });
