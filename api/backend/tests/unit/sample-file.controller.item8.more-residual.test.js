@@ -310,3 +310,215 @@ describe('sample-file.controller item 8 more residual canonical branches', () =>
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Acesso negado' }));
   });
 });
+
+
+describe('sample-file.controller item 8 alternate file lifecycle branches', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('downloads a plaintext file without audit and tolerates a scope lookup that cannot resolve an ObjectId', async () => {
+    const specimenId = 'legacy-specimen-key';
+    const fileID = new ObjectId().toString();
+    const { db, samples } = buildDb({
+      fileRecord: {
+        _id: new ObjectId(fileID),
+        specimenId,
+        fileName: 'plain.csv',
+        fileType: 'CSV',
+        fileSize: 5,
+        storagePath: '/tmp/plain.csv',
+        encryptionAlgorithm: null,
+      },
+    });
+    samples.findOne.mockRejectedValueOnce(new Error('not an ObjectId'));
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('plain'));
+    const audit = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const res = createRes();
+
+    await controller.downloadFile({
+      app: { locals: { db } },
+      params: { specimenId, fileID },
+      organizationScope: { scope: 'organization', organizationIds: ['org-1'] },
+      user: null,
+    }, res);
+
+    expect(res.send).toHaveBeenCalledWith(Buffer.from('plain'));
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when a download record exists but the physical file is missing', async () => {
+    const specimenId = new ObjectId().toString();
+    const fileID = new ObjectId().toString();
+    const { db } = buildDb({
+      fileRecord: {
+        _id: new ObjectId(fileID),
+        specimenId,
+        fileName: 'missing.csv',
+        storagePath: '/tmp/missing.csv',
+      },
+    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+    const res = createRes();
+
+    await controller.downloadFile({ app: { locals: { db } }, params: { specimenId, fileID } }, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('continues logical deletion when physical cleanup fails and skips audit for an anonymous request', async () => {
+    const specimenId = new ObjectId().toString();
+    const fileID = new ObjectId().toString();
+    const { db, sampleFiles } = buildDb({
+      fileRecord: {
+        _id: new ObjectId(fileID),
+        specimenId,
+        fileName: 'locked.csv',
+        storagePath: '/tmp/locked.csv',
+      },
+    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(() => { throw new Error('locked'); });
+    const audit = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const res = createRes();
+
+    await controller.deleteFile({
+      app: { locals: { db } },
+      params: { specimenId, fileID },
+      user: null,
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(sampleFiles.deleteOne).toHaveBeenCalledTimes(1);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('rejects replace requests with no upload and cleans uploads for malformed/unknown/mismatched identifiers', async () => {
+    const specimenId = new ObjectId().toString();
+    const validFileID = new ObjectId().toString();
+    const res = createRes();
+
+    let { db } = buildDb();
+    await controller.replaceFile({ app: { locals: { db } }, params: { specimenId, fileID: validFileID } }, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+    ({ db } = buildDb());
+    await controller.replaceFile({
+      app: { locals: { db } },
+      params: { specimenId, fileID: 'bad-id' },
+      file: { path: '/tmp/bad.csv', originalname: 'bad.csv', size: 1 },
+    }, createRes());
+
+    ({ db } = buildDb({ fileRecord: null }));
+    await controller.replaceFile({
+      app: { locals: { db } },
+      params: { specimenId, fileID: validFileID },
+      file: { path: '/tmp/missing.csv', originalname: 'missing.csv', size: 1 },
+    }, createRes());
+
+    ({ db } = buildDb({
+      fileRecord: {
+        _id: new ObjectId(validFileID),
+        specimenId: new ObjectId().toString(),
+        fileName: 'old.csv',
+      },
+    }));
+    await controller.replaceFile({
+      app: { locals: { db } },
+      params: { specimenId, fileID: validFileID },
+      file: { path: '/tmp/mismatch.csv', originalname: 'mismatch.csv', size: 1 },
+    }, createRes());
+
+    expect(unlink).toHaveBeenCalledTimes(3);
+  });
+
+  it('rejects replace invalid file type and invalid explicit fileRole before encryption', async () => {
+    const specimenId = new ObjectId().toString();
+    const fileID = new ObjectId().toString();
+    const fileRecord = {
+      _id: new ObjectId(fileID),
+      specimenId,
+      sampleID: specimenId,
+      fileName: 'old.csv',
+      fileRole: 'raw',
+    };
+    const { db } = buildDb({ fileRecord });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+    let res = createRes();
+    await controller.replaceFile({
+      app: { locals: { db } },
+      params: { specimenId, fileID },
+      file: { path: '/tmp/invalid.exe', originalname: 'invalid.exe', size: 1 },
+      body: {},
+    }, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+
+    res = createRes();
+    await controller.replaceFile({
+      app: { locals: { db } },
+      params: { specimenId, fileID },
+      file: { path: '/tmp/role.csv', originalname: 'role.csv', size: 1 },
+      body: { fileRole: 'not-a-role' },
+    }, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(unlink).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['exportHL7v2', 'generateHL7v2Message'],
+    ['exportFHIR', 'generateFHIRResource'],
+    ['exportCDA', 'generateCDA'],
+  ])('%s exports an in-scope sample without an authenticated audit actor', async (method, generator) => {
+    const hl7Service = require('../../src/services/hl7.service');
+    const generated = method === 'exportFHIR' ? { resourceType: 'Bundle' } : 'generated-document';
+    vi.spyOn(hl7Service, generator).mockResolvedValue(generated);
+    const specimenId = new ObjectId().toString();
+    const fileID = new ObjectId().toString();
+    const { db } = buildDb({
+      fileRecord: { _id: new ObjectId(fileID), specimenId, fileName: 'x.csv', fileType: 'CSV' },
+      sample: { _id: new ObjectId(specimenId), participantId: null, collectionSite: 'org-1' },
+    });
+    const audit = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const res = createRes();
+
+    await controller[method]({
+      app: { locals: { db } },
+      params: { specimenId, fileID },
+      organizationScope: { scope: 'organization', organizationIds: ['org-1'] },
+      user: null,
+    }, res);
+
+    expect(hl7Service[generator]).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ fileName: 'x.csv' }),
+      expect.objectContaining({ participantId: null }),
+      ''
+    );
+    expect(audit).not.toHaveBeenCalled();
+    if (method === 'exportFHIR') expect(res.json).toHaveBeenCalledWith(generated);
+    else expect(res.send).toHaveBeenCalledWith(generated);
+  });
+
+  it('maps an interoperability generator failure to the export 500 response', async () => {
+    const hl7Service = require('../../src/services/hl7.service');
+    vi.spyOn(hl7Service, 'generateFHIRResource').mockRejectedValue(new Error('generator down'));
+    const specimenId = new ObjectId().toString();
+    const fileID = new ObjectId().toString();
+    const { db } = buildDb({
+      fileRecord: { _id: new ObjectId(fileID), specimenId, fileName: 'x.csv' },
+      sample: { _id: new ObjectId(specimenId), participantId: '12345678' },
+    });
+    const res = createRes();
+
+    await controller.exportFHIR({ app: { locals: { db } }, params: { specimenId, fileID } }, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'generator down' }));
+  });
+});
