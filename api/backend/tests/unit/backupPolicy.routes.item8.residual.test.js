@@ -5,10 +5,12 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
-const getPolicy = vi.fn();
-const updatePolicy = vi.fn();
-const reloadBackupSchedule = vi.fn();
-const loggerError = vi.fn();
+const { getPolicy, updatePolicy, reloadBackupSchedule, loggerError } = vi.hoisted(() => ({
+  getPolicy: vi.fn(),
+  updatePolicy: vi.fn(),
+  reloadBackupSchedule: vi.fn(),
+  loggerError: vi.fn(),
+}));
 
 vi.mock('../../src/infrastructure/middleware/auth', () => ({
   authenticate: (_req, _res, next) => next(),
