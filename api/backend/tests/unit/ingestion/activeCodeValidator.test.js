@@ -62,6 +62,25 @@ describe('ingestion/activeCodeValidator (RF029 AC 4)', () => {
       expect(result.status).toBe('inactive_release');
     });
 
+    it('reports inactive_release with release:null when the referenced release no longer resolves', async () => {
+      const db = createFakeDb({
+        terminologyConcepts: [activeConcept({ referenceDatasetReleaseId: 'missing-release' })],
+        referenceDatasetReleases: [],
+      });
+      const result = await checkActiveCode(db, { systemUri: SYSTEM_URI, code: 'HP:0000001' });
+      expect(result).toMatchObject({ active: false, status: 'inactive_release', release: null });
+    });
+
+    it('returns unknown for an explicit version that has no matching concept row', async () => {
+      const db = createFakeDb({ terminologyConcepts: [], referenceDatasetReleases: [] });
+      const result = await checkActiveCode(db, {
+        systemUri: SYSTEM_URI,
+        code: 'HP:0000001',
+        version: '1900-01-01',
+      });
+      expect(result).toEqual({ active: false, status: 'unknown', concept: null, release: null });
+    });
+
     it('requires systemUri and code', async () => {
       const db = createFakeDb({});
       await expect(checkActiveCode(db, { code: 'HP:0000001' })).rejects.toThrow(/systemUri e code/);
@@ -162,6 +181,14 @@ describe('ingestion/activeCodeValidator (RF029 AC 4)', () => {
       const result = await validateActiveCodes(db, [{ systemUri: SYSTEM_URI, code: 'HP:9999999', label: 'icdCode' }]);
       expect(result.valid).toBe(false);
       expect(result.violations[0]).toMatchObject({ code: 'INACTIVE_OR_UNKNOWN_CODE', field: 'icdCode' });
+    });
+
+    it('uses systemUri|code and the code itself when an inactive entry has no display label', async () => {
+      const db = createFakeDb({ terminologyConcepts: [], referenceDatasetReleases: [] });
+      const result = await validateActiveCodes(db, [{ systemUri: SYSTEM_URI, code: 'HP:9999999' }]);
+
+      expect(result.violations[0].field).toBe(`${SYSTEM_URI}|HP:9999999`);
+      expect(result.violations[0].message).toContain('HP:9999999');
     });
 
     it('does not turn an inactive code into a violation when allowControlledReview is set', async () => {
