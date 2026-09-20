@@ -396,7 +396,7 @@ describe('import.controller item 8 upload filter branches', () => {
         contentType: 'text/csv',
       });
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(400);
     expect(response.text).toMatch(/Formato de arquivo não seguro/);
   });
 
@@ -411,7 +411,7 @@ describe('import.controller item 8 upload filter branches', () => {
         contentType: 'application/x-unknown',
       });
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(400);
     expect(response.text).toMatch(/Formato de arquivo não seguro/);
   });
 });
