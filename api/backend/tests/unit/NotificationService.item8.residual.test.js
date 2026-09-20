@@ -27,7 +27,12 @@ describe('NotificationService item 8 residual branches', () => {
     expect(() => service.getFrontendUrl()).toThrow('FRONTEND_URL é obrigatório');
 
     process.env.FRONTEND_URL = 'not a url';
-    expect(() => service.validateFrontendUrl()).toThrow(/URL absoluta válida/);
+    expect(() => service.validateFrontendUrl()).toThrow('Invalid URL');
+    try {
+      service.validateFrontendUrl();
+    } catch (error) {
+      expect(error.code).toBe('ERR_INVALID_URL');
+    }
 
     process.env.NODE_ENV = 'test';
     const nonDev = new NotificationService();
