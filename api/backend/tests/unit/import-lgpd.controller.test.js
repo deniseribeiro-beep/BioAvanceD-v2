@@ -757,6 +757,103 @@ describe('import-lgpd.controller', () => {
     });
   });
 
+
+    it('reports partial smart-import results with canonical actor precedence, mapping/group metadata and staging batch id', async () => {
+      const db = createDb();
+      db.__collection.insertOne.mockResolvedValue({ insertedId: 'summary-item8' });
+      const file = { path: '/tmp/smart-item8.csv', originalname: 'smart-item8.csv' };
+      const req = {
+        app: { locals: { db } },
+        file,
+        body: {
+          mapping: JSON.stringify({ Nome: 'patientName' }),
+          groupFields: JSON.stringify({ demographics: ['sex'] }),
+        },
+        user: {
+          userID: 'canonical-user-id',
+          id: 'legacy-user-id',
+          _id: 'object-user-id',
+          name: 'Canonical User',
+          email: 'fallback@example.test',
+          role: 'Coordenador',
+        },
+        ip: '203.0.113.20',
+        get: vi.fn().mockReturnValue('item8-agent'),
+      };
+      const res = createRes();
+
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('smart item8'));
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      const importSmart = vi.spyOn(importLGPDService, 'importPatientsSmart').mockResolvedValue({
+        total: 3,
+        success: 2,
+        errors: [{ row: 3, error: 'synthetic invalid row' }],
+        duplicates: 1,
+        skipped: 0,
+        stagingBatchId: { toString: () => 'batch-item8' },
+      });
+      const cleanup = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      const audit = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+      const auditImport = vi.spyOn(auditLogger, 'logImport').mockResolvedValue(undefined);
+
+      await controller.importPatientsSmart(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const body = res.json.mock.calls[0][0];
+      expect(body.success).toBe(false);
+      expect(body.data).toMatchObject({
+        total: 3,
+        success: 2,
+        errors: 1,
+        duplicatesFound: 1,
+        skipped: 0,
+        summaryReportId: 'summary-item8',
+        stagingBatchId: 'batch-item8',
+      });
+
+      expect(importSmart).toHaveBeenCalledWith(
+        db,
+        file,
+        expect.objectContaining({
+          mapping: { Nome: 'patientName' },
+          groupFields: { demographics: ['sex'] },
+          actor: expect.objectContaining({
+            userID: 'canonical-user-id',
+            userId: 'canonical-user-id',
+            userName: 'Canonical User',
+            userRole: 'Coordenador',
+            ipAddress: '203.0.113.20',
+            userAgent: 'item8-agent',
+          }),
+        })
+      );
+
+      const summaryInsert = db.__collection.insertOne.mock.calls[0][0];
+      expect(summaryInsert).toMatchObject({
+        userId: 'canonical-user-id',
+        userName: 'Canonical User',
+        totalSucesso: 2,
+        totalFalhas: 1,
+      });
+
+      expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'warning',
+        severity: 'warning',
+        message: 'Execução de importação inteligente concluída com inconsistências.',
+      }));
+      expect(auditImport).toHaveBeenCalledWith(
+        req,
+        'Patient',
+        'partial',
+        3,
+        2,
+        1,
+        { skipped: 0 }
+      );
+      expect(cleanup).toHaveBeenCalledWith(file.path);
+    });
+
   describe('downloadPatientTemplateExcel', () => {
     it('builds a workbook and sends it with the correct headers', async () => {
       const req = {};
