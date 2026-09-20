@@ -1,3 +1,4 @@
+// Stage 2 consolidated validation checkpoint: behavior unchanged.
 import { describe, expect, it } from 'vitest';
 import { createRequire } from 'module';
 
