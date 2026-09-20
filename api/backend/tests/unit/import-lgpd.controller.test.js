@@ -767,7 +767,7 @@ describe('import-lgpd.controller', () => {
         file,
         body: {
           mapping: JSON.stringify({ Nome: 'patientName' }),
-          groupFields: JSON.stringify({ demographics: ['sex'] }),
+          groupFields: JSON.stringify({ clinicalUnit: 'ONCO' }),
         },
         user: {
           userID: 'canonical-user-id',
@@ -817,7 +817,7 @@ describe('import-lgpd.controller', () => {
         file,
         expect.objectContaining({
           mapping: { Nome: 'patientName' },
-          groupFields: { demographics: ['sex'] },
+          groupFields: { clinicalUnit: 'ONCO' },
           actor: expect.objectContaining({
             userID: 'canonical-user-id',
             userId: 'canonical-user-id',
