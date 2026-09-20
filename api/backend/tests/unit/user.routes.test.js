@@ -1388,6 +1388,7 @@ describe('user.routes item 8 HTTP alternate outcomes', () => {
 
   it('blocks register when the requested access level exceeds the caller hierarchy', async () => {
     const assignment = require('../../src/services/rbac-assignment.service');
+    const authService = require('../../src/services/auth.service');
     vi.spyOn(assignment, 'resolveUserHierarchyLevel').mockResolvedValue(2);
     const register = vi.spyOn(authService, 'registerUser');
     const { router } = loadRoute();
@@ -1402,6 +1403,7 @@ describe('user.routes item 8 HTTP alternate outcomes', () => {
 
   it('normalizes optional register fields and skips audit when there is no authenticated actor', async () => {
     const auditLogger = require('../../src/utils/auditLogger');
+    const authService = require('../../src/services/auth.service');
     const audit = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
     const register = vi.spyOn(authService, 'registerUser').mockResolvedValue({
       id: 'u-created',
