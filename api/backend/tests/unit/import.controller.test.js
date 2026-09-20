@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
+import express from 'express';
+import request from 'supertest';
 
 const require = createRequire(import.meta.url);
 
 const controller = require('../../src/controllers/import.controller');
 const importService = require('../../src/services/import.service');
 const auditLogger = require('../../src/utils/auditLogger');
+const fs = require('fs');
 
 function createRes() {
   return {
@@ -344,4 +347,71 @@ describe('import.controller', () => {
     });
   });
 
+});
+
+
+describe('import.controller item 8 upload filter branches', () => {
+  it('accepts a valid CSV multipart upload, creates the temp directory when needed, and reuses it on the next upload', async () => {
+    const app = express();
+    const uploadedPaths = [];
+
+    app.post('/upload', controller.uploadMiddleware(), (req, res) => {
+      uploadedPaths.push(req.file.path);
+      res.status(204).end();
+    });
+
+    const first = await request(app)
+      .post('/upload')
+      .attach('file', Buffer.from('id,name\n1,A\n'), {
+        filename: 'valid.csv',
+        contentType: 'text/csv',
+      });
+    expect(first.status).toBe(204);
+    expect(uploadedPaths).toHaveLength(1);
+    expect(fs.existsSync(uploadedPaths[0])).toBe(true);
+
+    const second = await request(app)
+      .post('/upload')
+      .attach('file', Buffer.from('id,name\n2,B\n'), {
+        filename: 'valid-second.csv',
+        contentType: 'text/csv',
+      });
+    expect(second.status).toBe(204);
+    expect(uploadedPaths).toHaveLength(2);
+    expect(fs.existsSync(uploadedPaths[1])).toBe(true);
+
+    for (const uploadedPath of uploadedPaths) {
+      if (fs.existsSync(uploadedPath)) fs.unlinkSync(uploadedPath);
+    }
+  });
+
+  it('rejects a blocked executable extension even when its MIME type would otherwise be allowed', async () => {
+    const app = express();
+    app.post('/upload', controller.uploadMiddleware(), (_req, res) => res.status(204).end());
+
+    const response = await request(app)
+      .post('/upload')
+      .attach('file', Buffer.from('not-an-executable'), {
+        filename: 'payload.exe',
+        contentType: 'text/csv',
+      });
+
+    expect(response.status).toBe(500);
+    expect(response.text).toMatch(/Formato de arquivo não seguro/);
+  });
+
+  it('rejects an unapproved MIME type when the extension is not explicitly blocked', async () => {
+    const app = express();
+    app.post('/upload', controller.uploadMiddleware(), (_req, res) => res.status(204).end());
+
+    const response = await request(app)
+      .post('/upload')
+      .attach('file', Buffer.from('opaque'), {
+        filename: 'payload.bin',
+        contentType: 'application/x-unknown',
+      });
+
+    expect(response.status).toBe(500);
+    expect(response.text).toMatch(/Formato de arquivo não seguro/);
+  });
 });
