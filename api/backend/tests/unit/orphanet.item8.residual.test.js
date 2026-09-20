@@ -264,6 +264,7 @@ describe('orphanet item 8 residual normalization branches', () => {
   });
 
   it('returns an empty local result when external terminology sync is disabled', async () => {
+    global.fetch = vi.fn();
     const db = {
       collection: vi.fn((name) => {
         if (name === 'cids' || name === 'orphanet_diseases') {
