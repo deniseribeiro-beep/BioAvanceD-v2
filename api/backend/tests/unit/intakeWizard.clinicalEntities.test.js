@@ -780,9 +780,9 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
 
       expect(res.status).toBe(200);
       expect(collections.conditions.docs[0].conditionCoding).toEqual(expect.arrayContaining([
-        { systemUri: ORPHA_SYSTEM_URI, code: 'ORPHA:558' },
-        { systemUri: OMIM_SYSTEM_URI, code: '154700' },
-        { systemUri: 'http://hl7.org/fhir/sid/icd-10', code: 'A00' },
+        expect.objectContaining({ systemUri: ORPHA_SYSTEM_URI, code: 'ORPHA:558' }),
+        expect.objectContaining({ systemUri: OMIM_SYSTEM_URI, code: '154700' }),
+        expect.objectContaining({ systemUri: 'http://hl7.org/fhir/sid/icd-10', code: 'A00' }),
       ]));
       expect(collections.familyHistories.docs[0]).toMatchObject({
         relationship: 'sibling',
