@@ -77,6 +77,7 @@ function collection(overrides = {}) {
     insertOne: vi.fn().mockResolvedValue({ insertedId: new ObjectId() }),
     updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    createIndex: vi.fn().mockResolvedValue('item8-index'),
     ...overrides,
   };
 }
