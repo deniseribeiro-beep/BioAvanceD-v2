@@ -140,6 +140,33 @@ describe('LogService', () => {
       expect(result._id).toBe('log-1');
     });
 
+    it('normalizes a non-Error audit mirror failure and still emits the critical alert', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      vi.spyOn(auditV2Service, 'ingestLogRecord').mockRejectedValue('audit mirror string failure');
+      vi.spyOn(securityAlertsService, 'init').mockImplementation(() => {});
+      const alertSpy = vi.spyOn(securityAlertsService, 'logSecurityAlert').mockResolvedValue('alert-string');
+
+      const result = await logService.createLog(db, {
+        userID: 'user-item8',
+        action: 'CREATE',
+        entity: 'Sample'
+      }, null);
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Falha ao espelhar log em audit_events:',
+        'audit mirror string failure'
+      );
+      expect(alertSpy).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'AUDIT_TRAIL_WRITE_FAILURE',
+        details: expect.objectContaining({
+          error: 'audit mirror string failure'
+        })
+      }));
+      expect(result._id).toBe('log-1');
+    });
+
     it('throws when validation fails and does not attempt to insert', async () => {
       const collection = makeCollection();
       const db = makeDb(collection);
@@ -427,6 +454,32 @@ describe('LogService', () => {
       expect(query.$and).toHaveLength(2);
       expect(query.$and[0]).toEqual({ $or: [{ resourceType: 'Sample' }, { entity: 'Sample' }] });
       expect(query.$and[1]).toEqual({ $or: [{ status: 'success' }, { result: 'success' }] });
+    });
+
+    it('accepts resourceType/status arrays and reuses the existing $and bucket for both canonical aliases', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, {
+        resourceType: ['Sample', 'Patient'],
+        status: ['success', 'failure'],
+      });
+
+      const query = collection.find.mock.calls[0][0];
+      expect(query.$and).toEqual([
+        {
+          $or: [
+            { resourceType: { $in: ['Sample', 'Patient'] } },
+            { entity: { $in: ['Sample', 'Patient'] } },
+          ],
+        },
+        {
+          $or: [
+            { status: { $in: ['success', 'failure'] } },
+            { result: { $in: ['success', 'failure'] } },
+          ],
+        },
+      ]);
     });
 
     it('merges an existing $or with a text search into $and', async () => {
