@@ -533,19 +533,4 @@ class SampleGraphValidator {
   }
 }
 
-SampleGraphValidator._test = {
-  normalizeString,
-  normalizeNumber,
-  normalizeKey,
-  stableObject,
-  hashSampleIntegrityPayload,
-  normalizeOrpha,
-  normalizeBiomarkerMap,
-  defaultRequirements,
-  resolveSuggestedStatus,
-  complianceGraphReasonCodes,
-  isComplianceGraphOwnedAction,
-  normalizeSampleIdFilter,
-};
-
 module.exports = SampleGraphValidator;
