@@ -1455,4 +1455,72 @@ describe('backup.service', () => {
     });
 
   });
+
+  describe('item 8 backup fallback and manifest guards', () => {
+    it('falls back to the canonical default database name when MONGO_URI has no parseable URL shape', async () => {
+      env.MONGO_URI = 'not-a-valid-mongodb-url';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-item8-invalid-uri');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      const writeFile = vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup();
+
+      expect(result.success).toBe(true);
+      const manifestCall = writeFile.mock.calls.find(([file]) => String(file).endsWith('manifest.json'));
+      expect(manifestCall).toBeTruthy();
+      expect(JSON.parse(manifestCall[1]).dbName).toBe('bioavanced');
+    });
+
+    it('ignores an unreadable restore manifest and still restores an unencrypted mongodump', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      const backupPath = path.join('C:', 'tmp', 'backup-item8-bad-manifest');
+
+      vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+        const value = String(p);
+        return value === backupPath || value.endsWith('manifest.json');
+      });
+      vi.spyOn(fs.promises, 'readFile').mockRejectedValueOnce(new Error('manifest unreadable'));
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'restored', ''));
+
+      const backupService = freshBackupService();
+      const result = await backupService.restoreBackup(backupPath);
+
+      expect(result).toMatchObject({ success: true, mode: 'mongorestore' });
+      expect(cp.exec).toHaveBeenCalledWith(
+        expect.stringContaining(`"${backupPath}"`),
+        { windowsHide: true },
+        expect.any(Function)
+      );
+    });
+
+    it('returns the generic restore failure when the command error has no usable message', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockResolvedValue('{}');
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb({}, '', ''));
+
+      const backupService = freshBackupService();
+      const result = await backupService.restoreBackup(path.join('C:', 'tmp', 'backup-item8-generic-error'));
+
+      expect(result).toEqual({ success: false, error: 'Erro ao restaurar backup' });
+    });
+
+    it('keeps cleanupOldBackups as a no-op when the base directory is absent', async () => {
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      const readdir = vi.spyOn(fs.promises, 'readdir');
+
+      const backupService = freshBackupService();
+      await expect(backupService.cleanupOldBackups('/missing-backup-root', 30)).resolves.toBeUndefined();
+
+      expect(readdir).not.toHaveBeenCalled();
+    });
+  });
+
 });
