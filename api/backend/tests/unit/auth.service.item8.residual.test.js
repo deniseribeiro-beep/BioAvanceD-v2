@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 const bcrypt = require('bcryptjs');
+const speakeasy = require('speakeasy');
+const QRCode = require('qrcode');
 const authService = require('../../src/services/auth.service');
 
 const HASHED = 'a'.repeat(60);
@@ -180,4 +182,191 @@ describe('AuthService item 8 residual branch coverage', () => {
       expect.objectContaining({ $inc: { failedLoginAttempts: 1 } })
     );
   });
+
+  it('login rejects missing identifiers and missing passwords before touching the database', async () => {
+    const db = { collection: vi.fn() };
+
+    await expect(authService.login(db, { email: '', password: 'pw' }, {})).rejects.toThrow();
+    await expect(authService.login(db, { email: 'user@test.com', password: '' }, {})).rejects.toThrow();
+
+    expect(db.collection).not.toHaveBeenCalled();
+  });
+
+  it('processLogin rejects malformed stored password material and bcrypt failures generically', async () => {
+    const { db, users } = usersDb(vi.fn());
+
+    await expect(
+      authService.processLogin(db, { ...BASE_USER, password: '' }, 'pw', null, users, {})
+    ).rejects.toThrow('Credenciais inválidas');
+
+    vi.spyOn(bcrypt, 'compare').mockRejectedValueOnce(new Error('bcrypt unavailable'));
+    await expect(
+      authService.processLogin(db, BASE_USER, 'pw', null, users, {})
+    ).rejects.toThrow('Credenciais inválidas');
+  });
+
+  it('setupMFAFirstLogin validates credential shape before database access', async () => {
+    const db = { collection: vi.fn() };
+
+    await expect(authService.setupMFAFirstLogin(db, { username: '', password: 'pw' }))
+      .rejects.toThrow('Username e senha são obrigatórios');
+    await expect(authService.setupMFAFirstLogin(db, { username: { $ne: null }, password: 'pw' }))
+      .rejects.toThrow('Username e senha são obrigatórios');
+
+    expect(db.collection).not.toHaveBeenCalled();
+  });
+
+  it('setupMFAFirstLogin equalizes unknown and already-enrolled accounts', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+
+    let fixture = usersDb(vi.fn().mockResolvedValue(null));
+    await expect(
+      authService.setupMFAFirstLogin(fixture.db, { username: 'missing', password: 'pw' })
+    ).rejects.toThrow('Credenciais inválidas');
+
+    fixture = usersDb(vi.fn().mockResolvedValue({
+      ...BASE_USER,
+      lastLogin: new Date(),
+      mfaEnabled: true,
+      mfaSecretCiphertext: 'ciphertext',
+    }));
+    await expect(
+      authService.setupMFAFirstLogin(fixture.db, { username: 'user1', password: 'pw' })
+    ).rejects.toThrow('Credenciais inválidas');
+  });
+
+  it('setupMFAFirstLogin enforces account lockout and counts a wrong password', async () => {
+    let fixture = usersDb(vi.fn().mockResolvedValue({
+      ...BASE_USER,
+      accountLockedUntil: new Date(Date.now() + 60_000),
+    }));
+    const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+
+    await expect(
+      authService.setupMFAFirstLogin(fixture.db, { username: 'user1', password: 'pw' })
+    ).rejects.toThrow('Credenciais inválidas');
+    expect(compare).not.toHaveBeenCalled();
+
+    fixture = usersDb(vi.fn().mockResolvedValue(BASE_USER));
+    await expect(
+      authService.setupMFAFirstLogin(fixture.db, { username: 'user1', password: 'wrong' })
+    ).rejects.toThrow('Credenciais inválidas');
+    expect(fixture.users.updateOne).toHaveBeenCalled();
+  });
+
+  it('setupMFAFirstLogin rejects unusable generated secrets and QR generation failures', async () => {
+    const fixture = usersDb(vi.fn().mockResolvedValue(BASE_USER));
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    vi.spyOn(speakeasy, 'generateSecret').mockReturnValueOnce({});
+    await expect(
+      authService.setupMFAFirstLogin(fixture.db, { username: 'user1', password: 'pw' })
+    ).rejects.toThrow('Erro ao gerar secret do MFA');
+
+    vi.spyOn(speakeasy, 'generateSecret').mockReturnValueOnce({
+      base32: 'JBSWY3DPEHPK3PXP',
+      otpauth_url: 'otpauth://totp/BioAvanceD',
+    });
+    vi.spyOn(QRCode, 'toDataURL').mockRejectedValueOnce(new Error('qr unavailable'));
+    await expect(
+      authService.setupMFAFirstLogin(fixture.db, { username: 'user1', password: 'pw' })
+    ).rejects.toThrow('Erro ao gerar QR Code');
+  });
+
+  it('enableMFAFirstLogin validates credentials and MFA code before database lookup', async () => {
+    const db = { collection: vi.fn() };
+
+    await expect(authService.enableMFAFirstLogin(db, { username: '', password: 'pw' }, '123456', {}))
+      .rejects.toThrow('Username e senha são obrigatórios');
+    await expect(authService.enableMFAFirstLogin(db, { username: { $gt: '' }, password: 'pw' }, '123456', {}))
+      .rejects.toThrow('Username e senha são obrigatórios');
+    await expect(authService.enableMFAFirstLogin(db, { username: 'user1', password: 'pw' }, '', {}))
+      .rejects.toThrow('Código MFA é obrigatório');
+
+    expect(db.collection).not.toHaveBeenCalled();
+  });
+
+  it('enableMFAFirstLogin rejects unknown, enrolled, locked and wrong-password callers generically', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+
+    let fixture = usersDb(vi.fn().mockResolvedValue(null));
+    await expect(
+      authService.enableMFAFirstLogin(fixture.db, { username: 'missing', password: 'pw' }, '123456', {})
+    ).rejects.toThrow('Credenciais inválidas');
+
+    fixture = usersDb(vi.fn().mockResolvedValue({
+      ...BASE_USER,
+      lastLogin: new Date(),
+      mfaEnabled: true,
+      mfaSecretCiphertext: 'ciphertext',
+    }));
+    await expect(
+      authService.enableMFAFirstLogin(fixture.db, { username: 'user1', password: 'pw' }, '123456', {})
+    ).rejects.toThrow('Credenciais inválidas');
+
+    fixture = usersDb(vi.fn().mockResolvedValue({
+      ...BASE_USER,
+      accountLockedUntil: new Date(Date.now() + 60_000),
+    }));
+    await expect(
+      authService.enableMFAFirstLogin(fixture.db, { username: 'user1', password: 'pw' }, '123456', {})
+    ).rejects.toThrow('Credenciais inválidas');
+
+    fixture = usersDb(vi.fn().mockResolvedValue(BASE_USER));
+    await expect(
+      authService.enableMFAFirstLogin(fixture.db, { username: 'user1', password: 'wrong' }, '123456', {})
+    ).rejects.toThrow('Credenciais inválidas');
+    expect(fixture.users.updateOne).toHaveBeenCalled();
+  });
+
+  it('enableMFAFirstLogin requires an enrollment secret and rejects an invalid TOTP', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    let fixture = usersDb(vi.fn().mockResolvedValue(BASE_USER));
+    await expect(
+      authService.enableMFAFirstLogin(fixture.db, { username: 'user1', password: 'pw' }, '123456', {})
+    ).rejects.toThrow('MFA não configurado');
+
+    fixture = usersDb(vi.fn().mockResolvedValue({
+      ...BASE_USER,
+      mfaSecretCiphertext: 'ciphertext',
+    }));
+    vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(false);
+    await expect(
+      authService.enableMFAFirstLogin(fixture.db, { username: 'user1', password: 'pw' }, '123456', {})
+    ).rejects.toThrow('Código MFA inválido');
+  });
+
+  it('setupMFA and enableMFA expose their not-found/not-configured guards', async () => {
+    const { ObjectId } = require('mongodb');
+    const id = new ObjectId().toString();
+
+    let fixture = usersDb(vi.fn().mockResolvedValue(null));
+    await expect(authService.setupMFA(fixture.db, id)).rejects.toThrow('Usuário não encontrado');
+    await expect(authService.enableMFA(fixture.db, id, '123456')).rejects.toThrow('MFA não configurado');
+
+    fixture = usersDb(vi.fn().mockResolvedValue({ ...BASE_USER, _id: new ObjectId(), mfaSecretCiphertext: 'ciphertext' }));
+    vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(false);
+    await expect(authService.enableMFA(fixture.db, id, '123456')).rejects.toThrow('Código MFA inválido');
+  });
+
+  it('requestPasswordReset preserves non-enumerating success for missing and inactive users', async () => {
+    let fixture = usersDb(vi.fn().mockResolvedValue(null));
+    await expect(authService.requestPasswordReset(fixture.db, 'missing@test.com', {}))
+      .resolves.toMatchObject({ success: true });
+
+    fixture = usersDb(vi.fn().mockResolvedValue({ ...BASE_USER, status: 'inactive' }));
+    await expect(authService.requestPasswordReset(fixture.db, 'inactive@test.com', {}))
+      .resolves.toMatchObject({ success: true });
+  });
+
+  it('resetPassword rejects absent token and absent replacement password before JWT work', async () => {
+    const { db } = usersDb(vi.fn());
+
+    await expect(authService.resetPassword(db, '', 'Strong#Password123', {}))
+      .rejects.toThrow('Token de recuperação não fornecido');
+    await expect(authService.resetPassword(db, 'token', '', {}))
+      .rejects.toThrow('Nova senha é obrigatória');
+  });
+
 });
