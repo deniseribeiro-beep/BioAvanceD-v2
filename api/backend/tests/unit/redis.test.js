@@ -498,3 +498,103 @@ describe('config/redis.js', () => {
     });
   });
 });
+
+
+describe('config/redis.js item 8 final residual branches', () => {
+  afterEach(() => {
+    delete require.cache[REDIS_MODULE_PATH];
+    delete require.cache[ENV_MODULE_PATH];
+    restoreRealRedis();
+    process.env = { ...ORIGINAL_ENV };
+    vi.restoreAllMocks();
+  });
+
+  it('keeps a discrete local Redis config passwordless when REDIS_PASSWORD is absent', () => {
+    setEnv({ NODE_ENV: 'test', REDIS_HOST: '127.0.0.1', REDIS_PORT: '6379' });
+    const redisMod = freshRedis();
+    redisMod.getRedisInstance();
+
+    const config = FakeRedisInstance.instances[0]._args[0];
+    expect(config.password).toBeUndefined();
+    expect(config.username).toBe('default');
+  });
+
+  it('keeps a URL Redis config passwordless when neither explicit nor embedded password is present', () => {
+    setEnv({ NODE_ENV: 'production', REDIS_URL: 'redis://remotehost:6380' });
+    const redisMod = freshRedis();
+    redisMod.getRedisInstance();
+
+    const config = FakeRedisInstance.instances[0]._args[1];
+    expect(config.password).toBeUndefined();
+    expect(config.username).toBe('default');
+  });
+
+  it('falls back to REDIS_HOST metadata when a non-empty REDIS_URL cannot be parsed', () => {
+    setEnv({
+      NODE_ENV: 'production',
+      REDIS_URL: 'not a valid redis url',
+      REDIS_HOST: 'fallback.redis.internal',
+      REDIS_PORT: '6380',
+    });
+    const redisMod = freshRedis();
+
+    expect(() => redisMod.getRedisInstance()).not.toThrow();
+    expect(FakeRedisInstance.instances).toHaveLength(1);
+    expect(FakeRedisInstance.instances[0]._args[0]).toBe('not a valid redis url');
+  });
+
+  it('generic ping failure without optional error metadata skips all specialized diagnostics', async () => {
+    setEnv({ NODE_ENV: 'production', REDIS_HOST: 'remotehost.example.com', REDIS_PORT: '6379' });
+    const redisMod = freshRedis();
+    const instance = redisMod.getRedisInstance();
+    instance.status = 'ready';
+    const logger = require('../../src/utils/logger');
+    const errorSpy = vi.spyOn(logger, 'error');
+    FakeRedisInstance.pingBehavior = async () => {
+      throw new Error('plain redis failure');
+    };
+
+    await expect(redisMod.testRedisConnection()).resolves.toBe(false);
+
+    expect(errorSpy).toHaveBeenCalledWith('[ERROR] Teste de conexão Redis falhou:', 'plain redis failure');
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Código do erro'));
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Chamada de sistema'));
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Endereço'));
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Redis está rodando'));
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('firewall'));
+  });
+
+  it('exercises connect/ready/close/reconnecting event callbacks on a real configured fake instance', () => {
+    setEnv({ NODE_ENV: 'production', REDIS_HOST: 'remotehost.example.com', REDIS_PORT: '6379' });
+    const redisMod = freshRedis();
+    const instance = redisMod.getRedisInstance();
+    const logger = require('../../src/utils/logger');
+    const infoSpy = vi.spyOn(logger, 'info');
+    const warnSpy = vi.spyOn(logger, 'warn');
+
+    instance.emit('connect');
+    instance.emit('ready');
+    instance.emit('close');
+    instance.emit('reconnecting', 250);
+
+    expect(infoSpy).toHaveBeenCalledWith('[INFO] Redis conectado');
+    expect(infoSpy).toHaveBeenCalledWith('[INFO] Redis pronto para uso');
+    expect(warnSpy).toHaveBeenCalledWith('[WARN] Conexão Redis fechada');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('250ms'));
+  });
+
+  it('uses proxy-owned properties without constructing Redis and covers the has trap on both states', () => {
+    setEnv({ NODE_ENV: 'test', REDIS_HOST: '127.0.0.1', REDIS_PORT: '6379' });
+    const redisMod = freshRedis();
+
+    redisMod.item8Sentinel = 'ok';
+    expect(redisMod.item8Sentinel).toBe('ok');
+    expect('item8Sentinel' in redisMod).toBe(true);
+    expect('definitelyMissingProperty' in redisMod).toBe(false);
+    expect(FakeRedisInstance.instances).toHaveLength(0);
+
+    const instance = redisMod.getRedisInstance();
+    instance.runtimeOnly = 42;
+    expect('runtimeOnly' in redisMod).toBe(true);
+  });
+});
