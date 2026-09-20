@@ -518,8 +518,11 @@ class BatchValidationEngine {
       normalizedRow[this.normalizeHeader(key)] = rawRow[key];
     });
 
+    // Canonical v2: Specimen.specimenId is the stable specimen reference.
+    // Keep historical aliases only as boundary fallbacks for old callers.
     const specimenIdentifier = String(
-      specimen?.sampleID
+      specimen?.specimenId
+      || specimen?.sampleID
       || specimen?.sampleId
       || specimen?._id
       || specimen?.barcode
