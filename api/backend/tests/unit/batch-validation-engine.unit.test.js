@@ -1149,4 +1149,68 @@ describe('BatchValidationEngine item 8 remaining behavior branches', () => {
   });
 });
 
+
+describe('BatchValidationEngine item 8 canonical linkage fallback', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('keeps the input participant identifier when the linked canonical Patient exposes participantId rather than legacy patientID', async () => {
+    vi.spyOn(engine, 'findLinkedPatient').mockResolvedValue({
+      _id: 'patient-canonical-id',
+      participantId: '12345678',
+    });
+    const createSample = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
+      _id: 'sample-canonical-id',
+      specimenId: 'SPEC-CANONICAL',
+      registeredAt: new Date('2026-05-01T00:00:00.000Z'),
+    });
+
+    const result = await engine.persistSample(
+      {},
+      {
+        patientID: '12345678',
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'EDTA',
+        quantity: '1',
+      },
+      44
+    );
+
+    expect(result.classification).toBe('VALID');
+    expect(createSample).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        patientID: '12345678',
+        patientObjectId: 'patient-canonical-id',
+      }),
+      expect.any(Object)
+    );
+    expect(result.persistedIds).toEqual([
+      'patient-canonical-id',
+      'sample-canonical-id',
+    ]);
+  });
+
+  it('returns the documented validation error when quantity is absent instead of entering persistence', async () => {
+    const findLinkedPatient = vi.spyOn(engine, 'findLinkedPatient');
+
+    const result = await engine.persistSample(
+      {},
+      {
+        patientID: '12345678',
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'EDTA',
+      },
+      45
+    );
+
+    expect(result.classification).toBe('INVALID');
+    expect(result.errors).toContain('quantity deve ser um número maior que zero');
+    expect(findLinkedPatient).not.toHaveBeenCalled();
+  });
+});
+
 });
