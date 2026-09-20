@@ -100,6 +100,12 @@ describe('DrugService#_normalizeDrugRecord', () => {
     expect(result.code).toBe('ATC:C09AA01');
   });
 
+  it('keeps an unknown ATC level without inventing a drug-class label', () => {
+    const result = service._normalizeDrugRecord({ atc_code: 'Z99ZZ99' });
+    expect(result.atc_level_1).toBe('Z');
+    expect(result.drug_class).toBe('');
+  });
+
   it('falls back to [atcCode] for atc_classifications when row does not carry an array', () => {
     const result = service._normalizeDrugRecord({ atc_code: 'J01CA04' });
     expect(result.atc_classifications).toEqual(['J01CA04']);
@@ -132,6 +138,27 @@ describe('DrugService#_cacheDrugs', () => {
   it('no-ops for a non-array input', async () => {
     await service._cacheDrugs(null, collection);
     expect(collection.bulkWrite).not.toHaveBeenCalled();
+  });
+
+  it('uses name/source/class fallbacks for a cacheable row that omits normalized optional aliases', async () => {
+    await service._cacheDrugs([
+      {
+        name: 'Synthetic Z Drug',
+        code: 'ATC:Z99ZZ99',
+        atc_code: 'Z99ZZ99',
+        atc_level_1: 'Z',
+        atc_classifications: ['Z99ZZ99'],
+      },
+    ], collection);
+
+    const op = collection.bulkWrite.mock.calls[0][0][0].updateOne;
+    expect(op.filter).toEqual({ generic_name: 'Synthetic Z Drug', atc_code: 'Z99ZZ99' });
+    expect(op.update.$set).toMatchObject({
+      generic_name: 'Synthetic Z Drug',
+      name: 'Synthetic Z Drug',
+      drug_class: '',
+      source: 'CHEMBL',
+    });
   });
 
   it('builds one upsert updateOne op per drug with expected shape', async () => {
@@ -200,6 +227,22 @@ describe('DrugService#_logAtcDictionarySync', () => {
       })
     ).resolves.toBeUndefined();
     expect(createLogSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves the audit actor from req.user.id when canonical userID is absent', async () => {
+    createLogSpy.mockResolvedValue({});
+    const service = new DrugService({ some: 'db' });
+
+    await service._logAtcDictionarySync({
+      query: 'aspirin',
+      cacheMiss: true,
+      upsertedCount: 1,
+      status: 'success',
+      message: 'msg',
+      auditContext: { req: { user: { id: 'legacy-user-id' } } },
+    });
+
+    expect(createLogSpy.mock.calls[0][1].userID).toBe('legacy-user-id');
   });
 
   it('calls logService.createLog with the given status when db is present', async () => {
