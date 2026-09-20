@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const MODULE_PATH = require.resolve('../../src/config/env');
+const MODULE_PATH = require.resolve('../../../src/config/env');
 
 const originalEnv = { ...process.env };
 
