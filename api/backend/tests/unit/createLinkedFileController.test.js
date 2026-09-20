@@ -556,6 +556,61 @@ describe('createLinkedFileController item 8 residual request branches', () => {
     expect(updateOne).toHaveBeenCalledTimes(1);
     expect(res.status).toHaveBeenCalledWith(200);
   });
+
+  it('replaceFile does not unlink when the replacement reuses the same storage path', async () => {
+    const controller = buildController();
+    const fileId = new ObjectId();
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+      widgetFiles: {
+        findOne: vi.fn().mockResolvedValue({
+          _id: fileId,
+          widgetId: 'w-1',
+          fileName: 'old.csv',
+          storagePath: '/tmp/same.csv',
+          checksum: 'old-checksum',
+        }),
+        updateOne,
+      },
+    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('replacement content'));
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+    const res = createRes();
+
+    await controller.replaceFile(
+      {
+        app: { locals: { db } },
+        params: { widgetId: 'w-1', fileID: fileId.toString() },
+        file: { path: '/tmp/same.csv', originalname: 'same.csv', size: 19 },
+      },
+      res
+    );
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(updateOne).toHaveBeenCalledTimes(1);
+    expect(unlink).not.toHaveBeenCalled();
+  });
+
+  it('uses the route parent identifier when the resolved parent has no canonical id field', async () => {
+    const controller = buildController();
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockResolvedValue({ _id: new ObjectId() }) },
+      widgetFiles: { find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) },
+    });
+    const res = createRes();
+
+    await controller.listFiles(
+      { app: { locals: { db } }, params: { widgetId: 'route-parent-1' } },
+      res
+    );
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(db.collection('widgetFiles').find).toHaveBeenCalledWith({ widgetId: 'route-parent-1' });
+  });
+
 });
 
 
