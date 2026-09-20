@@ -551,4 +551,55 @@ describe('ImportService item 8 legitimate residual branches', () => {
   });
 });
 
+
+describe('ImportService item 8 remaining spreadsheet branches', () => {
+  it('readSpreadsheetRows resolves ExcelJS hyperlink/text objects through their visible text', async () => {
+    const filePath = path.join(os.tmpdir(), `import-link-${Date.now()}.xlsx`);
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Data');
+    worksheet.addRow(['source', 'registeredAt']);
+    worksheet.getCell('A2').value = {
+      text: 'Synthetic source',
+      hyperlink: 'https://example.invalid/source',
+    };
+    worksheet.getCell('B2').value = new Date('2026-03-04T05:06:07.000Z');
+    await workbook.xlsx.writeFile(filePath);
+
+    try {
+      const rows = await importService.readSpreadsheetRows(filePath);
+      expect(rows).toEqual([{
+        source: 'Synthetic source',
+        registeredAt: '2026-03-04T05:06:07.000Z',
+      }]);
+    } finally {
+      fs.unlinkSync(filePath);
+    }
+  });
+
+  it('parseSampleCSV reports malformed float and date fields while keeping valid aliases normalized', () => {
+    const parsed = importService.parseSampleCSV({
+      patient_id: '12345678',
+      tipoAmostra: ' PLASMA ',
+      origemAmostra: ' VENOUS_BLOOD ',
+      protocoloExtracao: ' EDTA ',
+      quantidade: 'not-a-float',
+      qualidade: 'not-a-float',
+      dataRegistro: 'not-a-date',
+    });
+
+    expect(parsed.data).toMatchObject({
+      participantId: '12345678',
+      sampleType: 'PLASMA',
+      sampleOrigin: 'VENOUS_BLOOD',
+      extractionProtocol: 'EDTA',
+      quantity: null,
+    });
+    expect(parsed.parseErrors).toEqual(expect.arrayContaining([
+      expect.stringContaining('quantity inválido'),
+      expect.stringContaining('quality inválido'),
+      expect.stringContaining('registeredAt em formato inválido'),
+    ]));
+  });
+});
+
 });
