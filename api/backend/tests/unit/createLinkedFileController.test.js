@@ -720,3 +720,137 @@ describe('createLinkedFileController item 8 final residual branches', () => {
     expect(unlink).toHaveBeenCalledWith('/tmp/new.exe');
   });
 });
+
+
+describe('createLinkedFileController item 8 operational error branches', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('uploadFile cleans the temporary file and maps a parent lookup failure to the established 400 response', async () => {
+    const controller = buildController();
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockRejectedValue(new Error('parent lookup failed')) },
+    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+    const res = createRes();
+
+    await controller.uploadFile({
+      app: { locals: { db } },
+      params: { widgetId: 'w-error' },
+      file: { path: '/tmp/upload-error.csv', originalname: 'upload-error.csv', size: 10 },
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      error: 'Erro ao fazer upload de arquivo',
+      message: 'parent lookup failed',
+    }));
+    expect(unlink).toHaveBeenCalledWith('/tmp/upload-error.csv');
+  });
+
+  it('uploadFile keeps the original 404 even when best-effort temp cleanup itself fails', async () => {
+    const controller = buildController();
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockResolvedValue(null) },
+    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {
+      throw new Error('unlink denied');
+    });
+    const res = createRes();
+
+    await controller.uploadFile({
+      app: { locals: { db } },
+      params: { widgetId: 'missing-widget' },
+      file: { path: '/tmp/missing-parent.csv', originalname: 'missing-parent.csv', size: 10 },
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('listFiles maps an unexpected parent lookup failure to 500', async () => {
+    const controller = buildController();
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockRejectedValue(new Error('list parent failed')) },
+    });
+    const res = createRes();
+
+    await controller.listFiles({
+      app: { locals: { db } },
+      params: { widgetId: 'w-list-error' },
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      error: 'Erro ao listar arquivos',
+      message: 'list parent failed',
+    }));
+  });
+
+  it('downloadFile maps a database failure after a valid file id to 500', async () => {
+    const controller = buildController();
+    const fileID = new ObjectId().toString();
+    const db = createDb({
+      widgetFiles: { findOne: vi.fn().mockRejectedValue(new Error('download lookup failed')) },
+    });
+    const res = createRes();
+
+    await controller.downloadFile({
+      app: { locals: { db } },
+      params: { widgetId: 'w-1', fileID },
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      error: 'Erro ao fazer download de arquivo',
+      message: 'download lookup failed',
+    }));
+  });
+
+  it('deleteFile maps a database failure after a valid file id to 500', async () => {
+    const controller = buildController();
+    const fileID = new ObjectId().toString();
+    const db = createDb({
+      widgetFiles: { findOne: vi.fn().mockRejectedValue(new Error('delete lookup failed')) },
+    });
+    const res = createRes();
+
+    await controller.deleteFile({
+      app: { locals: { db } },
+      params: { widgetId: 'w-1', fileID },
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      error: 'Erro ao deletar arquivo',
+      message: 'delete lookup failed',
+    }));
+  });
+
+  it('replaceFile cleans the new upload and maps a database lookup failure to 400', async () => {
+    const controller = buildController();
+    const fileID = new ObjectId().toString();
+    const db = createDb({
+      widgetFiles: { findOne: vi.fn().mockRejectedValue(new Error('replace lookup failed')) },
+    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+    const res = createRes();
+
+    await controller.replaceFile({
+      app: { locals: { db } },
+      params: { widgetId: 'w-1', fileID },
+      file: { path: '/tmp/replacement-error.csv', originalname: 'replacement-error.csv', size: 10 },
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      error: 'Erro ao substituir arquivo',
+      message: 'replace lookup failed',
+    }));
+    expect(unlink).toHaveBeenCalledWith('/tmp/replacement-error.csv');
+  });
+});
