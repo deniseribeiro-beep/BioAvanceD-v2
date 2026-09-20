@@ -9,6 +9,8 @@ const notificationService = require('../../src/services/NotificationService');
 const qualityDomain = require('../../src/services/quality-domain.service');
 const fhirImportStagingController = require('../../src/controllers/fhir-import-staging.controller');
 const rcsReferenceData = require('../../src/services/rcs-reference-data');
+const rcsAssessmentService = require('../../src/services/rcs-assessment.service');
+const specimenPreanalyticsService = require('../../src/services/specimen-preanalytics.service');
 
 function createCursor(items) {
   let current = [...items];
@@ -734,6 +736,38 @@ describe('FHIR import staging', () => {
     const committedSample = db.collections.samples.docs[0];
     expect(committedSample.sealedRcsAssessmentId).toBe(db.collections.rcsAssessments.docs[0]._id);
     expect(committedSample.sealedSpecimenPreanalyticsId).toBe(db.collections.specimenPreanalytics.docs[0]._id);
+  });
+
+  it('#526: mantém o commit da amostra quando os snapshots referenciais falham de forma best-effort', async () => {
+    const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle-snapshot-failure.json' });
+    const stagedRecord = db.collections.import_staging_records.docs.find(
+      (doc) => String(doc.batchId) === String(staged.batch._id)
+    );
+    certifyStagedRecordAsAdmissible(stagedRecord);
+
+    const assessment = vi.spyOn(rcsAssessmentService, 'recordAssessment')
+      .mockRejectedValue(new Error('assessment unavailable'));
+    const profile = vi.spyOn(specimenPreanalyticsService, 'recordProfile')
+      .mockRejectedValue(new Error('profile unavailable'));
+
+    const result = await fhirImportStagingService.commitBatch(db, staged.batch._id);
+
+    expect(result.committed).toBe(1);
+    expect(assessment).toHaveBeenCalledWith(
+      db,
+      'S-001',
+      expect.objectContaining({ governance_status: 1 })
+    );
+    expect(profile).toHaveBeenCalledWith(
+      db,
+      'S-001',
+      expect.objectContaining({ matrixType: 'fluid' })
+    );
+
+    const committedSample = db.collections.samples.docs[0];
+    expect(committedSample.specimenId).toBe('S-001');
+    expect(committedSample.sealedRcsAssessmentId).toBeUndefined();
+    expect(committedSample.sealedSpecimenPreanalyticsId).toBeUndefined();
   });
 
   it('#526: não grava novo RcsAssessment/SpecimenPreanalytics ao comitar registro que apenas atualiza amostra já existente', async () => {
