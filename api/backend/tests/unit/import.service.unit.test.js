@@ -484,17 +484,20 @@ describe('ImportService item 8 legitimate residual branches', () => {
     }
   });
 
-  it('readSpreadsheetRows normalizes blank cells, rich/text objects, dates and blank headers', async () => {
+  it('readSpreadsheetRows normalizes an interior blank cell, rich/text objects, dates and blank headers', async () => {
     const filePath = path.join(os.tmpdir(), `import-rows-${Date.now()}.xlsx`);
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Data');
 
-    worksheet.getRow(1).values = ['name', '', 'registeredAt', 'notes'];
+    // Keep a populated column after the null cell so ExcelJS cannot trim the
+    // blank value from row.values before import.service maps it.
+    worksheet.getRow(1).values = ['name', 'optional', 'registeredAt', '', 'tail'];
     worksheet.getCell('A2').value = { text: 'Synthetic', hyperlink: 'https://example.invalid/synthetic' };
-    worksheet.getCell('B2').value = 'ignored-under-blank-header';
+    worksheet.getCell('B2').value = null;
     worksheet.getCell('C2').value = new Date('2026-01-02T03:04:05.000Z');
-    worksheet.getCell('D2').value = null;
-    worksheet.addRow([null, null, null, null]);
+    worksheet.getCell('D2').value = 'ignored-under-blank-header';
+    worksheet.getCell('E2').value = 'keeps-interior-gap';
+    worksheet.addRow([null, null, null, null, null]);
 
     await workbook.xlsx.writeFile(filePath);
 
@@ -503,12 +506,42 @@ describe('ImportService item 8 legitimate residual branches', () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({
         name: 'Synthetic',
+        optional: '',
         registeredAt: '2026-01-02T03:04:05.000Z',
+        tail: 'keeps-interior-gap',
       });
       expect(rows[0]).not.toHaveProperty('ignored-under-blank-header');
     } finally {
       fs.unlinkSync(filePath);
     }
+  });
+
+  it('parseSampleCSV preserves canonical axis_penalties when the quality resolver supplies them', () => {
+    const qualityDomain = require('../../src/services/quality-domain.service');
+    const resolver = vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+      model_version: 'RCS-GOV-ITEM8',
+      matrix_type: 'fluid',
+      governance_status: 1,
+      governance_failure_reasons: [],
+      governance_rule_codes: [],
+      rcs_score: 92,
+      score_based_grade: 'A',
+      final_grade: 'A',
+      grade_route: 'score',
+      axis_penalties: [{ axis: 'preanalytics', penalty: 1 }],
+      calculation_trace: { source: 'item8' },
+    });
+
+    const { data, parseErrors } = importService.parseSampleCSV({
+      participantId: '12345678',
+      sampleType: 'PLASMA',
+      quantity: '1.5',
+    });
+
+    expect(parseErrors).toEqual([]);
+    expect(resolver).toHaveBeenCalled();
+    expect(data.axisPenalties).toEqual([{ axis: 'preanalytics', penalty: 1 }]);
+    expect(data.calculationTrace).toEqual({ source: 'item8' });
   });
 
   it('parseSampleCSV parses a valid legacy numeric location and rejects a malformed one without throwing', () => {
