@@ -1099,6 +1099,51 @@ describe('import-lgpd.controller', () => {
       expect(res.send).toHaveBeenCalledTimes(1);
     });
 
+
+    it('builds the Excel example and reference sheet from populated canonical reference collections', async () => {
+      const ExcelJS = require('exceljs');
+      const collections = {
+        sampleTypes: [{ description: 'PLASMA_DB' }, { name: 'SERUM_DB' }],
+        sampleOrigins: [{ id: 'VENOUS_BLOOD_DB' }],
+        extractionProtocols: [{ description: 'EDTA_DB' }],
+      };
+      const db = {
+        collection: vi.fn((name) => ({
+          find: vi.fn(() => ({
+            toArray: vi.fn().mockResolvedValue(collections[name] || []),
+          })),
+        })),
+      };
+      const req = { app: { locals: { db } } };
+      const res = createRes();
+
+      await controller.downloadSampleTemplateExcel(req, res);
+
+      expect(res.send).toHaveBeenCalledTimes(1);
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(res.send.mock.calls[0][0]);
+
+      const dataSheet = workbook.getWorksheet('Amostras');
+      expect(dataSheet.getRow(2).getCell(2).value).toBe('PLASMA_DB');
+      expect(dataSheet.getRow(2).getCell(3).value).toBe('VENOUS_BLOOD_DB');
+      expect(dataSheet.getRow(2).getCell(4).value).toBe('EDTA_DB');
+
+      const referenceSheet = workbook.getWorksheet('Valores Válidos');
+      expect(referenceSheet).toBeTruthy();
+      const referenceValues = [];
+      referenceSheet.eachRow((row) => referenceValues.push(row.getCell(1).value));
+      expect(referenceValues).toEqual(expect.arrayContaining([
+        'PLASMA_DB',
+        'SERUM_DB',
+        'VENOUS_BLOOD_DB',
+        'EDTA_DB',
+      ]));
+
+      expect(db.collection).toHaveBeenCalledWith('sampleTypes');
+      expect(db.collection).toHaveBeenCalledWith('sampleOrigins');
+      expect(db.collection).toHaveBeenCalledWith('extractionProtocols');
+    });
+
     it('returns 500 when workbook generation throws', async () => {
       const ExcelJS = require('exceljs');
       vi.spyOn(ExcelJS.Workbook.prototype, 'addWorksheet').mockImplementation(() => {
