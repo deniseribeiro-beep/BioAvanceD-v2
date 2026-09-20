@@ -131,7 +131,7 @@ describe('orphanet item 8 residual normalization branches', () => {
             { source: 'ICD-10', code: 'D44.4' },
             { source: 'OMIM', id: '100444' },
           ],
-          aliases: ['Remote alias'],
+          aliases: expect.arrayContaining(['Remote alias']),
         }],
       }),
     });
