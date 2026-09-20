@@ -235,6 +235,51 @@ describe('#738: JSON-fallback backup round trip preserves BSON types', () => {
     });
   });
 
+
+  describe('item 8 numeric/date wrapper guard residuals', () => {
+    it('keeps non-string and malformed integer wrapper collisions as plain legacy JSON', () => {
+      const rawDoc = {
+        intNonString: { $numberInt: 1 },
+        intMalformed: { $numberInt: '12x' },
+        longNonString: { $numberLong: 1 },
+        longMalformed: { $numberLong: '12x' },
+        longTooWide: { $numberLong: '123456789012345678901' },
+      };
+
+      const docs = backupService.parseBackupDocs(JSON.stringify([rawDoc]));
+
+      expect(docs).toEqual([rawDoc]);
+    });
+
+    it('accepts both canonical date wrapper shapes while rejecting malformed numberLong dates', () => {
+      const raw = JSON.stringify([{
+        isoDate: { $date: '2026-01-02T03:04:05.678Z' },
+        numericDate: { $date: { $numberLong: '1767323045678' } },
+        legacyDate: { $date: { $numberLong: 'not-an-integer' } },
+      }]);
+
+      const docs = backupService.parseBackupDocs(raw);
+
+      expect(docs[0].isoDate).toBeInstanceOf(Date);
+      expect(docs[0].numericDate).toBeInstanceOf(Date);
+      expect(docs[0].legacyDate).toEqual({ $date: { $numberLong: 'not-an-integer' } });
+    });
+
+    it('keeps nested arrays with a legacy dollar-key collision while still converting valid siblings', () => {
+      const raw = JSON.stringify([{
+        values: [
+          { $oid: '507f1f77bcf86cd799439011' },
+          { $oid: 'not-an-object-id' },
+        ],
+      }]);
+
+      const docs = backupService.parseBackupDocs(raw);
+
+      expect(docs[0].values[0]).toBeInstanceOf(ObjectId);
+      expect(docs[0].values[1]).toEqual({ $oid: 'not-an-object-id' });
+    });
+  });
+
   // Canonical mode wraps plain numbers in Int32/Double rather than
   // returning native JS numbers. That is deliberate and must not be
   // "simplified" to `relaxed: true`: relaxed parsing returns native numbers
