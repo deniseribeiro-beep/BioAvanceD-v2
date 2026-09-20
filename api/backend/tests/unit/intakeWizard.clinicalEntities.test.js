@@ -83,11 +83,13 @@ function makeActiveCodeCollections() {
     { systemUri: HPO_SYSTEM_URI, code: 'HP:0000822', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-hpo' },
     // #698: RF028's real OMIM importer stores bare digits, no "OMIM:" prefix.
     { systemUri: OMIM_SYSTEM_URI, code: '154700', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-omim' },
+    { systemUri: 'http://hl7.org/fhir/sid/icd-10', code: 'A00', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-icd10' },
   ];
   const referenceDatasetReleases = [
     { referenceDatasetReleaseId: 'release-orpha', datasetCode: 'ORPHA', releaseStatus: 'active' },
     { referenceDatasetReleaseId: 'release-hpo', datasetCode: 'HPO', releaseStatus: 'active' },
     { referenceDatasetReleaseId: 'release-omim', datasetCode: 'OMIM', releaseStatus: 'active' },
+    { referenceDatasetReleaseId: 'release-icd10', datasetCode: 'ICD10', releaseStatus: 'active' },
   ];
   return {
     terminologyConcepts: {
