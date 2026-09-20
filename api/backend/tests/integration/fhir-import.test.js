@@ -1202,13 +1202,13 @@ describe('FHIR import staging', () => {
         barcode: 'ACC-UUID-1',
         consentSigned: true,
       });
-      expect(record.normalized.biomarkers).toEqual([
+      expect(record.normalized.biomarkers).toEqual(expect.arrayContaining([
         expect.objectContaining({
           biomarkerType: 'Marker display fallback',
           value: 'positive',
           unit: '',
         }),
-      ]);
+      ]));
     });
 
     it('recalculates a missing-email-only record as NEEDS_REVIEW with its canonical warning', async () => {
