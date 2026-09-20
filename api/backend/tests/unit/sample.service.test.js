@@ -2720,3 +2720,92 @@ describe('sample.service item 8 residual branch coverage', () => {
   });
 
 });
+
+
+describe('sample.service item 8 remaining precedence branches', () => {
+  beforeEach(() => {
+    currentCanonicalPlacement = null;
+    currentAllocateExecute = vi.fn(async () => ({
+      success: true,
+      currentStoragePlacement: currentCanonicalPlacement,
+      lineageQueued: true,
+      lineageEventId: 'evt-item8-final',
+    }));
+    currentFindCurrentStoragePlacement = vi.fn(async () => currentCanonicalPlacement);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('prefers auditInfo.userName over actorName when recording the sample birth movement', async () => {
+    const db = makeDb();
+    mockOperationalStorage(db);
+
+    await sampleService.createSample(
+      db,
+      validSampleData({
+        specimenId: 600030,
+        barcode: 'BR-ACTOR-PRIMARY',
+      }),
+      {
+        auditInfo: {
+          userName: 'Primary Actor',
+          actorName: 'Fallback Actor',
+        },
+      }
+    );
+
+    const movement = db.collections.sample_movements.insertOne.mock.calls[0][0];
+    expect(movement.responsible).toBe('Primary Actor');
+    expect(currentAllocateExecute.mock.calls[0][0].actor.userName).toBe('Primary Actor');
+  });
+
+  it('prefers explicit sampleDestination and linkedProject overrides during a successful withdrawal', async () => {
+    const db = makeDb();
+    db.collections.samples.findOne.mockResolvedValue({
+      specimenId: 'SPEC-WITHDRAW-PRECEDENCE',
+      specimenStatus: 'available',
+      quantity: 10,
+      initialQuantity: 10,
+      currentQuantity: 10,
+      totalWithdrawn: 0,
+      unit: 'mL',
+      barcode: 'BR-WITHDRAW-PRECEDENCE',
+      linkedProject: 'stored-project',
+    });
+
+    const result = await sampleService.withdrawSample(
+      db,
+      'SPEC-WITHDRAW-PRECEDENCE',
+      {
+        withdrawalType: 'Parcial',
+        withdrawalQuantity: 2,
+        withdrawalResponsible: 'Jane Doe',
+        sampleDestination: 'Primary Lab',
+        withdrawalDestination: 'Fallback Lab',
+        purpose: 'Primary purpose',
+        justification: 'Fallback purpose',
+        linkedProject: 'override-project',
+        observations: 'Primary observation',
+        notes: 'Fallback observation',
+      },
+      {
+        userId: 'user-1',
+        userName: 'User One',
+        userRole: 'Curator',
+      }
+    );
+
+    expect(result.withdrawnQuantity).toBe(2);
+    const movement = db.collections.sample_movements.insertOne.mock.calls[0][0];
+    expect(movement.destination).toBe('Primary Lab');
+    expect(movement.purpose).toBe('Primary purpose');
+    expect(movement.linkedProject).toBe('override-project');
+    expect(movement.observations).toBe('Primary observation');
+
+    const update = db.collections.samples.updateOne.mock.calls[0][1].$set;
+    expect(update.sampleDestination).toBe('Primary Lab');
+    expect(update.linkedProject).toBe('override-project');
+  });
+});
