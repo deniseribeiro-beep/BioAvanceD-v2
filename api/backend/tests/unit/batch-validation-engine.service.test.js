@@ -338,6 +338,130 @@ describe('batch-validation-engine.service', () => {
   });
 });
 
+
+describe('batch-validation-engine.service item 8 linkage and biomarker residuals', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('builds every supported stable patient-linkage criterion including numeric recordNumber and ObjectId', () => {
+    const objectId = new ObjectId();
+    const criteria = batchValidationEngine.buildPatientLinkageQuery(
+      {
+        patientID: '1234-5678',
+        cpf: '123.456.789-01',
+        recordNumber: '42',
+        patientObjectId: objectId.toString(),
+      },
+      {}
+    );
+
+    expect(criteria).toEqual(expect.arrayContaining([
+      { participantId: '12345678' },
+      { cpf: '12345678901' },
+      { recordNumber: '42' },
+      { recordNumber: 42 },
+      { _id: expect.any(ObjectId) },
+    ]));
+    const objectIdCriterion = criteria.find((criterion) => criterion._id);
+    expect(objectIdCriterion._id.toString()).toBe(objectId.toString());
+  });
+
+  it('returns no linkage criteria when every candidate identifier is absent or invalid', () => {
+    const criteria = batchValidationEngine.buildPatientLinkageQuery(
+      {
+        patientID: 'abc',
+        cpf: 'invalid',
+        recordNumber: '   ',
+        patientObjectId: 'not-an-object-id',
+      },
+      {}
+    );
+
+    expect(criteria).toEqual([]);
+  });
+
+  it('creates only valid biomarker observations and reports missing/invalid biomarker values', () => {
+    const patient = { _id: 'patient-1', participantId: '12345678' };
+    const specimen = {
+      _id: 'sample-1',
+      specimenId: 'SPEC-1',
+      registeredAt: new Date('2026-01-02T03:04:05.000Z'),
+    };
+
+    const result = batchValidationEngine.buildBiomarkerObservationPayloads(
+      {
+        biomarkers: 'alpha=2,5;beta;gamma=-1',
+      },
+      patient,
+      specimen
+    );
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads[0]).toMatchObject({
+      participantId: '12345678',
+      patientObjectId: 'patient-1',
+      biomarkerType: 'alpha',
+      value: 2.5,
+      specimenId: 'SPEC-1',
+      specimenObjectId: 'sample-1',
+      sampleID: 'SPEC-1',
+      linkedResourceId: 'patient-1',
+      subject: { reference: 'Patient/patient-1', type: 'Patient' },
+      specimen: { reference: 'Specimen/SPEC-1' },
+      effectiveDateTime: new Date('2026-01-02T03:04:05.000Z'),
+    });
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      'Biomarcador beta foi ignorado por não informar valor.',
+      'Biomarcador gamma foi ignorado por conter valor inválido.',
+    ]));
+  });
+
+  it('persists a valid patient row and classifies normalization warnings without changing production behavior', async () => {
+    const db = createDb();
+    const createPatient = vi.spyOn(patientService, 'createPatient').mockResolvedValue({
+      _id: { toString: () => 'patient-created-1' },
+      participantId: '12345678',
+    });
+
+    const result = await batchValidationEngine.persistPatient(
+      db,
+      {
+        patientName: '  Ana Silva  ',
+        birthDate: '1990-01-01',
+        sex: 'F',
+        email: ' ANA@EXAMPLE.ORG ',
+        phone: ' 11999999999 ',
+        clinicalUnit: ' ONCO ',
+        unitAcronym: ' ONC ',
+        consentTemplateId: ' template-1 ',
+      },
+      2,
+      { actor: { userId: 'u1' } }
+    );
+
+    expect(createPatient).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        patientName: 'Ana Silva',
+        email: 'ana@example.org',
+        phone: '11999999999',
+        clinicalUnit: 'ONCO',
+        unitAcronym: 'ONC',
+        consentTemplateId: 'template-1',
+      }),
+      expect.objectContaining({
+        isBatchImport: true,
+        batchImport: true,
+        source: 'batch-import',
+        actor: { userId: 'u1' },
+      })
+    );
+    expect(result.classification).toMatch(/VALID|PARTIAL/);
+    expect(result.persistedId).toBe('patient-created-1');
+  });
+});
+
 describe('batch-validation-engine.service processBatchImport', () => {
   let tmpDir;
 
