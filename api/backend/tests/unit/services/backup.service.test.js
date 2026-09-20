@@ -1167,6 +1167,53 @@ describe('backup.service', () => {
     });
   });
 
+
+    it('does not let a restoreTestHistory write failure replace a successful controlled restore result', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const backupPath = path.join('C:', 'tmp', 'backup-history-write-failure');
+
+      vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('manifest.json'));
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'restored', ''));
+
+      const scratchDb = {
+        listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })),
+        dropDatabase: vi.fn().mockResolvedValue(),
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () {
+        return {
+          connect: vi.fn().mockResolvedValue(),
+          db: vi.fn(() => scratchDb),
+          close: vi.fn().mockResolvedValue(),
+        };
+      });
+
+      const historyInsert = vi.fn().mockRejectedValue(new Error('restore history unavailable'));
+      const appDb = {
+        collection: vi.fn((name) => {
+          expect(name).toBe('restoreTestHistory');
+          return { insertOne: historyInsert };
+        }),
+      };
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(backupPath, appDb);
+
+      expect(result).toMatchObject({
+        success: true,
+        mode: 'mongorestore',
+        checksumVerified: false,
+        restoredCollections: 0,
+        restoredDocuments: 0,
+      });
+      expect(historyInsert).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        'Erro ao registrar histórico de teste de restauração:',
+        'restore history unavailable'
+      );
+    });
+
   // #734: encryptionEnabled is read from the admin-editable BackupPolicy
   // (mirroring #728's retentionDays wiring) and threaded into the JSON
   // fallback writer. These run against real temp directories, not mocked
