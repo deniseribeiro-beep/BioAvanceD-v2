@@ -213,6 +213,12 @@ describe('reports.routes item 8 more residual canonical branches', () => {
             }),
           };
         }
+        if (name === 'reports') {
+          return {
+            find: vi.fn(() => { throw new Error('reports.find must not run after audit authorization denial'); }),
+            insertOne: vi.fn(() => { throw new Error('reports.insertOne must not run after audit authorization denial'); }),
+          };
+        }
         throw new Error(`collection ${name} must not be reached after audit authorization denial`);
       },
     };
