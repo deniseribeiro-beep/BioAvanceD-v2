@@ -1294,24 +1294,4 @@ router.get('/:type/export/pdf', authenticate, requirePermission('viewReports'), 
   }
 });
 
-router._test = {
-  normalizeReport,
-  resolveCollection,
-  nextReportId,
-  toTemplateCode,
-  buildDateQuery,
-  normalizeFilterText,
-  escapeRegex,
-  toRegex,
-  isTruthyFilter,
-  normalizeReleaseStatus,
-  normalizeTreatmentStatus,
-  releaseStatusToSpecimenStatus,
-  normalizeSprecCode,
-  buildSampleQuery,
-  getMatchingPatientIds,
-  unknownTypeResult,
-  toCsvRows,
-};
-
 module.exports = router;
