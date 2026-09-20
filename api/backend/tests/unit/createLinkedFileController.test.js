@@ -558,3 +558,110 @@ describe('createLinkedFileController item 8 residual request branches', () => {
   });
 });
 
+
+
+describe('createLinkedFileController item 8 final residual branches', () => {
+  beforeEach(() => {
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('includes the Mongo _id lookup leg when a parent identifier is a valid ObjectId', async () => {
+    const controller = buildController();
+    const parentId = new ObjectId().toString();
+    const parentFindOne = vi.fn().mockResolvedValue({ _id: new ObjectId(parentId), widgetId: parentId });
+    const fileFind = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) });
+    const db = createDb({
+      widgets: { findOne: parentFindOne },
+      widgetFiles: { find: fileFind },
+    });
+    const res = createRes();
+
+    await controller.listFiles(
+      { app: { locals: { db } }, params: { widgetId: parentId } },
+      res
+    );
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(parentFindOne).toHaveBeenCalledTimes(1);
+    const query = parentFindOne.mock.calls[0][0];
+    expect(query.$or).toEqual(expect.arrayContaining([
+      { widgetId: parentId },
+      { _id: expect.any(ObjectId) },
+    ]));
+  });
+
+  it('uploadMiddleware returns a clean 400 for a rejected file extension', async () => {
+    const express = require('express');
+    const request = require('supertest');
+    const controller = buildController();
+    const app = express();
+
+    app.post('/widgets/:widgetId/files', controller.uploadMiddleware(), (_req, res) => {
+      res.status(204).end();
+    });
+
+    const response = await request(app)
+      .post('/widgets/w-1/files')
+      .attach('file', Buffer.from('not allowed'), 'payload.exe');
+
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toMatch(/Formato de arquivo inválido/);
+  });
+
+  it('uploadMiddleware rejects an allowed file when the required parent route param is absent', async () => {
+    const express = require('express');
+    const request = require('supertest');
+    const controller = buildController();
+    const app = express();
+
+    app.post('/files', controller.uploadMiddleware(), (_req, res) => {
+      res.status(204).end();
+    });
+
+    const response = await request(app)
+      .post('/files')
+      .attach('file', Buffer.from('csv-data'), 'payload.csv');
+
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(response.body.error).toMatch(/widgetId é obrigatório/);
+  });
+
+  it('replaceFile rejects an unsupported extension and removes only the newly uploaded temp file', async () => {
+    const controller = buildController();
+    const fileId = new ObjectId();
+    const db = createDb({
+      widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+      widgetFiles: {
+        findOne: vi.fn().mockResolvedValue({
+          _id: fileId,
+          widgetId: 'w-1',
+          fileName: 'old.csv',
+          storagePath: '/tmp/old.csv',
+        }),
+      },
+    });
+    vi.spyOn(fs, 'existsSync').mockImplementation((candidate) => candidate === '/tmp/new.exe');
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+    const res = createRes();
+
+    await controller.replaceFile(
+      {
+        app: { locals: { db } },
+        params: { widgetId: 'w-1', fileID: fileId.toString() },
+        file: { path: '/tmp/new.exe', originalname: 'new.exe', size: 4 },
+      },
+      res
+    );
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Tipo de arquivo inválido' }));
+    expect(unlink).toHaveBeenCalledWith('/tmp/new.exe');
+  });
+});
