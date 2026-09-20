@@ -643,4 +643,160 @@ describe('reports.routes item 8 more residual canonical branches', () => {
     expect(assignments.resolveUserOrganizationScope).toHaveBeenCalledWith(db, 'user-object-id');
   });
 
+
+  it('POST /sample_analysis/preview returns an empty analysis without querying Result when no scoped samples match', async () => {
+    const resultFind = vi.fn();
+    const samples = {
+      find: vi.fn(() => cursor([])),
+    };
+    const results = { find: resultFind };
+    const db = {
+      collection(name) {
+        if (name === 'reportTemplates') {
+          return { findOne: vi.fn().mockResolvedValue({
+            code: 'sample_analysis',
+            handlerKey: 'sampleAnalysis',
+            templateStatus: 'active',
+          }) };
+        }
+        if (name === 'samples') return samples;
+        if (name === 'results') return results;
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+
+    const res = await request(buildApp(db))
+      .post('/api/reports/sample_analysis/preview')
+      .send({ filters: {} });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.analysis).toEqual([]);
+    expect(resultFind).not.toHaveBeenCalled();
+  });
+
+  it('POST /patient/preview keeps the canonical unfiltered query shape for a global caller with no filters', async () => {
+    const distinct = vi.fn();
+    const samples = { distinct };
+    const find = vi.fn((query) => {
+      expect(query).toEqual({});
+      return cursor([{ participantId: 'P-GLOBAL' }]);
+    });
+    const patients = {
+      find,
+      countDocuments: vi.fn(async (query) => {
+        expect(query).toEqual({});
+        return 1;
+      }),
+    };
+    const db = {
+      collection(name) {
+        if (name === 'reportTemplates') {
+          return { findOne: vi.fn().mockResolvedValue({
+            code: 'patient',
+            handlerKey: 'patient',
+            templateStatus: 'active',
+          }) };
+        }
+        if (name === 'samples') return samples;
+        if (name === 'patients') return patients;
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+
+    const res = await request(buildApp(db))
+      .post('/api/reports/patient/preview')
+      .send({ filters: {} });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.total).toBe(1);
+    expect(distinct).not.toHaveBeenCalled();
+  });
+
+  it('POST /samples_by_patient/preview queries samples only by the resolved participant ids when no sample-level filter is active', async () => {
+    const distinct = vi.fn();
+    const samples = {
+      distinct,
+      find: vi.fn((query) => {
+        expect(query).toEqual({
+          $and: [{ participantId: { $in: ['P-1'] } }],
+        });
+        return cursor([
+          { participantId: 'P-1', specimenId: 'S-1' },
+          { participantId: 'P-1', specimenId: 'S-2' },
+        ]);
+      }),
+    };
+    const patients = {
+      find: vi.fn((query) => {
+        expect(query).toEqual({});
+        return cursor([{ participantId: 'P-1' }]);
+      }),
+    };
+    const db = {
+      collection(name) {
+        if (name === 'reportTemplates') {
+          return { findOne: vi.fn().mockResolvedValue({
+            code: 'samples_by_patient',
+            handlerKey: 'samplesByPatient',
+            templateStatus: 'active',
+          }) };
+        }
+        if (name === 'samples') return samples;
+        if (name === 'patients') return patients;
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+
+    const res = await request(buildApp(db))
+      .post('/api/reports/samples_by_patient/preview')
+      .send({ filters: {} });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.patients[0]).toMatchObject({
+      participantId: 'P-1',
+      sampleCount: 2,
+      samplesLimited: false,
+    });
+    expect(distinct).not.toHaveBeenCalled();
+  });
+
+  it('GET export and export/pdf both resolve organization scope from req.user._id when userID is absent', async () => {
+    delete require.cache[modulePaths.route];
+    setCachedModule(modulePaths.auth, {
+      authenticate: (req, _res, next) => {
+        req.user = { _id: 'report-export-user' };
+        next();
+      },
+    });
+
+    const assignments = require(modulePaths.assignments);
+    const templates = {
+      findOne: vi.fn().mockResolvedValue({
+        code: 'sample',
+        handlerKey: 'sample',
+        templateStatus: 'active',
+      }),
+    };
+    const samples = {
+      find: vi.fn(() => cursor([])),
+      countDocuments: vi.fn().mockResolvedValue(0),
+    };
+    const db = {
+      collection(name) {
+        if (name === 'reportTemplates') return templates;
+        if (name === 'samples') return samples;
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+    const app = buildApp(db);
+
+    const csv = await request(app).get('/api/reports/sample/export');
+    const pdf = await request(app).get('/api/reports/sample/export/pdf');
+
+    expect(csv.status).toBe(200);
+    expect(pdf.status).toBe(200);
+    expect(assignments.resolveUserOrganizationScope).toHaveBeenCalledWith(db, 'report-export-user');
+    expect(assignments.resolveUserOrganizationScope).toHaveBeenCalledTimes(2);
+  });
+
 });
