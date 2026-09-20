@@ -536,3 +536,135 @@ describe('NotificationService item 8 residual branches', () => {
   });
 
 });
+
+
+describe('NotificationService item 8 transport alternate outcomes', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it('records pre-transport validation failures for missing payload, sender and recipient', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.EMAIL_FROM = 'bio@example.test';
+    let service = new NotificationService();
+    let persist = vi.spyOn(service, 'persistComplianceLog').mockResolvedValue(undefined);
+
+    await expect(service.sendEmail({ to: 'user@example.test', subject: '', html: '', text: '' }))
+      .rejects.toThrow(/subject e html\/text/);
+    expect(persist).toHaveBeenCalledWith(expect.objectContaining({
+      deliveryStatus: 'DELIVERY_FAILED',
+      errorCode: 'VALIDATION_FAILED',
+    }));
+
+    delete process.env.EMAIL_FROM;
+    service = new NotificationService();
+    persist = vi.spyOn(service, 'persistComplianceLog').mockResolvedValue(undefined);
+    await expect(service.sendEmail({ to: 'user@example.test', subject: 'S', text: 'body' }))
+      .rejects.toThrow(/EMAIL_FROM/);
+    expect(persist).toHaveBeenCalled();
+
+    process.env.EMAIL_FROM = 'bio@example.test';
+    service = new NotificationService();
+    persist = vi.spyOn(service, 'persistComplianceLog').mockResolvedValue(undefined);
+    await expect(service.sendEmail({ to: '   ', subject: 'S', text: 'body' }))
+      .rejects.toThrow(/Destinatário/);
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it('sends through SMTP and preserves a null provider message id when the transport omits it', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.EMAIL_FROM = 'bio@example.test';
+    process.env.SMTP_HOST = 'mailpit';
+    const service = new NotificationService();
+    vi.spyOn(service, 'persistComplianceLog').mockResolvedValue(undefined);
+    const sendMail = vi.fn().mockResolvedValue({});
+    vi.spyOn(service, 'getSmtpTransport').mockReturnValue({ sendMail });
+
+    const result = await service.sendEmail({
+      to: 'user@example.test',
+      subject: 'Synthetic',
+      text: 'body',
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      provider: 'smtp',
+      messageId: null,
+      notificationType: 'generic',
+      redirectedByEnvironment: false,
+    });
+    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({
+      from: 'bio@example.test',
+      to: 'user@example.test',
+    }));
+    expect(service.persistComplianceLog).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends through Resend with and without a provider id and surfaces provider response errors', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.EMAIL_FROM = 'bio@example.test';
+    delete process.env.SMTP_HOST;
+    const service = new NotificationService();
+    vi.spyOn(service, 'persistComplianceLog').mockResolvedValue(undefined);
+    const send = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'resend-1' } })
+      .mockResolvedValueOnce({ data: null })
+      .mockResolvedValueOnce({ error: {} });
+    vi.spyOn(service, 'getResendClient').mockReturnValue({ emails: { send } });
+
+    await expect(service.sendEmail({
+      to: 'user@example.test', subject: 'S1', html: '<p>body</p>', notificationType: 'TEST',
+    })).resolves.toMatchObject({ provider: 'resend', messageId: 'resend-1' });
+
+    await expect(service.sendEmail({
+      to: 'user@example.test', subject: 'S2', text: 'body',
+    })).resolves.toMatchObject({ provider: 'resend', messageId: null });
+
+    await expect(service.sendEmail({
+      to: 'user@example.test', subject: 'S3', text: 'body',
+    })).rejects.toThrow('Falha ao enviar e-mail via Resend');
+
+    expect(service.persistComplianceLog).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'resend',
+      deliveryStatus: 'DELIVERY_FAILED',
+      errorCode: 'CONSENT_DELIVERY_FAILED',
+    }));
+  });
+
+  it('records a transport-specific failure code without masking the original SMTP error', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.EMAIL_FROM = 'bio@example.test';
+    process.env.SMTP_HOST = 'mailpit';
+    const service = new NotificationService();
+    vi.spyOn(service, 'persistComplianceLog').mockResolvedValue(undefined);
+    const transportError = new Error('smtp refused');
+    transportError.code = 'ECONNREFUSED';
+    vi.spyOn(service, 'getSmtpTransport').mockReturnValue({
+      sendMail: vi.fn().mockRejectedValue(transportError),
+    });
+
+    await expect(service.sendEmail({
+      to: 'user@example.test', subject: 'S', text: 'body', metadata: { purpose: 'test' },
+    })).rejects.toBe(transportError);
+
+    expect(service.persistComplianceLog).toHaveBeenCalledWith(expect.objectContaining({
+      deliveryStatus: 'DELIVERY_FAILED',
+      errorCode: 'ECONNREFUSED',
+      metadata: { purpose: 'test' },
+    }));
+  });
+
+  it('wraps a missing frontend URL into the canonical consent transport error', () => {
+    process.env.NODE_ENV = 'test';
+    delete process.env.FRONTEND_URL;
+    const service = new NotificationService();
+
+    expect(() => service.validateFrontendUrl()).toThrow(/FRONTEND_URL/);
+    try {
+      service.validateFrontendUrl();
+    } catch (error) {
+      expect(error.code).toBe('CONSENT_FRONTEND_URL_INVALID');
+    }
+  });
+});
