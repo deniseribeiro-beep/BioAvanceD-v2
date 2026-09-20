@@ -750,4 +750,96 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     });
   });
 
+
+  describe('item 8 legitimate intake clinical alternates', () => {
+    it('records every supported diagnosis coding and the conditionName-only family-history form', async () => {
+      const payload = {
+        ...VALID_PAYLOAD,
+        diagnosis: {
+          orphaCode: 'ORPHA:558',
+          omimCode: 'OMIM:154700',
+          icdCode: 'A00',
+        },
+        clinical: {
+          ...VALID_PAYLOAD.clinical,
+          familyHistories: [{
+            relationship: 'sibling',
+            conditionName: 'Synthetic family condition',
+            orphaCode: '',
+            onset: '',
+          }],
+        },
+      };
+
+      const { res, collections } = await runIntake(payload);
+
+      expect(res.status).toBe(200);
+      expect(collections.conditions.docs[0].conditionCoding).toEqual(expect.arrayContaining([
+        { systemUri: ORPHA_SYSTEM_URI, code: 'ORPHA:558' },
+        { systemUri: OMIM_SYSTEM_URI, code: '154700' },
+        { systemUri: 'http://hl7.org/fhir/sid/icd-10', code: 'A00' },
+      ]));
+      expect(collections.familyHistories.docs[0]).toMatchObject({
+        relationship: 'sibling',
+        familyCondition: [{
+          condition: { display: 'Synthetic family condition' },
+        }],
+      });
+      expect(collections.familyHistories.docs[0].familyCondition[0].onset).toBeUndefined();
+    });
+
+    it('covers end-only washout periods and the complementary required-field skip guards', async () => {
+      const payload = {
+        ...VALID_PAYLOAD,
+        clinical: {
+          ...VALID_PAYLOAD.clinical,
+          pharmacologyData: {
+            treatmentStatus: 'WASHOUT',
+            medicationName: 'Metformin',
+            atcCode: 'A10BA02',
+            washoutEndDate: '2026-01-20',
+          },
+          procedures: [{
+            procedureName: 'Missing performed',
+            procedureCode: 'LOCAL-003',
+            performed: '',
+          }],
+          observationRecords: [{
+            testName: 'No effective date',
+            loincCode: '718-7',
+            value: '12',
+            unit: 'g/dL',
+            effectiveDate: '',
+          }],
+          clinicalOutcomes: [{
+            outcomeType: 'stable',
+            outcomeDate: '',
+          }],
+        },
+      };
+
+      const { res, collections } = await runIntake(payload);
+
+      expect(res.status).toBe(200);
+      expect(collections.medicationExposures.docs[0].medicationPeriod).toEqual({
+        start: null,
+        end: new Date('2026-01-20T00:00:00.000Z'),
+      });
+      expect(collections.procedures.docs).toHaveLength(0);
+      expect(collections.clinicalObservations.docs).toHaveLength(0);
+      expect(collections.clinicalOutcomes.docs).toHaveLength(0);
+    });
+
+    it('keeps best-effort reporting stable when service failures are non-Error values', async () => {
+      const { res } = await runIntake(VALID_PAYLOAD, { failCollections: ['encounters'] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.clinicalEntities.failed).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ entity: 'Encounter' }),
+        ])
+      );
+    });
+  });
+
 });
