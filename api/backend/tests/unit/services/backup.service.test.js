@@ -1526,21 +1526,20 @@ describe('backup.service', () => {
 
   describe('item 8 backup path selection branches', () => {
     it('resolves restore scratch from env and then from the backup-root default', () => {
-      const original = process.env.RESTORE_SCRATCH_DIR;
+      const original = env.RESTORE_SCRATCH_DIR;
       try {
         env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-item8-root');
-        process.env.RESTORE_SCRATCH_DIR = path.join('C:', 'tmp', 'explicit-restore-scratch');
+        env.RESTORE_SCRATCH_DIR = path.join('C:', 'tmp', 'explicit-restore-scratch');
         let backupService = freshBackupService();
-        expect(backupService.getRestoreScratchBaseDir()).toBe(process.env.RESTORE_SCRATCH_DIR);
+        expect(backupService.getRestoreScratchBaseDir()).toBe(env.RESTORE_SCRATCH_DIR);
 
-        delete process.env.RESTORE_SCRATCH_DIR;
+        env.RESTORE_SCRATCH_DIR = undefined;
         backupService = freshBackupService();
         expect(backupService.getRestoreScratchBaseDir()).toBe(
           path.join(env.BACKUP_DIR, '.restore-scratch')
         );
       } finally {
-        if (original === undefined) delete process.env.RESTORE_SCRATCH_DIR;
-        else process.env.RESTORE_SCRATCH_DIR = original;
+        env.RESTORE_SCRATCH_DIR = original;
       }
     });
 
