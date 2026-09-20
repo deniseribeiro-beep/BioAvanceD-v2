@@ -473,6 +473,8 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
     );
 
     expect(payloads[0].collectedAt.toISOString()).toBe('2026-02-01T00:00:00.000Z');
+    expect(payloads[0].specimenId).toBe('SPEC-768');
+    expect(payloads[0].specimen).toEqual({ reference: 'Specimen/SPEC-768' });
   });
 
   // The rawRow legs stay: persistSample hands buildBiomarkerObservationPayloads
