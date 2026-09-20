@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createRequire } from 'module';
@@ -11,24 +11,35 @@ const { resolveFileReference, auditInit, auditLog } = vi.hoisted(() => ({
   auditLog: vi.fn(),
 }));
 
-vi.mock('../../src/infrastructure/middleware/auth', () => ({
-  authenticate: (req, _res, next) => next(),
-}));
+// Patch CommonJS exports before the router captures them at require-time.
+const authModule = require('../../src/infrastructure/middleware/auth');
+const rbacModule = require('../../src/infrastructure/middleware/rbac');
+const workflowRunFileLinker = require('../../src/services/workflowRunFileLinker');
+const auditLogger = require('../../src/utils/auditLogger');
 
-vi.mock('../../src/infrastructure/middleware/rbac', () => ({
-  requireRole: () => (req, _res, next) => next(),
-}));
+const originals = {
+  authenticate: authModule.authenticate,
+  requireRole: rbacModule.requireRole,
+  resolveFileReference: workflowRunFileLinker.resolveFileReference,
+  auditInit: auditLogger.init,
+  auditLog: auditLogger.log,
+};
 
-vi.mock('../../src/services/workflowRunFileLinker', () => ({
-  resolveFileReference,
-}));
-
-vi.mock('../../src/utils/auditLogger', () => ({
-  init: auditInit,
-  log: auditLog,
-}));
+authModule.authenticate = (_req, _res, next) => next();
+rbacModule.requireRole = () => (_req, _res, next) => next();
+workflowRunFileLinker.resolveFileReference = resolveFileReference;
+auditLogger.init = auditInit;
+auditLogger.log = auditLog;
 
 const router = require('../../src/interface/routes/workflow-run-file-link.routes');
+
+afterAll(() => {
+  authModule.authenticate = originals.authenticate;
+  rbacModule.requireRole = originals.requireRole;
+  workflowRunFileLinker.resolveFileReference = originals.resolveFileReference;
+  auditLogger.init = originals.auditInit;
+  auditLogger.log = originals.auditLog;
+});
 
 function makeApp({ findOneResults = [], updateOneResult = { matchedCount: 1 }, user } = {}) {
   const findOne = vi.fn();
