@@ -789,6 +789,44 @@ describe('SampleGraphValidator', () => {
       const [, update] = samplesCollection.updateOne.mock.calls[0];
       expect(update.$set.specimenStatus).toBeUndefined();
     });
+
+    it('uses the sample ATC class when the medication dictionary entry has no drug_class', async () => {
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+      diseaseDictionaryCollection.findOne.mockResolvedValueOnce({
+        orpha_code: '324',
+        drug_classes: ['A'],
+        validation_requirements: {
+          miabis: { requireTreatmentStatus: true },
+          biomarkers: { required: [] },
+          pharmacology: { required: ['treatmentStatus'], treatmentStatuses: ['TREATED'] },
+        },
+      });
+      medicationDictionaryCollection.findOne.mockResolvedValueOnce({
+        atc_code: 'A16AX27',
+        drug_class: '',
+        active: true,
+      });
+      const sample = buildSample({
+        pharmacologyData: {
+          treatmentStatus: 'TREATED',
+          medicationName: 'Migalastat',
+          atcCode: 'A16AX27',
+          atcClass: 'A',
+        },
+      });
+      samplesCollection.findOne.mockResolvedValue(sample);
+
+      const report = await validator.validateSampleCompliance(sample._id);
+
+      expect(report.graphPath.pharmacology).toEqual({
+        valid: true,
+        reason: 'Nó farmacológico válido',
+      });
+      expect(medicationDictionaryCollection.findOne).toHaveBeenCalledWith({
+        atc_code: 'A16AX27',
+        active: { $ne: false },
+      });
+
   });
 
 });
