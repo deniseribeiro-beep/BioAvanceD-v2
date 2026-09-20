@@ -1248,4 +1248,98 @@ describe('user.routes item 8 remaining PUT governance branches', () => {
   });
 });
 
+
+describe('user.routes item 8 remaining RBAC mutation branches', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    loadRoute();
+  });
+
+  function installCommonUpdateMocks() {
+    const UserModel = require('../../src/models/User');
+    const rbacAssignment = require('../../src/services/rbac-assignment.service');
+    const auditLogger = require('../../src/utils/auditLogger');
+
+    vi.spyOn(UserModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+    vi.spyOn(rbacAssignment, 'isAdministrator').mockResolvedValue(false);
+    vi.spyOn(rbacAssignment, 'resolveRoleDisplayName').mockResolvedValue('Coordenador');
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'logPermissionChange').mockResolvedValue(undefined);
+    vi.spyOn(auditLogger, 'logUpdate').mockResolvedValue(undefined);
+
+    return { UserModel, rbacAssignment, auditLogger };
+  }
+
+  it('changes a target role when the requested hierarchy is within the caller level', async () => {
+    const { rbacAssignment } = installCommonUpdateMocks();
+    vi.spyOn(rbacAssignment, 'resolveUserHierarchyLevel')
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(4);
+    const changeUserRole = vi.spyOn(rbacAssignment, 'changeUserRole').mockResolvedValue({ changed: true });
+
+    const target = {
+      _id: 'u-role-allowed',
+      name: 'Synthetic User',
+      organizationId: 'org-1',
+    };
+    const updated = { ...target };
+    const usersCollection = {
+      findOne: vi.fn()
+        .mockResolvedValueOnce(target)
+        .mockResolvedValueOnce(updated),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    };
+    const db = { collection: vi.fn(() => usersCollection) };
+
+    const { router } = loadRoute();
+    const res = await request(buildApp(router, { db }))
+      .put('/api/users/u-role-allowed')
+      .send({ roleName: 'Coordenador' });
+
+    expect(res.status).toBe(200);
+    expect(changeUserRole).toHaveBeenCalledWith(db, {
+      userAccountId: 'u-role-allowed',
+      accessType: 3,
+      changedBy: 'user-1',
+      organizationId: 'org-1',
+    });
+  });
+
+  it('grants the additive auditor role without rewriting the base hierarchy assignment', async () => {
+    const { rbacAssignment } = installCommonUpdateMocks();
+    const grantAdditionalRole = vi.spyOn(rbacAssignment, 'grantAdditionalRole').mockResolvedValue({ granted: true });
+    const revokeAdditionalRole = vi.spyOn(rbacAssignment, 'revokeAdditionalRole').mockResolvedValue({ revoked: true });
+    const changeUserRole = vi.spyOn(rbacAssignment, 'changeUserRole').mockResolvedValue({ changed: true });
+
+    const target = {
+      _id: 'u-auditor-grant',
+      name: 'Synthetic User',
+      organizationId: 'org-a',
+    };
+    const updated = { ...target };
+    const usersCollection = {
+      findOne: vi.fn()
+        .mockResolvedValueOnce(target)
+        .mockResolvedValueOnce(updated),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    };
+    const db = { collection: vi.fn(() => usersCollection) };
+
+    const { router } = loadRoute();
+    const res = await request(buildApp(router, { db }))
+      .put('/api/users/u-auditor-grant')
+      .send({ auditorRole: true });
+
+    expect(res.status).toBe(200);
+    expect(grantAdditionalRole).toHaveBeenCalledWith(db, {
+      userAccountId: 'u-auditor-grant',
+      roleCode: 'auditor',
+      grantedBy: 'user-1',
+      organizationId: 'org-a',
+    });
+    expect(revokeAdditionalRole).not.toHaveBeenCalled();
+    expect(changeUserRole).not.toHaveBeenCalled();
+  });
+});
+
 });
