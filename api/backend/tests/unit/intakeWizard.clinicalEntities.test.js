@@ -159,7 +159,13 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
   // #782: `failCollections` makes a named entity collection reject on insert,
   // so the outcome summary the wizard now returns can be asserted on a real
   // failure. Defaults to none, so every existing caller is unaffected.
-  async function runIntake(payload, { failCollections = [], failureValueByCollection = {} } = {}) {
+  async function runIntake(payload, {
+    failCollections = [],
+    failureValueByCollection = {},
+    consentRecord = null,
+    matchOutcome = null,
+    assessmentFailure = null,
+  } = {}) {
     clearCache();
 
     const notificationServiceModule = require(notificationServicePath);
@@ -168,11 +174,13 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     notificationServiceModule.sendConsentEmail = vi.fn().mockResolvedValue({ success: true, channel: 'email' });
 
     const patientIdentityServiceModule = require(patientIdentityServicePath);
-    vi.spyOn(patientIdentityServiceModule, 'matchOrUpsertParticipant').mockResolvedValue({
-      created: true,
-      matchType: 'new',
-      patient: { _id: 'patient-obj-1', participantId: '12345678' },
-    });
+    vi.spyOn(patientIdentityServiceModule, 'matchOrUpsertParticipant').mockResolvedValue(
+      matchOutcome || {
+        created: true,
+        matchType: 'new',
+        patient: { _id: 'patient-obj-1', participantId: '12345678' },
+      }
+    );
 
     const merkleServiceModule = require(merkleServicePath);
     merkleServiceModule.generateSampleHash = vi.fn(() => 'hash-1');
@@ -188,10 +196,12 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     }));
 
     const rcsAssessmentServiceModule = require(rcsAssessmentServicePath);
-    rcsAssessmentServiceModule.recordAssessment = vi.fn().mockResolvedValue({ _id: 'assessment-1' });
+    rcsAssessmentServiceModule.recordAssessment = assessmentFailure
+      ? vi.fn().mockRejectedValue(assessmentFailure)
+      : vi.fn().mockResolvedValue({ _id: 'assessment-1' });
 
     const consentServiceModule = require(consentServicePath);
-    consentServiceModule.getPatientConsent = vi.fn().mockResolvedValue(null);
+    consentServiceModule.getPatientConsent = vi.fn().mockResolvedValue(consentRecord);
 
     const collections = {
       samples: {
@@ -915,6 +925,120 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
         'PhenotypeObservation',
         'Procedure',
       ]);
+    });
+  });
+
+
+  describe('item 8 governance and response alternates', () => {
+    it('releases the specimen when consent is ACTIVE and returns a consent identifier from _id fallback', async () => {
+      const { res } = await runIntake(VALID_PAYLOAD, {
+        consentRecord: { _id: 'consent-object-id', status: 'ACTIVE' },
+        matchOutcome: {
+          created: false,
+          matchType: 'participantId',
+          patient: { _id: 'patient-obj-1', participantId: '12345678' },
+        },
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.patientMatch).toMatchObject({
+        matched: true,
+        created: false,
+        matchType: 'participantId',
+      });
+      expect(res.body.consent).toMatchObject({
+        active: true,
+        status: 'SIGNED',
+        consentId: 'consent-object-id',
+        patientId: '12345678',
+        reason: null,
+      });
+    });
+
+    it('keeps the specimen quarantined when consent is REVOKED and surfaces the governed reason', async () => {
+      const { res } = await runIntake(VALID_PAYLOAD, {
+        consentRecord: { consentId: 'CONSENT-REVOKED', status: 'REVOKED' },
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.consent).toMatchObject({
+        active: false,
+        status: 'REVOKED',
+        consentId: 'CONSENT-REVOKED',
+        reason: 'Consentimento revogado.',
+      });
+      expect(res.body.sample.specimenStatus).toBe('quarantined');
+      expect(res.body.message).toContain('permanece bloqueada');
+    });
+
+    it('keeps intake successful when the referenced RCS assessment snapshot fails best-effort', async () => {
+      const { res } = await runIntake(VALID_PAYLOAD, {
+        assessmentFailure: new Error('assessment unavailable'),
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.sample).toBeDefined();
+    });
+
+    it('rejects non-canonical top-level section shapes before touching persistence', async () => {
+      clearCache();
+      const router = require(routePath);
+      const app = buildApp(router, { collection: vi.fn() });
+
+      const participantArray = await request(app)
+        .post('/api/intake-wizard')
+        .send({ ...VALID_PAYLOAD, participant: [] });
+      expect(participantArray.status).toBe(422);
+      expect(participantArray.body).toMatchObject({
+        error: 'NON_CANONICAL_FIELD',
+        fields: expect.arrayContaining(['participant']),
+      });
+
+      const specimenWithoutParticipant = await request(app)
+        .post('/api/intake-wizard')
+        .send({ ...VALID_PAYLOAD, specimen: { sampleType: 'PLASMA' } });
+      expect(specimenWithoutParticipant.status).toBe(422);
+      expect(specimenWithoutParticipant.body.fields).toEqual(expect.arrayContaining(['specimen']));
+    });
+
+    it('rejects canonical-v1 aliases at the intake boundary', async () => {
+      clearCache();
+      const router = require(routePath);
+      const app = buildApp(router, { collection: vi.fn() });
+      const payload = {
+        ...VALID_PAYLOAD,
+        participant: { ...VALID_PAYLOAD.participant, patientID: '87654321' },
+        specimen: {
+          ...VALID_PAYLOAD.specimen,
+          sampleID: 'legacy',
+          registrationDate: '2026-01-01',
+          lifecycleStatus: 'AVAILABLE',
+        },
+      };
+
+      const res = await request(app).post('/api/intake-wizard').send(payload);
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+      expect(res.body.fields).toEqual(expect.arrayContaining([
+        'patientID',
+        'sampleID',
+        'registrationDate',
+        'lifecycleStatus',
+      ]));
+    });
+
+    it('fails closed with 503 when the intake database is unavailable', async () => {
+      clearCache();
+      const router = require(routePath);
+      const app = buildApp(router, null);
+
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(503);
+      expect(res.body.success).toBe(false);
     });
   });
 
