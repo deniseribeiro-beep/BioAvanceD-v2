@@ -899,4 +899,227 @@ describe('user.routes item 8 administrative security success paths', () => {
   });
 });
 
+
+describe('user.routes item 8 operational route branches', () => {
+  it('deletes an existing user and records the canonical delete audit event', async () => {
+    const auditLogger = require('../../src/utils/auditLogger');
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logDelete = vi.spyOn(auditLogger, 'logDelete').mockResolvedValue(undefined);
+    const usersCollection = {
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    };
+    const db = { collection: vi.fn(() => usersCollection) };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db });
+
+    const res = await request(app).delete('/api/users/user-delete');
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(logDelete).toHaveBeenCalledWith(expect.anything(), 'User', 'user-delete');
+
+    vi.restoreAllMocks();
+    loadRoute();
+  });
+
+  it('returns the default inactive status for a legacy user with no explicit status', async () => {
+    const usersCollection = {
+      findOne: vi.fn().mockResolvedValue({ _id: 'u-status' }),
+    };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: { collection: () => usersCollection } });
+
+    const res = await request(app).get('/api/users/u-status/validate-status');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('inactive');
+  });
+
+  it('covers validate-status missing-user and database failure responses', async () => {
+    const usersCollection = {
+      findOne: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockRejectedValueOnce(new Error('status lookup failed')),
+    };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: { collection: () => usersCollection } });
+
+    const missing = await request(app).get('/api/users/missing-status/validate-status');
+    const failed = await request(app).get('/api/users/failing-status/validate-status');
+
+    expect(missing.status).toBe(404);
+    expect(failed.status).toBe(500);
+    expect(failed.body.message).toBe('status lookup failed');
+  });
+
+  it('delegates patient registration and maps service rejection without changing the route contract', async () => {
+    const patientService = require('../../src/services/patient.service');
+    const create = vi.spyOn(patientService, 'createPatient')
+      .mockResolvedValueOnce({ participantId: '12345678' })
+      .mockRejectedValueOnce(new Error('patient rejected'));
+    const db = {};
+    const { router } = loadRoute();
+    const app = buildApp(router, { db });
+
+    const ok = await request(app)
+      .post('/api/users/register-patient')
+      .send({ participantId: '12345678' });
+    const failed = await request(app)
+      .post('/api/users/register-patient')
+      .send({ participantId: '87654321' });
+
+    expect(ok.status).toBe(201);
+    expect(ok.body.data.participantId).toBe('12345678');
+    expect(failed.status).toBe(400);
+    expect(failed.body.message).toBe('patient rejected');
+    expect(create).toHaveBeenCalledTimes(2);
+
+    vi.restoreAllMocks();
+    loadRoute();
+  });
+
+  it('requires sampleID only after consent validation and records a valid withdrawal through SampleService', async () => {
+    const sampleService = require('../../src/services/sample.service');
+    const consent = vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+    vi.spyOn(consentValidator, 'init').mockImplementation(() => {});
+    const withdraw = vi.spyOn(sampleService, 'withdrawSample').mockResolvedValue({
+      movementID: 'MOV-1',
+      withdrawnQuantity: 1,
+    });
+    const db = {};
+    const { router } = loadRoute();
+    const app = buildApp(router, { db });
+
+    const missing = await request(app)
+      .post('/api/users/record-withdrawal')
+      .send({ requiredScope: 'research' });
+    expect(missing.status).toBe(400);
+    expect(missing.body.error).toBe('users.sampleIDRequired');
+
+    const sampleID = '507f1f77bcf86cd799439011';
+    const ok = await request(app)
+      .post('/api/users/record-withdrawal')
+      .send({
+        sampleID,
+        consentScope: 'research',
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Synthetic User',
+      });
+
+    expect(ok.status).toBe(200);
+    expect(consent).toHaveBeenCalledWith(sampleID, 'research');
+    expect(withdraw).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ toString: expect.any(Function) }),
+      expect.objectContaining({ withdrawalType: 'Total' })
+    );
+
+    vi.restoreAllMocks();
+    loadRoute();
+  });
+
+  it('maps consent or withdrawal failures to the established 400 response', async () => {
+    vi.spyOn(consentValidator, 'init').mockImplementation(() => {});
+    vi.spyOn(consentValidator, 'validateAccess').mockRejectedValue(new Error('consent denied'));
+    const sampleService = require('../../src/services/sample.service');
+    const withdraw = vi.spyOn(sampleService, 'withdrawSample');
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: {} });
+
+    const res = await request(app)
+      .post('/api/users/record-withdrawal')
+      .send({ sampleID: '507f1f77bcf86cd799439011' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('consent denied');
+    expect(withdraw).not.toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+    loadRoute();
+  });
+
+  it('creates a pending report and preserves generatedBy from the authenticated user', async () => {
+    const ReportsModel = require('../../src/models/Reports');
+    const create = vi.spyOn(ReportsModel, 'create').mockImplementation((payload) => ({
+      reportID: 1,
+      ...payload,
+    }));
+    const reportsCollection = {
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'report-object-id' }),
+    };
+    const db = { collection: vi.fn(() => reportsCollection) };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db });
+
+    const res = await request(app)
+      .post('/api/users/generate-report')
+      .send({ reportType: 'samples', filters: { status: 'AVAILABLE' } });
+
+    expect(res.status).toBe(201);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      reportType: 'samples',
+      filters: { status: 'AVAILABLE' },
+      generatedBy: 'user-1',
+      status: 'pending',
+    }));
+    expect(reportsCollection.insertOne).toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+    loadRoute();
+  });
+
+  it('uses an empty filter object and null generatedBy when optional report request context is absent', async () => {
+    const ReportsModel = require('../../src/models/Reports');
+    const create = vi.spyOn(ReportsModel, 'create').mockImplementation((payload) => payload);
+    const reportsCollection = {
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'report-2' }),
+    };
+    const authWithoutUser = (req, _res, next) => {
+      req.user = null;
+      req.t = (key) => key;
+      next();
+    };
+    const { router } = loadRoute({ authImpl: authWithoutUser });
+    const app = buildApp(router, { db: { collection: () => reportsCollection } });
+
+    const res = await request(app)
+      .post('/api/users/generate-report')
+      .send({ reportType: 'samples' });
+
+    expect(res.status).toBe(201);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      filters: {},
+      generatedBy: null,
+    }));
+
+    vi.restoreAllMocks();
+    loadRoute();
+  });
+
+  it('delegates sensor registration and maps service failure to 400', async () => {
+    const sensorService = require('../../src/services/sensor.service');
+    const create = vi.spyOn(sensorService, 'createSensor')
+      .mockResolvedValueOnce({ sensorID: 'SENSOR-1' })
+      .mockRejectedValueOnce(new Error('sensor rejected'));
+    const db = {};
+    const { router } = loadRoute();
+    const app = buildApp(router, { db });
+
+    const ok = await request(app)
+      .post('/api/users/register-sensor')
+      .send({ sensorID: 'SENSOR-1' });
+    const failed = await request(app)
+      .post('/api/users/register-sensor')
+      .send({ sensorID: 'SENSOR-2' });
+
+    expect(ok.status).toBe(201);
+    expect(ok.body.data.sensorID).toBe('SENSOR-1');
+    expect(failed.status).toBe(400);
+    expect(failed.body.message).toBe('sensor rejected');
+
+    vi.restoreAllMocks();
+    loadRoute();
+  });
+});
+
 });
