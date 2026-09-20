@@ -206,6 +206,65 @@ function buildApp(router, db = {}, { stripReqIp } = {}) {
   return app;
 }
 
+
+describe('sample.routes item 8 label reprint residual', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('marks a subsequent print job as a reprint and records the REPRINT audit action', async () => {
+    const sample = {
+      _id: { toString: () => 'sample-internal-1' },
+      specimenId: 'SPEC-REPRINT-1',
+      barcode: 'BC-REPRINT-1',
+      sampleType: 'PLASMA',
+    };
+    const samples = {
+      findOne: vi.fn().mockResolvedValue(sample),
+    };
+    const labelGenerations = {
+      findOne: vi.fn().mockResolvedValue({
+        specimenId: 'SPEC-REPRINT-1',
+        generatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      }),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'label-generation-2' }),
+    };
+
+    const { router, auditLoggerModule } = loadRoute({
+      getSamplePhysicalPlacement: async () => ({ found: false }),
+    });
+    const db = {
+      collection: (name) => {
+        if (name === 'samples') return samples;
+        if (name === 'labelGenerations') return labelGenerations;
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+    const app = buildApp(router, db);
+
+    const res = await request(app)
+      .get('/api/samples/SPEC-REPRINT-1/label/print-job');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.reprint).toBe(true);
+    expect(labelGenerations.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        specimenId: 'SPEC-REPRINT-1',
+        formats: ['zpl'],
+        reprint: true,
+      })
+    );
+    expect(auditLoggerModule.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'REPRINT',
+        resourceType: 'SampleLabel',
+        resourceId: 'SPEC-REPRINT-1',
+        payload: expect.objectContaining({ reprint: true }),
+      })
+    );
+  });
+});
+
 // #921 slice 4: copied from storage.routes.test.js:1174-1205 (confirmed
 // against that file, and against patient.routes.test.js/user.routes.test.js,
 // before use here) -- records the arguments the middleware FACTORY was
