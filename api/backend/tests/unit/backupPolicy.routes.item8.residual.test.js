@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createRequire } from 'module';
@@ -12,31 +12,41 @@ const { getPolicy, updatePolicy, reloadBackupSchedule, loggerError } = vi.hoiste
   loggerError: vi.fn(),
 }));
 
-vi.mock('../../src/infrastructure/middleware/auth', () => ({
-  authenticate: (_req, _res, next) => next(),
-}));
+// CommonJS dependencies are captured when the router is required, so patch
+// the exported properties before loading the route instead of relying on
+// vi.mock() interception.
+const authModule = require('../../src/infrastructure/middleware/auth');
+const rbacModule = require('../../src/infrastructure/middleware/rbac');
+const backupPolicyService = require('../../src/services/backup-policy.service');
+const schedulerService = require('../../src/services/scheduler.service');
+const logger = require('../../src/utils/logger');
 
-vi.mock('../../src/infrastructure/middleware/rbac', () => ({
-  requireRole: () => (_req, _res, next) => next(),
-}));
+const originals = {
+  authenticate: authModule.authenticate,
+  requireRole: rbacModule.requireRole,
+  getPolicy: backupPolicyService.getPolicy,
+  updatePolicy: backupPolicyService.updatePolicy,
+  reloadBackupSchedule: schedulerService.reloadBackupSchedule,
+  loggerError: logger.error,
+};
 
-vi.mock('../../src/services/backup-policy.service', () => ({
-  getPolicy,
-  updatePolicy,
-}));
-
-vi.mock('../../src/services/scheduler.service', () => ({
-  reloadBackupSchedule,
-}));
-
-vi.mock('../../src/utils/logger', () => ({
-  error: loggerError,
-  info: vi.fn(),
-  warn: vi.fn(),
-  debug: vi.fn(),
-}));
+authModule.authenticate = (_req, _res, next) => next();
+rbacModule.requireRole = () => (_req, _res, next) => next();
+backupPolicyService.getPolicy = getPolicy;
+backupPolicyService.updatePolicy = updatePolicy;
+schedulerService.reloadBackupSchedule = reloadBackupSchedule;
+logger.error = loggerError;
 
 const router = require('../../src/interface/routes/backupPolicy.routes');
+
+afterAll(() => {
+  authModule.authenticate = originals.authenticate;
+  rbacModule.requireRole = originals.requireRole;
+  backupPolicyService.getPolicy = originals.getPolicy;
+  backupPolicyService.updatePolicy = originals.updatePolicy;
+  schedulerService.reloadBackupSchedule = originals.reloadBackupSchedule;
+  logger.error = originals.loggerError;
+});
 
 function makeApp(db) {
   const app = express();
