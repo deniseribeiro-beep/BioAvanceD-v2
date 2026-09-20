@@ -19,6 +19,10 @@ describe('ingestion/canonicalGateway (RF029 AC 1/2; canonical v2.0.0)', () => {
       expect(collectAliasViolations({ participantId: '123' }, aliasMap)).toEqual([]);
     });
 
+    it('ignores a malformed alias-map entry that is not an array', () => {
+      expect(collectAliasViolations({ patientID: '123' }, { participantId: 'patientID' })).toEqual([]);
+    });
+
     it('returns no hits for a non-object payload', () => {
       expect(collectAliasViolations(null, aliasMap)).toEqual([]);
       expect(collectAliasViolations(['array'], aliasMap)).toEqual([]);
@@ -33,6 +37,11 @@ describe('ingestion/canonicalGateway (RF029 AC 1/2; canonical v2.0.0)', () => {
   });
 
   describe('validateIngestionPayload', () => {
+    it('requires entityType before contract validation', async () => {
+      await expect(validateIngestionPayload({ payload: VALID_PARTICIPANT }))
+        .rejects.toThrow('entityType é obrigatório');
+    });
+
     it('passes a payload matching the approved Participant v2 contract', async () => {
       const result = await validateIngestionPayload({ entityType: 'Participant', payload: VALID_PARTICIPANT });
       expect(result.valid).toBe(true);
@@ -97,6 +106,19 @@ describe('ingestion/canonicalGateway (RF029 AC 1/2; canonical v2.0.0)', () => {
           message: 'Referência inexistente: participantId="P-missing" não encontrado em participants',
         },
       ]);
+    });
+
+    it('uses the reference field as the public label when label is omitted', async () => {
+      const db = createFakeDb({ participants: [] });
+      const result = await assertReferencesExist(db, [
+        { collection: 'participants', field: 'participantId', value: 'P-missing' },
+      ]);
+
+      expect(result.violations[0]).toEqual({
+        code: 'REFERENCE_NOT_FOUND',
+        field: 'participantId',
+        message: 'Referência inexistente: participantId="P-missing" não encontrado em participants',
+      });
     });
 
     it('skips a reference whose value is absent', async () => {
