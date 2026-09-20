@@ -1356,3 +1356,261 @@ describe('user.routes item 8 unchanged-role branch', () => {
 });
 
 });
+
+describe('user.routes item 8 HTTP alternate outcomes', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    loadRoute();
+  });
+
+  it('fails closed when the database is unavailable on representative user endpoints', async () => {
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: null });
+
+    const cases = [
+      request(app).post('/api/users/register').send({}),
+      request(app).get('/api/users/'),
+      request(app).get('/api/users/logs'),
+      request(app).get('/api/users/u1'),
+      request(app).delete('/api/users/u1'),
+      request(app).get('/api/users/u1/validate-status'),
+      request(app).post('/api/users/register-patient').send({}),
+      request(app).post('/api/users/generate-report').send({}),
+      request(app).post('/api/users/register-sensor').send({}),
+      request(app).post('/api/users/u1/reset-mfa').send({}),
+      request(app).post('/api/users/u1/force-password-reset').send({}),
+      request(app).post('/api/users/u1/disable-mfa').send({}),
+    ];
+
+    const responses = await Promise.all(cases);
+    for (const res of responses) expect(res.status).toBe(503);
+  });
+
+  it('blocks register when the requested access level exceeds the caller hierarchy', async () => {
+    const assignment = require('../../src/services/rbac-assignment.service');
+    vi.spyOn(assignment, 'resolveUserHierarchyLevel').mockResolvedValue(2);
+    const register = vi.spyOn(authService, 'registerUser');
+    const { router } = loadRoute();
+
+    const res = await request(buildApp(router, { db: { collection: vi.fn() } }))
+      .post('/api/users/register')
+      .send({ accessType: 4 });
+
+    expect(res.status).toBe(403);
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('normalizes optional register fields and skips audit when there is no authenticated actor', async () => {
+    const auditLogger = require('../../src/utils/auditLogger');
+    const audit = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const register = vi.spyOn(authService, 'registerUser').mockResolvedValue({
+      id: 'u-created',
+      username: 'synthetic',
+    });
+
+    const authImpl = (req, _res, next) => {
+      req.user = null;
+      req.t = (key) => key;
+      next();
+    };
+    const { router } = loadRoute({ authImpl });
+
+    const res = await request(buildApp(router, { db: { collection: vi.fn() } }))
+      .post('/api/users/register')
+      .send({
+        phone: ' (11) 9999-0000 ',
+        organizationId: '   ',
+      });
+
+    expect(res.status).toBe(201);
+    expect(register).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ phone: '1199990000', organizationId: null }),
+      undefined
+    );
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('lists a user without optional status/role resolution/id synthesis branches', async () => {
+    const assignment = require('../../src/services/rbac-assignment.service');
+    const resolveRole = vi.spyOn(assignment, 'resolveRoleDisplayName');
+    const users = {
+      find: vi.fn(() => ({
+        toArray: vi.fn().mockResolvedValue([{
+          _id: 'u-list',
+          id: 'already-present',
+          roleName: 'Técnico',
+          name: 'Synthetic',
+        }]),
+      })),
+    };
+    const db = { collection: vi.fn(() => users) };
+    const { router } = loadRoute();
+
+    const res = await request(buildApp(router, { db })).get('/api/users/');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].id).toBe('already-present');
+    expect(res.body.data[0].roleName).toBe('Técnico');
+    expect(resolveRole).not.toHaveBeenCalled();
+  });
+
+  it('maps logs and single-user database errors to 500 and handles missing users', async () => {
+    const logService = require('../../src/services/log.service');
+    vi.spyOn(logService, 'getLogs').mockRejectedValueOnce(new Error('logs down'));
+
+    const failingUsers = { findOne: vi.fn().mockRejectedValue(new Error('users down')) };
+    let db = { collection: vi.fn(() => failingUsers) };
+    let { router } = loadRoute();
+
+    const logs = await request(buildApp(router, { db })).get('/api/users/logs');
+    expect(logs.status).toBe(500);
+
+    const one = await request(buildApp(router, { db })).get('/api/users/u-error');
+    expect(one.status).toBe(500);
+
+    vi.restoreAllMocks();
+    loadRoute();
+    db = { collection: vi.fn(() => ({ findOne: vi.fn().mockResolvedValue(null) })) };
+    ({ router } = loadRoute());
+    const missing = await request(buildApp(router, { db })).get('/api/users/u-missing');
+    expect(missing.status).toBe(404);
+  });
+
+  it('covers delete not-found/error and validate-status not-found/error outcomes', async () => {
+    let users = {
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }),
+      findOne: vi.fn().mockResolvedValue(null),
+    };
+    let db = { collection: vi.fn(() => users) };
+    let { router } = loadRoute();
+    let app = buildApp(router, { db });
+
+    expect((await request(app).delete('/api/users/u-missing')).status).toBe(404);
+    expect((await request(app).get('/api/users/u-missing/validate-status')).status).toBe(404);
+
+    vi.restoreAllMocks();
+    loadRoute();
+    users = {
+      deleteOne: vi.fn().mockRejectedValue(new Error('delete down')),
+      findOne: vi.fn().mockRejectedValue(new Error('status down')),
+    };
+    db = { collection: vi.fn(() => users) };
+    ({ router } = loadRoute());
+    app = buildApp(router, { db });
+
+    expect((await request(app).delete('/api/users/u-error')).status).toBe(400);
+    expect((await request(app).get('/api/users/u-error/validate-status')).status).toBe(500);
+  });
+
+  it('covers register-patient service success/error and generate-report default filters/actor', async () => {
+    const patientService = require('../../src/services/patient.service');
+    const createPatient = vi.spyOn(patientService, 'createPatient')
+      .mockResolvedValueOnce({ participantId: '12345678' })
+      .mockRejectedValueOnce(new Error('patient rejected'));
+
+    const reports = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'R1' }) };
+    const ReportsModel = require('../../src/models/Reports');
+    const createReport = vi.spyOn(ReportsModel, 'create').mockImplementation((x) => x);
+    const db = { collection: vi.fn((name) => name === 'reports' ? reports : {}) };
+    const { router } = loadRoute();
+
+    expect((await request(buildApp(router, { db })).post('/api/users/register-patient').send({})).status).toBe(201);
+    expect((await request(buildApp(router, { db })).post('/api/users/register-patient').send({})).status).toBe(400);
+
+    const authImpl = (req, _res, next) => {
+      req.user = null;
+      req.t = (key) => key;
+      next();
+    };
+    loadRoute({ authImpl });
+    const reportRes = await request(buildApp(router, { db }))
+      .post('/api/users/generate-report')
+      .send({ reportType: 'inventory' });
+
+    expect(reportRes.status).toBe(201);
+    expect(createReport).toHaveBeenCalledWith(expect.objectContaining({
+      filters: {},
+      generatedBy: null,
+      status: 'pending',
+    }));
+    expect(createPatient).toHaveBeenCalledTimes(2);
+  });
+
+  it('covers register-sensor success and service failure', async () => {
+    const sensorService = require('../../src/services/sensor.service');
+    vi.spyOn(sensorService, 'createSensor')
+      .mockResolvedValueOnce({ sensorID: 'S1' })
+      .mockRejectedValueOnce(new Error('sensor down'));
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: {} });
+
+    expect((await request(app).post('/api/users/register-sensor').send({})).status).toBe(201);
+    expect((await request(app).post('/api/users/register-sensor').send({})).status).toBe(400);
+  });
+
+  it('covers reset-MFA missing target plus administrator unlock and non-admin reset paths', async () => {
+    const assignment = require('../../src/services/rbac-assignment.service');
+    const auditLogger = require('../../src/utils/auditLogger');
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const sessionService = require('../../src/services/session.service');
+    vi.spyOn(sessionService, 'invalidateUserSessions').mockResolvedValue(undefined);
+
+    const users = {
+      findOne: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ _id: { toString: () => 'admin-target' } })
+        .mockResolvedValueOnce({ _id: { toString: () => 'user-target' } }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    };
+    const db = { collection: vi.fn(() => users) };
+    const isAdmin = vi.spyOn(assignment, 'isAdministrator')
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const { router } = loadRoute();
+    const app = buildApp(router, { db });
+
+    expect((await request(app).post('/api/users/missing/reset-mfa')).status).toBe(404);
+    const unlock = await request(app).post('/api/users/admin/reset-mfa');
+    expect(unlock.status).toBe(200);
+    expect(unlock.body.unlockedOnly).toBe(true);
+    const reset = await request(app).post('/api/users/user/reset-mfa');
+    expect(reset.status).toBe(200);
+    expect(isAdmin).toHaveBeenCalledTimes(2);
+  });
+
+  it('covers force-password-reset missing target and disable-MFA denial/missing/non-admin target guards', async () => {
+    const assignment = require('../../src/services/rbac-assignment.service');
+    const auditLogger = require('../../src/utils/auditLogger');
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+
+    let users = { findOne: vi.fn().mockResolvedValue(null), updateOne: vi.fn() };
+    let db = { collection: vi.fn(() => users) };
+    let { router } = loadRoute();
+    expect((await request(buildApp(router, { db })).post('/api/users/missing/force-password-reset')).status).toBe(404);
+
+    vi.restoreAllMocks();
+    loadRoute();
+    const isAdmin = vi.spyOn(assignment, 'isAdministrator')
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    users = {
+      findOne: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ _id: { toString: () => 'not-admin-target' } }),
+      updateOne: vi.fn(),
+    };
+    db = { collection: vi.fn(() => users) };
+    ({ router } = loadRoute());
+    const app = buildApp(router, { db });
+
+    expect((await request(app).post('/api/users/u/disable-mfa')).status).toBe(403);
+    expect((await request(app).post('/api/users/missing/disable-mfa')).status).toBe(404);
+    expect((await request(app).post('/api/users/nonadmin/disable-mfa')).status).toBe(403);
+    expect(users.updateOne).not.toHaveBeenCalled();
+  });
+});
