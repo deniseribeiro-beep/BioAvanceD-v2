@@ -439,4 +439,103 @@ describe('reports.routes item 8 more residual canonical branches', () => {
     });
   });
 
+
+  it('POST /samples_by_patient/preview composes keyword ORPHA sample and organization filters without leaking civil identity', async () => {
+    scope = { scope: 'organization', organizationIds: ['org-1'] };
+
+    const samples = {
+      distinct: vi.fn().mockResolvedValue(['P-1']),
+      find: vi.fn((query) => {
+        if (query && query.$and) {
+          return cursor([
+            { participantId: 'P-1', specimenId: 'S-1', specimenStatus: 'available' },
+            { participantId: 'P-1', specimenId: 'S-2', specimenStatus: 'available' },
+            { participantId: '', specimenId: 'ignored' },
+          ]);
+        }
+        return cursor([]);
+      }),
+    };
+    const patients = {
+      find: vi.fn((query) => {
+        expect(query.$and).toEqual(expect.arrayContaining([
+          { participantId: { $regex: 'P-1', $options: 'i' } },
+          expect.objectContaining({ $or: expect.any(Array) }),
+          { participantId: { $in: ['P-1'] } },
+          { clinicalUnitId: { $in: ['org-1'] } },
+        ]));
+        return cursor([{
+          participantId: 'P-1',
+          consentToken: 'must-not-leak',
+          status: 'active',
+        }]);
+      }),
+    };
+    const db = {
+      collection(name) {
+        if (name === 'reportTemplates') {
+          return { findOne: vi.fn().mockResolvedValue({
+            code: 'samples_by_patient',
+            handlerKey: 'samplesByPatient',
+            templateStatus: 'active',
+          }) };
+        }
+        if (name === 'samples') return samples;
+        if (name === 'patients') return patients;
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+
+    const res = await request(buildApp(db))
+      .post('/api/reports/samples_by_patient/preview')
+      .send({ filters: { keyword: 'P-1', orphaCode: 'ORPHA:558' } });
+
+    expect(res.status).toBe(200);
+    expect(samples.distinct).toHaveBeenCalled();
+    expect(res.body.data.patients[0].sampleCount).toBe(2);
+    expect(res.body.data.patients[0]).not.toHaveProperty('consentToken');
+  });
+
+  it('POST /patient/preview applies the same pseudonymous keyword ORPHA and organization filters to the patient-rooted report', async () => {
+    scope = { scope: 'organization', organizationIds: ['org-2'] };
+
+    const samples = {
+      distinct: vi.fn().mockResolvedValue(['P-2']),
+    };
+    const patients = {
+      find: vi.fn((query) => {
+        expect(query.$and).toEqual(expect.arrayContaining([
+          { participantId: { $regex: 'P-2', $options: 'i' } },
+          expect.objectContaining({ $or: expect.any(Array) }),
+          { participantId: { $in: ['P-2'] } },
+          { clinicalUnitId: { $in: ['org-2'] } },
+        ]));
+        return cursor([{ participantId: 'P-2', consentToken: 'secret' }]);
+      }),
+      countDocuments: vi.fn().mockResolvedValue(1),
+    };
+    const db = {
+      collection(name) {
+        if (name === 'reportTemplates') {
+          return { findOne: vi.fn().mockResolvedValue({
+            code: 'patient',
+            handlerKey: 'patient',
+            templateStatus: 'active',
+          }) };
+        }
+        if (name === 'samples') return samples;
+        if (name === 'patients') return patients;
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+
+    const res = await request(buildApp(db))
+      .post('/api/reports/patient/preview')
+      .send({ filters: { keyword: 'P-2', disease: '558' } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.total).toBe(1);
+    expect(res.body.data.patients[0]).not.toHaveProperty('consentToken');
+  });
+
 });
