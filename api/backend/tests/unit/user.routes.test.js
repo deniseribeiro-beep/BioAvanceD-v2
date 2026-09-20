@@ -1342,4 +1342,51 @@ describe('user.routes item 8 remaining RBAC mutation branches', () => {
   });
 });
 
+
+describe('user.routes item 8 unchanged-role branch', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    loadRoute();
+  });
+
+  it('does not churn UserRoleAssignment when roleName resolves to the target current hierarchy', async () => {
+    const UserModel = require('../../src/models/User');
+    const rbacAssignment = require('../../src/services/rbac-assignment.service');
+    const auditLogger = require('../../src/utils/auditLogger');
+
+    vi.spyOn(UserModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+    vi.spyOn(rbacAssignment, 'isAdministrator').mockResolvedValue(false);
+    const hierarchy = vi.spyOn(rbacAssignment, 'resolveUserHierarchyLevel').mockResolvedValue(2);
+    vi.spyOn(rbacAssignment, 'resolveRoleDisplayName').mockResolvedValue('Técnico');
+    const changeUserRole = vi.spyOn(rbacAssignment, 'changeUserRole').mockResolvedValue({ changed: true });
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logUpdate = vi.spyOn(auditLogger, 'logUpdate').mockResolvedValue(undefined);
+    const logPermissionChange = vi.spyOn(auditLogger, 'logPermissionChange').mockResolvedValue(undefined);
+
+    const target = {
+      _id: 'u-same-role',
+      name: 'Synthetic User',
+      organizationId: 'org-1',
+    };
+    const usersCollection = {
+      findOne: vi.fn()
+        .mockResolvedValueOnce(target)
+        .mockResolvedValueOnce(target),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    };
+    const db = { collection: vi.fn(() => usersCollection) };
+
+    const { router } = loadRoute();
+    const res = await request(buildApp(router, { db }))
+      .put('/api/users/u-same-role')
+      .send({ roleName: 'Técnico' });
+
+    expect(res.status).toBe(200);
+    expect(hierarchy).toHaveBeenCalledTimes(1);
+    expect(changeUserRole).not.toHaveBeenCalled();
+    expect(logPermissionChange).not.toHaveBeenCalled();
+    expect(logUpdate).toHaveBeenCalledWith(expect.anything(), 'User', 'u-same-role');
+  });
+});
+
 });
