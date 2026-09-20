@@ -275,6 +275,107 @@ describe('ImportService.importPatients (JSON)', () => {
   });
 });
 
+
+describe('ImportService.importPatients item 8 identity/merge residuals', () => {
+  it('falls back to the plaintext identityDocument lookup when no blind-index candidate is available', async () => {
+    const candidates = vi.spyOn(participantIdentityService, 'computeBlindIndexCandidates').mockReturnValue([]);
+    const filePath = writeTmpFile('plaintext-fallback.json', JSON.stringify(validPatient()));
+    const patients = makeCollection({
+      existing: { _id: 'existing-plain', participantId: '11223344', birthDate: '1985-05-20' },
+    });
+
+    let capturedIdentityQuery = null;
+    const participantIdentities = makeCollection({
+      existing: { participantId: '11223344', identityDocument: '12345678900' },
+    });
+    participantIdentities.findOne = vi.fn(async (query) => {
+      capturedIdentityQuery = query;
+      return { participantId: '11223344', identityDocument: '12345678900' };
+    });
+
+    const result = await importService.importPatients(
+      makeDb({ patients, participantIdentities }),
+      { path: filePath, originalname: 'plaintext-fallback.json' }
+    );
+
+    expect(result.success).toBe(1);
+    expect(candidates).toHaveBeenCalledWith('identityDocument', '12345678900');
+    expect(capturedIdentityQuery).toEqual({
+      $or: [{ identityDocument: '12345678900' }],
+    });
+    expect(patients.updates[0].update.$set.participantId).toBe('11223344');
+  });
+
+  it('links by recordNumber when civil identityDocument is absent and preserves an existing optional email when the incoming value is blank', async () => {
+    const filePath = writeTmpFile('record-number-merge.json', JSON.stringify(validPatient({
+      cpf: undefined,
+      recordNumber: 'RN-ITEM8',
+      email: '',
+    })));
+
+    const patients = makeCollection({
+      existing: {
+        _id: 'existing-record',
+        participantId: '55667788',
+        recordNumber: 'RN-ITEM8',
+        patientName: 'Existing Name',
+        birthDate: '1985-05-20',
+        email: 'keep@example.test',
+      },
+    });
+    const participantIdentities = makeCollection();
+
+    const result = await importService.importPatients(
+      makeDb({ patients, participantIdentities }),
+      { path: filePath, originalname: 'record-number-merge.json' }
+    );
+
+    expect(result.success).toBe(1);
+    expect(patients.updates).toHaveLength(1);
+    expect(patients.updates[0].update.$set).toMatchObject({
+      participantId: '55667788',
+      recordNumber: 'RN-ITEM8',
+      email: 'keep@example.test',
+    });
+
+    // Required civil fields still synchronize, but no identityDocument is
+    // invented when this legitimate linkage route used recordNumber.
+    expect(participantIdentities.updates).toHaveLength(1);
+    expect(participantIdentities.updates[0].update.$set).toMatchObject({
+      patientName: 'Maria Silva',
+    });
+    expect(participantIdentities.updates[0].update.$set).not.toHaveProperty('identityDocument');
+  });
+
+  it('does not overwrite an existing optional object/array field when the incoming value is null', async () => {
+    const filePath = writeTmpFile('null-optional-merge.json', JSON.stringify(validPatient({
+      dadosEspecificos: null,
+      anamneseGeral: null,
+    })));
+    const patients = makeCollection({
+      existing: {
+        _id: 'existing-null',
+        participantId: '99887766',
+        birthDate: '1985-05-20',
+        dadosEspecificos: ['existing-item'],
+        anamneseGeral: { source: 'existing' },
+      },
+    });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '99887766', identityDocument: '12345678900' },
+    });
+
+    const result = await importService.importPatients(
+      makeDb({ patients, participantIdentities }),
+      { path: filePath, originalname: 'null-optional-merge.json' }
+    );
+
+    expect(result.success).toBe(1);
+    expect(patients.updates[0].update.$set.dadosEspecificos).toEqual(['existing-item']);
+    expect(patients.updates[0].update.$set.anamneseGeral).toEqual({ source: 'existing' });
+  });
+});
+
 describe('ImportService.importPatients (CSV)', () => {
   it('successfully imports a CSV row with email/consentTemplateId/cpf mapped to identityDocument (fixed, issue #87/#225), and dual-writes ParticipantIdentity', async () => {
     const filePath = writeTmpFile('patients.csv', 'patientName,birthDate,sex,email,consentTemplateId,cpf\nJoão Souza,1990-01-01,M,joao@example.com,tcle-1,98765432100\n');
