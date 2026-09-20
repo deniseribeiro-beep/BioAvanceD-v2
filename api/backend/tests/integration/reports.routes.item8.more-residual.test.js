@@ -291,4 +291,152 @@ describe('reports.routes item 8 more residual canonical branches', () => {
     expect(res.status).toBe(404);
     expect(deleteOne).toHaveBeenCalledWith({ reportID: 77 });
   });
+
+  it('POST /sample_analysis/preview applies organization scope and groups canonical Result rows by specimenId', async () => {
+    scope = { scope: 'organization', organizationIds: ['org-1'] };
+
+    const samples = {
+      find: vi.fn((query) => {
+        expect(query).toEqual({ collectionSite: { $in: ['org-1'] } });
+        return cursor([
+          { specimenId: 'S-1', participantId: 'P-1', sampleType: 'PLASMA', specimenStatus: 'available' },
+          { specimenId: 'S-2', participantId: 'P-2', sampleType: 'SERUM', specimenStatus: 'available' },
+        ]);
+      }),
+    };
+    const results = {
+      find: vi.fn((query) => {
+        expect(query).toEqual({ specimenId: { $in: ['S-1', 'S-2'] } });
+        return cursor([
+          { specimenId: 'S-1', resultID: 'R-1' },
+          { specimenId: 'S-1', resultID: 'R-2' },
+          { specimenId: '', resultID: 'R-ignored' },
+        ]);
+      }),
+    };
+    const db = {
+      collection(name) {
+        if (name === 'reportTemplates') {
+          return { findOne: vi.fn().mockResolvedValue({
+            code: 'sample_analysis',
+            handlerKey: 'sampleAnalysis',
+            templateStatus: 'active',
+          }) };
+        }
+        if (name === 'samples') return samples;
+        if (name === 'results') return results;
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+
+    const res = await request(buildApp(db))
+      .post('/api/reports/sample_analysis/preview')
+      .send({ filters: {} });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.analysis).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sampleID: 'S-1', resultCount: 2, hasResults: true }),
+      expect.objectContaining({ sampleID: 'S-2', resultCount: 0, hasResults: false }),
+    ]));
+  });
+
+  it('POST /tissue_origin_history/preview scopes the sample-rooted history query to the caller organizations', async () => {
+    scope = { scope: 'organization', organizationIds: ['org-1', 'org-2'] };
+    const find = vi.fn((query) => {
+      expect(query).toEqual({
+        $and: [
+          {
+            $or: [
+              { sampleOrigin: { $exists: true, $ne: null } },
+              { linkedProject: { $exists: true, $ne: null } },
+            ],
+          },
+          { collectionSite: { $in: ['org-1', 'org-2'] } },
+        ],
+      });
+      return cursor([{ specimenId: 'S-1', sampleOrigin: 'VENOUS_BLOOD' }]);
+    });
+    const samples = {
+      find,
+      countDocuments: vi.fn().mockResolvedValue(1),
+    };
+    const db = {
+      collection(name) {
+        if (name === 'reportTemplates') {
+          return { findOne: vi.fn().mockResolvedValue({
+            code: 'tissue_origin_history',
+            handlerKey: 'tissueOriginHistory',
+            templateStatus: 'active',
+          }) };
+        }
+        if (name === 'samples') return samples;
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+
+    const res = await request(buildApp(db))
+      .post('/api/reports/tissue_origin_history/preview')
+      .send({ filters: {} });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.samples).toHaveLength(1);
+  });
+
+  it('POST /access_logs/preview applies a real date interval to both canonical audit timestamp fields', async () => {
+    auditReader = true;
+    const find = vi.fn((query) => {
+      expect(query.$or).toHaveLength(2);
+      expect(query.$or[0]).toHaveProperty('dateTime');
+      expect(query.$or[1]).toHaveProperty('timestamp');
+      return cursor([{ action: 'LOGIN', dateTime: new Date('2026-01-10T00:00:00.000Z') }]);
+    });
+    const logs = {
+      find,
+      countDocuments: vi.fn().mockResolvedValue(1),
+    };
+    const db = {
+      collection(name) {
+        if (name === 'reportTemplates') {
+          return { findOne: vi.fn().mockResolvedValue({
+            code: 'access_logs',
+            handlerKey: 'accessLogs',
+            templateStatus: 'active',
+          }) };
+        }
+        if (name === 'logs') return logs;
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+
+    const res = await request(buildApp(db))
+      .post('/api/reports/access_logs/preview')
+      .send({ filters: { startDate: '2026-01-01', endDate: '2026-01-31' } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.logs).toHaveLength(1);
+  });
+
+  it('POST /configured_without_handler/preview returns the stable no-preview shape for an active template without a registered handler', async () => {
+    const db = {
+      collection(name) {
+        expect(name).toBe('reportTemplates');
+        return { findOne: vi.fn().mockResolvedValue({
+          code: 'configured_without_handler',
+          handlerKey: 'notRegistered',
+          templateStatus: 'active',
+        }) };
+      },
+    };
+
+    const res = await request(buildApp(db))
+      .post('/api/reports/configured_without_handler/preview')
+      .send({ filters: {} });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      total: 0,
+      type: 'configured_without_handler',
+    });
+  });
+
 });
