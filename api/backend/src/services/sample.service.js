@@ -1127,4 +1127,14 @@ class SampleService {
   }
 }
 
-module.exports = new SampleService();
+const sampleService = new SampleService();
+sampleService._test = {
+  findSampleByAnyId,
+  createSampleValidationError,
+  normalizeRequiredStorageBoxAssignment,
+  resolveStorageHierarchyForBox,
+  buildIdVariants,
+  isOperationalSensor,
+};
+
+module.exports = sampleService;
