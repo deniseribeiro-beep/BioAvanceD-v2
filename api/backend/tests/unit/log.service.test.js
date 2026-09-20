@@ -3,6 +3,7 @@ import { createRequire } from 'module';
 
 // Stage 2 consolidated validation trigger; no test semantics changed.
 // Item 8 post-reconciliation verification checkpoint.
+// Item 8 coverage checkpoint after legitimate residual tests.
 
 const require2 = createRequire(import.meta.url);
 const logService = require2('../../src/services/log.service');
