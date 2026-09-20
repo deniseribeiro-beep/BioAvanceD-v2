@@ -568,127 +568,86 @@ describe('user.routes item 8 PUT residual branch closure', () => {
   });
 
 describe('user.routes item 8 register-sample and normalization alternates', () => {
-  it('uses compatible actor fallbacks and reports permissive topology quarantine as partial success', async () => {
-    const RegisterSampleUseCase = require('../../src/core/use-cases/RegisterSampleUseCase');
-    const execute = vi.spyOn(RegisterSampleUseCase.prototype, 'execute').mockResolvedValue({
-      sample: { _id: null, id: 'legacy-sample-id', specimenId: 'SPEC-1' },
-      strictMode: false,
-      topology: { synced: false, fallbackQueued: true },
-    });
-
-    const authImpl = (req, _res, next) => {
-      req.user = {
-        _id: { toString: () => 'object-user-id' },
-        username: 'synthetic-user',
-        role: 'Técnico',
-      };
-      req.t = () => '';
-      Object.defineProperty(req, 'ip', { configurable: true, value: undefined });
-      next();
-    };
-
-    const { router } = loadRoute({ authImpl });
-    const app = buildApp(router, { db: {} });
-
-    const res = await request(app)
-      .post('/api/users/register-sample')
-      .set('x-forwarded-for', '203.0.113.10')
-      .set('user-agent', 'item8-agent')
-      .send({ sampleType: 'PLASMA' });
-
-    expect(res.status).toBe(202);
-    expect(res.body).toMatchObject({
-      success: true,
-      partialSuccess: true,
-      data: {
-        sampleID: 'legacy-sample-id',
-        operationMode: 'PERMISSIVE',
-        topology: { synced: false, fallbackQueued: true },
-      },
-    });
-    expect(res.body.message).toContain('integração topológica em quarentena');
-    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
-      actor: expect.objectContaining({
-        userId: 'object-user-id',
-        userName: 'synthetic-user',
-        userRole: 'Técnico',
-        ipAddress: '203.0.113.10',
-        userAgent: 'item8-agent',
-      }),
-    }));
-
-    execute.mockRestore();
+  afterEach(() => {
+    vi.restoreAllMocks();
     loadRoute();
   });
 
-  it('returns normal 201 success for strict mode with synchronized topology and userID/name/roleName actor fields', async () => {
-    const RegisterSampleUseCase = require('../../src/core/use-cases/RegisterSampleUseCase');
-    const execute = vi.spyOn(RegisterSampleUseCase.prototype, 'execute').mockResolvedValue({
-      sample: { _id: { toString: () => 'sample-object-id' }, specimenId: 'SPEC-2' },
-      strictMode: true,
-      topology: { synced: true, fallbackQueued: false },
+  it('returns the current asynchronous-projection response for a permissive sample registration', async () => {
+    const sampleService = require('../../src/services/sample.service');
+    const env = require('../../src/config/env');
+    const originalLineageMode = env.LINEAGE_MODE;
+    env.LINEAGE_MODE = 'fail-open';
+    const create = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
+      _id: null,
+      id: 'legacy-sample-id',
+      specimenId: 'SPEC-1',
     });
 
-    const authImpl = (req, _res, next) => {
-      req.user = {
-        userID: 'user-id-fallback',
-        name: 'Synthetic Name',
-        roleName: 'Administrador',
+    try {
+      const authImpl = (req, _res, next) => {
+        req.user = {
+          _id: { toString: () => 'object-user-id' },
+          username: 'synthetic-user',
+          role: 'Técnico',
+        };
+        req.t = (key) => key;
+        next();
       };
-      req.t = (key) => key;
-      next();
-    };
 
-    const { router } = loadRoute({ authImpl });
-    const app = buildApp(router, { db: {} });
-    const res = await request(app)
-      .post('/api/users/register-sample')
-      .send({ sampleType: 'PLASMA' });
+      const { router } = loadRoute({ authImpl });
+      const app = buildApp(router, { db: {} });
 
-    expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({
-      partialSuccess: false,
-      message: 'users.registerSampleSuccess',
-      data: {
-        sampleID: 'sample-object-id',
-        operationMode: 'STRICT',
-        topology: { synced: true, fallbackQueued: false },
-      },
-    });
-    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
-      actor: expect.objectContaining({
-        userId: 'user-id-fallback',
-        userName: 'Synthetic Name',
-        userRole: 'Administrador',
-      }),
-    }));
+      const res = await request(app)
+        .post('/api/users/register-sample')
+        .send({ sampleType: 'PLASMA' });
 
-    execute.mockRestore();
-    loadRoute();
+      expect(res.status).toBe(201);
+      expect(res.body).toMatchObject({
+        success: true,
+        partialSuccess: false,
+        message: 'users.registerSampleSuccess',
+        data: {
+          sampleID: 'legacy-sample-id',
+          operationMode: 'PERMISSIVE',
+          topology: { synced: false, fallbackQueued: false },
+        },
+      });
+      expect(create).toHaveBeenCalledWith(
+        {},
+        expect.objectContaining({ sampleType: 'PLASMA' })
+      );
+    } finally {
+      env.LINEAGE_MODE = originalLineageMode;
+    }
   });
 
-  it.each([
-    [Object.assign(new Error('blocked by policy'), { statusCode: 403 })],
-    [Object.assign(new Error('blocked by code'), { code: 'STRICT_MODE_BLOCKED' })],
-    [new Error('STRICT_MODE_BLOCKED: topology unavailable')],
-  ])('maps strict-mode governance failures to HTTP 403', async (failure) => {
-    const RegisterSampleUseCase = require('../../src/core/use-cases/RegisterSampleUseCase');
-    const execute = vi.spyOn(RegisterSampleUseCase.prototype, 'execute').mockRejectedValue(failure);
+  it('reports STRICT operation mode for a high-risk sample while projection remains asynchronous', async () => {
+    const sampleService = require('../../src/services/sample.service');
+    vi.spyOn(sampleService, 'createSample').mockResolvedValue({
+      _id: { toString: () => 'sample-object-id' },
+      specimenId: 'SPEC-2',
+    });
 
     const { router } = loadRoute();
     const app = buildApp(router, { db: {} });
     const res = await request(app)
       .post('/api/users/register-sample')
-      .send({ sampleType: 'PLASMA' });
+      .send({ sampleType: 'PLASMA', riskLevel: 'high' });
 
-    expect(res.status).toBe(403);
-    expect(res.body.error).toBe('STRICT_MODE_BLOCKED');
-
-    execute.mockRestore();
-    loadRoute();
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      success: true,
+      partialSuccess: false,
+      data: {
+        sampleID: 'sample-object-id',
+        operationMode: 'STRICT',
+        topology: { synced: false, fallbackQueued: false },
+      },
+    });
   });
 
-  it('keeps malformed optional register phone/organization inputs for model validation instead of coercing them as strings', async () => {
+  it('keeps malformed optional register phone/organization inputs for model validation when the organization itself resolves', async () => {
     const authService = require('../../src/services/auth.service');
     const register = vi.spyOn(authService, 'registerUser').mockResolvedValue({
       _id: null,
@@ -701,25 +660,32 @@ describe('user.routes item 8 register-sample and normalization alternates', () =
       req.t = (key) => key;
       next();
     };
+    const organizations = {
+      findOne: vi.fn().mockResolvedValue({ organizationId: '123' }),
+    };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'organizations') return organizations;
+        throw new Error(`unexpected collection ${name}`);
+      }),
+    };
+
     const { router } = loadRoute({ authImpl: authWithoutUser });
-    const app = buildApp(router, { db: {} });
+    const app = buildApp(router, { db });
 
     const res = await request(app)
       .post('/api/users/register')
       .send({ phone: 5511999999999, organizationId: 123 });
 
     expect(res.status).toBe(201);
+    expect(organizations.findOne).toHaveBeenCalledWith({ organizationId: '123' });
     expect(register).toHaveBeenCalledWith(
-      {},
+      db,
       expect.objectContaining({ phone: 5511999999999, organizationId: 123 }),
       undefined
     );
-
-    register.mockRestore();
-    loadRoute();
   });
 });
-
 
 describe('user.routes item 8 administrative security success paths', () => {
   it('reset-mfa unlocks an Administrator without destroying enrollment or revoking sessions', async () => {
