@@ -161,8 +161,8 @@ describe('organization.routes item 8 residual branches', () => {
         organizationType: null,
         countryCode: 'BR',
         website: null,
-        contact: null,
-        qualityStandards: [],
+        contact: { email: 'contact@example.test' },
+        qualityStandards: ['ISO 20387'],
       });
 
     const created = await request(buildApp({}))
@@ -176,8 +176,8 @@ describe('organization.routes item 8 residual branches', () => {
       organizationType: null,
       countryCode: 'BR',
       website: null,
-      contact: null,
-      qualityStandards: [],
+      contact: { email: 'contact@example.test' },
+      qualityStandards: ['ISO 20387'],
     }));
   });
 
