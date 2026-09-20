@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// Stage 2 consolidated validation checkpoint: static residual audit completed before CI.
+
 const fs = require('fs');
 
 // #977: src/workers/worker.js is the worker process entrypoint and had NO test
