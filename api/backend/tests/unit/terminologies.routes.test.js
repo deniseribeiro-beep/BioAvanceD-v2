@@ -639,5 +639,84 @@ describe('terminologies.routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.data).toHaveLength(0);
     });
+
+    it('hydrates local CID redundancy from orphaCode/ORPHAcode and alternate CID description fields', async () => {
+      const { db, terminologiesFindFn, terminologiesBulkWrite } = buildDb({
+        terminologiesFind: [],
+        terminologiesCount: 0,
+        cids: [
+          { orphaCode: '901', icdCode: 'E90.1', description: 'Synthetic one' },
+          { ORPHAcode: '902', Codigo_Tabulacao: 'E90.2', label: 'Synthetic two' },
+        ],
+      });
+
+      terminologiesFindFn
+        .mockImplementationOnce(() => cursor([]))
+        .mockImplementationOnce(() => cursor([
+          { _id: '901', codigo: 'ORPHA:901', sistema: 'ORPHA', descricao: 'Synthetic one' },
+          { _id: '902', codigo: 'ORPHA:902', sistema: 'ORPHA', descricao: 'Synthetic two' },
+        ]));
+
+      const response = await request(buildApp(db)).get('/api/terminologies?q=Synthetic');
+
+      expect(response.status).toBe(200);
+      expect(response.body.data).toHaveLength(2);
+      const operations = terminologiesBulkWrite.mock.calls[0][0];
+      expect(operations.map((operation) => operation.updateOne.filter.codigo))
+        .toEqual(expect.arrayContaining(['ORPHA:901', 'ORPHA:902']));
+      expect(operations.map((operation) => operation.updateOne.update.$set.relacoes.cid))
+        .toEqual(expect.arrayContaining(['E90.1', 'E90.2']));
+    });
+
+    it('normalizes all supported Orphadata synonym/reference aliases before redundant ORPHA upsert', async () => {
+      process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
+      process.env.ORPHADATA_BASE_URL = 'https://orphadata.test';
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          results: [{
+            ORPHAcode: '903',
+            preferredTerm: 'Synthetic remote terminology',
+            Synonym: [
+              { Label: 'Upper-label synonym' },
+              { _: 'Underscore synonym' },
+              'Raw synonym',
+            ],
+            externalReferences: [
+              { source: 'ICD-10', reference: 'E90.3' },
+              { source: 'OMIM', id: '100903' },
+            ],
+          }],
+        }),
+      });
+
+      const { db, terminologiesFindFn, orphanetBulkWrite } = buildDb({
+        terminologiesFind: [],
+        terminologiesCount: 0,
+      });
+      terminologiesFindFn
+        .mockImplementationOnce(() => cursor([]))
+        .mockImplementationOnce(() => cursor([
+          { _id: '903', codigo: 'ORPHA:903', sistema: 'ORPHA', descricao: 'Synthetic remote terminology' },
+        ]));
+
+      const response = await request(buildApp(db)).get('/api/terminologies?q=remote');
+
+      expect(response.status).toBe(200);
+      expect(orphanetBulkWrite).toHaveBeenCalledTimes(1);
+      const persisted = orphanetBulkWrite.mock.calls[0][0][0].updateOne.update.$set;
+      expect(persisted).toMatchObject({
+        code: '903',
+        Codigos_CID10: 'E90.3',
+        OMIM: 'OMIM:100903',
+        source: 'orphadata-live',
+      });
+      expect(persisted.aliases).toEqual(expect.arrayContaining([
+        'Upper-label synonym',
+        'Underscore synonym',
+        'Raw synonym',
+      ]));
+    });
   });
 });
