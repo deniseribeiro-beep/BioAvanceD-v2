@@ -15,7 +15,10 @@ describe('SampleGraphValidator instance residual branches', () => {
       participantId: 'P-1',
     }, miss)).resolves.toMatchObject({ valid: false });
     expect(miss.findOne).toHaveBeenCalledWith({
-      $or: [{ consentTemplateId: 'template-1' }],
+      $or: [
+        { _id: null },
+        { consentTemplateId: 'template-1' },
+      ],
     });
 
     const oid = new ObjectId();
