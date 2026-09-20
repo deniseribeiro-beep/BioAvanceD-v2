@@ -156,6 +156,30 @@ describe('import-async.service', () => {
   });
 
   describe('validateFile', () => {
+    it('uses an empty allowlist for an unknown dataType and reports the invalid format', async () => {
+      const filePath = writeFile('unknown.csv', 'a,b\n1,2\n');
+      const file = { originalname: 'unknown.csv', size: 10, mimetype: 'text/csv', path: filePath };
+
+      const result = await service.validateFile(file, 'unknown-data-type');
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain('Formato de arquivo inválido. Formatos aceitos: ');
+    });
+
+    it('uses the generic invalid-JSON message when the parser throws a non-Error value', async () => {
+      const filePath = writeFile('generic-error.json', '{"synthetic":true}');
+      const file = { originalname: 'generic-error.json', size: 20, mimetype: 'application/json', path: filePath };
+      const read = vi.spyOn(fsSync, 'readFileSync').mockImplementation(() => {
+        throw {};
+      });
+
+      const result = await service.validateFile(file, 'patients');
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain('Arquivo JSON inválido');
+      expect(read).toHaveBeenCalled();
+    });
+
     it('rejects a disallowed extension for the given dataType', async () => {
       const filePath = writeFile('bad.txt', 'hello');
       const file = { originalname: 'bad.txt', size: 10, mimetype: 'text/plain', path: filePath };
@@ -324,6 +348,96 @@ describe('import-async.service', () => {
       const headers = await service.getHeadersFromFile(file, 'patients');
 
       expect(headers).toEqual([]);
+    });
+
+    it('ignores duplicate/late CSV callbacks after headers have already resolved', async () => {
+      let sourceErrorHandler;
+      const parser = {
+        on: vi.fn((event, callback) => {
+          if (event === 'headers') {
+            callback(['PatientID', 'SampleType']);
+            callback(['late', 'headers']);
+          }
+          if (event === 'error') {
+            callback(new Error('late parser error'));
+          }
+          if (event === 'end') {
+            callback();
+          }
+          return parser;
+        }),
+      };
+      const source = {
+        on: vi.fn((event, callback) => {
+          if (event === 'error') sourceErrorHandler = callback;
+          return source;
+        }),
+        pipe: vi.fn(() => parser),
+      };
+      vi.spyOn(fsSync, 'createReadStream').mockReturnValue(source);
+
+      const headers = await service.getHeadersFromFile(
+        { originalname: 'late-events.csv', path: '/synthetic/late-events.csv' },
+        'patients'
+      );
+
+      expect(headers).toEqual(['participantId', 'sampleType']);
+      expect(sourceErrorHandler).toBeInstanceOf(Function);
+      sourceErrorHandler(new Error('late source error'));
+    });
+
+    it('resolves an empty header list when CSV reaches end before headers or errors', async () => {
+      const parser = {
+        on: vi.fn((event, callback) => {
+          if (event === 'end') callback();
+          return parser;
+        }),
+      };
+      const source = {
+        on: vi.fn().mockReturnThis(),
+        pipe: vi.fn(() => parser),
+      };
+      vi.spyOn(fsSync, 'createReadStream').mockReturnValue(source);
+
+      const headers = await service.getHeadersFromFile(
+        { originalname: 'empty.csv', path: '/synthetic/empty.csv' },
+        'patients'
+      );
+
+      expect(headers).toEqual([]);
+    });
+
+    it('returns [] for an XLSX workbook with no worksheets', async () => {
+      const workbook = new ExcelJSLib.Workbook();
+      const filePath = path.join(tmpDir, 'no-worksheets.xlsx');
+      await workbook.xlsx.writeFile(filePath);
+
+      const headers = await service.getHeadersFromFile(
+        { originalname: 'no-worksheets.xlsx', path: filePath },
+        'samples'
+      );
+
+      expect(headers).toEqual([]);
+    });
+
+    it('normalizes rich-text and Date cells while scanning XLSX rows before the header', async () => {
+      const workbook = new ExcelJSLib.Workbook();
+      const ws = workbook.addWorksheet('Data');
+      ws.addRow([
+        { text: 'Synthetic preamble', hyperlink: 'https://example.invalid/preamble' },
+        new Date('2026-09-20T12:00:00.000Z'),
+      ]);
+      ws.addRow(['PatientID', 'SampleType', 'Block']);
+      ws.addRow(['12345678', 'PLASMA', 'A']);
+      const filePath = path.join(tmpDir, 'rich-date-header.xlsx');
+      await workbook.xlsx.writeFile(filePath);
+
+      const headers = await service.getHeadersFromFile(
+        { originalname: 'rich-date-header.xlsx', path: filePath },
+        'samples'
+      );
+
+      expect(headers).toEqual(['participantId', 'sampleType', 'block']);
     });
 
     it('resolves canonicalized headers from an xlsx header row', async () => {
