@@ -427,4 +427,129 @@ describe('result.routes item 8 more residual canonical branches', () => {
     expect(putRes.status).toBe(200);
     expect(auditLogger.log).not.toHaveBeenCalled();
   });
+
+  describe('item 8 list/download/error alternates', () => {
+    it('GET / applies organization specimenIds plus importJobID and audits the filtered list', async () => {
+      currentScope = { scope: 'organization', organizationIds: ['org-1'] };
+      const find = vi.fn((query) => ({
+        toArray: vi.fn().mockResolvedValue([{ _id: 'r1', specimenId: 'S1', importJobID: 'J1' }]),
+      }));
+      const distinct = vi.fn().mockResolvedValue(['S1', 'S2']);
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'results') return { find };
+          if (name === 'amostras') return { distinct };
+          throw new Error('unexpected');
+        }),
+      };
+
+      const res = await request(buildApp(db)).get('/api/results?importJobID=J1');
+
+      expect(res.status).toBe(200);
+      expect(find).toHaveBeenCalledWith({
+        specimenId: { $in: ['S1', 'S2'] },
+        importJobID: 'J1',
+      });
+      expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'QUERY',
+        payload: expect.objectContaining({ total: 1 }),
+      }));
+    });
+
+    it('GET / maps collection failures to 500', async () => {
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'results') {
+            return { find: vi.fn(() => ({ toArray: vi.fn().mockRejectedValue(new Error('list down')) })) };
+          }
+          throw new Error('unexpected');
+        }),
+      };
+
+      const res = await request(buildApp(db)).get('/api/results');
+
+      expect(res.status).toBe(500);
+      expect(res.body.message).toBe('list down');
+    });
+
+    it('GET /:id and /:id/download map malformed ObjectIds to their 500 catch branches', async () => {
+      const { db } = buildDb();
+
+      const getRes = await request(buildApp(db)).get('/api/results/not-an-object-id');
+      expect(getRes.status).toBe(500);
+
+      const downloadRes = await request(buildApp(db)).get('/api/results/not-an-object-id/download');
+      expect(downloadRes.status).toBe(500);
+    });
+
+    it('download returns an external URL after the scope check and audits success', async () => {
+      const id = new ObjectId().toString();
+      const { db } = buildDb({
+        result: { _id: id, specimenId: 'SPEC-1', filePath: 'https://example.test/result.csv' },
+      });
+
+      const res = await request(buildApp(db)).get('/api/results/' + id + '/download');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ redirect: true, url: 'https://example.test/result.csv' });
+      expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'DOWNLOAD',
+        status: 'success',
+      }));
+    });
+
+    it('download returns 404 when a local path is absent', async () => {
+      const id = new ObjectId().toString();
+      const { db } = buildDb({
+        result: { _id: id, specimenId: 'SPEC-1', filePath: '/definitely/missing/item8-result.csv' },
+      });
+
+      const res = await request(buildApp(db)).get('/api/results/' + id + '/download');
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Arquivo de analise não encontrado');
+    });
+
+    it('PUT, link-sample and DELETE map malformed source ids through defensive catch branches', async () => {
+      const { db } = buildDb({ result: { specimenId: 'SPEC-1' } });
+      const app = buildApp(db);
+
+      expect((await request(app).put('/api/results/bad').send({ description: 'x' })).status).toBe(400);
+      expect((await request(app).put('/api/results/bad/link-sample').send({ specimenId: 'SPEC-1' })).status).toBe(400);
+      expect((await request(app).delete('/api/results/bad')).status).toBe(400);
+    });
+
+    it('link-sample and DELETE skip success audit when there is no authenticated principal', async () => {
+      currentUser = null;
+      const id = new ObjectId().toString();
+      const { db } = buildDb({
+        result: { _id: id, specimenId: 'SPEC-OLD' },
+        samples: [{ specimenId: 'SPEC-NEW', collectionSite: 'org-1' }],
+      });
+      const app = buildApp(db);
+
+      const link = await request(app)
+        .put('/api/results/' + id + '/link-sample')
+        .send({ specimenId: 'SPEC-NEW' });
+      expect(link.status).toBe(200);
+
+      const del = await request(app).delete('/api/results/' + id);
+      expect(del.status).toBe(200);
+      expect(auditLogger.log).not.toHaveBeenCalled();
+    });
+
+    it('fails closed for an orphan Result under organization scope', async () => {
+      currentScope = { scope: 'organization', organizationIds: ['org-1'] };
+      const id = new ObjectId().toString();
+      const { db } = buildDb({
+        result: { _id: id, specimenId: 'ORPHAN' },
+        samples: [],
+      });
+
+      const res = await request(buildApp(db)).get('/api/results/' + id);
+
+      expect(res.status).toBe(403);
+    });
+  });
+
 });
