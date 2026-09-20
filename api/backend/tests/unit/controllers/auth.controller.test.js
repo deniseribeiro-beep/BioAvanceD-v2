@@ -330,6 +330,81 @@ describe('AuthController.login', () => {
   });
 });
 
+describe('AuthController refresh-cookie security options (item 8)', () => {
+  it('sets Secure + SameSite=Strict in production when login issues a refresh token', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+      vi.spyOn(authService, 'login').mockResolvedValue({
+        token: 'access-prod',
+        refreshToken: 'refresh-prod',
+        sessionID: 'session-prod',
+        user: { userID: 'u-prod' },
+      });
+      vi.spyOn(auditLogger, 'logLogin').mockResolvedValue(undefined);
+
+      const req = createReq({ body: { email: 'prod@example.test', password: 'pw' } });
+      const res = createRes();
+
+      await authController.login(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.cookie).toHaveBeenCalledWith(
+        'refresh_token',
+        'refresh-prod',
+        expect.objectContaining({
+          httpOnly: true,
+          secure: true,
+          sameSite: 'strict',
+          path: '/api/auth',
+        })
+      );
+      const payload = res.json.mock.calls[0][0].data;
+      expect(payload).not.toHaveProperty('refreshToken');
+      expect(payload).not.toHaveProperty('sessionID');
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
+  it('uses the non-production cookie contract and emits no cookie when no refresh token is returned', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'test';
+      vi.spyOn(auditLogger, 'logLogin').mockResolvedValue(undefined);
+
+      vi.spyOn(authService, 'login')
+        .mockResolvedValueOnce({
+          token: 'access-test',
+          refreshToken: 'refresh-test',
+          sessionID: 'session-test',
+          user: { userID: 'u-test' },
+        })
+        .mockResolvedValueOnce({
+          token: 'access-no-refresh',
+          user: { userID: 'u-test-2' },
+        });
+
+      let res = createRes();
+      await authController.login(createReq({ body: { email: 'test@example.test', password: 'pw' } }), res);
+      expect(res.cookie).toHaveBeenCalledWith(
+        'refresh_token',
+        'refresh-test',
+        expect.objectContaining({ secure: false, sameSite: 'lax' })
+      );
+
+      res = createRes();
+      await authController.login(createReq({ body: { email: 'test2@example.test', password: 'pw' } }), res);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.cookie).not.toHaveBeenCalled();
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+});
+
 describe('AuthController.setupMFA', () => {
   it('returns 503 when db is unavailable', async () => {
     const req = NO_DB_REQ({ user: { userID: 'u1' } });
