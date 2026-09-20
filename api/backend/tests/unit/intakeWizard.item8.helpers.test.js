@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const router = require('../../src/routes/intakeWizard');
-const participantIdentityService = require('../../src/services/participantIdentity.service');
+const patientIdentityService = require('../../src/services/PatientIdentityService');
 
 const {
   normalizeString,
@@ -225,7 +225,7 @@ describe('intakeWizard item 8 helper behavior', () => {
   });
 
   it('delegates patient matching with normalized identity and parsed birth date', async () => {
-    const match = vi.spyOn(participantIdentityService, 'matchOrUpsertParticipant')
+    const match = vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant')
       .mockResolvedValue({ created: false, patient: { participantId: '12345678' } });
 
     const db = {};
@@ -248,7 +248,7 @@ describe('intakeWizard item 8 helper behavior', () => {
   });
 
   it('delegates patient matching with null identityDocument when the field is blank', async () => {
-    const match = vi.spyOn(participantIdentityService, 'matchOrUpsertParticipant')
+    const match = vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant')
       .mockResolvedValue({ created: true, patient: { participantId: '12345678' } });
 
     await resolveMatchedPatient({}, {
