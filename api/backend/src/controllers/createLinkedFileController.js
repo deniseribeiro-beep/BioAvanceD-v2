@@ -301,13 +301,15 @@ function createLinkedFileController(opts) {
     const { fileID } = req.params;
 
     const collection = db.collection(fileCollectionName);
-    let fileRecord;
-    try {
-      fileRecord = await collection.findOne({ _id: new ObjectId(fileID) });
-    } catch (idError) {
+    if (!ObjectId.isValid(fileID)) {
       res.status(400).json({ success: false, error: 'ID de arquivo inválido' });
       return null;
     }
+
+    // Validation errors are client errors; database lookup failures must
+    // propagate to the public handler so they are reported as operational
+    // failures instead of being mislabeled as an invalid identifier.
+    const fileRecord = await collection.findOne({ _id: new ObjectId(fileID) });
 
     if (!fileRecord) {
       res.status(404).json({ success: false, error: 'Arquivo não encontrado' });
