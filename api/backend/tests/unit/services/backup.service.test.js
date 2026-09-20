@@ -1504,6 +1504,26 @@ describe('backup.service', () => {
   });
 
   describe('item 8 backup fallback and manifest guards', () => {
+    it('falls back to the canonical default database name when a valid Mongo URI omits its database path', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-item8-root-uri');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      const writeFile = vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup();
+
+      expect(result.success).toBe(true);
+      const manifestCall = writeFile.mock.calls.find(([file]) => String(file).endsWith('manifest.json'));
+      expect(manifestCall).toBeTruthy();
+      expect(JSON.parse(manifestCall[1]).dbName).toBe('bioavanced');
+    });
+
     it('falls back to the canonical default database name when MONGO_URI has no parseable URL shape', async () => {
       env.MONGO_URI = 'not-a-valid-mongodb-url';
       env.MONGO_DB = undefined;
