@@ -799,4 +799,29 @@ describe('reports.routes item 8 more residual canonical branches', () => {
     expect(assignments.resolveUserOrganizationScope).toHaveBeenCalledTimes(2);
   });
 
+
+  it('GET /:type/filters returns an empty catalog for an active custom handler without predefined filters', async () => {
+    const db = {
+      collection(name) {
+        expect(name).toBe('reportTemplates');
+        return {
+          findOne: vi.fn().mockResolvedValue({
+            code: 'custom_item8',
+            handlerKey: 'customHandlerWithoutCatalog',
+            templateStatus: 'active',
+          }),
+        };
+      },
+    };
+
+    const res = await request(buildApp(db)).get('/api/reports/custom_item8/filters');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      filters: [],
+      reportType: 'custom_item8',
+      handlerKey: 'customHandlerWithoutCatalog',
+    });
+  });
+
 });
