@@ -348,7 +348,10 @@ class BatchValidationEngine {
   buildSampleRow(rawRow = {}) {
     const mapped = {};
     const headerMap = {
-      patientid: 'patientID',
+      // Canonical v2: normalize both the historical CSV header patientID and
+      // the canonical participantId header to Participant.participantId.
+      patientid: 'participantId',
+      participantid: 'participantId',
       sampleid: 'sampleID',
       specimenid: 'sampleID',
       sampletype: 'sampleType',
@@ -455,7 +458,7 @@ class BatchValidationEngine {
     const criteria = [];
 
     const patientID = this.normalizePatientID(
-      patientData.patientID || rawRow.patientID || rawRow.patientId || rawRow.patient_id
+      patientData.participantId || patientData.patientID || rawRow.participantId || rawRow.patientID || rawRow.patientId || rawRow.patient_id
     );
     if (patientID) {
       // #853: `patients` never persists a `patientID` key (Patient.js's
@@ -523,7 +526,7 @@ class BatchValidationEngine {
       || ''
     ).trim();
     const specimenObjectId = specimen?._id ? String(specimen._id).trim() : null;
-    const patientIdentifier = String(patient?.patientID || rawRow.patientID || '').trim();
+    const patientIdentifier = String(patient?.participantId || rawRow.participantId || rawRow.patientID || '').trim();
     const patientObjectId = patient?._id ? String(patient._id).trim() : null;
     // #768: the specimen legs used to read `registrationDate`/`registerDate`,
     // names e2549bee canonicalized away. Sample.js:38 declares `registeredAt`
@@ -586,7 +589,7 @@ class BatchValidationEngine {
       }
 
       payloads.push({
-        patientID: patientIdentifier,
+        participantId: patientIdentifier,
         patientObjectId,
         biomarkerType,
         value: numericValue,
@@ -754,10 +757,10 @@ class BatchValidationEngine {
    *
    * Fluxo de record linkage:
    * 1. Procura o paciente por identificadores estáveis informados na linha
-   *    (CPF, prontuário, patientID ou _id legado).
+   *    (participantId canônico, CPF, prontuário ou _id).
    * 2. Se o paciente existir, reutiliza o _id interno de MongoDB.
    * 3. Se não existir, cria um novo Patient e captura o novo _id.
-   * 4. Cria a Specimen vinculada ao patientID legado e ao patientObjectId interno.
+   * 4. Cria a Specimen vinculada ao participantId canônico e ao patientObjectId interno.
    * 5. Cria Observations apenas quando a linha traz biomarcadores válidos.
    *
    * Isso permite importar follow-ups clínicos sem duplicar pacientes e sem
@@ -765,7 +768,7 @@ class BatchValidationEngine {
    */
   async persistSample(db, rawRow, rowNumber, context = {}) {
     const sampleData = importLGPDService.parseSampleRow(this.buildSampleRow(rawRow));
-    sampleData.patientID = sampleData.patientID ? String(sampleData.patientID).trim() : null;
+    sampleData.participantId = sampleData.participantId ? String(sampleData.participantId).trim() : null;
     sampleData.sampleType = sampleData.sampleType ? String(sampleData.sampleType).trim() : null;
     sampleData.sampleOrigin = sampleData.sampleOrigin ? String(sampleData.sampleOrigin).trim() : null;
     sampleData.extractionProtocol = sampleData.extractionProtocol ? String(sampleData.extractionProtocol).trim() : null;
@@ -834,7 +837,7 @@ class BatchValidationEngine {
         });
       }
 
-      sampleData.patientID = String(patient.patientID || sampleData.patientID || '').trim();
+      sampleData.participantId = String(patient.participantId || sampleData.participantId || '').trim();
       sampleData.patientObjectId = String(patient._id || '').trim();
       sampleData.semanticCascade = {
         disease: semanticCascade.disease,
