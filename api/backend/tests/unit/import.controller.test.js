@@ -388,6 +388,9 @@ describe('import.controller item 8 upload filter branches', () => {
   it('rejects a blocked executable extension even when its MIME type would otherwise be allowed', async () => {
     const app = express();
     app.post('/upload', controller.uploadMiddleware(), (_req, res) => res.status(204).end());
+    app.use((err, _req, res, _next) => {
+      res.status(err.status || 500).json({ error: err.message });
+    });
 
     const response = await request(app)
       .post('/upload')
@@ -397,12 +400,15 @@ describe('import.controller item 8 upload filter branches', () => {
       });
 
     expect(response.status).toBe(400);
-    expect(response.text).toMatch(/Formato de arquivo não seguro/);
+    expect(response.body.error).toBe('Formato de arquivo não seguro');
   });
 
   it('rejects an unapproved MIME type when the extension is not explicitly blocked', async () => {
     const app = express();
     app.post('/upload', controller.uploadMiddleware(), (_req, res) => res.status(204).end());
+    app.use((err, _req, res, _next) => {
+      res.status(err.status || 500).json({ error: err.message });
+    });
 
     const response = await request(app)
       .post('/upload')
@@ -412,6 +418,6 @@ describe('import.controller item 8 upload filter branches', () => {
       });
 
     expect(response.status).toBe(400);
-    expect(response.text).toMatch(/Formato de arquivo não seguro/);
+    expect(response.body.error).toBe('Formato de arquivo não seguro');
   });
 });
