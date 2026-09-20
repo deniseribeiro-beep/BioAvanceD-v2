@@ -370,3 +370,68 @@ describe('AuthService item 8 residual branch coverage', () => {
   });
 
 });
+
+
+describe('AuthService item 8 password-reset development branches', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns the development reset token/link using the configured frontend base URL', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalFrontendUrl = process.env.FRONTEND_URL;
+    try {
+      process.env.NODE_ENV = 'development';
+      process.env.FRONTEND_URL = 'https://frontend.example.test';
+
+      const { db, users } = usersDb(vi.fn().mockResolvedValue(BASE_USER));
+      const result = await authService.requestPasswordReset(
+        db,
+        'user@test.com',
+        { language: 'pt-BR' }
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.token).toEqual(expect.any(String));
+      expect(result.resetLink).toBe(
+        `https://frontend.example.test/reset-password?token=${result.token}`
+      );
+      expect(users.updateOne).toHaveBeenCalledWith(
+        { _id: BASE_USER._id },
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            passwordResetTokenHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+            passwordResetExpires: expect.any(Date),
+          }),
+        })
+      );
+    } finally {
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalNodeEnv;
+      if (originalFrontendUrl === undefined) delete process.env.FRONTEND_URL;
+      else process.env.FRONTEND_URL = originalFrontendUrl;
+    }
+  });
+
+  it('uses the localhost frontend fallback for development when FRONTEND_URL is absent', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalFrontendUrl = process.env.FRONTEND_URL;
+    try {
+      process.env.NODE_ENV = 'development';
+      delete process.env.FRONTEND_URL;
+
+      const { db } = usersDb(vi.fn().mockResolvedValue(BASE_USER));
+      const result = await authService.requestPasswordReset(db, 'user@test.com', {});
+
+      expect(result.token).toEqual(expect.any(String));
+      expect(result.resetLink).toBe(
+        `http://localhost:5173/reset-password?token=${result.token}`
+      );
+    } finally {
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalNodeEnv;
+      if (originalFrontendUrl === undefined) delete process.env.FRONTEND_URL;
+      else process.env.FRONTEND_URL = originalFrontendUrl;
+    }
+  });
+});
