@@ -337,6 +337,14 @@ describe('BatchValidationEngine.buildPatientLinkageQuery', () => {
     expect(criteria).toEqual([{ participantId: '12345678' }]);
   });
 
+  it('uses canonical participantId from parsed Patient data before historical input aliases', () => {
+    const criteria = engine.buildPatientLinkageQuery(
+      { patientID: '87654321' },
+      { participantId: '12345678' }
+    );
+    expect(criteria[0]).toEqual({ participantId: '12345678' });
+  });
+
   it('returns empty array when nothing resolves', () => {
     const criteria = engine.buildPatientLinkageQuery({}, {});
     expect(criteria).toEqual([]);
@@ -362,7 +370,7 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
   it('returns a payload per valid biomarker field', () => {
     const { payloads, warnings } = engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'alphaGal:12.5,lysoGb3:4.2' },
-      { patientID: 'P1', _id: 'patient-1' },
+      { participantId: 'P1', _id: 'patient-1' },
       { sampleID: 'S1', _id: 'sample-1' }
     );
 
@@ -409,7 +417,7 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
       { sampleId: 'specimen-sample-id' }
     );
 
-    expect(payloads[0].patientID).toBe('raw-patient-id');
+    expect(payloads[0].participantId).toBe('raw-patient-id');
     expect(payloads[0].sampleID).toBe('specimen-sample-id');
   });
 
@@ -533,7 +541,7 @@ describe('BatchValidationEngine item 8 reader/linkage residuals', () => {
   it('warns and skips a named biomarker token that omits its numeric value', () => {
     const result = engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'alphaGal' },
-      { patientID: '12345678' },
+      { participantId: '12345678' },
       { sampleID: 'S-1' }
     );
 
@@ -551,7 +559,7 @@ describe('BatchValidationEngine item 8 reader/linkage residuals', () => {
     );
 
     expect(result.payloads[0]).toMatchObject({
-      patientID: '12345678',
+      participantId: '12345678',
       patientObjectId: null,
       sampleID: 'BC-ITEM8',
       specimenId: 'BC-ITEM8',
@@ -1015,7 +1023,7 @@ describe('BatchValidationEngine item 8 legitimate residuals', () => {
   });
 
   it('persists a provided linkedProject through the sample import normalization path', async () => {
-    const patient = { _id: 'patient-1', patientID: '12345678' };
+    const patient = { _id: 'patient-1', participantId: '12345678' };
     vi.spyOn(engine, 'findLinkedPatient').mockResolvedValue(patient);
     vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-1' });
     vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({ _id: 'obs-1' });
@@ -1182,7 +1190,7 @@ describe('BatchValidationEngine item 8 canonical linkage fallback', () => {
     expect(createSample).toHaveBeenCalledWith(
       {},
       expect.objectContaining({
-        patientID: '12345678',
+        participantId: '12345678',
         patientObjectId: 'patient-canonical-id',
       }),
       expect.any(Object)
