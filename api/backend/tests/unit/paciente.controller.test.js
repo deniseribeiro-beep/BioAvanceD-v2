@@ -575,6 +575,33 @@ describe('paciente.controller', () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
+
+    it('forwards the configured Neo4j driver to patientService during a canonical update', async () => {
+      const neo4jDriver = { session: vi.fn() };
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue(null);
+      const update = vi.spyOn(patientService, 'updatePatient')
+        .mockResolvedValue({ participantId: '12345678' });
+      const { freshController, spy: complianceSpy } = reloadControllerWithFreshCompliancySpy();
+      const db = {};
+      const req = createReq({
+        app: { locals: { db, neo4jDriver } },
+        params: { id: '12345678' },
+        body: { clinicalUnit: 'ONCO' },
+      });
+      const res = createRes();
+
+      await freshController.atualizar(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(update).toHaveBeenCalledWith(
+        db,
+        '12345678',
+        expect.objectContaining({ clinicalUnit: 'ONCO' }),
+        { neo4jDriver }
+      );
+      expect(complianceSpy).toHaveBeenCalledWith(db, '12345678');
+    });
+
     it('logs audit error and returns error statusCode when update fails', async () => {
       const error = new Error('boom');
       error.statusCode = 422;
