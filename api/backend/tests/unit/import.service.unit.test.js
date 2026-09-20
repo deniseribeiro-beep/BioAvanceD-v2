@@ -582,8 +582,9 @@ describe('ImportService item 8 remaining spreadsheet branches', () => {
       tipoAmostra: ' PLASMA ',
       origemAmostra: ' VENOUS_BLOOD ',
       protocoloExtracao: ' EDTA ',
-      quantidade: 'not-a-float',
-      qualidade: 'not-a-float',
+      quantity: 'not-a-float',
+      quality: 'GOOD',
+      qualityScore: 'not-a-float',
       dataRegistro: 'not-a-date',
     });
 
@@ -596,7 +597,7 @@ describe('ImportService item 8 remaining spreadsheet branches', () => {
     });
     expect(parsed.parseErrors).toEqual(expect.arrayContaining([
       expect.stringContaining('quantity inválido'),
-      expect.stringContaining('quality inválido'),
+      expect.stringContaining('rcsScore inválido'),
       expect.stringContaining('registeredAt em formato inválido'),
     ]));
   });
