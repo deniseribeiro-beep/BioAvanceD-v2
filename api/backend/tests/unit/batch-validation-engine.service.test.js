@@ -138,6 +138,7 @@ describe('batch-validation-engine.service', () => {
     const createPatientSpy = vi.spyOn(patientService, 'createPatient');
     const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: 'sample-object-id-1',
+      specimenId: 'SPEC-BATCH-001',
       sampleID: 'sample-001',
     });
     const createObservationSpy = vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({
@@ -188,6 +189,8 @@ describe('batch-validation-engine.service', () => {
         participantId: '12345678',
         patientObjectId: 'patient-object-id-1',
         specimenObjectId: 'sample-object-id-1',
+        specimenId: 'SPEC-BATCH-001',
+        specimen: { reference: 'Specimen/SPEC-BATCH-001' },
         linkedResourceId: 'patient-object-id-1',
       })
     );
