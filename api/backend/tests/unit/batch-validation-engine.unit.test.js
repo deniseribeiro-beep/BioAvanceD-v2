@@ -1,4 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
+
+// Stage 2 consolidated validation checkpoint: no behavioral change.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
