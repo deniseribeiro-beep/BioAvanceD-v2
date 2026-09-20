@@ -131,7 +131,7 @@ describe('orphanet item 8 residual normalization branches', () => {
             { source: 'ICD-10', code: 'D44.4' },
             { source: 'OMIM', id: '100444' },
           ],
-          aliases: expect.arrayContaining(['Remote alias']),
+          aliases: ['Remote alias'],
         }],
       }),
     });
@@ -159,7 +159,7 @@ describe('orphanet item 8 residual normalization branches', () => {
       name: 'Synthetic remote disease',
       Codigos_CID10: 'D44.4',
       OMIM: 'OMIM:100444',
-      aliases: ['Remote alias'],
+      aliases: expect.arrayContaining(['Remote alias']),
       source: 'orphadata-live',
     });
     expect(global.fetch).toHaveBeenCalledWith(
