@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createRequire } from 'module';
@@ -12,22 +12,37 @@ const { auditInit, auditCreate, auditUpdate, auditDelete } = vi.hoisted(() => ({
   auditDelete: vi.fn(),
 }));
 
-vi.mock('../../src/infrastructure/middleware/auth', () => ({
-  authenticate: (_req, _res, next) => next(),
-}));
+// These routes are CommonJS and destructure middleware at require-time.
+const authModule = require('../../src/infrastructure/middleware/auth');
+const rbacModule = require('../../src/infrastructure/middleware/rbac');
+const auditLogger = require('../../src/utils/auditLogger');
 
-vi.mock('../../src/infrastructure/middleware/rbac', () => ({
-  requirePermission: () => (_req, _res, next) => next(),
-}));
+const originals = {
+  authenticate: authModule.authenticate,
+  requirePermission: rbacModule.requirePermission,
+  auditInit: auditLogger.init,
+  auditCreate: auditLogger.logCreate,
+  auditUpdate: auditLogger.logUpdate,
+  auditDelete: auditLogger.logDelete,
+};
 
-vi.mock('../../src/utils/auditLogger', () => ({
-  init: auditInit,
-  logCreate: auditCreate,
-  logUpdate: auditUpdate,
-  logDelete: auditDelete,
-}));
+authModule.authenticate = (_req, _res, next) => next();
+rbacModule.requirePermission = () => (_req, _res, next) => next();
+auditLogger.init = auditInit;
+auditLogger.logCreate = auditCreate;
+auditLogger.logUpdate = auditUpdate;
+auditLogger.logDelete = auditDelete;
 
 const router = require('../../src/interface/routes/access.routes');
+
+afterAll(() => {
+  authModule.authenticate = originals.authenticate;
+  rbacModule.requirePermission = originals.requirePermission;
+  auditLogger.init = originals.auditInit;
+  auditLogger.logCreate = originals.auditCreate;
+  auditLogger.logUpdate = originals.auditUpdate;
+  auditLogger.logDelete = originals.auditDelete;
+});
 
 function makeApp(db) {
   const app = express();
