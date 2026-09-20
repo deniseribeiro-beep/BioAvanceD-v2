@@ -183,6 +183,70 @@ describe('terminologies.routes', () => {
       expect(response.body.data).toHaveLength(1);
     });
 
+    it('hidrata CIDs cujo vínculo ORPHA existe apenas no relacoes.orpha canônico', async () => {
+      const { db, terminologiesFindFn, terminologiesBulkWrite } = buildDb({
+        terminologiesFind: [],
+        terminologiesCount: 0,
+        cids: [{
+          relacoes: { orpha: '324' },
+          Descricao: 'Doença de Fabry sintética',
+        }],
+      });
+
+      terminologiesFindFn
+        .mockImplementationOnce(() => cursor([]))
+        .mockImplementationOnce(() => cursor([{
+          _id: 'rel-orpha-1',
+          codigo: 'ORPHA:324',
+          sistema: 'ORPHA',
+          descricao: 'Doença de Fabry sintética',
+        }]));
+
+      const app = buildApp(db);
+      const response = await request(app).get('/api/terminologies?q=324');
+
+      expect(response.status).toBe(200);
+      expect(terminologiesBulkWrite).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            updateOne: expect.objectContaining({
+              filter: { sistema: 'ORPHA', codigo: 'ORPHA:324' },
+            }),
+          }),
+        ]),
+        { ordered: false }
+      );
+    });
+
+    it('usa o próprio código ORPHA como descrição quando a redundância orphanet não traz rótulo', async () => {
+      const { db, terminologiesFindFn, terminologiesBulkWrite } = buildDb({
+        terminologiesFind: [],
+        terminologiesCount: 0,
+        cids: [],
+        orphanetDiseases: [{ code: '999999' }],
+      });
+
+      terminologiesFindFn
+        .mockImplementationOnce(() => cursor([]))
+        .mockImplementationOnce(() => cursor([{
+          _id: 'orpha-code-only',
+          codigo: 'ORPHA:999999',
+          sistema: 'ORPHA',
+          descricao: 'ORPHA:999999',
+        }]));
+
+      const app = buildApp(db);
+      const response = await request(app).get('/api/terminologies?q=999999');
+
+      expect(response.status).toBe(200);
+      const operations = terminologiesBulkWrite.mock.calls[0][0];
+      expect(operations[0].updateOne.update.$set).toMatchObject({
+        codigo: 'ORPHA:999999',
+        descricao: 'ORPHA:999999',
+        label: 'ORPHA:999999',
+      });
+    });
+
     it('cai para orphanet_diseases quando cids não preenche o limite', async () => {
       const { db, terminologiesFindFn, orphanetFind } = buildDb({
         terminologiesFind: [],
@@ -275,6 +339,49 @@ describe('terminologies.routes', () => {
       expect(terminologiesBulkWrite).toHaveBeenCalled();
       expect(orphanetBulkWrite).toHaveBeenCalled();
       expect(response.body.data).toHaveLength(1);
+    });
+
+    it('ignora referência externa sem Source/source antes de resolver referências válidas do Orphadata', async () => {
+      process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
+      process.env.ORPHADATA_BASE_URL = 'https://orphadata.test';
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          results: [{
+            ORPHAcode: '324',
+            'Preferred term': 'Fabry disease',
+            ExternalReference: [
+              { Reference: 'sem-fonte' },
+              { source: 'ICD-10', reference: 'E75.2' },
+              { source: 'OMIM', reference: '301500' },
+            ],
+          }],
+        }),
+      });
+
+      const { db, terminologiesFindFn, terminologiesBulkWrite } = buildDb({
+        terminologiesFind: [],
+        terminologiesCount: 0,
+      });
+      terminologiesFindFn
+        .mockImplementationOnce(() => cursor([]))
+        .mockImplementationOnce(() => cursor([{
+          _id: 'remote-ref-1',
+          codigo: 'ORPHA:324',
+          sistema: 'ORPHA',
+          descricao: 'Fabry disease',
+        }]));
+
+      const app = buildApp(db);
+      const response = await request(app).get('/api/terminologies?q=Fabry');
+
+      expect(response.status).toBe(200);
+      const operations = terminologiesBulkWrite.mock.calls[0][0];
+      expect(operations[0].updateOne.update.$set.relacoes).toMatchObject({
+        cid: 'E75.2',
+        omim: 'OMIM:301500',
+      });
     });
 
     it('não busca remoto quando ALLOW_EXTERNAL_TERMINOLOGY_SYNC está desabilitado', async () => {
