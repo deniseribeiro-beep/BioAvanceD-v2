@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+const fs = require('fs');
+
 // #977: src/workers/worker.js is the worker process entrypoint and had NO test
 // at all, on either half of the decision it makes. That matters because the
 // decision is an asymmetry: this process treats ANY Redis failure as fatal
@@ -22,6 +24,7 @@ const dotenvPath = require.resolve('dotenv');
 
 let fakeInitWorker;
 let fakeTestRedisConnection;
+let fakeGetRedisInstance;
 let exitSpy;
 let signalListenersBefore;
 
@@ -48,6 +51,7 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
 
     fakeInitWorker = vi.fn().mockResolvedValue({});
     fakeTestRedisConnection = vi.fn().mockResolvedValue(true);
+    fakeGetRedisInstance = vi.fn(() => ({ ping: vi.fn().mockResolvedValue('PONG') }));
 
     exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined);
 
@@ -55,7 +59,7 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
     stub(loggerPath, { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() });
     stub(importWorkerPath, { initWorker: fakeInitWorker, closeWorker: vi.fn() });
     stub(queueConfigPath, { testConnection: vi.fn().mockResolvedValue(true) });
-    stub(redisConfigPath, { testRedisConnection: fakeTestRedisConnection });
+    stub(redisConfigPath, { testRedisConnection: fakeTestRedisConnection, getRedisInstance: fakeGetRedisInstance });
     stub(dailyMerkleJobPath, { scheduleNextRun: vi.fn() });
   });
 
@@ -157,6 +161,94 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
 
       expect(fakeInitWorker).toHaveBeenCalled();
       expect(exitSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('item 8 worker scheduler and heartbeat residual branches', () => {
+    it('keeps worker startup alive when the optional daily Merkle scheduler throws during registration', async () => {
+      const logger = require(loggerPath);
+      const scheduleNextRun = vi.fn(() => {
+        throw new Error('scheduler unavailable');
+      });
+      stub(dailyMerkleJobPath, { scheduleNextRun });
+
+      await loadWorker();
+
+      expect(scheduleNextRun).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Job daily-merkle não registrado:',
+        'scheduler unavailable'
+      );
+      expect(fakeInitWorker).toHaveBeenCalledTimes(1);
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it('skips scheduler registration cleanly when the optional module has no scheduleNextRun function', async () => {
+      stub(dailyMerkleJobPath, {});
+
+      await loadWorker();
+
+      expect(fakeInitWorker).toHaveBeenCalledTimes(1);
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it('writes the heartbeat only after a live Redis PONG', async () => {
+      const ping = vi.fn().mockResolvedValue('PONG');
+      fakeGetRedisInstance.mockReturnValue({ ping });
+      const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      let heartbeatCallback = null;
+      const unref = vi.fn();
+      vi.spyOn(global, 'setInterval').mockImplementation((callback) => {
+        heartbeatCallback = callback;
+        return { unref };
+      });
+
+      await loadWorker();
+      expect(typeof heartbeatCallback).toBe('function');
+      expect(unref).toHaveBeenCalledTimes(1);
+
+      await heartbeatCallback();
+
+      expect(ping).toHaveBeenCalledTimes(1);
+      expect(writeSpy).toHaveBeenCalledWith('/tmp/worker-heartbeat', expect.any(String));
+    });
+
+    it('does not refresh the heartbeat when Redis responds with a non-PONG value', async () => {
+      const ping = vi.fn().mockResolvedValue('LOADING');
+      fakeGetRedisInstance.mockReturnValue({ ping });
+      const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      let heartbeatCallback = null;
+      vi.spyOn(global, 'setInterval').mockImplementation((callback) => {
+        heartbeatCallback = callback;
+        return { unref: vi.fn() };
+      });
+
+      await loadWorker();
+      await heartbeatCallback();
+
+      expect(ping).toHaveBeenCalledTimes(1);
+      expect(writeSpy).not.toHaveBeenCalled();
+    });
+
+    it('logs a heartbeat ping failure without throwing or writing a stale heartbeat', async () => {
+      const logger = require(loggerPath);
+      const ping = vi.fn().mockRejectedValue(new Error('redis heartbeat down'));
+      fakeGetRedisInstance.mockReturnValue({ ping });
+      const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      let heartbeatCallback = null;
+      vi.spyOn(global, 'setInterval').mockImplementation((callback) => {
+        heartbeatCallback = callback;
+        return { unref: vi.fn() };
+      });
+
+      await loadWorker();
+      await expect(heartbeatCallback()).resolves.toBeUndefined();
+
+      expect(writeSpy).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[WARN] Falha ao gravar heartbeat do worker:',
+        'redis heartbeat down'
+      );
     });
   });
 });
