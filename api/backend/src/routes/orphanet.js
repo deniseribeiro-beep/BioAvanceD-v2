@@ -88,11 +88,11 @@ function normalizeDiseaseRecord(item = {}, source = 'local') {
     || item.relacoes?.omim
     || externalRefs.omim
   );
-  const synonyms = Array.from(new Set([
+  const synonyms = [
     ...(Array.isArray(item.synonyms) ? item.synonyms : []),
     ...(Array.isArray(item.aliases) ? item.aliases : []),
     ...(Array.isArray(item.Synonym) ? item.Synonym.map((entry) => entry?.label || entry?.Label || entry?._ || entry) : []),
-  ].map(normalizeText).filter(Boolean)));
+  ].map(normalizeText).filter(Boolean);
   const name = normalizeText(
     item.name
     || item.namePt
