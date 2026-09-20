@@ -391,7 +391,7 @@ describe('batch-validation-engine.service item 8 linkage and biomarker residuals
 
     const result = batchValidationEngine.buildBiomarkerObservationPayloads(
       {
-        biomarkers: 'alpha=2,5;beta;gamma=-1',
+        biomarkers: 'alpha=2.5;beta;gamma=-1',
       },
       patient,
       specimen
