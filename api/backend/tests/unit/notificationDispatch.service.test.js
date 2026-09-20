@@ -308,12 +308,20 @@ describe('notificationDispatch.service item 8 residual branches', () => {
     const users = createCollectionMock({ aggregate: vi.fn() });
     const db = createDbMock({ users, notificationRules: notificationRules.mock, notifications: notifications.mock });
 
-    await notificationRuleService.createRule(db, {
+    // The canonical rule API rejects an empty recipientRoleCodes array.
+    // Seed a persisted legacy/malformed row directly to prove the dispatcher
+    // remains fail-safe without weakening v2 rule validation.
+    notificationRules.docs.push({
+      _id: new ObjectId(),
+      version: 'v-legacy-empty-roles',
       eventType: 'in_app_only',
       channels: ['in_app'],
       recipientRoleCodes: [],
       sensitiveFieldsAllowlist: [],
       maxDeliveryMinutes: 2,
+      active: true,
+      escalation: { enabled: false },
+      createdAt: new Date(),
     });
 
     const result = await notificationDispatchService.dispatchNotification(db, {
@@ -331,12 +339,19 @@ describe('notificationDispatch.service item 8 residual branches', () => {
     const notifications = statefulCollection();
     const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock });
 
-    await notificationRuleService.createRule(db, {
+    // Unsupported channels cannot be created through the canonical v2 API.
+    // A raw persisted fixture exercises defensive dispatch of historical data.
+    notificationRules.docs.push({
+      _id: new ObjectId(),
+      version: 'v-legacy-fax',
       eventType: 'unsupported_channel_event',
       channels: ['fax'],
       recipientRoleCodes: ['administrator'],
       sensitiveFieldsAllowlist: [],
       maxDeliveryMinutes: 2,
+      active: true,
+      escalation: { enabled: false },
+      createdAt: new Date(),
     });
 
     const result = await notificationDispatchService.dispatchNotification(db, {
@@ -381,13 +396,19 @@ describe('notificationDispatch.service item 8 residual branches', () => {
     const notifications = statefulCollection();
     const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock });
 
-    await notificationRuleService.createRule(db, {
+    // Canonical validation rejects the unsupported escalation channel.
+    // Seed it directly as historical persisted data so dispatch remains robust.
+    notificationRules.docs.push({
+      _id: new ObjectId(),
+      version: 'v-legacy-pager',
       eventType: 'failed_escalation_event',
       channels: ['email'],
       recipientRoleCodes: ['coordinator'],
       sensitiveFieldsAllowlist: [],
       maxDeliveryMinutes: 2,
+      active: true,
       escalation: { enabled: true, afterFailures: 1, channel: 'pager' },
+      createdAt: new Date(),
     });
 
     const result = await notificationDispatchService.dispatchNotification(db, {
