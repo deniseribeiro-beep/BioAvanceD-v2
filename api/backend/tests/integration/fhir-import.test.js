@@ -1120,6 +1120,165 @@ describe('FHIR import staging', () => {
     });
   });
 
+
+  describe('item 8 FHIR boundary and alternate representation branches', () => {
+    it('rejects an empty Bundle and a Bundle with resources but no Specimen', async () => {
+      await expect(
+        fhirImportStagingService.stageBundle(db, { resourceType: 'Bundle', entry: [] }, { fileName: 'empty.json' })
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        message: 'Bundle FHIR JSON inválido ou sem entradas.',
+      });
+
+      await expect(
+        fhirImportStagingService.stageBundle(db, {
+          resourceType: 'Bundle',
+          entry: [{
+            resource: {
+              resourceType: 'Patient',
+              id: 'P-NOSPEC',
+              name: [{ text: 'Paciente sem espécime' }],
+              identifier: [{ value: 'DOC-NOSPEC' }],
+            },
+          }],
+        }, { fileName: 'no-specimen.json' })
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        message: 'Bundle FHIR não contém Specimen para staging.',
+      });
+    });
+
+    it('normalizes urn:uuid references, given/family names, accession barcode and CodeableConcept observation values', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          {
+            resource: {
+              resourceType: 'Patient',
+              id: 'patient-uuid-1',
+              name: [{ given: ['Ana', 'Maria'], family: 'Silva' }],
+              identifier: [{ system: 'urn:cpf', value: 'DOC-UUID-1' }],
+              telecom: [{ system: 'email', value: 'ana@example.org' }],
+            },
+          },
+          {
+            resource: {
+              resourceType: 'Consent',
+              status: 'active',
+              subject: { reference: 'urn:uuid:patient-uuid-1' },
+            },
+          },
+          {
+            resource: {
+              resourceType: 'Observation',
+              subject: { reference: 'urn:uuid:patient-uuid-1' },
+              specimen: { reference: 'urn:uuid:specimen-uuid-1' },
+              code: { coding: [{ display: 'Marker display fallback' }] },
+              valueCodeableConcept: { text: 'positive' },
+            },
+          },
+          {
+            resource: {
+              resourceType: 'Specimen',
+              id: 'specimen-uuid-1',
+              subject: { reference: 'urn:uuid:patient-uuid-1' },
+              type: { coding: [{ code: 'PLASMA' }] },
+              accessionIdentifier: { value: 'ACC-UUID-1' },
+            },
+          },
+        ],
+      };
+
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'uuid.json' });
+      const record = result.records[0];
+
+      expect(record.status).toBe('READY_TO_COMMIT');
+      expect(record.normalized).toMatchObject({
+        participantId: 'patient-uuid-1',
+        patientName: 'Ana Maria Silva',
+        patientDocument: 'DOC-UUID-1',
+        specimenId: 'specimen-uuid-1',
+        sampleType: 'PLASMA',
+        barcode: 'ACC-UUID-1',
+        consentSigned: true,
+      });
+      expect(record.normalized.biomarkers).toEqual([
+        expect.objectContaining({
+          biomarkerType: 'Marker display fallback',
+          value: 'positive',
+          unit: '',
+        }),
+      ]);
+    });
+
+    it('recalculates a missing-email-only record as NEEDS_REVIEW with its canonical warning', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          {
+            resource: {
+              resourceType: 'Patient',
+              id: 'P-REVIEW',
+              name: [{ text: 'Paciente Revisão' }],
+              identifier: [{ value: 'DOC-REVIEW' }],
+            },
+          },
+          {
+            resource: {
+              resourceType: 'Specimen',
+              id: 'S-REVIEW',
+              subject: { reference: 'Patient/P-REVIEW' },
+              type: { text: 'SANGUE' },
+            },
+          },
+        ],
+      };
+
+      const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'review.json' });
+      expect(staged.records[0].status).toBe('NEEDS_REVIEW');
+
+      const validated = await fhirImportStagingService.validateBatch(db, staged.batch._id);
+
+      expect(validated.records[0].status).toBe('NEEDS_REVIEW');
+      expect(validated.records[0].warnings).toEqual([
+        { field: 'consent', message: 'Registro sem e-mail permanece em revisão.' },
+      ]);
+    });
+
+    it('keeps staging available when the auxiliary audit collection rejects the audit write', async () => {
+      db.collections.audit_logs.insertOne.mockRejectedValueOnce(new Error('audit store unavailable'));
+
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          {
+            resource: {
+              resourceType: 'Patient',
+              id: 'P-AUDIT-FAIL',
+              name: [{ text: 'Paciente Audit Fail' }],
+              identifier: [{ value: 'DOC-AUDIT-FAIL' }],
+              telecom: [{ system: 'email', value: 'audit@example.org' }],
+            },
+          },
+          {
+            resource: {
+              resourceType: 'Specimen',
+              id: 'S-AUDIT-FAIL',
+              subject: { reference: 'Patient/P-AUDIT-FAIL' },
+              type: { text: 'SANGUE' },
+            },
+          },
+        ],
+      };
+
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'audit-fail.json' });
+
+      expect(result.batch._id).toBeTruthy();
+      expect(result.records).toHaveLength(1);
+      expect(result.records[0].normalized.specimenId).toBe('S-AUDIT-FAIL');
+    });
+  });
+
   describe('helpers de normalização com formatos FHIR alternativos', () => {
     it('resolve identificador por fallback quando nenhum identifier bate com o sistema preferido', async () => {
       const bundle = {
