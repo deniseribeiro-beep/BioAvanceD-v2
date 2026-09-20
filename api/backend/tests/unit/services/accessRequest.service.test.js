@@ -421,4 +421,72 @@ describe('accessRequest.service', () => {
       expect(evaluateAccessState(accessRequest, now)).toEqual(expected);
     });
   });
+
+  describe('item 8 residual access-state guards', () => {
+    it('defaults a request with no committee decision to pending', () => {
+      expect(evaluateAccessState({}, new Date('2026-06-15T00:00:00Z')))
+        .toEqual({ allowed: false, reason: 'pending' });
+    });
+
+    it('rejects compatibility evaluation for an unknown request', async () => {
+      const db = createFakeDb();
+      await expect(accessRequestService.evaluateCompatibility(db, 'missing-request'))
+        .rejects.toThrow('Solicitação de acesso não encontrada');
+    });
+
+    it('rejects a committee decision for an unknown request', async () => {
+      const db = createFakeDb();
+      await expect(accessRequestService.recordDecision(
+        db,
+        'missing-request',
+        { status: 'approved', justification: 'Synthetic approval' }
+      )).rejects.toThrow('Solicitação de acesso não encontrada');
+    });
+
+    it('rejects distribution for an unknown request', async () => {
+      const db = createFakeDb();
+      await expect(accessRequestService.markDistributed(db, 'missing-request'))
+        .rejects.toThrow('Solicitação de acesso não encontrada');
+    });
+
+    it('requires a non-blank revocation justification', async () => {
+      const db = createFakeDb();
+      await expect(accessRequestService.revokeAccess(db, 'request-1', '   ', 'coordinator-1'))
+        .rejects.toThrow('justification é obrigatório');
+    });
+
+    it('rejects revocation for an unknown request after a valid justification', async () => {
+      const db = createFakeDb();
+      await expect(accessRequestService.revokeAccess(db, 'missing-request', 'Consent withdrawn', 'coordinator-1'))
+        .rejects.toThrow('Solicitação de acesso não encontrada');
+    });
+
+    it('preserves the original committee decider when revocation omits decidedBy', async () => {
+      const db = createFakeDb({
+        samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1' }],
+        consents: [{ participantId: 'participant-1', status: 'ACTIVE' }],
+        studies: [{ studyId: 'study-1', studyStatus: 'active' }],
+      });
+      const created = await accessRequestService.createRequest(db, baseRequestPayload());
+      await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+      await accessRequestService.recordDecision(
+        db,
+        created.accessRequestId,
+        { status: 'approved', justification: 'Compatible' },
+        'committee-original'
+      );
+
+      const revoked = await accessRequestService.revokeAccess(
+        db,
+        created.accessRequestId,
+        'Consent withdrawn'
+      );
+
+      expect(revoked.committeeDecision).toMatchObject({
+        status: 'revoked',
+        decidedBy: 'committee-original',
+      });
+    });
+  });
+
 });
