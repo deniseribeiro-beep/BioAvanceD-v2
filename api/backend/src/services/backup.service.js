@@ -1186,25 +1186,5 @@ module.exports = {
   serializeBackupDocs,
   parseBackupDocs,
   restoreBackup,
-  testRestoreBackup,
-  _test: {
-    resolveRetentionDays,
-    resolveEncryptionEnabled,
-    isEncryptedMongodumpManifest,
-    formatDateFolder,
-    getBackupDirPath,
-    isPlainObject,
-    isNumberIntShape,
-    isNumberLongShape,
-    isNumericStringShape,
-    isDateWrapperShape,
-    isWellFormedWrapper,
-    hasLegacyDollarObject,
-    convertLegacyAwareTree,
-    resolveDatabaseName,
-    stripDefaultDatabase,
-    recordBackupHistory,
-    recordRestoreTestHistory,
-    cleanupDecryptedRestoreCopy,
-  }
+  testRestoreBackup
 };
