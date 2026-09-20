@@ -538,4 +538,109 @@ describe('reports.routes item 8 more residual canonical branches', () => {
     expect(res.body.data.patients[0]).not.toHaveProperty('consentToken');
   });
 
+
+  it('GET /sample/export returns the stable empty CSV payload when a configured report has no rows', async () => {
+    const templates = {
+      findOne: vi.fn().mockResolvedValue({
+        code: 'sample',
+        handlerKey: 'sample',
+        templateStatus: 'active',
+      }),
+    };
+    const samples = {
+      find: vi.fn(() => cursor([])),
+      countDocuments: vi.fn().mockResolvedValue(0),
+    };
+    const db = {
+      collection(name) {
+        if (name === 'reportTemplates') return templates;
+        if (name === 'samples') return samples;
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+
+    const res = await request(buildApp(db)).get('/api/reports/sample/export');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+    expect(res.text).toBe('total,message\n0,"Sem dados para exportação"');
+  });
+
+  it('POST /extracellular_network/preview applies organization scope to the canonical sample collection', async () => {
+    scope = { scope: 'organization', organizationIds: ['org-extra'] };
+    const samples = {
+      find: vi.fn((query) => {
+        expect(query).toEqual({
+          $and: [
+            {
+              $or: [
+                { linkedProject: { $regex: 'extracel', $options: 'i' } },
+                { sampleOrigin: { $regex: 'extracel', $options: 'i' } },
+              ],
+            },
+            { collectionSite: { $in: ['org-extra'] } },
+          ],
+        });
+        return cursor([{ specimenId: 'S-EXTRA', linkedProject: 'extracellular study' }]);
+      }),
+      countDocuments: vi.fn().mockResolvedValue(1),
+    };
+    const db = {
+      collection(name) {
+        if (name === 'reportTemplates') {
+          return { findOne: vi.fn().mockResolvedValue({
+            code: 'extracellular_network',
+            handlerKey: 'extracellularNetwork',
+            templateStatus: 'active',
+          }) };
+        }
+        if (name === 'samples') return samples;
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+
+    const res = await request(buildApp(db))
+      .post('/api/reports/extracellular_network/preview')
+      .send({ filters: {} });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.samples).toHaveLength(1);
+  });
+
+  it('POST /sample/preview resolves organization scope from req.user._id when userID is absent', async () => {
+    delete require.cache[modulePaths.route];
+    setCachedModule(modulePaths.auth, {
+      authenticate: (req, _res, next) => {
+        req.user = { _id: 'user-object-id' };
+        next();
+      },
+    });
+
+    const assignments = require(modulePaths.assignments);
+    const samples = {
+      find: vi.fn(() => cursor([])),
+      countDocuments: vi.fn().mockResolvedValue(0),
+    };
+    const db = {
+      collection(name) {
+        if (name === 'reportTemplates') {
+          return { findOne: vi.fn().mockResolvedValue({
+            code: 'sample',
+            handlerKey: 'sample',
+            templateStatus: 'active',
+          }) };
+        }
+        if (name === 'samples') return samples;
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+
+    const res = await request(buildApp(db))
+      .post('/api/reports/sample/preview')
+      .send({ filters: {} });
+
+    expect(res.status).toBe(200);
+    expect(assignments.resolveUserOrganizationScope).toHaveBeenCalledWith(db, 'user-object-id');
+  });
+
 });
