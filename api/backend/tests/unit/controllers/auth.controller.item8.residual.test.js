@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const authController = require('../../src/controllers/auth.controller');
-const authService = require('../../src/services/auth.service');
-const auditLogger = require('../../src/utils/auditLogger');
-const logger = require('../../src/utils/logger');
+const authController = require('../../../src/controllers/auth.controller');
+const authService = require('../../../src/services/auth.service');
+const auditLogger = require('../../../src/utils/auditLogger');
+const logger = require('../../../src/utils/logger');
 
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 
