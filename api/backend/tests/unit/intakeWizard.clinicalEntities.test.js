@@ -159,7 +159,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
   // #782: `failCollections` makes a named entity collection reject on insert,
   // so the outcome summary the wizard now returns can be asserted on a real
   // failure. Defaults to none, so every existing caller is unaffected.
-  async function runIntake(payload, { failCollections = [] } = {}) {
+  async function runIntake(payload, { failCollections = [], failureValueByCollection = {} } = {}) {
     clearCache();
 
     const notificationServiceModule = require(notificationServicePath);
@@ -218,6 +218,9 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       collections[key] = {
         docs: [],
         insertOne: vi.fn(async () => {
+          if (Object.prototype.hasOwnProperty.call(failureValueByCollection, key)) {
+            throw failureValueByCollection[key];
+          }
           throw new Error(`insert rejeitado (${key})`);
         }),
       };
@@ -832,15 +835,86 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       expect(collections.clinicalOutcomes.docs).toHaveLength(0);
     });
 
-    it('keeps best-effort reporting stable when service failures are non-Error values', async () => {
-      const { res } = await runIntake(VALID_PAYLOAD, { failCollections: ['encounters'] });
+    it('keeps best-effort reporting stable when every clinical integration rejects with a non-Error value', async () => {
+      const payload = {
+        ...VALID_PAYLOAD,
+        diagnosis: {
+          orphaCode: 'ORPHA:558',
+          omimCode: 'OMIM:154700',
+          icdCode: 'A00',
+        },
+        clinical: {
+          ...VALID_PAYLOAD.clinical,
+          allergies: [{ allergenName: 'Dipirona', allergenCode: '03730', reaction: 'Urticária' }],
+          familyHistories: [{
+            relationship: 'sibling',
+            conditionName: 'Synthetic family condition',
+            orphaCode: '',
+            onset: '',
+          }],
+          procedures: [{
+            procedureName: 'Liver biopsy',
+            procedureCode: 'LOCAL-001',
+            performed: '2026-01-15',
+            bodySite: 'Liver',
+          }],
+          observationRecords: [{
+            testName: 'Hemoglobina',
+            loincCode: '718-7',
+            value: '13.2',
+            unit: 'g/dL',
+            effectiveDate: '2026-01-15',
+          }],
+          clinicalOutcomes: [{
+            outcomeType: 'remission',
+            outcomeDate: '2026-02-01',
+          }],
+          charlsonConditions: ['copd'],
+        },
+      };
+
+      const failCollections = [
+        'encounters',
+        'conditions',
+        'phenotypeObservations',
+        'medicationExposures',
+        'allergyIntolerances',
+        'familyHistories',
+        'procedures',
+        'clinicalObservations',
+        'clinicalOutcomes',
+        'derivedScores',
+      ];
+      const failureValueByCollection = Object.fromEntries(
+        failCollections.map((key) => [key, `non-error failure: ${key}`])
+      );
+
+      const { res } = await runIntake(payload, {
+        failCollections,
+        failureValueByCollection,
+      });
 
       expect(res.status).toBe(200);
-      expect(res.body.clinicalEntities.failed).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ entity: 'Encounter' }),
-        ])
-      );
+      expect(res.body.success).toBe(true);
+      expect(res.body.clinicalEntities.recorded).toEqual({});
+      expect(res.body.clinicalEntities.failed).toHaveLength(10);
+
+      for (const entry of res.body.clinicalEntities.failed) {
+        expect(entry.error).toMatch(/^non-error failure: /);
+      }
+
+      expect(res.body.clinicalEntities.failed.map((entry) => entry.entity).sort()).toEqual([
+        'AllergyIntolerance',
+        'ClinicalObservation',
+        'ClinicalOutcome',
+        'Condition',
+        'DerivedScore',
+        'Encounter',
+        'FamilyHistory',
+        'MedicationExposure',
+        'PhenotypeObservation',
+        'Procedure',
+      ]);
     });
   });
 
