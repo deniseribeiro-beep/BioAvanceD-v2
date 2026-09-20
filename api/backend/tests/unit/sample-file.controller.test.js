@@ -2000,3 +2000,49 @@ describe('sample-file.controller', () => {
     });
   });
 });
+
+
+describe('sample-file.controller final item 8 legacy-boundary branch', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('listFiles resolves a historical numeric specimen identifier at the API boundary', async () => {
+    const sample = { _id: new ObjectId(), specimenId: 42, collectionSite: 'org-1' };
+    const sampleFindOne = vi.fn().mockImplementation(async (query) => (
+      query.specimenId === 42 ? sample : null
+    ));
+    const fileFind = vi.fn().mockReturnValue({
+      toArray: vi.fn().mockResolvedValue([
+        {
+          _id: new ObjectId(),
+          specimenId: sample._id.toString(),
+          fileName: 'legacy.csv',
+          fileType: 'CSV',
+          fileSize: 10,
+        },
+      ]),
+    });
+    const db = createDb({
+      samples: { findOne: sampleFindOne },
+      sample_files: { find: fileFind },
+    });
+    const req = {
+      app: { locals: { db } },
+      params: { specimenId: '42' },
+      user: null,
+      organizationScope: { scope: 'global', organizationIds: [] },
+    };
+    const res = createRes();
+
+    await controller.listFiles(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(sampleFindOne).toHaveBeenCalledWith({ specimenId: 42 });
+    expect(fileFind).toHaveBeenCalledWith({ specimenId: sample._id.toString() });
+    expect(res.json.mock.calls[0][0].data[0]).toMatchObject({
+      fileName: 'legacy.csv',
+      fileType: 'CSV',
+    });
+  });
+});
