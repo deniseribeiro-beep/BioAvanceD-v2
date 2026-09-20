@@ -723,3 +723,112 @@ describe('audit.controller.dashboardRoots', () => {
     expect(logger.error).toHaveBeenCalledWith('Erro ao listar roots do dashboard:', 'plain string failure');
   });
 });
+
+
+describe('audit.controller.anchorNow item 8 residual branches', () => {
+  const dailyMerkleJob = require('../../src/workers/jobs/daily-merkle.job');
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns 503 when the database is unavailable', async () => {
+    const req = { body: { date: '2026-09-19' }, app: { locals: { db: null } } };
+    const res = buildRes();
+
+    await auditController.anchorNow(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Banco de dados não disponível' });
+  });
+
+  it('defaults to yesterday when date is omitted and returns the anchored outcome', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const anchorDate = vi.spyOn(dailyMerkleJob, 'anchorDate').mockResolvedValue({
+      _id: 'head-1',
+      treeSize: 12,
+      anchorStatus: 'ANCHORED',
+      status: 'PENDING_TIMESTAMP',
+    });
+    const db = {};
+    const req = { body: {}, app: { locals: { db } } };
+    const res = buildRes();
+
+    await auditController.anchorNow(req, res);
+
+    expect(anchorDate).toHaveBeenCalledWith(db, '2026-09-19');
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: {
+        date: '2026-09-19',
+        treeHeadId: 'head-1',
+        treeSize: 12,
+        anchorStatus: 'ANCHORED',
+        status: 'PENDING_TIMESTAMP',
+      },
+    });
+  });
+
+  it('rejects a caller-supplied date outside YYYY-MM-DD before invoking the Merkle job', async () => {
+    const anchorDate = vi.spyOn(dailyMerkleJob, 'anchorDate');
+    const req = { body: { date: '20/09/2026' }, app: { locals: { db: {} } } };
+    const res = buildRes();
+
+    await auditController.anchorNow(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(anchorDate).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 when the requested date has no valid Merkle result to seal', async () => {
+    vi.spyOn(dailyMerkleJob, 'anchorDate').mockResolvedValue(null);
+    const req = { body: { date: '2026-09-19' }, app: { locals: { db: {} } } };
+    const res = buildRes();
+
+    await auditController.anchorNow(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Nenhum resultado Merkle válido para 2026-09-19; nada foi selado.',
+    });
+  });
+
+  it('returns the explicit date and tree-head outcome on a successful on-demand anchor', async () => {
+    vi.spyOn(dailyMerkleJob, 'anchorDate').mockResolvedValue({
+      _id: 'head-2',
+      treeSize: 5,
+      anchorStatus: 'TIMESTAMPED',
+      status: 'PENDING_TIMESTAMP',
+    });
+    const req = { body: { date: '2026-09-18' }, app: { locals: { db: {} } } };
+    const res = buildRes();
+
+    await auditController.anchorNow(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      data: expect.objectContaining({
+        date: '2026-09-18',
+        treeHeadId: 'head-2',
+        anchorStatus: 'TIMESTAMPED',
+      }),
+    }));
+  });
+
+  it('returns 500 and logs the underlying failure when anchoring throws', async () => {
+    vi.spyOn(dailyMerkleJob, 'anchorDate').mockRejectedValue(new Error('tsa unavailable'));
+    const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const req = { body: { date: '2026-09-18' }, app: { locals: { db: {} } } };
+    const res = buildRes();
+
+    await auditController.anchorNow(req, res);
+
+    expect(loggerSpy).toHaveBeenCalledWith('Erro ao ancorar tree head sob demanda:', 'tsa unavailable');
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'tsa unavailable' });
+  });
+});
