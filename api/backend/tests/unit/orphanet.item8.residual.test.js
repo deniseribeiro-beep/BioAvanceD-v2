@@ -209,4 +209,109 @@ describe('orphanet item 8 residual normalization branches', () => {
       OMIM: 'OMIM:100555',
     });
   });
+
+  it('covers canonical local aliases and duplicate-record enrichment without losing existing values', async () => {
+    const records = [
+      {
+        id: 'base-777',
+        ORPHA: '777',
+        Codigos_CID10: '',
+        OMIM: '',
+        name: 'Synthetic duplicate base',
+        synonyms: ['base synonym'],
+      },
+      {
+        id: 'enriched-777',
+        ORPHAcode: '777',
+        ICD_10: 'E77.7',
+        omim: '100777',
+        label: 'Synthetic duplicate enriched',
+        aliases: ['enriched alias'],
+      },
+      {
+        id: 'icd-888',
+        ORPHA: '888',
+        ICD10: 'E88.8',
+        OMIM: 'OMIM:100888',
+        preferredTerm: 'Synthetic ICD alias',
+      },
+    ];
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: vi.fn(() => cursor([])) };
+        if (name === 'orphanet_diseases') return { find: vi.fn(() => cursor(records)) };
+        throw new Error(`unexpected collection: ${name}`);
+      }),
+    };
+
+    const response = await request(loadApp(db))
+      .get('/api/orphanet/search?q=synthetic&lang=pt');
+
+    expect(response.status).toBe(200);
+    const merged = response.body.find((item) => item.code === '777');
+    expect(merged).toMatchObject({
+      code: '777',
+      Codigos_CID10: 'E77.7',
+      OMIM: 'OMIM:100777',
+    });
+    expect(merged.synonyms).toEqual(expect.arrayContaining(['base synonym', 'enriched alias']));
+
+    expect(response.body.find((item) => item.code === '888')).toMatchObject({
+      Codigos_CID10: 'E88.8',
+      OMIM: 'OMIM:100888',
+    });
+  });
+
+  it('returns an empty local result when external terminology sync is disabled', async () => {
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids' || name === 'orphanet_diseases') {
+          return { find: vi.fn(() => cursor([])) };
+        }
+        throw new Error(`unexpected collection: ${name}`);
+      }),
+    };
+
+    const response = await request(loadApp(db, {
+      ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false',
+      ORPHADATA_BASE_URL: 'https://orphadata.example.invalid',
+    }))
+      .get('/api/orphanet/search?q=no-match');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([]);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('applies the default language and clamps explicit search limits', async () => {
+    const seenFilters = [];
+    const seenLimits = [];
+    const db = {
+      collection: vi.fn((name) => ({
+        find: vi.fn((filter) => {
+          seenFilters.push({ name, filter });
+          return {
+            limit(value) {
+              seenLimits.push(value);
+              return this;
+            },
+            toArray: vi.fn().mockResolvedValue([]),
+          };
+        }),
+      })),
+    };
+
+    let response = await request(loadApp(db)).get('/api/orphanet/search?q=none&limit=100');
+    expect(response.status).toBe(200);
+    expect(seenLimits).toContain(50);
+    expect(seenFilters.find((entry) => entry.name === 'orphanet_diseases')?.filter.lang)
+      .toEqual({ $in: ['pt', '', null] });
+
+    seenLimits.length = 0;
+    response = await request(loadApp(db)).get('/api/orphanet/search?q=none&limit=-5');
+    expect(response.status).toBe(200);
+    expect(seenLimits).toContain(1);
+  });
+
 });
