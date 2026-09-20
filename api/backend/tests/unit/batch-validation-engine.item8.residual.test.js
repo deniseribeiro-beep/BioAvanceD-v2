@@ -183,7 +183,7 @@ describe('batch-validation-engine additional item8 residual branches', () => {
 
     const missing = engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'CRP;IL6=bad;LDL=-1;GLU=5.5', collectedAt: '2026-01-01' },
-      { patientID: 'P1', _id: 'PO1' },
+      { participantId: 'P1', _id: 'PO1' },
       { sampleID: 'S1', _id: 'SO1', registeredAt: new Date() }
     );
 
@@ -194,7 +194,7 @@ describe('batch-validation-engine additional item8 residual branches', () => {
     ]));
     expect(missing.payloads).toHaveLength(1);
     expect(missing.payloads[0]).toMatchObject({
-      patientID: 'P1',
+      participantId: 'P1',
       patientObjectId: 'PO1',
       biomarkerType: 'GLU',
       value: 5.5,
