@@ -720,4 +720,183 @@ describe('user.routes item 8 register-sample and normalization alternates', () =
   });
 });
 
+
+describe('user.routes item 8 administrative security success paths', () => {
+  it('reset-mfa unlocks an Administrator without destroying enrollment or revoking sessions', async () => {
+    const rbacAssignment = require('../../src/services/rbac-assignment.service');
+    const auditLogger = require('../../src/utils/auditLogger');
+    const sessionService = require('../../src/services/session.service');
+
+    const admin = vi.spyOn(rbacAssignment, 'isAdministrator').mockResolvedValue(true);
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const audit = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const invalidate = vi.spyOn(sessionService, 'invalidateUserSessions').mockResolvedValue(undefined);
+
+    const target = {
+      _id: { toString: () => 'admin-target' },
+      mfaEnabled: true,
+      mfaSecretCiphertext: 'ciphertext',
+      mfaLocked: true,
+      mfaFailedAttempts: 5,
+    };
+    const usersCollection = {
+      findOne: vi.fn().mockResolvedValue(target),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: { collection: () => usersCollection } });
+
+    const res = await request(app).post('/api/users/admin-target/reset-mfa');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, unlockedOnly: true });
+    expect(usersCollection.updateOne).toHaveBeenCalledWith(
+      expect.anything(),
+      { $set: expect.objectContaining({
+        mfaFailedAttempts: 0,
+        mfaLocked: false,
+      }) }
+    );
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'MFA',
+      payload: expect.objectContaining({
+        operation: 'unlock',
+        enrolmentPreserved: true,
+        secondFactorActive: true,
+        sessionsRevoked: false,
+      }),
+    }));
+
+    admin.mockRestore();
+    loadRoute();
+  });
+
+  it('reset-mfa removes a non-admin enrollment and revokes that target account sessions', async () => {
+    const rbacAssignment = require('../../src/services/rbac-assignment.service');
+    const auditLogger = require('../../src/utils/auditLogger');
+    const sessionService = require('../../src/services/session.service');
+
+    const admin = vi.spyOn(rbacAssignment, 'isAdministrator').mockResolvedValue(false);
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const audit = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const invalidate = vi.spyOn(sessionService, 'invalidateUserSessions').mockResolvedValue(undefined);
+
+    const target = {
+      _id: { toString: () => 'tech-target' },
+      mfaEnabled: true,
+      mfaSecretCiphertext: 'ciphertext',
+    };
+    const usersCollection = {
+      findOne: vi.fn().mockResolvedValue(target),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: { collection: () => usersCollection } });
+
+    const res = await request(app).post('/api/users/tech-target/reset-mfa');
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(usersCollection.updateOne).toHaveBeenCalledWith(
+      expect.anything(),
+      { $set: expect.objectContaining({
+        mfaEnabled: false,
+        mfaSecretCiphertext: null,
+        mfaLocked: false,
+        lastLogin: null,
+      }) }
+    );
+    expect(invalidate).toHaveBeenCalledWith(
+      expect.anything(),
+      'tech-target',
+      'admin_action',
+      'user-1'
+    );
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'MFA',
+      payload: expect.objectContaining({
+        operation: 'reset',
+        enrolmentPreserved: false,
+        secondFactorActive: false,
+        sessionsRevoked: true,
+      }),
+    }));
+
+    admin.mockRestore();
+    loadRoute();
+  });
+
+  it('force-password-reset sets forceReset and writes an explicit UPDATE audit event', async () => {
+    const auditLogger = require('../../src/utils/auditLogger');
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const audit = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+
+    const target = { _id: { toString: () => 'user-force-reset' } };
+    const usersCollection = {
+      findOne: vi.fn().mockResolvedValue(target),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: { collection: () => usersCollection } });
+
+    const res = await request(app).post('/api/users/user-force-reset/force-password-reset');
+
+    expect(res.status).toBe(200);
+    expect(usersCollection.updateOne).toHaveBeenCalledWith(
+      expect.anything(),
+      { $set: expect.objectContaining({ forceReset: true }) }
+    );
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'UPDATE',
+      resourceType: 'User',
+      resourceId: 'user-force-reset',
+      payload: { operation: 'forcePasswordReset', fieldsSet: ['forceReset'] },
+    }));
+
+    loadRoute();
+  });
+
+  it('disable-mfa succeeds only after both caller and target Administrator checks and preserves the secret', async () => {
+    const rbacAssignment = require('../../src/services/rbac-assignment.service');
+    const auditLogger = require('../../src/utils/auditLogger');
+
+    const admin = vi.spyOn(rbacAssignment, 'isAdministrator')
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true);
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const audit = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+
+    const target = {
+      _id: { toString: () => 'admin-2' },
+      mfaEnabled: true,
+      mfaSecretCiphertext: 'preserved-secret',
+    };
+    const usersCollection = {
+      findOne: vi.fn().mockResolvedValue(target),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    };
+    const { router } = loadRoute();
+    const app = buildApp(router, { db: { collection: () => usersCollection } });
+
+    const res = await request(app).post('/api/users/admin-2/disable-mfa');
+
+    expect(res.status).toBe(200);
+    const update = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect(update).toMatchObject({ mfaEnabled: false, mfaFailedAttempts: 0, mfaLocked: false });
+    expect(update).not.toHaveProperty('mfaSecretCiphertext');
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'MFA',
+      payload: expect.objectContaining({
+        operation: 'disable',
+        enrolmentPreserved: true,
+        secondFactorActive: false,
+      }),
+    }));
+
+    admin.mockRestore();
+    loadRoute();
+  });
+});
+
 });
