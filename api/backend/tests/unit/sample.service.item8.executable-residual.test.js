@@ -249,3 +249,201 @@ describe('sample.service item 8 executable residual branches', () => {
     expect(result).toEqual([{ action: 'QUARANTINE' }]);
   });
 });
+
+
+describe('sample.service item 8 read/query alternate branches', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns null for a missing sample and false when deleteSample removes nothing', async () => {
+    const samples = collection({
+      findOne: vi.fn().mockResolvedValue(null),
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }),
+    });
+    const db = { collection: vi.fn(() => samples) };
+
+    await expect(sampleService.getSample(db, 'missing')).resolves.toBeNull();
+    await expect(sampleService.deleteSample(db, 'missing')).resolves.toBe(false);
+  });
+
+  it('applies all supported list filters including organization scope and explicit pagination', async () => {
+    const cursor = {
+      sort: vi.fn().mockReturnThis(),
+      skip: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      toArray: vi.fn().mockResolvedValue([{ specimenId: 'S1' }]),
+    };
+    const samples = collection({ find: vi.fn(() => cursor) });
+    const db = { collection: vi.fn(() => samples) };
+
+    const result = await sampleService.listSamples(db, {
+      participantId: '12345678',
+      specimenStatus: 'available',
+      sampleType: 'PLASMA',
+      organizationScope: { scope: 'organization', organizationIds: ['ORG-1'] },
+      limit: 7,
+      skip: 3,
+    });
+
+    expect(result).toEqual([{ specimenId: 'S1' }]);
+    expect(samples.find).toHaveBeenCalledWith(expect.objectContaining({
+      participantId: '12345678',
+      specimenStatus: 'available',
+      sampleType: 'PLASMA',
+    }));
+    expect(cursor.skip).toHaveBeenCalledWith(3);
+    expect(cursor.limit).toHaveBeenCalledWith(7);
+  });
+
+  it('resolves an exact barcode without a participant linkage', async () => {
+    const sample = { _id: 'sample-1', specimenId: 'S1', barcode: 'ABC', specimenStatus: 'available' };
+    const samples = collection({ findOne: vi.fn().mockResolvedValueOnce(sample) });
+    const patients = collection();
+    const db = {
+      collection: vi.fn((name) => name === 'samples' ? samples : patients),
+    };
+
+    const result = await sampleService.getSampleByBarcode(db, 'ABC');
+
+    expect(result.sample).toMatchObject({ specimenId: 'S1' });
+    expect(result.participant).toBeNull();
+    expect(patients.findOne).not.toHaveBeenCalled();
+  });
+
+  it('falls through to case-insensitive, numeric and regex barcode strategies', async () => {
+    const sampleCase = { _id: 'case', specimenId: 'CASE', barcode: 'ABC', specimenStatus: 'available' };
+    let samples = collection({
+      findOne: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(sampleCase),
+    });
+    let db = { collection: vi.fn((name) => name === 'samples' ? samples : collection()) };
+    await expect(sampleService.getSampleByBarcode(db, 'abc')).resolves.toMatchObject({
+      sample: expect.objectContaining({ specimenId: 'CASE' }),
+    });
+
+    const sampleNumeric = { _id: 'num', specimenId: 'NUM', barcode: 123, specimenStatus: 'available' };
+    samples = collection({
+      findOne: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(sampleNumeric),
+    });
+    db = { collection: vi.fn((name) => name === 'samples' ? samples : collection()) };
+    await expect(sampleService.getSampleByBarcode(db, '123')).resolves.toMatchObject({
+      sample: expect.objectContaining({ specimenId: 'NUM' }),
+    });
+
+    const sampleRegex = { _id: 'regex', specimenId: 'REGEX', barcode: 'R.*', specimenStatus: 'available' };
+    samples = collection({
+      findOne: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(sampleRegex),
+    });
+    db = { collection: vi.fn((name) => name === 'samples' ? samples : collection()) };
+    await expect(sampleService.getSampleByBarcode(db, 'R.*')).resolves.toMatchObject({
+      sample: expect.objectContaining({ specimenId: 'REGEX' }),
+    });
+  });
+
+  it('returns the canonical empty barcode result after all lookup strategies fail', async () => {
+    const diagnosticsCursor = {
+      limit: vi.fn().mockReturnThis(),
+      project: vi.fn().mockReturnThis(),
+      toArray: vi.fn().mockResolvedValue([{ barcode: 'EXAMPLE' }]),
+    };
+    const samples = collection({
+      findOne: vi.fn().mockResolvedValue(null),
+      countDocuments: vi.fn().mockResolvedValue(1),
+      find: vi.fn(() => diagnosticsCursor),
+    });
+    const db = { collection: vi.fn((name) => name === 'samples' ? samples : collection()) };
+
+    await expect(sampleService.getSampleByBarcode(db, 'not-found'))
+      .resolves.toEqual({ sample: null, participant: null });
+  });
+
+  it('anonymizes participant identity for missing, single-part and multi-part names', async () => {
+    const identityService = require('../../src/services/participant-identity.service');
+    const sample = {
+      _id: 'sample-p',
+      specimenId: 'SP',
+      barcode: 'P',
+      participantId: '12345678',
+      specimenStatus: 'available',
+    };
+
+    for (const [identity, expected] of [
+      [null, '***'],
+      [{ patientName: 'Ana' }, 'A***'],
+      [{ patientName: 'Ana Silva' }, 'A. S.'],
+    ]) {
+      const samples = collection({ findOne: vi.fn().mockResolvedValueOnce(sample) });
+      const patients = collection({ findOne: vi.fn().mockResolvedValue({ participantId: '12345678', recordNumber: 'R1' }) });
+      const identities = collection({ findOne: vi.fn().mockResolvedValue(identity ? { encrypted: true } : null) });
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'samples') return samples;
+          if (name === 'patients') return patients;
+          if (name === 'participantIdentities') return identities;
+          return collection();
+        }),
+      };
+      const decrypt = vi.spyOn(identityService, 'decryptIdentity').mockReturnValue(identity);
+
+      const result = await sampleService.getSampleByBarcode(db, 'P');
+      expect(result.participant.patientName).toBe(expected);
+      decrypt.mockRestore();
+    }
+  });
+
+  it('rejects sample-result lookup when the sample does not exist', async () => {
+    const samples = collection({ findOne: vi.fn().mockResolvedValue(null) });
+    const results = collection();
+    const db = {
+      collection: vi.fn((name) => name === 'samples' ? samples : results),
+    };
+
+    await expect(sampleService.getSampleResults(db, 'missing')).rejects.toThrow('Amostra não encontrada');
+  });
+
+  it('rejects an invalid barcode render request and forwards includePayload=false for valid industrial assets', async () => {
+    await expect(sampleService.getBarcodeIndustrialAssets(''))
+      .rejects.toThrow('Código de barras inválido');
+
+    await expect(sampleService.getBarcodeIndustrialAssets('ABC123', { includePayload: false }))
+      .resolves.toEqual({ dataMatrix: 'BR-ITEM8' });
+  });
+
+  it('falls back to the requested specimen identifier when SPREC/quarantine history lookup finds no Sample', async () => {
+    const samples = collection({ findOne: vi.fn().mockResolvedValue(null) });
+    const db = { collection: vi.fn(() => samples) };
+    const sprec = vi.spyOn(specimenPreanalyticsService, 'getProfilesForSpecimen').mockResolvedValue([]);
+    const quarantine = vi.spyOn(quarantineActionService, 'getActionsForSpecimen').mockResolvedValue([]);
+
+    const idObject = { toString: () => 'OBJ-SPEC' };
+    await sampleService.getSprecProfiles(db, idObject);
+    await sampleService.getQuarantineActions(db, 'RAW-SPEC');
+
+    expect(sprec).toHaveBeenCalledWith(db, 'OBJ-SPEC');
+    expect(quarantine).toHaveBeenCalledWith(db, 'RAW-SPEC');
+  });
+
+  it('forces research availability regardless of a caller-supplied specimenStatus', async () => {
+    const cursor = { toArray: vi.fn().mockResolvedValue([]) };
+    const samples = collection({ find: vi.fn(() => cursor) });
+    const db = { collection: vi.fn(() => samples) };
+
+    await sampleService.findAvailableSamplesForResearch(db, {
+      specimenStatus: 'quarantined',
+      sampleType: 'PLASMA',
+    });
+
+    expect(samples.find).toHaveBeenCalledWith({
+      specimenStatus: 'available',
+      sampleType: 'PLASMA',
+    });
+  });
+});
