@@ -8,6 +8,9 @@ const engine = require('../../src/services/batch-validation-engine.service');
 // real model, not a hand-shaped literal -- see the collectedAt tests below.
 const { SampleModel } = require('../../src/models/Sample');
 const patientService = require('../../src/services/patient.service');
+const sampleService = require('../../src/services/sample.service');
+const biomarkerObservationService = require('../../src/services/biomarker-observation.service');
+const importLGPDService = require('../../src/services/import-lgpd.service');
 
 describe('BatchValidationEngine.normalizeHeader', () => {
   it('normalizes Portuguese header with accents', () => {
