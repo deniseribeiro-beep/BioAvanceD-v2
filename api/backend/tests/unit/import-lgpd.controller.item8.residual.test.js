@@ -393,6 +393,7 @@ describe('import-lgpd.controller item8 residual branches', () => {
     }), res);
     expect(cleanup).toHaveBeenCalledWith('/tmp/s2.csv');
 
+    cleanup.mockClear();
     res = resMock();
     await controller.importSamples({
       app: { locals: {} },
@@ -400,7 +401,8 @@ describe('import-lgpd.controller item8 residual branches', () => {
       file: { path: '/tmp/no-db.csv', originalname: 'no-db.csv' },
       user: null,
     }, res);
-    expect(cleanup).toHaveBeenCalledWith('/tmp/no-db.csv');
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(cleanup).not.toHaveBeenCalled();
   });
 
   it('keeps uploader middleware available as a single-file middleware', () => {
