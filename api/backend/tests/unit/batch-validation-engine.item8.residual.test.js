@@ -408,3 +408,173 @@ describe('batch-validation-engine additional item8 residual branches', () => {
     );
   });
 });
+
+
+describe('batch-validation-engine item8 process and classification coverage', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('detects patient rows, sample filenames, and the patient fallback without hints', () => {
+    expect(engine.detectDataType([{ patientName: 'Synthetic', birthDate: '2026-01-01' }], 'data.csv'))
+      .toBe('patients');
+    expect(engine.detectDataType([{ unrelated: 'x' }], 'specimen-upload.bin'))
+      .toBe('samples');
+    expect(engine.detectDataType([{ unrelated: 'x' }], 'generic.bin'))
+      .toBe('patients');
+  });
+
+  it('records retry and terminal attempt failures with the canonical status and fallback message', async () => {
+    const update = vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+
+    await engine.recordAttemptFailure('job-retry', {
+      attemptNumber: 1,
+      attemptsAllowed: 3,
+      message: 'temporary',
+    });
+    expect(update).toHaveBeenLastCalledWith(
+      { jobId: 'job-retry' },
+      expect.objectContaining({
+        $set: expect.objectContaining({ status: 'processing' }),
+        $push: expect.objectContaining({
+          importErrors: expect.objectContaining({ message: 'Tentativa 1/3 falhou: temporary' }),
+        }),
+      })
+    );
+
+    await engine.recordAttemptFailure('job-final', {
+      attemptNumber: 3,
+      attemptsAllowed: 3,
+    });
+    expect(update).toHaveBeenLastCalledWith(
+      { jobId: 'job-final' },
+      expect.objectContaining({
+        $set: expect.objectContaining({ status: 'failed' }),
+        $push: expect.objectContaining({
+          importErrors: expect.objectContaining({ message: 'Tentativa 3/3 falhou: erro desconhecido' }),
+        }),
+      })
+    );
+  });
+
+  it('processBatchImport rejects missing staging, missing file, and empty input before row persistence', async () => {
+    const find = vi.spyOn(StagingImport, 'findOne');
+    find.mockResolvedValueOnce(null);
+    await expect(engine.processBatchImport({}, 'missing')).rejects.toThrow('StagingImport não encontrado');
+
+    find.mockResolvedValueOnce({ fileName: 'missing.csv', rawData: { storagePath: '/missing.csv' } });
+    vi.spyOn(fs, 'existsSync').mockReturnValueOnce(false);
+    await expect(engine.processBatchImport({}, 'missing-file')).rejects.toThrow('Arquivo bruto do staging não encontrado');
+
+    find.mockResolvedValueOnce({ fileName: 'empty.csv', rawData: { storagePath: '/empty.csv' } });
+    fs.existsSync.mockReturnValueOnce(true);
+    vi.spyOn(engine, 'updateProgress').mockResolvedValue(undefined);
+    vi.spyOn(engine, 'readRowsFromFile').mockResolvedValueOnce([]);
+    await expect(engine.processBatchImport({}, 'empty')).rejects.toThrow('Arquivo não contém registros válidos');
+  });
+
+  it('processBatchImport accounts for VALID/PARTIAL/INVALID sample rows, sheet metadata, persistence ids and progress', async () => {
+    const rows = [{ row: 1 }, { row: 2 }, { row: 3 }];
+    Object.defineProperty(rows, 'sourceLines', { value: [4, 8, 12], enumerable: false });
+    Object.defineProperty(rows, 'sourceSheets', { value: ['A', 'A', 'B'], enumerable: false });
+
+    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
+      fileName: 'samples.xlsx',
+      rawData: { storagePath: '/tmp/samples.xlsx', keep: 'yes' },
+    });
+    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(engine, 'readRowsFromFile').mockResolvedValue(rows);
+    vi.spyOn(engine, 'detectDataType').mockReturnValue('samples');
+    vi.spyOn(engine, 'persistSample')
+      .mockResolvedValueOnce({ classification: 'VALID', warnings: [], errors: [], persistedId: 'S1' })
+      .mockResolvedValueOnce({ classification: 'PARTIAL', warnings: ['normalized'], errors: [], persistedId: 'S2' })
+      .mockResolvedValueOnce({ classification: 'INVALID', warnings: ['review'], errors: ['bad row'] });
+    vi.spyOn(engine, 'quarantineRejectedRows').mockResolvedValue('QB1');
+    const updateProgress = vi.spyOn(engine, 'updateProgress').mockResolvedValue(undefined);
+    const job = { updateProgress: vi.fn().mockResolvedValue(undefined) };
+
+    const result = await engine.processBatchImport({}, 'job-xlsx', job);
+
+    expect(result).toMatchObject({
+      dataType: 'samples',
+      totalRows: 3,
+      processedRows: 3,
+      validRows: 1,
+      partialRows: 1,
+      invalidRows: 1,
+      persistedIds: ['S1', 'S2'],
+      quarantineBatchId: 'QB1',
+    });
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ row: 8, sheet: 'A', classification: 'PARTIAL' }),
+      expect.objectContaining({ row: 12, sheet: 'B', classification: 'INVALID' }),
+    ]));
+    expect(result.errors).toEqual([
+      expect.objectContaining({ row: 12, sheet: 'B', errors: ['bad row'] }),
+    ]);
+    expect(job.updateProgress).toHaveBeenCalledTimes(3);
+    expect(updateProgress).toHaveBeenLastCalledWith(
+      'job-xlsx',
+      expect.objectContaining({
+        status: 'completed',
+        rawData: expect.objectContaining({
+          summary: expect.objectContaining({ quarantineBatchId: 'QB1' }),
+        }),
+      })
+    );
+  });
+
+  it('processBatchImport uses JSON row numbering, patient persistence, no progress callback and failed final status', async () => {
+    const rows = [{ patientName: 'one' }];
+    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
+      fileName: 'patients.json',
+      rawData: { storagePath: '/tmp/patients.json' },
+    });
+    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(engine, 'readRowsFromFile').mockResolvedValue(rows);
+    vi.spyOn(engine, 'detectDataType').mockReturnValue('patients');
+    const persist = vi.spyOn(engine, 'persistPatient').mockResolvedValue({
+      classification: 'INVALID',
+      warnings: [],
+      errors: ['invalid patient'],
+    });
+    vi.spyOn(engine, 'quarantineRejectedRows').mockResolvedValue(null);
+    const updateProgress = vi.spyOn(engine, 'updateProgress').mockResolvedValue(undefined);
+
+    const result = await engine.processBatchImport({}, 'job-json');
+
+    expect(persist).toHaveBeenCalledWith({}, rows[0], 1);
+    expect(result).toMatchObject({ invalidRows: 1, validRows: 0, partialRows: 0 });
+    expect(result).not.toHaveProperty('quarantineBatchId');
+    expect(updateProgress).toHaveBeenLastCalledWith(
+      'job-json',
+      expect.objectContaining({
+        status: 'failed',
+        rawData: expect.objectContaining({
+          summary: expect.objectContaining({ quarantineBatchId: null }),
+        }),
+      })
+    );
+  });
+
+  it('uses specimenId/participantId canonical identifiers and date fallbacks in biomarker payloads', () => {
+    const registeredAt = new Date('2026-03-04T00:00:00.000Z');
+    const result = engine.buildBiomarkerObservationPayloads(
+      { biomarkers: 'GLU=7.5' },
+      { participantId: '87654321' },
+      { specimenId: 'SPEC-CANONICAL', registeredAt }
+    );
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads[0]).toMatchObject({
+      participantId: '87654321',
+      specimenId: 'SPEC-CANONICAL',
+      linkedResourceId: '87654321',
+      effectiveDateTime: registeredAt,
+      subject: { reference: 'Patient/87654321' },
+      specimen: { reference: 'Specimen/SPEC-CANONICAL' },
+    });
+  });
+});
