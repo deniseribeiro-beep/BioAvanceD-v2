@@ -368,4 +368,61 @@ describe('ImportService SPREC import', () => {
     expect(SampleGraphValidator.prototype.validateSampleCompliance).toHaveBeenCalledTimes(1);
   });
 
+
+  it('keeps a valid JSON sample import successful when referenced snapshot writes and compliance validation fail independently', async () => {
+    const rcsAssessmentService = require('../../src/services/rcs-assessment.service');
+    const specimenPreanalyticsService = require('../../src/services/specimen-preanalytics.service');
+
+    vi.spyOn(rcsAssessmentService, 'recordAssessment')
+      .mockRejectedValue(new Error('json assessment unavailable'));
+    vi.spyOn(specimenPreanalyticsService, 'recordProfile')
+      .mockRejectedValue(new Error('json profile unavailable'));
+    SampleGraphValidator.prototype.validateSampleCompliance
+      .mockRejectedValueOnce(new Error('json compliance unavailable'));
+
+    const jsonPath = path.join(tempDir, 'samples-resilience.json');
+    fs.writeFileSync(jsonPath, JSON.stringify({
+      specimenId: 'SPEC-JSON-ITEM8',
+      participantId: '12345678',
+      sampleType: 'PLASMA',
+      sampleOrigin: 'VENOUS_BLOOD',
+      extractionProtocol: 'TUBE_EDTA',
+      quantity: 1.5,
+      quality: 'GOOD',
+      registeredAt: '2026-01-01T00:00:00.000Z',
+      linkedProject: 'Projeto JSON',
+      rcsEvaluation: {
+        model_version: 'item8',
+        final_grade: 'B',
+      },
+      sprec: {
+        matrixType: 'fluid',
+        sampleType: 'BLD',
+        primaryContainer: 'PED',
+      },
+    }), 'utf8');
+
+    const result = await importService.importSamples(db, {
+      originalname: 'samples-resilience.json',
+      mimetype: 'application/json',
+      path: jsonPath,
+    });
+
+    expect(result).toMatchObject({ success: 1, total: 1 });
+    expect(result.errors).toEqual([]);
+    expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+    expect(rcsAssessmentService.recordAssessment).toHaveBeenCalledWith(
+      db,
+      'SPEC-JSON-ITEM8',
+      expect.objectContaining({ final_grade: 'B' })
+    );
+    expect(specimenPreanalyticsService.recordProfile).toHaveBeenCalledWith(
+      db,
+      'SPEC-JSON-ITEM8',
+      expect.objectContaining({ matrixType: 'fluid' })
+    );
+    expect(SampleGraphValidator.prototype.validateSampleCompliance)
+      .toHaveBeenCalledWith('507f1f77bcf86cd799439011');
+  });
+
 });
