@@ -161,8 +161,8 @@ describe('organization.routes item 8 residual branches', () => {
         organizationType: null,
         countryCode: 'BR',
         website: null,
-        contact: { email: 'contact@example.test' },
-        qualityStandards: ['ISO 20387'],
+        contact: null,
+        qualityStandards: [],
       });
 
     const created = await request(buildApp({}))
@@ -176,8 +176,8 @@ describe('organization.routes item 8 residual branches', () => {
       organizationType: null,
       countryCode: 'BR',
       website: null,
-      contact: { email: 'contact@example.test' },
-      qualityStandards: ['ISO 20387'],
+      contact: null,
+      qualityStandards: [],
     }));
   });
 
@@ -245,8 +245,8 @@ describe('organization.routes item 8 residual branches', () => {
       normalizedName: 'HOSPITAL ATUALIZADO',
       acronym: null,
       website: null,
-      contact: null,
-      qualityStandards: [],
+      contact: { email: 'contact@example.test' },
+      qualityStandards: ['ISO 20387'],
     });
     const updated = await request(buildApp({}))
       .put('/api/organizations/org-1')
@@ -267,8 +267,8 @@ describe('organization.routes item 8 residual branches', () => {
         organizationType: 'hospital',
         countryCode: 'BR',
         website: null,
-        contact: null,
-        qualityStandards: [],
+        contact: { email: 'contact@example.test' },
+        qualityStandards: ['ISO 20387'],
       }) },
       { returnDocument: 'after' }
     );
