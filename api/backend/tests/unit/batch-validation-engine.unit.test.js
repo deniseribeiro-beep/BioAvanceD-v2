@@ -1042,4 +1042,111 @@ describe('BatchValidationEngine item 8 legitimate residuals', () => {
   });
 });
 
+
+describe('BatchValidationEngine item 8 remaining behavior branches', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('detectDataType prefers real sample headers even when the filename suggests patients', () => {
+    const result = engine.detectDataType(
+      [{ sampleType: 'PLASMA', patientName: 'Synthetic Patient' }],
+      'patients-import.csv'
+    );
+    expect(result).toBe('samples');
+  });
+
+  it('persistPatient uses a mapped row when one is supplied and forwards the import context', async () => {
+    const rawRow = { legacy_name: 'raw value' };
+    const mappedRow = { patientName: 'Mapped Patient' };
+    const parsed = {
+      patientName: 'Mapped Patient',
+      birthDate: new Date('1990-05-20T00:00:00.000Z'),
+      sex: 'F',
+      email: 'mapped@example.test',
+      consentTemplateId: 'TCLE-ITEM8',
+      phone: '11999999999',
+      recordNumber: 'RN-ITEM8',
+      clinicalUnit: 'UNIT',
+      unitAcronym: 'UN',
+      cpf: '12345678901',
+    };
+
+    const parse = vi.spyOn(importLGPDService, 'parsePatientRow').mockReturnValue(parsed);
+    const create = vi.spyOn(patientService, 'createPatient').mockResolvedValue({ _id: 'patient-item8' });
+
+    const result = await engine.persistPatient(
+      {},
+      rawRow,
+      31,
+      { requestedBy: 'item8' },
+      mappedRow
+    );
+
+    expect(result).toMatchObject({
+      classification: 'VALID',
+      rowNumber: 31,
+      persistedId: 'patient-item8',
+    });
+    expect(parse).toHaveBeenCalledWith(mappedRow);
+    expect(create).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        patientName: 'Mapped Patient',
+        email: 'mapped@example.test',
+      }),
+      expect.objectContaining({
+        isBatchImport: true,
+        batchImport: true,
+        source: 'batch-import',
+        requestedBy: 'item8',
+      })
+    );
+  });
+
+  it('quarantineRejectedRows keeps optional batch metadata explicitly null when it was not supplied', async () => {
+    const importBatches = {
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'batch-item8-defaults' }),
+    };
+    const stagingRecords = {
+      insertMany: vi.fn().mockResolvedValue({ insertedCount: 1 }),
+    };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'import_batches') return importBatches;
+        if (name === 'import_staging_records') return stagingRecords;
+        throw new Error(`unexpected collection ${name}`);
+      }),
+    };
+
+    const batchId = await engine.quarantineRejectedRows(db, {
+      dataType: 'samples',
+      rejected: [{
+        rowNumber: 4,
+        classification: 'INVALID',
+      }],
+    });
+
+    expect(batchId).toBe('batch-item8-defaults');
+    expect(importBatches.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: null,
+      fileName: null,
+      counts: {
+        total: null,
+        success: null,
+        errors: 1,
+      },
+    }));
+    expect(stagingRecords.insertMany).toHaveBeenCalledWith([
+      expect.objectContaining({
+        rowNumber: 4,
+        sheet: null,
+        errors: [],
+        validationErrors: [],
+        row: null,
+      }),
+    ]);
+  });
+});
+
 });
