@@ -1127,14 +1127,4 @@ class SampleService {
   }
 }
 
-const sampleService = new SampleService();
-sampleService._test = {
-  findSampleByAnyId,
-  createSampleValidationError,
-  normalizeRequiredStorageBoxAssignment,
-  resolveStorageHierarchyForBox,
-  buildIdVariants,
-  isOperationalSensor,
-};
-
-module.exports = sampleService;
+module.exports = new SampleService();
