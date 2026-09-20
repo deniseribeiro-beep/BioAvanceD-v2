@@ -5,10 +5,12 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
-const auditInit = vi.fn();
-const auditCreate = vi.fn();
-const auditUpdate = vi.fn();
-const auditDelete = vi.fn();
+const { auditInit, auditCreate, auditUpdate, auditDelete } = vi.hoisted(() => ({
+  auditInit: vi.fn(),
+  auditCreate: vi.fn(),
+  auditUpdate: vi.fn(),
+  auditDelete: vi.fn(),
+}));
 
 vi.mock('../../src/infrastructure/middleware/auth', () => ({
   authenticate: (_req, _res, next) => next(),
