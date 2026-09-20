@@ -82,6 +82,50 @@ describe('canonical v2 contract/dictionary item 8 residual branches', () => {
     await expect(canonicalContracts.getRegistry()).rejects.toThrow('completeness gate failed');
   });
 
+  it('normalizes formula, text, rich text, Date, empty and primitive workbook cells inside the canonical contract registry', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bioavanced-contract-cells-'));
+    const file = path.join(dir, 'contracts.xlsx');
+    const workbook = new ExcelJS.Workbook();
+
+    const enums = workbook.addWorksheet('ENUMS');
+    enums.addRow(['Entity', 'Field', 'Value', 'Status']);
+    enums.addRow([]);
+    const enumRow = enums.addRow(['', '', '', 'active']);
+    enumRow.getCell(1).value = { formula: '"Specimen"', result: 'Specimen' };
+    enumRow.getCell(2).value = { text: 'status', hyperlink: 'https://example.invalid/status' };
+    enumRow.getCell(3).value = { richText: [{ text: 'ACTIVE' }, { text: '' }] };
+
+    const rules = workbook.addWorksheet('REGRAS_CONDICIONAIS');
+    rules.addRow(['Entity/domain', 'Rule']);
+    rules.addRow([new Date('2026-09-20T10:00:00.000Z'), 'date-cell']);
+
+    const relationships = workbook.addWorksheet('RELACIONAMENTOS');
+    relationships.addRow(['Source entity', 'Target entity']);
+    relationships.addRow(['Specimen', 'Participant']);
+
+    await workbook.xlsx.writeFile(file);
+
+    vi.spyOn(canonicalDictionary, 'loadCanonicalDictionary').mockResolvedValue([{
+      elementId: 'V2E-TEST',
+      entity: 'Specimen',
+      canonicalField: 'status',
+      cardinality: '0..1',
+      dataType: 'string',
+      requirement: 'optional',
+      changeStatus: 'new',
+    }]);
+    vi.spyOn(canonicalDictionary, 'checkCompleteness').mockResolvedValue({ verified: true });
+    vi.spyOn(canonicalDictionary, 'resolveDictionaryPath').mockReturnValue(file);
+    canonicalContracts.resetCacheForTests();
+
+    const registry = await canonicalContracts.getRegistry();
+    const schema = registry.schemas.get('Specimen');
+
+    expect(schema.properties.status.enum).toEqual(['ACTIVE']);
+    expect(registry.conditionalRules[0]['Entity/domain']).toBe('2026-09-20T10:00:00.000Z');
+    expect(registry.relationships[0]['Source entity']).toBe('Specimen');
+  });
+
   it('fails contract registry construction when required v2 workbook sheets are absent', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bioavanced-contract-'));
     const file = path.join(dir, 'contracts.xlsx');
