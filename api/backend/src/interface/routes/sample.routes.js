@@ -76,7 +76,6 @@ router.get('/:id/compliance-graph', authenticate, requireOrganizationScope, asyn
   }
 });
 const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCase');
-const MongoLineageRepository = require('../../infrastructure/persistence/mongo/MongoLineageRepository');
 const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
 const { getCollection } = require('../../utils/collectionResolver');
 const { ObjectId } = require('mongodb');
@@ -314,9 +313,7 @@ router.post('/',
       };
 
       const registerSampleUseCase = new RegisterSampleUseCase({
-        sampleRepository,
-        lineageRepository: new MongoLineageRepository(db),
-        quarantineService: req.app.locals.neo4jQuarantineService || req.app.locals.topologicalQuarantine || null
+        sampleRepository
       });
 
       const result = await registerSampleUseCase.execute({
