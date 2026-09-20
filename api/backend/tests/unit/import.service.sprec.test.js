@@ -335,4 +335,37 @@ describe('ImportService SPREC import', () => {
     expect(recorded.fixationStabilizationType).toBe('NBF');
     expect(recorded.fixationTime).toBe('D');
   });
+
+  it('keeps a valid tabular sample import successful when referenced snapshots or post-import compliance are temporarily unavailable', async () => {
+    const rcsAssessmentService = require('../../src/services/rcs-assessment.service');
+    const specimenPreanalyticsService = require('../../src/services/specimen-preanalytics.service');
+
+    vi.spyOn(rcsAssessmentService, 'recordAssessment')
+      .mockRejectedValue(new Error('assessment service unavailable'));
+    vi.spyOn(specimenPreanalyticsService, 'recordProfile')
+      .mockRejectedValue(new Error('profile service unavailable'));
+    SampleGraphValidator.prototype.validateSampleCompliance
+      .mockRejectedValueOnce(new Error('compliance service unavailable'));
+
+    const csvPath = path.join(tempDir, 'samples-resilience.csv');
+    const csvContent = [
+      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,PED,C,A,D,E,F',
+    ].join('\n');
+    fs.writeFileSync(csvPath, csvContent, 'utf8');
+
+    const result = await importService.importSamples(db, {
+      originalname: 'samples-resilience.csv',
+      mimetype: 'text/csv',
+      path: csvPath,
+    });
+
+    expect(result).toMatchObject({ success: 1, total: 1 });
+    expect(result.errors).toEqual([]);
+    expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+    expect(rcsAssessmentService.recordAssessment).toHaveBeenCalledTimes(1);
+    expect(specimenPreanalyticsService.recordProfile).toHaveBeenCalledTimes(1);
+    expect(SampleGraphValidator.prototype.validateSampleCompliance).toHaveBeenCalledTimes(1);
+  });
+
 });
