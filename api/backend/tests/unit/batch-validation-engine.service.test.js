@@ -22,7 +22,7 @@ function createDb(patientsByFilter = {}) {
   // product code handed it.
   const patientsCollection = {
     findOne: vi.fn(async (filter) => {
-      if (filter.participantId && patientsByFilter.patientID === filter.participantId) {
+      if (filter.participantId && patientsByFilter.participantId === filter.participantId) {
         return patientsByFilter.patient;
       }
 
@@ -89,6 +89,13 @@ describe('batch-validation-engine.service#buildSampleRow', () => {
   // favor of boxId/positionCode) — the mapping produced a value that was
   // silently discarded. Pinning that the header map no longer claims to
   // handle these columns at all.
+  it('normalizes canonical participantId and historical patientID CSV headers to participantId', () => {
+    expect(batchValidationEngine.buildSampleRow({ participantId: '12345678' }))
+      .toEqual({ participantId: '12345678' });
+    expect(batchValidationEngine.buildSampleRow({ patientID: '87654321' }))
+      .toEqual({ participantId: '87654321' });
+  });
+
   it('does not map legacy locationid/idlocalizacao headers onto any target field', () => {
     const mapped = batchValidationEngine.buildSampleRow({
       locationid: 'freezer-a1',
@@ -118,13 +125,13 @@ describe('batch-validation-engine.service', () => {
   it('reutiliza paciente existente e persiste specimen e biomarcadores vinculados', async () => {
     const patient = {
       _id: 'patient-object-id-1',
-      patientID: '12345678',
+      participantId: '12345678',
       cpf: '12345678901',
       recordNumber: 'RN-001',
     };
 
     const db = createDb({
-      patientID: '12345678',
+      participantId: '12345678',
       patient,
     });
 
@@ -166,7 +173,7 @@ describe('batch-validation-engine.service', () => {
     expect(createSampleSpy).toHaveBeenCalledWith(
       db,
       expect.objectContaining({
-        patientID: '12345678',
+        participantId: '12345678',
         patientObjectId: 'patient-object-id-1',
       }),
       expect.objectContaining({
@@ -178,7 +185,7 @@ describe('batch-validation-engine.service', () => {
     expect(createObservationSpy).toHaveBeenCalledWith(
       db,
       expect.objectContaining({
-        patientID: '12345678',
+        participantId: '12345678',
         patientObjectId: 'patient-object-id-1',
         specimenObjectId: 'sample-object-id-1',
         linkedResourceId: 'patient-object-id-1',
@@ -198,7 +205,7 @@ describe('batch-validation-engine.service', () => {
 
     const createPatientSpy = vi.spyOn(patientService, 'createPatient').mockResolvedValue({
       _id: 'patient-object-id-2',
-      patientID: '87654321',
+      participantId: '87654321',
     });
     const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: 'sample-object-id-2',
@@ -283,8 +290,8 @@ describe('batch-validation-engine.service', () => {
 
   it('returns INVALID with the thrown error message when createSample rejects', async () => {
     const db = createDb({
-      patientID: '12345678',
-      patient: { _id: 'patient-object-id-3', patientID: '12345678' },
+      participantId: '12345678',
+      patient: { _id: 'patient-object-id-3', participantId: '12345678' },
     });
 
     vi.spyOn(sampleService, 'createSample').mockRejectedValue(new Error('storage collision'));
@@ -306,8 +313,8 @@ describe('batch-validation-engine.service', () => {
 
   it('returns INVALID with a fallback message when the persist step throws a non-Error value', async () => {
     const db = createDb({
-      patientID: '12345678',
-      patient: { _id: 'patient-object-id-4', patientID: '12345678' },
+      participantId: '12345678',
+      patient: { _id: 'patient-object-id-4', participantId: '12345678' },
     });
 
     vi.spyOn(sampleService, 'createSample').mockRejectedValue('a plain string rejection');
@@ -618,8 +625,8 @@ describe('batch-validation-engine.service processBatchImport', () => {
     });
     vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
     const db = createDb({
-      patientID: '12345678',
-      patient: { _id: 'patient-object-id-5', patientID: '12345678' },
+      participantId: '12345678',
+      patient: { _id: 'patient-object-id-5', participantId: '12345678' },
     });
     vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-object-id-5' });
 
