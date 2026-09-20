@@ -1124,4 +1124,128 @@ describe('user.routes item 8 operational route branches', () => {
   });
 });
 
+
+describe('user.routes item 8 remaining PUT governance branches', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    loadRoute();
+  });
+
+  it('rejects an organizationId that does not resolve to a registered Organization', async () => {
+    const UserModel = require('../../src/models/User');
+    vi.spyOn(UserModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+
+    const target = { _id: 'u-org', organizationId: null };
+    const usersCollection = {
+      findOne: vi.fn().mockResolvedValue(target),
+      updateOne: vi.fn(),
+    };
+    const organizationsCollection = {
+      findOne: vi.fn().mockResolvedValue(null),
+    };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (name === 'organizations') return organizationsCollection;
+        throw new Error(`unexpected collection ${name}`);
+      }),
+    };
+
+    const { router } = loadRoute();
+    const res = await request(buildApp(router, { db }))
+      .put('/api/users/u-org')
+      .send({ organizationId: 'missing-org' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('organizationId missing-org não encontrado');
+    expect(usersCollection.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('blocks a role promotion above the caller hierarchy before any user update', async () => {
+    const UserModel = require('../../src/models/User');
+    const rbacAssignment = require('../../src/services/rbac-assignment.service');
+    vi.spyOn(UserModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+    vi.spyOn(rbacAssignment, 'isAdministrator').mockResolvedValue(false);
+    const hierarchy = vi.spyOn(rbacAssignment, 'resolveUserHierarchyLevel')
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(3);
+
+    const target = { _id: 'u-role', organizationId: 'org-1' };
+    const usersCollection = {
+      findOne: vi.fn().mockResolvedValue(target),
+      updateOne: vi.fn(),
+    };
+    const db = { collection: vi.fn(() => usersCollection) };
+
+    const { router } = loadRoute();
+    const res = await request(buildApp(router, { db }))
+      .put('/api/users/u-role')
+      .send({ roleName: 'Administrador' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.message).toContain('nível de acesso superior');
+    expect(hierarchy).toHaveBeenNthCalledWith(1, db, 'u-role');
+    expect(hierarchy).toHaveBeenNthCalledWith(2, db, 'user-1');
+    expect(usersCollection.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('resynchronizes RBAC assignment scope on a real organization-only change', async () => {
+    const UserModel = require('../../src/models/User');
+    const rbacAssignment = require('../../src/services/rbac-assignment.service');
+    const auditLogger = require('../../src/utils/auditLogger');
+
+    vi.spyOn(UserModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+    vi.spyOn(rbacAssignment, 'isAdministrator').mockResolvedValue(false);
+    vi.spyOn(rbacAssignment, 'resolveRoleDisplayName').mockResolvedValue('Técnico');
+    const updateAssignmentScope = vi.spyOn(rbacAssignment, 'updateAssignmentScope').mockResolvedValue({ updated: true });
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logPermissionChange = vi.spyOn(auditLogger, 'logPermissionChange').mockResolvedValue(undefined);
+
+    const target = {
+      _id: 'u-scope',
+      name: 'Synthetic User',
+      organizationId: 'org-old',
+    };
+    const updated = {
+      ...target,
+      organizationId: 'org-new',
+    };
+    const usersCollection = {
+      findOne: vi.fn()
+        .mockResolvedValueOnce(target)
+        .mockResolvedValueOnce(updated),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+    };
+    const organizationsCollection = {
+      findOne: vi.fn().mockResolvedValue({ organizationId: 'org-new' }),
+    };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (name === 'organizations') return organizationsCollection;
+        throw new Error(`unexpected collection ${name}`);
+      }),
+    };
+
+    const { router } = loadRoute();
+    const res = await request(buildApp(router, { db }))
+      .put('/api/users/u-scope')
+      .send({ organizationId: '  org-new  ' });
+
+    expect(res.status).toBe(200);
+    expect(updateAssignmentScope).toHaveBeenCalledWith(db, {
+      userAccountId: 'u-scope',
+      organizationId: 'org-new',
+      updatedBy: 'user-1',
+    });
+    expect(logPermissionChange).toHaveBeenCalledWith(
+      expect.anything(),
+      'u-scope',
+      expect.objectContaining({
+        organizationId: { from: 'org-old', to: 'org-new' },
+      })
+    );
+  });
+});
+
 });
