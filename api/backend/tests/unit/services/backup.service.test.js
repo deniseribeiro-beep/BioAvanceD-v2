@@ -390,6 +390,28 @@ describe('backup.service', () => {
       expect(fs.promises.rm).not.toHaveBeenCalled();
     });
 
+    it('falls back to the env retention when the policy returns a non-numeric retentionDays', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-policy-retention-invalid');
+      env.BACKUP_RETENTION_DAYS = '5';
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      mockBaseDirListing(env.BACKUP_DIR);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(fs.promises, 'rm').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+
+      const backupService = freshBackupService();
+      const db = dbWithPolicy({ retentionDays: 'not-a-number', encryptionEnabled: false });
+      await backupService.runBackup(db);
+
+      // Invalid policy data must not disable retention. The configured
+      // five-day fallback still removes this 45-day-old backup directory.
+      expect(fs.promises.rm).toHaveBeenCalled();
+    });
+
     it('falls back to the env var when the policy lookup fails', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.MONGO_DB = undefined;
