@@ -1523,4 +1523,72 @@ describe('backup.service', () => {
     });
   });
 
+
+  describe('item 8 backup path selection branches', () => {
+    it('resolves restore scratch from env and then from the backup-root default', () => {
+      const original = process.env.RESTORE_SCRATCH_DIR;
+      try {
+        env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-item8-root');
+        process.env.RESTORE_SCRATCH_DIR = path.join('C:', 'tmp', 'explicit-restore-scratch');
+        let backupService = freshBackupService();
+        expect(backupService.getRestoreScratchBaseDir()).toBe(process.env.RESTORE_SCRATCH_DIR);
+
+        delete process.env.RESTORE_SCRATCH_DIR;
+        backupService = freshBackupService();
+        expect(backupService.getRestoreScratchBaseDir()).toBe(
+          path.join(env.BACKUP_DIR, '.restore-scratch')
+        );
+      } finally {
+        if (original === undefined) delete process.env.RESTORE_SCRATCH_DIR;
+        else process.env.RESTORE_SCRATCH_DIR = original;
+      }
+    });
+
+    it('returns null when no backup root exists and never attempts directory enumeration', () => {
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-item8-missing-root');
+      const exists = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      const readdir = vi.spyOn(fs, 'readdirSync');
+
+      const backupService = freshBackupService();
+      expect(backupService.getLatestBackupPath()).toBeNull();
+
+      expect(exists).toHaveBeenCalledWith(env.BACKUP_DIR);
+      expect(readdir).not.toHaveBeenCalled();
+    });
+
+    it('ignores dot-prefixed restore scratch directories and chooses the newest real backup', () => {
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-item8-latest');
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readdirSync').mockReturnValue([
+        { name: '.restore-scratch', isDirectory: () => true },
+        { name: '2026-09-18_1-0-0', isDirectory: () => true },
+        { name: '2026-09-19_1-0-0', isDirectory: () => true },
+        { name: 'README.txt', isDirectory: () => false },
+      ]);
+      vi.spyOn(fs, 'statSync').mockImplementation((fullPath) => ({
+        birthtime: new Date(String(fullPath).includes('2026-09-19') ? '2026-09-19T01:00:00Z' : '2026-09-18T01:00:00Z'),
+      }));
+
+      const backupService = freshBackupService();
+      expect(backupService.getLatestBackupPath()).toBe(
+        path.join(env.BACKUP_DIR, '2026-09-19_1-0-0')
+      );
+      expect(fs.statSync).not.toHaveBeenCalledWith(
+        path.join(env.BACKUP_DIR, '.restore-scratch')
+      );
+    });
+
+    it('returns null when the backup root contains only non-backup entries', () => {
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-item8-empty-latest');
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readdirSync').mockReturnValue([
+        { name: '.restore-scratch', isDirectory: () => true },
+        { name: 'README.txt', isDirectory: () => false },
+      ]);
+
+      const backupService = freshBackupService();
+      expect(backupService.getLatestBackupPath()).toBeNull();
+    });
+  });
+
 });
