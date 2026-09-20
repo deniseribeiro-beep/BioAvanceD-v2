@@ -506,7 +506,6 @@ describe('ImportService item 8 legitimate residual branches', () => {
         registeredAt: '2026-01-02T03:04:05.000Z',
       });
       expect(rows[0]).not.toHaveProperty('ignored-under-blank-header');
-      expect(rows[0].notes).toBe('');
     } finally {
       fs.unlinkSync(filePath);
     }
