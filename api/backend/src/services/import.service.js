@@ -79,7 +79,8 @@ class ImportService {
       const rowObj = {};
       headers.forEach((header, index) => {
         if (String(header || '').trim()) {
-          rowObj[String(header).trim()] = values[index];
+          const cellValue = values[index];
+          rowObj[String(header).trim()] = cellValue === undefined || cellValue === null ? '' : cellValue;
         }
       });
 
