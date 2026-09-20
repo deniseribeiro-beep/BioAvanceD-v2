@@ -423,4 +423,116 @@ describe('NotificationService item 8 residual branches', () => {
       'https://app.example.test/recover-password?token=token%20value'
     );
   });
+
+  it('covers cached provider clients and missing Resend configuration', () => {
+    const service = new NotificationService();
+
+    service.resendClient = { cached: true };
+    expect(service.getResendClient()).toBe(service.resendClient);
+
+    service.resendClient = null;
+    delete process.env.RESEND_API_KEY;
+    expect(() => service.getResendClient()).toThrow(/RESEND_API_KEY/);
+
+    service.smtpTransport = { cached: true };
+    expect(service.getSmtpTransport()).toBe(service.smtpTransport);
+  });
+
+  it('keeps compliance persistence fail-open when its database dependency is unavailable', async () => {
+    const service = new NotificationService({
+      connectDatabase: vi.fn().mockRejectedValue(new Error('mongo unavailable')),
+    });
+
+    await expect(service.persistComplianceLog({
+      notificationType: 'synthetic',
+      deliveryStatus: 'DELIVERY_FAILED',
+    })).resolves.toBeUndefined();
+  });
+
+  it('suppresses development previews outside development and renders placeholder bodies inside it', () => {
+    process.env.NODE_ENV = 'test';
+    let service = new NotificationService();
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    service.logDevelopmentPreview({
+      subject: 'Synthetic',
+      text: '',
+      html: '',
+      originalTo: 'a@test',
+      effectiveTo: 'a@test',
+      notificationType: 'TEST',
+    });
+    expect(output).not.toHaveBeenCalled();
+
+    process.env.NODE_ENV = 'development';
+    service = new NotificationService();
+    service.logDevelopmentPreview({
+      subject: 'Synthetic',
+      text: '',
+      html: '',
+      originalTo: 'a@test',
+      effectiveTo: 'admin@test',
+      notificationType: 'TEST',
+    });
+
+    expect(output).toHaveBeenCalledWith('[sem versão texto]');
+    expect(output).toHaveBeenCalledWith('[sem versão html]');
+  });
+
+  it('reuses an initialized Socket.IO instance and wires a supplied io-compatible transport', () => {
+    const service = new NotificationService();
+    const existing = { existing: true };
+    service.io = existing;
+    expect(service.initSocketIO({})).toBe(existing);
+
+    service.io = null;
+    let connectionHandler;
+    const io = {
+      of: vi.fn(),
+      emit: vi.fn(),
+      on: vi.fn((event, handler) => {
+        if (event === 'connection') connectionHandler = handler;
+      }),
+    };
+
+    expect(service.initSocketIO(io)).toBe(io);
+    expect(typeof connectionHandler).toBe('function');
+
+    const socketHandlers = {};
+    const socket = {
+      id: 'socket-1',
+      join: vi.fn(),
+      on: vi.fn((event, handler) => {
+        socketHandlers[event] = handler;
+      }),
+    };
+    connectionHandler(socket);
+
+    socketHandlers['subscribe:user']('');
+    socketHandlers['subscribe:user']('u1');
+    socketHandlers['subscribe:job']('');
+    socketHandlers['subscribe:job']('j1');
+    socketHandlers.disconnect();
+
+    expect(socket.join).toHaveBeenCalledWith('user-u1');
+    expect(socket.join).toHaveBeenCalledWith('j1');
+  });
+
+  it('uses environment temperature thresholds when explicit options are absent', async () => {
+    process.env.TELEMETRY_MIN_TEMP_ALERT = '-190';
+    process.env.TELEMETRY_MAX_TEMP_ALERT = '-70';
+    const service = new NotificationService();
+
+    await expect(service.sendCriticalTempAlert('S1', -100))
+      .resolves.toMatchObject({ triggered: false });
+
+    vi.spyOn(service, 'sendTemperatureAlert').mockResolvedValue({ success: true });
+    await expect(service.sendCriticalTempAlert('S1', -60))
+      .resolves.toMatchObject({
+        triggered: true,
+        minTemp: -190,
+        maxTemp: -70,
+      });
+  });
+
 });
