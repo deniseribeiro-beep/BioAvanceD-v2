@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
 
+// Stage 2 consolidated validation trigger; no test semantics changed.
+
 const require2 = createRequire(import.meta.url);
 const logService = require2('../../src/services/log.service');
 const LogModel = require2('../../src/models/Log');
