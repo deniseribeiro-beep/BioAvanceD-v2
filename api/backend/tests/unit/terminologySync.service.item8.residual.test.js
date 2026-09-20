@@ -86,7 +86,7 @@ describe('terminologySync.service item 8 residual branches', () => {
     const svc = freshService();
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({
-      contentType: undefined,
+      contentType: null,
       body: '<not-json>',
     })));
 
