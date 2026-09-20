@@ -2608,4 +2608,115 @@ describe('sample.service item 8 residual branch coverage', () => {
 
 });
 
+
+  describe('item 8 legitimate residual branches', () => {
+    it('getSample resolves a direct Mongo ObjectId hit before falling back to specimenId', async () => {
+      const db = makeDb();
+      const objectId = new ObjectId();
+      db.collections.samples.findOne.mockResolvedValueOnce({
+        _id: objectId,
+        specimenId: 'SPEC-OBJECTID',
+        specimenStatus: 'available'
+      });
+
+      const result = await sampleService.getSample(db, objectId.toString());
+
+      expect(result.specimenId).toBe('SPEC-OBJECTID');
+      expect(db.collections.samples.findOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.samples.findOne.mock.calls[0][0]._id.toString()).toBe(objectId.toString());
+    });
+
+    it('createSample resolves a BOX -> DRAWER -> RACK -> SHELF -> FREEZER hierarchy', async () => {
+      const db = makeDb();
+      db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
+
+      const drawerId = new ObjectId();
+      const rackId = new ObjectId();
+      const shelfId = new ObjectId();
+      const freezerId = new ObjectId();
+
+      const nodes = new Map([
+        [String(drawerId), { _id: drawerId, containerType: 'DRAWER', parent_id: rackId }],
+        [String(rackId), { _id: rackId, containerType: 'RACK', parent_id: shelfId }],
+        [String(shelfId), { _id: shelfId, containerType: 'SHELF', parent_id: freezerId }],
+        [String(freezerId), { _id: freezerId, containerType: 'FREEZER', containerID: 7001, parent_id: null }],
+      ]);
+
+      const storageBoxes = {
+        findOne: vi.fn().mockResolvedValue({
+          _id: BOX_ID,
+          parent_id: drawerId,
+          dimension: { rows: 8, cols: 12 },
+        }),
+        updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+      };
+      const storageContainers = {
+        findOne: vi.fn((query) => Promise.resolve(nodes.get(String(query._id)) || null)),
+      };
+      const equipment = {
+        findOne: vi.fn().mockResolvedValue({ equipmentID: 7001, maintenanceStatus: 'active' }),
+      };
+      const sensors = {
+        findOne: vi.fn().mockResolvedValue({ maintenanceStatus: 'active' }),
+      };
+
+      db.collection.mockImplementation((name) => {
+        if (name === 'storageBoxes') return storageBoxes;
+        if (name === 'storageContainers') return storageContainers;
+        if (name === 'equipment') return equipment;
+        if (name === 'sensors') return sensors;
+        return db.collections[name] || (db.collections[name] = makeCollection(name));
+      });
+      db.collections.samples.findOne.mockImplementation((query) => {
+        if (query && query._id !== undefined) {
+          return Promise.resolve({ _id: query._id, specimenId: String(query._id), barcode: null });
+        }
+        return Promise.resolve(null);
+      });
+
+      const result = await sampleService.createSample(db, validSampleData());
+
+      expect(result._id).toBe('generated-id');
+      expect(storageContainers.findOne).toHaveBeenCalledWith({ _id: drawerId });
+      expect(storageContainers.findOne).toHaveBeenCalledWith({ _id: rackId });
+      expect(storageContainers.findOne).toHaveBeenCalledWith({ _id: shelfId });
+      expect(equipment.findOne).toHaveBeenCalledWith({
+        equipmentID: { $in: expect.arrayContaining([7001, '7001']) },
+      });
+    });
+
+    it('getSampleByBarcode preserves pseudonymization when identity is absent and when the participant record is absent', async () => {
+      let db = makeDb();
+      db.collections.samples.findOne.mockResolvedValueOnce({
+        _id: 's1',
+        barcode: 'BR-1',
+        participantId: '12345678',
+      });
+      db.collections.patients.findOne.mockResolvedValue({
+        participantId: '12345678',
+        recordNumber: 'RN1',
+      });
+      db.collection('participantIdentities').findOne.mockResolvedValue(null);
+
+      let result = await sampleService.getSampleByBarcode(db, 'BR-1');
+      expect(result.participant).toEqual({
+        participantId: '12345678',
+        patientName: '***',
+        recordNumber: 'RN1',
+      });
+
+      db = makeDb();
+      db.collections.samples.findOne.mockResolvedValueOnce({
+        _id: 's2',
+        barcode: 'BR-2',
+        participantId: '87654321',
+      });
+      db.collections.patients.findOne.mockResolvedValue(null);
+
+      result = await sampleService.getSampleByBarcode(db, 'BR-2');
+      expect(result.sample._id).toBe('s2');
+      expect(result.participant).toBeNull();
+    });
+  });
+
 });
