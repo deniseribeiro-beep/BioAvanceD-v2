@@ -31,10 +31,16 @@ describe('fhir-validator.service item 8 executable residual branches', () => {
   it('ignores a profile file that has no schema $id instead of registering an unusable validator', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(fs, 'readdirSync').mockReturnValue(['NoId.schema.json']);
-    vi.spyOn(fs, 'readFileSync').mockReturnValue(JSON.stringify({
-      type: 'object',
-      properties: { resourceType: { const: 'NoId' } },
-    }));
+    const originalReadFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, 'readFileSync').mockImplementation((filePath, ...args) => {
+      if (String(filePath).endsWith('NoId.schema.json')) {
+        return JSON.stringify({
+          type: 'object',
+          properties: { resourceType: { const: 'NoId' } },
+        });
+      }
+      return originalReadFileSync(filePath, ...args);
+    });
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
 
     delete require.cache[validatorPath];
