@@ -879,4 +879,84 @@ describe('BatchValidationEngine file readers', () => {
     jsonParseSpy.mockRestore();
     expect(rows).toEqual([{ a: '1' }]);
   });
+
+describe('BatchValidationEngine item 8 legitimate residuals', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('normalizes valid ObjectIds and rejects blank/invalid identifiers', () => {
+    const id = '507f1f77bcf86cd799439011';
+    expect(engine.normalizeObjectId(id)).toBe(id);
+    expect(engine.normalizeObjectId('   ')).toBeNull();
+    expect(engine.normalizeObjectId('not-an-object-id')).toBeNull();
+  });
+
+  it('covers normalized-empty numeric input and primitive coding values', () => {
+    expect(engine.parseNumericValue('   ')).toBeNull();
+    expect(engine.normalizeCoding('HP:0000001', 'http://purl.obolibrary.org/obo/hp.owl'))
+      .toEqual({
+        system: 'http://purl.obolibrary.org/obo/hp.owl',
+        code: 'HP:0000001',
+        display: 'HP:0000001',
+      });
+  });
+
+  it('accepts a null semantic row as an empty source without inventing cascade data', () => {
+    expect(engine.extractSemanticCascadeFromRow(null)).toEqual({
+      disease: null,
+      phenotypes: [],
+      biomarkers: [],
+      warnings: [],
+    });
+  });
+
+  it('uses raw registerDate and a current-time fallback for biomarker observations when no earlier date exists', () => {
+    const fromRegisterDate = engine.buildBiomarkerObservationPayloads(
+      { biomarkers: 'alphaGal:1', registerDate: '2026-04-01T00:00:00.000Z' },
+      {},
+      {}
+    );
+    expect(fromRegisterDate.payloads[0].collectedAt.toISOString())
+      .toBe('2026-04-01T00:00:00.000Z');
+
+    const before = Date.now();
+    const fallback = engine.buildBiomarkerObservationPayloads(
+      { biomarkers: 'alphaGal:1' },
+      {},
+      {}
+    );
+    const after = Date.now();
+    expect(fallback.payloads[0].collectedAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(fallback.payloads[0].collectedAt.getTime()).toBeLessThanOrEqual(after);
+  });
+
+  it('persists a provided linkedProject through the sample import normalization path', async () => {
+    const patient = { _id: 'patient-1', patientID: '12345678' };
+    vi.spyOn(engine, 'findLinkedPatient').mockResolvedValue(patient);
+    vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-1' });
+    vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({ _id: 'obs-1' });
+
+    const result = await engine.persistSample(
+      {},
+      {
+        patientID: '12345678',
+        sampleType: 'Sangue',
+        sampleOrigin: 'Coleta',
+        extractionProtocol: 'EDTA',
+        linkedProject: '  Projeto-1  ',
+        quantity: '1',
+      },
+      21
+    );
+
+    expect(result.classification).toBe('VALID');
+    expect(sampleService.createSample).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ linkedProject: 'Projeto-1' }),
+      expect.any(Object)
+    );
+  });
+});
+
 });
