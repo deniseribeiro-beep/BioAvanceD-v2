@@ -274,7 +274,10 @@ describe('sample.service item 8 read/query alternate branches', () => {
       limit: vi.fn().mockReturnThis(),
       toArray: vi.fn().mockResolvedValue([{ specimenId: 'S1' }]),
     };
-    const samples = collection({ find: vi.fn(() => cursor) });
+    const samples = collection({
+      find: vi.fn(() => cursor),
+      countDocuments: vi.fn().mockResolvedValue(1),
+    });
     const db = { collection: vi.fn(() => samples) };
 
     const result = await sampleService.listSamples(db, {
@@ -286,7 +289,12 @@ describe('sample.service item 8 read/query alternate branches', () => {
       skip: 3,
     });
 
-    expect(result).toEqual([{ specimenId: 'S1' }]);
+    expect(result).toEqual({
+      samples: [{ specimenId: 'S1', specimenStatus: 'available' }],
+      total: 1,
+      limit: 7,
+      skip: 3,
+    });
     expect(samples.find).toHaveBeenCalledWith(expect.objectContaining({
       participantId: '12345678',
       specimenStatus: 'available',
@@ -366,7 +374,7 @@ describe('sample.service item 8 read/query alternate branches', () => {
   });
 
   it('anonymizes participant identity for missing, single-part and multi-part names', async () => {
-    const identityService = require('../../src/services/participant-identity.service');
+    const identityService = require('../../src/services/participantIdentity.service');
     const sample = {
       _id: 'sample-p',
       specimenId: 'SP',
