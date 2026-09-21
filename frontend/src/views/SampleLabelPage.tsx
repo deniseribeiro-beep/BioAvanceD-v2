@@ -4,8 +4,8 @@ import Card from '../components/UI/Card';
 import { apiClient } from '../api/client';
 import '../components/UI/Button.css';
 
-type SymbologyAsset = {
-  payload: string;
+type DataMatrixAsset = {
+  encodedValue: string;
   scannerPrefix: string;
   renderer: string;
   imagePng: { mimeType: string; base64: string | null };
@@ -13,17 +13,10 @@ type SymbologyAsset = {
 
 type LabelData = {
   sampleId: string;
-  barcode: string;
-  code128: SymbologyAsset;
-  dataMatrix: SymbologyAsset;
-  qr: SymbologyAsset;
+  encodedValue: string;
+  symbology: 'data_matrix';
+  dataMatrix: DataMatrixAsset;
 };
-
-const SYMBOLOGY_ROWS: Array<{ key: 'code128' | 'dataMatrix' | 'qr'; testSlug: string; title: string }> = [
-  { key: 'code128', testSlug: 'code128', title: 'Code128' },
-  { key: 'dataMatrix', testSlug: 'data-matrix', title: 'DataMatrix' },
-  { key: 'qr', testSlug: 'qr', title: 'QR' },
-];
 
 export default function SampleLabelPage() {
   const { id } = useParams<{ id: string }>();
@@ -61,11 +54,10 @@ export default function SampleLabelPage() {
 
         if (active) {
           setLabel({
-            sampleId: String(sample.sampleID ?? sample._id ?? id),
-            barcode: assets.barcode,
-            code128: assets.code128,
+            sampleId: String(sample.specimenId ?? sample._id ?? id),
+            encodedValue: assets.encodedValue,
+            symbology: assets.symbology,
             dataMatrix: assets.dataMatrix,
-            qr: assets.qr,
           });
         }
       } catch (err: any) {
@@ -152,25 +144,18 @@ export default function SampleLabelPage() {
 
       <Card>
         <div style={{ display: 'grid', gap: '1.5rem', justifyItems: 'center', padding: '2rem' }} data-testid="sample-label-symbology">
-          <p style={{ fontWeight: 600 }} data-testid="sample-label-barcode">{label.barcode}</p>
-          <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', justifyContent: 'center' }}>
-            {SYMBOLOGY_ROWS.map(({ key, testSlug, title }) => {
-              const asset = label[key];
-              return (
-                <div key={key} data-testid={`sample-label-${testSlug}`} style={{ textAlign: 'center' }}>
-                  <p>{title}</p>
-                  {asset.imagePng.base64 ? (
-                    <img
-                      src={`data:${asset.imagePng.mimeType};base64,${asset.imagePng.base64}`}
-                      alt={`${title} ${label.barcode}`}
-                      data-testid={`sample-label-${testSlug}-image`}
-                    />
-                  ) : (
-                    <p data-testid={`sample-label-${testSlug}-pending`}>Gerando imagem...</p>
-                  )}
-                </div>
-              );
-            })}
+          <p style={{ fontWeight: 600 }} data-testid="sample-label-barcode">{label.encodedValue}</p>
+          <div data-testid="sample-label-data-matrix" style={{ textAlign: 'center' }}>
+            <p>Data Matrix</p>
+            {label.dataMatrix.imagePng.base64 ? (
+              <img
+                src={`data:${label.dataMatrix.imagePng.mimeType};base64,${label.dataMatrix.imagePng.base64}`}
+                alt={`Data Matrix ${label.encodedValue}`}
+                data-testid="sample-label-data-matrix-image"
+              />
+            ) : (
+              <p data-testid="sample-label-data-matrix-pending">Gerando imagem...</p>
+            )}
           </div>
         </div>
       </Card>
