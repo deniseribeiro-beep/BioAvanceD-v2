@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
 
-// Stage 2 item 8 post-safe-branch measurement checkpoint; no test semantics changed.
+// Stage 2 item 8 safe-branch measurement retry; no test semantics changed.
 // Item 8 post-reconciliation verification checkpoint.
 // Item 8 coverage checkpoint after legitimate residual tests.
 
