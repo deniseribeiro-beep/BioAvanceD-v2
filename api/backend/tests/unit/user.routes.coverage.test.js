@@ -550,3 +550,143 @@ describe('user.routes item 8 coverage — lower route bodies', () => {
     });
   });
 });
+
+
+describe('user.routes item 8 safe upper-route and neutral-update branches', () => {
+  it('covers list/log/get database guards and get not-found response', async () => {
+    expect((await request(buildApp({ db: null })).get('/api/users')).status).toBe(503);
+    expect((await request(buildApp({ db: null })).get('/api/users/logs')).status).toBe(503);
+    expect((await request(buildApp({ db: null })).get('/api/users/u1')).status).toBe(503);
+
+    const users = collection({ findOne: vi.fn().mockResolvedValue(null) });
+    const res = await request(buildApp({ db: dbWith({ users }) })).get('/api/users/u1');
+    expect(res.status).toBe(404);
+  });
+
+  it('covers PUT database and target-user not-found guards', async () => {
+    expect((await request(buildApp({ db: null })).put('/api/users/u1').send({ name: 'X' })).status).toBe(503);
+
+    const users = collection({ findOne: vi.fn().mockResolvedValue(null) });
+    const res = await request(buildApp({ db: dbWith({ users }) }))
+      .put('/api/users/u1')
+      .send({ name: 'X' });
+    expect(res.status).toBe(404);
+  });
+
+  it('normalizes explicit empty phone and organizationId on a neutral update', async () => {
+    const rbacAssignments = require('../../src/services/rbac-assignment.service');
+    vi.spyOn(rbacAssignments, 'isAdministrator').mockResolvedValue(false);
+    vi.spyOn(rbacAssignments, 'resolveRoleDisplayName').mockResolvedValue('Técnico');
+
+    const target = {
+      _id: { toString: () => 'u1' },
+      name: 'Before',
+      email: 'before@example.test',
+      username: 'before',
+      status: 'active',
+      organizationId: null,
+    };
+    const updated = {
+      _id: { toString: () => 'u1' },
+      name: 'After',
+      email: 'before@example.test',
+      username: 'before',
+      organizationId: null,
+    };
+    const users = collection({
+      findOne: vi.fn()
+        .mockResolvedValueOnce(target)
+        .mockResolvedValueOnce(updated),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+    });
+
+    vi.spyOn(auditLogger, 'logUpdate').mockResolvedValue(undefined);
+    const res = await request(buildApp({ db: dbWith({ users }) }))
+      .put('/api/users/u1')
+      .send({ name: 'After', phone: '', organizationId: '' });
+
+    expect(res.status).toBe(200);
+    expect(users.updateOne).toHaveBeenCalledWith(
+      expect.anything(),
+      { $set: expect.objectContaining({ phone: null, organizationId: null }) }
+    );
+    expect(res.body.data.status).toBeUndefined();
+    expect(res.body.data.id).toBe('u1');
+  });
+
+  it('rejects an organizationId that does not resolve to a canonical Organization', async () => {
+    const target = {
+      _id: { toString: () => 'u1' },
+      name: 'Before',
+      email: 'before@example.test',
+      username: 'before',
+      status: 'active',
+    };
+    const users = collection({ findOne: vi.fn().mockResolvedValue(target) });
+    const organizations = collection({ findOne: vi.fn().mockResolvedValue(null) });
+    const res = await request(buildApp({ db: dbWith({ users, organizations }) }))
+      .put('/api/users/u1')
+      .send({ organizationId: 'ORG-MISSING' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('não encontrado');
+  });
+
+  it('returns updateNotFound when the target disappears after the guarded update', async () => {
+    const rbacAssignments = require('../../src/services/rbac-assignment.service');
+    vi.spyOn(rbacAssignments, 'isAdministrator').mockResolvedValue(false);
+
+    const target = {
+      _id: { toString: () => 'u1' },
+      name: 'Before',
+      email: 'before@example.test',
+      username: 'before',
+      status: 'active',
+    };
+    const users = collection({
+      findOne: vi.fn()
+        .mockResolvedValueOnce(target)
+        .mockResolvedValueOnce(null),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+    });
+
+    const res = await request(buildApp({ db: dbWith({ users }) }))
+      .put('/api/users/u1')
+      .send({ name: 'After' });
+    expect(res.status).toBe(404);
+  });
+
+  it('covers same-level role request without hierarchy escalation and preserves ordinary MFA state', async () => {
+    const rbacAssignments = require('../../src/services/rbac-assignment.service');
+    vi.spyOn(rbacAssignments, 'isAdministrator').mockResolvedValue(false);
+    vi.spyOn(rbacAssignments, 'resolveUserHierarchyLevel').mockResolvedValue(2);
+    vi.spyOn(rbacAssignments, 'resolveRoleDisplayName').mockResolvedValue('Técnico');
+
+    const target = {
+      _id: { toString: () => 'u1' },
+      name: 'Before',
+      email: 'before@example.test',
+      username: 'before',
+      status: 'active',
+      organizationId: 'ORG-1',
+      mfaEnabled: true,
+      mfaSecretCiphertext: { keyId: 'test', ciphertext: 'opaque' },
+    };
+    const updated = { ...target, name: 'After' };
+    const users = collection({
+      findOne: vi.fn()
+        .mockResolvedValueOnce(target)
+        .mockResolvedValueOnce(updated),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+    });
+
+    const res = await request(buildApp({ db: dbWith({ users }) }))
+      .put('/api/users/u1')
+      .send({ name: 'After', roleName: 'Técnico' });
+
+    expect(res.status).toBe(200);
+    const update = users.updateOne.mock.calls[0][1].$set;
+    expect(update.mfaEnabled).toBeUndefined();
+    expect(update.mfaSecretCiphertext).toBeUndefined();
+  });
+});
