@@ -1912,10 +1912,9 @@ describe('sample.routes', () => {
 
     it('generates labels for every resolvable specimen, reporting per-id success and totals', async () => {
       const getBarcodeIndustrialAssets = vi.fn(async (barcode) => ({
-        canonicalValue: barcode,
-        code128: { payload: barcode },
-        dataMatrix: { payload: barcode },
-        qr: { payload: barcode },
+        encodedValue: barcode,
+        symbology: 'data_matrix',
+        dataMatrix: { encodedValue: barcode },
       }));
       const { router } = loadRoute({ sampleServiceOverrides: { getBarcodeIndustrialAssets } });
       const { db, labelGenerations } = statefulDb({
@@ -1933,8 +1932,8 @@ describe('sample.routes', () => {
       expect(res.body.data.generated).toBe(2);
       expect(res.body.data.failed).toBe(0);
       expect(res.body.data.results).toEqual([
-        expect.objectContaining({ specimenId: 's1', success: true, barcode: 'BC-1', reprint: false }),
-        expect.objectContaining({ specimenId: 's2', success: true, barcode: 'BC-2', reprint: false }),
+        expect.objectContaining({ specimenId: 's1', success: true, encodedValue: 'BC-1', symbology: 'data_matrix', reprint: false }),
+        expect.objectContaining({ specimenId: 's2', success: true, encodedValue: 'BC-2', symbology: 'data_matrix', reprint: false }),
       ]);
       expect(labelGenerations.insertOne).toHaveBeenCalledTimes(2);
     });
@@ -1958,7 +1957,7 @@ describe('sample.routes', () => {
 
     it('reports a per-id failure (not found) without failing the whole batch', async () => {
       const getBarcodeIndustrialAssets = vi.fn(async (barcode) => ({
-        canonicalValue: barcode, code128: {}, dataMatrix: {}, qr: {},
+        encodedValue: barcode, symbology: 'data_matrix', dataMatrix: {},
       }));
       const { router } = loadRoute({ sampleServiceOverrides: { getBarcodeIndustrialAssets } });
       const { db } = statefulDb({ samples: [{ _id: 's1', specimenId: 's1', barcode: 'BC-1' }] });
@@ -1976,7 +1975,7 @@ describe('sample.routes', () => {
 
     it('reports a per-id 403 when a specimen is outside the caller\'s organization scope, without failing the whole batch', async () => {
       const getBarcodeIndustrialAssets = vi.fn(async (barcode) => ({
-        canonicalValue: barcode, code128: {}, dataMatrix: {}, qr: {},
+        encodedValue: barcode, symbology: 'data_matrix', dataMatrix: {},
       }));
       const { router } = loadRoute({
         sampleServiceOverrides: { getBarcodeIndustrialAssets },
@@ -2004,7 +2003,7 @@ describe('sample.routes', () => {
     // 404'd instead of resolving.
     it('finds a specimen by its canonical specimenId when no other identifier leg matches (issue #857)', async () => {
       const getBarcodeIndustrialAssets = vi.fn(async (barcode) => ({
-        canonicalValue: barcode, code128: {}, dataMatrix: {}, qr: {},
+        encodedValue: barcode, symbology: 'data_matrix', dataMatrix: {},
       }));
       const { router } = loadRoute({ sampleServiceOverrides: { getBarcodeIndustrialAssets } });
       const { db } = statefulDb({ samples: [{ _id: 's1', specimenId: 'SPEC-99', barcode: 'BC-1' }] });
@@ -2601,11 +2600,9 @@ describe('sample.routes', () => {
     it('returns 200 with generated barcode assets', async () => {
       const getSampleByBarcode = vi.fn().mockResolvedValue({ sample: { _id: 's1' } });
       const getBarcodeIndustrialAssets = vi.fn().mockResolvedValue({
-        canonicalValue: 'BC1',
-        generatedAt: '2026-01-01',
-        code128: 'code128data',
+        encodedValue: 'BC1',
+        symbology: 'data_matrix',
         dataMatrix: 'dataMatrixData',
-        qr: 'qrData',
       });
       const { router } = loadRoute({
         sampleServiceOverrides: { getSampleByBarcode, getBarcodeIndustrialAssets },
@@ -2620,7 +2617,7 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual(
-        expect.objectContaining({ barcode: 'BC1', includePayload: false, code128: 'code128data', qr: 'qrData', reprint: false })
+        expect.objectContaining({ encodedValue: 'BC1', symbology: 'data_matrix', includePayload: false, dataMatrix: 'dataMatrixData', reprint: false })
       );
       expect(getBarcodeIndustrialAssets).toHaveBeenCalledWith('BC1', { includePayload: false });
       expect(labelGenerations.insertOne).toHaveBeenCalledWith(
