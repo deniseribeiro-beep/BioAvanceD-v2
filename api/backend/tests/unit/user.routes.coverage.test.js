@@ -308,47 +308,10 @@ describe('user.routes item 8 coverage — lower route bodies', () => {
       expect(registerSampleState.lastInput.actor.userAgent).toBe('coverage-agent');
     });
 
-    it('uses topologicalQuarantine when the neo4jQuarantineService slot is empty', async () => {
-      const db = dbWith();
-      const topologicalQuarantine = { enqueue: vi.fn() };
-      vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-3' });
-
-      const res = await request(buildApp({ db, locals: { topologicalQuarantine } }))
-        .post('/api/users/register-sample')
-        .send({ barcode: 'SYN-003' });
-
-      expect(res.status).toBe(201);
-      expect(registerSampleState.lastDeps.quarantineService).toBe(topologicalQuarantine);
-    });
-
-    it('prefers neo4jQuarantineService over topologicalQuarantine', async () => {
-      const db = dbWith();
-      const neo4jQuarantineService = { enqueue: vi.fn() };
-      const topologicalQuarantine = { enqueue: vi.fn() };
-      vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-4' });
-
-      const res = await request(buildApp({
-        db,
-        locals: { neo4jQuarantineService, topologicalQuarantine },
-      }))
-        .post('/api/users/register-sample')
-        .send({ barcode: 'SYN-004' });
-
-      expect(res.status).toBe(201);
-      expect(registerSampleState.lastDeps.quarantineService).toBe(neo4jQuarantineService);
-    });
-
-    it('passes null quarantineService when neither application slot exists', async () => {
-      const db = dbWith();
-      vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-5' });
-
-      const res = await request(buildApp({ db }))
-        .post('/api/users/register-sample')
-        .send({ barcode: 'SYN-005' });
-
-      expect(res.status).toBe(201);
-      expect(registerSampleState.lastDeps.quarantineService).toBeNull();
-    });
+    // Legacy synchronous lineage/quarantine service injection was removed from
+    // RegisterSampleUseCase wiring in canonical v2. The route now supplies only
+    // the canonical sample repository; projection/quarantine is derived outside
+    // this request path.
 
     it('covers the repository rollback helper with an ObjectId target', async () => {
       const samples = collection();
