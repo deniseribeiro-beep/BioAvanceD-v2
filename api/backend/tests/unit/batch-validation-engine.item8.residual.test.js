@@ -578,3 +578,108 @@ describe('batch-validation-engine item8 process and classification coverage', ()
     });
   });
 });
+
+
+describe('batch-validation-engine item 8 safe reader and persistence alternates', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('readCsvRows ignores non-object/blank records while preserving physical source lines', async () => {
+    vi.spyOn(engine, 'detectCsvSeparator').mockReturnValue(';');
+
+    const handlers = {};
+    const parserStream = {
+      on: vi.fn((event, handler) => {
+        handlers[event] = handler;
+        return parserStream;
+      }),
+    };
+    const sourceStream = {
+      pipe: vi.fn(() => parserStream),
+    };
+    vi.spyOn(fs, 'createReadStream').mockReturnValue(sourceStream);
+
+    const promise = engine.readCsvRows('/tmp/safe.csv');
+    handlers.data(null);
+    handlers.data({});
+    handlers.data({ a: '   ' });
+    handlers.data({ a: 'value', b: '' });
+    handlers.end();
+
+    const rows = await promise;
+    expect(rows).toEqual([{ a: 'value', b: '' }]);
+    expect(rows.sourceLines).toEqual([4]);
+  });
+
+  it('readCsvRows forwards stream errors without converting them into data errors', async () => {
+    vi.spyOn(engine, 'detectCsvSeparator').mockReturnValue(',');
+    const handlers = {};
+    const parserStream = {
+      on: vi.fn((event, handler) => {
+        handlers[event] = handler;
+        return parserStream;
+      }),
+    };
+    vi.spyOn(fs, 'createReadStream').mockReturnValue({ pipe: vi.fn(() => parserStream) });
+
+    const promise = engine.readCsvRows('/tmp/fail.csv');
+    handlers.error(new Error('csv stream failed'));
+    await expect(promise).rejects.toThrow('csv stream failed');
+  });
+
+  it('builds biomarker payload with the generated-now fallback when no clinical/sample date exists', () => {
+    const before = Date.now();
+    const result = engine.buildBiomarkerObservationPayloads(
+      { biomarkers: 'GLU=5.5' },
+      { participantId: '12345678' },
+      { specimenId: 'SPEC-1' }
+    );
+    const after = Date.now();
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads[0].collectedAt).toBeInstanceOf(Date);
+    expect(result.payloads[0].collectedAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(result.payloads[0].collectedAt.getTime()).toBeLessThanOrEqual(after);
+  });
+
+  it('persistSample reuses an already linked patient and succeeds without biomarker observations', async () => {
+    const patient = { _id: 'PERSISTED-P1', participantId: '12345678' };
+    vi.spyOn(importLGPDService, 'parseSampleRow').mockReturnValue({
+      patientID: '12345678',
+      sampleType: 'PLASMA',
+      sampleOrigin: 'VENOUS',
+      extractionProtocol: 'EDTA',
+      quantity: 1,
+      quality: 1,
+    });
+    vi.spyOn(importLGPDService, 'parsePatientRow').mockReturnValue({
+      patientName: null,
+      birthDate: null,
+      sex: null,
+      email: null,
+      consentTemplateId: null,
+    });
+    vi.spyOn(engine, 'buildSampleRow').mockReturnValue({});
+    vi.spyOn(engine, 'classifySampleRow').mockReturnValue([]);
+    vi.spyOn(engine, 'findLinkedPatient').mockResolvedValue(patient);
+    vi.spyOn(sampleService, 'createSample').mockResolvedValue({
+      _id: 'PERSISTED-S1',
+      specimenId: 'SPEC-1',
+    });
+    vi.spyOn(engine, 'buildBiomarkerObservationPayloads').mockReturnValue({
+      payloads: [],
+      warnings: [],
+    });
+    const createPatient = vi.spyOn(patientService, 'createPatient');
+
+    const result = await engine.persistSample({}, { orpha: 'ORPHA:1' }, 20);
+
+    expect(result).toMatchObject({
+      classification: 'VALID',
+      persistedId: 'PERSISTED-S1',
+      persistedIds: ['PERSISTED-P1', 'PERSISTED-S1'],
+    });
+    expect(createPatient).not.toHaveBeenCalled();
+  });
+});
