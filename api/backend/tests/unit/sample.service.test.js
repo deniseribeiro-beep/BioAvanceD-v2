@@ -2203,34 +2203,19 @@ describe('sample.service item 8 residual branch coverage', () => {
     expect(result.skip).toBe(3);
   });
 
-  it('finds samples by exact, case-insensitive, numeric and regex barcode strategies', async () => {
-    for (const setup of [
-      [
-        [{ _id: 'x', barcode: 'ABC', specimenStatus: 'available' }],
-        'ABC',
-      ],
-      [
-        [null, { _id: 'x', barcode: 'ABC', specimenStatus: 'available' }],
-        'abc',
-      ],
-      [
-        [null, null, { _id: 'x', barcode: 123, specimenStatus: 'available' }],
-        '123',
-      ],
-      [
-        [null, null, { _id: 'x', barcode: 'A+B', specimenStatus: 'available' }],
-        'A+B',
-      ],
-    ]) {
-      const [responses, barcode] = setup;
-      const db = makeDb();
-      db.collections.samples.findOne.mockReset();
-      for (const response of responses) {
-        db.collections.samples.findOne.mockResolvedValueOnce(response);
-      }
-      const result = await sampleService.getSampleByBarcode(db, barcode);
-      expect(result.sample).not.toBeNull();
-    }
+  it('finds samples only by exact canonical encodedValue', async () => {
+    const db = makeDb();
+    db.collections.samples.findOne.mockResolvedValueOnce({
+      _id: 'x',
+      barcode: 'ABC',
+      specimenStatus: 'available',
+    });
+
+    const result = await sampleService.getSampleByBarcode(db, ']d2ABC');
+
+    expect(result.sample).toMatchObject({ _id: 'x', barcode: 'ABC' });
+    expect(db.collections.samples.findOne).toHaveBeenCalledTimes(1);
+    expect(db.collections.samples.findOne).toHaveBeenCalledWith({ barcode: 'ABC' });
   });
 
   it('returns the explicit not-found barcode shape and logs example barcodes', async () => {
