@@ -4,9 +4,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { ObjectId } = require('mongodb');
 const fs = require('fs');
-const fileCrypto = require('../../src/utils/fileCrypto');
-const controllerPath = require.resolve('../../src/controllers/sample-file.controller');
-const controller = require(controllerPath);
+const controller = require('../../src/controllers/sample-file.controller');
 
 function createRes() {
   return {
@@ -42,7 +40,6 @@ function createDb({ sample = null, fileRecord = null } = {}) {
 describe('sample-file.controller item 8 executable residual branches', () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    delete require.cache[controllerPath];
   });
 
   it('translates the out-of-scope upload error and removes the staged file', async () => {
@@ -139,16 +136,14 @@ describe('sample-file.controller item 8 executable residual branches', () => {
     const { db } = createDb({ fileRecord });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('ciphertext'));
-    vi.spyOn(fileCrypto, 'decryptFileBuffer').mockImplementation(() => {
-      throw new Error('authentication tag mismatch');
-    });
-
-    delete require.cache[controllerPath];
-    const freshController = require(controllerPath);
+    // Exercise the real decrypt failure path without reloading a CommonJS
+    // module inside a Vitest worker. An unknown key id is a valid malformed
+    // persisted-envelope scenario and decryptFileBuffer fails before crypto I/O.
+    fileRecord.encryptionKeyId = 'missing-key-id';
     const t = vi.fn((key) => `i18n:${key}`);
     const res = createRes();
 
-    await freshController.downloadFile({
+    await controller.downloadFile({
       app: { locals: { db } },
       params: { specimenId, fileID },
       t,
