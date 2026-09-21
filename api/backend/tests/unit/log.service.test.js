@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
 
-// Stage 2 consolidated CI retry checkpoint; no test semantics changed.
+// Stage 2 consolidated CI retry after residual-test reconciliation; no test semantics changed.
 // Item 8 post-reconciliation verification checkpoint.
 // Item 8 coverage checkpoint after legitimate residual tests.
 
