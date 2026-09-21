@@ -243,7 +243,7 @@ function buildZplPrintJob({ specimenId, barcode, location }) {
     '^LL320',
     '^FO35,28^A0N,30,30^FDBioAvanceD^FS',
     `^FO35,70^A0N,28,28^FDAmostra: ${safeSpecimenId}^FS`,
-    `^FO35,110^BCN,80,Y,N,N^FD${safeBarcode}^FS`,
+    `^FO35,110^BXN,5,200^FD${safeBarcode}^FS`,
     safeLocation ? `^FO35,220^A0N,24,24^FD${safeLocation}^FS` : null,
     '^XZ',
   ].filter(Boolean).join('\n');
@@ -738,18 +738,17 @@ router.post('/labels/batch', authenticate, requireOrganizationScope, async (req,
         const assets = await sampleService.getBarcodeIndustrialAssets(sample.barcode, { includePayload: false });
         const { reprint } = await recordLabelGeneration(db, {
           sample,
-          formats: ['code128', 'dataMatrix', 'qr'],
+          formats: ['dataMatrix'],
           req
         });
 
         return {
           specimenId: id,
           success: true,
-          barcode: assets.canonicalValue,
+          encodedValue: assets.encodedValue,
+          symbology: assets.symbology,
           reprint,
-          code128: assets.code128,
-          dataMatrix: assets.dataMatrix,
-          qr: assets.qr
+          dataMatrix: assets.dataMatrix
         };
       } catch (error) {
         return { specimenId: id, success: false, error: error.message };
@@ -769,7 +768,7 @@ router.post('/labels/batch', authenticate, requireOrganizationScope, async (req,
     logger.error('Erro ao gerar lote de etiquetas:', error.message);
     return res.status(500).json({
       success: false,
-      error: 'Erro ao gerar artefatos de barcode',
+      error: 'Erro ao gerar artefato Data Matrix',
       message: error.message
     });
   }
@@ -1205,24 +1204,22 @@ router.get('/by-barcode/:barcode/symbology-assets', authenticate, requireOrganiz
 
     const { reprint } = await recordLabelGeneration(db, {
       sample: lookup.sample,
-      formats: ['code128', 'dataMatrix', 'qr'],
+      formats: ['dataMatrix'],
       req
     });
 
     return res.status(200).json({
       success: true,
       data: {
-        barcode: assets.canonicalValue,
-        generatedAt: assets.generatedAt,
+        encodedValue: assets.encodedValue,
+        symbology: assets.symbology,
         includePayload,
         reprint,
-        code128: assets.code128,
-        dataMatrix: assets.dataMatrix,
-        qr: assets.qr
+        dataMatrix: assets.dataMatrix
       }
     });
   } catch (error) {
-    logger.error('Erro ao gerar artefatos industriais de barcode:', error.message);
+    logger.error('Erro ao gerar artefato Data Matrix:', error.message);
     return res.status(500).json({
       success: false,
       error: 'Erro ao gerar artefatos de barcode',
