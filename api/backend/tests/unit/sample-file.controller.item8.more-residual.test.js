@@ -522,3 +522,123 @@ describe('sample-file.controller item 8 alternate file lifecycle branches', () =
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'generator down' }));
   });
 });
+
+
+describe('sample-file.controller item 8 safe identifier and ownership guards', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('downloadFile rejects malformed file IDs before any filesystem access', async () => {
+    const { db } = buildDb();
+    const exists = vi.spyOn(fs, 'existsSync');
+    const res = createRes();
+
+    await controller.downloadFile({
+      app: { locals: { db } },
+      params: { specimenId: 'SPEC-1', fileID: 'not-an-object-id' },
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(exists).not.toHaveBeenCalled();
+  });
+
+  it('downloadFile rejects a valid file that belongs to another specimen', async () => {
+    const fileID = new ObjectId().toString();
+    const { db } = buildDb({
+      fileRecord: {
+        _id: new ObjectId(fileID),
+        specimenId: 'SPEC-OTHER',
+        fileName: 'x.csv',
+        storagePath: '/tmp/x.csv',
+      },
+    });
+    const exists = vi.spyOn(fs, 'existsSync');
+    const res = createRes();
+
+    await controller.downloadFile({
+      app: { locals: { db } },
+      params: { specimenId: 'SPEC-1', fileID },
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(exists).not.toHaveBeenCalled();
+  });
+
+  it('deleteFile rejects malformed file IDs and ownership mismatches before deletion', async () => {
+    let fixture = buildDb();
+    let res = createRes();
+
+    await controller.deleteFile({
+      app: { locals: { db: fixture.db } },
+      params: { specimenId: 'SPEC-1', fileID: 'not-an-object-id' },
+    }, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(fixture.sampleFiles.deleteOne).not.toHaveBeenCalled();
+
+    const fileID = new ObjectId().toString();
+    fixture = buildDb({
+      fileRecord: {
+        _id: new ObjectId(fileID),
+        specimenId: 'SPEC-OTHER',
+        fileName: 'x.csv',
+        storagePath: '/tmp/x.csv',
+      },
+    });
+    res = createRes();
+    await controller.deleteFile({
+      app: { locals: { db: fixture.db } },
+      params: { specimenId: 'SPEC-1', fileID },
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(fixture.sampleFiles.deleteOne).not.toHaveBeenCalled();
+  });
+
+  it('listFiles falls back to specimenId lookup for a non-ObjectId route identifier', async () => {
+    const sample = { _id: new ObjectId(), specimenId: 42, collectionSite: 'org-1' };
+    const { db, samples } = buildDb({ sample, files: [] });
+    const res = createRes();
+
+    await controller.listFiles({
+      app: { locals: { db } },
+      params: { specimenId: '42' },
+      user: null,
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(samples.findOne).toHaveBeenCalledTimes(2);
+    expect(samples.findOne).toHaveBeenLastCalledWith({ specimenId: 42 });
+  });
+
+  it('downloadFile serves encrypted-path errors as 500 without leaking decrypt details', async () => {
+    const specimenId = new ObjectId().toString();
+    const fileID = new ObjectId().toString();
+    const { db } = buildDb({
+      fileRecord: {
+        _id: new ObjectId(fileID),
+        specimenId,
+        fileName: 'encrypted.csv',
+        storagePath: '/tmp/encrypted.csv',
+        encryptionAlgorithm: 'aes-256-gcm',
+        encryptionKeyId: 'missing-key-id',
+        encryptionIv: 'AA==',
+        encryptionTag: 'AA==',
+      },
+    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('ciphertext'));
+    const res = createRes();
+
+    await controller.downloadFile({
+      app: { locals: { db } },
+      params: { specimenId, fileID },
+      user: null,
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+    }));
+  });
+});
