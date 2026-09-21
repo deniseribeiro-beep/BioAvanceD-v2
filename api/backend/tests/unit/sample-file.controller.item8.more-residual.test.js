@@ -607,8 +607,8 @@ describe('sample-file.controller item 8 safe identifier and ownership guards', (
     }, res);
 
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(samples.findOne).toHaveBeenCalledTimes(2);
-    expect(samples.findOne).toHaveBeenLastCalledWith({ specimenId: 42 });
+    expect(samples.findOne).toHaveBeenCalledTimes(1);
+    expect(samples.findOne).toHaveBeenCalledWith({ specimenId: 42 });
   });
 
   it('downloadFile serves encrypted-path errors as 500 without leaking decrypt details', async () => {
