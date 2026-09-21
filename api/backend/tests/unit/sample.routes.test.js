@@ -1941,7 +1941,9 @@ describe('sample.routes', () => {
 
     it('marks a second generation for the same specimen as a reprint', async () => {
       const getBarcodeIndustrialAssets = vi.fn(async (barcode) => ({
-        canonicalValue: barcode, code128: {}, dataMatrix: {}, qr: {},
+        encodedValue: barcode,
+        symbology: 'data_matrix',
+        dataMatrix: {},
       }));
       const { router } = loadRoute({ sampleServiceOverrides: { getBarcodeIndustrialAssets } });
       const { db } = statefulDb({ samples: [{ _id: 's1', specimenId: 's1', barcode: 'BC-1' }] });
@@ -2622,7 +2624,7 @@ describe('sample.routes', () => {
       );
       expect(getBarcodeIndustrialAssets).toHaveBeenCalledWith('BC1', { includePayload: false });
       expect(labelGenerations.insertOne).toHaveBeenCalledWith(
-        expect.objectContaining({ specimenId: 's1', formats: ['code128', 'dataMatrix', 'qr'], reprint: false })
+        expect.objectContaining({ specimenId: 's1', formats: ['dataMatrix'], reprint: false })
       );
     });
 
