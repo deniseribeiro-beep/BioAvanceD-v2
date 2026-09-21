@@ -1011,8 +1011,8 @@ test.describe('Sample labeling (RF016) — real backend', () => {
 // directly -- the page a real user actually lands on (SampleLabelPage.tsx,
 // mounted at samples/:id/label in App.tsx) called a separate, simpler
 // system (label.routes.js, retired by this fix) with no real symbology.
-// This proves the redirect: the real page now renders the real bwip-js
-// Code128/DataMatrix/QR images and drives the ported ZPL print-job route.
+// The real page renders the canonical Data Matrix tube identifier and
+// drives the ZPL print-job route with Data Matrix output.
 test.describe('Sample labeling (RF016) — through the real UI (#655)', () => {
   const seededStorageBoxes: SeededStorageBox[] = [];
 
@@ -1047,9 +1047,7 @@ test.describe('Sample labeling (RF016) — through the real UI (#655)', () => {
     await page.goto(`/samples/${sampleID}/label`);
 
     await expect(page.getByTestId('sample-label-page')).toBeVisible();
-    await expect(page.getByTestId('sample-label-code128-image')).toBeVisible();
     await expect(page.getByTestId('sample-label-data-matrix-image')).toBeVisible();
-    await expect(page.getByTestId('sample-label-qr-image')).toBeVisible();
     await expect(page.getByTestId('sample-label-barcode')).not.toHaveText('');
 
     const [download] = await Promise.all([
