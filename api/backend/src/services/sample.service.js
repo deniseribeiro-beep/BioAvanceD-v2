@@ -4,7 +4,6 @@ const logger = require('../utils/logger');
 const { validateParticipantId } = require('../utils/patientAnonymization');
 const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
 const {
-  generateBarcodeSymbologies,
   generateIndustrialBarcodeArtifacts,
   parseScannedBarcode
 } = require('../utils/barcodeSymbology');
@@ -278,27 +277,27 @@ class SampleService {
         throw createSampleValidationError(`Localização física sem sensor operacional associado.${statusMessage}`);
       }
 
-      // Gera código de barras automaticamente se não fornecido
-      if (!sampleData.barcode || (typeof sampleData.barcode === 'string' && sampleData.barcode.trim() === '')) {
+      // O identificador físico do tubo é textual e sua simbologia canônica é
+      // Data Matrix. Valores numéricos históricos não são convertidos nem
+      // preservados como compatibilidade.
+      if (sampleData.barcode === undefined || sampleData.barcode === null || sampleData.barcode === '') {
         sampleData.barcode = await generateUniqueBarcode(db);
-        logger.info(`Código de barras gerado automaticamente: ${sampleData.barcode}`);
+        logger.info(`Identificador Data Matrix gerado automaticamente: ${sampleData.barcode}`);
       } else {
-        // Converte para string se necessário
-        sampleData.barcode = String(sampleData.barcode).trim();
-        
-        // #944: era "RF004", que nao menciona barcode em nenhum criterio.
-        // O requisito e dict-02 ELM-0116 (Specimen.barcodeValue, Unico).
-        // Verifica duplicidade por barcode (se fornecido)
-        const existingSample = await samplesCollection.findOne({ barcode: sampleData.barcode });
-        if (existingSample) {
-          throw new Error(`Já existe uma amostra com o código de barras ${sampleData.barcode}`);
+        if (typeof sampleData.barcode !== 'string') {
+          throw createSampleValidationError('barcode deve ser uma string canônica para identificação Data Matrix');
+        }
+        sampleData.barcode = sampleData.barcode.trim();
+        if (!sampleData.barcode) {
+          sampleData.barcode = await generateUniqueBarcode(db);
+          logger.info(`Identificador Data Matrix gerado automaticamente: ${sampleData.barcode}`);
+        } else {
+          const existingSample = await samplesCollection.findOne({ barcode: sampleData.barcode });
+          if (existingSample) {
+            throw new Error(`Já existe uma amostra com o código de barras ${sampleData.barcode}`);
+          }
         }
       }
-
-      sampleData.barcodeSymbologies = generateBarcodeSymbologies(sampleData.barcode);
-      sampleData.barcodeIndustrial = await generateIndustrialBarcodeArtifacts(sampleData.barcode, {
-        includePayload: false
-      });
 
       // #492: live registration didn't compute RCS server-side at all —
       // mirrors import.service.js's CSV/XLSX branch (#383), which is the
@@ -693,7 +692,7 @@ class SampleService {
       // flag, not this change's call.
       const ALLOWED_UPDATE_FIELDS = [
         'sampleType', 'sampleOrigin', 'extractionProtocol', 'barcode',
-        'barcodeSymbologies', 'barcodeIndustrial', 'registeredAt',
+        'registeredAt',
         'withdrawnAt', 'receivedAt', 'quantity', 'unit', 'quality',
         'modelVersion', 'matrixType', 'governanceStatus',
         'governanceFailureReasons', 'governanceRuleCodes',
@@ -758,53 +757,17 @@ class SampleService {
       const barcodeStr = parsedBarcode.normalizedValue;
       logger.info(`Buscando amostra com código de barras: "${barcodeStr}" (simbologia: ${parsedBarcode.scannerSymbology})`);
       
-      // Tenta múltiplas estratégias de busca para garantir compatibilidade
-      let sample = null;
+      if (!parsedBarcode.isValid) {
+        throw createSampleValidationError('Identificador físico inválido: apenas Data Matrix canônico é suportado');
+      }
 
-      // 1. Busca exata (string)
-      if (!sample) {
-        sample = await samplesCollection.findOne({ barcode: barcodeStr });
-      }
+      // O valor codificado é identidade física exata. Não há fallback
+      // numérico, case-insensitive ou regex para dados históricos.
+      const sample = await samplesCollection.findOne({ barcode: barcodeStr });
       if (sample) {
-        logger.info(`Amostra encontrada (busca exata): ${sample._id}, barcode: ${sample.barcode}`);
+        logger.info(`Amostra encontrada por identificador Data Matrix: ${sample._id}, barcode: ${sample.barcode}`);
       }
-      
-      // 2. Se não encontrou, tenta case-insensitive (normaliza para uppercase)
-      if (!sample) {
-        const barcodeUpper = barcodeStr.toUpperCase();
-        sample = await samplesCollection.findOne({ 
-          $or: [
-            { barcode: barcodeUpper },
-            { barcode: barcodeStr }
-          ]
-        });
-        if (sample) {
-          logger.info(`Amostra encontrada (case-insensitive): ${sample._id}, barcode: ${sample.barcode}`);
-        }
-      }
-      
-      // 3. Se não encontrou e é formato numérico, tenta como número (compatibilidade com dados antigos)
-      if (!sample && /^\d+$/.test(barcodeStr)) {
-        const barcodeNum = parseInt(barcodeStr, 10);
-        if (!isNaN(barcodeNum)) {
-          sample = await samplesCollection.findOne({ barcode: barcodeNum });
-          if (sample) {
-            logger.info(`Amostra encontrada (como número): ${sample._id}, barcode: ${sample.barcode}`);
-          }
-        }
-      }
-      
-      // 4. Última tentativa: busca por regex (case-insensitive) para casos com formatação diferente
-      if (!sample) {
-        // Escapa caracteres especiais do regex
-        const escapedBarcode = barcodeStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regexPattern = new RegExp(`^${escapedBarcode}$`, 'i');
-        sample = await samplesCollection.findOne({ barcode: { $regex: regexPattern } });
-        if (sample) {
-          logger.info(`Amostra encontrada (regex): ${sample._id}, barcode: ${sample.barcode}`);
-        }
-      }
-      
+
       if (!sample) {
         // Log de debug: lista alguns códigos de barras existentes para comparação
         const sampleCount = await samplesCollection.countDocuments({});
