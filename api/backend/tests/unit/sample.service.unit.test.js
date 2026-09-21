@@ -18,9 +18,20 @@ describe('SampleService.getBarcodeIndustrialAssets', () => {
     expect(result).toBeDefined();
   });
 
-  it('returns assets for Code128 prefix barcode', async () => {
-    const result = await sampleService.getBarcodeIndustrialAssets(']C1SMP-001');
-    expect(result).toBeDefined();
+  it('returns a Data Matrix artifact for a canonical encoded value', async () => {
+    const result = await sampleService.getBarcodeIndustrialAssets(']d2SMP-001');
+    expect(result).toMatchObject({
+      encodedValue: 'SMP-001',
+      symbology: 'data_matrix',
+    });
+    expect(result.dataMatrix).toBeDefined();
+    expect(result.code128).toBeUndefined();
+    expect(result.qr).toBeUndefined();
+  });
+
+  it('rejects retired Code128 and QR scanner inputs', async () => {
+    await expect(sampleService.getBarcodeIndustrialAssets(']C1SMP-001')).rejects.toThrow('inválido');
+    await expect(sampleService.getBarcodeIndustrialAssets(']Q3SMP-001')).rejects.toThrow('inválido');
   });
 });
 
