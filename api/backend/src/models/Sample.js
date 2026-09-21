@@ -33,8 +33,6 @@ const SampleSchema = new Schema({
   sampleOrigin: { type: String, required: true },
   extractionProtocol: { type: String, required: true },
   barcode: { type: String, index: true },
-  barcodeSymbologies: { type: Schema.Types.Mixed, default: null },
-  barcodeIndustrial: { type: Schema.Types.Mixed, default: null },
   registeredAt: { type: Date, required: true },
   withdrawnAt: { type: Date, default: null },
   receivedAt: { type: Date, default: null },
@@ -105,7 +103,6 @@ const SampleSchema = new Schema({
   protocolId: { type: String, default: null },
   collectionId: { type: String, default: null },
   linkedFiles: { type: [Schema.Types.Mixed], default: [] },
-  qrCode: { type: String, default: null },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 }, { collection: 'samples' });
@@ -187,8 +184,6 @@ class SampleModel {
       sampleOrigin: data.sampleOrigin,
       extractionProtocol: data.extractionProtocol,
       barcode: data.barcode || null,
-      barcodeSymbologies: data.barcodeSymbologies || null,
-      barcodeIndustrial: data.barcodeIndustrial || null,
       registeredAt,
       withdrawnAt: data.withdrawnAt ? new Date(data.withdrawnAt) : null,
       receivedAt: data.receivedAt ? new Date(data.receivedAt) : null,
