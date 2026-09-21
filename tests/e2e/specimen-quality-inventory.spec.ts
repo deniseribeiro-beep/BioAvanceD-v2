@@ -900,9 +900,9 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
 // Wave 3 kickoff (#646). RF016's 6 acceptance criteria (requisitos-index.md)
 // -- AC#3 (printer-layout validation) has no implementation anywhere in the
 // codebase and needs a design call before it can be scoped; filed as #652
-// rather than built here. AC#1/#2/#5 (unique specimenId+barcode, Code128/
-// DataMatrix/QR) and AC#4/#6 (batch generation, audit + reprint tracking)
-// are all proven below against the real backend.
+// rather than built here. The v2 physical-identification contract uses a
+// unique encoded value rendered as Data Matrix for specimen containers;
+// batch generation, audit and reprint tracking are proven below.
 test.describe('Sample labeling (RF016) — real backend', () => {
   const seededStorageBoxes: SeededStorageBox[] = [];
 
@@ -933,7 +933,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     return { sampleID: body.sampleID, barcode: sample.barcode };
   }
 
-  test('generates Code128, DataMatrix and QR symbology assets tied to the specimen\'s own unique barcode (criteria 1, 2)', async ({ request }) => {
+  test('generates the canonical Data Matrix asset tied to the specimen container identifier (criteria 1, 2)', async ({ request }) => {
     const admin = await realLogin(request);
     const sample = await createRealSample(request, admin.token);
     expect(sample.barcode).toBeTruthy();
@@ -945,13 +945,12 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     expect(res.ok(), await res.text()).toBeTruthy();
     const assets = (await res.json()).data;
 
-    expect(assets.barcode).toBe(sample.barcode);
-    expect(assets.code128.payload).toBe(sample.barcode);
-    expect(assets.code128.scannerPrefix).toBe(']C1');
-    expect(assets.dataMatrix.payload).toBe(sample.barcode);
+    expect(assets.encodedValue).toBe(sample.barcode);
+    expect(assets.symbology).toBe('data_matrix');
+    expect(assets.dataMatrix.encodedValue).toBe(sample.barcode);
     expect(assets.dataMatrix.scannerPrefix).toBe(']d2');
-    expect(assets.qr.payload).toBe(sample.barcode);
-    expect(assets.qr.scannerPrefix).toBe(']Q3');
+    expect(assets.code128).toBeUndefined();
+    expect(assets.qr).toBeUndefined();
   });
 
   test('never reuses a barcode across two distinct specimens (criterion 5)', async ({ request }) => {
@@ -999,8 +998,12 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     expect(body.failed).toBe(1);
 
     const resultA = body.results.find((r: any) => r.specimenId === sampleA.sampleID);
-    expect(resultA).toMatchObject({ success: true, barcode: sampleA.barcode });
-    expect(resultA.qr.payload).toBe(sampleA.barcode);
+    expect(resultA).toMatchObject({
+      success: true,
+      encodedValue: sampleA.barcode,
+      symbology: 'data_matrix',
+    });
+    expect(resultA.dataMatrix.encodedValue).toBe(sampleA.barcode);
 
     const missing = body.results.find((r: any) => r.specimenId === 'does-not-exist');
     expect(missing).toMatchObject({ success: false });
