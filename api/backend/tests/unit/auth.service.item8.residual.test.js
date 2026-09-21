@@ -435,3 +435,185 @@ describe('AuthService item 8 password-reset development branches', () => {
     }
   });
 });
+
+
+describe('AuthService item 8 safe success-side branches', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('covers role/access mapping defaults and explicit mappings', () => {
+    expect(authService.getRoleName(4)).toBe('Administrador');
+    expect(authService.getRoleName(999)).toBe('Técnico');
+    expect(authService.getAccessTypeForRole('Coordenador')).toBe(3);
+    expect(authService.getAccessTypeForRole('Perfil desconhecido')).toBe(2);
+  });
+
+  it('includes sessionID only when explicitly supplied in refresh-token payload', () => {
+    const jwt = require('jsonwebtoken');
+    const sign = vi.spyOn(jwt, 'sign').mockReturnValue('refresh-token');
+    const user = { _id: { toString: () => 'user-1' } };
+
+    expect(authService.issueRefreshToken(user, 'session-1')).toBe('refresh-token');
+    expect(sign).toHaveBeenCalledWith(
+      expect.objectContaining({ userID: 'user-1', type: 'refresh', sessionID: 'session-1' }),
+      expect.any(String),
+      expect.objectContaining({ expiresIn: '7d' })
+    );
+  });
+
+  it('locks the account when the configured failed-attempt threshold is reached', async () => {
+    const users = { updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }) };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'security_config') {
+          return {
+            findOne: vi.fn().mockResolvedValue({
+              _id: 'main',
+              authentication: { maxLoginAttempts: 2, lockoutDurationMinutes: 5 },
+            }),
+          };
+        }
+        return users;
+      }),
+    };
+
+    await authService.recordFailedPasswordAttempt(db, users, {
+      _id: 'user-1',
+      failedLoginAttempts: 1,
+    });
+
+    expect(users.updateOne).toHaveBeenCalledWith(
+      { _id: 'user-1' },
+      expect.objectContaining({
+        $inc: { failedLoginAttempts: 1 },
+        $set: expect.objectContaining({
+          updatedAt: expect.any(Date),
+          accountLockedUntil: expect.any(Date),
+        }),
+      })
+    );
+  });
+
+  it('completes first-login MFA setup with a valid generated secret and QR code', async () => {
+    const fixture = usersDb(vi.fn().mockResolvedValue({
+      ...BASE_USER,
+      lastLogin: null,
+      mfaEnabled: false,
+      mfaSecretCiphertext: null,
+    }));
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    vi.spyOn(speakeasy, 'generateSecret').mockReturnValue({
+      base32: 'JBSWY3DPEHPK3PXP',
+      otpauth_url: 'otpauth://totp/BioAvanceD',
+    });
+    vi.spyOn(QRCode, 'toDataURL').mockResolvedValue('data:image/png;base64,synthetic');
+
+    const result = await authService.setupMFAFirstLogin(
+      fixture.db,
+      { username: 'user1', password: 'pw' }
+    );
+
+    expect(result).toEqual({
+      secret: 'JBSWY3DPEHPK3PXP',
+      qrCode: 'data:image/png;base64,synthetic',
+      manualEntryKey: 'JBSWY3DPEHPK3PXP',
+    });
+    expect(fixture.users.updateOne).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          mfaSecretCiphertext: expect.anything(),
+          mfaActivationDate: null,
+        }),
+      })
+    );
+  });
+
+  it('enables first-login MFA on a valid TOTP and returns session tokens', async () => {
+    const setupFixture = usersDb(vi.fn().mockResolvedValue({
+      ...BASE_USER,
+      lastLogin: null,
+      mfaEnabled: false,
+      mfaSecretCiphertext: null,
+    }));
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    vi.spyOn(speakeasy, 'generateSecret').mockReturnValue({
+      base32: 'JBSWY3DPEHPK3PXP',
+      otpauth_url: 'otpauth://totp/BioAvanceD',
+    });
+    vi.spyOn(QRCode, 'toDataURL').mockResolvedValue('data:image/png;base64,synthetic');
+
+    await authService.setupMFAFirstLogin(setupFixture.db, { username: 'user1', password: 'pw' });
+    const encryptionSet = setupFixture.users.updateOne.mock.calls.at(-1)[1].$set;
+
+    const fixture = usersDb(vi.fn().mockResolvedValue({
+      ...BASE_USER,
+      lastLogin: null,
+      mfaEnabled: false,
+      mfaSecretCiphertext: encryptionSet.mfaSecretCiphertext,
+    }));
+    vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
+    vi.spyOn(authService, 'issueSessionTokens').mockResolvedValue({
+      token: 'access',
+      refreshToken: 'refresh',
+      sessionID: 'session-1',
+    });
+
+    const result = await authService.enableMFAFirstLogin(
+      fixture.db,
+      { username: 'user1', password: 'pw' },
+      '123456',
+      {}
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      token: 'access',
+      refreshToken: 'refresh',
+      sessionID: 'session-1',
+    });
+    expect(fixture.users.updateOne).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          mfaEnabled: true,
+          failedLoginAttempts: 0,
+          accountLockedUntil: null,
+        }),
+      })
+    );
+  });
+
+  it('enables authenticated MFA for a returning user without issuing first-login tokens', async () => {
+    const { ObjectId } = require('mongodb');
+    const userID = new ObjectId().toString();
+
+    const setupFixture = usersDb(vi.fn().mockResolvedValue({
+      ...BASE_USER,
+      _id: new ObjectId(userID),
+      lastLogin: null,
+    }));
+    vi.spyOn(speakeasy, 'generateSecret').mockReturnValue({
+      base32: 'JBSWY3DPEHPK3PXP',
+      otpauth_url: 'otpauth://totp/BioAvanceD',
+    });
+    vi.spyOn(QRCode, 'toDataURL').mockResolvedValue('data:image/png;base64,synthetic');
+    const setup = await authService.setupMFA(setupFixture.db, userID);
+    expect(setup.secret).toBe('JBSWY3DPEHPK3PXP');
+    const ciphertext = setupFixture.users.updateOne.mock.calls.at(-1)[1].$set.mfaSecretCiphertext;
+
+    const returning = usersDb(vi.fn().mockResolvedValue({
+      ...BASE_USER,
+      _id: new ObjectId(userID),
+      lastLogin: new Date('2026-09-01T00:00:00Z'),
+      mfaSecretCiphertext: ciphertext,
+    }));
+    vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
+    const tokens = vi.spyOn(authService, 'issueSessionTokens');
+
+    await expect(authService.enableMFA(returning.db, userID, '123456'))
+      .resolves.toEqual({ success: true });
+    expect(tokens).not.toHaveBeenCalled();
+  });
+});
