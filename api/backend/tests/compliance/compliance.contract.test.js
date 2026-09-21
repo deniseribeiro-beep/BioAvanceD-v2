@@ -167,7 +167,7 @@ describe('Compliance Gate - MQTT Signed Ingestion Trail', () => {
   });
 });
 
-describe('Compliance Gate - DataMatrix/Code128 Industrial Layer', () => {
+describe('Compliance Gate - Data Matrix physical identification', () => {
   const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 
   function expectValidPngAsset(asset) {
@@ -183,30 +183,26 @@ describe('Compliance Gate - DataMatrix/Code128 Industrial Layer', () => {
     expect(Array.from(pngBuffer.subarray(0, 8))).toEqual(PNG_SIGNATURE);
   }
 
-  it('gera artefatos PNG industriais para Code128, DataMatrix e QR', async () => {
+  it('gera somente o artefato Data Matrix do identificador físico do tubo', async () => {
     const artifacts = await generateIndustrialBarcodeArtifacts('BR-2026-001', {
       includePayload: true
     });
 
-    expect(artifacts.canonicalValue).toBe('BR-2026-001');
-    expect(artifacts.code128.renderer).toBe('bwip-js');
+    expect(artifacts.encodedValue).toBe('BR-2026-001');
+    expect(artifacts.symbology).toBe('data_matrix');
     expect(artifacts.dataMatrix.renderer).toBe('bwip-js');
-    expect(artifacts.qr.renderer).toBe('bwip-js');
-
-    expectValidPngAsset(artifacts.code128.imagePng);
     expectValidPngAsset(artifacts.dataMatrix.imagePng);
-    expectValidPngAsset(artifacts.qr.imagePng);
+    expect(artifacts.code128).toBeUndefined();
+    expect(artifacts.qr).toBeUndefined();
   });
 
-  it('normaliza leitura com prefixos industriais de scanner', () => {
-    const code128Scan = parseScannedBarcode(']C1BR-2026-001');
-    expect(code128Scan.isValid).toBe(true);
-    expect(code128Scan.scannerSymbology).toBe('Code128');
-    expect(code128Scan.normalizedValue).toBe('BR-2026-001');
-
+  it('aceita leitura Data Matrix e rejeita formatos retirados', () => {
     const dataMatrixScan = parseScannedBarcode(']d2BR-2026-001');
     expect(dataMatrixScan.isValid).toBe(true);
     expect(dataMatrixScan.scannerSymbology).toBe('DataMatrix');
     expect(dataMatrixScan.normalizedValue).toBe('BR-2026-001');
+
+    expect(parseScannedBarcode(']C1BR-2026-001').isValid).toBe(false);
+    expect(parseScannedBarcode(']Q3BR-2026-001').isValid).toBe(false);
   });
 });
