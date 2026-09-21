@@ -388,6 +388,7 @@ describe('item 8 compact legitimate branch pack', () => {
     });
 
     env.LINEAGE_MODE = 'fail-closed';
+    lineageRepository.validateBeforePersistence.mockRejectedValueOnce(new Error('outbox refused hard'));
     await expect(useCase.persistLineageInTransaction({}, 'session'))
       .rejects.toThrow('RF023_LINEAGE_VALIDATION_FAILED');
     const noLineage = new AllocateSampleUseCase({ storageRepository, auditRepository, lineageRepository: null });
@@ -433,6 +434,7 @@ describe('item 8 compact legitimate branch pack', () => {
     });
 
     env.LINEAGE_MODE = 'fail-closed';
+    lineageRepository.validateBeforePersistence.mockRejectedValueOnce(new Error('bad lineage hard'));
     await expect(withLineage.persistLineageInTransaction({}, 'session'))
       .rejects.toThrow('RF023_LINEAGE_VALIDATION_FAILED');
   });
