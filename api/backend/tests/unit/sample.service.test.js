@@ -1345,37 +1345,38 @@ describe('sample.service', () => {
       expect(result).toEqual({ sample: null, participant: null });
     });
 
-    it('falls back to a case-insensitive match when the exact match misses', async () => {
+    it('uses exact encodedValue matching without case, numeric or regex compatibility fallbacks', async () => {
       const db = makeDb();
-      db.collections.samples.findOne
-        .mockResolvedValueOnce(null) // exact match
-        .mockResolvedValueOnce({ _id: 's1', barcode: 'BR-UPPER' }); // case-insensitive match
+      db.collections.samples.findOne.mockResolvedValue(null);
 
-      const { sample } = await sampleService.getSampleByBarcode(db, 'br-upper');
-      expect(sample._id).toBe('s1');
+      const result = await sampleService.getSampleByBarcode(db, 'br-upper');
+
+      expect(result).toEqual({ sample: null, participant: null });
+      expect(db.collections.samples.findOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.samples.findOne).toHaveBeenCalledWith({ barcode: 'br-upper' });
     });
 
-    it('falls back to a numeric match for legacy all-digit barcodes', async () => {
+    it('does not coerce all-digit encoded values to numeric legacy barcodes', async () => {
       const db = makeDb();
-      db.collections.samples.findOne
-        .mockResolvedValueOnce(null) // exact match
-        .mockResolvedValueOnce(null) // case-insensitive match
-        .mockResolvedValueOnce({ _id: 's1', barcode: 123456 }); // numeric match
+      db.collections.samples.findOne.mockResolvedValue(null);
 
-      const { sample } = await sampleService.getSampleByBarcode(db, '123456');
-      expect(sample._id).toBe('s1');
-      expect(db.collections.samples.findOne).toHaveBeenCalledWith({ barcode: 123456 });
+      const result = await sampleService.getSampleByBarcode(db, '123456');
+
+      expect(result).toEqual({ sample: null, participant: null });
+      expect(db.collections.samples.findOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.samples.findOne).toHaveBeenCalledWith({ barcode: '123456' });
     });
 
-    it('falls back to a regex match as a last resort', async () => {
+    it('rejects retired QR and Code128 scanner prefixes', async () => {
       const db = makeDb();
-      db.collections.samples.findOne
-        .mockResolvedValueOnce(null) // exact match
-        .mockResolvedValueOnce(null) // case-insensitive match
-        .mockResolvedValueOnce({ _id: 's1', barcode: 'BR.1' }); // regex match
 
-      const { sample } = await sampleService.getSampleByBarcode(db, 'BR.1');
-      expect(sample._id).toBe('s1');
+      await expect(sampleService.getSampleByBarcode(db, ']Q3BR-1')).rejects.toThrow(
+        'apenas Data Matrix canônico'
+      );
+      await expect(sampleService.getSampleByBarcode(db, ']C1BR-1')).rejects.toThrow(
+        'apenas Data Matrix canônico'
+      );
+      expect(db.collections.samples.findOne).not.toHaveBeenCalled();
     });
 
     it('returns the sample without a participant when it has no participantId', async () => {
@@ -1472,9 +1473,11 @@ describe('sample.service', () => {
 
     it('generates industrial artifacts for a valid barcode', async () => {
       const assets = await sampleService.getBarcodeIndustrialAssets('BR-2024-001');
-      expect(assets.canonicalValue).toBe('BR-2024-001');
-      expect(assets.code128.imagePng).toBeDefined();
+      expect(assets.encodedValue).toBe('BR-2024-001');
+      expect(assets.symbology).toBe('data_matrix');
       expect(assets.dataMatrix.imagePng).toBeDefined();
+      expect(assets.code128).toBeUndefined();
+      expect(assets.qr).toBeUndefined();
     });
   });
 
