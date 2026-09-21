@@ -38,8 +38,6 @@ export function useSamplesPage() {
         const mongoId = String((sample as any)._id || '');
         const barcode = String(sample.barcode || '');
         const sampleId = String(sample.sampleID || '');
-        const labelCode = String((sample as any).labelData?.code || (sample as any).labelCode || '');
-        const qrPayload = String((sample as any).labelData?.qrPayload || (sample as any).barcodeIndustrial?.payload || '');
         const participantId = String(sample.participantId || (sample as any).patient?.participantId || '');
         const patientName =
           String(
@@ -60,8 +58,6 @@ export function useSamplesPage() {
           mongoId.toLowerCase().includes(term) ||
           sampleId.toLowerCase().includes(term) ||
           barcode.toLowerCase().includes(term) ||
-          labelCode.toLowerCase().includes(term) ||
-          qrPayload.toLowerCase().includes(term) ||
           participantId.toLowerCase().includes(term) ||
           patientName.toLowerCase().includes(term) ||
           recordNumber.toLowerCase().includes(term) ||
