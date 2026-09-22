@@ -35,7 +35,7 @@ function sanitizeTemplateHtml(rawHtml: string) {
 
 interface ConsentFormProps {
   patientName: string;
-  patientId: string;
+  participantId: string;
   templateText: string;
   permissions: ConsentPermission[];
   onSubmit: (payload: {
@@ -49,7 +49,7 @@ interface ConsentFormProps {
 
 export default function ConsentForm({
   patientName,
-  patientId,
+  participantId,
   templateText,
   permissions,
   onSubmit,
@@ -105,10 +105,10 @@ export default function ConsentForm({
   }, [permissions]);
 
   useEffect(() => {
-    const normalizedPatientId = String(patientId || '').trim();
-    if (!normalizedPatientId) return;
-    setSignatureName((prev) => (prev.trim().length > 0 ? prev : normalizedPatientId));
-  }, [patientId]);
+    const normalizedParticipantId = String(participantId || '').trim();
+    if (!normalizedParticipantId) return;
+    setSignatureName((prev) => (prev.trim().length > 0 ? prev : normalizedParticipantId));
+  }, [participantId]);
 
   const handleToggle = (key: string) => {
     setResponses((prev) => ({
@@ -159,7 +159,7 @@ export default function ConsentForm({
       <div className="consent-form-header" data-testid="consent-form-header">
         <h2>{t('consent.form.header')}</h2>
         <p data-testid="consent-form-patient-name">{t('consent.form.patientLabel')} <strong>{patientName}</strong></p>
-        <p data-testid="consent-form-patient-id">{t('patients.tableId')} <strong>{patientId}</strong></p>
+        <p data-testid="consent-form-participant-id">{t('patients.tableId')} <strong>{participantId}</strong></p>
       </div>
 
       <div className="consent-form-grid" data-testid="consent-form-grid">
@@ -219,13 +219,13 @@ export default function ConsentForm({
 
             <div className="consent-signature-canvas" data-testid="consent-signature-wrapper">
               <AssinaturaDigitalTCLE
-                doadorId={patientId}
+                doadorId={participantId}
                 persistirNoBackend={false}
                 testIdPrefix="consent-signature"
                 onAssinaturaConfirmada={({ assinaturaBase64 }: { assinaturaBase64: string }) => {
                   setSignatureImageBase64(assinaturaBase64);
                   if (signatureName.trim().length === 0) {
-                    setSignatureName(patientId);
+                    setSignatureName(participantId);
                   }
                 }}
               />
