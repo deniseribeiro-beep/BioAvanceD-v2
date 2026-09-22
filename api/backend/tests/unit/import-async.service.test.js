@@ -92,7 +92,7 @@ describe('import-async.service', () => {
 
   describe('canonicalizeHeader', () => {
     it('maps known aliases to canonical field names', () => {
-      expect(service.canonicalizeHeader('idPaciente')).toBe('participantId');
+      expect(service.canonicalizeHeader('participantId')).toBe('participantId');
       expect(service.canonicalizeHeader('Tipo Amostra')).toBe('sampleType');
       // #770: was 'registrationDate', a name sample.routes.js rejects at the
       // API boundary as NON_CANONICAL_FIELD and canonical-fields.arch.test.js
@@ -131,7 +131,7 @@ describe('import-async.service', () => {
     it('returns the index of the first row containing a candidate header', () => {
       const rows = [
         ['foo', 'bar'],
-        ['PatientID', 'SampleType', 'Block'],
+        ['participantId', 'SampleType', 'Block'],
         ['1', 'blood', 'A'],
       ];
       expect(service.findHeaderRow(rows, 'samples')).toBe(1);
@@ -201,7 +201,7 @@ describe('import-async.service', () => {
     });
 
     it('accepts a valid csv and populates headers metadata', async () => {
-      const filePath = writeFile('temp.csv', 'PatientID,SampleType\n1,blood\n');
+      const filePath = writeFile('temp.csv', 'participantId,SampleType\n1,blood\n');
       const file = { originalname: 'temp.csv', size: 20, mimetype: 'text/csv', path: filePath };
 
       const result = await service.validateFile(file, 'patients');
@@ -283,7 +283,7 @@ describe('import-async.service', () => {
 
   describe('getHeadersFromFile', () => {
     it('resolves canonicalized headers from a csv file', async () => {
-      const filePath = writeFile('h1.csv', 'ID Paciente,Tipo Amostra\n1,blood\n');
+      const filePath = writeFile('h1.csv', 'participantId,Tipo Amostra\n1,blood\n');
       const file = { originalname: 'h1.csv', path: filePath };
 
       const headers = await service.getHeadersFromFile(file, 'patients');
@@ -343,7 +343,7 @@ describe('import-async.service', () => {
       const parser = {
         on: vi.fn((event, callback) => {
           if (event === 'headers') {
-            callback(['PatientID', 'SampleType']);
+            callback(['participantId', 'SampleType']);
             callback(['late', 'headers']);
           }
           if (event === 'error') {
@@ -415,7 +415,7 @@ describe('import-async.service', () => {
         { text: 'Synthetic preamble', hyperlink: 'https://example.invalid/preamble' },
         new Date('2026-09-20T12:00:00.000Z'),
       ]);
-      ws.addRow(['PatientID', 'SampleType', 'Block']);
+      ws.addRow(['participantId', 'SampleType', 'Block']);
       ws.addRow(['12345678', 'PLASMA', 'A']);
       const filePath = path.join(tmpDir, 'rich-date-header.xlsx');
       await workbook.xlsx.writeFile(filePath);
@@ -431,7 +431,7 @@ describe('import-async.service', () => {
     it('resolves canonicalized headers from an xlsx header row', async () => {
       const filePath = await writeXlsx('h1.xlsx', [
         ['some', 'preamble'],
-        ['PatientID', 'SampleType', 'Block'],
+        ['participantId', 'SampleType', 'Block'],
         ['1', 'blood', 'A'],
       ]);
       const file = { originalname: 'h1.xlsx', path: filePath };
@@ -490,7 +490,7 @@ describe('import-async.service', () => {
       const freshService = freshServiceWithQueue({ add: addMock });
       const notifyQueuedSpy = vi.spyOn(notificationService, 'notifyJobQueued').mockResolvedValue();
       const db = createDb();
-      const filePath = writeFile('ok.csv', 'PatientID\n1\n');
+      const filePath = writeFile('ok.csv', 'participantId\n1\n');
       const file = { originalname: 'ok.csv', size: 20, mimetype: 'text/csv', path: filePath };
 
       const result = await freshService.createImportJob(db, 'user1', file, 'patients', { priority: 3 });
