@@ -384,7 +384,7 @@ class SampleGraphValidator {
 
     const movement = SampleMovementModel.create({
       movementID,
-      sampleID: String(sample?.sampleID || sample?._id || '').trim(),
+      specimenId: String(sample?.specimenId || sample?._id || sample?.sampleID || '').trim(),
       barcode: normalizeString(sample?.barcode) || null,
       type: SampleMovementModel.MOVEMENT_TYPES.ADJUST,
       quantity: 1,
