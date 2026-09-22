@@ -115,6 +115,16 @@ describe('generateIndustrialBarcodeArtifacts', () => {
     expect(result.dataMatrix.imagePng.renderOptions.paddingheight).toBe(3);
   });
 
+  it('preserves a valid zero-padding printer configuration', async () => {
+    const result = await generateIndustrialBarcodeArtifacts('SMP-IND-003', {
+      dataMatrix: { paddingwidth: 0, paddingheight: 0 },
+    });
+
+    expect(result.dataMatrix.imagePng.renderOptions.paddingwidth).toBe(0);
+    expect(result.dataMatrix.imagePng.renderOptions.paddingheight).toBe(0);
+    expect(result.dataMatrix.imagePng.base64).toEqual(expect.any(String));
+  });
+
   it('rejects an empty or numeric encodedValue', async () => {
     await expect(generateIndustrialBarcodeArtifacts('   ')).rejects.toThrow('encodedValue é obrigatório');
     await expect(generateIndustrialBarcodeArtifacts(123)).rejects.toThrow('encodedValue é obrigatório');
