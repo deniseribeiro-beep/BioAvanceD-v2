@@ -67,6 +67,48 @@ trap 'rm -rf "$TMP"' EXIT
 # idempotency guard, so re-running this script cannot orphan a key that
 # already-signed audit_roots documents were verified against.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXAMPLE="$SCRIPT_DIR/.env.docker.example"
+[[ -f "$EXAMPLE" ]] || { echo "Erro: $EXAMPLE não encontrado." >&2; exit 1; }
+
+# #1153: BOTH paths fill from the example, through this one function. A fresh
+# generate used to write 31 of the 80 variables the example declares, so the
+# working recipe for a correct dev env was "generate, then immediately
+# --upgrade" -- which nobody would infer and nothing said. The 49 it omitted
+# included REDIS_URL, REDIS_HOST and REDIS_PORT, and compose.dev.yml supplies
+# none of them: its backend service is env_file: .env.docker plus an
+# environment: block holding only the two CHOKIDAR variables. So a freshly
+# generated dev stack had no Redis configuration at all, and since the file
+# sets NODE_ENV=development, validateRedisOnly's development escape hatch logged
+# "Redis não será inicializado" and let the boot continue -- an import queue that
+# silently did nothing. ALLOWED_ORIGINS and FRONTEND_URL were absent on the same
+# terms.
+#
+# Adds only what is MISSING, with the example's own value, and never touches an
+# existing line -- so a live stack's credentials survive, and where the two
+# sources disagree in value the generator's choice wins. That matters for
+# AUDIT_RFC3161_MODE, which the example ships as `remote` and this script sets to
+# `disabled`; which is intended is #962's open call, and filling gaps must not
+# silently decide it. An architecture test pins both halves.
+#
+# Safe to copy values because no secret in .env.docker.example carries a real
+# one -- every secret-shaped entry there is blank.
+sync_from_example() {
+  local target="$1"
+  local line name
+  SYNC_ADDED=0
+  while IFS= read -r line; do
+    case "$line" in
+      [A-Z]*=*) ;;
+      *) continue ;;
+    esac
+    name="${line%%=*}"
+    if ! grep -q "^$name=" "$target"; then
+      printf '%s\n' "$line" >> "$target"
+      SYNC_ADDED=$((SYNC_ADDED + 1))
+      echo "  + $name"
+    fi
+  done < "$EXAMPLE"
+}
 KEY_DIR="$SCRIPT_DIR/infra/audit/secrets"
 KEY_FILE="$KEY_DIR/merkle_signing_key.pem"
 # compose.dev.yml bind-mounts $KEY_DIR read-only at /run/secrets in backend and worker.
@@ -95,30 +137,12 @@ PY
 )"
 
 if [[ "$UPGRADE" -eq 1 ]]; then
-  EXAMPLE="$SCRIPT_DIR/.env.docker.example"
-  [[ -f "$EXAMPLE" ]] || { echo "Erro: $EXAMPLE não encontrado." >&2; exit 1; }
-
   BACKUP="$OUT.bak-$(date +%Y%m%d%H%M%S)"
   cp "$OUT" "$BACKUP"
   chmod 600 "$BACKUP" || true
 
-  # Add every variable the example declares and $OUT lacks, with the example's own
-  # value. Safe because no secret in .env.docker.example carries a real value --
-  # every secret-shaped entry there is blank. An existing line is never touched, so
-  # a live stack's credentials survive untouched.
-  added=0
-  while IFS= read -r line; do
-    case "$line" in
-      [A-Z]*=*) ;;
-      *) continue ;;
-    esac
-    name="${line%%=*}"
-    if ! grep -q "^$name=" "$OUT"; then
-      printf '%s\n' "$line" >> "$OUT"
-      added=$((added + 1))
-      echo "  + $name"
-    fi
-  done < "$EXAMPLE"
+  sync_from_example "$OUT"
+  added="$SYNC_ADDED"
 
   # The three signing values are SET, not merely added. The example ships
   # AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON={}, and an EMPTY registry is worse than an
@@ -202,7 +226,11 @@ INFLUXDB_URL=http://influxdb:8086
 RESEND_API_KEY=COLE_AQUI_SUA_CHAVE_REAL_DO_RESEND
 EOF
 
+# #1153: the generator's own lines are already in place, so this only fills the
+# rest -- and cannot overwrite a value chosen above.
+sync_from_example "$OUT"
+
 chmod 600 "$OUT"
-echo "Gerado: $OUT"
+echo "Gerado: $OUT ($SYNC_ADDED variável(is) preenchida(s) a partir de $EXAMPLE)."
 echo "AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE -> $KEY_FILE_IN_CONTAINER (host: $KEY_FILE)."
 echo "Cole sua chave real em RESEND_API_KEY e mantenha o arquivo fora do Git."
