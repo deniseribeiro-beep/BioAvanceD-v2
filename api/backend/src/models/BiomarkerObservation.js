@@ -41,6 +41,11 @@ class BiomarkerObservationModel {
       errors.push('participantId é obrigatório');
     }
 
+    const specimenId = String(data.specimenId || '').trim();
+    if (!specimenId) {
+      errors.push('specimenId é obrigatório');
+    }
+
     const biomarkerType = String(data.biomarkerType || '').trim();
     if (!biomarkerType) {
       errors.push('biomarkerType é obrigatório');
@@ -77,10 +82,9 @@ class BiomarkerObservationModel {
       errors.push('unit é obrigatório para observação biomarcadora');
     }
 
-    const sampleID = String(data.sampleID || data.sampleId || data.specimenID || data.specimenId || '').trim();
     const resourceType = String(data.resourceType || 'Observation').trim() || 'Observation';
     const subject = data.subject || null;
-    const specimen = data.specimen || (sampleID ? { reference: `Specimen/${sampleID}` } : null);
+    const specimen = data.specimen || { reference: `Specimen/${specimenId}` };
     const effectiveDateTime = this.normalizeDate(data.effectiveDateTime || collectedAt);
 
     return {
@@ -100,10 +104,7 @@ class BiomarkerObservationModel {
         specimenObjectId: data.specimenObjectId ? String(data.specimenObjectId).trim() : null,
         linkedResourceType: data.linkedResourceType ? String(data.linkedResourceType).trim() : 'Patient',
         linkedResourceId: data.linkedResourceId ? String(data.linkedResourceId).trim() : participantId,
-        sampleID: sampleID || null,
-        sampleId: sampleID || null,
-        specimenID: sampleID || null,
-        specimenId: sampleID || null,
+        specimenId,
         resourceType,
         subject,
         specimen,
@@ -115,7 +116,7 @@ class BiomarkerObservationModel {
   static buildIdempotencyKey(normalized = {}) {
     return [
       normalized.participantId,
-      normalized.sampleID || normalized.specimenID || normalized.linkedResourceId || '',
+      normalized.specimenId || normalized.linkedResourceId || '',
       normalized.biomarkerType,
       normalized.collectedAt?.toISOString() || '',
       normalized.value,
@@ -145,9 +146,6 @@ class BiomarkerObservationModel {
       specimenObjectId: normalized.specimenObjectId,
       linkedResourceType: normalized.linkedResourceType,
       linkedResourceId: normalized.linkedResourceId,
-      sampleID: normalized.sampleID,
-      sampleId: normalized.sampleId,
-      specimenID: normalized.specimenID,
       specimenId: normalized.specimenId,
       resourceType: normalized.resourceType,
       subject: normalized.subject,
