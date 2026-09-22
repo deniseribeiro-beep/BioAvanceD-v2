@@ -163,11 +163,11 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
 
     it('deve validar ATC codes durante import e vinculá-los ao Orpha', async () => {
       const sampleWithATC = {
-        sampleID: 'S-1001',
-        patientID: '12345678',
-        patient_identity: {
-          patient_id: '12345678',
-          patient_name: 'Paciente Fabry',
+        specimenId: 'S-1001',
+        participantId: '12345678',
+        participantIdentity: {
+          participantId: '12345678',
+          patientName: 'Paciente Fabry',
         },
         sprec: {
           specimen_type: 'PLASMA',
@@ -242,11 +242,11 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
   describe('CSV validation edge cases', () => {
     it('deve lidar com missing ATC fields gracefully', async () => {
       const sampleWithoutATC = {
-        sampleID: 'S-1002',
-        patientID: '87654321',
-        patient_identity: {
-          patient_id: '87654321',
-          patient_name: 'Paciente Legado',
+        specimenId: 'S-1002',
+        participantId: '87654321',
+        participantIdentity: {
+          participantId: '87654321',
+          patientName: 'Paciente',
         },
         clinical_data: {
           orphaCode: 'ORPHA:100',
@@ -261,7 +261,7 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
       // Should generate hash without errors
       const hash = generateSampleHash(sampleWithoutATC);
       expect(hash).toMatch(/^[a-f0-9]{64}$/);
-      console.log('✓ Amostra legada (sem ATC) processada sem errors');
+      console.log('✓ Amostra canônica (sem ATC) processada sem errors');
     });
 
     it('deve normalizar diferentes formatos de datas', async () => {
