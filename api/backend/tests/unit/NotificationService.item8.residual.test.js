@@ -438,6 +438,58 @@ describe('NotificationService item 8 residual branches', () => {
     expect(service.getSmtpTransport()).toBe(service.smtpTransport);
   });
 
+  it('creates and caches provider clients without opening a network connection', () => {
+    process.env.RESEND_API_KEY = 're_test_synthetic';
+    process.env.SMTP_HOST = 'mailpit';
+    process.env.SMTP_PORT = '1025';
+
+    const service = new NotificationService();
+
+    const resend = service.getResendClient();
+    expect(resend).toBeDefined();
+    expect(service.getResendClient()).toBe(resend);
+
+    const smtp = service.getSmtpTransport();
+    expect(smtp).toBeDefined();
+    expect(service.getSmtpTransport()).toBe(smtp);
+  });
+
+  it('persists a compliance row when the database dependency is available', async () => {
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'log-1' });
+    const collection = vi.fn().mockReturnValue({ insertOne });
+    const service = new NotificationService({
+      connectDatabase: vi.fn().mockResolvedValue({ collection }),
+    });
+
+    await expect(service.persistComplianceLog({
+      notificationType: 'synthetic',
+      deliveryStatus: 'ATTEMPTED',
+    })).resolves.toBeUndefined();
+
+    expect(collection).toHaveBeenCalledWith('notification_compliance_logs');
+    expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'resend',
+      notificationType: 'synthetic',
+      deliveryStatus: 'ATTEMPTED',
+      createdAt: expect.any(Date),
+    }));
+  });
+
+  it('returns an already-created notification queue without reinitializing Redis', () => {
+    const service = new NotificationService();
+    const cachedQueue = { cached: true };
+    service.notificationQueue = cachedQueue;
+
+    expect(service.getNotificationQueue()).toBe(cachedQueue);
+  });
+
+  it('normalizes direct phone and phoneNumber aliases in addition to mobile and whatsapp', () => {
+    const service = new NotificationService();
+
+    expect(service.resolvePatientPhone({ phone: '11999999999' })).toBe('+5511999999999');
+    expect(service.resolvePatientPhone({ phoneNumber: '11988888888' })).toBe('+5511988888888');
+  });
+
   it('keeps compliance persistence fail-open when its database dependency is unavailable', async () => {
     const service = new NotificationService({
       connectDatabase: vi.fn().mockRejectedValue(new Error('mongo unavailable')),
