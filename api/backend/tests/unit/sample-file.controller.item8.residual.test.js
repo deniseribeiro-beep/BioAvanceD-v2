@@ -160,7 +160,7 @@ describe('sample-file.controller item 8 residual branches', () => {
       user: null,
     }, res);
 
-    expect(sampleLookup).toHaveBeenCalledWith({ specimenId: 42 });
+    expect(sampleLookup).toHaveBeenCalledWith({ specimenId: '42' });
     expect(find).toHaveBeenCalledWith({ specimenId: sample.specimenId });
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
