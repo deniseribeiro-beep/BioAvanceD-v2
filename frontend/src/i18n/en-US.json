@@ -259,14 +259,14 @@
     },
     "miabis": {
       "p1": "BioAvanceD-v2 adopts MIABIS 2.0 as the interoperability basis for patient, specimen and quality metadata description. The operational model is relational and traceability-oriented, with cardinality Patient -> N Samples.",
-      "p2": "To ensure clinical registration idempotency, the system applies heuristic matching: search by patientID or by Normalized Name + Birth Date. Normalization removes accents and standardizes casing and spacing. When matched, new data is linked to the existing patient to prevent duplicates.",
+      "p2": "To ensure clinical registration idempotency, the system applies heuristic matching: search by participantId or by Normalized Name + Birth Date. Normalization removes accents and standardizes casing and spacing. When matched, new data is linked to the existing patient to prevent duplicates.",
       "table": {
         "meta": "MIABIS Metadata",
         "metaRel": "1:1 per sample",
         "metaRule": "Validation of type, origin, protocol, quality and institution",
         "patient": "Patient",
         "patientRel": "1:N Samples",
-        "patientRule": "Idempotent identification by patientID or Normalized Name + Birth Date",
+        "patientRule": "Idempotent identification by participantId or Normalized Name + Birth Date",
         "relation": "Relation",
         "rule": "Governance Rule",
         "sample": "Sample",

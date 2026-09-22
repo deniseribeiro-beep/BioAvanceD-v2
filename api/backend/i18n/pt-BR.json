@@ -152,7 +152,7 @@
     "resetMFAError": "Erro ao resetar MFA",
     "resetMFASuccess": "MFA resetado com sucesso. O usuário precisará configurar MFA novamente no próximo login.",
     "resetMFAUnlockedSuccess": "MFA desbloqueado com sucesso. O administrador mantem o cadastro atual e pode entrar com o autenticador que ja possui.",
-    "sampleIDRequired": "sampleID é obrigatório",
+    "specimenIdRequired": "specimenId é obrigatório",
     "updateError": "Erro ao atualizar usuário",
     "updateNotFound": "Usuário não encontrado após atualização",
     "updateSuccess": "Usuário atualizado com sucesso",
