@@ -65,8 +65,8 @@ describe('GET /api/analysis-files/validate/:sampleIdentifier', () => {
   it('returns eligible: true when sample passes validation', async () => {
     vi.spyOn(analysisValidationService, 'validateUploadEligibility').mockResolvedValue({
       success: true,
-      sample: { sampleID: 'SMP-001' },
-      patient: { patientID: 'PAT-001' },
+      sample: { specimenId: 'SMP-001' },
+      patient: { participantId: 'PAT-001' },
     });
 
     const res = await request(app)
