@@ -4,6 +4,7 @@ const { ObjectId } = require('mongodb');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
+const { ensureRoomIndexes } = require('../../utils/facilityIndexes');
 
 /**
  * Room CRUD — dict-02 StorageAssignment.roomId (ELM-0169, 1..1 Core).
@@ -36,7 +37,13 @@ router.get('/', authenticate, requirePermission('viewStorageTopology'), async (r
       query.facilityId = new ObjectId(req.query.facilityId);
     }
 
-    const rooms = await db.collection('rooms').find(query).sort({ name: 1 }).toArray();
+    // #941: ensured on the READ path -- see facility.routes.js for why.
+    // The { facilityId, name } key order is what lets one index serve the
+    // facilityId filter and the name sort in a single pass.
+    const roomsCollection = db.collection('rooms');
+    ensureRoomIndexes(roomsCollection);
+
+    const rooms = await roomsCollection.find(query).sort({ name: 1 }).toArray();
     return res.status(200).json({ success: true, data: rooms });
   } catch (error) {
     logger.error('Erro ao listar rooms:', error.message);

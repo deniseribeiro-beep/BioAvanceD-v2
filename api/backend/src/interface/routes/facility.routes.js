@@ -4,6 +4,7 @@ const { ObjectId } = require('mongodb');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
+const { ensureFacilityIndexes } = require('../../utils/facilityIndexes');
 
 /**
  * Facility CRUD — dict-02 StorageAssignment.facilityId (ELM-0168, 1..1 Core).
@@ -25,7 +26,15 @@ function validateFacilityInput(data) {
 router.get('/', authenticate, requirePermission('viewStorageTopology'), async (req, res) => {
   try {
     const db = req.app.locals.db;
-    const facilities = await db.collection('facilities')
+    // #941: ensured on the READ path, not the write path. This index exists
+    // for the sort below -- measured as the winning plan, removing an
+    // in-memory SORT -- so it has to be built wherever that query runs. A
+    // process that only serves this endpoint never reaches the POST handler.
+    // Latched per collection name, so this is one no-op call after the first.
+    const facilitiesCollection = db.collection('facilities');
+    ensureFacilityIndexes(facilitiesCollection);
+
+    const facilities = await facilitiesCollection
       .find({ deletedAt: null })
       .sort({ name: 1 })
       .toArray();

@@ -1,4 +1,5 @@
 const logger = require('./logger');
+const { buildLookupIndex } = require('./lookupIndex');
 
 /**
  * #941: unique indexes on `storageContainers.containerID`,
@@ -68,29 +69,9 @@ const storageContainersIndexed = new Set();
 const sensorMetadataIndexed = new Set();
 const storageBoxesIndexed = new Set();
 
-/**
- * #941: a non-unique LOOKUP index, built best-effort with its own catch.
- *
- * Separate from the unique builds above because the failure means something
- * different. A unique build failing is a data problem worth naming (E11000 =
- * duplicates already written); a lookup build failing costs performance and
- * nothing else, so the message says so rather than implying corruption.
- *
- * Each call carries its own try/catch for the #1027 reason: one shared catch
- * around several builds reports the first failure and skips the rest silently.
- */
-async function buildLookupIndex(collection, keys, name, tag) {
-  try {
-    await collection.createIndex(keys, { name });
-  } catch (error) {
-    logger.warn(
-      '[' + tag + '][INDEX] Não foi possível criar ' + name + ' (#941). '
-        + 'Índice apenas de desempenho: as consultas continuam corretas, '
-        + 'porém sem o plano indexado: '
-        + (error?.message || error)
-    );
-  }
-}
+// #941: `buildLookupIndex` moved to utils/lookupIndex.js when
+// facilityIndexes.js needed the same builder -- one copy, because the
+// failure MESSAGE is the part that matters and a second copy would drift.
 
 async function ensureStorageContainerIndexes(collection) {
   if (!collection || typeof collection.createIndex !== 'function') return;
