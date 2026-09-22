@@ -6,7 +6,7 @@ const NonconformanceModel = require('../../src/models/Nonconformance');
 const UserRoleAssignmentModel = require('../../src/models/UserRoleAssignment');
 const {
   parseScannedBarcode,
-  generateBarcodeSymbologies,
+  generateDataMatrixDescriptor,
 } = require('../../src/utils/barcodeSymbology');
 const {
   generateAnonId,
@@ -259,18 +259,18 @@ describe('item 8 compact legitimate branch pack', () => {
       scannerSymbology: 'DataMatrix', normalizedValue: 'BIO-DM', isValid: true,
     });
     expect(parseScannedBarcode(']Q3BIO-QR')).toMatchObject({
-      scannerSymbology: 'QR', normalizedValue: 'BIO-QR', isValid: true,
+      scannerSymbology: 'UNSUPPORTED', normalizedValue: ']Q3BIO-QR', isValid: false,
     });
     expect(parseScannedBarcode(']C1BIO-C128')).toMatchObject({
-      scannerSymbology: 'Code128', normalizedValue: 'BIO-C128', isValid: true,
+      scannerSymbology: 'UNSUPPORTED', normalizedValue: ']C1BIO-C128', isValid: false,
     });
     expect(parseScannedBarcode(' BIO-RAW ')).toMatchObject({
       scannerSymbology: 'UNKNOWN', normalizedValue: 'BIO-RAW', isValid: true,
     });
-    const generated = generateBarcodeSymbologies(' BIO-001 ');
-    expect(generated.code128.checksumHint).toHaveLength(8);
-    expect(generated.dataMatrix.checksumHint).toHaveLength(8);
-    expect(generated.qr.checksumHint).toHaveLength(8);
+    const generated = generateDataMatrixDescriptor(' BIO-001 ');
+    expect(generated.symbology).toBe('data_matrix');
+    expect(generated.scannerPrefix).toBe(']d2');
+    expect(generated.checksumHint).toHaveLength(8);
   });
 
   it('covers user anonymization database, stored-id and sanitization branches', async () => {
