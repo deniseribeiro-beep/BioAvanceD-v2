@@ -4,7 +4,7 @@ const {
   normalizeBarcodeText,
   stripScannerPrefix,
   parseScannedBarcode,
-  generateBarcodeSymbologies,
+  generateDataMatrixDescriptor,
   generateIndustrialBarcodeArtifacts,
 } = require('../../src/utils/barcodeSymbology');
 const ClinicalUnitModel = require('../../src/models/ClinicalUnit');
@@ -99,45 +99,33 @@ describe('simple utility/model branch coverage for item 8', () => {
       isValid: false,
     }));
 
-    expect(() => generateBarcodeSymbologies(false)).toThrow('obrigatório');
+    expect(() => generateDataMatrixDescriptor(false)).toThrow('obrigatório');
     await expect(generateIndustrialBarcodeArtifacts('   ')).rejects.toThrow('obrigatório');
 
     const defaults = await generateIndustrialBarcodeArtifacts(' BIO-001 ');
-    expect(defaults.canonicalValue).toBe('BIO-001');
-    expect(defaults.code128.imagePng).toEqual(expect.objectContaining({
+    expect(defaults.encodedValue).toBe('BIO-001');
+    expect(defaults.symbology).toBe('data_matrix');
+    expect(defaults.dataMatrix.imagePng).toEqual(expect.objectContaining({
       mimeType: 'image/png',
       base64: expect.any(String),
     }));
-    expect(defaults.code128.imagePng.renderOptions).toEqual(expect.objectContaining({
-      bcid: 'code128',
-      height: 12,
-      includetext: true,
-      textxalign: 'center',
-    }));
     expect(defaults.dataMatrix.imagePng.renderOptions).toEqual(expect.objectContaining({
       bcid: 'datamatrix',
-      height: null,
-      includetext: false,
-      textxalign: null,
+      scale: 5,
+      paddingwidth: 8,
+      paddingheight: 8,
     }));
-    expect(defaults.qr.imagePng.renderOptions.bcid).toBe('qrcode');
 
     const noPayload = await generateIndustrialBarcodeArtifacts('BIO-002', {
       includePayload: false,
-      code128: { scale: 2, height: 10, paddingwidth: 0, paddingheight: 0 },
-      dataMatrix: { scale: 3 },
-      qr: { scale: 4 },
+      dataMatrix: { scale: 3, paddingwidth: 0, paddingheight: 0 },
     });
-    expect(noPayload.code128.imagePng.base64).toBeNull();
     expect(noPayload.dataMatrix.imagePng.base64).toBeNull();
-    expect(noPayload.qr.imagePng.base64).toBeNull();
-    expect(noPayload.code128.imagePng.renderOptions).toEqual(expect.objectContaining({
-      scale: 2,
-      height: 10,
+    expect(noPayload.dataMatrix.imagePng.renderOptions).toEqual(expect.objectContaining({
+      bcid: 'datamatrix',
+      scale: 3,
       paddingwidth: 0,
       paddingheight: 0,
     }));
-    expect(noPayload.dataMatrix.imagePng.renderOptions.scale).toBe(3);
-    expect(noPayload.qr.imagePng.renderOptions.scale).toBe(4);
   });
 });
