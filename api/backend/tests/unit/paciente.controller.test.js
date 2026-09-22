@@ -13,13 +13,13 @@ const { buildRbacCollections } = require('../factories/rbac.factory');
 
 const controllerPath = require.resolve('../../src/controllers/paciente.controller');
 
-// paciente.controller.js destructures revalidateSamplesByPatientID at module load,
+// paciente.controller.js destructures revalidateSamplesByParticipantId at module load,
 // so spying on the sampleComplianceSync module object after the fact won't be seen
 // by the controller's already-bound local reference — clear the controller from
 // require.cache and re-require it after the spy is set up (see testing-conventions'
 // CJS mocking reference, point 4/5).
 function reloadControllerWithFreshCompliancySpy() {
-  const spy = vi.spyOn(sampleComplianceSync, 'revalidateSamplesByPatientID').mockResolvedValue();
+  const spy = vi.spyOn(sampleComplianceSync, 'revalidateSamplesByParticipantId').mockResolvedValue();
   delete require.cache[controllerPath];
   const freshController = require(controllerPath);
   return { freshController, spy };
