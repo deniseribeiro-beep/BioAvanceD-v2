@@ -34,7 +34,7 @@ interface SamplesPageViewProps {
   onOpenPrintModal: () => void;
   onClosePrintModal: () => void;
   onPrint: () => void;
-  onEditSample: (sampleId: string) => void;
+  onEditSample: (specimenId: string) => void;
   onOpenStorage: (sample: SampleWithId) => void;
   expandedStorageSample: SampleWithId | null;
   onCloseExpandedStorage: () => void;
