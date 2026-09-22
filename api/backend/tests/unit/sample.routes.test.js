@@ -1843,6 +1843,31 @@ describe('sample.routes', () => {
       expect(second.body.data.results[0].reprint).toBe(true);
     });
 
+    it('does not resolve a batch specimenId through the Data Matrix encoded value', async () => {
+      const getBarcodeIndustrialAssets = vi.fn();
+      const { router } = loadRoute({ sampleServiceOverrides: { getBarcodeIndustrialAssets } });
+      const { db } = statefulDb({
+        samples: [{ _id: 's1', specimenId: 'SPEC-1', barcode: 'DM-ONLY-1' }],
+      });
+      const app = buildApp(router, db);
+
+      const res = await request(app)
+        .post('/api/samples/labels/batch')
+        .send({ specimenIds: ['DM-ONLY-1'] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.generated).toBe(0);
+      expect(res.body.data.failed).toBe(1);
+      expect(res.body.data.results[0]).toEqual(
+        expect.objectContaining({
+          specimenId: 'DM-ONLY-1',
+          success: false,
+          error: 'Amostra não encontrada',
+        })
+      );
+      expect(getBarcodeIndustrialAssets).not.toHaveBeenCalled();
+    });
+
     it('reports a per-id failure (not found) without failing the whole batch', async () => {
       const getBarcodeIndustrialAssets = vi.fn(async (barcode) => ({
         encodedValue: barcode, symbology: 'data_matrix', dataMatrix: {},
@@ -2615,6 +2640,18 @@ describe('sample.routes', () => {
       const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
 
       expect(res.status).toBe(403);
+    });
+
+    it('does not resolve the print-job specimen parameter through a Data Matrix value', async () => {
+      const { router } = loadRoute();
+      const collection = createMatchingCollection([
+        { _id: 'internal-1', specimenId: 'SPEC-1', barcode: 'DM-ONLY-1' },
+      ]);
+      const app = buildApp(router, { collection: () => collection });
+
+      const res = await request(app).get('/api/samples/DM-ONLY-1/label/print-job');
+
+      expect(res.status).toBe(404);
     });
 
     it('returns 409 when the sample has no barcode generated yet', async () => {
