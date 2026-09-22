@@ -70,7 +70,7 @@ describe('sample-file.controller item 8 more residual canonical branches', () =>
   it('listFiles refuses an out-of-scope specimen before reading file metadata', async () => {
     const specimenId = new ObjectId().toString();
     const { db, sampleFiles } = buildDb({
-      sample: { _id: new ObjectId(specimenId), collectionSite: 'org-2' },
+      sample: { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-2' },
     });
     const res = createRes();
 
@@ -87,7 +87,7 @@ describe('sample-file.controller item 8 more residual canonical branches', () =>
 
   it('listFiles audits an authenticated in-scope query', async () => {
     const specimenId = new ObjectId().toString();
-    const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-1' };
+    const sample = { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-1' };
     const { db } = buildDb({ sample, files: [] });
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const log = vi.spyOn(auditLogger, 'log').mockResolvedValue();
@@ -138,7 +138,7 @@ describe('sample-file.controller item 8 more residual canonical branches', () =>
         fileName: 'private.csv',
         storagePath: '/tmp/private.csv',
       },
-      sample: { _id: new ObjectId(specimenId), collectionSite: 'org-2' },
+      sample: { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-2' },
     });
     const exists = vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     const read = vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('secret'));
@@ -185,7 +185,7 @@ describe('sample-file.controller item 8 more residual canonical branches', () =>
         fileName: 'private.csv',
         storagePath: '/tmp/private.csv',
       },
-      sample: { _id: new ObjectId(specimenId), collectionSite: 'org-2' },
+      sample: { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-2' },
     });
     const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
     const res = createRes();
@@ -296,7 +296,7 @@ describe('sample-file.controller item 8 more residual canonical branches', () =>
     const fileID = new ObjectId().toString();
     const { db } = buildDb({
       fileRecord: { _id: new ObjectId(fileID), specimenId, fileName: 'x.csv', fileType: 'CSV' },
-      sample: { _id: new ObjectId(specimenId), participantId: '12345678', collectionSite: 'org-2' },
+      sample: { _id: new ObjectId(specimenId), specimenId, participantId: '12345678', collectionSite: 'org-2' },
     });
     const res = createRes();
 
@@ -442,8 +442,7 @@ describe('sample-file.controller item 8 alternate file lifecycle branches', () =
     const fileRecord = {
       _id: new ObjectId(fileID),
       specimenId,
-      sampleID: specimenId,
-      fileName: 'old.csv',
+            fileName: 'old.csv',
       fileRole: 'raw',
     };
     const { db } = buildDb({ fileRecord });
@@ -482,7 +481,7 @@ describe('sample-file.controller item 8 alternate file lifecycle branches', () =
     const fileID = new ObjectId().toString();
     const { db } = buildDb({
       fileRecord: { _id: new ObjectId(fileID), specimenId, fileName: 'x.csv', fileType: 'CSV' },
-      sample: { _id: new ObjectId(specimenId), participantId: null, collectionSite: 'org-1' },
+      sample: { _id: new ObjectId(specimenId), specimenId, participantId: null, collectionSite: 'org-1' },
     });
     const audit = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
     const res = createRes();
@@ -512,7 +511,7 @@ describe('sample-file.controller item 8 alternate file lifecycle branches', () =
     const fileID = new ObjectId().toString();
     const { db } = buildDb({
       fileRecord: { _id: new ObjectId(fileID), specimenId, fileName: 'x.csv' },
-      sample: { _id: new ObjectId(specimenId), participantId: '12345678' },
+      sample: { _id: new ObjectId(specimenId), specimenId, participantId: '12345678' },
     });
     const res = createRes();
 
@@ -595,8 +594,8 @@ describe('sample-file.controller item 8 safe identifier and ownership guards', (
     expect(fixture.sampleFiles.deleteOne).not.toHaveBeenCalled();
   });
 
-  it('listFiles falls back to specimenId lookup for a non-ObjectId route identifier', async () => {
-    const sample = { _id: new ObjectId(), specimenId: 42, collectionSite: 'org-1' };
+  it('listFiles resolves a non-ObjectId canonical specimenId', async () => {
+    const sample = { _id: new ObjectId(), specimenId: '42', collectionSite: 'org-1' };
     const { db, samples } = buildDb({ sample, files: [] });
     const res = createRes();
 
@@ -608,7 +607,7 @@ describe('sample-file.controller item 8 safe identifier and ownership guards', (
 
     expect(res.status).toHaveBeenCalledWith(200);
     expect(samples.findOne).toHaveBeenCalledTimes(1);
-    expect(samples.findOne).toHaveBeenCalledWith({ specimenId: 42 });
+    expect(samples.findOne).toHaveBeenCalledWith({ specimenId: '42' });
   });
 
   it('downloadFile serves encrypted-path errors as 500 without leaking decrypt details', async () => {
