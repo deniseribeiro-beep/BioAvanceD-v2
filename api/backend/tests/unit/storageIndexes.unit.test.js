@@ -104,14 +104,52 @@ describe('#941 ensureSensorMetadataIndexes', () => {
 
     await ensureSensorMetadataIndexes(collection);
 
-    expect(collection.createIndex).toHaveBeenCalledTimes(1);
-    const [keys, options] = collection.createIndex.mock.calls[0];
+    // #941: two indexes are built here now (sensorId and macAddress), so
+    // this case locates its own by key rather than by call position.
+    expect(collection.createIndex).toHaveBeenCalledTimes(2);
+    const sensorIdCall = collection.createIndex.mock.calls.find(
+      ([k]) => Object.prototype.hasOwnProperty.call(k, 'sensorId')
+    );
+    expect(sensorIdCall).toBeDefined();
+    const [keys, options] = sensorIdCall;
     expect(keys).toEqual({ sensorId: 1 });
     expect(options).toEqual({
       name: 'sensor_metadata_sensorid_unique_v1',
       unique: true
     });
     expect(options.partialFilterExpression).toBeUndefined();
+  });
+
+  // #941: macAddress was declared unique on the schema alongside sensorId
+  // and, unlike sensorId, was never materialised -- `ensureSensorMetadataIndexes`
+  // built only the sensorId index. So `sensor.service.js`'s documented
+  // "macAddress duplicado" failure was an E11000 the database could not
+  // produce: the upsert filter is {sensorId}, so two sensors could carry one MAC.
+  //
+  // The partial filter is the design decision, so it is pinned by value.
+  // Unlike sensorId -- which IS the upsert filter key and so structurally
+  // exists on every row -- macAddress only reaches the document through
+  // $set, behind a truthiness guard in the CALLER (`createSensor`), not in
+  // linkSensorMetadata's own contract. A plain unique index would therefore
+  // reject the second row that legitimately lacks one; `$type: 'string'`
+  // constrains exactly the rows that carry a real value, the same shape and
+  // the same reason as containerID above and samples.barcode in #936.
+  it('creates a partial UNIQUE index on macAddress', async () => {
+    const { ensureSensorMetadataIndexes } = freshStorageIndexes();
+    const collection = makeCollection('sensorMetadata');
+
+    await ensureSensorMetadataIndexes(collection);
+
+    const macCall = collection.createIndex.mock.calls.find(
+      ([keys]) => Object.prototype.hasOwnProperty.call(keys, 'macAddress')
+    );
+    expect(macCall).toBeDefined();
+
+    const [keys, options] = macCall;
+    expect(keys).toEqual({ macAddress: 1 });
+    expect(options.unique).toBe(true);
+    expect(options.name).toBe('sensor_metadata_macaddress_unique_v1');
+    expect(options.partialFilterExpression).toEqual({ macAddress: { $type: 'string' } });
   });
 
   it('logs and does not throw when the index cannot be built', async () => {
@@ -124,9 +162,17 @@ describe('#941 ensureSensorMetadataIndexes', () => {
 
     await expect(ensureSensorMetadataIndexes(collection)).resolves.toBeUndefined();
 
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toContain('E11000');
-    expect(warn.mock.calls[0][0]).toContain('#941');
+    // #941: one warning per index. A shared catch would report the first
+    // failure and silently skip the second build, so the count IS the
+    // assertion that the two builds are independent.
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mock.calls.forEach(([message]) => {
+      expect(message).toContain('E11000');
+      expect(message).toContain('#941');
+    });
+    const warned = warn.mock.calls.map(([message]) => message).join('\n');
+    expect(warned).toContain('sensor_metadata_sensorid_unique_v1');
+    expect(warned).toContain('sensor_metadata_macaddress_unique_v1');
   });
 
   it('is a no-op for a collection handle that cannot create indexes', async () => {
@@ -142,7 +188,9 @@ describe('#941 ensureSensorMetadataIndexes', () => {
     await ensureSensorMetadataIndexes(collection);
     await ensureSensorMetadataIndexes(collection);
 
-    expect(collection.createIndex).toHaveBeenCalledTimes(1);
+    // #941: the latch still admits the collection exactly once -- two
+    // createIndex calls for the two indexes, not four for two passes.
+    expect(collection.createIndex).toHaveBeenCalledTimes(2);
   });
 
   it('does not let the storageContainers latch and the sensorMetadata latch shadow each other', async () => {
@@ -154,6 +202,6 @@ describe('#941 ensureSensorMetadataIndexes', () => {
     await ensureSensorMetadataIndexes(sensorCollection);
 
     expect(storageCollection.createIndex).toHaveBeenCalledTimes(1);
-    expect(sensorCollection.createIndex).toHaveBeenCalledTimes(1);
+    expect(sensorCollection.createIndex).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,8 +1,8 @@
 const logger = require('./logger');
 
 /**
- * #941: unique indexes on `storageContainers.containerID` and
- * `sensorMetadata.sensorId`.
+ * #941: unique indexes on `storageContainers.containerID`,
+ * `sensorMetadata.sensorId` and `sensorMetadata.macAddress`.
  *
  * `StorageContainer.js` and `SensorMetadata.schema.js` have declared these
  * constraints all along (`containerID: { unique: true, sparse: true }` and
@@ -27,7 +27,20 @@ const logger = require('./logger');
  * ## Why `sensorMetadata.sensorId` needs no partial filter
  *
  * `sensorId` is `required: true` on `SensorMetadata.schema.js` -- every row
- * has one, so a plain unique index is correct.
+ * has one, so a plain unique index is correct. It is also the upsert FILTER
+ * key in `linkSensorMetadata`, so it structurally cannot be absent.
+ *
+ * ## Why `sensorMetadata.macAddress` DOES need one
+ *
+ * `macAddress` is `required: true` on the schema too, but that is a mongoose
+ * validator and every write to this collection goes through the NATIVE
+ * driver (`updateOne` on the raw collection), which never runs it. Unlike
+ * `sensorId` it is not the upsert filter key either -- it reaches the
+ * document only through `$set`, behind an `if (sensor.macAddress)` guard
+ * that lives in the CALLER (`createSensor`), not in `linkSensorMetadata`'s
+ * own contract. So a row without one is a shape the schema forbids and the
+ * database permits, and a plain unique index would reject the second such
+ * row. `$type: 'string'` constrains exactly the rows carrying a real value.
  *
  * ## Failure posture
  *
@@ -100,6 +113,29 @@ async function ensureSensorMetadataIndexes(collection) {
       '[SENSOR_METADATA][INDEX] Não foi possível criar sensor_metadata_sensorid_unique_v1 (#941). '
         + 'Um E11000 aqui significa sensorId duplicados já gravados -- '
         + 'a unicidade segue apenas em nível de aplicação (upsert) até que sejam corrigidos: '
+        + (error?.message || error)
+    );
+  }
+
+  // #941: macAddress carries its OWN try/catch rather than sharing the one
+  // above. A single catch around both builds would let a failure on the
+  // first index skip the second silently -- the exact shape #1027 corrected
+  // in create-db.js, where one throw cost 46 index builds.
+  try {
+    await collection.createIndex(
+      { macAddress: 1 },
+      {
+        name: 'sensor_metadata_macaddress_unique_v1',
+        unique: true,
+        partialFilterExpression: { macAddress: { $type: 'string' } }
+      }
+    );
+  } catch (error) {
+    logger.warn(
+      '[SENSOR_METADATA][INDEX] Não foi possível criar sensor_metadata_macaddress_unique_v1 (#941). '
+        + 'Um E11000 aqui significa macAddress duplicados já gravados -- '
+        + 'o erro "macAddress duplicado" que sensor.service.js documenta segue '
+        + 'impossível de produzir até que sejam corrigidos: '
         + (error?.message || error)
     );
   }
