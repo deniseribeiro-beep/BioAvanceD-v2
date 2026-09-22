@@ -7,7 +7,7 @@ import { useRef } from 'react';
  * useResults.ts's loadResults (a `useRef(0)` monotonic counter stamped on
  * entry to the loader, checked after the await and in the catch, and used
  * to decide whether the trailing setLoading(false) still applies). Lifting
- * it here lets every parameter-keyed loader (sampleID, diseaseCoding, ...)
+ * it here lets every parameter-keyed loader (specimenId, diseaseCoding, ...)
  * share the same shape instead of re-deriving it.
  *
  * This is a discard guard, not a cancel guard: it never aborts the
