@@ -348,12 +348,11 @@ class BatchValidationEngine {
   buildSampleRow(rawRow = {}) {
     const mapped = {};
     const headerMap = {
-      // Canonical v2: normalize both the historical CSV header patientID and
-      // the canonical participantId header to Participant.participantId.
-      patientid: 'participantId',
+      // Canonical v2: identifier headers are accepted only under their
+      // canonical names. Historical patient/sample aliases are rejected by
+      // omission rather than coerced at the boundary.
       participantid: 'participantId',
-      sampleid: 'sampleID',
-      specimenid: 'sampleID',
+      specimenid: 'specimenId',
       sampletype: 'sampleType',
       tipodeamostra: 'sampleType',
       sampleorigin: 'sampleOrigin',
@@ -409,10 +408,6 @@ class BatchValidationEngine {
   classifyPatientRow(rawRow, patientData) {
     const warnings = [];
 
-    if (rawRow.patientID) {
-      warnings.push('patientID fornecido será ignorado; o sistema gera o identificador automaticamente');
-    }
-
     if (rawRow.email && String(rawRow.email).trim() !== String(patientData.email || '').trim()) {
       warnings.push('email foi normalizado');
     }
@@ -457,15 +452,11 @@ class BatchValidationEngine {
   buildPatientLinkageQuery(rawRow = {}, patientData = {}) {
     const criteria = [];
 
-    const patientID = this.normalizePatientID(
-      patientData.participantId || patientData.patientID || rawRow.participantId || rawRow.patientID || rawRow.patientId || rawRow.patient_id
+    const participantId = this.normalizePatientID(
+      patientData.participantId || rawRow.participantId
     );
-    if (patientID) {
-      // #853: `patients` never persists a `patientID` key (Patient.js's
-      // CANONICAL_FIELDS declares `participantId`); an 8-digit patientID
-      // column is exactly that canonical participantId, so the filter must
-      // be keyed on `participantId` or this criterion never matches.
-      criteria.push({ participantId: patientID });
+    if (participantId) {
+      criteria.push({ participantId });
     }
 
     const cpf = this.normalizeCpf(patientData.cpf || rawRow.cpf || rawRow.representativeCpf);
@@ -498,7 +489,7 @@ class BatchValidationEngine {
 
     for (const filter of criteria) {
       // Prioriza a igualdade exata para manter o record linkage previsível.
-      // A ordem dos critérios é significativa: patientID, CPF, prontuário e, por fim, _id.
+      // A ordem dos critérios é significativa: participantId, CPF, prontuário e, por fim, _id.
       // eslint-disable-next-line no-await-in-loop
       const matchedPatient = await patientsCollection.findOne(filter);
       if (matchedPatient) {
@@ -518,18 +509,10 @@ class BatchValidationEngine {
       normalizedRow[this.normalizeHeader(key)] = rawRow[key];
     });
 
-    // Canonical v2: Specimen.specimenId is the stable specimen reference.
-    // Keep historical aliases only as boundary fallbacks for old callers.
-    const specimenIdentifier = String(
-      specimen?.specimenId
-      || specimen?.sampleID
-      || specimen?.sampleId
-      || specimen?._id
-      || specimen?.barcode
-      || ''
-    ).trim();
+    // Canonical v2: internal linkage uses only participantId/specimenId.
+    const specimenIdentifier = String(specimen?.specimenId || '').trim();
     const specimenObjectId = specimen?._id ? String(specimen._id).trim() : null;
-    const patientIdentifier = String(patient?.participantId || rawRow.participantId || rawRow.patientID || '').trim();
+    const patientIdentifier = String(patient?.participantId || rawRow.participantId || '').trim();
     const patientObjectId = patient?._id ? String(patient._id).trim() : null;
     // #768: the specimen legs used to read `registrationDate`/`registerDate`,
     // names e2549bee canonicalized away. Sample.js:38 declares `registeredAt`
@@ -603,9 +586,6 @@ class BatchValidationEngine {
         eventType: 'create',
         linkedResourceType: 'Patient',
         linkedResourceId: patientObjectId || patientIdentifier,
-        sampleID: specimenIdentifier,
-        sampleId: specimenIdentifier,
-        specimenID: specimenIdentifier,
         specimenId: specimenIdentifier,
         specimenObjectId,
         subject: {
@@ -639,7 +619,6 @@ class BatchValidationEngine {
       'quality',
       'biomarkers',
       'specimenid',
-      'sampleid',
     ];
     const patientHints = [
       'patientname',
@@ -766,8 +745,8 @@ class BatchValidationEngine {
    * 4. Cria a Specimen vinculada ao participantId canônico e ao patientObjectId interno.
    * 5. Cria Observations apenas quando a linha traz biomarcadores válidos.
    *
-   * Isso permite importar follow-ups clínicos sem duplicar pacientes e sem
-   * bloquear linhas históricas que contenham apenas inventário de amostras.
+   * Isso permite importar follow-ups clínicos sem duplicar pacientes,
+   * preservando apenas o contrato canônico v2.
    */
   async persistSample(db, rawRow, rowNumber, context = {}) {
     const sampleData = importLGPDService.parseSampleRow(this.buildSampleRow(rawRow));
@@ -840,7 +819,16 @@ class BatchValidationEngine {
         });
       }
 
-      sampleData.participantId = String(patient.participantId || sampleData.participantId || '').trim();
+      const linkedParticipantId = String(patient?.participantId || '').trim();
+      if (!linkedParticipantId) {
+        return {
+          classification: 'INVALID',
+          rowNumber,
+          errors: ['participantId canônico é obrigatório no Patient vinculado.'],
+          warnings,
+        };
+      }
+      sampleData.participantId = linkedParticipantId;
       sampleData.patientObjectId = String(patient._id || '').trim();
       sampleData.semanticCascade = {
         disease: semanticCascade.disease,
@@ -854,6 +842,10 @@ class BatchValidationEngine {
         source: 'batch-import',
         ...context,
       });
+
+      if (!String(createdSample?.specimenId || '').trim()) {
+        throw new Error('specimenId canônico é obrigatório na Specimen criada.');
+      }
 
       const biomarkerPayloads = this.buildBiomarkerObservationPayloads(rawRow, patient, createdSample);
       const observationWarnings = biomarkerPayloads.warnings || [];
