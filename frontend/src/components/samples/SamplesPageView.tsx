@@ -347,11 +347,11 @@ export default function SamplesPageView({
               const participantId = sample.participantId ?? (sample as any).patient?.participantId;
 
               return (
-                <div key={sample.id} className="qr-label">
-                  <div className="qr-label__title">{sample.sampleType || t('samples.sampleFallback')}</div>
-                  <div className="qr-label__code">{encodedValue || 'N/A'}</div>
+                <div key={sample.id} className="data-matrix-label">
+                  <div className="data-matrix-label__title">{sample.sampleType || t('samples.sampleFallback')}</div>
+                  <div className="data-matrix-label__code">{encodedValue || 'N/A'}</div>
                   {encodedValue && (
-                    <div className="qr-label__barcode">
+                    <div className="data-matrix-label__barcode">
                       <Datamatrix
                         value={String(encodedValue)}
                         width={60}
@@ -361,7 +361,7 @@ export default function SamplesPageView({
                       />
                     </div>
                   )}
-                  <div className="qr-label__patient">{participantId ?? 'N/A'}</div>
+                  <div className="data-matrix-label__patient">{participantId ?? 'N/A'}</div>
                 </div>
               );
             })}
