@@ -7,7 +7,7 @@ describe('ClinicalIntakeWizard buildSubmissionPayload', () => {
   it('#167: diagnosis payload only carries canonical camelCase keys, no legacy snake_case duplicates', () => {
     const formData = {
       isHealthyControl: false,
-      patientID: '12345678',
+      participantId: '12345678',
       patientName: 'Paciente Teste',
       collectionInstitution: 'Hospital Teste',
       collectionInstitutionAcronym: 'HT',
@@ -38,7 +38,7 @@ describe('ClinicalIntakeWizard buildSubmissionPayload', () => {
     ];
     const formData = {
       isHealthyControl: false,
-      patientID: '12345678',
+      participantId: '12345678',
       patientName: 'Paciente Teste',
       collectionInstitution: 'Hospital Teste',
       collectionInstitutionAcronym: 'HT',
@@ -57,7 +57,7 @@ describe('ClinicalIntakeWizard buildSubmissionPayload', () => {
   it('#699: participant/specimen match the canonical.v1.intake AJV contract shape', () => {
     const formData = {
       isHealthyControl: true,
-      patientID: '',
+      participantId: '',
       patientName: 'Paciente Teste',
       birthDate: '01011990',
       prontuario: 'PRONT-1',
@@ -93,7 +93,7 @@ describe('ClinicalIntakeWizard buildSubmissionPayload', () => {
   it('#701: specimen.sampleType/sampleOrigin/extractionProtocol carry the real MIABIS selections, not the SPREC axis codes', () => {
     const formData = {
       isHealthyControl: true,
-      patientID: '',
+      participantId: '',
       patientName: 'Paciente Teste',
       birthDate: '01011990',
       prontuario: 'PRONT-1',
