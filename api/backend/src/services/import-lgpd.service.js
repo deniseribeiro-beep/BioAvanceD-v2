@@ -1680,14 +1680,14 @@ class ImportLGPDService {
             }
           } else { void 0; }
 
-          // Gera código de barras automaticamente se não fornecido
-          if (!sampleData.barcode || (typeof sampleData.barcode === 'string' && sampleData.barcode.trim() === '')) {
+          // Ausência do valor físico gera um novo identificador; valores
+          // fornecidos já foram validados como string canônica por SampleModel.
+          if (!sampleData.barcode) {
             const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
             sampleData.barcode = await generateUniqueBarcode(db);
-            logger.info(`Código de barras gerado automaticamente para linha ${rowNumber}: ${sampleData.barcode}`);
+            logger.info(`Identificador Data Matrix gerado automaticamente para linha ${rowNumber}: ${sampleData.barcode}`);
           } else {
-            // Converte para string se necessário
-            sampleData.barcode = String(sampleData.barcode).trim();
+            sampleData.barcode = sampleData.barcode.trim();
           }
 
           // Cria amostra
@@ -2086,7 +2086,9 @@ class ImportLGPDService {
       sampleType: row.sampleType?.trim() || null,
       sampleOrigin: this.normalizeCatalogValue(row.sampleOrigin, SAMPLE_ORIGINS),
       extractionProtocol: this.normalizeCatalogValue(row.extractionProtocol, EXTRACTION_PROTOCOLS),
-      barcode: row.barcode ? String(row.barcode).trim() : null, // dict-02 ELM-0116 -- barcode como string (#944)
+      barcode: typeof row.barcode === 'string'
+        ? (row.barcode.trim() || null)
+        : (row.barcode ?? null),
       registeredAt: registeredAt,
       quantity: row.quantity ? parseFloat(row.quantity) : null,
       quality: parseQualityMIABIS(row.quality), // Valida e converte para id MIABIS canônico
