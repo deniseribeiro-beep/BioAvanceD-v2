@@ -218,7 +218,7 @@ describe('intakeWizard routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(res.body.patientMatch.patientID).toBe('12345678');
+      expect(res.body.patientMatch.participantId).toBe('12345678');
       expect(res.body.qualityAssessment.score).toBe(80);
       expect(sampleServiceModule.createSample).toHaveBeenCalledTimes(1);
       // #569: the sample document must never carry a denormalized civil-identity
@@ -912,7 +912,7 @@ function defaultStorageContainersFindOne({ _id }) {
       expect(res.status).toBe(503);
     });
 
-    it('returns 400 when neither patientID nor patientName+birthDate are provided', async () => {
+    it('returns 400 when neither participantId nor patientName+birthDate are provided', async () => {
       const { router } = loadRoute();
       const app = buildApp(router, {});
 
@@ -939,12 +939,12 @@ function defaultStorageContainersFindOne({ _id }) {
       return { getCollectionImpl, identityFindOne, identityFind, patientsFindOne };
     }
 
-    it('returns matched:false when no patient is found by patientID', async () => {
+    it('returns matched:false when no patient is found by participantId', async () => {
       const { getCollectionImpl } = makeIdentityCollectionRouter();
       const { router } = loadRoute({ getCollectionImpl });
       const app = buildApp(router, {});
 
-      const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+      const res = await request(app).get('/api/intake-wizard/patient-match').query({ participantId: '12345678' });
 
       expect(res.status).toBe(200);
       expect(res.body.matched).toBe(false);
@@ -959,12 +959,12 @@ function defaultStorageContainersFindOne({ _id }) {
       const { router } = loadRoute({ getCollectionImpl });
       const app = buildApp(router, {});
 
-      const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+      const res = await request(app).get('/api/intake-wizard/patient-match').query({ participantId: '12345678' });
 
       expect(res.status).toBe(200);
       expect(res.body.matched).toBe(true);
       expect(res.body.patient).toEqual(
-        expect.objectContaining({ patientID: '12345678', patientName: 'Paciente Teste', status: 'ACTIVE' })
+        expect.objectContaining({ participantId: '12345678', patientName: 'Paciente Teste', status: 'ACTIVE' })
       );
     });
 
@@ -973,7 +973,7 @@ function defaultStorageContainersFindOne({ _id }) {
     // lines apart in the same handler, which is why grepping decryptIdentity
     // made this file look fully repointed. A ciphertext-only row came back
     // with null patientName/birthDate.
-    it('#1104: decrypts a ciphertext-only identity found by patientID, not just the name+birthDate candidates', async () => {
+    it('#1104: decrypts a ciphertext-only identity found by participantId, not just the name+birthDate candidates', async () => {
       const participantIdentityService = require('../../src/services/participantIdentity.service');
       const birthDate = new Date(2000, 0, 1);
       const encrypted = participantIdentityService.encryptIdentityFields({
@@ -988,17 +988,17 @@ function defaultStorageContainersFindOne({ _id }) {
       const { router } = loadRoute({ getCollectionImpl });
       const app = buildApp(router, {});
 
-      const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+      const res = await request(app).get('/api/intake-wizard/patient-match').query({ participantId: '12345678' });
 
       expect(res.status).toBe(200);
       expect(res.body.matched).toBe(true);
       expect(res.body.patient).toEqual(
-        expect.objectContaining({ patientID: '12345678', patientName: 'Paciente Teste', status: 'ACTIVE' })
+        expect.objectContaining({ participantId: '12345678', patientName: 'Paciente Teste', status: 'ACTIVE' })
       );
       expect(res.body.patient.birthDate).toBeTruthy();
     });
 
-    it('matches by normalized name + birthDate when patientID is absent', async () => {
+    it('matches by normalized name + birthDate when participantId is absent', async () => {
       const { getCollectionImpl, identityFind } = makeIdentityCollectionRouter({
         identityCandidates: [{ participantId: '87654321', patientName: 'João Ção', birthDate: new Date(2000, 1, 1) }],
       });
@@ -1063,12 +1063,12 @@ function defaultStorageContainersFindOne({ _id }) {
       const { router } = loadRoute({ getCollectionImpl });
       const app = buildApp(router, {});
 
-      const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+      const res = await request(app).get('/api/intake-wizard/patient-match').query({ participantId: '12345678' });
 
       expect(res.status).toBe(500);
     });
 
-    it('matches by patientID first, falling back to name+birthDate only when the ID lookup misses', async () => {
+    it('matches by participantId first, falling back to name+birthDate only when the ID lookup misses', async () => {
       const { getCollectionImpl, identityFind } = makeIdentityCollectionRouter({
         identityFindOne: vi.fn().mockResolvedValue({ participantId: '12345678', patientName: 'Paciente Teste' }),
       });
@@ -1077,25 +1077,25 @@ function defaultStorageContainersFindOne({ _id }) {
 
       const res = await request(app)
         .get('/api/intake-wizard/patient-match')
-        .query({ patientID: '12345678', patientName: 'Paciente Teste', birthDate: '01/02/2000' });
+        .query({ participantId: '12345678', patientName: 'Paciente Teste', birthDate: '01/02/2000' });
 
       expect(res.status).toBe(200);
       expect(res.body.matched).toBe(true);
       expect(identityFind).not.toHaveBeenCalled();
     });
 
-    it('falls back to status ACTIVE and empty patientName/patientID when the stored identity lacks them', async () => {
+    it('falls back to status ACTIVE and empty patientName/participantId when the stored identity lacks them', async () => {
       const { getCollectionImpl } = makeIdentityCollectionRouter({
         identityFindOne: vi.fn().mockResolvedValue({ birthDate: '2000-01-01' }),
       });
       const { router } = loadRoute({ getCollectionImpl });
       const app = buildApp(router, {});
 
-      const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+      const res = await request(app).get('/api/intake-wizard/patient-match').query({ participantId: '12345678' });
 
       expect(res.status).toBe(200);
       expect(res.body.patient.status).toBe('ACTIVE');
-      expect(res.body.patient.patientID).toBe('');
+      expect(res.body.patient.participantId).toBe('');
       expect(res.body.patient.patientName).toBe('');
     });
   });
