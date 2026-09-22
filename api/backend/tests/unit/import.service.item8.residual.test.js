@@ -179,7 +179,7 @@ describe('import.service item 8 residual parser branches', () => {
 
   it('parses sample CSV aliases, nulls and invalid number/date fields into parseErrors', () => {
     const { data, parseErrors } = importService.parseSampleCSV({
-      idPaciente: ' 12345678 ',
+      participantId: ' 12345678 ',
       tipoAmostra: ' PLASMA ',
       origemAmostra: ' VENOUS_BLOOD ',
       protocoloExtracao: ' EDTA ',
