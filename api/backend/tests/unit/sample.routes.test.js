@@ -2779,14 +2779,11 @@ describe('sample.routes', () => {
 // "requirePermission[(]|requireRole[(]|requireOrganizationScope" --
 // api/backend/src/interface/routes/sample.routes.js`): the file has no
 // requireRole call at all. After retiring the non-Data-Matrix SVG label
-// route, 26 routes are registered in total; 24 carry requireOrganizationScope
-// (8 of those also carry requirePermission) and 2
-// (GET /search/by-term, GET /by-barcode/:barcode) carry neither -- only
-// `authenticate`. That is 8 + 24 = 32 individual gate call sites.
-// the line count `git grep -c` reports (line count and site count agree
-// here only because two routes each carry both gates on one source line,
-// which offsets the handful of matched lines that are a comment or the
-// `requireOrganizationScope` import rather than a call site).
+// route, 27 routes are registered in total. 24 carry
+// requireOrganizationScope; 8 carry requirePermission (POST / carries
+// permission without organization scope); GET /search/by-term and
+// GET /by-barcode/:barcode carry neither beyond authenticate.
+// That yields 32 explicit organization/permission gate call sites.
 describe('sample.routes authorization gates (issue #921)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -2828,7 +2825,7 @@ describe('sample.routes authorization gates (issue #921)', () => {
   });
 
   describe('requireOrganizationScope presence pinning', () => {
-    // 24 of the file's 26 routes wire in requireOrganizationScope.
+    // 24 of the file's 27 routes wire in requireOrganizationScope.
     const GATED_CASES = [
       { label: 'GET /:id/miabis-compliance', method: 'get', path: '/s1/miabis-compliance' },
       { label: 'GET /:id/compliance-graph', method: 'get', path: '/s1/compliance-graph' },
