@@ -385,7 +385,7 @@ const CONSENT_PLACEHOLDERS = {
   '{{NOME_PACIENTE}}': (formData, fallbackValues) => String(formData.patientName || '').trim() || fallbackValues.patientNameMissing,
   '{{DOC_PACIENTE}}': (formData, fallbackValues) => String(formData.participantId || '').trim() || fallbackValues.patientDocMissing,
   '{{ID_PACIENTE_SISTEMA}}': (formData, fallbackValues) => String(formData.participantId || '').trim() || fallbackValues.patientSystemIdMissing,
-  '{{ID_AMOSTRA}}': (formData, fallbackValues) => String(formData.specimenId || '').trim() || fallbackValues.sampleIdMissing,
+  '{{ID_AMOSTRA}}': (formData, fallbackValues) => String(formData.specimenId || '').trim() || fallbackValues.specimenIdMissing,
   '{{NOME_REPRESENTANTE}}': (formData, fallbackValues) => (formData.isDeceased ? String(formData.representativeName || '').trim() : fallbackValues.notApplicable) || fallbackValues.notApplicable,
 };
 
@@ -408,7 +408,7 @@ function buildConsentPreview(template, formData, t) {
     patientNameMissing: t('wizard.labels.patientNameMissing', 'Name not provided'),
     patientDocMissing: t('wizard.labels.patientDocMissing', 'Patient/sample ID will be generated on submit'),
     patientSystemIdMissing: t('wizard.labels.patientSystemIdMissing', 'Will be generated on submit'),
-    sampleIdMissing: t('wizard.labels.sampleIdMissing', 'Will be generated on submit'),
+    specimenIdMissing: t('wizard.labels.specimenIdMissing', 'Will be generated on submit'),
     notApplicable: t('common.notApplicable', 'Not applicable'),
   };
 
@@ -3779,7 +3779,7 @@ export default function ClinicalIntakeWizard(props) {
               <div className="sample-label-body">
                 <div className="sample-label-code" data-testid="sample-label-code">{sampleLabel.barcode || 'N/A'}</div>
                 <div className="sample-label-meta">
-                  <span data-testid="sample-label-sample-id">{t('wizard.sampleLabel.sampleId', 'Amostra')}: {sampleLabel.specimenId || 'N/A'}</span>
+                  <span data-testid="sample-label-specimen-id">{t('wizard.sampleLabel.specimenId', 'Amostra')}: {sampleLabel.specimenId || 'N/A'}</span>
                   <span data-testid="sample-label-type">{t('wizard.sampleLabel.type', 'Tipo')}: {sampleLabel.sampleType || 'N/A'}</span>
                   <span data-testid="sample-label-date">{t('wizard.sampleLabel.date', 'Data')}: {sampleLabel.collectionDate || 'N/A'}</span>
                   <span>{t('wizard.sampleLabel.location', 'Localização')}: {sampleLabel.currentStoragePlacement?.readable || sampleLabel.currentStoragePlacement?.positionCode || 'N/A'}</span>
