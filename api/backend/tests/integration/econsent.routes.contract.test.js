@@ -63,7 +63,7 @@ describe('eConsent contract', () => {
   it('POST /api/econsent/generate-link rejeita payload incompleto', async () => {
     const response = await request(buildApp())
       .post('/api/econsent/generate-link')
-      .send({ patientId: '12345678' });
+      .send({ participantId: '12345678' });
 
     expect(response.status).toBe(400);
     expect(response.body).toMatchObject({
