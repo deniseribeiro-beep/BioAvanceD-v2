@@ -1,5 +1,4 @@
 const crypto = require('crypto');
-const { ObjectId } = require('mongodb');
 const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
 const { generateSampleHashFromSample } = require('./MerkleService');
@@ -154,14 +153,8 @@ function isComplianceGraphOwnedAction(action) {
     && action.reasonCodes.every((code) => String(code).startsWith('COMPLIANCE_GRAPH_'));
 }
 
-// Canonical v2 identifier resolution. Mongo _id remains accepted as an
-// internal transport identifier, but the retired sampleID alias was removed
-// after #804 migrated the public sample contract to specimenId.
+// Canonical v2 identifier resolution: internal contracts use specimenId only.
 function normalizeSpecimenIdFilter(specimenId) {
-  if (ObjectId.isValid(specimenId)) {
-    return { _id: new ObjectId(specimenId) };
-  }
-
   return { specimenId: normalizeString(specimenId) };
 }
 
@@ -372,7 +365,7 @@ class SampleGraphValidator {
 
     const movement = SampleMovementModel.create({
       movementID,
-      specimenId: String(sample?.specimenId || sample?._id || '').trim(),
+      specimenId: String(sample?.specimenId || '').trim(),
       barcode: normalizeString(sample?.barcode) || null,
       type: SampleMovementModel.MOVEMENT_TYPES.ADJUST,
       quantity: 1,
@@ -423,7 +416,7 @@ class SampleGraphValidator {
     const suggestedStatus = resolveSuggestedStatus(graphPath);
 
     const report = {
-      specimenId: String(sample.specimenId || sample._id || specimenId),
+      specimenId: String(sample.specimenId || specimenId),
       orphaCode: normalizeOrpha(sample?.clinicalData?.orphaCode),
       disease: diseaseContext.disease
         ? {
