@@ -319,44 +319,23 @@ describe('sample.service item 8 read/query alternate branches', () => {
     expect(patients.findOne).not.toHaveBeenCalled();
   });
 
-  it('falls through to case-insensitive, numeric and regex barcode strategies', async () => {
-    const sampleCase = { _id: 'case', specimenId: 'CASE', barcode: 'ABC', specimenStatus: 'available' };
-    let samples = collection({
-      findOne: vi.fn()
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(sampleCase),
-    });
-    let db = { collection: vi.fn((name) => name === 'samples' ? samples : collection()) };
-    await expect(sampleService.getSampleByBarcode(db, 'abc')).resolves.toMatchObject({
-      sample: expect.objectContaining({ specimenId: 'CASE' }),
-    });
+  it('does not restore historical case, numeric or regex lookup fallbacks', async () => {
+    for (const encodedValue of ['abc', '123', 'R.*']) {
+      const samples = collection({
+        findOne: vi.fn().mockResolvedValue(null),
+        countDocuments: vi.fn().mockResolvedValue(0),
+      });
+      const db = { collection: vi.fn((name) => name === 'samples' ? samples : collection()) };
 
-    const sampleNumeric = { _id: 'num', specimenId: 'NUM', barcode: 123, specimenStatus: 'available' };
-    samples = collection({
-      findOne: vi.fn()
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(sampleNumeric),
-    });
-    db = { collection: vi.fn((name) => name === 'samples' ? samples : collection()) };
-    await expect(sampleService.getSampleByBarcode(db, '123')).resolves.toMatchObject({
-      sample: expect.objectContaining({ specimenId: 'NUM' }),
-    });
+      const result = await sampleService.getSampleByBarcode(db, encodedValue);
 
-    const sampleRegex = { _id: 'regex', specimenId: 'REGEX', barcode: 'R.*', specimenStatus: 'available' };
-    samples = collection({
-      findOne: vi.fn()
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(sampleRegex),
-    });
-    db = { collection: vi.fn((name) => name === 'samples' ? samples : collection()) };
-    await expect(sampleService.getSampleByBarcode(db, 'R.*')).resolves.toMatchObject({
-      sample: expect.objectContaining({ specimenId: 'REGEX' }),
-    });
+      expect(result).toEqual({ sample: null, participant: null });
+      expect(samples.findOne).toHaveBeenCalledTimes(1);
+      expect(samples.findOne).toHaveBeenCalledWith({ barcode: encodedValue });
+    }
   });
 
-  it('returns the canonical empty barcode result after all lookup strategies fail', async () => {
+  it('returns the canonical empty barcode result when the exact lookup fails', async () => {
     const diagnosticsCursor = {
       limit: vi.fn().mockReturnThis(),
       project: vi.fn().mockReturnThis(),
