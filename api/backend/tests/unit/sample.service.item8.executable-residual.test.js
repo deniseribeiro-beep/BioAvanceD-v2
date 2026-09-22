@@ -48,8 +48,15 @@ require.cache[barcodeSymbologyPath] = {
   loaded: true,
   exports: {
     ...realBarcode,
-    generateBarcodeSymbologies: () => ({ code128: 'BR-ITEM8' }),
-    generateIndustrialBarcodeArtifacts: async () => ({ dataMatrix: 'BR-ITEM8' }),
+    generateIndustrialBarcodeArtifacts: async (encodedValue, options = {}) => ({
+      encodedValue,
+      symbology: 'data_matrix',
+      dataMatrix: {
+        encodedValue,
+        scannerPrefix: ']d2',
+        imagePng: { base64: options.includePayload === false ? null : 'synthetic' },
+      },
+    }),
   },
 };
 require.cache[ledgerPath] = {
@@ -401,7 +408,15 @@ describe('sample.service item 8 read/query alternate branches', () => {
       .rejects.toThrow('Código de barras inválido');
 
     await expect(sampleService.getBarcodeIndustrialAssets('ABC123', { includePayload: false }))
-      .resolves.toEqual({ dataMatrix: 'BR-ITEM8' });
+      .resolves.toEqual({
+        encodedValue: 'ABC123',
+        symbology: 'data_matrix',
+        dataMatrix: {
+          encodedValue: 'ABC123',
+          scannerPrefix: ']d2',
+          imagePng: { base64: null },
+        },
+      });
   });
 
   it('falls back to the requested specimen identifier when SPREC/quarantine history lookup finds no Sample', async () => {
