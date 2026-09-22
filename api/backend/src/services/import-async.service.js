@@ -112,20 +112,9 @@ class ImportAsyncService {
   canonicalizeHeader(original) {
     const normalized = this.normalizeHeader(original);
     const fieldMapping = {
-      // patientId aliases
-      // #773: both entries targeted the legacy name 'patientID'. Two
-      // independent sources settle the canonical spelling as
-      // 'participantId': contracts/canonical/v2/index.js declares
-      // participantId (required) and lists no patientID field, and
-      // sample.routes.js:378-384 already 422s a payload carrying patientID
-      // as NON_CANONICAL_FIELD, the same "Legacy Fields Prohibited" list.
-      // The keys on the left are user-facing CSV column names and stay as
-      // they are -- only the canonical target changes.
-      patientid: 'participantId',
-      // #770: `idpaciente` was listed twice here. Both copies assigned the
-      // same value, so the duplicate was inert -- but it is the same
-      // rename-collision tell that started this family at #758, so it goes.
-      idpaciente: 'participantId',
+      // Canonical v2 participant identifier. Retired patient aliases are
+      // intentionally not coerced at this boundary.
+      participantid: 'participantId',
       // sampleType aliases
       sampletype: 'sampleType',
       tipoamostra: 'sampleType',
@@ -166,7 +155,7 @@ class ImportAsyncService {
    */
   findHeaderRow(sheetRows, dataType) {
     const candidates = new Set([
-      'patientid', 'sampletype', 'sampleorigin', 'extractionprotocol',
+      'participantid', 'sampletype', 'sampleorigin', 'extractionprotocol',
       'equipmenttype', 'block', 'rack', 'drawer', 'box'
     ]);
     for (let i = 0; i < sheetRows.length; i++) {
