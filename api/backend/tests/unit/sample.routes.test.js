@@ -458,7 +458,7 @@ describe('sample.routes', () => {
 
     it('accepts a boolean isRareDisease', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 's1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 's1' }, participantId: '12345678' },
         strictMode: true,
         topology: {},
       });
@@ -474,7 +474,7 @@ describe('sample.routes', () => {
 
     it('accepts a valid boxId/positionCode pair, per issue #462', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 's1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 's1' }, participantId: '12345678' },
         strictMode: true,
         topology: {},
       });
@@ -695,7 +695,7 @@ describe('sample.routes', () => {
 
     it('uses req.t fallback strings and quality=null when req.t is absent and sample.quality is undefined', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678', quality: undefined },
+        sample: { _id: { toString: () => 'sample-1' }, participantId: '12345678', quality: undefined },
         strictMode: true,
         topology: { synced: true, fallbackQueued: false },
       });
@@ -718,7 +718,7 @@ describe('sample.routes', () => {
 
     it('uses the partial-success message suffix when topology sync falls back to quarantine', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678', quality: null },
+        sample: { _id: { toString: () => 'sample-1' }, participantId: '12345678', quality: null },
         strictMode: false,
         topology: { synced: false, fallbackQueued: true },
       });
@@ -755,7 +755,7 @@ describe('sample.routes', () => {
 
     it('falls back to null actor fields when req.user is absent entirely (no audit log write)', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 's1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 's1' }, participantId: '12345678' },
         strictMode: true,
         topology: {},
       });
@@ -844,7 +844,7 @@ describe('sample.routes', () => {
 
     it('uses the req.t fallback in the partial-success (202) message', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 'sample-1' }, participantId: '12345678' },
         strictMode: false,
         topology: { synced: false, fallbackQueued: true },
       });
@@ -891,7 +891,7 @@ describe('sample.routes', () => {
         await capturedSampleRepository.deleteById('not-a-valid-object-id');
         await capturedSampleRepository.deleteById('000000000000000000000000');
         return {
-          sample: { _id: { toString: () => 'sample-1' }, patientID: sampleData.participantId },
+          sample: { _id: { toString: () => 'sample-1' }, participantId: sampleData.participantId },
           strictMode: true,
           topology: {},
         };
@@ -2017,14 +2017,14 @@ describe('sample.routes', () => {
     });
 
     it('returns 200 with the sample', async () => {
-      const getSample = vi.fn().mockResolvedValue({ _id: '1', patientID: 'P1' });
+      const getSample = vi.fn().mockResolvedValue({ _id: '1', participantId: 'P1' });
       const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/000000000000000000000000');
 
       expect(res.status).toBe(200);
-      expect(res.body.data).toEqual({ _id: '1', patientID: 'P1' });
+      expect(res.body.data).toEqual({ _id: '1', participantId: 'P1' });
     });
 
     // #340: an existing sample outside the caller's organization scope
@@ -2633,7 +2633,7 @@ describe('sample.routes', () => {
     });
 
     it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
-      const findOne = vi.fn().mockResolvedValue({ sampleID: 42, barcode: 'BC1', collectionSite: 'org-other' });
+      const findOne = vi.fn().mockResolvedValue({ specimenId: 'SPEC-42', barcode: 'BC1', collectionSite: 'org-other' });
       const { router } = loadRoute({
         requireOrganizationScopeImpl: (req, res, next) => {
           req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
@@ -2661,7 +2661,7 @@ describe('sample.routes', () => {
 
     it('returns 409 when the sample has no barcode generated yet', async () => {
       const { router } = loadRoute();
-      const findOne = vi.fn().mockResolvedValue({ sampleID: 42 });
+      const findOne = vi.fn().mockResolvedValue({ specimenId: 'SPEC-42' });
       const app = buildApp(router, { collection: () => ({ findOne }) });
 
       const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
@@ -2768,7 +2768,7 @@ describe('sample.routes', () => {
 
     it('escapes ^ and ~ out of ZPL field data and omits the location line when absent', async () => {
       const { router } = loadRoute();
-      const findOne = vi.fn().mockResolvedValue({ sampleID: 42, barcode: 'BC^1~x' });
+      const findOne = vi.fn().mockResolvedValue({ specimenId: 'SPEC-42', barcode: 'BC^1~x' });
       const insertOne = vi.fn().mockResolvedValue({ insertedId: 'lg1' });
       const app = buildApp(router, { collection: () => ({ findOne, insertOne }) });
 
