@@ -226,7 +226,7 @@ describe('temperatureService.checkPolicyAndAlert', () => {
     await temperatureService.checkPolicyAndAlert(db, {
       policyId: 'p1',
       sensorId: 'sensor-a',
-      sampleId: 'sample-1',
+      specimenId: 'sample-1',
       temperatureValue: 99
     });
 
@@ -242,7 +242,7 @@ describe('temperatureService.checkPolicyAndAlert', () => {
 
     // #646 Wave 3 (RF015/RNF026) - the rule-driven notification engine is
     // also fired from this real critical-alert trigger, alongside (not
-    // instead of) the legacy sendCriticalTempAlert call above.
+    // instead of) the direct sendCriticalTempAlert call above.
     expect(dispatchSpy).toHaveBeenCalledWith(db, {
       eventType: 'environmental_excursion',
       sourceEventType: 'TemperatureAlert',
