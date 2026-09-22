@@ -568,7 +568,6 @@ router.get('/:id/label/print-job', authenticate, requireOrganizationScope, async
       $or: [
         ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
         { specimenId: rawId },
-        { barcode: rawId },
       ],
     });
     if (!sample) {
@@ -651,7 +650,6 @@ router.post('/labels/batch', authenticate, requireOrganizationScope, async (req,
           $or: [
             ...(ObjectId.isValid(id) ? [{ _id: new ObjectId(id) }] : []),
             { specimenId: id },
-            { barcode: id },
           ],
         });
 
