@@ -161,4 +161,13 @@ describe('Sample.validate', () => {
     expect(result.isValid).toBe(false);
     expect(result.errors.some(e => e.includes('specimenId'))).toBe(true);
   });
+
+  it('rejects a non-string physical identifier and accepts an omitted one for server generation', () => {
+    const invalid = Sample.validate({ ...validData, barcode: 12345 });
+    expect(invalid.isValid).toBe(false);
+    expect(invalid.errors).toContain('barcode deve ser uma string canônica para identificação Data Matrix');
+
+    const absent = Sample.validate({ ...validData, barcode: null });
+    expect(absent.isValid).toBe(true);
+  });
 });
