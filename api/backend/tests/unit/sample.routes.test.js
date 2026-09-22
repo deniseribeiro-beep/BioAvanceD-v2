@@ -2485,7 +2485,7 @@ describe('sample.routes', () => {
       expect(res.status).toBe(404);
     });
 
-    it('returns 200 with generated barcode assets', async () => {
+    it('returns 200 with the generated Data Matrix asset', async () => {
       const getSampleByBarcode = vi.fn().mockResolvedValue({ sample: { _id: 's1' } });
       const getBarcodeIndustrialAssets = vi.fn().mockResolvedValue({
         encodedValue: 'BC1',
@@ -2513,6 +2513,40 @@ describe('sample.routes', () => {
       );
     });
 
+    it('passes includePayload=true to the canonical Data Matrix renderer', async () => {
+      const getSampleByBarcode = vi.fn().mockResolvedValue({ sample: { _id: 's1' } });
+      const getBarcodeIndustrialAssets = vi.fn().mockResolvedValue({
+        encodedValue: 'BC1',
+        symbology: 'data_matrix',
+        dataMatrix: { imagePng: { base64: 'synthetic' } },
+      });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSampleByBarcode, getBarcodeIndustrialAssets },
+      });
+      const labelGenerations = {
+        findOne: vi.fn().mockResolvedValue({ specimenId: 's1' }),
+        insertOne: vi.fn().mockResolvedValue({ insertedId: 'lg2' }),
+      };
+      const app = buildApp(router, {
+        collection: (name) => (name === 'labelGenerations' ? labelGenerations : {}),
+      });
+
+      const res = await request(app)
+        .get('/api/samples/by-barcode/BC1/symbology-assets')
+        .query({ includePayload: 'true' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual(
+        expect.objectContaining({
+          encodedValue: 'BC1',
+          symbology: 'data_matrix',
+          includePayload: true,
+          reprint: true,
+        })
+      );
+      expect(getBarcodeIndustrialAssets).toHaveBeenCalledWith('BC1', { includePayload: true });
+    });
+
     it('returns 500 when generating assets throws', async () => {
       const getSampleByBarcode = vi.fn().mockResolvedValue({ sample: { _id: 's1' } });
       const getBarcodeIndustrialAssets = vi.fn().mockRejectedValue(new Error('boom'));
@@ -2527,8 +2561,8 @@ describe('sample.routes', () => {
     });
 
     // #653/#655: this route had no requireOrganizationScope/
-    // isRecordInOrganizationScope check at all, unlike every other sample
-    // sub-resource route in this file (mirrors #619's GET /:id/label test).
+    // isRecordInOrganizationScope check at all, unlike the other protected
+    // sample sub-resource routes in this file.
     it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
       const getSampleByBarcode = vi.fn().mockResolvedValue({
         sample: { _id: 's1', collectionSite: 'org-other' },
@@ -2593,7 +2627,7 @@ describe('sample.routes', () => {
       expect(res.status).toBe(409);
     });
 
-    it('returns ZPL with the barcode drawn via ^BC and audits the generation', async () => {
+    it('returns ZPL with the tube identifier drawn as Data Matrix and audits the generation', async () => {
       const { router } = loadRoute({
         getSamplePhysicalPlacement: async () => ({
           found: true,
@@ -2625,7 +2659,8 @@ describe('sample.routes', () => {
           reprint: false,
         })
       );
-      expect(res.body.data.zpl).toContain('^BCN,80,Y,N,N^FDBC1^FS');
+      expect(res.body.data.zpl).toContain('^BXN,5,200^FDBC1^FS');
+      expect(res.body.data.zpl).not.toContain('^BC');
       expect(labelGenerations.insertOne).toHaveBeenCalledWith(
         expect.objectContaining({ specimenId: expect.any(String), formats: ['zpl'], reprint: false })
       );
@@ -2685,10 +2720,11 @@ describe('sample.routes', () => {
 // Re-derived against source (`git grep -n -E
 // "requirePermission[(]|requireRole[(]|requireOrganizationScope" --
 // api/backend/src/interface/routes/sample.routes.js`): the file has no
-// requireRole call at all. 27 routes are registered in total; 25 carry
-// requireOrganizationScope (8 of those also carry requirePermission) and 2
+// requireRole call at all. After retiring the non-Data-Matrix SVG label
+// route, 26 routes are registered in total; 24 carry requireOrganizationScope
+// (8 of those also carry requirePermission) and 2
 // (GET /search/by-term, GET /by-barcode/:barcode) carry neither -- only
-// `authenticate`. That is 8 + 25 = 33 individual gate call sites, matching
+// `authenticate`. That is 8 + 24 = 32 individual gate call sites.
 // the line count `git grep -c` reports (line count and site count agree
 // here only because two routes each carry both gates on one source line,
 // which offsets the handful of matched lines that are a comment or the
@@ -2734,12 +2770,11 @@ describe('sample.routes authorization gates (issue #921)', () => {
   });
 
   describe('requireOrganizationScope presence pinning', () => {
-    // 25 of the file's 27 routes wire in requireOrganizationScope.
+    // 24 of the file's 26 routes wire in requireOrganizationScope.
     const GATED_CASES = [
       { label: 'GET /:id/miabis-compliance', method: 'get', path: '/s1/miabis-compliance' },
       { label: 'GET /:id/compliance-graph', method: 'get', path: '/s1/compliance-graph' },
       { label: 'GET /', method: 'get', path: '/' },
-      { label: 'GET /:id/label', method: 'get', path: '/s1/label' },
       { label: 'GET /:id/label/print-job', method: 'get', path: '/s1/label/print-job' },
       { label: 'POST /labels/batch', method: 'post', path: '/labels/batch' },
       { label: 'GET /:id', method: 'get', path: '/s1' },
@@ -2828,7 +2863,7 @@ describe('sample.routes authorization gates (issue #921)', () => {
   //   - 1 segment, GET: only GET /:id -- no literal 1-segment GET route
   //     exists anywhere else in the file to collide with it.
   //   - 2 segments, GET: GET /:id/miabis-compliance, GET /:id/compliance-graph,
-  //     GET /:id/label, GET /search/by-term, GET /by-barcode/:barcode,
+  //     GET /search/by-term, GET /by-barcode/:barcode,
   //     GET /:id/results, GET /:id/movements, GET /:id/rcs-assessments,
   //     GET /:id/sprec-profiles, GET /:id/quarantine-actions,
   //     GET /:specimenId/files. None of these has a wildcard in BOTH
