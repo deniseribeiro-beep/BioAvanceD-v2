@@ -422,7 +422,7 @@ describe('ImportService SPREC import', () => {
       expect.objectContaining({ matrixType: 'fluid' })
     );
     expect(SampleGraphValidator.prototype.validateSampleCompliance)
-      .toHaveBeenCalledWith('507f1f77bcf86cd799439011');
+      .toHaveBeenCalledWith('SPEC-JSON-ITEM8');
   });
 
 });
