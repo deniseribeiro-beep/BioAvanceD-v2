@@ -1230,7 +1230,7 @@ describe('sample.routes', () => {
   describe('GET /:id/miabis-compliance', () => {
     it('returns 200 with the compliance report', async () => {
       const validateMiabisCompliance = vi.fn().mockResolvedValue({ compliant: true, missing: [] });
-      const getSample = vi.fn().mockResolvedValue(null);
+      const getSample = vi.fn().mockResolvedValue({ specimenId: 's1' });
       const { router } = loadRoute({ validateMiabisCompliance, sampleServiceOverrides: { getSample } });
       const app = buildApp(router, {});
 
@@ -1989,7 +1989,7 @@ describe('sample.routes', () => {
       expect(res.status).toBe(500);
       expect(res.body).toEqual({
         success: false,
-        error: 'Erro ao gerar artefatos de barcode',
+        error: 'Erro ao gerar artefato Data Matrix',
         message: 'samples collection unavailable',
       });
     });
