@@ -497,7 +497,7 @@ class NotificationService {
   async sendConsentSmsFallback(patientData, consentLink) {
     const phone = this.resolvePatientPhone(patientData);
     if (!phone) {
-      logger.warn('Consentimento: telefone ausente para SMS', { patientID: patientData.patientID });
+      logger.warn('Consentimento: telefone ausente para SMS', { participantId: patientData.participantId || null });
       return { channel: 'sms', success: false, reason: 'missing_phone' };
     }
 
@@ -515,7 +515,7 @@ class NotificationService {
       html: `<p><strong>Destino SMS:</strong> ${phone}</p><p>${message}</p>`,
       notificationType: 'RF_CONSENT_SMS_FALLBACK',
       metadata: {
-        patientID: patientData.patientID || null,
+        participantId: patientData.participantId || null,
         phone
       }
     });
@@ -531,7 +531,7 @@ class NotificationService {
   async sendConsentWhatsappFallback(patientData, consentLink) {
     const phone = this.resolvePatientPhone(patientData);
     if (!phone) {
-      logger.warn('Consentimento: telefone ausente para WhatsApp', { patientID: patientData.patientID });
+      logger.warn('Consentimento: telefone ausente para WhatsApp', { participantId: patientData.participantId || null });
       return { channel: 'whatsapp', success: false, reason: 'missing_phone' };
     }
 
