@@ -154,27 +154,15 @@ function isComplianceGraphOwnedAction(action) {
     && action.reasonCodes.every((code) => String(code).startsWith('COMPLIANCE_GRAPH_'));
 }
 
-// #1090: the canonical specimenId tier was missing entirely -- a non-ObjectId
-// argument went straight to the RETIRED sampleID key (filter-keys.arch.test.js's
-// RETIRED_FILTER_KEYS), so a caller handing this a canonical specimenId matched
-// nothing. Per #788 that is worse than an empty result: a filter on a key the
-// document lacks matches every other document that also lacks it, and findOne
-// returns an arbitrary one.
-//
-// Not hypothetical -- sampleComplianceSync.service.js:26 calls this with
-// `String(sample._id || sample.specimenId || '')`, so any sample reaching it
-// without an _id is looked up by specimenId against the sampleID key.
-//
-// Mirrors the _id -> specimenId -> legacy sampleID fallback result.routes.js
-// (#628) and sample.routes.js (#857) already use. The legacy leg is kept
-// deliberately; #804 owns sampleID's eventual retirement.
-function normalizeSampleIdFilter(sampleId) {
-  if (ObjectId.isValid(sampleId)) {
-    return { _id: new ObjectId(sampleId) };
+// Canonical v2 identifier resolution. Mongo _id remains accepted as an
+// internal transport identifier, but the retired sampleID alias was removed
+// after #804 migrated the public sample contract to specimenId.
+function normalizeSpecimenIdFilter(specimenId) {
+  if (ObjectId.isValid(specimenId)) {
+    return { _id: new ObjectId(specimenId) };
   }
 
-  const raw = normalizeString(sampleId);
-  return { $or: [{ specimenId: raw }, { sampleID: raw }] };
+  return { specimenId: normalizeString(specimenId) };
 }
 
 class SampleGraphValidator {
@@ -204,9 +192,9 @@ class SampleGraphValidator {
     };
   }
 
-  async _loadSample(sampleId) {
+  async _loadSample(specimenId) {
     const samplesCollection = await getCollection(this.db, 'samples');
-    const sample = await samplesCollection.findOne(normalizeSampleIdFilter(sampleId));
+    const sample = await samplesCollection.findOne(normalizeSpecimenIdFilter(specimenId));
     return { samplesCollection, sample };
   }
 
@@ -384,7 +372,7 @@ class SampleGraphValidator {
 
     const movement = SampleMovementModel.create({
       movementID,
-      specimenId: String(sample?.specimenId || sample?._id || sample?.sampleID || '').trim(),
+      specimenId: String(sample?.specimenId || sample?._id || '').trim(),
       barcode: normalizeString(sample?.barcode) || null,
       type: SampleMovementModel.MOVEMENT_TYPES.ADJUST,
       quantity: 1,
@@ -409,12 +397,12 @@ class SampleGraphValidator {
     );
   }
 
-  async validateSampleCompliance(sampleId) {
+  async validateSampleCompliance(specimenId) {
     if (!this.db) {
       throw new Error('Database não inicializado para SampleGraphValidator');
     }
 
-    const { samplesCollection, sample } = await this._loadSample(sampleId);
+    const { samplesCollection, sample } = await this._loadSample(specimenId);
     if (!sample) {
       throw new Error('Amostra não encontrada para validação de conformidade');
     }
@@ -435,7 +423,7 @@ class SampleGraphValidator {
     const suggestedStatus = resolveSuggestedStatus(graphPath);
 
     const report = {
-      sampleId: String(sample._id || sample.sampleID || sampleId),
+      specimenId: String(sample.specimenId || sample._id || specimenId),
       orphaCode: normalizeOrpha(sample?.clinicalData?.orphaCode),
       disease: diseaseContext.disease
         ? {
@@ -475,7 +463,7 @@ class SampleGraphValidator {
       const currentOrder = SPECIMEN_STATUS_ORDER[currentSpecimenStatus] ?? SPECIMEN_STATUS_ORDER.available;
 
       if (targetOrder !== currentOrder) {
-        const existingActions = await quarantineActionService.getActionsForSpecimen(this.db, report.sampleId);
+        const existingActions = await quarantineActionService.getActionsForSpecimen(this.db, report.specimenId);
         latestActiveAction = existingActions.find((action) => action.actionStatus === 'active') || null;
       }
 
@@ -502,29 +490,29 @@ class SampleGraphValidator {
       // manual) is left untouched; this escalation's own action is recorded
       // alongside it.
       if (isComplianceGraphOwnedAction(latestActiveAction)) {
-        await quarantineActionService.releaseActiveAction(this.db, report.sampleId, 'SYSTEM_COMPLIANCE_GRAPH');
+        await quarantineActionService.releaseActiveAction(this.db, report.specimenId, 'SYSTEM_COMPLIANCE_GRAPH');
       }
       const reasonCodes = complianceGraphReasonCodes(graphPath);
       if (reasonCodes.length > 0) {
         await quarantineActionService.recordAction(this.db, {
-          specimenIds: [report.sampleId],
+          specimenIds: [report.specimenId],
           reasonCodes,
         });
       }
     } else if (downgraded) {
-      await quarantineActionService.releaseActiveAction(this.db, report.sampleId, 'SYSTEM_COMPLIANCE_GRAPH');
+      await quarantineActionService.releaseActiveAction(this.db, report.specimenId, 'SYSTEM_COMPLIANCE_GRAPH');
     }
 
     if (!isReleasable) {
       logger.warn('[SAMPLE_GRAPH_VALIDATOR] Amostra bloqueada/quarentenada', {
-        sampleId: report.sampleId,
+        specimenId: report.specimenId,
         suggestedStatus,
         graphPath,
       });
     } else {
       await this._recordClinicalSealHistory(sample, samplesCollection);
       logger.info('[SAMPLE_GRAPH_VALIDATOR] Amostra apta para liberação', {
-        sampleId: report.sampleId,
+        specimenId: report.specimenId,
         suggestedStatus,
       });
     }

@@ -15,7 +15,7 @@ function completeGovernanceEvidence(overrides = {}) {
 function buildSample(overrides = {}) {
   const sample = {
     _id: '507f1f77bcf86cd799439011',
-    sampleID: 'S-0001',
+    specimenId: 'SPEC-0001',
     participantId: '12345678',
     consentTemplateId: 'tcle-001',
     quality_category: 'A',
@@ -362,41 +362,18 @@ describe('SampleGraphValidator', () => {
     expect(failReport.suggestedStatus).toBe('BLOCKED');
   });
 
-  // #1090: normalizeSampleIdFilter had two tiers -- _id, then the RETIRED
-  // sampleID key (filter-keys.arch.test.js's RETIRED_FILTER_KEYS). A
-  // non-ObjectId argument therefore never queried the canonical specimenId at
-  // all, and per #788 a filter on a key the document lacks matches every other
-  // document that also lacks it. Reachable in production:
-  // sampleComplianceSync.service.js:26 calls this with
-  // `String(sample._id || sample.specimenId || '')`.
-  //
-  // Every other test in this file passes `sample._id`, so none of them
-  // exercises the non-ObjectId branch at all.
-  describe('#1090: identifier resolution tiers', () => {
-    it('queries the canonical specimenId for a non-ObjectId identifier, not only the retired sampleID', async () => {
+  describe('#1090/#804: canonical identifier resolution', () => {
+    it('queries only the canonical specimenId for a non-ObjectId identifier', async () => {
       samplesCollection.findOne.mockResolvedValue(null);
 
       await expect(validator.validateSampleCompliance('SPX-CANONICAL-1'))
         .rejects.toThrow('Amostra não encontrada para validação de conformidade');
 
       const filter = samplesCollection.findOne.mock.calls[0][0];
-      expect(JSON.stringify(filter)).toContain('specimenId');
+      expect(filter).toEqual({ specimenId: 'SPX-CANONICAL-1' });
+      expect(JSON.stringify(filter)).not.toContain('sampleID');
     });
 
-    // Control: green before and after the fix. The legacy tier is kept
-    // deliberately -- #804 owns sampleID's eventual retirement -- so a fix
-    // that dropped it to satisfy the case above would be wrong.
-    it('keeps the legacy sampleID leg for a non-ObjectId identifier', async () => {
-      samplesCollection.findOne.mockResolvedValue(null);
-
-      await expect(validator.validateSampleCompliance('S-0001'))
-        .rejects.toThrow('Amostra não encontrada para validação de conformidade');
-
-      const filter = samplesCollection.findOne.mock.calls[0][0];
-      expect(JSON.stringify(filter)).toContain('sampleID');
-    });
-
-    // Control: green before and after the fix.
     it('still resolves an ObjectId identifier by _id', async () => {
       samplesCollection.findOne.mockResolvedValue(null);
 
@@ -850,8 +827,8 @@ describe('SampleGraphValidator', () => {
       expect(report.graphPath.clinical.valid).toBe(true);
     });
 
-    it('uses _id as the movement sample identifier when the legacy sampleID field is blank', async () => {
-      const sample = buildSample({ sampleID: '' });
+    it('uses Mongo _id for the movement only when canonical specimenId is absent', async () => {
+      const sample = buildSample({ specimenId: '' });
       samplesCollection.findOne.mockResolvedValue(sample);
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
@@ -864,11 +841,8 @@ describe('SampleGraphValidator', () => {
       );
     });
 
-    it('prefers canonical specimenId over Mongo _id and retired sampleID when sealing the compliance movement', async () => {
-      const sample = buildSample({
-        specimenId: 'SPEC-CANONICAL-1',
-        sampleID: 'LEGACY-SAMPLE-1',
-      });
+    it('prefers canonical specimenId over Mongo _id when sealing the compliance movement', async () => {
+      const sample = buildSample({ specimenId: 'SPEC-CANONICAL-1' });
       samplesCollection.findOne.mockResolvedValue(sample);
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
@@ -881,23 +855,23 @@ describe('SampleGraphValidator', () => {
       );
     });
 
-    it('falls back from _id to sampleID and finally to the caller identifier in the compliance report', async () => {
-      const sampleIdFallback = buildSample({ _id: '', sampleID: 'S-FALLBACK' });
-      samplesCollection.findOne.mockResolvedValue(sampleIdFallback);
+    it('uses canonical specimenId in the compliance report and falls back to the caller only when both stored identifiers are absent', async () => {
+      const canonical = buildSample({ _id: '', specimenId: 'SPEC-CANONICAL-REPORT' });
+      samplesCollection.findOne.mockResolvedValue(canonical);
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-      const bySampleId = await validator.validateSampleCompliance('SPEC-LOOKUP-1');
-      expect(bySampleId.sampleId).toBe('S-FALLBACK');
+      const byCanonical = await validator.validateSampleCompliance('SPEC-LOOKUP-1');
+      expect(byCanonical.specimenId).toBe('SPEC-CANONICAL-REPORT');
 
       const byArgument = buildSample({
         _id: '',
-        sampleID: '',
+        specimenId: '',
         clinicalData: { orphaCode: 'ORPHA:324', cid: '' },
       });
       samplesCollection.findOne.mockResolvedValue(byArgument);
 
       const byArgumentReport = await validator.validateSampleCompliance('SPEC-LOOKUP-2');
-      expect(byArgumentReport.sampleId).toBe('SPEC-LOOKUP-2');
+      expect(byArgumentReport.specimenId).toBe('SPEC-LOOKUP-2');
       expect(byArgumentReport.isReleasable).toBe(false);
     });
 
