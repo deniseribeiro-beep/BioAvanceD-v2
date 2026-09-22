@@ -24,10 +24,10 @@ export const CryoLabelPrinter: React.FC<CryoLabelPrinterProps> = ({ samples }) =
       </div>
       <div className="labels-sheet">
         {samples.map((sample) => (
-          <div className="cryo-label" key={sample.sampleId}>
+          <div className="cryo-label" key={sample.specimenId}>
             <div className="datamatrix-container">
               <Datamatrix
-                value={sample.sampleId}
+                value={sample.specimenId}
                 width={60}
                 height={60}
                 foreground="#000"
@@ -35,7 +35,7 @@ export const CryoLabelPrinter: React.FC<CryoLabelPrinterProps> = ({ samples }) =
               />
             </div>
             <div className="label-info">
-              <div className="sample-id">{sample.sampleId}</div>
+              <div className="sample-id">{sample.specimenId}</div>
               <div className="date">{sample.date ? new Date(sample.date).toLocaleDateString() : ''}</div>
               <div className="location">{formatLocation(sample)}</div>
             </div>
