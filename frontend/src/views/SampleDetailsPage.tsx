@@ -114,7 +114,7 @@ export default function SampleDetailsPage() {
           currentQuantity: (foundSample.volumeCurrent ?? foundSample.currentQuantity ?? foundSample.quantity ?? '').toString(),
           sampleOrigin: foundSample.sampleOrigin || '',
           extractionProtocol: foundSample.extractionProtocol || '',
-          participantId: (foundSample as any).participantId ? String((foundSample as any).participantId) : String((foundSample as any).patientID || ''),
+          participantId: foundSample.participantId ? String(foundSample.participantId) : '',
         });
       } else {
         console.warn('Amostra não encontrada:', { searchId: id, availableIds: samples.map(s => ({ _id: s._id, specimenId: s.specimenId })) });
