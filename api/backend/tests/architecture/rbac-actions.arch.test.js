@@ -81,7 +81,7 @@ const SUBROUTER_MOUNT_GATES = new Set([
   // `router.use(authenticate, requirePermission('createSample'),
   //  intakeGovernanceResponseGuard, intakeWizardRouter)` — the verbs are on
   //  intakeWizardRouter, in src/routes/intakeWizard.js.
-  'interface/routes/intakeWizard.routes.js:188',
+  'interface/routes/intakeWizard.routes.js:189',
 ]);
 
 // `requirePermission('code')` or `requirePermission('code', 'ACTION')`.
