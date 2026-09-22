@@ -141,7 +141,7 @@ export default function SamplesPage() {
         onOpenPrintModal={openPrintModal}
         onClosePrintModal={closePrintModal}
         onPrint={() => window.print()}
-        onEditSample={(sampleId) => navigate(`/samples/${sampleId}`)}
+        onEditSample={(specimenId) => navigate(`/samples/${specimenId}`)}
         onOpenStorage={(sample) => {
           setExpandedStorageSample((current) => (current?.id === sample.id ? null : sample));
         }}
