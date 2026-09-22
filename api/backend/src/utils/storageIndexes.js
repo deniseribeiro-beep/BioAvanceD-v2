@@ -66,6 +66,31 @@ const logger = require('./logger');
 // sensorMetadata name never shadow one another.
 const storageContainersIndexed = new Set();
 const sensorMetadataIndexed = new Set();
+const storageBoxesIndexed = new Set();
+
+/**
+ * #941: a non-unique LOOKUP index, built best-effort with its own catch.
+ *
+ * Separate from the unique builds above because the failure means something
+ * different. A unique build failing is a data problem worth naming (E11000 =
+ * duplicates already written); a lookup build failing costs performance and
+ * nothing else, so the message says so rather than implying corruption.
+ *
+ * Each call carries its own try/catch for the #1027 reason: one shared catch
+ * around several builds reports the first failure and skips the rest silently.
+ */
+async function buildLookupIndex(collection, keys, name, tag) {
+  try {
+    await collection.createIndex(keys, { name });
+  } catch (error) {
+    logger.warn(
+      '[' + tag + '][INDEX] Não foi possível criar ' + name + ' (#941). '
+        + 'Índice apenas de desempenho: as consultas continuam corretas, '
+        + 'porém sem o plano indexado: '
+        + (error?.message || error)
+    );
+  }
+}
 
 async function ensureStorageContainerIndexes(collection) {
   if (!collection || typeof collection.createIndex !== 'function') return;
@@ -91,6 +116,46 @@ async function ensureStorageContainerIndexes(collection) {
         + (error?.message || error)
     );
   }
+
+  // #941: BUILD, taken from the planner. `listOperationalFreezers` issues
+  // find({containerType:'FREEZER',status:'OPERATIONAL'}) verbatim.
+  await buildLookupIndex(
+    collection, { containerType: 1, status: 1 },
+    'storage_containers_type_status_idx_v1', 'STORAGE'
+  );
+
+  // #941: BUILD. The shelf/rack tree walk -- MongoStorageTopologyReadRepository,
+  // TelemetryMonitor and equipment-sensor-quarantine.service all issue
+  // find({parent_id, containerType}), the second of them per reading.
+  await buildLookupIndex(
+    collection, { parent_id: 1, containerType: 1 },
+    'storage_containers_parent_type_idx_v1', 'STORAGE'
+  );
+}
+
+/**
+ * #941: the storageBoxes lookup index.
+ *
+ * No unique constraint here -- `StorageBox.js` declares none at HEAD (its
+ * former boxID unique+sparse line is gone). This exists for the one lookup
+ * the planner measurably uses, so the helper is deliberately not modelled on
+ * the unique ones above.
+ */
+async function ensureStorageBoxIndexes(collection) {
+  if (!collection || typeof collection.createIndex !== 'function') return;
+
+  const name = collection.collectionName;
+  if (storageBoxesIndexed.has(name)) return;
+  storageBoxesIndexed.add(name);
+
+  // #941: BUILD. Winning plan for BOTH storageBoxes shapes in src/ --
+  // the topology walk's find({parent_id}).sort({name:1}) and
+  // TelemetryMonitor's find({parent_id:{$in:rackIds}}). A compound index
+  // serves its own prefix, so the status suffix costs those nothing.
+  await buildLookupIndex(
+    collection, { parent_id: 1, status: 1 },
+    'storage_boxes_parent_status_idx_v1', 'STORAGE'
+  );
 }
 
 async function ensureSensorMetadataIndexes(collection) {
@@ -143,5 +208,6 @@ async function ensureSensorMetadataIndexes(collection) {
 
 module.exports = {
   ensureStorageContainerIndexes,
+  ensureStorageBoxIndexes,
   ensureSensorMetadataIndexes
 };

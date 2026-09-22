@@ -99,7 +99,13 @@ const StorageContainerSchema = new mongoose.Schema(
 // ==================== ÍNDICES ====================
 StorageContainerSchema.index({ containerType: 1, status: 1 });
 StorageContainerSchema.index({ parent_id: 1, containerType: 1 });
-StorageContainerSchema.index({ name: 1 });
+// #941: `index({ name: 1 })` deleted here. Measured on mongo:7 against a
+// representative tree: it is never the winning plan for any query shape in
+// src/. Every .sort({ name: 1 }) on this collection follows a SELECTIVE
+// filter (containerType+status, or parent_id+containerType), so the planner
+// takes that compound index and sorts the already-small result in memory.
+// Both compound indexes ARE built now, natively, by
+// utils/storageIndexes.js#ensureStorageContainerIndexes.
 // #941: this line declared the SAME {containerID} unique+sparse spec already
 // declared field-level at the top of this schema. One of the two was pure
 // noise; the field-level one survives, marked there.

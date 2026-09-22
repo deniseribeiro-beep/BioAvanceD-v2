@@ -39,8 +39,14 @@ describe('#941 ensureStorageContainerIndexes', () => {
 
     await ensureStorageContainerIndexes(collection);
 
-    expect(collection.createIndex).toHaveBeenCalledTimes(1);
-    const [keys, options] = collection.createIndex.mock.calls[0];
+    // #941: three indexes are built here now (the containerID unique plus
+    // two lookup indexes), so this case locates its own by key.
+    expect(collection.createIndex).toHaveBeenCalledTimes(3);
+    const containerIdCall = collection.createIndex.mock.calls.find(
+      ([k]) => Object.prototype.hasOwnProperty.call(k, 'containerID')
+    );
+    expect(containerIdCall).toBeDefined();
+    const [keys, options] = containerIdCall;
     expect(keys).toEqual({ containerID: 1 });
     expect(options.unique).toBe(true);
     expect(options.name).toBe('storage_containers_containerid_unique_v1');
@@ -70,9 +76,31 @@ describe('#941 ensureStorageContainerIndexes', () => {
 
     await expect(ensureStorageContainerIndexes(collection)).resolves.toBeUndefined();
 
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toContain('E11000');
-    expect(warn.mock.calls[0][0]).toContain('#941');
+    // #941: one warning per index -- a shared catch would report the first
+    // failure and skip the remaining builds silently.
+    expect(warn).toHaveBeenCalledTimes(3);
+    warn.mock.calls.forEach(([message]) => {
+      expect(message).toContain('#941');
+    });
+
+    const warned = warn.mock.calls.map(([message]) => message);
+    const uniqueWarning = warned.find((m) => m.includes('storage_containers_containerid_unique_v1'));
+    expect(uniqueWarning).toContain('E11000');
+
+    // A lookup-index failure costs performance and nothing else, so its
+    // message must not read as a data problem the way the unique one does.
+    // Asserted on the message's OWN framing, not on the appended error text:
+    // this fixture throws one error object for every build, so the error
+    // string is identical in all three warnings and says nothing about which
+    // wording the helper chose.
+    const lookupWarnings = warned.filter((m) => m.includes('_idx_v1'));
+    expect(lookupWarnings).toHaveLength(2);
+    lookupWarnings.forEach((m) => {
+      expect(m).toContain('desempenho');
+      expect(m).not.toContain('unicidade');
+      expect(m).not.toContain('duplicados');
+    });
+    expect(uniqueWarning).toContain('duplicados');
   });
 
   it('is a no-op for a collection handle that cannot create indexes', async () => {
@@ -89,7 +117,126 @@ describe('#941 ensureStorageContainerIndexes', () => {
     await ensureStorageContainerIndexes(collection);
     await ensureStorageContainerIndexes(collection);
 
-    expect(collection.createIndex).toHaveBeenCalledTimes(1);
+    expect(collection.createIndex).toHaveBeenCalledTimes(3);
+  });
+
+  // #941: the two lookup indexes below are BUILD decisions taken from the
+  // planner rather than by inference. Measured on mongo:7 against a scratch
+  // tree (1 freezer / 5 shelves / 25 racks / 250 boxes) using the query
+  // shapes that actually exist in src/: both are the winning plan, and the
+  // topology walks go from a collection scan to examined == returned.
+  it('builds the { containerType, status } lookup index', async () => {
+    const { ensureStorageContainerIndexes } = freshStorageIndexes();
+    const collection = makeCollection('storageContainers');
+
+    await ensureStorageContainerIndexes(collection);
+
+    const call = collection.createIndex.mock.calls.find(
+      ([k]) => k.containerType === 1 && k.status === 1
+    );
+    expect(call).toBeDefined();
+    // listOperationalFreezers: find({containerType:'FREEZER',status:'OPERATIONAL'})
+    expect(call[1].unique).toBeUndefined();
+  });
+
+  it('builds the { parent_id, containerType } lookup index', async () => {
+    const { ensureStorageContainerIndexes } = freshStorageIndexes();
+    const collection = makeCollection('storageContainers');
+
+    await ensureStorageContainerIndexes(collection);
+
+    const call = collection.createIndex.mock.calls.find(
+      ([k]) => k.parent_id === 1 && k.containerType === 1
+    );
+    expect(call).toBeDefined();
+    // The shelf/rack walk in MongoStorageTopologyReadRepository, TelemetryMonitor
+    // and equipment-sensor-quarantine.service all issue exactly this shape.
+    expect(call[1].unique).toBeUndefined();
+  });
+
+  // #941: pins a DELETE decision, so it cannot quietly come back.
+  // StorageContainer.js declared a standalone { name: 1 }. Measured: it is
+  // never the winning plan for any query shape in src/, because every
+  // .sort({name:1}) there follows a SELECTIVE filter -- the planner takes
+  // the compound index and sorts the already-small result in memory.
+  it('does NOT build a standalone { name: 1 } index', async () => {
+    const { ensureStorageContainerIndexes } = freshStorageIndexes();
+    const collection = makeCollection('storageContainers');
+
+    await ensureStorageContainerIndexes(collection);
+
+    const nameOnly = collection.createIndex.mock.calls.find(
+      ([k]) => Object.keys(k).length === 1 && k.name === 1
+    );
+    expect(nameOnly).toBeUndefined();
+  });
+});
+
+describe('#941 ensureStorageBoxIndexes', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // #941: measured as the winning plan for BOTH storageBoxes query shapes
+  // in src/ -- the topology walk's find({parent_id}).sort({name:1}) and
+  // TelemetryMonitor's find({parent_id:{$in:rackIds}}). The status suffix
+  // costs nothing for those, since a compound index serves its own prefix.
+  it('builds the { parent_id, status } lookup index', async () => {
+    const { ensureStorageBoxIndexes } = freshStorageIndexes();
+    const collection = makeCollection('storageBoxes');
+
+    await ensureStorageBoxIndexes(collection);
+
+    const call = collection.createIndex.mock.calls.find(
+      ([k]) => k.parent_id === 1 && k.status === 1
+    );
+    expect(call).toBeDefined();
+    expect(call[1].unique).toBeUndefined();
+  });
+
+  // #941: the second DELETE. StorageBox.js declared a standalone { name: 1 }
+  // and the planner never picks it, for the same reason as the container one.
+  it('does NOT build a standalone { name: 1 } index', async () => {
+    const { ensureStorageBoxIndexes } = freshStorageIndexes();
+    const collection = makeCollection('storageBoxes');
+
+    await ensureStorageBoxIndexes(collection);
+
+    const nameOnly = collection.createIndex.mock.calls.find(
+      ([k]) => Object.keys(k).length === 1 && k.name === 1
+    );
+    expect(nameOnly).toBeUndefined();
+  });
+
+  it('logs and does not throw when the index cannot be built', async () => {
+    const { ensureStorageBoxIndexes } = freshStorageIndexes();
+    const logger = require('../../src/utils/logger');
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const collection = makeCollection('storageBoxes', async () => {
+      throw new Error('boom');
+    });
+
+    await expect(ensureStorageBoxIndexes(collection)).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalled();
+    expect(warn.mock.calls[0][0]).toContain('#941');
+  });
+
+  it('is a no-op for a collection handle that cannot create indexes', async () => {
+    const { ensureStorageBoxIndexes } = freshStorageIndexes();
+    await expect(ensureStorageBoxIndexes(null)).resolves.toBeUndefined();
+    await expect(ensureStorageBoxIndexes({})).resolves.toBeUndefined();
+  });
+
+  it('latches per resolved collection name', async () => {
+    const { ensureStorageBoxIndexes } = freshStorageIndexes();
+    const collection = makeCollection('storageBoxes');
+
+    await ensureStorageBoxIndexes(collection);
+    const afterFirst = collection.createIndex.mock.calls.length;
+    await ensureStorageBoxIndexes(collection);
+
+    expect(collection.createIndex).toHaveBeenCalledTimes(afterFirst);
   });
 });
 
@@ -201,7 +348,7 @@ describe('#941 ensureSensorMetadataIndexes', () => {
     await ensureStorageContainerIndexes(storageCollection);
     await ensureSensorMetadataIndexes(sensorCollection);
 
-    expect(storageCollection.createIndex).toHaveBeenCalledTimes(1);
+    expect(storageCollection.createIndex).toHaveBeenCalledTimes(3);
     expect(sensorCollection.createIndex).toHaveBeenCalledTimes(2);
   });
 });
