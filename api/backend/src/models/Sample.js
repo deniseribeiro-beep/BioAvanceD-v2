@@ -240,7 +240,6 @@ class SampleModel {
       protocolId: data.protocolId || null,
       collectionId: data.collectionId || null,
       linkedFiles: Array.isArray(data.linkedFiles) ? data.linkedFiles : [],
-      qrCode: data.qrCode || null,
       createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
       updatedAt: new Date()
     };

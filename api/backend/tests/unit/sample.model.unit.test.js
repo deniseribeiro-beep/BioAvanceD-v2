@@ -22,6 +22,12 @@ describe('Sample.create - collectionSite (ELM-0128)', () => {
     const result = Sample.create({ ...base });
     expect(result.collectionSite).toBeNull();
   });
+
+  it('does not emit the retired qrCode alias and preserves the canonical Data Matrix value', () => {
+    const result = Sample.create({ ...base, barcode: 'BR-2026-001', qrCode: 'legacy-qr-value' });
+    expect(result.barcode).toBe('BR-2026-001');
+    expect(result).not.toHaveProperty('qrCode');
+  });
 });
 
 describe('Sample.validateSpecimenStatus', () => {
