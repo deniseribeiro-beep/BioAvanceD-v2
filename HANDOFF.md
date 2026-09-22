@@ -87,9 +87,12 @@ this sitting; five are still open and this is the state each was left in:**
 - **#1153** — a *fresh* generate writes 31 of the example's 79 variables, and
   the two disagree on whether the RFC3161 TSA is on. Directions listed, none
   chosen.
-- **#1154** — boot-time validation of the signing config. **Genuinely
-  blocked**: the check is trivial, but its disposition is the same
-  fatal-vs-degrade call #979 has open and undecided.
+- **#1154** — boot-time validation of the signing config. **Not blocked, and
+  an earlier draft of this note wrongly said it was.** Directions 2 and 3 do
+  wait on the fatal-vs-degrade call #979 has open, but **direction 1 (warn
+  loudly once at boot, no behaviour change) needs no decision from anyone** —
+  the issue body says so itself. It was left undone by choice, not by
+  dependency.
 - **#1155** — the three tracked `.sh` files have no tests. First step is
   checking whether CI's runner image has `bash`/`openssl`/`python3`; that
   decides the direction.
