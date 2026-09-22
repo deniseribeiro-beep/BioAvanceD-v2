@@ -173,7 +173,7 @@ describe('NotificationService item 8 residual branches', () => {
     service.adminEmail = 'admin@example.test';
     const send = vi.spyOn(service, 'sendEmail').mockResolvedValue({ success: true });
     await expect(service.sendConsentSmsFallback({
-      patientID: 'legacy-id',
+      participantId: 'P1',
       patientName: 'Ana',
       phone: '11999999999',
     }, 'https://link')).resolves.toMatchObject({
@@ -184,6 +184,7 @@ describe('NotificationService item 8 residual branches', () => {
     expect(send).toHaveBeenCalledWith(expect.objectContaining({
       to: 'admin@example.test',
       notificationType: 'RF_CONSENT_SMS_FALLBACK',
+      metadata: expect.objectContaining({ participantId: 'P1' }),
     }));
   });
 
