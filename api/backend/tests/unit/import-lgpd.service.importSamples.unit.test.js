@@ -675,7 +675,7 @@ describe('ImportLGPDService.importSamples', () => {
     expect(inserted.pharmacologyData.atcCode).toBeNull();
   });
 
-  it('uses a provided barcode as-is (string-converted) instead of auto-generating one', async () => {
+  it('uses a provided canonical Data Matrix value as-is instead of auto-generating one', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, barcode: 'BR-CUSTOM-999' }]);
 
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
@@ -683,6 +683,18 @@ describe('ImportLGPDService.importSamples', () => {
     expect(result.success).toBe(1);
     const inserted = samplesCollection.insertOne.mock.calls[0][0];
     expect(inserted.barcode).toBe('BR-CUSTOM-999');
+  });
+
+  it('rejects a numeric historical barcode instead of converting it to string', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, barcode: 12345 }]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors).toContain(
+      'barcode deve ser uma string canônica para identificação Data Matrix'
+    );
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
   });
 
   // `tcle_id` on VALID_ROW is not a field parseSampleRow reads (it reads
