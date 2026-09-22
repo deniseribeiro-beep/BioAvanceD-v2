@@ -1367,13 +1367,10 @@ describe('sample.service', () => {
       expect(db.collections.samples.findOne).toHaveBeenCalledWith({ barcode: '123456' });
     });
 
-    it('rejects retired QR and Code128 scanner prefixes', async () => {
+    it('rejects unsupported AIM scanner prefixes', async () => {
       const db = makeDb();
 
-      await expect(sampleService.getSampleByBarcode(db, ']Q3BR-1')).rejects.toThrow(
-        'apenas Data Matrix canônico'
-      );
-      await expect(sampleService.getSampleByBarcode(db, ']C1BR-1')).rejects.toThrow(
+      await expect(sampleService.getSampleByBarcode(db, ']x1BR-1')).rejects.toThrow(
         'apenas Data Matrix canônico'
       );
       expect(db.collections.samples.findOne).not.toHaveBeenCalled();
