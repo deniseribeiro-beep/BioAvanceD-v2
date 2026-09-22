@@ -13,7 +13,7 @@ function writeTempFile(content, ext = '.csv') {
 
 describe('ImportService.normalizeImportKey', () => {
   it('lowercases string', () => {
-    expect(importService.normalizeImportKey('PatientID')).toBe('patientid');
+    expect(importService.normalizeImportKey('ParticipantId')).toBe('patientid');
   });
 
   it('removes accents', () => {
@@ -40,12 +40,12 @@ describe('ImportService.normalizeImportKey', () => {
 
 describe('ImportService.getRowValue', () => {
   it('returns value for matching alias (exact)', () => {
-    const row = { patientID: '12345678' };
-    expect(importService.getRowValue(row, ['patientID'])).toBe('12345678');
+    const row = { participantId: '12345678' };
+    expect(importService.getRowValue(row, ['participantId'])).toBe('12345678');
   });
 
   it('returns value for case-insensitive match', () => {
-    const row = { PatientID: '12345678' };
+    const row = { ParticipantId: '12345678' };
     expect(importService.getRowValue(row, ['patientid'])).toBe('12345678');
   });
 
@@ -60,16 +60,16 @@ describe('ImportService.getRowValue', () => {
   });
 
   it('returns undefined for empty row', () => {
-    expect(importService.getRowValue({}, ['patientID'])).toBeUndefined();
+    expect(importService.getRowValue({}, ['participantId'])).toBeUndefined();
   });
 
   it('returns undefined when aliases is empty', () => {
-    expect(importService.getRowValue({ patientID: '1' }, [])).toBeUndefined();
+    expect(importService.getRowValue({ participantId: '1' }, [])).toBeUndefined();
   });
 
   it('tries multiple aliases and returns first match', () => {
-    const row = { sampleid: 'SMP-001' };
-    expect(importService.getRowValue(row, ['nonexistent', 'sampleID'])).toBe('SMP-001');
+    const row = { specimenId: 'SMP-001' };
+    expect(importService.getRowValue(row, ['nonexistent', 'specimenId'])).toBe('SMP-001');
   });
 });
 
@@ -301,15 +301,15 @@ describe('ImportService.parseSampleCSV', () => {
   });
 
   it('resolves aliased column names (e.g. tipoAmostra) via getRowValue', () => {
-    const row = { tipoAmostra: 'Plasma', origemAmostra: 'Arterial', idPaciente: 'P-9' };
+    const row = { tipoAmostra: 'Plasma', origemAmostra: 'Arterial', participantId: 'P-9' };
     const { data } = importService.parseSampleCSV(row);
     expect(data.sampleType).toBe('Plasma');
     expect(data.sampleOrigin).toBe('Arterial');
     expect(data.participantId).toBe('P-9');
   });
 
-  it('resolves participantId via the patient_id legacy alias (#547: was shadowed by a duplicate canonical-key entry)', () => {
-    const { data } = importService.parseSampleCSV({ patient_id: 'P-77' });
+  it('reads participantId only from the canonical participantId field', () => {
+    const { data } = importService.parseSampleCSV({ participantId: 'P-77' });
     expect(data.participantId).toBe('P-77');
   });
 
@@ -611,7 +611,7 @@ describe('ImportService item 8 remaining spreadsheet branches', () => {
 
   it('parseSampleCSV reports malformed float and date fields while keeping valid aliases normalized', () => {
     const parsed = importService.parseSampleCSV({
-      patient_id: '12345678',
+      participantId: '12345678',
       tipoAmostra: ' PLASMA ',
       origemAmostra: ' VENOUS_BLOOD ',
       protocoloExtracao: ' EDTA ',
