@@ -205,7 +205,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
         originalName: 'analysis.pdf',
         mimeType: 'application/pdf',
         size: 1024,
-        specimenId: 'sample-object-id',
+        specimenId: 'SMP-001',
         specimenIdentifier: 'SMP-001',
         participantId: 'PAT-001',
         uploadedBy: 'user-123'
