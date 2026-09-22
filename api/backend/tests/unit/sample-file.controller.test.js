@@ -185,7 +185,7 @@ describe('sample-file.controller', () => {
 
     it('returns 400 and cleans up file when file type invalid', async () => {
       const specimenId = new ObjectId().toString();
-      const sample = { _id: new ObjectId(specimenId) };
+      const sample = { _id: new ObjectId(specimenId), specimenId };
       const db = createDb({
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
       });
@@ -210,7 +210,7 @@ describe('sample-file.controller', () => {
     // shape as the invalid-fileType rejection above.
     it('returns 400 and cleans up file when fileRole is invalid', async () => {
       const specimenId = new ObjectId().toString();
-      const sample = { _id: new ObjectId(specimenId) };
+      const sample = { _id: new ObjectId(specimenId), specimenId };
       const db = createDb({
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
       });
@@ -238,7 +238,7 @@ describe('sample-file.controller', () => {
     // file same as the other pre-persist rejection paths above.
     it('returns 403 and cleans up file when the sample belongs to a different organization', async () => {
       const specimenId = new ObjectId().toString();
-      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-9' };
       const db = createDb({
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
       });
@@ -260,7 +260,7 @@ describe('sample-file.controller', () => {
 
     it('returns 422 and cleans up file when validation fails', async () => {
       const specimenId = new ObjectId().toString();
-      const sample = { _id: new ObjectId(specimenId) };
+      const sample = { _id: new ObjectId(specimenId), specimenId };
       const db = createDb({
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
       });
@@ -293,7 +293,7 @@ describe('sample-file.controller', () => {
 
     it('happy path: creates sample file record and returns sanitized data', async () => {
       const specimenId = new ObjectId().toString();
-      const sample = { _id: new ObjectId(specimenId) };
+      const sample = { _id: new ObjectId(specimenId), specimenId };
       const insertedId = new ObjectId();
       const sampleFilesCollection = {
         insertOne: vi.fn().mockResolvedValue({ insertedId })
@@ -334,7 +334,7 @@ describe('sample-file.controller', () => {
 
     it('happy path with an explicit fileRole: stores and returns it instead of the default', async () => {
       const specimenId = new ObjectId().toString();
-      const sample = { _id: new ObjectId(specimenId) };
+      const sample = { _id: new ObjectId(specimenId), specimenId };
       const insertedId = new ObjectId();
       const sampleFilesCollection = {
         insertOne: vi.fn().mockResolvedValue({ insertedId })
@@ -370,7 +370,7 @@ describe('sample-file.controller', () => {
 
     it('happy path with req.user: logs the upload audit entry', async () => {
       const specimenId = new ObjectId().toString();
-      const sample = { _id: new ObjectId(specimenId) };
+      const sample = { _id: new ObjectId(specimenId), specimenId };
       const insertedId = new ObjectId();
       const sampleFilesCollection = {
         insertOne: vi.fn().mockResolvedValue({ insertedId })
@@ -472,7 +472,7 @@ describe('sample-file.controller', () => {
     // 403s before files are listed.
     it('returns 403 when the sample belongs to a different organization', async () => {
       const specimenId = new ObjectId().toString();
-      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-9' };
       const db = createDb({
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
       });
@@ -490,11 +490,11 @@ describe('sample-file.controller', () => {
 
     it('returns sanitized files without storagePath', async () => {
       const specimenId = new ObjectId().toString();
-      const sample = { _id: new ObjectId(specimenId) };
+      const sample = { _id: new ObjectId(specimenId), specimenId };
       const rawFiles = [
         {
           _id: new ObjectId(),
-          specimenId: sample._id.toString(),
+          specimenId: sample.specimenId,
           fileName: 'a.csv',
           fileType: 'CSV',
           fileRole: 'processed',
@@ -530,7 +530,7 @@ describe('sample-file.controller', () => {
 
     it('logs the query audit entry when req.user is present', async () => {
       const specimenId = new ObjectId().toString();
-      const sample = { _id: new ObjectId(specimenId) };
+      const sample = { _id: new ObjectId(specimenId), specimenId };
       const sampleFilesCollection = {
         find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) })
       };
@@ -633,7 +633,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
-      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-9' };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -874,7 +874,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
-      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-9' };
       const deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord), deleteOne },
@@ -993,7 +993,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
-      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-9' };
       const updateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 });
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne },
@@ -1353,7 +1353,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv' };
-      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-9' };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -1374,7 +1374,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv', fileType: 'CSV' };
-      const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, participantId: '12345678' };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -1396,7 +1396,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv' };
-      const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, participantId: '12345678' };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -1428,7 +1428,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv', fileType: 'CSV' };
-      const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, participantId: '12345678' };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -1450,7 +1450,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv', fileType: 'CSV' };
-      const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, participantId: '12345678' };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -1522,7 +1522,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv' };
-      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-9' };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -1543,7 +1543,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv', fileType: 'CSV' };
-      const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, participantId: '12345678' };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -1565,7 +1565,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv' };
-      const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, participantId: '12345678' };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -1636,7 +1636,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv' };
-      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-9' };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -1657,7 +1657,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv', fileType: 'CSV' };
-      const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, participantId: '12345678' };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -1677,7 +1677,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv', fileType: 'CSV' };
-      const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, participantId: '12345678' };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -1699,7 +1699,7 @@ describe('sample-file.controller', () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv' };
-      const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+      const sample = { _id: new ObjectId(specimenId), specimenId, participantId: '12345678' };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
         samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -1750,7 +1750,7 @@ describe('sample-file.controller', () => {
 
       // 400 invalid file type
       res = createRes();
-      const sample = { _id: new ObjectId(specimenId) };
+      const sample = { _id: new ObjectId(specimenId), specimenId };
       const db3 = createDb({ samples: { findOne: vi.fn().mockResolvedValue(sample) } });
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue(null);
       await controller.uploadFile(
@@ -1949,7 +1949,7 @@ describe('sample-file.controller', () => {
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'samples.sampleNotFound' }));
 
         res = createRes();
-        const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+        const sample = { _id: new ObjectId(specimenId), specimenId, participantId: '12345678' };
         const db4 = createDb({
           sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
           samples: { findOne: vi.fn().mockResolvedValue(sample) }
@@ -2008,9 +2008,9 @@ describe('sample-file.controller final item 8 legacy-boundary branch', () => {
   });
 
   it('listFiles resolves a historical numeric specimen identifier at the API boundary', async () => {
-    const sample = { _id: new ObjectId(), specimenId: 42, collectionSite: 'org-1' };
+    const sample = { _id: new ObjectId(), specimenId: '42', collectionSite: 'org-1' };
     const sampleFindOne = vi.fn().mockImplementation(async (query) => (
-      query.specimenId === 42 ? sample : null
+      query.specimenId === '42' ? sample : null
     ));
     const fileFind = vi.fn().mockReturnValue({
       toArray: vi.fn().mockResolvedValue([
@@ -2038,8 +2038,8 @@ describe('sample-file.controller final item 8 legacy-boundary branch', () => {
     await controller.listFiles(req, res);
 
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(sampleFindOne).toHaveBeenCalledWith({ specimenId: 42 });
-    expect(fileFind).toHaveBeenCalledWith({ specimenId: sample._id.toString() });
+    expect(sampleFindOne).toHaveBeenCalledWith({ specimenId: '42' });
+    expect(fileFind).toHaveBeenCalledWith({ specimenId: sample.specimenId });
     expect(res.json.mock.calls[0][0].data[0]).toMatchObject({
       fileName: 'legacy.csv',
       fileType: 'CSV',
