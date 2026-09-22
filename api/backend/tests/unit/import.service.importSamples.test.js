@@ -335,3 +335,57 @@ describe('ImportService.importSamples (unsupported extension / top-level error)'
     })).rejects.toThrow();
   });
 });
+
+
+describe('ImportService.importSamples item 8 non-Error dependency failures', () => {
+  it('keeps a JSON import successful when RCS, SPREC and compliance dependencies reject with non-Error values', async () => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockRejectedValue({ source: 'graph' });
+
+    const filePath = writeTmpFile('non-error-dependencies.json', JSON.stringify(validSample({
+      specimenId: 'SPEC-JSON-NONERROR',
+      consentTemplateId: 'tcle-item8',
+      rcsEvaluation: { rcs_score: 75, score_based_grade: 'B' },
+      sprec: { sampleType: 'BLD', primaryContainer: 'PED' },
+    })));
+
+    const collection = makeSamplesCollection();
+    const rcsAssessmentsCollection = makeRcsAssessmentsCollection();
+    const specimenPreanalyticsCollection = makeSpecimenPreanalyticsCollection();
+    rcsAssessmentsCollection.insertOne = async () => { throw { source: 'rcs' }; };
+    specimenPreanalyticsCollection.insertOne = async () => { throw { source: 'sprec' }; };
+
+    const result = await importService.importSamples(
+      makeDb(collection, rcsAssessmentsCollection, specimenPreanalyticsCollection),
+      { path: filePath, originalname: 'non-error-dependencies.json' }
+    );
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(collection.inserted).toHaveLength(1);
+  });
+
+  it('keeps a tabular import successful when RCS, SPREC and compliance dependencies reject with non-Error values', async () => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockRejectedValue({ source: 'graph' });
+
+    const filePath = writeTmpFile(
+      'non-error-dependencies.csv',
+      [
+        'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+        '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01,fluid,BLD,PED,C,A,D,E,F',
+      ].join('\\n')
+    );
+
+    const collection = makeSamplesCollection();
+    const rcsAssessmentsCollection = makeRcsAssessmentsCollection();
+    const specimenPreanalyticsCollection = makeSpecimenPreanalyticsCollection();
+    rcsAssessmentsCollection.insertOne = async () => { throw { source: 'rcs' }; };
+    specimenPreanalyticsCollection.insertOne = async () => { throw { source: 'sprec' }; };
+
+    const result = await importService.importSamples(
+      makeDb(collection, rcsAssessmentsCollection, specimenPreanalyticsCollection),
+      { path: filePath, originalname: 'non-error-dependencies.csv' }
+    );
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(collection.inserted).toHaveLength(1);
+  });
+});
