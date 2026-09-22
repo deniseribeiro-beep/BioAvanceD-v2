@@ -32,10 +32,24 @@ clean and matching origin.
    a task.** Filed as a conventions gap on the pack tracker.
 2. **Técnico reads storage topology; Coordenador and above write it.** This
    answered #929's check 2 (same tier, different code), #1148's seeded
-   population, and the RF006-vs-RF017 actor question in one go — RF006's
-   Técnico governs custody and movement, RF017's Coordenador governs topology
-   *authoring*, so they describe different operations. **#1146 stands as
-   shipped.**
+   population, and the RF006-vs-RF017 actor question in one go. **#1146
+   stands as shipped.**
+
+## The RF006-vs-RF017 "actor disagreement" does not exist
+
+Four issues carried it (#888 → #929 → #1148 → #1151) and none had read the
+entries. **[read it]** `requisitos-index.md:82-95` and `:256-270`: **RF006 is
+specimen custody** (Ator Técnico; 6 ACs, all custody events), **RF017 is
+equipment and topology** (Ator Coordenador; 7 ACs, all containers/devices).
+Different subjects, so different primary actors is expected, not a
+contradiction — and Dennis's answer matches the documents rather than going
+beyond them. **#1151 was filed and then closed `premise-corrected` this same
+sitting on that reading. Do not re-open the actor question.**
+
+What IS open on that axis is **scope**, and it belongs to **#1147**: RF017's
+ACs begin at **Freezer** and **Facility/Room appear in none of the seven**,
+while both route files cite dict-02 `facilityId`/`roomId` (ELM-0168/0169,
+1..1 Core).
 
 ## The most reusable finding: #921's premise is wrong
 
@@ -77,10 +91,12 @@ query will not tell you:
   `Role.permissionIds` none.
 - **#1149** — filed this sitting. The `PUT /api/security/permissions` no-op.
   Direction 1 needs no answer from #1123; direction 2 is incoherent until it.
+  **[read it]** It also writes a `severity: 'critical'`, `status: 'success'`
+  audit row per toggle (`security.service.js:555-574`) for a change that
+  alters no authorization decision — an affirmatively misleading compliance
+  record, which rules out direction 3.
 - **#921** — commented, `premise-corrected`. See above. Needs a redesign, not
   a build.
-- **#1151** — filed this sitting. Docs-only: reconcile RF006/RF017 in the
-  requirements. Probably Denise's.
 - **#1127** — untouched again, still open only on its live-stack proof.
 - **#1147** — untouched this sitting.
 
@@ -93,9 +109,10 @@ test stack discharges **#1127** and re-checks #1150's three e2e callers
 should pass the new gate unchanged, but that is read, not run.
 
 Still undone from five notes: **diff Requisitos v4.0.0 against v3.0.1 for RF
-renumbering** before building further on `E2E_TRACEABILITY_PLAN.md`. #1151
-depends on it — if RF006/RF017 were renumbered, that issue's identifiers may
-not mean what they say.
+renumbering** before building further on `E2E_TRACEABILITY_PLAN.md`. It now
+also bears on #1147 — the RF006/RF017 reading above is against the
+`docs-7-27-2026` extraction as it stands in the tree today, and a renumbering
+would move the identifiers under it.
 
 ## Things a next session must not undo
 
