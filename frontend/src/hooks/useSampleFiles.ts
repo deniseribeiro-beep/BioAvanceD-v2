@@ -3,17 +3,17 @@ import { SampleFile } from '../types/models';
 import { sampleService } from '../services/api';
 import { useRequestSequence } from './useRequestSequence';
 
-export function useSampleFiles(sampleID: string | null) {
+export function useSampleFiles(specimenId: string | null) {
   const [files, setFiles] = useState<SampleFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // #901: discards a stale response when sampleID changes before the
-  // in-flight request for the previous sampleID resolves.
+  // #901: discards a stale response when specimenId changes before the
+  // in-flight request for the previous specimenId resolves.
   const requestSeq = useRequestSequence();
 
   const loadFiles = async () => {
     const seq = requestSeq.next();
-    if (!sampleID) {
+    if (!specimenId) {
       setFiles([]);
       return;
     }
@@ -21,7 +21,7 @@ export function useSampleFiles(sampleID: string | null) {
     try {
       setLoading(true);
       setError(null);
-      const response = await sampleService.listFiles(sampleID);
+      const response = await sampleService.listFiles(specimenId);
       if (!requestSeq.isCurrent(seq)) return;
       // Backend retorna { success: true, data: [...] }
       const responseData = response.data as any;
@@ -41,7 +41,7 @@ export function useSampleFiles(sampleID: string | null) {
   };
 
   const uploadFile = async (file: File): Promise<SampleFile> => {
-    if (!sampleID) {
+    if (!specimenId) {
       throw new Error('ID da amostra não fornecido');
     }
 
@@ -49,7 +49,7 @@ export function useSampleFiles(sampleID: string | null) {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await sampleService.uploadFile(sampleID, formData);
+      const response = await sampleService.uploadFile(specimenId, formData);
       const responseData = response.data as any;
       const newFile = responseData?.data || responseData;
       
@@ -64,12 +64,12 @@ export function useSampleFiles(sampleID: string | null) {
   };
 
   const downloadFile = async (fileID: string, fileName: string) => {
-    if (!sampleID) {
+    if (!specimenId) {
       throw new Error('ID da amostra não fornecido');
     }
 
     try {
-      const response = await sampleService.downloadFile(sampleID, fileID);
+      const response = await sampleService.downloadFile(specimenId, fileID);
       
       // Cria URL temporária para download
       const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -89,12 +89,12 @@ export function useSampleFiles(sampleID: string | null) {
   };
 
   const deleteFile = async (fileID: string) => {
-    if (!sampleID) {
+    if (!specimenId) {
       throw new Error('ID da amostra não fornecido');
     }
 
     try {
-      await sampleService.deleteFile(sampleID, fileID);
+      await sampleService.deleteFile(specimenId, fileID);
       // Recarrega a lista após exclusão
       await loadFiles();
     } catch (err: any) {
@@ -104,12 +104,12 @@ export function useSampleFiles(sampleID: string | null) {
   };
 
   const exportHL7v2 = async (fileID: string) => {
-    if (!sampleID) {
+    if (!specimenId) {
       throw new Error('ID da amostra não fornecido');
     }
 
     try {
-      const response = await sampleService.exportHL7v2(sampleID, fileID);
+      const response = await sampleService.exportHL7v2(specimenId, fileID);
       // HL7 v2.x retorna como texto
       const blob = new Blob([response.data], { type: 'text/plain; charset=utf-8' });
       const url = window.URL.createObjectURL(blob);
@@ -127,12 +127,12 @@ export function useSampleFiles(sampleID: string | null) {
   };
 
   const exportFHIR = async (fileID: string) => {
-    if (!sampleID) {
+    if (!specimenId) {
       throw new Error('ID da amostra não fornecido');
     }
 
     try {
-      const response = await sampleService.exportFHIR(sampleID, fileID);
+      const response = await sampleService.exportFHIR(specimenId, fileID);
       // FHIR retorna como JSON
       const jsonData = response.data;
       const jsonString = typeof jsonData === 'string' ? jsonData : JSON.stringify(jsonData, null, 2);
@@ -152,12 +152,12 @@ export function useSampleFiles(sampleID: string | null) {
   };
 
   const exportCDA = async (fileID: string) => {
-    if (!sampleID) {
+    if (!specimenId) {
       throw new Error('ID da amostra não fornecido');
     }
 
     try {
-      const response = await sampleService.exportCDA(sampleID, fileID);
+      const response = await sampleService.exportCDA(specimenId, fileID);
       // CDA retorna como XML (texto)
       const blob = new Blob([response.data], { type: 'application/xml; charset=utf-8' });
       const url = window.URL.createObjectURL(blob);
