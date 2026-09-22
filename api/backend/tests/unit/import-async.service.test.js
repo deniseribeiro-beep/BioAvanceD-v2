@@ -109,25 +109,13 @@ describe('import-async.service', () => {
       expect(service.canonicalizeHeader('Register Date')).toBe('registeredAt');
     });
 
-    // #770: the map carried `idpaciente: 'patientID'` twice -- the same
-    // duplicate-key tell that started this family at #758. Both copies
-    // assigned the same value, so removing one is behaviour-invariant; this
-    // pins the surviving mapping so the dedupe cannot silently drop it.
-    it('still maps idPaciente after the duplicate key was removed', () => {
-      expect(service.canonicalizeHeader('idPaciente')).toBe('participantId');
-      expect(service.canonicalizeHeader('ID Paciente')).toBe('participantId');
-      expect(service.canonicalizeHeader('patientId')).toBe('participantId');
+    it('maps only the canonical participantId header to participantId', () => {
+      expect(service.canonicalizeHeader('participantId')).toBe('participantId');
     });
 
-    // #773: fieldMapping's two patientID-targeting entries (patientid,
-    // idpaciente) were repointed to the canonical name. Two independent
-    // sources settle it: the canonical v2 Participant contract declares
-    // participantId, and the sample API boundary already 422s a payload carrying patientID as
-    // NON_CANONICAL_FIELD. Pinned explicitly here so a future revert to the
-    // legacy name is caught.
-    it('maps patientId aliases to the canonical participantId name (#773)', () => {
-      expect(service.canonicalizeHeader('patientId')).toBe('participantId');
-      expect(service.canonicalizeHeader('idPaciente')).toBe('participantId');
+    it('does not coerce retired participant identifier headers', () => {
+      expect(service.canonicalizeHeader('patientId')).toBe('patientId');
+      expect(service.canonicalizeHeader('idPaciente')).toBe('idPaciente');
     });
 
     it('falls back to trimmed original string when no alias matches', () => {
