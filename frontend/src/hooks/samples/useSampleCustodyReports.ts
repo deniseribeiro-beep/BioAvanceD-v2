@@ -25,29 +25,29 @@ export interface SampleMovementState {
 
 type SampleRecord = SampleCustodyRow;
 
-export function resolveSampleId(sample: SampleRecord): string {
-  return String(sample?.sampleID || sample?.id || sample?._id || '—');
+export function resolveSpecimenId(sample: SampleRecord): string {
+  return String(sample?.specimenId || '—');
 }
 
 export function resolveParticipantId(sample: SampleRecord): string {
-  return String(sample?.participantId || sample?.patient?.id || '—');
+  return String(sample?.participantId || '—');
 }
 
 export function useSampleCustodyReports() {
   const { samples, loading } = useSamples();
-  const [movementBySampleId, setMovementBySampleId] = useState<Record<string, SampleMovementState>>({});
-  // #901: state here is keyed by sampleId, so cross-row writes are already
+  const [movementBySpecimenId, setMovementBySampleId] = useState<Record<string, SampleMovementState>>({});
+  // #901: state here is keyed by specimenId, so cross-row writes are already
   // safe -- but two toggles for the *same* row can still race. Keep one
-  // RequestSequence per sampleId (rather than a single shared sequence)
+  // RequestSequence per specimenId (rather than a single shared sequence)
   // so a same-row race is caught without one row's calls staling another
   // row's in-flight request.
   const sequencesRef = useRef<Map<string, RequestSequence>>(new Map());
 
-  const getSequenceFor = (sampleId: string): RequestSequence => {
-    let seq = sequencesRef.current.get(sampleId);
+  const getSequenceFor = (specimenId: string): RequestSequence => {
+    let seq = sequencesRef.current.get(specimenId);
     if (!seq) {
       seq = createRequestSequence();
-      sequencesRef.current.set(sampleId, seq);
+      sequencesRef.current.set(specimenId, seq);
     }
     return seq;
   };
@@ -55,13 +55,13 @@ export function useSampleCustodyReports() {
   const rows = useMemo<SampleCustodyRow[]>(() => (samples || []) as SampleCustodyRow[], [samples]);
 
   const toggleMovements = async (sample: SampleRecord) => {
-    const sampleId = resolveSampleId(sample);
-    const current = movementBySampleId[sampleId];
+    const specimenId = resolveSpecimenId(sample);
+    const current = movementBySpecimenId[specimenId];
 
     if (current?.isOpen && !current.isLoading) {
       setMovementBySampleId((previous) => ({
         ...previous,
-        [sampleId]: {
+        [specimenId]: {
           ...current,
           isOpen: false,
         },
@@ -71,25 +71,25 @@ export function useSampleCustodyReports() {
 
     setMovementBySampleId((previous) => ({
       ...previous,
-      [sampleId]: {
+      [specimenId]: {
         isOpen: true,
         isLoading: true,
         error: null,
         errorCode: null,
-        items: previous[sampleId]?.items || [],
+        items: previous[specimenId]?.items || [],
       },
     }));
 
-    const seq = getSequenceFor(sampleId);
+    const seq = getSequenceFor(specimenId);
     const stamp = seq.next();
 
     try {
-      const response = await sampleChainApi.getMovements(sampleId);
+      const response = await sampleChainApi.getMovements(specimenId);
       if (!seq.isCurrent(stamp)) return;
       const normalized = normalizeMovementList(response?.data);
       setMovementBySampleId((previous) => ({
         ...previous,
-        [sampleId]: {
+        [specimenId]: {
           isOpen: true,
           isLoading: false,
           error: null,
@@ -102,7 +102,7 @@ export function useSampleCustodyReports() {
       const parsed = parseComplianceError(error);
       setMovementBySampleId((previous) => ({
         ...previous,
-        [sampleId]: {
+        [specimenId]: {
           isOpen: true,
           isLoading: false,
           error: parsed.message,
@@ -116,7 +116,7 @@ export function useSampleCustodyReports() {
   return {
     loading,
     rows,
-    movementBySampleId,
+    movementBySpecimenId,
     toggleMovements,
   };
 }
