@@ -25,9 +25,8 @@ describe('stripScannerPrefix', () => {
     expect(stripScannerPrefix(']d2SMP-001')).toBe('SMP-001');
   });
 
-  it('does not normalize retired QR or Code128 prefixes', () => {
-    expect(stripScannerPrefix(']Q3SMP-001')).toBe(']Q3SMP-001');
-    expect(stripScannerPrefix(']C1SMP-001')).toBe(']C1SMP-001');
+  it('does not normalize unsupported AIM prefixes', () => {
+    expect(stripScannerPrefix(']x1SMP-001')).toBe(']x1SMP-001');
   });
 
   it('returns a plain encoded value unchanged', () => {
@@ -54,9 +53,10 @@ describe('parseScannedBarcode', () => {
     });
   });
 
-  it('rejects retired QR and Code128 scanner inputs', () => {
-    expect(parseScannedBarcode(']Q3SMP-003').isValid).toBe(false);
-    expect(parseScannedBarcode(']C1SMP-003').isValid).toBe(false);
+  it('rejects unsupported AIM scanner identifiers', () => {
+    const result = parseScannedBarcode(']x1SMP-003');
+    expect(result.scannerSymbology).toBe('UNSUPPORTED');
+    expect(result.isValid).toBe(false);
   });
 
   it('rejects empty Data Matrix payloads', () => {
