@@ -394,7 +394,7 @@ describe('NotificationService item 8 residual branches', () => {
     await expect(service.sendCriticalTempAlert('S1', -70, { minTemp: -196, maxTemp: -80 }))
       .resolves.toMatchObject({
         triggered: true,
-        sampleId: 'S1',
+        specimenId: 'S1',
         temp: -70,
         minTemp: -196,
         maxTemp: -80,
