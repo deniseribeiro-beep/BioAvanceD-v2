@@ -45,7 +45,7 @@ describe('sample-file.controller item 8 executable residual branches', () => {
   it('translates the out-of-scope upload error and removes the staged file', async () => {
     const specimenId = new ObjectId().toString();
     const { db } = createDb({
-      sample: { _id: new ObjectId(specimenId), collectionSite: 'org-2' },
+      sample: { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-2' },
     });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
@@ -71,7 +71,7 @@ describe('sample-file.controller item 8 executable residual branches', () => {
   it('translates the out-of-scope list error before reading file metadata', async () => {
     const specimenId = new ObjectId().toString();
     const { db, sampleFiles } = createDb({
-      sample: { _id: new ObjectId(specimenId), collectionSite: 'org-2' },
+      sample: { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-2' },
     });
     const t = vi.fn((key) => `i18n:${key}`);
     const res = createRes();
@@ -96,7 +96,7 @@ describe('sample-file.controller item 8 executable residual branches', () => {
     const specimenId = new ObjectId().toString();
     const fileID = new ObjectId().toString();
     const { db } = createDb({
-      sample: { _id: new ObjectId(specimenId), collectionSite: 'org-2' },
+      sample: { _id: new ObjectId(specimenId), specimenId, collectionSite: 'org-2' },
       fileRecord: {
         _id: new ObjectId(fileID),
         specimenId,
