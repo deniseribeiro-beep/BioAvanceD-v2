@@ -95,7 +95,7 @@ export default function DataDictionaryPage() {
             {t('dictionary.miabis.p1', 'O BioAvanceD-v2 adota MIABIS 2.0 como base de interoperabilidade para descrição de pacientes, espécimes e metadados de qualidade. O modelo operacional é relacional e orientado a rastreabilidade, com cardinalidade de Paciente -> N Amostras.')}
           </p>
           <p>
-            {t('dictionary.miabis.p2', 'Para garantir idempotência no cadastro clínico, o sistema aplica Match Heurístico: busca por patientID ou por combinação de Nome Normalizado + Data de Nascimento. A normalização remove acentuação, padroniza caixa e espaços. Quando há correspondência, os novos dados são vinculados ao paciente existente, evitando duplicação.')}
+            {t('dictionary.miabis.p2', 'Para garantir idempotência no cadastro clínico, o sistema aplica Match Heurístico: busca por participantId ou por combinação de Nome Normalizado + Data de Nascimento. A normalização remove acentuação, padroniza caixa e espaços. Quando há correspondência, os novos dados são vinculados ao paciente existente, evitando duplicação.')}
           </p>
 
           <div className="table-wrap">
@@ -111,7 +111,7 @@ export default function DataDictionaryPage() {
                 <tr>
                   <td>{t('dictionary.miabis.table.patient', 'Paciente')}</td>
                   <td>{t('dictionary.miabis.table.patientRel', '1:N Amostras')}</td>
-                  <td>{t('dictionary.miabis.table.patientRule', 'Identificação idempotente por patientID ou Nome Normalizado + Data de Nascimento')}</td>
+                  <td>{t('dictionary.miabis.table.patientRule', 'Identificação idempotente por participantId ou Nome Normalizado + Data de Nascimento')}</td>
                 </tr>
                 <tr>
                   <td>{t('dictionary.miabis.table.sample', 'Amostra')}</td>
