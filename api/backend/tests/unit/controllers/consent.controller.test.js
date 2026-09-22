@@ -1135,6 +1135,26 @@ describe('ConsentController.validateConsentToken', () => {
       expect.objectContaining({ success: false, error: 'Termo de consentimento indisponível' })
     );
   });
+
+  // #1138: the assertion above is objectContaining, so it passed either way.
+  // This route is unauthenticated, and the body used to carry
+  // templateError.message verbatim -- the last raw internal string reaching an
+  // unauthenticated caller anywhere in this controller.
+  it('does not echo the template error message to the unauthenticated caller', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p1' });
+    vi.spyOn(consentService, 'getActiveTemplate')
+      .mockRejectedValue(new Error('connection <monitor> to 10.0.0.5:27017 closed'));
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.validateConsentToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    const body = res.json.mock.calls[0][0];
+    expect(JSON.stringify(body)).not.toContain('connection <monitor> to 10.0.0.5:27017 closed');
+    expect(body).not.toHaveProperty('message');
+  });
 });
 
 describe('ConsentController.acceptConsentToken', () => {

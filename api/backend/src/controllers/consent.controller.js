@@ -660,10 +660,15 @@ class ConsentController {
         // one would tell the participant their link is bad and send them to
         // request another, which would not help.
         logger.error('Erro ao carregar termo ativo do link de consentimento:', templateError.message);
+        // #1138: no `message` key. This route is unauthenticated, so the
+        // reasoning #823 gave for the 400 and #1127 for the two 503s below
+        // applies here unchanged -- whatever getActiveTemplate threw can name
+        // a host, a replica-set member or a schema path, and the caller is
+        // told a state, not a cause. The detail is in the log line above,
+        // which is where an operator reads it.
         return res.status(503).json({
           success: false,
-          error: 'Termo de consentimento indisponível',
-          message: templateError.message
+          error: 'Termo de consentimento indisponível'
         });
       }
 
