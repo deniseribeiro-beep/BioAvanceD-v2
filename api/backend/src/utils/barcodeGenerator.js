@@ -91,9 +91,9 @@ async function seedYearCounter(db, samplesCollection, year, prefix, sequencePatt
  * deployment.
  *
  * **Lacunas na sequência são aceitáveis, e isso é citação e não escolha.**
- * dict-02 ELM-0116 (`barcodeValue`) exige `Único` e diz "GS1/DataMatrix/
- * Code128 conforme política"; nada em ELM-0116 nem nos critérios do RF004
- * pede contiguidade. Um insert que falhe depois de incrementar queima um
+ * O contrato canônico v2 exige unicidade do valor codificado e adota
+ * Data Matrix para identificação física dos tubos. A sequência interna
+ * não precisa ser contígua; um insert que falhe depois de incrementar queima um
  * número, e a etiqueta seguinte pula — o que o dicionário pede é unicidade,
  * não densidade.
  *
