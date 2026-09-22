@@ -14,7 +14,7 @@ const patientService = require('./patient.service');
 const notificationService = require('./notification.service');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
-const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
+const { omitParticipantIdentityFields } = require('../utils/participantIdentityFields');
 const {
   SPECIMEN_TYPES,
   SAMPLE_ORIGINS,
@@ -753,7 +753,7 @@ class ImportLGPDService {
           patientData.participantId = participantId;
 
           // Valida dados
-          const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
+          const validation = PatientModel.validate(omitParticipantIdentityFields(patientData));
           if (!validation.isValid) {
             // Adiciona número da linha em cada erro para melhor rastreabilidade
             const detailedErrors = validation.errors.map(err => `Linha ${rowNumber}: ${err}`);
@@ -817,7 +817,7 @@ class ImportLGPDService {
           } else { void 0; }
 
           // Cria paciente
-          const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
+          const patient = PatientModel.create(omitParticipantIdentityFields(patientData));
 
           // Insere no banco
           const insertResult = await patientsCollection.insertOne(patient);
@@ -1424,7 +1424,7 @@ class ImportLGPDService {
           sampleData = this.parseSampleRow(row);
 
           if (!sampleData.specimenId) {
-            const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
+            const { generateUniqueSpecimenId } = require('../utils/specimenIdGenerator');
             sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
           } else { void 0; }
 
@@ -2461,7 +2461,7 @@ class ImportLGPDService {
         delete patientData.geneticVariant;
         delete patientData.notes;
 
-        const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
+        const validation = PatientModel.validate(omitParticipantIdentityFields(patientData));
         if (!validation.isValid) {
           results.errors.push({ index: i, row: rowNumber, errors: validation.errors.map((error) => `Linha ${rowNumber}: ${error}`) });
           continue;
@@ -2473,7 +2473,7 @@ class ImportLGPDService {
         patientData.consentTokenCreatedAt = consentMetadata.createdAt;
         patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
-        const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
+        const patient = PatientModel.create(omitParticipantIdentityFields(patientData));
         const insertResult = await patientsCollection.insertOne(patient);
 
         // RF005/RNF007 (#575): patientName/birthDate/identityDocument are
