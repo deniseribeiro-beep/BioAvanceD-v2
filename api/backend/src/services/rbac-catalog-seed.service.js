@@ -43,12 +43,12 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 3,
       roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
     },
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
     },
   ],
 };
@@ -99,6 +99,31 @@ const PERMISSION_CATALOG = {
   editSample: { resourceType: 'Sample', allowedActions: ['UPDATE'], displayName: 'Editar amostra' },
   deleteSample: { resourceType: 'Sample', allowedActions: ['DELETE'], displayName: 'Excluir amostra' },
   createPatient: { resourceType: 'Patient', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Criar paciente' },
+  // #929, closing the last of #888's four createPatient borrowers. The other
+  // three were storage routes and took manageStorageTopology; eConsent.js's
+  // POST /generate-link is a Consent action and had no code to move to, so
+  // #888 left it borrowing a Patient-domain authorization for the act of
+  // inviting a participant to consent. The audit trail recorded every consent
+  // invitation as an exercise of "Criar paciente".
+  //
+  // Same TIER, different code -- Dennis, 2026-09-22, answering the question
+  // #888 left open and #929 carried as its check 2 ('whether any borrower
+  // should be a different tier rather than a differently-named code at the
+  // same tier'). So this is seeded to Coordenador + Administrador, exactly
+  // where createPatient already resolved, and the swap is a no-op for every
+  // real caller. Tecnico and UsuarioExterno could not reach the route before
+  // and still cannot.
+  //
+  // resourceType 'Consent' is dict-02's own entity (ELM-0088..0113), following
+  // the same rule viewEquipment and viewStorageTopology follow: resourceType is
+  // a 1..1 Core field of Permission (P1X-0221), so it is load-bearing and not a
+  // label (#1123).
+  //
+  // CREATE only, deliberately. The route is a POST and METHOD_TO_ACTION
+  // (rbac.js:82) derives CREATE, so a wider set buys nothing today and would
+  // let the code later gate a read or a delete the way viewTemperature was
+  // reused before #1073. Widening it is a catalogue edit, which is the point.
+  requestConsent: { resourceType: 'Consent', allowedActions: ['CREATE'], displayName: 'Solicitar consentimento' },
   // #888: the catalog had no storage-scoped code at all, so storage.routes.js
   // could only be gated by role, and its one requirePermission site borrowed
   // 'createPatient' -- a Patient-domain authorization recorded for a freezer

@@ -712,12 +712,12 @@ describe('eConsent.routes POST /consents/:id/revoke (#684)', () => {
 // full and confirmed against source before use): a factory stub records its
 // own `...args` into a `recordedCalls` array the test then asserts against.
 //
-// #888: POST /generate-link's requirePermission('createPatient') is a
-// Patient-domain permission code gating a Consent-domain route (confirmed
-// against eConsent.js:19). This suite pins that argument exactly as the
-// route declares it today; whether 'createPatient' is the *right* code is
-// #888's question, not this one's -- pinning only makes a future change to
-// it visible in a test.
+// #929: POST /generate-link used to carry requirePermission('createPatient') --
+// a Patient-domain permission code gating a Consent-domain route (confirmed
+// against eConsent.js:73). It now carries 'requestConsent', the Consent-domain
+// code #888 said it needed and #929 added. Seeded to Coordenador +
+// Administrador, the same tier createPatient already resolved to, so the swap
+// is a no-op for every real caller -- which is exactly why it needs pinning.
 //
 // requireOrganizationScope: eConsent.js destructures only
 // `{ requireRole, requirePermission }` from rbac (eConsent.js:7) and never
@@ -827,7 +827,7 @@ describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
     });
   }
 
-  it("pins requirePermission('createPatient') for POST /generate-link (#888: a Patient-domain code on a Consent-domain route)", async () => {
+  it("pins requirePermission('requestConsent') for POST /generate-link (#929: the Consent-domain code that replaced the borrowed createPatient)", async () => {
     const requirePermissionImpl = denyingRequirePermission();
     const router = loadRouterWithGate({ requirePermissionImpl });
     const app = buildApp(router);
@@ -838,6 +838,6 @@ describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.gate).toBe('permission');
-    expect(requirePermissionImpl.recordedCalls).toEqual([['createPatient']]);
+    expect(requirePermissionImpl.recordedCalls).toEqual([['requestConsent']]);
   });
 });

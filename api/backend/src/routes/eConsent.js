@@ -70,7 +70,7 @@ function resolveConsentSecretOr500(res) {
 }
 
 // Gera link seguro para o paciente
-router.post('/generate-link', authenticate, requirePermission('createPatient'), async (req, res) => {
+router.post('/generate-link', authenticate, requirePermission('requestConsent'), async (req, res) => {
   const { participantId, email } = req.body;
   if (!participantId || !email) return res.status(400).json({ error: 'participantId e email obrigatórios' });
 

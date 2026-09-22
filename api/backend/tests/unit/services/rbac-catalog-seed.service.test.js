@@ -270,6 +270,18 @@ describe('rbac-catalog-seed.service', () => {
       // routes at it. Pinned now, in the table that claims to be the audit.
       ['manageStorageAllocation', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
       ['manageStorageTopology', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
+      // #929: the read-only pair added by #1087 and #1146 after this table
+      // was last extended. Neither was backfilled here, which is the same
+      // drift the comment above describes -- a code can be introduced, or
+      // later widened, with nothing in the audit table objecting.
+      ['viewEquipment', ['READ']],
+      ['viewStorageTopology', ['READ']],
+      // #929: the Consent-domain code that replaced the borrowed
+      // 'createPatient' on POST /generate-link. CREATE only: the route is a
+      // POST and METHOD_TO_ACTION derives CREATE, so a wider set would buy
+      // nothing and would let the code later gate a read or a delete the way
+      // 'viewTemperature' did before #1073.
+      ['requestConsent', ['CREATE']],
     ])('%s allows exactly %j', (permissionCode, expectedActions) => {
       expect(PERMISSION_CATALOG[permissionCode].allowedActions).toEqual(expectedActions);
     });
