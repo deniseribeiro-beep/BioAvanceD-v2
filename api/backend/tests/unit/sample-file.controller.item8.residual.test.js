@@ -89,8 +89,8 @@ describe('sample-file.controller item 8 residual branches', () => {
     expect(successNext).toHaveBeenCalledTimes(1);
   });
 
-  it('uploadFile resolves a legacy numeric specimenId through the fallback lookup', async () => {
-    const sample = { _id: new ObjectId(), collectionSite: 'org-1' };
+  it('uploadFile resolves a canonical non-ObjectId specimenId', async () => {
+    const sample = { _id: new ObjectId(), specimenId: '42', collectionSite: 'org-1' };
     const sampleLookup = vi.fn().mockResolvedValue(sample);
     const db = createDb({ samples: { findOne: sampleLookup } });
     const req = {
@@ -103,7 +103,7 @@ describe('sample-file.controller item 8 residual branches', () => {
 
     await controller.uploadFile(req, res);
 
-    expect(sampleLookup).toHaveBeenCalledWith({ specimenId: 42 });
+    expect(sampleLookup).toHaveBeenCalledWith({ specimenId: '42' });
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       error: 'Tipo de arquivo inválido',
@@ -128,13 +128,13 @@ describe('sample-file.controller item 8 residual branches', () => {
     expect(unlink).not.toHaveBeenCalled();
   });
 
-  it('listFiles resolves a legacy numeric specimenId and sanitizes an unencrypted record', async () => {
+  it('listFiles resolves a canonical non-ObjectId specimenId and sanitizes an unencrypted record', async () => {
     const sample = { _id: new ObjectId(), collectionSite: 'org-1' };
     const sampleLookup = vi.fn().mockResolvedValue(sample);
     const find = vi.fn().mockReturnValue({
       toArray: vi.fn().mockResolvedValue([{
         _id: new ObjectId(),
-        specimenId: sample._id.toString(),
+        specimenId: sample.specimenId,
         fileName: 'legacy.csv',
         fileType: 'CSV',
         fileRole: 'raw',
@@ -161,7 +161,7 @@ describe('sample-file.controller item 8 residual branches', () => {
     }, res);
 
     expect(sampleLookup).toHaveBeenCalledWith({ specimenId: 42 });
-    expect(find).toHaveBeenCalledWith({ specimenId: sample._id.toString() });
+    expect(find).toHaveBeenCalledWith({ specimenId: sample.specimenId });
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       data: [expect.objectContaining({
