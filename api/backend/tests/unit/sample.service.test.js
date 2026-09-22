@@ -970,30 +970,20 @@ describe('sample.service', () => {
       expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
     });
 
-    // Regression per issue #252: withdrawSample's barcode-fallback lookup
-    // used to call a method that doesn't exist on the class
-    // (`getSpecimenByBarcode` instead of `getSampleByBarcode`), so a
-    // barcode-style specimenId that isn't found by the direct lookup threw
-    // a TypeError instead of falling back cleanly to the barcode lookup.
-    it('falls back to the barcode lookup instead of throwing, per issue #252', async () => {
+    it('does not treat a Data Matrix value as an alternate specimenId for withdrawal', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(null);
-      vi
-        .spyOn(sampleService, 'getSampleByBarcode')
-        .mockResolvedValue({ sample: null });
+      const physicalLookup = vi.spyOn(sampleService, 'getSampleByBarcode');
 
       await expect(
-        sampleService.withdrawSample(db, 'BR-NOT-AN-OBJECTID', {
+        sampleService.withdrawSample(db, 'DM-NOT-A-SPECIMEN-ID', {
           withdrawalType: 'Total',
           withdrawalResponsible: 'Jane Doe',
           linkedProject: 'ProjectX'
         })
       ).rejects.toThrow(/Amostra não encontrada/);
 
-      expect(sampleService.getSampleByBarcode).toHaveBeenCalledWith(
-        db,
-        'BR-NOT-AN-OBJECTID'
-      );
+      expect(physicalLookup).not.toHaveBeenCalled();
     });
 
     // RF006 AC#6 (#297): the ledger append and the balance update must be
@@ -1654,19 +1644,18 @@ describe('sample.service', () => {
       ).rejects.toThrow(/Observações são obrigatórias quando a condição não é Íntegra/);
     });
 
-    it('falls back to a barcode lookup when the direct specimenId lookup misses', async () => {
+    it('does not treat a Data Matrix value as an alternate specimenId for return', async () => {
       const db = makeDb();
-      db.collections.samples.findOne
-        .mockResolvedValueOnce(null) // direct specimenId lookup misses
-        .mockResolvedValueOnce(withdrawnSample()); // barcode-lookup exact match
+      db.collections.samples.findOne.mockResolvedValue(null);
+      const physicalLookup = vi.spyOn(sampleService, 'getSampleByBarcode');
 
-      const result = await sampleService.returnSample(db, 'BR-NOT-AN-OBJECTID', {
+      await expect(sampleService.returnSample(db, 'DM-NOT-A-SPECIMEN-ID', {
         returnResponsible: 'Jane Doe',
         condition: 'intact',
         returnType: 'Total'
-      });
+      })).rejects.toThrow(/Amostra não encontrada/);
 
-      expect(result.success).toBe(true);
+      expect(physicalLookup).not.toHaveBeenCalled();
     });
 
     // RF006 AC#6 (#297): same requirement as withdrawSample — ledger append
@@ -1711,7 +1700,7 @@ describe('sample.service', () => {
 
   // -------------------------------------------------------------------
   describe('getSampleMovements', () => {
-    it('queries movements by specimenId/barcode and sorts by newest first', async () => {
+    it('queries movements by canonical specimenId and sorts by newest first', async () => {
       const db = makeDb();
       const cursor = makeCursor([{ movementID: 2 }, { movementID: 1 }]);
       db.collections.sample_movements.find.mockReturnValue(cursor);
@@ -1719,7 +1708,7 @@ describe('sample.service', () => {
       const movements = await sampleService.getSampleMovements(db, 'sample-1');
 
       expect(db.collections.sample_movements.find).toHaveBeenCalledWith({
-        $or: [{ specimenId: 'sample-1' }, { barcode: 'sample-1' }]
+        specimenId: 'sample-1'
       });
       expect(cursor.sort).toHaveBeenCalledWith({ timestamp: -1 });
       expect(movements).toEqual([{ movementID: 2 }, { movementID: 1 }]);
@@ -1734,7 +1723,7 @@ describe('sample.service', () => {
       await sampleService.getSampleMovements(db, objectIdLike);
 
       expect(db.collections.sample_movements.find).toHaveBeenCalledWith({
-        $or: [{ specimenId: 'sample-1' }, { barcode: 'sample-1' }]
+        specimenId: 'sample-1'
       });
     });
 
