@@ -65,7 +65,7 @@ describe('GET /api/compliance/verify-biomarker/:id', () => {
     const biomarkerIntegrityId = '507f1f77bcf86cd799439011';
     vi.spyOn(biomarkerIntegrityService, 'verifyBiomarkerById').mockResolvedValue({
       biomarkerIntegrityId,
-      patientId: '12345678',
+      participantId: '12345678',
       biomarkerType: 'alphaGal',
       integrityHash: 'abc123',
       merkleRoot: 'root123',
