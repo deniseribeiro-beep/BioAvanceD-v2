@@ -90,9 +90,6 @@ describe('BiomarkerObservationModel simple branch coverage for item 8', () => {
     expect(explicit.isValid).toBe(true);
     expect(explicit.normalized).toEqual(expect.objectContaining({
       specimenId: 'SAMPLE-A',
-      specimenId: 'SAMPLE-A',
-      specimenId: 'SAMPLE-A',
-      specimenId: 'SAMPLE-A',
       resourceType: 'DiagnosticReport',
       subject: { reference: 'Patient/P1' },
       specimen: { reference: 'Specimen/custom' },
