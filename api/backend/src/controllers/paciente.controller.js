@@ -2,7 +2,7 @@ const patientService = require('../services/patient.service');
 const biomarkerObservationService = require('../services/biomarker-observation.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
-const { revalidateSamplesByPatientID } = require('../services/sampleComplianceSync.service');
+const { revalidateSamplesByParticipantId } = require('../services/sampleComplianceSync.service');
 const { getCollection } = require('../utils/collectionResolver');
 const PatientModel = require('../models/Patient');
 const { LEGACY_PATIENT_IDENTITY_FIELDS } = require('../utils/legacyPatientIdentityFields');
@@ -525,7 +525,7 @@ class PacienteController {
       }
 
       const result = await patientService.resendConsentNotification(db, participantId);
-      await revalidateSamplesByPatientID(db, participantId);
+      await revalidateSamplesByParticipantId(db, participantId);
 
       return res.status(200).json({
         success: true,
@@ -583,7 +583,7 @@ class PacienteController {
       const result = await patientService.updatePatient(db, id, updatePayload, {
         neo4jDriver: req.app.locals.neo4jDriver || null
       });
-      await revalidateSamplesByPatientID(db, id);
+      await revalidateSamplesByParticipantId(db, id);
 
       // Registra log (sanitizado)
       if (req.user) {
