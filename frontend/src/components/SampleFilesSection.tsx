@@ -12,13 +12,13 @@ import './SampleFilesSection.css';
 // Botão Exportar removido conforme solicitado
 
 interface SampleFilesSectionProps {
-  sampleID: string;
+  specimenId: string;
 }
 
-export default function SampleFilesSection({ sampleID }: SampleFilesSectionProps) {
+export default function SampleFilesSection({ specimenId }: SampleFilesSectionProps) {
   const { t } = useLanguage();
   const { user } = useAuth();
-  const { files, loading, error, loadFiles, uploadFile, downloadFile, deleteFile } = useSampleFiles(sampleID);
+  const { files, loading, error, loadFiles, uploadFile, downloadFile, deleteFile } = useSampleFiles(specimenId);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -29,12 +29,12 @@ export default function SampleFilesSection({ sampleID }: SampleFilesSectionProps
   const canUploadDelete = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || 
                           user?.accessType === 4 || user?.accessType === 3;
 
-  // Carrega arquivos ao montar e quando sampleID mudar
+  // Carrega arquivos ao montar e quando specimenId mudar
   useEffect(() => {
-    if (sampleID) {
+    if (specimenId) {
       loadFiles();
     }
-  }, [sampleID]);
+  }, [specimenId]);
 
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
