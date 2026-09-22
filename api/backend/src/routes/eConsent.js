@@ -328,7 +328,7 @@ router.get('/consent-policies/active-with-caae', authenticate, consentController
 router.get('/consent-policies/history', authenticate, requireRole(3, 4), consentController.getPoliciesHistory.bind(consentController));
 router.get('/consent-policies', authenticate, requireRole(3, 4), consentController.getAllPolicies.bind(consentController));
 
-router.post('/consents', authenticate, consentController.createPatientConsent.bind(consentController));
+router.post('/consents', authenticate, requireRole(3, 4), consentController.createPatientConsent.bind(consentController));
 // #684: was authenticate-only, while every neighbouring consent-policy
 // route gates on requireRole(3, 4) -- so any authenticated user of any
 // role could revoke any patient's consent by guessing a Mongo _id.
