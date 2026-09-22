@@ -1,5 +1,5 @@
 import React from 'react';
-import { SampleCustodyRow, SampleMovementState, resolveParticipantId, resolveSampleId } from '@/hooks/samples/useSampleCustodyReports';
+import { SampleCustodyRow, SampleMovementState, resolveParticipantId, resolveSpecimenId } from '@/hooks/samples/useSampleCustodyReports';
 import Button from '../UI/Button';
 import Card from '../UI/Card';
 import { mapMovementTypeLabel, TranslatorFn } from './movementTypeLabel';
@@ -8,7 +8,7 @@ interface SampleCustodyReportsViewProps {
   t: TranslatorFn;
   loading: boolean;
   rows: SampleCustodyRow[];
-  movementBySampleId: Record<string, SampleMovementState>;
+  movementBySpecimenId: Record<string, SampleMovementState>;
   onToggleMovements: (sample: SampleCustodyRow) => Promise<void>;
 }
 
@@ -16,7 +16,7 @@ export default function SampleCustodyReportsView({
   t,
   loading,
   rows,
-  movementBySampleId,
+  movementBySpecimenId,
   onToggleMovements,
 }: SampleCustodyReportsViewProps) {
   const headers = [
@@ -52,8 +52,8 @@ export default function SampleCustodyReportsView({
 
               <tbody>
                 {rows.map((sample) => {
-                  const rowId = resolveSampleId(sample);
-                  const movementState = movementBySampleId[rowId];
+                  const rowId = resolveSpecimenId(sample);
+                  const movementState = movementBySpecimenId[rowId];
 
                   return (
                     <React.Fragment key={rowId}>
