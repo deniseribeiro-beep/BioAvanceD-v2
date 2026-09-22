@@ -362,7 +362,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
       message: 'created',
       qualidade: 'A',
       qualityAssessment: { score: 90 },
-      patientMatch: { patientID: '123' },
+      patientMatch: { participantId: '123' },
       storageLocation: { boxId: 'box-1' },
       label: { text: 'label-1' },
       sample: {
@@ -383,7 +383,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.final_grade).toBe('B');
     expect(res.body.message).toBe('created');
     expect(res.body.qualityAssessment).toEqual({ score: 90 });
-    expect(res.body.patientMatch).toEqual({ patientID: '123' });
+    expect(res.body.patientMatch).toEqual({ participantId: '123' });
     expect(res.body.label).toEqual({ text: 'label-1' });
   });
 });
