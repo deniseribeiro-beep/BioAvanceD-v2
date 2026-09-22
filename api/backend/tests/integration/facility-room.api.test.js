@@ -57,6 +57,28 @@ describe('GET /api/facilities', () => {
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
   });
+
+  // #1163 / #941: the list handler must ENSURE the index its sort depends
+  // on. facilities_name_idx_v1 is declared on Facility.js and, like every
+  // Schema.index() in this repo, never built -- the connection uses
+  // autoIndex:false. Without this the wiring line can be deleted and the
+  // suite stays green (#1126's shape), which is how the helper ends up
+  // written, tested and never called.
+  it('#1163: ensures facilities_name_idx_v1 on the read path', async () => {
+    const coll = createCollectionMock({
+      collectionName: 'facilities_wiring_probe',
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+    });
+    app.locals.db = dbWithRbac({ facilities: coll }, 2);
+
+    await request(app).get('/api/facilities').set('Authorization', `Bearer ${makeToken(2)}`);
+
+    const call = coll.createIndex.mock.calls.find(
+      ([k]) => Object.keys(k).length === 1 && k.name === 1
+    );
+    expect(call).toBeDefined();
+    expect(call[1].name).toBe('facilities_name_idx_v1');
+  });
 });
 
 describe('GET /api/facilities/:id', () => {
@@ -199,6 +221,28 @@ describe('POST /api/rooms', () => {
 });
 
 describe('GET /api/rooms?facilityId=', () => {
+  // #1163 / #941: as above. The { facilityId, name } key ORDER is what lets
+  // one index serve the facilityId filter and the name sort in a single
+  // pass, so the order is asserted rather than just the membership.
+  it('#1163: ensures rooms_facility_name_idx_v1 on the read path', async () => {
+    const coll = createCollectionMock({
+      collectionName: 'rooms_wiring_probe',
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+    });
+    app.locals.db = dbWithRbac({ rooms: coll }, 2);
+
+    await request(app)
+      .get(`/api/rooms?facilityId=${FACILITY_ID}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    const call = coll.createIndex.mock.calls.find(
+      ([k]) => k.facilityId === 1 && k.name === 1
+    );
+    expect(call).toBeDefined();
+    expect(call[1].name).toBe('rooms_facility_name_idx_v1');
+    expect(Object.keys(call[0])).toEqual(['facilityId', 'name']);
+  });
+
   it('filters rooms by facilityId', async () => {
     const find = vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([FAKE_ROOM]) }) });
     const roomsColl = createCollectionMock({ find });

@@ -250,6 +250,31 @@ describe('location-storage-backfill.service', () => {
     ensureSpy.mockRestore();
   });
 
+  // #1163: the same assertion for the storageBoxes helper, which #941's
+  // lookup-index work added beside the one above and which was unpinned --
+  // deleting its wiring line left the whole suite green, which is exactly
+  // the recurrence #1126 was closed to prevent.
+  it('#1163: ensures the storageBoxes indexes on the write path', async () => {
+    const ensureSpy = vi
+      .spyOn(storageIndexes, 'ensureStorageBoxIndexes')
+      .mockImplementation(() => {});
+    const { backfillLocationsToStorage: freshBackfill } = reloadBackfillService();
+
+    const db = createFakeDb({
+      locations: [
+        { locationID: 702, equipmentID: 5, block: 1, rack: 2, drawer: null, box: 3, wellPosition: 'A1' },
+      ],
+      samples: [],
+    });
+
+    await freshBackfill(db);
+
+    expect(ensureSpy).toHaveBeenCalledTimes(1);
+    expect(ensureSpy.mock.calls[0][0]).toBe(db.collections.storageBoxes);
+
+    ensureSpy.mockRestore();
+  });
+
   it('#1070: is wired as an npm script pointing at its CLI wrapper (#933: unwired scripts never effectively run)', () => {
     const pkg = require('../../../package.json');
 
