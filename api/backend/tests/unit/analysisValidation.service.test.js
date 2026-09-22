@@ -35,7 +35,7 @@ function createDb({ samples = {}, patients = {} } = {}) {
 describe('analysisValidationService.validateSampleExists', () => {
   it('finds a sample by ObjectId when the identifier is a valid ObjectId string', async () => {
     const oid = new ObjectId();
-    const sampleDoc = { _id: oid, sampleID: '00001' };
+    const sampleDoc = { _id: oid, specimenId: 'SPEC-OBJECT-ID' };
     const findOne = vi.fn()
       .mockResolvedValueOnce(sampleDoc) // _id hit
       .mockResolvedValueOnce(null); // collision check: no other sample matches
@@ -49,7 +49,7 @@ describe('analysisValidationService.validateSampleExists', () => {
   });
 
   it('falls back to specimenId lookup when identifier is not a valid ObjectId', async () => {
-    const sampleDoc = { _id: new ObjectId(), sampleID: '00001' };
+    const sampleDoc = { _id: new ObjectId(), specimenId: '00001' };
     const findOne = vi.fn().mockResolvedValue(sampleDoc);
     const db = createDb({ samples: { findOne } });
 
@@ -92,13 +92,13 @@ describe('analysisValidationService.validateSampleExists', () => {
     expect(findOne).toHaveBeenCalledTimes(3);
   });
 
-  it('fails closed instead of silently trusting the ObjectId match when the same identifier also matches a different sample by sampleID/barcode (issue #34)', async () => {
+  it('fails closed instead of silently trusting the ObjectId match when the same identifier also matches a different sample by specimenId/Data Matrix (issue #34)', async () => {
     const oid = new ObjectId();
-    const idMatch = { _id: oid, sampleID: 'S-BY-ID' };
+    const idMatch = { _id: oid, specimenId: 'S-BY-ID' };
     const otherSample = { _id: new ObjectId(), barcode: oid.toString() };
     const findOne = vi.fn()
       .mockResolvedValueOnce(idMatch) // _id hit
-      .mockResolvedValueOnce(otherSample); // collision check: a different sample matches by barcode/sampleID
+      .mockResolvedValueOnce(otherSample); // collision check: a different sample matches by Data Matrix/specimenId
 
     const db = createDb({ samples: { findOne } });
 
@@ -114,7 +114,7 @@ describe('analysisValidationService.validateSampleExists', () => {
   // SampleModel.create actually writes) went undetected.
   it('includes a specimenId leg in the collision-check $or filter (issue #857)', async () => {
     const oid = new ObjectId();
-    const idMatch = { _id: oid, sampleID: 'S-BY-ID' };
+    const idMatch = { _id: oid, specimenId: 'S-BY-ID' };
     const findOne = vi.fn()
       .mockResolvedValueOnce(idMatch) // _id hit
       .mockResolvedValueOnce(null); // collision check: no other sample matches
@@ -134,7 +134,7 @@ describe('analysisValidationService.validateSampleExists', () => {
     const result = await analysisValidationService.validateSampleExists(db, 'nope');
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Amostra "nope" não encontrada. Verifique o ID ou código de barras.');
+    expect(result.error).toBe('Amostra "nope" não encontrada. Verifique o specimenId ou o Data Matrix.');
   });
 
   it('returns a generic DB-error failure (distinct from not-found) when the collection throws', async () => {
@@ -260,6 +260,22 @@ describe('analysisValidationService.validatePatientConsent', () => {
 });
 
 describe('analysisValidationService.validateUploadEligibility', () => {
+  it('blocks a resolved sample that lacks canonical specimenId before consent lookup', async () => {
+    const legacySample = { _id: new ObjectId(), barcode: 'BR-LEGACY', participantId: 'P1' };
+    const findOne = vi.fn().mockResolvedValue(legacySample);
+    const patientsFindOne = vi.fn();
+    const db = createDb({ samples: { findOne }, patients: { findOne: patientsFindOne } });
+
+    const result = await analysisValidationService.validateUploadEligibility(db, 'BR-LEGACY');
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Amostra sem specimenId canônico; upload de análise bloqueado'
+    });
+    expect(patientsFindOne).not.toHaveBeenCalled();
+  });
+
+
   it('short-circuits and returns the sample-validation failure as-is when the sample is not found', async () => {
     const db = createDb({
       samples: { findOne: vi.fn().mockResolvedValue(null) },
