@@ -136,7 +136,7 @@ class TemperatureService {
         });
 
         void notificationServiceV2.sendCriticalTempAlert(
-          temperature.sampleId || temperature.sampleID || 'N/A',
+          temperature.specimenId || 'N/A',
           temperature.temperatureValue
         ).catch((error) => {
           logger.error('[NOTIFICATION] Falha ao disparar alerta crítico:', error.message || error);
