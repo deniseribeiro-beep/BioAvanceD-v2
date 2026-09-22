@@ -169,6 +169,81 @@ describe('sensor.service (non-quarantine paths)', () => {
       expect(result.metadataLinked).toBe(true);
     });
 
+    // #1140: SensorMetadata.temperaturePolicy had no writer anywhere in
+    // src/ -- linkSensorMetadata pinned it null in $setOnInsert and nothing
+    // ever set it, so the only real values in the tracked tree came from the
+    // e2e fixture helper. Two live consumers read it and both degrade
+    // silently: TelemetryMonitor's per-sensor minimumDuration (#688) falls
+    // back to the global threshold for every sensor, and
+    // iot.controller#resolveTemperaturePolicy gates its whole threshold
+    // check on the populated value, so machine ingest compared nothing.
+    //
+    // Direction 1: bind at registration, exactly as #311 did for the sibling
+    // storageContainer field in be435d6c. Same function, same conditional
+    // $set, same ObjectId coercion.
+    it('#1140: binds temperaturePolicy from the request when provided', async () => {
+      const { db } = makeDb();
+      const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
+      const sensorMetadataCollection = { updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }) };
+      db.collection = vi.fn((name) => (name === 'sensorMetadata' ? sensorMetadataCollection : sensorsCollection));
+
+      const temperaturePolicyId = '507f1f77bcf86cd799439088';
+      const result = await sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        macAddress: 'AA:BB:CC:00:00:01',
+        temperaturePolicy: temperaturePolicyId
+      });
+
+      expect(sensorMetadataCollection.updateOne).toHaveBeenCalledTimes(1);
+      const [, update] = sensorMetadataCollection.updateOne.mock.calls[0];
+      expect(update.$set.temperaturePolicy.toString()).toBe(temperaturePolicyId);
+      expect(result.metadataLinked).toBe(true);
+    });
+
+    // This one is not cosmetic and the mock cannot catch it on its own:
+    // MongoDB REJECTS an update naming the same field in both $set and
+    // $setOnInsert. temperaturePolicy is already in $setOnInsert, unlike
+    // storageContainer, so the sibling pattern is not safe to copy verbatim
+    // -- the null default has to drop out whenever a value is supplied.
+    it('#1140: drops the $setOnInsert null when temperaturePolicy is supplied', async () => {
+      const { db } = makeDb();
+      const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
+      const sensorMetadataCollection = { updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }) };
+      db.collection = vi.fn((name) => (name === 'sensorMetadata' ? sensorMetadataCollection : sensorsCollection));
+
+      await sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        macAddress: 'AA:BB:CC:00:00:01',
+        temperaturePolicy: '507f1f77bcf86cd799439088'
+      });
+
+      const [, update] = sensorMetadataCollection.updateOne.mock.calls[0];
+      expect(update.$set).toHaveProperty('temperaturePolicy');
+      expect(update.$setOnInsert).not.toHaveProperty('temperaturePolicy');
+    });
+
+    // CONTROL: green before and after. The null default must still be there
+    // for a sensor registered without a policy, or an existing binding would
+    // be the only thing distinguishing the two paths.
+    it('CONTROL: keeps the $setOnInsert null when no temperaturePolicy is supplied', async () => {
+      const { db } = makeDb();
+      const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
+      const sensorMetadataCollection = { updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }) };
+      db.collection = vi.fn((name) => (name === 'sensorMetadata' ? sensorMetadataCollection : sensorsCollection));
+
+      await sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        macAddress: 'AA:BB:CC:00:00:01'
+      });
+
+      const [, update] = sensorMetadataCollection.updateOne.mock.calls[0];
+      expect(update.$setOnInsert).toHaveProperty('temperaturePolicy', null);
+      expect(update.$set).not.toHaveProperty('temperaturePolicy');
+    });
+
     it('does not throw when the sensorMetadata upsert fails, but surfaces metadataLinked: false (#313)', async () => {
       const { db } = makeDb();
       const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };

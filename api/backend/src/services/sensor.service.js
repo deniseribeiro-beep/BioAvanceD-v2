@@ -54,7 +54,7 @@ class SensorService {
 
       let metadataLinked;
       if (sensor.macAddress) {
-        metadataLinked = await this.linkSensorMetadata(db, sensor.sensorId, sensor.macAddress, sensorData.storageContainer);
+        metadataLinked = await this.linkSensorMetadata(db, sensor.sensorId, sensor.macAddress, sensorData.storageContainer, sensorData.temperaturePolicy);
       }
 
       return {
@@ -71,7 +71,9 @@ class SensorService {
   /**
    * Vincula (upsert) o SensorMetadata correspondente ao Sensor recém-criado,
    * incluindo o StorageContainer (RF009 AC#3 - vincular cada leitura ao
-   * local de armazenamento). Sem macAddress não há SensorMetadata a criar
+   * local de armazenamento) e, desde #1140, a TemperaturePolicy que define
+   * os limites contra os quais as leituras do sensor são avaliadas.
+   * Sem macAddress não há SensorMetadata a criar
    * (campo obrigatório/único no schema), então o sensor básico segue criado
    * normalmente.
    *
@@ -79,7 +81,7 @@ class SensorService {
    * a falha (ex.: macAddress duplicado) sem reverter a criação do Sensor,
    * que já foi concluída neste ponto (#313).
    */
-  async linkSensorMetadata(db, sensorId, macAddress, storageContainerId) {
+  async linkSensorMetadata(db, sensorId, macAddress, storageContainerId, temperaturePolicyId) {
     try {
       const sensorMetadataCollection = db.collection('sensorMetadata');
       ensureSensorMetadataIndexes(sensorMetadataCollection);
@@ -90,11 +92,38 @@ class SensorService {
           : storageContainerId;
       }
 
+      // #1140: this field had no writer anywhere in src/ -- it was pinned
+      // null below and nothing ever set it, so the only real values in the
+      // tracked tree came from the e2e fixture helper. Both live consumers
+      // degraded silently: TelemetryMonitor's per-sensor minimumDuration
+      // (#688) fell back to the global threshold for every sensor, and
+      // iot.controller#resolveTemperaturePolicy gates its entire threshold
+      // comparison on the populated value, so machine ingest checked nothing.
+      //
+      // Bound at registration, the same shape and the same place be435d6c
+      // (#311) used for storageContainer above, on Dennis's call there.
+      if (temperaturePolicyId) {
+        set.temperaturePolicy = ObjectId.isValid(temperaturePolicyId)
+          ? new ObjectId(temperaturePolicyId)
+          : temperaturePolicyId;
+      }
+
+      // #1140: unlike storageContainer, this field ALSO has a null default
+      // below, and MongoDB rejects an update naming the same field in both
+      // $set and $setOnInsert (ConflictingUpdateOperators). So the default
+      // has to drop out exactly when a value is supplied -- copying the
+      // storageContainer pattern verbatim would have thrown on a real
+      // connection while passing against a mock.
+      const setOnInsert = { equipment: null, device: null, createdAt: new Date() };
+      if (!set.temperaturePolicy) {
+        setOnInsert.temperaturePolicy = null;
+      }
+
       await sensorMetadataCollection.updateOne(
         { sensorId },
         {
           $set: set,
-          $setOnInsert: { equipment: null, device: null, temperaturePolicy: null, createdAt: new Date() }
+          $setOnInsert: setOnInsert
         },
         { upsert: true }
       );
