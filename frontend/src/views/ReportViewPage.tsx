@@ -245,8 +245,8 @@ export default function ReportViewPage() {
                     </thead>
                     <tbody>
                       {reportData.patients.slice(0, 50).map((p: any) => (
-                        <tr key={p.patientID}>
-                          <td>{p.patientID}</td>
+                        <tr key={p.participantId}>
+                          <td>{p.participantId}</td>
                           <td>{getPatientDisplayName(p, user)}</td>
                           <td>N/A</td>
                           <td>N/A</td>
@@ -276,11 +276,11 @@ export default function ReportViewPage() {
                     </thead>
                     <tbody>
                       {reportData.samples.slice(0, 50).map((s: any) => (
-                        <tr key={s.sampleID}>
-                          <td>{s.sampleID}</td>
+                        <tr key={s.specimenId}>
+                          <td>{s.specimenId}</td>
                           <td>{s.sampleType}</td>
                           <td>{translateSpecimenStatus(resolveSpecimenStatus(s))}</td>
-                          <td>{formatDate(s.registrationDate)}</td>
+                          <td>{formatDate(s.registeredAt)}</td>
                         </tr>
                       ))}
                     </tbody>
