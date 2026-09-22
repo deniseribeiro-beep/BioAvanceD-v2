@@ -371,7 +371,7 @@ describe('ImportService.importSamples item 8 non-Error dependency failures', () 
       [
         'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
         '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01,fluid,BLD,PED,C,A,D,E,F',
-      ].join('\\n')
+      ].join('\n')
     );
 
     const collection = makeSamplesCollection();
