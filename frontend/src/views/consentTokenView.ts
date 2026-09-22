@@ -92,8 +92,13 @@ export function mapConsentTokenError(status?: number): string {
     return 'Link inválido ou expirado. Solicite um novo convite à equipe do biobanco.';
   }
   if (status === 503) {
-    // The token was accepted; the term itself could not be loaded.
-    return 'O termo de consentimento está indisponível no momento. Tente novamente em alguns minutos.';
+    // Something on our side failed, not the link: the term could not be loaded,
+    // the token check could not run, or the acceptance could not be written
+    // (#1127). The one thing all three have in common is that requesting a new
+    // invitation would not help, so the copy must not suggest it -- it says the
+    // link is still good and asks for a retry instead. It also does not claim
+    // the acceptance was recorded, because on the accept route it was not.
+    return 'O serviço de consentimento está temporariamente indisponível. Seu link continua válido -- tente novamente em alguns minutos.';
   }
   return 'Não foi possível carregar seu termo de consentimento. Tente novamente em alguns minutos.';
 }

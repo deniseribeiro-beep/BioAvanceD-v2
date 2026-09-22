@@ -693,6 +693,18 @@ class ConsentController {
       // detail stays in the log line above. Deliberately no `message` key --
       // the frontend maps this by status alone (mapConsentTokenError).
       logger.error('Erro ao validar token de consentimento:', error.message);
+      // #1127: and the split above has a second half. The four throws are the
+      // participant's request being wrong; a driver error inside the token
+      // check is not, and reporting it as one tells them their link is bad and
+      // sends them to request another that would not help. Same decision the
+      // template arm makes above, for the same audience. The detail stays in
+      // the log line -- an unauthenticated caller is told a state, not a cause.
+      if (!patientService.isConsentTokenRejection(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'Não foi possível validar o link de consentimento'
+        });
+      }
       return res.status(400).json({
         success: false,
         error: 'Link inválido ou expirado'
@@ -727,6 +739,18 @@ class ConsentController {
       // the validate route; both leak, so both answer identically, which also
       // stops the PAIR of endpoints from distinguishing each other.
       logger.error('Erro ao aceitar consentimento:', error.message);
+      // #1127: worse on this route than on validate. The write recording the
+      // acceptance can fail after a good token has been checked, and a 400
+      // then tells a participant who DID consent that their link was invalid
+      // -- so they believe they failed to consent when the system failed to
+      // record it. 503 is the honest answer and the one that asks them to
+      // retry rather than to get a new link.
+      if (!patientService.isConsentTokenRejection(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'Não foi possível registrar o consentimento'
+        });
+      }
       return res.status(400).json({
         success: false,
         error: 'Link inválido ou expirado'

@@ -37,6 +37,22 @@ function createReq(overrides = {}) {
 
 const NO_DB_REQ = () => createReq({ app: { locals: {} } });
 
+// #1127: the controller now splits its catch on WHO is at fault, and the
+// service marks the refusals it raises against the caller's own request so the
+// controller can tell. A bare Error is an infrastructure failure under that
+// contract, so a test that wants the 400 arm must reject with a MARKED error.
+//
+// This builds one by calling the real service with no arguments, rather than
+// re-declaring the marker literal here: a fixture that hand-stamps the code
+// would keep passing if the service stopped stamping it, which is exactly the
+// drift that would put a token refusal back on the 503 arm unnoticed. If the
+// argument guard ever stops being the first thing validateConsentToken does,
+// this returns an unmarked error and the tests below go red rather than
+// quietly asserting nothing.
+async function realConsentTokenRefusal() {
+  return patientService.validateConsentToken(null, '', '').catch((error) => error);
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -1066,8 +1082,12 @@ describe('ConsentController.validateConsentToken', () => {
   // 'expired'` -- i.e. it pinned the raw service message being echoed to an
   // unauthenticated caller, which is the enumeration oracle itself. The
   // response must now carry no service detail at all.
-  it('returns 400 with an opaque error when the service throws', async () => {
-    vi.spyOn(patientService, 'validateConsentToken').mockRejectedValue(new Error('expired'));
+  it('returns 400 with an opaque error when the service REFUSES the token', async () => {
+    // #1127: was a bare Error. That now means an outage, not a bad token.
+    const refusal = await realConsentTokenRefusal();
+    expect(patientService.isConsentTokenRejection(refusal)).toBe(true);
+
+    vi.spyOn(patientService, 'validateConsentToken').mockRejectedValue(refusal);
     const req = createReq({ body: { patientId: 'p1', token: 'bad' } });
     const res = createRes();
 
@@ -1078,6 +1098,24 @@ describe('ConsentController.validateConsentToken', () => {
       success: false,
       error: 'Link inválido ou expirado',
     });
+  });
+
+  // #1127: the other half of that split. An unmarked error is our failure, not
+  // the participant's -- their link is fine, so answering 400 sends them to
+  // request a new invitation that cannot help. Same decision the template arm
+  // below already makes, now applied to the token check itself.
+  it('returns 503, not 400, when the token check fails for an infrastructure reason', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockRejectedValue(new Error('connection <monitor> closed'));
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.validateConsentToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    const body = JSON.stringify(res.json.mock.calls[0][0]);
+    expect(body).not.toContain('Link inválido ou expirado');
+    expect(body).not.toContain('connection <monitor> closed');
   });
 
   // A template-lookup failure must not be reported as an invalid token: the
@@ -1127,8 +1165,12 @@ describe('ConsentController.acceptConsentToken', () => {
   // service message echoed back, and this route is unauthenticated too. It also
   // now answers with the SAME body as validate, so the two routes cannot be
   // played off each other.
-  it('returns 400 with an opaque error when the service throws', async () => {
-    vi.spyOn(patientService, 'acceptConsentToken').mockRejectedValue(new Error('invalid token'));
+  it('returns 400 with an opaque error when the service REFUSES the token', async () => {
+    // #1127: was a bare Error. That now means an outage, not a bad token.
+    const refusal = await realConsentTokenRefusal();
+    expect(patientService.isConsentTokenRejection(refusal)).toBe(true);
+
+    vi.spyOn(patientService, 'acceptConsentToken').mockRejectedValue(refusal);
     const req = createReq({ body: { patientId: 'p1', token: 'bad' } });
     const res = createRes();
 
@@ -1139,6 +1181,24 @@ describe('ConsentController.acceptConsentToken', () => {
       success: false,
       error: 'Link inválido ou expirado',
     });
+  });
+
+  // #1127: worse here than on validate. acceptConsentToken checks the token
+  // and THEN writes, so an unmarked error can mean the participant consented
+  // and the write recording it failed. A 400 tells them their link was invalid
+  // -- i.e. that they failed to consent, when the system failed to record it.
+  it('returns 503, not 400, when the acceptance write fails', async () => {
+    vi.spyOn(patientService, 'acceptConsentToken')
+      .mockRejectedValue(new Error('connection <monitor> closed'));
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.acceptConsentToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    const body = JSON.stringify(res.json.mock.calls[0][0]);
+    expect(body).not.toContain('Link inválido ou expirado');
+    expect(body).not.toContain('connection <monitor> closed');
   });
 
   it('falls back to query values when body is empty', async () => {

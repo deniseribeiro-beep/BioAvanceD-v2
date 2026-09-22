@@ -12,6 +12,29 @@ const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 
 const indexedPatientCollections = new Set();
 
+// #1127: the code stamped on the refusals validateConsentToken raises when the
+// PARTICIPANT's request is at fault -- unknown id, not awaiting consent, wrong
+// token, expired token, missing arguments. Those stay one opaque 400 at the
+// controller, per #823's disclosure boundary. Anything else thrown out of that
+// method is OUR fault -- a driver error on the findOne, a failed acceptance
+// write -- and answering it with 'Link inválido ou expirado' sends the
+// participant to ask the biobank team for a new invitation, which cannot help
+// them because nothing was wrong with the old link.
+//
+// The marker is what lets the controller separate the two WITHOUT reopening
+// the enumeration oracle: the 400 body stays byte-identical to what #823
+// established, and only UNMARKED errors become 503. It is deliberately a stamp
+// on the refusals rather than a try/catch around the I/O, so an I/O call site
+// added to this flow later answers 503 by default instead of having to
+// remember to.
+const CONSENT_TOKEN_REJECTION_CODE = 'CONSENT_TOKEN_REJECTED';
+
+function consentTokenRejection(message) {
+  const error = new Error(message);
+  error.code = CONSENT_TOKEN_REJECTION_CODE;
+  return error;
+}
+
 /**
  * Service de Pacientes
  * RF005 - Cadastro de Paciente com Anonimização LGPD
@@ -1031,29 +1054,39 @@ class PatientService {
     }
   }
 
+  /**
+   * #1127: true only for the refusals this service raises against the caller's
+   * own request. The controller answers those 400 and everything else 503.
+   */
+  isConsentTokenRejection(error) {
+    return error?.code === CONSENT_TOKEN_REJECTION_CODE;
+  }
+
   async validateConsentToken(db, participantId, token) {
     if (!participantId || !token) {
-      throw new Error('participantId e token são obrigatórios');
+      throw consentTokenRejection('participantId e token são obrigatórios');
     }
 
+    // #1127: NOT wrapped. A driver error here is not a bad token, and it
+    // reaches the controller unmarked so it is answered as the outage it is.
     const patientsCollection = await this.getPatientsCollection(db);
     const query = { participantId };
     const patient = await patientsCollection.findOne(query);
 
     if (!patient) {
-      throw new Error('Paciente não encontrado');
+      throw consentTokenRejection('Paciente não encontrado');
     }
 
     if (patient.status !== 'PENDING_CONSENT') {
-      throw new Error('Paciente não está pendente de consentimento');
+      throw consentTokenRejection('Paciente não está pendente de consentimento');
     }
 
     if (!patient.consentToken || patient.consentToken !== token) {
-      throw new Error('Token inválido');
+      throw consentTokenRejection('Token inválido');
     }
 
     if (patient.consentTokenExpiresAt && new Date(patient.consentTokenExpiresAt) < new Date()) {
-      throw new Error('Token expirado');
+      throw consentTokenRejection('Token expirado');
     }
 
     return { valid: true, participantId: patient.participantId };

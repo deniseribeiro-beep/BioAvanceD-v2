@@ -113,12 +113,27 @@ describe('mapConsentTokenError', () => {
     expect(mapConsentTokenError(400)).toMatch(/inválido|expirado/i);
   });
 
-  // A 503 means the token was fine and the term could not be loaded. Telling
-  // the participant their link is bad would send them to request a new one,
-  // which would not help.
+  // A 503 means the failure was ours, not the link's: the term could not be
+  // loaded, the token check could not run, or the acceptance could not be
+  // written (#1127). Telling the participant their link is bad would send them
+  // to request a new one, which would not help in any of the three.
   it('distinguishes a 503 from an invalid link', () => {
     expect(mapConsentTokenError(503)).not.toMatch(/inválido/i);
     expect(mapConsentTokenError(503)).toMatch(/indisponível|tente/i);
+  });
+
+  // #1127: the 503 arm's whole job is to stop the participant discarding a
+  // working link, so it has to SAY the link still works. The pattern above
+  // cannot see that -- it matched the old term-specific wording too, which
+  // left the copy free to drift back to describing only the template lookup
+  // while three different failures now route here.
+  it('tells the participant their link is still valid on a 503', () => {
+    expect(mapConsentTokenError(503)).toMatch(/link continua válido/i);
+  });
+
+  // The 400 arm keeps the opposite instruction: there the link really is spent.
+  it('still sends the participant for a new invitation on a 400', () => {
+    expect(mapConsentTokenError(400)).toMatch(/novo convite/i);
   });
 
   it('falls back to a generic message for an unknown status', () => {
