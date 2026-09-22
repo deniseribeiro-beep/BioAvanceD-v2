@@ -797,14 +797,14 @@ class NotificationService {
     });
   }
 
-  async sendTemperatureAlert(sampleId, currentTemp, options = {}) {
+  async sendTemperatureAlert(specimenId, currentTemp, options = {}) {
     const targetEmail = options.email || process.env.ALERT_EMAIL_TO || this.adminEmail;
     if (!targetEmail) {
       throw new Error('ALERT_EMAIL_TO ou ADMIN_EMAIL deve ser configurado para alerta de temperatura');
     }
 
     const timestamp = new Date().toISOString();
-    const body = `[ALERTA CRÍTICO] Amostra ${sampleId} fora da faixa segura: ${currentTemp}°C | ${timestamp}`;
+    const body = `[ALERTA CRÍTICO] Amostra ${specimenId} fora da faixa segura: ${currentTemp}°C | ${timestamp}`;
     const html = `
       <div style="font-family: Arial, Helvetica, sans-serif; background:#fff7ed; padding:24px; color:#7c2d12;">
         <div style="max-width:680px; margin:0 auto; background:#ffffff; border:2px solid #f97316; border-radius:12px; overflow:hidden;">
@@ -816,7 +816,7 @@ class NotificationService {
             <table style="width:100%; border-collapse:collapse; font-size:14px;">
               <tr>
                 <td style="padding:8px; border:1px solid #fed7aa;"><strong>ID da amostra</strong></td>
-                <td style="padding:8px; border:1px solid #fed7aa;">${sampleId}</td>
+                <td style="padding:8px; border:1px solid #fed7aa;">${specimenId}</td>
               </tr>
               <tr>
                 <td style="padding:8px; border:1px solid #fed7aa;"><strong>Temperatura atual</strong></td>
@@ -840,7 +840,7 @@ class NotificationService {
       text: body,
       notificationType: 'RF016_TEMPERATURE_ALERT',
       metadata: {
-        sampleId,
+        specimenId,
         currentTemp
       }
     });
@@ -869,7 +869,7 @@ class NotificationService {
     return this.sendPasswordReset(email, link);
   }
 
-  async sendCriticalTempAlert(sampleId, temp, options = {}) {
+  async sendCriticalTempAlert(specimenId, temp, options = {}) {
     const minTemp = Number(options.minTemp ?? process.env.TELEMETRY_MIN_TEMP_ALERT ?? -196);
     const maxTemp = Number(options.maxTemp ?? process.env.TELEMETRY_MAX_TEMP_ALERT ?? -80);
     if (temp >= minTemp && temp <= maxTemp) {
@@ -879,7 +879,7 @@ class NotificationService {
       };
     }
 
-    const emailResult = await this.sendTemperatureAlert(sampleId, temp, options);
+    const emailResult = await this.sendTemperatureAlert(specimenId, temp, options);
 
     const smsSimulation = {
       success: true,
@@ -891,7 +891,7 @@ class NotificationService {
 
     return {
       triggered: true,
-      sampleId,
+      specimenId,
       temp,
       minTemp,
       maxTemp,
@@ -900,7 +900,7 @@ class NotificationService {
     };
   }
 
-  async sendCriticalTempAlertFromInflux(sampleId, options = {}) {
+  async sendCriticalTempAlertFromInflux(specimenId, options = {}) {
     await connectInfluxDB();
     const queryApi = getInfluxQueryApi();
     const influx = getInfluxConfig();
@@ -928,7 +928,7 @@ class NotificationService {
     }
 
     const latestTemp = Number(rows[0]._value);
-    return this.sendCriticalTempAlert(sampleId, latestTemp, options);
+    return this.sendCriticalTempAlert(specimenId, latestTemp, options);
   }
 }
 
