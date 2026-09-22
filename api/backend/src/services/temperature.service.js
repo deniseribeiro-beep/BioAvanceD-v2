@@ -107,7 +107,37 @@ class TemperatureService {
       if (!isValid) {
         // Gera alerta
         const alertsCollection = db.collection('alerts');
-        const alertInsert = await alertsCollection.insertOne({
+
+        // #1118: split from #1079. That commit gave this document a `type`
+        // so the scheduler's lifecycle helpers COULD match it, and wired the
+        // resolve half below -- but left this insert unconditional, so an
+        // out-of-range episode still wrote one row per reading. A freezer out
+        // of range for a day at a one-minute poll is 1,440 of them, and since
+        // #1079 bounded getActiveAlerts at `limit || 1000` one sustained
+        // excursion can fill the entire default page and push every other
+        // sensor's alert off it.
+        //
+        // The filter is scheduler.service.js#ensureActiveAlert's own, rather
+        // than a second predicate for the same question. It is duplicated
+        // rather than imported for the reason the resolve half below already
+        // records: importing that module would pull node-cron and three
+        // unrelated services into every caller of this one.
+        //
+        // Shape 1 of the three the issue lists: the ROW is deduped, the
+        // operator is NOT. Both notifications still fire on every breaching
+        // reading -- silencing an operator who missed the first alert while a
+        // cold-chain excursion continues is a safety decision, and RF009 AC#6
+        // requires an alert without saying how often. #1079's own canonical
+        // sibling (iot.controller#upsertEnvironmentalExcursion) is
+        // episode-shaped, which is evidence for deduping the row and says
+        // nothing about notification cadence.
+        const existingAlert = await alertsCollection.findOne({
+          sensorId: temperature.sensorId || temperature.sensorID,
+          type: THRESHOLD_BREACH_ALERT_TYPE,
+          status: 'active'
+        });
+
+        const alertPayload = {
           sensorId: temperature.sensorId || temperature.sensorID,
           // #1062: an alert carried no organizationId at all, so
           // GET /alerts could not be scoped by adding middleware -- the
@@ -133,7 +163,17 @@ class TemperatureService {
           severity: 'warning',
           status: 'active',
           createdAt: new Date()
-        });
+        };
+
+        // Reuse the open episode's id when we skip the insert. Nothing in
+        // src/ reads sourceEventId back -- it is written by seven call sites
+        // and stored at notificationDispatch.service.js:159, and queried by
+        // none -- so reusing it breaks no consumer, and RF015 AC#6 ("vincular
+        // a notificação ao evento que a originou") still holds because the
+        // episode's alert IS the originating event.
+        const activeAlertId = existingAlert
+          ? existingAlert._id
+          : (await alertsCollection.insertOne(alertPayload)).insertedId;
 
         logger.warn('Alerta de temperatura gerado:', {
           sensorId: temperature.sensorId || temperature.sensorID,
@@ -155,7 +195,7 @@ class TemperatureService {
         void notificationDispatchService.dispatchNotification(db, {
           eventType: 'environmental_excursion',
           sourceEventType: 'TemperatureAlert',
-          sourceEventId: alertInsert.insertedId,
+          sourceEventId: activeAlertId,
           payload: {
             sensorId: temperature.sensorId || temperature.sensorID,
             temperatureValue: temperature.temperatureValue,
