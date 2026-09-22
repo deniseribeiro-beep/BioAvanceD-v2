@@ -12,7 +12,7 @@ type DataMatrixAsset = {
 };
 
 type LabelData = {
-  sampleId: string;
+  specimenId: string;
   encodedValue: string;
   symbology: 'data_matrix';
   dataMatrix: DataMatrixAsset;
@@ -54,7 +54,7 @@ export default function SampleLabelPage() {
 
         if (active) {
           setLabel({
-            sampleId: String(sample.specimenId ?? sample._id ?? id),
+            specimenId: String(sample.specimenId),
             encodedValue: assets.encodedValue,
             symbology: assets.symbology,
             dataMatrix: assets.dataMatrix,
