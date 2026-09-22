@@ -17,16 +17,17 @@ function normalizeString(value) {
 
 function buildSampleQuery(sample = {}) {
   const id = normalizeString(sample?._id?.toString?.() || sample?._id);
-  const sampleID = normalizeString(sample?.specimenId || sample?.sampleID || sample?.sampleId);
-  const barcode = normalizeString(sample?.barcode);
+  const specimenId = normalizeString(sample?.specimenId);
   const queries = [];
 
   if (id && ObjectId.isValid(id)) {
     queries.push({ _id: new ObjectId(id) });
   }
-  if (sampleID) queries.push({ specimenId: sampleID });
-  if (barcode) queries.push({ barcode });
+  if (specimenId) queries.push({ specimenId });
 
+  // Data Matrix encodedValue is a physical identifier, not an alias for
+  // specimen identity. Governance persistence resolves only canonical _id
+  // or specimenId.
   return queries.length > 0 ? { $or: queries } : null;
 }
 
@@ -87,7 +88,7 @@ async function buildSafeSampleSummary(db, sample = {}, governanceStatus = {}) {
   const currentStoragePlacement = await resolveCurrentStoragePlacement(db, sample);
   return {
     _id: normalizeString(sample?._id?.toString?.() || sample?._id) || null,
-    specimenId: normalizeString(sample.specimenId || sample.sampleID || sample.sampleId) || null,
+    specimenId: normalizeString(sample.specimenId) || null,
     barcode: normalizeString(sample.barcode) || null,
     status: governanceStatus.status,
     currentStatus: governanceStatus.currentStatus,
