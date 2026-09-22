@@ -362,11 +362,9 @@ describe('reports.routes.js gaps', () => {
     );
   });
 
-  // #633: Sample documents only ever have `specimenId` (the canonical
-  // field) — `specimenId` doesn't exist on the real model. This fixture
-  // deliberately has no `specimenId` at all, matching a real Sample
-  // document shape, to prove the join actually works rather than
-  // relying on a mock that happens to carry the buggy field name.
+  // #633: Sample documents use `specimenId` as the canonical identifier.
+  // This fixture pins the report join to that field so retired sampleID
+  // compatibility cannot silently return to the executable v2 contract.
   it('sampleanalysis: amostra com specimenId e resultado correspondente mostra hasResults true', async () => {
     const { db } = buildCollectionDb({
       samples: [{ specimenId: 'SPEC-1', barcode: 'B1' }],
