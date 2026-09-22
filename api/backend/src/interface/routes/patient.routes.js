@@ -25,7 +25,7 @@ router.get('/search', authenticate, requireOrganizationScope, patientController.
 router.get('/operational', authenticate, requireOrganizationScope, patientController.listar.bind(patientController));
 
 // Buscar consentimento atual do paciente
-router.get('/:patientId/consent', authenticate, consentController.getPatientConsent.bind(consentController));
+router.get('/:participantId/consent', authenticate, consentController.getPatientConsent.bind(consentController));
 
 // Reenviar notificações de consentimento
 router.post('/:id/consent/resend', authenticate, requirePermission('createPatient'), requireOrganizationScope, patientController.resendConsentNotification.bind(patientController));
