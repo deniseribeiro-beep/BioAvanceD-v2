@@ -1350,13 +1350,6 @@ function buildSampleIntegrityInput(formData, clinicalComorbidityDefinitions = []
   };
 }
 
-function buildSampleLabelCode({ date = new Date(), participantId = '', sampleType = '' }) {
-  const normalizedDate = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
-  const normalizedPatient = String(participantId || '').trim() || 'NOID';
-  const normalizedSampleType = String(sampleType || '').trim().replace(/\s+/g, '_').toUpperCase() || 'SAMPLE';
-  return `${normalizedDate}-${normalizedPatient}-${normalizedSampleType}`;
-}
-
 function formatSampleLabelDate(value, fallbackDate = new Date()) {
   const date = value ? new Date(value) : fallbackDate;
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
@@ -1367,40 +1360,26 @@ function formatSampleLabelDate(value, fallbackDate = new Date()) {
 }
 
 function buildSampleLabelData(createdSample = {}, payload = {}, formData = {}, date = new Date()) {
-  const labelData = createdSample?.labelData && typeof createdSample.labelData === 'object' ? createdSample.labelData : {};
   const sampleType = String(
-    labelData.sampleType
-    || createdSample.sampleType
+    createdSample.sampleType
     || payload?.specimen?.sampleType
-    || formData?.sprecSampleType
     || ''
   ).trim();
   const participantId = String(
-    labelData.participantId
-    || createdSample.participantId
+    createdSample.participantId
     || payload?.participant?.participantId
     || ''
   ).trim();
-  const fallbackCode = buildSampleLabelCode({ date, participantId, sampleType });
-  const specimenId = String(
-    labelData.specimenId
-    || createdSample.specimenId
-    || createdSample._id
-    || ''
-  ).trim();
-  const barcode = String(labelData.barcode || createdSample.barcode || specimenId || fallbackCode).trim();
-  const collectionDate = labelData.collectionDate
-    || labelData.registeredAt
-    || createdSample.collectionDate
-    || createdSample.registeredAt
+  const specimenId = String(createdSample.specimenId || '').trim();
+  const barcode = String(createdSample.barcode || '').trim();
+  const collectionDate = createdSample.registeredAt
     || createdSample.createdAt
     || payload?.specimen?.registeredAt
     || date.toISOString();
 
   return {
-    code: barcode || specimenId || fallbackCode,
-    specimenId: specimenId || barcode || fallbackCode,
-    barcode: barcode || specimenId || fallbackCode,
+    specimenId,
+    barcode,
     sprecCode: String(formData.sprecCode || payload?.specimen?.sprecCode || '').trim(),
     sampleType,
     participantId,
@@ -2666,11 +2645,7 @@ export default function ClinicalIntakeWizard(props) {
       setSampleLabel({
         ...buildSampleLabelData(createdSample, payload, formData, new Date()),
         ...(response?.data?.label || {}),
-        // dict-02 StorageAssignment (#495) — POST /intake-wizard already
-        // resolves this additively (see intakeWizard.js), prefer it over the
-        // legacy embedded storageLocation shape.
-        storageAssignment: response?.data?.storageAssignment || createdSample?.storageAssignment || null,
-        storageLocation: response?.data?.storageLocation || createdSample?.storageLocation || null,
+        currentStoragePlacement: response?.data?.currentStoragePlacement || createdSample?.currentStoragePlacement || null,
       });
 
       const clinicalEntitiesFailedRaw = response?.data?.clinicalEntities?.failed;
@@ -2713,9 +2688,9 @@ export default function ClinicalIntakeWizard(props) {
   };
 
   const handlePrintSampleLabel = () => {
-    const sampleId = String(sampleLabel?.specimenId || sampleLabel?.code || '').trim();
-    if (typeof window !== 'undefined' && sampleId) {
-      window.open(`/samples/${encodeURIComponent(sampleId)}/label`, '_blank', 'noopener,noreferrer');
+    const specimenId = String(sampleLabel?.specimenId || '').trim();
+    if (typeof window !== 'undefined' && specimenId) {
+      window.open(`/samples/${encodeURIComponent(specimenId)}/label`, '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -3802,12 +3777,12 @@ export default function ClinicalIntakeWizard(props) {
                 <span className="sample-label-chip">SPREC {sampleLabel.sprecCode || 'N/A'}</span>
               </div>
               <div className="sample-label-body">
-                <div className="sample-label-code" data-testid="sample-label-code">{sampleLabel.code}</div>
+                <div className="sample-label-code" data-testid="sample-label-code">{sampleLabel.barcode || 'N/A'}</div>
                 <div className="sample-label-meta">
                   <span data-testid="sample-label-sample-id">{t('wizard.sampleLabel.sampleId', 'Amostra')}: {sampleLabel.specimenId || 'N/A'}</span>
                   <span data-testid="sample-label-type">{t('wizard.sampleLabel.type', 'Tipo')}: {sampleLabel.sampleType || 'N/A'}</span>
                   <span data-testid="sample-label-date">{t('wizard.sampleLabel.date', 'Data')}: {sampleLabel.collectionDate || 'N/A'}</span>
-                  <span>{t('wizard.sampleLabel.location', 'Localização')}: {sampleLabel.storageAssignment?.positionCode || sampleLabel.storageLocation?.readable || sampleLabel.storageLocation?.position || 'N/A'}</span>
+                  <span>{t('wizard.sampleLabel.location', 'Localização')}: {sampleLabel.currentStoragePlacement?.readable || sampleLabel.currentStoragePlacement?.positionCode || 'N/A'}</span>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="secondary" className="sample-label-print-button" data-testid="sample-label-print-button" onClick={handlePrintSampleLabel}>
@@ -3826,7 +3801,7 @@ export default function ClinicalIntakeWizard(props) {
             <div data-testid="clinical-entities-warning">
               <div className="text-sm font-semibold text-amber-900">
                 {t('wizard.clinicalEntitiesWarning.title', 'Alguns registros clínicos não foram salvos')}
-                {(sampleLabel?.specimenId || sampleLabel?.code) ? ` — ${t('wizard.clinicalEntitiesWarning.specimen', 'Amostra')}: ${sampleLabel.specimenId || sampleLabel.code}` : ''}
+                {sampleLabel?.specimenId ? ` — ${t('wizard.clinicalEntitiesWarning.specimen', 'Amostra')}: ${sampleLabel.specimenId}` : ''}
               </div>
               <ul className="mt-2 text-sm text-amber-800 list-disc list-inside">
                 {failedClinicalEntities.map((failure, index) => (
