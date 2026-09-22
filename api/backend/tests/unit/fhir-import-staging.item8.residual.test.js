@@ -258,3 +258,65 @@ describe('fhir-import-staging.service.js item 8 residual branches', () => {
     expect(db.collections.import_batches.findOne).not.toHaveBeenCalled();
   });
 });
+
+
+describe('fhir-import-staging.service.js item 8 branch-95 source-located guards', () => {
+  const originalSecret = process.env.CONSENT_SECRET;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    process.env.CONSENT_SECRET = 'item8-fhir-branch95-secret';
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalSecret === undefined) delete process.env.CONSENT_SECRET;
+    else process.env.CONSENT_SECRET = originalSecret;
+  });
+
+  it('preserves the canonical bad-request status from normalizeEntries instead of wrapping it again', async () => {
+    const db = createDb();
+
+    await expect(fhirImportStagingService.stageBundle(db, null))
+      .rejects.toMatchObject({
+        message: 'A importação em lote exige um FHIR R4 Bundle JSON.',
+        statusCode: 400,
+      });
+
+    expect(db.collections.import_batches.docs).toHaveLength(0);
+  });
+
+  it('counts WARNING and NEEDS_EMAIL records independently in consent-status reconciliation', async () => {
+    const db = createDb();
+    const batchId = new ObjectId();
+    await db.collection('import_batches').insertOne({
+      _id: batchId,
+      type: 'FHIR_BUNDLE',
+      status: 'STAGED',
+    });
+
+    await db.collection('import_staging_records').insertMany([
+      {
+        _id: new ObjectId(),
+        batchId,
+        status: fhirImportStagingService.STATUS.WARNING,
+        errors: [],
+        warnings: [{ field: 'synthetic', message: 'warning' }],
+        normalized: { participantId: 'P-WARN', specimenId: 'S-WARN' },
+      },
+      {
+        _id: new ObjectId(),
+        batchId,
+        status: fhirImportStagingService.STATUS.NEEDS_EMAIL,
+        errors: [{ code: 'NEEDS_EMAIL', message: 'email required' }],
+        warnings: [],
+        normalized: { participantId: 'P-EMAIL', specimenId: 'S-EMAIL' },
+      },
+    ]);
+
+    const result = await fhirImportStagingService.getConsentStatus(db, batchId);
+
+    expect(result.counts.warnings).toBe(1);
+    expect(result.counts.errors).toBe(1);
+  });
+});
