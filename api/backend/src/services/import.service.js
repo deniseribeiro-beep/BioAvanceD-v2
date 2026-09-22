@@ -838,7 +838,7 @@ class ImportService {
       return parsed;
     };
 
-    const participantIdRaw = this.getRowValue(row, ['participantId', 'patient_id', 'idPaciente']);
+    const participantIdRaw = this.getRowValue(row, ['participantId']);
     const sampleTypeRaw = this.getRowValue(row, ['sampleType', 'tipoAmostra']);
     const sampleOriginRaw = this.getRowValue(row, ['sampleOrigin', 'origemAmostra']);
     const extractionRaw = this.getRowValue(row, ['extractionProtocol', 'protocoloExtracao']);
