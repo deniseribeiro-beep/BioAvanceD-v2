@@ -78,10 +78,10 @@ describe('StorageBox pre-save validation', () => {
 
   it('sincroniza currentOccupancy a partir do occupancyGrid', async () => {
     vi.spyOn(StorageContainer, 'findById').mockResolvedValue({ containerType: 'RACK' });
-    const sampleId = new mongoose.Types.ObjectId();
+    const specimenObjectId = new mongoose.Types.ObjectId();
     const doc = makeBox({
       dimension: { rows: 2, cols: 2 },
-      occupancyGrid: new Map([['A1', sampleId], ['A2', null]]),
+      occupancyGrid: new Map([['A1', specimenObjectId], ['A2', null]]),
     });
 
     await runPreSave(doc);
@@ -136,12 +136,12 @@ describe('StorageBox pre-save validation', () => {
 describe('StorageBox#addSample / #removeSample', () => {
   it('adiciona amostra em posição vazia e incrementa currentOccupancy', () => {
     const box = makeBox({ dimension: { rows: 2, cols: 2 } });
-    const sampleId = new mongoose.Types.ObjectId();
+    const specimenObjectId = new mongoose.Types.ObjectId();
 
-    const result = box.addSample('A1', sampleId);
+    const result = box.addSample('A1', specimenObjectId);
 
     expect(result).toEqual({ success: true });
-    expect(String(box.occupancyGrid.get('A1'))).toBe(String(sampleId));
+    expect(String(box.occupancyGrid.get('A1'))).toBe(String(specimenObjectId));
     expect(box.currentOccupancy).toBe(1);
   });
 
@@ -164,21 +164,21 @@ describe('StorageBox#addSample / #removeSample', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('POSITION_OCCUPIED');
-    expect(String(result.sampleID)).toBe(String(existingSampleId));
+    expect(String(result.specimenObjectId)).toBe(String(existingSampleId));
   });
 
   it('remove amostra de posição ocupada e decrementa currentOccupancy', () => {
-    const sampleId = new mongoose.Types.ObjectId();
+    const specimenObjectId = new mongoose.Types.ObjectId();
     const box = makeBox({
       dimension: { rows: 2, cols: 2 },
-      occupancyGrid: new Map([['A1', sampleId]]),
+      occupancyGrid: new Map([['A1', specimenObjectId]]),
       currentOccupancy: 1,
     });
 
     const result = box.removeSample('A1');
 
     expect(result.success).toBe(true);
-    expect(String(result.sampleID)).toBe(String(sampleId));
+    expect(String(result.specimenObjectId)).toBe(String(specimenObjectId));
     expect(box.occupancyGrid.get('A1')).toBeUndefined();
     expect(box.currentOccupancy).toBe(0);
   });
