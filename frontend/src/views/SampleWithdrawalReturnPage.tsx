@@ -80,7 +80,7 @@ export default function SampleWithdrawalReturnPage() {
   const { t } = useLanguage();
   const [searchBarcode, setSearchBarcode] = useState('');
   const [sample, setSample] = useState<Sample | null>(null);
-  const [patientInfo, setPatientInfo] = useState<{ patientID: string; patientName: string } | null>(null);
+  const [participantInfo, setParticipantInfo] = useState<{ participantId: string; patientName: string } | null>(null);
   const [movements, setMovements] = useState<SampleMovement[]>([]);
   const [currentStoragePlacement, setCurrentStoragePlacement] = useState<CurrentStoragePlacementDTO | null>(null);
   const [loading, setLoading] = useState(false);
@@ -140,7 +140,7 @@ export default function SampleWithdrawalReturnPage() {
     setSearchLoading(true);
     setMessage(null);
     setSample(null);
-    setPatientInfo(null);
+    setParticipantInfo(null);
     setMovements([]);
     setCurrentStoragePlacement(null);
 
@@ -151,10 +151,10 @@ export default function SampleWithdrawalReturnPage() {
 
       if (result?.sample) {
         setSample(result.sample);
-        if (result.patient) {
-          setPatientInfo({
-            patientID: String(result.patient.patientID),
-            patientName: result.patient.patientName
+        if (result.participant) {
+          setParticipantInfo({
+            participantId: String(result.participant.participantId),
+            patientName: result.participant.patientName
           });
         }
         if (result.sample.linkedProject) {
@@ -174,17 +174,17 @@ export default function SampleWithdrawalReturnPage() {
     }
   };
 
-  const loadMovements = async (sampleId: string) => {
+  const loadMovements = async (specimenId: string) => {
     try {
-      const response = await sampleService.getMovements(sampleId);
+      const response = await sampleService.getMovements(specimenId);
       if (response.data?.data) setMovements(response.data.data);
     } catch (error) {
       console.error('Erro ao carregar movimentações:', error);
     }
   };
 
-  const loadCurrentStoragePlacement = async (sampleId: string) => {
-    const response = await storageApi.getCurrentStoragePlacement(sampleId);
+  const loadCurrentStoragePlacement = async (specimenId: string) => {
+    const response = await storageApi.getCurrentStoragePlacement(specimenId);
     setCurrentStoragePlacement(response.success && response.data ? response.data : null);
   };
 
@@ -353,8 +353,8 @@ export default function SampleWithdrawalReturnPage() {
                 <div className="info-row"><span className="info-label">Código de Barras:</span><span className="info-value barcode">{sample.barcode || '-'}</span></div>
                 <div className="info-row"><span className="info-label">Tipo:</span><span className="info-value">{sample.sampleType || '-'}</span></div>
                 <div className="info-row"><span className="info-label">Projeto:</span><span className="info-value">{sample.linkedProject || '-'}</span></div>
-                {patientInfo && (
-                  <div className="info-row"><span className="info-label">Paciente:</span><span className="info-value">{patientInfo.patientID} - {patientInfo.patientName}</span></div>
+                {participantInfo && (
+                  <div className="info-row"><span className="info-label">Participante:</span><span className="info-value">{participantInfo.participantId} - {participantInfo.patientName}</span></div>
                 )}
               </div>
 
