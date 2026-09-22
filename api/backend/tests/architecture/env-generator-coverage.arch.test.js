@@ -100,6 +100,27 @@ test('a fresh generate declares nothing .env.docker.example omits (#1161)', () =
   }
 });
 
+// #1162: a security default the sync must not quietly widen. `1` makes
+// Express take req.ip from a client-supplied X-Forwarded-For, which is the
+// key the rate limiters count against, and no stack in this repo puts
+// anything in front of the backend.
+test('a fresh generate does not trust a proxy that does not exist (#1162)', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-generator-arch-'));
+  const outFile = path.join(outDir, '.env.docker');
+  try {
+    execFileSync('bash', [GENERATOR, outFile], { cwd: REPO_ROOT, stdio: 'pipe' });
+
+    const trustLines = fs.readFileSync(outFile, 'utf8')
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('TRUST_PROXY='));
+
+    assert.equal(trustLines.length, 1, 'TRUST_PROXY must appear exactly once');
+    assert.equal(trustLines[0], 'TRUST_PROXY=0');
+  } finally {
+    fs.rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
 // The generator's own values must win where the two disagree. #1153 recorded
 // one such divergence -- AUDIT_RFC3161_MODE is `remote` in the example and
 // `disabled` from the generator -- and which is intended is #962's open call,
