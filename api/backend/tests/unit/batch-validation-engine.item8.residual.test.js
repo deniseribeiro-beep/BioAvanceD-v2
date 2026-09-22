@@ -144,7 +144,7 @@ describe('batch-validation-engine additional item8 residual branches', () => {
   it('builds patient linkage criteria in priority order and includes numeric record variants', () => {
     const oid = new ObjectId().toString();
     const criteria = engine.buildPatientLinkageQuery({
-      patient_id: '12.345.678',
+      participantId: '12.345.678',
       cpf: '123.456.789-01',
       record_number: '0042',
       patientObjectId: oid,
@@ -168,7 +168,7 @@ describe('batch-validation-engine additional item8 residual branches', () => {
     const db = { collection: vi.fn(() => ({ findOne })) };
 
     await expect(engine.findLinkedPatient(db, {
-      patientID: '12345678',
+      participantId: '12345678',
       recordNumber: '42',
     })).resolves.toEqual({ participantId: '12345678' });
     expect(findOne).toHaveBeenCalledTimes(2);
@@ -184,7 +184,7 @@ describe('batch-validation-engine additional item8 residual branches', () => {
     const missing = engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'CRP;IL6=bad;LDL=-1;GLU=5.5', collectedAt: '2026-01-01' },
       { participantId: 'P1', _id: 'PO1' },
-      { sampleID: 'S1', _id: 'SO1', registeredAt: new Date() }
+      { specimenId: 'S1', _id: 'SO1', registeredAt: new Date() }
     );
 
     expect(missing.warnings).toEqual(expect.arrayContaining([
@@ -198,7 +198,6 @@ describe('batch-validation-engine additional item8 residual branches', () => {
       patientObjectId: 'PO1',
       biomarkerType: 'GLU',
       value: 5.5,
-      sampleID: 'S1',
       specimenId: 'S1',
       status: 'final',
     });
@@ -258,7 +257,7 @@ describe('batch-validation-engine additional item8 residual branches', () => {
 
   it('persistSample rejects structural errors and loose disease text without ORPHA', async () => {
     vi.spyOn(importLGPDService, 'parseSampleRow').mockReturnValue({
-      patientID: null,
+      participantId: null,
       sampleType: null,
       sampleOrigin: null,
       extractionProtocol: null,
@@ -280,7 +279,7 @@ describe('batch-validation-engine additional item8 residual branches', () => {
 
   it('persistSample refuses creation of a new patient when linkage misses and identity is insufficient', async () => {
     vi.spyOn(importLGPDService, 'parseSampleRow').mockReturnValue({
-      patientID: '12345678',
+      participantId: '12345678',
       sampleType: 'PLASMA',
       sampleOrigin: 'VENOUS',
       extractionProtocol: 'EDTA',
@@ -301,7 +300,7 @@ describe('batch-validation-engine additional item8 residual branches', () => {
 
   it('persistSample creates missing patient, sample and biomarker observations and aggregates warnings', async () => {
     vi.spyOn(importLGPDService, 'parseSampleRow').mockReturnValue({
-      patientID: null,
+      participantId: null,
       sampleType: 'PLASMA',
       sampleOrigin: 'VENOUS',
       extractionProtocol: null,
@@ -321,8 +320,8 @@ describe('batch-validation-engine additional item8 residual branches', () => {
     vi.spyOn(engine, 'buildSampleRow').mockReturnValue({});
     vi.spyOn(engine, 'classifySampleRow').mockReturnValue(['sample normalized']);
     vi.spyOn(engine, 'findLinkedPatient').mockResolvedValue(null);
-    vi.spyOn(patientService, 'createPatient').mockResolvedValue({ _id: 'P1', patientID: '12345678' });
-    vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'S1', sampleID: 'SM1' });
+    vi.spyOn(patientService, 'createPatient').mockResolvedValue({ _id: 'P1', participantId: '12345678' });
+    vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'S1', specimenId: 'SM1' });
     vi.spyOn(engine, 'buildBiomarkerObservationPayloads').mockReturnValue({
       payloads: [{ biomarkerType: 'CRP', value: 1 }],
       warnings: ['bio warning'],
@@ -646,7 +645,7 @@ describe('batch-validation-engine item 8 safe reader and persistence alternates'
   it('persistSample reuses an already linked patient and succeeds without biomarker observations', async () => {
     const patient = { _id: 'PERSISTED-P1', participantId: '12345678' };
     vi.spyOn(importLGPDService, 'parseSampleRow').mockReturnValue({
-      patientID: '12345678',
+      participantId: '12345678',
       sampleType: 'PLASMA',
       sampleOrigin: 'VENOUS',
       extractionProtocol: 'EDTA',
