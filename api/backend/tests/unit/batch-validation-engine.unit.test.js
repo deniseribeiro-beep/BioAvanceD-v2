@@ -108,7 +108,7 @@ describe('BatchValidationEngine.normalizePatientID', () => {
     expect(engine.normalizePatientID('123456789')).toBeNull();
   });
 
-  it('returns 8-digit string for valid patientID', () => {
+  it('returns 8-digit string for valid participantId', () => {
     expect(engine.normalizePatientID('12345678')).toBe('12345678');
   });
 
@@ -413,7 +413,7 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
     expect(warnings).toEqual(['Biomarcador alphaGal foi ignorado por não informar valor.']);
   });
 
-  it('falls back through specimen sampleId/barcode and patient rawRow.patientID identifiers', () => {
+  it('falls back through specimen specimenId/barcode and patient rawRow.participantId identifiers', () => {
     const { payloads } = engine.buildBiomarkerObservationPayloads(
       { participantId: 'raw-patient-id', biomarkers: 'alphaGal:1' },
       {},
@@ -554,7 +554,7 @@ describe('BatchValidationEngine item 8 reader/linkage residuals', () => {
     ]);
   });
 
-  it('uses patientID and barcode fallbacks when internal object identifiers are legitimately absent', () => {
+  it('uses participantId and barcode fallbacks when internal object identifiers are legitimately absent', () => {
     const result = engine.buildBiomarkerObservationPayloads(
       { participantId: '12345678', biomarkers: 'alphaGal:2.5' },
       {},
@@ -839,7 +839,7 @@ describe('BatchValidationEngine file readers', () => {
 
   it('readXlsxRows maps header row to values across worksheet rows', async () => {
     const filePath = await writeXlsxFile([
-      { name: 'Sheet1', rows: [['patientID', 'sampleType'], ['12345678', 'Sangue'], ['87654321', 'Plasma']] },
+      { name: 'Sheet1', rows: [['participantId', 'sampleType'], ['12345678', 'Sangue'], ['87654321', 'Plasma']] },
     ]);
 
     const rows = await engine.readXlsxRows(filePath);
@@ -1166,7 +1166,7 @@ describe('BatchValidationEngine item 8 canonical linkage fallback', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps the input participant identifier when the linked canonical Patient exposes participantId rather than legacy patientID', async () => {
+  it('keeps the input participant identifier when the linked canonical Patient exposes participantId rather than legacy participantId', async () => {
     vi.spyOn(engine, 'findLinkedPatient').mockResolvedValue({
       _id: 'patient-canonical-id',
       participantId: '12345678',
