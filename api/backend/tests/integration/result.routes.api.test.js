@@ -42,12 +42,9 @@ function givenSession() {
 
 const SAMPLE_OID = new ObjectId().toString();
 const RESULT_OID = new ObjectId().toString();
-// #628: Result.specimenId stores the referenced Sample's own canonical
-// specimenId (a business identifier, not a Mongo _id) — SAMPLE_OID is
-// still used as the wire-request identifier in most tests below (the
-// resolution logic accepts an _id, a specimenId, or a legacy numeric
-// sampleID), but the persisted/returned Result document's own field is
-// this separate value.
+// Result.specimenId stores the referenced Sample's canonical business
+// identifier. SAMPLE_OID remains accepted only as an internal transport
+// identifier; retired sample aliases are not part of the route contract.
 const SPECIMEN_ID = 'SPX-628-1';
 
 // #1082: buildRbacCollections gives every non-accessType-4 user scopeType
@@ -255,18 +252,10 @@ describe('POST /api/results/upload', () => {
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
-  it('falls back to the legacy numeric sampleID lookup when _id and specimenId both miss', async () => {
-    // #628: three-tier resolution -- _id, then specimenId, then the
-    // legacy numeric Sample.sampleID -- only the third tier's query
-    // actually matches here, proving the fallback itself works rather
-    // than an earlier tier accidentally short-circuiting it.
-    const sampleDoc = { _id: new ObjectId(), specimenId: SPECIMEN_ID, sampleID: 42, collectionSite: FIXTURE_ORG };
-    const findOneSpy = vi.fn().mockImplementation(async (query) => (
-      Object.prototype.hasOwnProperty.call(query, 'sampleID') ? sampleDoc : null
-    ));
+  it('rejects a retired numeric sample alias when neither _id nor canonical specimenId resolves', async () => {
+    const findOneSpy = vi.fn().mockResolvedValue(null);
     const amostrasColl = createCollectionMock({ findOne: findOneSpy });
-    const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
-    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
 
     const res = await request(app)
@@ -275,10 +264,9 @@ describe('POST /api/results/upload', () => {
       .field('specimenId', '42')
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(404);
     expect(findOneSpy).toHaveBeenCalledWith({ specimenId: '42' });
-    expect(findOneSpy).toHaveBeenCalledWith({ sampleID: 42 });
-    expect(res.body.data.specimenId).toBe(SPECIMEN_ID);
+    expect(findOneSpy.mock.calls.some(([query]) => Object.prototype.hasOwnProperty.call(query, 'sampleID'))).toBe(false);
 
     const resultDir = path.join(__dirname, '../../storage/results', '42');
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
