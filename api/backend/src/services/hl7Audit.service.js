@@ -12,7 +12,7 @@ class HL7AuditService {
   }
 
   async _hashFHIRResources(db, date) {
-    const samplesCol = db.collection('amostras');
+    const samplesCol = db.collection('samples');
     // search for samples with a 'fhir' field and createdAt on date
     const start = new Date(date + 'T00:00:00.000Z');
     const end = new Date(date + 'T23:59:59.999Z');
@@ -23,7 +23,7 @@ class HL7AuditService {
       try {
         const json = JSON.stringify(doc.fhir);
         const hash = sha256Hex(json);
-        results.push({ type: 'fhir', sampleId: doc._id, hash, doc });
+        results.push({ type: 'fhir', specimenId: doc.specimenId, hash, doc });
       } catch (err) {
         logger.error('Erro ao gerar hash FHIR da amostra:', err.message || err);
       }
@@ -69,14 +69,14 @@ class HL7AuditService {
     const logsCol = db.collection('logs');
     const inserted = [];
     for (const item of [...fhir, ...hl7]) {
-      const sourceId = item.sampleId != null
-        ? String(item.sampleId)
+      const sourceId = item.specimenId != null
+        ? String(item.specimenId)
         : item.fileId != null
           ? String(item.fileId)
           : null;
 
       if (!sourceId) {
-        logger.warn('[HL7_AUDIT] Item sem sampleId/fileId ignorado para deduplicação');
+        logger.warn('[HL7_AUDIT] Item sem specimenId/fileId ignorado para deduplicação');
         continue;
       }
 
