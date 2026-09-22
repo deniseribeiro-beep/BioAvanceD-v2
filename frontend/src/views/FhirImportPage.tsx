@@ -30,9 +30,9 @@ type FhirRecord = {
   consentTracking?: { sentAt?: string | Date | null; failedAt?: string | Date | null } | null;
   normalized?: {
     patientName?: string;
-    patientID?: string;
+    participantId?: string;
     patientEmail?: string;
-    sampleID?: string;
+    specimenId?: string;
     consentSigned?: boolean;
   };
   errors?: Array<{ field?: string; message?: string; code?: string }>;
@@ -342,8 +342,8 @@ export default function FhirImportPage() {
                     return (
                       <tr key={row._id || row.rowNumber}>
                         <td style={tdStyle}>{row.rowNumber}</td>
-                        <td style={tdStyle}>{row.normalized?.patientName || row.normalized?.patientID || '-'}</td>
-                        <td style={tdStyle}>{row.normalized?.sampleID || '-'}</td>
+                        <td style={tdStyle}>{row.normalized?.patientName || row.normalized?.participantId || '-'}</td>
+                        <td style={tdStyle}>{row.normalized?.specimenId || '-'}</td>
                         <td style={{ ...tdStyle, fontWeight: 800 }}>{getDisplayStatus(row)}</td>
                         <td style={tdStyle}>{messages || 'Sem inconsistências'}</td>
                       </tr>
@@ -407,8 +407,8 @@ export default function FhirImportPage() {
                   ) : fhirStagingRows.map((row) => (
                     <tr key={`status-${row._id || row.rowNumber}`}>
                       <td style={tdStyle}>{row.rowNumber}</td>
-                      <td style={tdStyle}>{row.normalized?.patientName || row.normalized?.patientID || '-'}</td>
-                      <td style={tdStyle}>{row.normalized?.sampleID || '-'}</td>
+                      <td style={tdStyle}>{row.normalized?.patientName || row.normalized?.participantId || '-'}</td>
+                      <td style={tdStyle}>{row.normalized?.specimenId || '-'}</td>
                       <td style={tdStyle}><StatusPill status={getDisplayStatus(row)} /></td>
                       <td style={tdStyle}>{formatConsentDisplay(row)}</td>
                       <td style={tdStyle}>{String(row.quarantineStatus || (getDisplayStatus(row) === 'RELEASED' || getDisplayStatus(row) === 'SIGNED' || getDisplayStatus(row) === 'EXTERNAL_ATTACHED' ? 'RELEASED' : 'QUARANTINED')).toUpperCase()}</td>
