@@ -197,6 +197,29 @@ describe('item 8 compact model and serializer branch pack', () => {
       storageRackId: 'R1', positionCode: 'b12',
     })).toMatchObject({ positionCode: 'B12', rowIndex: 2, columnIndex: 12 });
 
+    expect(PhysicalStorageV2.storagePosition({
+      storageRackId: 'R1', positionCode: 'a01',
+    })).toMatchObject({
+      storageRackId: 'R1',
+      positionCode: 'A01',
+      rowIndex: 1,
+      columnIndex: 1,
+      status: 'available',
+    });
+
+    expect(PhysicalStorageV2.storageRack({
+      storageRackId: 'R2',
+      rowCount: 8,
+      columnCount: 12,
+    })).toMatchObject({
+      storageRackId: 'R2',
+      rowCount: 8,
+      columnCount: 12,
+      coordinateScheme: 'alpha_numeric',
+      orientationRule: 'top_left_origin',
+      status: 'active',
+    });
+
     expect(PhysicalStorageV2.containerPositionAssignment({
       containerPositionAssignmentId: 'CPA1',
       containerId: 'C1',
