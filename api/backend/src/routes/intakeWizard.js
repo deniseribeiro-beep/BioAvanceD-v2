@@ -382,8 +382,8 @@ function buildFallbackPatientID() {
 
 function resolvePatientID(data = {}) {
   const participant = normalizeObject(data?.participant);
-  const patientID = normalizeString(participant.participantId);
-  if (/^\d{8}$/.test(patientID)) return patientID;
+  const participantId = normalizeString(participant.participantId);
+  if (/^\d{8}$/.test(participantId)) return participantId;
   return buildFallbackPatientID();
 }
 
@@ -474,12 +474,12 @@ async function resolveConsentDecision(db, patient) {
   }
   const consent = await consentService.getPatientConsent(db, participantId);
   if (consent?.status === 'ACTIVE') {
-    return { active: true, consentId: consent.consentId || consent._id || null, patientId: participantId, status: 'SIGNED', quarantineReason: null, governanceReason: null };
+    return { active: true, consentId: consent.consentId || consent._id || null, participantId, status: 'SIGNED', quarantineReason: null, governanceReason: null };
   }
   if (consent?.status === 'REVOKED') {
-    return { active: false, consentId: consent.consentId || consent._id || null, patientId: participantId, status: 'REVOKED', quarantineReason: 'CONSENT_REVOKED', governanceReason: 'Consentimento revogado.' };
+    return { active: false, consentId: consent.consentId || consent._id || null, participantId, status: 'REVOKED', quarantineReason: 'CONSENT_REVOKED', governanceReason: 'Consentimento revogado.' };
   }
-  return { active: false, consentId: null, patientId: participantId, status: 'PENDING', quarantineReason: 'CONSENT_PENDING', governanceReason: 'Consentimento ainda não ativo/assinado.' };
+  return { active: false, consentId: null, participantId, status: 'PENDING', quarantineReason: 'CONSENT_PENDING', governanceReason: 'Consentimento ainda não ativo/assinado.' };
 }
 
 function isOperationalSensor(sensor) {
@@ -679,7 +679,7 @@ async function handleIntakeWizard(req, res) {
       action: 'PATIENT_MATCH_UPSERT', resourceType: 'Patient', resourceId: matchOutcome?.patient?.participantId || null,
       status: 'success', severity: 'info',
       message: matchOutcome?.created ? 'Novo paciente criado durante intake wizard.' : 'Paciente existente identificado e atualizado durante intake wizard.',
-      payload: { created: Boolean(matchOutcome?.created), matched: !Boolean(matchOutcome?.created), matchType: matchOutcome?.matchType || null, patientID: matchOutcome?.patient?.participantId || null },
+      payload: { created: Boolean(matchOutcome?.created), matched: !Boolean(matchOutcome?.created), matchType: matchOutcome?.matchType || null, participantId: matchOutcome?.patient?.participantId || null },
       req, module: 'Cadastro'
     });
 
@@ -750,8 +750,8 @@ async function handleIntakeWizard(req, res) {
       message: responseMessage,
       qualidade: qualidade.final_grade ? `Grade ${qualidade.final_grade}` : 'Indeterminada',
       qualityAssessment: qualidade,
-      patientMatch: { matched: !matchOutcome.created, created: matchOutcome.created, matchType: matchOutcome.matchType, patientID: matchOutcome.patient?.participantId || null },
-      consent: { active: consentDecision.active, status: consentDecision.status, consentId: consentDecision.consentId || null, patientId: consentDecision.patientId || null, reason: consentDecision.governanceReason || null },
+      patientMatch: { matched: !matchOutcome.created, created: matchOutcome.created, matchType: matchOutcome.matchType, participantId: matchOutcome.patient?.participantId || null },
+      consent: { active: consentDecision.active, status: consentDecision.status, consentId: consentDecision.consentId || null, participantId: consentDecision.participantId || null, reason: consentDecision.governanceReason || null },
       currentStoragePlacement: physicalPlacement,
       label: buildLabelLinks(allocatedSample),
       clinicalEntities: clinicalEntitiesOutcome,
@@ -767,11 +767,11 @@ router.get('/patient-match', async (req, res) => {
   const db = req.app.locals.db;
   if (!db) return res.status(503).json({ success: false, error: 'Banco de dados não disponível.' });
 
-  const patientName = normalizeString(req.query?.patientName || req.query?.name);
+  const patientName = normalizeString(req.query?.patientName);
   const birthDate = parseBirthDate(req.query?.birthDate);
-  const participantIdQuery = normalizeString(req.query?.patientID || req.query?.patientId);
+  const participantIdQuery = normalizeString(req.query?.participantId);
   if (!participantIdQuery && (!patientName || !birthDate)) {
-    return res.status(400).json({ success: false, error: 'Informe patientID ou (patientName + birthDate).' });
+    return res.status(400).json({ success: false, error: 'Informe participantId ou (patientName + birthDate).' });
   }
 
   try {
@@ -809,14 +809,14 @@ router.get('/patient-match', async (req, res) => {
       action: 'PATIENT_MATCH_UPSERT', resourceType: 'Patient', resourceId: identity?.participantId || participantIdQuery || null,
       status: 'success', severity: 'info',
       message: identity ? 'Heurística de intake encontrou paciente existente para upsert.' : 'Heurística de intake não encontrou paciente correspondente.',
-      payload: { endpoint: '/patient-match', matched: Boolean(identity), query: { patientID: participantIdQuery || null, patientName: patientName || null, birthDate: birthDate ? birthDate.toISOString().slice(0, 10) : null } },
+      payload: { endpoint: '/patient-match', matched: Boolean(identity), query: { participantId: participantIdQuery || null, patientName: patientName || null, birthDate: birthDate ? birthDate.toISOString().slice(0, 10) : null } },
       req, module: 'Cadastro'
     });
 
     return res.json({
       success: true,
       matched: Boolean(identity),
-      patient: identity ? { patientID: normalizeString(identity.participantId), patientName: normalizeString(identity.patientName), birthDate: identity.birthDate || null, status: patientStatus } : null,
+      patient: identity ? { participantId: normalizeString(identity.participantId), patientName: normalizeString(identity.patientName), birthDate: identity.birthDate || null, status: patientStatus } : null,
       message: identity ? 'Paciente identificado. Novos dados serão vinculados ao perfil histórico.' : '',
     });
   } catch (error) {
