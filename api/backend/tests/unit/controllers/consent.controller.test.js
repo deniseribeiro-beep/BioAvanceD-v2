@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // NOTE on mocking strategy: this repo's Vitest setup does not let vi.mock()
-// intercept CommonJS require() (see .claude/skills/testing-conventions/SKILL.md).
+// intercept CommonJS require().
 // consent.controller.js does plain, non-destructured
 // `const consentService = require('../services/consent.service')` and
 // `const patientService = require('../services/patient.service')` at the top,

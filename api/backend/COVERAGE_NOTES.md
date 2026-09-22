@@ -20,8 +20,7 @@ stale as slices land and as source files change. Keep it honest:
   tail -60 /tmp/covrun.log` for the coverage table, then
   `grep -E "Test Files|^ Tests " /tmp/covrun.log` for the pass/fail
   summary — a bare `--coverage` run with no dir targets is blocked by
-  `.claude/hooks/full-suite-guard.cjs`
-  (per-iteration full-suite guard); explicit dir targets are the hook's
+  the per-iteration full-suite guard; explicit dir targets are the hook's
   own documented exception and produce an equivalent full-suite result.
   Then re-derive buckets from `coverage/coverage-summary.json`
   (`lines.pct` per file). `coverage/` is gitignored — this file is the
