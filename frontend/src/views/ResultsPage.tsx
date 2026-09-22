@@ -56,7 +56,7 @@ export default function ResultsPage() {
   const locale = language;
   const [searchParams, setSearchParams] = useSearchParams();
   const importJobID = searchParams.get('importJobID') || undefined;
-  const sampleIdParam = searchParams.get('sampleId') || searchParams.get('sampleID') || '';
+  const specimenIdParam = searchParams.get('specimenId') || '';
   const { results, loading, error, loadResults } = useResults(importJobID);
   const { equipment } = useEquipment();
   // Estados para importação
@@ -202,7 +202,7 @@ export default function ResultsPage() {
       <Card className="import-section">
         <h2 className="import-title">{t('results.import', 'Importar Arquivos de Análise')}</h2>
 
-        <AnalysisUpload sampleId={sampleIdParam} />
+        <AnalysisUpload specimenId={specimenIdParam} />
 
         {importError && (
           <div className="error-message import-error">
