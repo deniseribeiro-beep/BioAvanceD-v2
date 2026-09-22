@@ -282,6 +282,7 @@ describe('item 8 compact model and serializer branch pack', () => {
   it('covers BiomarkerObservation negative/invalid vocabulary and alias normalization branches', () => {
     const base = {
       participantId: 'P1',
+      specimenId: 'S1',
       biomarkerType: 'CRP',
       value: 1.2,
       unit: 'mg/L',
@@ -298,7 +299,6 @@ describe('item 8 compact model and serializer branch pack', () => {
       ...base,
       status: 'AMENDED',
       eventType: 'atualização',
-      sampleId: 'S1',
       resourceType: '',
       subject: { reference: 'Patient/P1' },
       effectiveDateTime: '2026-09-21T02:00:00Z',
@@ -309,7 +309,6 @@ describe('item 8 compact model and serializer branch pack', () => {
     expect(validation.isValid).toBe(true);
     expect(validation.normalized).toMatchObject({
       eventType: 'update',
-      sampleID: 'S1',
       specimenId: 'S1',
       resourceType: 'Observation',
       linkedResourceType: 'Specimen',
