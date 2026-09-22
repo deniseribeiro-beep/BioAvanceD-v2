@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 const { generateUniqueEquipmentID } = require('../../src/utils/equipmentIDGenerator');
-const { generateUniqueSpecimenId } = require('../../src/utils/sampleIDGenerator');
+const { generateUniqueSpecimenId } = require('../../src/utils/specimenIdGenerator');
 
 function makeDbMock(findOneResults) {
   let callCount = 0;
