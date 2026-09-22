@@ -31,6 +31,7 @@ function buildDb(collection) {
 
 const VALID_PAYLOAD = {
   participantId: '12345678',
+  specimenId: 'SPEC-1',
   biomarkerType: 'alphaGal',
   value: 4.2,
   unit: 'kU/L',
