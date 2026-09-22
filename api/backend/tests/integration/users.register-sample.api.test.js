@@ -65,6 +65,7 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
   function givenSampleServiceResult() {
     vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: '507f1f77bcf86cd799439013',
+      specimenId: 'SPEC-USER-0003',
       participantId: '12345678',
       sampleType: 'Sangue',
       barcode: 'BR-TEST-0003',
@@ -119,7 +120,7 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
     expect(response.body.data.topology.synced).toBe(false);
     expect(response.body.data.topology.fallbackQueued).toBe(false);
     expect(enqueueTopologicalTransaction).not.toHaveBeenCalled();
-    expect(typeof response.body.data.sampleID).toBe('string');
+    expect(typeof response.body.data.specimenId).toBe('string');
     expect(patientsCollectionMock.updateOne).not.toHaveBeenCalled();
   });
 

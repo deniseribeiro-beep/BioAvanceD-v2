@@ -255,6 +255,7 @@ describe('user.routes item 8 coverage — lower route bodies', () => {
       const db = dbWith();
       vi.spyOn(sampleService, 'createSample').mockResolvedValue({
         _id: 'sample-1',
+        specimenId: 'SPEC-COV-001',
         barcode: 'SYN-001',
       });
 
@@ -264,7 +265,7 @@ describe('user.routes item 8 coverage — lower route bodies', () => {
 
       expect(res.status).toBe(201);
       expect(res.body.partialSuccess).toBe(false);
-      expect(res.body.data.sampleID).toBe('sample-1');
+      expect(res.body.data.specimenId).toBe('SPEC-COV-001');
       expect(res.body.data.operationMode).toBe('PERMISSIVE');
       expect(res.body.data.topology).toEqual({ synced: true, fallbackQueued: false });
       expect(registerSampleState.lastInput.sampleData).toEqual({ barcode: 'SYN-001' });
@@ -278,6 +279,7 @@ describe('user.routes item 8 coverage — lower route bodies', () => {
       vi.spyOn(sampleService, 'createSample').mockResolvedValue({
         _id: null,
         id: 'sample-fallback-id',
+        specimenId: 'SPEC-COV-002',
         barcode: 'SYN-002',
       });
       currentRegisterSampleExecution = async (deps, input) => ({
@@ -300,7 +302,7 @@ describe('user.routes item 8 coverage — lower route bodies', () => {
       expect(res.status).toBe(202);
       expect(res.body.partialSuccess).toBe(true);
       expect(res.body.message).toContain('Amostra registrada com sucesso');
-      expect(res.body.data.sampleID).toBe('sample-fallback-id');
+      expect(res.body.data.specimenId).toBe('SPEC-COV-002');
       expect(res.body.data.operationMode).toBe('STRICT');
       expect(registerSampleState.lastInput.actor.userId).toBe('mongo-user');
       expect(registerSampleState.lastInput.actor.userName).toBe('synthetic-user');
@@ -409,11 +411,11 @@ describe('user.routes item 8 coverage — lower route bodies', () => {
     it('returns 503 without a database', async () => {
       const res = await request(buildApp({ db: null }))
         .post('/api/users/record-withdrawal')
-        .send({ sampleID: '507f1f77bcf86cd799439011' });
+        .send({ specimenId: '507f1f77bcf86cd799439011' });
       expect(res.status).toBe(503);
     });
 
-    it('requires sampleID after consent validation', async () => {
+    it('requires specimenId after consent validation', async () => {
       const res = await request(buildApp({ db: dbWith() }))
         .post('/api/users/record-withdrawal')
         .send({ requiredScope: 'research' });
@@ -424,46 +426,50 @@ describe('user.routes item 8 coverage — lower route bodies', () => {
 
     it('uses consentScope as the fallback authorization scope', async () => {
       vi.spyOn(sampleService, 'withdrawSample').mockResolvedValue({ ok: true });
-      const sampleID = '507f1f77bcf86cd799439011';
+      const specimenId = '507f1f77bcf86cd799439011';
       const res = await request(buildApp({ db: dbWith() }))
         .post('/api/users/record-withdrawal')
-        .send({ sampleID, consentScope: 'diagnostics', amount: 2 });
+        .send({ specimenId, consentScope: 'diagnostics', amount: 2 });
 
       expect(res.status).toBe(200);
-      expect(consentValidator.validateAccess).toHaveBeenCalledWith(sampleID, 'diagnostics');
+      expect(consentValidator.validateAccess).toHaveBeenCalledWith(specimenId, 'diagnostics');
       expect(sampleService.withdrawSample).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({}),
+        specimenId,
         expect.objectContaining({ consentScope: 'diagnostics', amount: 2 })
       );
     });
 
     it('passes null when no consent scope is supplied', async () => {
       vi.spyOn(sampleService, 'withdrawSample').mockResolvedValue({ ok: true });
-      const sampleID = '507f1f77bcf86cd799439011';
+      const specimenId = '507f1f77bcf86cd799439011';
       const res = await request(buildApp({ db: dbWith() }))
         .post('/api/users/record-withdrawal')
-        .send({ sampleID, amount: 1 });
+        .send({ specimenId, amount: 1 });
 
       expect(res.status).toBe(200);
-      expect(consentValidator.validateAccess).toHaveBeenCalledWith(sampleID, null);
+      expect(consentValidator.validateAccess).toHaveBeenCalledWith(specimenId, null);
     });
 
-    it('maps invalid ObjectId input to the route 400 response', async () => {
+    it('passes a canonical non-ObjectId specimenId through to SampleService', async () => {
       const withdrawSpy = vi.spyOn(sampleService, 'withdrawSample').mockResolvedValue({ ok: true });
       const res = await request(buildApp({ db: dbWith() }))
         .post('/api/users/record-withdrawal')
-        .send({ sampleID: 'not-an-object-id' });
+        .send({ specimenId: 'SPEC-CANONICAL-001' });
 
-      expect(res.status).toBe(400);
-      expect(withdrawSpy).not.toHaveBeenCalled();
+      expect(res.status).toBe(200);
+      expect(withdrawSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        'SPEC-CANONICAL-001',
+        expect.objectContaining({})
+      );
     });
 
     it('maps withdraw service failures to 400', async () => {
       vi.spyOn(sampleService, 'withdrawSample').mockRejectedValue(new Error('withdraw failed'));
       const res = await request(buildApp({ db: dbWith() }))
         .post('/api/users/record-withdrawal')
-        .send({ sampleID: '507f1f77bcf86cd799439011' });
+        .send({ specimenId: '507f1f77bcf86cd799439011' });
 
       expect(res.status).toBe(400);
       expect(res.body.message).toBe('withdraw failed');

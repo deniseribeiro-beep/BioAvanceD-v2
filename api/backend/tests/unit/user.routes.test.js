@@ -608,7 +608,7 @@ describe('user.routes item 8 register-sample and normalization alternates', () =
         partialSuccess: false,
         message: 'users.registerSampleSuccess',
         data: {
-          sampleID: 'legacy-sample-id',
+          specimenId: 'SPEC-1',
           operationMode: 'PERMISSIVE',
           topology: { synced: false, fallbackQueued: false },
         },
@@ -640,7 +640,7 @@ describe('user.routes item 8 register-sample and normalization alternates', () =
       success: true,
       partialSuccess: false,
       data: {
-        sampleID: 'sample-object-id',
+        specimenId: 'SPEC-2',
         operationMode: 'STRICT',
         topology: { synced: false, fallbackQueued: false },
       },
@@ -944,7 +944,7 @@ describe('user.routes item 8 operational route branches', () => {
     loadRoute();
   });
 
-  it('requires sampleID only after consent validation and records a valid withdrawal through SampleService', async () => {
+  it('requires specimenId only after consent validation and records a valid withdrawal through SampleService', async () => {
     const sampleService = require('../../src/services/sample.service');
     const consentValidator = require('../../src/services/consent.validator');
     const consent = vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
@@ -961,20 +961,20 @@ describe('user.routes item 8 operational route branches', () => {
       .post('/api/users/record-withdrawal')
       .send({ requiredScope: 'research' });
     expect(missing.status).toBe(400);
-    expect(missing.body.error).toBe('users.sampleIDRequired');
+    expect(missing.body.error).toBe('users.specimenIdRequired');
 
-    const sampleID = '507f1f77bcf86cd799439011';
+    const specimenId = '507f1f77bcf86cd799439011';
     const ok = await request(app)
       .post('/api/users/record-withdrawal')
       .send({
-        sampleID,
+        specimenId,
         consentScope: 'research',
         withdrawalType: 'Total',
         withdrawalResponsible: 'Synthetic User',
       });
 
     expect(ok.status).toBe(200);
-    expect(consent).toHaveBeenCalledWith(sampleID, 'research');
+    expect(consent).toHaveBeenCalledWith(specimenId, 'research');
     expect(withdraw).toHaveBeenCalledWith(
       db,
       expect.objectContaining({ toString: expect.any(Function) }),
@@ -996,7 +996,7 @@ describe('user.routes item 8 operational route branches', () => {
 
     const res = await request(app)
       .post('/api/users/record-withdrawal')
-      .send({ sampleID: '507f1f77bcf86cd799439011' });
+      .send({ specimenId: '507f1f77bcf86cd799439011' });
 
     expect(res.status).toBe(400);
     expect(res.body.message).toBe('consent denied');

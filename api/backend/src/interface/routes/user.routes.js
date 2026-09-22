@@ -862,11 +862,11 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
 
         return savedSample;
       },
-      deleteById: async (sampleId) => {
+      deleteById: async (specimenId) => {
         const samplesCollection = await getCollection(db, 'samples');
-        const filter = ObjectId.isValid(sampleId)
-          ? { _id: new ObjectId(sampleId) }
-          : { _id: sampleId };
+        const filter = ObjectId.isValid(specimenId)
+          ? { _id: new ObjectId(specimenId) }
+          : { _id: specimenId };
         await samplesCollection.deleteOne(filter);
       }
     };
@@ -897,7 +897,6 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
         : req.t('users.registerSampleSuccess') || 'Amostra registrada com sucesso',
       data: {
         ...sample,
-        sampleID: sample._id?.toString ? sample._id.toString() : String(sample._id || sample.id || ''),
         operationMode,
         topology: {
           synced: Boolean(result?.topology?.synced),
@@ -936,21 +935,20 @@ router.post('/record-withdrawal', authenticate, requirePermission('withdrawSampl
 
     consentValidator.init(db);
     await consentValidator.validateAccess(
-      req.body?.sampleID,
+      req.body?.specimenId,
       req.body?.requiredScope || req.body?.consentScope || null
     );
 
-    const { sampleID, ...withdrawalData } = req.body;
-    if (!sampleID) {
+    const { specimenId, ...withdrawalData } = req.body;
+    if (!specimenId) {
       return res.status(400).json({
         success: false,
-        error: req.t('users.sampleIDRequired')
+        error: req.t('users.specimenIdRequired')
       });
     }
 
-    const { ObjectId } = require('mongodb');
     const sampleService = require('../../services/sample.service');
-    const result = await sampleService.withdrawSample(db, new ObjectId(sampleID), withdrawalData);
+    const result = await sampleService.withdrawSample(db, specimenId, withdrawalData);
 
     return res.status(200).json({
       success: true,

@@ -217,9 +217,9 @@ describe('user.routes item 8 legitimate residual branches', () => {
     const missing = await request(app).post('/api/users/record-withdrawal').send({});
     expect(missing.status).toBe(400);
 
-    const sampleID = '507f1f77bcf86cd799439011';
+    const specimenId = '507f1f77bcf86cd799439011';
     const ok = await request(app).post('/api/users/record-withdrawal').send({
-      sampleID,
+      specimenId,
       requiredScope: 'research',
       quantity: 1,
     });
@@ -227,13 +227,13 @@ describe('user.routes item 8 legitimate residual branches', () => {
     expect(ok.body.data).toEqual({ movementID: 'M-1' });
 
     const denied = await request(app).post('/api/users/record-withdrawal').send({
-      sampleID,
+      specimenId,
       consentScope: 'secondary-use',
     });
     expect(denied.status).toBe(400);
     expect(denied.body.message).toBe('consent-boom');
-    expect(validateAccess).toHaveBeenCalledWith(sampleID, 'research');
-    expect(validateAccess).toHaveBeenCalledWith(sampleID, 'secondary-use');
+    expect(validateAccess).toHaveBeenCalledWith(specimenId, 'research');
+    expect(validateAccess).toHaveBeenCalledWith(specimenId, 'secondary-use');
   });
 });
 
