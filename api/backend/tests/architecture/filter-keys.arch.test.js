@@ -951,6 +951,14 @@ function offendersInSynthetic(source) {
   });
 }
 
+test('canonical v2: retired participant/specimen filter keys have no runtime exemptions', () => {
+  assert.equal(
+    RETIRED_KEY_EXEMPT.size,
+    0,
+    'Canonical v2 permits no runtime query exemptions for retired participant/specimen identifiers'
+  );
+});
+
 test('#788: no .find()/.findOne() filters on a field nothing in src/ ever writes, or a retired one', () => {
   const offenders = offendersIn(sweepSource());
 
