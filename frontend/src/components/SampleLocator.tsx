@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Search, MapPin, AlertCircle, Loader, QrCode } from 'lucide-react';
+import { Search, MapPin, AlertCircle, Loader, ScanLine } from 'lucide-react';
 import { storageApi } from '../services/storageApi';
 import type { CurrentStoragePlacementDTO } from '../types/models';
 import './SampleLocator.css';
@@ -91,7 +91,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
           <MapPin size={24} />
           <h3>Buscar amostra</h3>
         </div>
-        <p className="sample-locator-description">Busque por ID, barcode ou QR code.</p>
+        <p className="sample-locator-description">Busque por ID ou identificador Data Matrix.</p>
       </div>
 
       <div className="sample-locator-search" data-testid="sample-locator-search">
@@ -100,7 +100,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
           <input
             ref={inputRef}
             type="text"
-            placeholder={scanMode ? 'Escaneie e pressione Enter...' : 'Digite ID, barcode ou QR code...'}
+            placeholder={scanMode ? 'Escaneie e pressione Enter...' : 'Digite ID ou identificador Data Matrix...'}
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -118,11 +118,11 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
             onClick={handleToggleScanMode}
             disabled={loading}
             className={`btn-scan ${scanMode ? 'active' : ''}`}
-            title="Ativar leitura por barcode/QR code"
+            title="Ativar leitura Data Matrix"
             data-testid="sample-locator-scan-button"
           >
-            <QrCode size={16} />
-            {scanMode ? 'Leitura ativa' : 'Barcode/QR'}
+            <ScanLine size={16} />
+            {scanMode ? 'Leitura ativa' : 'Data Matrix'}
           </button>
         </div>
       </div>
