@@ -7,7 +7,7 @@ const { generateUniqueParticipantId, sanitizePatientForLogs } = require('../util
 const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require('../utils/fieldEncryption');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
-const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
+const { omitParticipantIdentityFields } = require('../utils/participantIdentityFields');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 
 const indexedPatientCollections = new Set();
@@ -622,7 +622,7 @@ class PatientService {
         void 0;
       }
 
-      const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
+      const validation = PatientModel.validate(omitParticipantIdentityFields(patientData));
       [validation]
         .filter((result) => !result.isValid)
         .forEach((result) => {
@@ -682,7 +682,7 @@ class PatientService {
       patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
       const patientsCollection = await this.getPatientsCollection(db);
-      const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
+      const patient = PatientModel.create(omitParticipantIdentityFields(patientData));
       const persistedPatient = this.encryptSensitivePatientFields(patient);
 
       const result = await patientsCollection.insertOne(persistedPatient);
@@ -1083,7 +1083,7 @@ class PatientService {
           continue;
         }
       }
-      updateData = omitLegacyIdentityFields(updateData);
+      updateData = omitParticipantIdentityFields(updateData);
 
       // Busca por participantId (string de 8 dígitos), _id (ObjectId de 24
       // caracteres hex) ou participantId de formato livre (#604 -- mesmo
