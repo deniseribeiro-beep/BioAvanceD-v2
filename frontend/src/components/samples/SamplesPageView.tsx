@@ -1,6 +1,6 @@
 import { Fragment, useState } from 'react';
-import { Edit3, Package, Printer, QrCode, Search } from 'lucide-react';
-import Barcode from 'react-barcode';
+import { Edit3, Package, Printer, ScanLine, Search } from 'lucide-react';
+import Datamatrix from 'react-datamatrix-svg';
 import Button from '../UI/Button';
 import Card from '../UI/Card';
 import Input from '../UI/Input';
@@ -114,14 +114,14 @@ export default function SamplesPageView({
           <div className="samples-search-panel">
             <Input
               label={t('samples.searchLabel')}
-              placeholder={scanMode ? t('samples.searchScanPlaceholder', 'Escaneie barcode/QR code e pressione pesquisar') : t('samples.searchPlaceholder')}
+              placeholder={scanMode ? t('samples.searchScanPlaceholder', 'Escaneie o Data Matrix e pressione pesquisar') : t('samples.searchPlaceholder')}
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
               data-testid="samples-search-input"
             />
             <p className="samples-search-hint">
               {scanMode
-                ? t('samples.searchScanHint', 'Modo leitura ativo: use o leitor de barcode ou QR code e depois pressione Pesquisar.')
+                ? t('samples.searchScanHint', 'Modo leitura ativo: use o leitor Data Matrix e depois pressione Pesquisar.')
                 : t('samples.searchHint')}
             </p>
             <div className="samples-search-actions">
@@ -135,8 +135,8 @@ export default function SamplesPageView({
                 onClick={() => setScanMode((current) => !current)}
                 data-testid="samples-scan-button"
               >
-                <QrCode size={15} />
-                {scanMode ? t('samples.scanModeOn', 'Leitura ativa') : t('samples.scanModeOff', 'Barcode/QR')}
+                <ScanLine size={15} />
+                {scanMode ? t('samples.scanModeOn', 'Leitura ativa') : t('samples.scanModeOff', 'Data Matrix')}
               </button>
             </div>
           </div>
@@ -343,16 +343,22 @@ export default function SamplesPageView({
         <Modal isOpen title={t('samples.printLabels')} onClose={onClosePrintModal}>
           <div id="printable-area">
             {selectedSamples.map((sample) => {
-              const barcodeValue = sample.barcode || sample.sampleID || sample.id;
+              const encodedValue = sample.barcode || sample.sampleID || sample.id;
               const participantId = sample.participantId ?? (sample as any).patient?.participantId;
 
               return (
                 <div key={sample.id} className="qr-label">
                   <div className="qr-label__title">{sample.sampleType || t('samples.sampleFallback')}</div>
-                  <div className="qr-label__code">{barcodeValue || 'N/A'}</div>
-                  {barcodeValue && (
+                  <div className="qr-label__code">{encodedValue || 'N/A'}</div>
+                  {encodedValue && (
                     <div className="qr-label__barcode">
-                      <Barcode value={String(barcodeValue)} height={42} width={1.4} displayValue={false} margin={0} />
+                      <Datamatrix
+                        value={String(encodedValue)}
+                        width={60}
+                        height={60}
+                        foreground="#000"
+                        background="#fff"
+                      />
                     </div>
                   )}
                   <div className="qr-label__patient">{participantId ?? 'N/A'}</div>
