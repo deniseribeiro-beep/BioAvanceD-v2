@@ -5,9 +5,9 @@ import { useSampleFiles } from './useSampleFiles';
 import { sampleService } from '../services/api';
 import { vi } from 'vitest';
 
-// #901: SampleFilesSection.tsx (the consumer) keys a useEffect on sampleID
+// #901: SampleFilesSection.tsx (the consumer) keys a useEffect on specimenId
 // and calls loadFiles() whenever it changes (SampleFilesSection.tsx:33-37).
-// If sampleID flips quickly (A -> B) and B's response resolves before A's
+// If specimenId flips quickly (A -> B) and B's response resolves before A's
 // late one arrives, the unguarded hook has no way to tell the two calls
 // apart -- whichever resolves LAST wins, even if it was requested first.
 // This reproduces that race with two independently controllable promises.
@@ -25,17 +25,17 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function SampleFilesHarness({ sampleID }: { sampleID: string }) {
-  const { files, loading, loadFiles } = useSampleFiles(sampleID);
+function SampleFilesHarness({ specimenId }: { specimenId: string }) {
+  const { files, loading, loadFiles } = useSampleFiles(specimenId);
 
   // Mirrors SampleFilesSection.tsx: the load-on-change effect lives in the
   // consumer, not inside the hook.
   useEffect(() => {
-    if (sampleID) {
+    if (specimenId) {
       loadFiles();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sampleID]);
+  }, [specimenId]);
 
   return (
     <div>
@@ -50,20 +50,20 @@ describe('useSampleFiles stale-response race (#901)', () => {
     vi.clearAllMocks();
   });
 
-  it('discards sampleID A\'s late response once sampleID B has been requested and resolves first', async () => {
+  it('discards specimenId A\'s late response once specimenId B has been requested and resolves first', async () => {
     const deferredA = deferred<any>();
     const deferredB = deferred<any>();
 
     vi.mocked(sampleService.listFiles).mockImplementation(((id: string) => {
       if (id === 'sample-a') return deferredA.promise;
       if (id === 'sample-b') return deferredB.promise;
-      return Promise.reject(new Error('unexpected sampleID'));
+      return Promise.reject(new Error('unexpected specimenId'));
     }) as any);
 
-    const { rerender } = render(<SampleFilesHarness sampleID="sample-a" />);
+    const { rerender } = render(<SampleFilesHarness specimenId="sample-a" />);
     await waitFor(() => expect(sampleService.listFiles).toHaveBeenCalledWith('sample-a'));
 
-    rerender(<SampleFilesHarness sampleID="sample-b" />);
+    rerender(<SampleFilesHarness specimenId="sample-b" />);
     await waitFor(() => expect(sampleService.listFiles).toHaveBeenCalledWith('sample-b'));
 
     // B (the newer request) resolves first...
