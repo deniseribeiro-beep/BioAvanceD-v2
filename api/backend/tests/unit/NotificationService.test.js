@@ -568,7 +568,7 @@ describe('NotificationService', () => {
       expect(link).toBe('https://app.example.com/patients/P-1/consent?token=tok%20en');
     });
 
-    // #805: was 'falls back to patientId then id when patientID is absent'.
+    // #805: was 'falls back to participantId then id when participantId is absent'.
     // That fallback chain never matched any caller's shape and produced
     // /patients/undefined/consent in production; it now throws instead.
     it('throws when participantId is absent instead of emitting an undefined id', () => {
@@ -607,8 +607,8 @@ describe('NotificationService', () => {
       const sendEmailSpy = vi
         .spyOn(notificationService, 'sendEmail')
         .mockResolvedValue({ success: true, channel: 'email', provider: 'resend' });
-      // #796: was `{ patientID: 'P-1', ... }` asserting `metadata: { patientID: 'P-1' }`.
-      // No caller passes `patientID`, so that assertion only held because the
+      // #796: was `{ participantId: 'P-1', ... }` asserting `metadata: { participantId: 'P-1' }`.
+      // No caller passes `participantId`, so that assertion only held because the
       // test invented the field the product code was wrongly reading.
       const result = await notificationService.sendConsentEmail(
         { participantId: '12345678', patientName: 'Maria', email: 'maria@example.com' },
@@ -624,12 +624,12 @@ describe('NotificationService', () => {
       expect(result).toEqual({ channel: 'email', success: true, provider: 'resend' });
     });
 
-    // #796: every test above hands sendConsentEmail `{ patientID: 'P-1' }`,
+    // #796: every test above hands sendConsentEmail `{ participantId: 'P-1' }`,
     // a shape neither real caller produces. Both pass `participantId`:
     //   routes/eConsent.js:31            sendConsentEmail({ participantId, email }, link)
     //   fhir-import-staging.service.js   sendConsentEmail({ participantId: normalized.participantId, ... })
     // Driven with the real shape, the compliance record persisted by
-    // sendEmail -> persistComplianceLog carried `patientID: null`, so every
+    // sendEmail -> persistComplianceLog carried `participantId: null`, so every
     // RF_CONSENT_NOTIFICATION ever written had no link back to the
     // participant it was sent for. Same shape as #795's audit trail, and the
     // same enabler as #803 (fixture shapes diverging from real callers).
@@ -657,7 +657,7 @@ describe('NotificationService', () => {
   describe('sendConsentSmsFallback', () => {
     it('returns missing_phone failure when phone cannot be resolved', async () => {
       vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      const result = await notificationService.sendConsentSmsFallback({ patientID: 'P-1' }, 'http://link');
+      const result = await notificationService.sendConsentSmsFallback({ participantId: 'P-1' }, 'http://link');
       expect(result).toEqual({ channel: 'sms', success: false, reason: 'missing_phone' });
     });
 
@@ -666,7 +666,7 @@ describe('NotificationService', () => {
       delete process.env.ALERT_EMAIL_TO;
       vi.spyOn(logger, 'warn').mockImplementation(() => {});
       const result = await notificationService.sendConsentSmsFallback(
-        { patientID: 'P-1', phone: '11912345678' },
+        { participantId: 'P-1', phone: '11912345678' },
         'http://link'
       );
       expect(result).toEqual({ channel: 'sms', success: false, reason: 'missing_sms_fallback_email' });
@@ -676,7 +676,7 @@ describe('NotificationService', () => {
       notificationService.adminEmail = 'admin@example.com';
       const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
       const result = await notificationService.sendConsentSmsFallback(
-        { patientID: 'P-1', phone: '11912345678' },
+        { participantId: 'P-1', phone: '11912345678' },
         'http://link'
       );
       expect(sendEmailSpy).toHaveBeenCalledWith(
@@ -689,13 +689,13 @@ describe('NotificationService', () => {
   describe('sendConsentWhatsappFallback', () => {
     it('returns missing_phone failure when phone cannot be resolved', async () => {
       vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      const result = await notificationService.sendConsentWhatsappFallback({ patientID: 'P-1' }, 'http://link');
+      const result = await notificationService.sendConsentWhatsappFallback({ participantId: 'P-1' }, 'http://link');
       expect(result).toEqual({ channel: 'whatsapp', success: false, reason: 'missing_phone' });
     });
 
     it('reports a consolidated mocked success when a phone is resolvable (no real WhatsApp send)', async () => {
       const result = await notificationService.sendConsentWhatsappFallback(
-        { patientID: 'P-1', phone: '11912345678' },
+        { participantId: 'P-1', phone: '11912345678' },
         'http://link'
       );
       expect(result).toEqual({
@@ -716,7 +716,7 @@ describe('NotificationService', () => {
         success: true
       });
 
-      const results = await notificationService.notifyPatientConsent({ patientID: 'P-1' }, 'http://link');
+      const results = await notificationService.notifyPatientConsent({ participantId: 'P-1' }, 'http://link');
       expect(results).toEqual([
         { channel: 'email', success: true },
         { channel: 'whatsapp', success: true }
@@ -730,7 +730,7 @@ describe('NotificationService', () => {
         success: true
       });
 
-      const results = await notificationService.notifyPatientConsent({ patientID: 'P-1' }, 'http://link');
+      const results = await notificationService.notifyPatientConsent({ participantId: 'P-1' }, 'http://link');
       expect(results[0]).toEqual({ channel: 'unknown', success: false, reason: 'boom' });
       expect(results[1]).toEqual({ channel: 'whatsapp', success: true });
     });
@@ -743,8 +743,8 @@ describe('NotificationService', () => {
         .spyOn(notificationService, 'notifyPatientConsent')
         .mockResolvedValue([{ channel: 'email', success: true }]);
 
-      const result = await notificationService.enqueueConsentNotification({ patientID: 'P-1' }, 'http://link');
-      expect(notifySpy).toHaveBeenCalledWith({ patientID: 'P-1' }, 'http://link');
+      const result = await notificationService.enqueueConsentNotification({ participantId: 'P-1' }, 'http://link');
+      expect(notifySpy).toHaveBeenCalledWith({ participantId: 'P-1' }, 'http://link');
       expect(result).toEqual([{ channel: 'email', success: true }]);
     });
 
@@ -753,9 +753,9 @@ describe('NotificationService', () => {
       vi.spyOn(notificationService, 'getNotificationQueue').mockReturnValue({ add: addMock });
       const notifySpy = vi.spyOn(notificationService, 'notifyPatientConsent');
 
-      const result = await notificationService.enqueueConsentNotification({ patientID: 'P-1' }, 'http://link');
+      const result = await notificationService.enqueueConsentNotification({ participantId: 'P-1' }, 'http://link');
       expect(addMock).toHaveBeenCalledWith('consent-notification', {
-        patientData: { patientID: 'P-1' },
+        patientData: { participantId: 'P-1' },
         consentLink: 'http://link'
       });
       expect(notifySpy).not.toHaveBeenCalled();
@@ -770,11 +770,11 @@ describe('NotificationService', () => {
         .mockResolvedValue([{ channel: 'email', success: true }]);
 
       const result = await notificationService.processConsentNotificationJob({
-        patientData: { patientID: 'P-9' },
+        patientData: { participantId: 'P-9' },
         consentLink: 'http://link/9'
       });
 
-      expect(notifySpy).toHaveBeenCalledWith({ patientID: 'P-9' }, 'http://link/9');
+      expect(notifySpy).toHaveBeenCalledWith({ participantId: 'P-9' }, 'http://link/9');
       expect(result).toEqual([{ channel: 'email', success: true }]);
     });
   });
