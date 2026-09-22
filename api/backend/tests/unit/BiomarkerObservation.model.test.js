@@ -4,6 +4,7 @@ import BiomarkerObservationModel from '../../src/models/BiomarkerObservation.js'
 describe('BiomarkerObservationModel.validate', () => {
   const baseData = {
     participantId: 'p-1',
+    specimenId: 'SPEC-1',
     biomarkerType: 'glucose',
     value: 90,
     unit: 'mg/dL',
@@ -77,10 +78,10 @@ describe('BiomarkerObservationModel item 8 branch coverage', () => {
     expect(result.normalized.eventType).toBe('manual');
   });
 
-  it('normalizes specimen aliases, explicit FHIR linkage and optional metadata', () => {
+  it('normalizes canonical specimenId, explicit FHIR linkage and optional metadata', () => {
     const result = BiomarkerObservationModel.validate({
       ...baseData,
-      sampleId: ' SAMPLE-1 ',
+      specimenId: ' SAMPLE-1 ',
       resourceType: '   ',
       subject: { reference: 'Patient/p-1' },
       specimen: { reference: 'Specimen/explicit' },
@@ -95,7 +96,7 @@ describe('BiomarkerObservationModel item 8 branch coverage', () => {
     });
 
     expect(result.isValid).toBe(true);
-    expect(result.normalized.sampleID).toBe('SAMPLE-1');
+    expect(result.normalized.specimenId).toBe('SAMPLE-1');
     expect(result.normalized.resourceType).toBe('Observation');
     expect(result.normalized.subject).toEqual({ reference: 'Patient/p-1' });
     expect(result.normalized.specimen).toEqual({ reference: 'Specimen/explicit' });
@@ -107,26 +108,23 @@ describe('BiomarkerObservationModel item 8 branch coverage', () => {
     expect(result.normalized.eventType).toBe('update');
   });
 
-  it('derives a specimen reference from specimenID and covers empty linkage fallbacks', () => {
+  it('derives a specimen reference from canonical specimenId and rejects its absence', () => {
     const withSpecimen = BiomarkerObservationModel.validate({
       ...baseData,
-      specimenID: 'SPEC-2',
+      specimenId: 'SPEC-2',
     }).normalized;
     expect(withSpecimen.specimen).toEqual({ reference: 'Specimen/SPEC-2' });
 
-    const withoutSpecimen = BiomarkerObservationModel.validate(baseData).normalized;
-    expect(withoutSpecimen.sampleID).toBeNull();
-    expect(withoutSpecimen.specimen).toBeNull();
-    expect(withoutSpecimen.subject).toBeNull();
-    expect(withoutSpecimen.linkedResourceType).toBe('Patient');
-    expect(withoutSpecimen.linkedResourceId).toBe('p-1');
+    const withoutSpecimen = BiomarkerObservationModel.validate({ ...baseData, specimenId: '' });
+    expect(withoutSpecimen.isValid).toBe(false);
+    expect(withoutSpecimen.errors).toContain('specimenId é obrigatório');
   });
 
   it('builds idempotency keys through each identifier/date fallback and rejects create() defaults', () => {
     const collectedAt = new Date('2026-01-01T00:00:00.000Z');
     expect(BiomarkerObservationModel.buildIdempotencyKey({
       participantId: 'p1',
-      specimenID: 'SPEC-3',
+      specimenId: 'SPEC-3',
       biomarkerType: 'x',
       collectedAt,
       value: 1,
@@ -135,12 +133,11 @@ describe('BiomarkerObservationModel item 8 branch coverage', () => {
 
     expect(BiomarkerObservationModel.buildIdempotencyKey({
       participantId: 'p1',
-      linkedResourceId: 'LINK-2',
       biomarkerType: 'x',
       collectedAt: null,
       value: 1,
       eventType: 'manual',
-    })).toContain('LINK-2|x||1|manual');
+    })).toContain('p1||x||1|manual');
 
     expect(BiomarkerObservationModel.buildIdempotencyKey()).toBe('|||||');
     expect(() => BiomarkerObservationModel.create()).toThrow();
