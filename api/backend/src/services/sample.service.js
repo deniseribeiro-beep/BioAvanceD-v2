@@ -666,6 +666,25 @@ class SampleService {
         currentSpecimenStatus
       );
 
+      let normalizedBarcodeUpdate;
+      if (Object.prototype.hasOwnProperty.call(updateData, 'barcode')) {
+        if (typeof updateData.barcode !== 'string') {
+          throw createSampleValidationError('barcode deve ser uma string canônica para identificação Data Matrix');
+        }
+
+        normalizedBarcodeUpdate = updateData.barcode.trim();
+        if (!normalizedBarcodeUpdate) {
+          throw createSampleValidationError('barcode não pode ser vazio na atualização');
+        }
+
+        if (normalizedBarcodeUpdate !== existing.barcode) {
+          const duplicateBarcode = await samplesCollection.findOne({ barcode: normalizedBarcodeUpdate });
+          if (duplicateBarcode) {
+            throw createSampleValidationError(`Já existe uma amostra com o código de barras ${normalizedBarcodeUpdate}`, 409);
+          }
+        }
+      }
+
       // lifecycleStatus/availabilityStatus/quarantineStatus are retired
       // (#408), and status/currentStatus alongside them (#540) —
       // specimenStatus is the sole source of truth, so any caller still
@@ -705,7 +724,7 @@ class SampleService {
       const restUpdateData = {};
       for (const key of ALLOWED_UPDATE_FIELDS) {
         if (Object.prototype.hasOwnProperty.call(updateData, key)) {
-          restUpdateData[key] = updateData[key];
+          restUpdateData[key] = key === 'barcode' ? normalizedBarcodeUpdate : updateData[key];
         }
       }
 
