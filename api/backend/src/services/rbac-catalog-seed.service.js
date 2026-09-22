@@ -38,17 +38,17 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 2,
       roleName: 'Tecnico',
-      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'uploadFiles', 'viewReports', 'viewEquipment', 'manageStorageAllocation'],
+      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'uploadFiles', 'viewReports', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation'],
     },
     {
       accessType: 3,
       roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
     },
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
     },
   ],
 };
@@ -120,6 +120,30 @@ const PERMISSION_CATALOG = {
   // READ/UPDATE-only set would 403 every create and every delete on those
   // three routers -- six of the nine sites -- while looking like a rename.
   manageStorageTopology: { resourceType: 'StorageContainer', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar topologia de armazenamento' },
+  // #1146: facility.routes.js and room.routes.js gated their writes on
+  // manageStorageTopology above but left all four of their GETs on
+  // `authenticate` alone, so any authenticated principal could enumerate the
+  // facility and room topology -- UsuarioExterno included, whose only seeded
+  // grant is viewReports. #1087 had already closed the same hole in the third
+  // file of the family, equipment.routes.js.
+  //
+  // NOT a reuse of viewEquipment, and the reason is the catalog's own data
+  // rather than taste: viewEquipment carries resourceType 'Device', which a
+  // facility or a room is not, and dict-02 makes resourceType a 1..1 Core
+  // field of Permission (P1X-0221) -- load-bearing, not a label (#1123). This
+  // takes manageStorageTopology's resourceType so the pair matches.
+  //
+  // READ-only on purpose, for #1087's reason: the #631 derived-action check
+  // passes for GET, and the code can never later be reused to gate a write
+  // the way viewTemperature was before #1073.
+  //
+  // Granted to Tecnico + Coordenador + Administrador, viewEquipment's exact
+  // population. Unlike #1074's and #1087's splits this is NOT seeded to a
+  // pre-existing population -- that population is everyone authenticated, so
+  // any gate narrows. It matches what the UI already admits
+  // (rolePermissions.ts:133 gates /facility-management to STAFF), so the one
+  // principal that loses access had no UI path to these routes.
+  viewStorageTopology: { resourceType: 'StorageContainer', allowedActions: ['READ'], displayName: 'Visualizar topologia de armazenamento' },
   // #1087: the three equipment GETs carried no permission at all, so every
   // authenticated principal could list the inventory -- UsuarioExterno
   // included, whose only seeded grant is viewReports. The sibling route

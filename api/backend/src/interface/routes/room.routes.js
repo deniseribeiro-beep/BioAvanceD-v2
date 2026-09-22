@@ -24,7 +24,7 @@ function validateRoomInput(data) {
   return { isValid: errors.length === 0, errors };
 }
 
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, requirePermission('viewStorageTopology'), async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -48,7 +48,7 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-router.get('/:id', authenticate, async (req, res) => {
+router.get('/:id', authenticate, requirePermission('viewStorageTopology'), async (req, res) => {
   try {
     const db = req.app.locals.db;
 
