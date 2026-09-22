@@ -655,7 +655,7 @@ export interface Policy {
 export interface SampleHistory {
   _id?: string;
   historyID: number;
-  sampleID: number;
+  specimenId: string;
   action: 'CREATE' | 'UPDATE' | 'DELETE' | 'WITHDRAWAL' | 'LOCATION_CHANGE' | 'STATUS_CHANGE' | 'QUANTITY_CHANGE';
   changedBy: {
     userID: string;
@@ -675,7 +675,7 @@ export interface SampleHistory {
 export interface Withdrawal {
   _id?: string;
   withdrawalID: number;
-  sampleID: number;
+  specimenId: string;
   withdrawalDate?: Date | string;
   withdrawalType: 'Parcial' | 'Total';
   withdrawalQuantity?: number;
@@ -692,7 +692,7 @@ export interface Withdrawal {
 export interface Return {
   _id?: string;
   returnID: number;
-  sampleID: number;
+  specimenId: string;
   returnDate?: Date | string;
   returnType: 'Parcial' | 'Total';
   returnQuantity: number;
@@ -708,7 +708,7 @@ export interface Return {
 export interface SampleMovement {
   _id?: string;
   movementID: number;
-  sampleID: string;
+  specimenId: string;
   barcode?: string;
   type: 'withdraw' | 'return' | 'adjust';
   quantity: number;
