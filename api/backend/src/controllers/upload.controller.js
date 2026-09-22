@@ -65,7 +65,7 @@ class UploadController {
         storedPath,
         mimeType: file.mimetype,
         size: file.size,
-        specimenId: validationResult.sample._id, // Usa o _id da amostra validada
+        specimenId: String(validationResult.sample.specimenId), // referência canônica ao espécime
         specimenIdentifier: String(specimenId), // Mantém o identificador original para auditoria
         participantId: validationResult.sample.participantId,
         uploadedBy,
