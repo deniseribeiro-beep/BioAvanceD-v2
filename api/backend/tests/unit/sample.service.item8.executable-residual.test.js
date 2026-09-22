@@ -328,9 +328,15 @@ describe('sample.service item 8 read/query alternate branches', () => {
 
   it('does not restore historical case, numeric or regex lookup fallbacks', async () => {
     for (const encodedValue of ['abc', '123', 'R.*']) {
+      const diagnosticsCursor = {
+        limit: vi.fn().mockReturnThis(),
+        project: vi.fn().mockReturnThis(),
+        toArray: vi.fn().mockResolvedValue([]),
+      };
       const samples = collection({
         findOne: vi.fn().mockResolvedValue(null),
         countDocuments: vi.fn().mockResolvedValue(0),
+        find: vi.fn(() => diagnosticsCursor),
       });
       const db = { collection: vi.fn((name) => name === 'samples' ? samples : collection()) };
 
