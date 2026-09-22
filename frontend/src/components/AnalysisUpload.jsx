@@ -35,16 +35,16 @@ const getFileIcon = (extension) => {
   return File;
 };
 
-export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
+export default function AnalysisUpload({ specimenId: initialSpecimenId = '' }) {
   const [file, setFile] = useState(null);
-  const [sampleId, setSampleId] = useState(initialSampleId);
+  const [specimenId, setSpecimenId] = useState(initialSpecimenId);
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [validating, setValidating] = useState(false);
   const [validated, setValidated] = useState(null);
-  const [qrScanMode, setQrScanMode] = useState(false);
+  const [dataMatrixScanMode, setQrScanMode] = useState(false);
 
   const extension = useMemo(() => getExtension(file?.name), [file]);
   const FileIcon = useMemo(() => getFileIcon(extension), [extension]);
@@ -57,7 +57,7 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
     setSuccess('');
   };
 
-  const validateSampleId = async (id) => {
+  const validateSpecimenId = async (id) => {
     if (!id || id.trim() === '') {
       setValidated(null);
       return;
@@ -91,15 +91,15 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
     }
   };
 
-  const handleSampleIdChange = async (event) => {
+  const handleSpecimenIdChange = async (event) => {
     const value = event.target.value;
-    setSampleId(value);
+    setSpecimenId(value);
     
     // Valida apenas após parar de digitar (com delay)
     if (value.trim().length > 0) {
       setTimeout(() => {
-        if (value === sampleId) { // Verifica se o valor não mudou
-          validateSampleId(value);
+        if (value === specimenId) { // Verifica se o valor não mudou
+          validateSpecimenId(value);
         }
       }, 800);
     } else {
@@ -107,11 +107,11 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
     }
   };
 
-  const handleQrInput = async (event) => {
+  const handleDataMatrixInput = async (event) => {
     const scannedValue = event.target.value.trim();
     if (scannedValue) {
-      setSampleId(scannedValue);
-      await validateSampleId(scannedValue);
+      setSpecimenId(scannedValue);
+      await validateSpecimenId(scannedValue);
       setQrScanMode(false);
     }
   };
@@ -121,7 +121,7 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
       setError('Selecione um arquivo para upload');
       return;
     }
-    if (!sampleId) {
+    if (!specimenId) {
       setError('Informe o ID da amostra');
       return;
     }
@@ -137,7 +137,7 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('sampleId', sampleId);
+      formData.append('specimenId', specimenId);
 
       await analysisFileService.upload(formData, (event) => {
         if (!event.total) return;
@@ -148,7 +148,7 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
       setSuccess('Arquivo enviado com sucesso');
       setFile(null);
       setProgress(0);
-      setSampleId('');
+      setSpecimenId('');
       setValidated(null);
     } catch (err) {
       const message = err?.response?.data?.error || err?.message || 'Erro ao enviar arquivo';
@@ -184,7 +184,7 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
             <label>ID da Amostra</label>
             <button 
               type="button"
-              onClick={() => setQrScanMode(!qrScanMode)}
+              onClick={() => setQrScanMode(!dataMatrixScanMode)}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -197,24 +197,24 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
                 cursor: 'pointer'
               }}
             >
-              <Barcode size={14} /> QR Code
+              <Barcode size={14} /> Data Matrix
             </button>
           </div>
           
-          {qrScanMode ? (
+          {dataMatrixScanMode ? (
             <Input
               autoFocus
               type="text"
               onBlur={() => setQrScanMode(false)}
-              onChange={handleQrInput}
-              placeholder="Escaneie o código de barras/QR code"
+              onChange={handleDataMatrixInput}
+              placeholder="Escaneie o Data Matrix"
               disabled={uploading}
             />
           ) : (
             <Input
-              value={sampleId}
-              onChange={handleSampleIdChange}
-              placeholder="Digite o ID, código de barras ou escaneie QR code"
+              value={specimenId}
+              onChange={handleSpecimenIdChange}
+              placeholder="Digite o specimenId ou escaneie o Data Matrix"
               disabled={uploading}
             />
           )}
@@ -236,7 +236,7 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
               <>
                 <CheckCircle size={18} style={{ color: '#22c55e' }} />
                 <div style={{ fontSize: '14px', color: '#16a34a' }}>
-                  <strong>✓ Amostra válida:</strong> {validated.sample.sampleID} ({validated.sample.barcode})
+                  <strong>✓ Amostra válida:</strong> {validated.sample.specimenId} ({validated.sample.barcode})
                   <br />
                   <small>Paciente com consentimento assinado</small>
                 </div>
