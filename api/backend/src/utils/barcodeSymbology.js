@@ -13,12 +13,11 @@ function inferScannerSymbology(rawValue) {
     return 'DataMatrix';
   }
 
-  if (value.startsWith(']Q3')) {
-    return 'QR';
-  }
-
-  if (value.startsWith(']C1')) {
-    return 'Code128';
+  // Any other AIM prefix is outside the canonical v2 tube-identification
+  // contract. It is rejected generically rather than preserved as a
+  // compatibility path for retired symbologies.
+  if (value.startsWith(']')) {
+    return 'UNSUPPORTED';
   }
 
   return 'UNKNOWN';
@@ -38,7 +37,7 @@ function stripScannerPrefix(rawValue) {
 function parseScannedBarcode(rawValue) {
   const scannerSymbology = inferScannerSymbology(rawValue);
   const normalizedValue = stripScannerPrefix(rawValue);
-  const supportedSymbology = scannerSymbology === 'DataMatrix' || scannerSymbology === 'UNKNOWN';
+  const supportedSymbology = scannerSymbology !== 'UNSUPPORTED';
 
   return {
     rawValue: String(rawValue || ''),
