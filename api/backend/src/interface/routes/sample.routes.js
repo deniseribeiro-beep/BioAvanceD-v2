@@ -11,7 +11,7 @@ const sampleService = require('../../services/sample.service');
 // GET /api/samples/:id/miabis-compliance - MIABIS compliance check for a sample
 router.get('/:id/miabis-compliance', authenticate, requireOrganizationScope, async (req, res) => {
   try {
-    const sampleId = req.params.id;
+    const specimenRef = req.params.id;
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({
@@ -20,7 +20,7 @@ router.get('/:id/miabis-compliance', authenticate, requireOrganizationScope, asy
       });
     }
 
-    const sampleForScope = await sampleService.getSample(db, sampleId);
+    const sampleForScope = await sampleService.getSample(db, specimenRef);
     if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
       return res.status(403).json({
         success: false,
@@ -29,7 +29,7 @@ router.get('/:id/miabis-compliance', authenticate, requireOrganizationScope, asy
       });
     }
 
-    const result = await validateMiabisCompliance(sampleId, db);
+    const result = await validateMiabisCompliance(sampleForScope.specimenId, db);
     return res.status(200).json(result);
   } catch (error) {
     return res.status(500).json({
