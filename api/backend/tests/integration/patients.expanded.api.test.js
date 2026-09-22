@@ -653,6 +653,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
       app.locals.db = dbWithRbac({ observations: observationsCollection, biomarker_observations: observationsCollection });
 
       const payload = {
+        specimenId: 'SPEC-OBS-1',
         biomarkerType: 'alphaGal',
         value: 89.5,
         unit: 'nmol/g',
