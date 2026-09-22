@@ -317,6 +317,11 @@ describe('ImportLGPDService', () => {
       expect(result.quantity).toBe(5.5);
     });
 
+    it('does not coerce a numeric historical barcode into a canonical Data Matrix string', () => {
+      const result = importLgpdService.parseSampleRow({ barcode: 12345 });
+      expect(result.barcode).toBe(12345);
+    });
+
     it('defaults registeredAt to now when no date columns are supplied', () => {
       const before = Date.now();
       const result = importLgpdService.parseSampleRow({});
