@@ -400,9 +400,9 @@ describe('Reports API integration', () => {
           { participantId: 'P2', patientName: 'Bruno' },
         ],
         samples: [
-          { participantId: 'P1', sampleID: 'S1', clinical_data: { orphaCode: '558' } },
-          { participantId: 'P1', sampleID: 'S2', clinical_data: { orphaCode: '558' } },
-          { participantId: 'P2', sampleID: 'S3', clinical_data: { orphaCode: '558' } },
+          { participantId: 'P1', specimenId: 'S1', clinical_data: { orphaCode: '558' } },
+          { participantId: 'P1', specimenId: 'S2', clinical_data: { orphaCode: '558' } },
+          { participantId: 'P2', specimenId: 'S3', clinical_data: { orphaCode: '558' } },
         ],
       });
 
@@ -425,7 +425,7 @@ describe('Reports API integration', () => {
           { participantId: 'P9', patientName: 'Sem Amostras' },
         ],
         samples: [
-          { participantId: 'P1', sampleID: 'S1' },
+          { participantId: 'P1', specimenId: 'S1' },
         ],
       });
 
@@ -450,7 +450,7 @@ describe('Reports API integration', () => {
       // directly off Sample — seed a matching profile so the resolved
       // `specimenId: { $in: [...] }` condition is non-empty.
       const { db, capturedQueries } = buildCollectionDb({
-        samples: [{ patientID: 'P1', sampleID: 'S1', specimenId: 'SPEC-1' }],
+        samples: [{ participantId: 'P1', specimenId: 'S1', specimenId: 'SPEC-1' }],
         specimenPreanalytics: [{ specimenId: 'SPEC-1', matrixType: 'plasma', recordedAt: new Date('2026-01-01') }],
       });
 
@@ -539,7 +539,7 @@ describe('Reports API integration', () => {
 
     it('rede extracelular: filtra amostras por linkedProject/sampleOrigin com regex', async () => {
       const { db } = buildCollectionDb({
-        samples: [{ sampleID: 'S1', linkedProject: 'Rede Extracelular X' }],
+        samples: [{ specimenId: 'S1', linkedProject: 'Rede Extracelular X' }],
       });
       const testApp = appWithDb(db);
 
@@ -566,8 +566,8 @@ describe('Reports API integration', () => {
       expect(response.body.data.withResults).toBe(1);
       expect(response.body.data.withoutResults).toBe(1);
       expect(response.body.data.analysis).toHaveLength(2);
-      expect(response.body.data.analysis.find((item) => item.sampleID === 'S1').hasResults).toBe(true);
-      expect(response.body.data.analysis.find((item) => item.sampleID === 'S2').hasResults).toBe(false);
+      expect(response.body.data.analysis.find((item) => item.specimenId === 'S1').hasResults).toBe(true);
+      expect(response.body.data.analysis.find((item) => item.specimenId === 'S2').hasResults).toBe(false);
     });
 
     // #539: this used to read the legacy currentStatus/status fields
@@ -586,10 +586,10 @@ describe('Reports API integration', () => {
       const response = await request(testApp).post('/api/reports/sample_analysis/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
-      expect(response.body.data.analysis.find((item) => item.sampleID === 'S1').status).toBe('depleted');
+      expect(response.body.data.analysis.find((item) => item.specimenId === 'S1').status).toBe('depleted');
       // No specimenStatus recorded: falls back to the schema default
       // ('available'), not the stale legacy fields.
-      expect(response.body.data.analysis.find((item) => item.sampleID === 'S2').status).toBe('available');
+      expect(response.body.data.analysis.find((item) => item.specimenId === 'S2').status).toBe('available');
     });
 
     it('sensor/equipamento/resultado: retornam coleções genéricas com total', async () => {
