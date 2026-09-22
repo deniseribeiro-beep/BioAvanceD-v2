@@ -685,6 +685,68 @@ describe('NotificationService item 8 transport alternate outcomes', () => {
     }));
   });
 
+  it('preserves nonzero failed queue counts in consent queue statistics', async () => {
+    const service = new NotificationService();
+    vi.spyOn(service, 'getNotificationQueue').mockReturnValue({
+      getJobCounts: vi.fn().mockResolvedValue({
+        waiting: 1,
+        delayed: 2,
+        active: 3,
+        failed: 4,
+      }),
+    });
+
+    await expect(service.getConsentQueueStats()).resolves.toEqual({
+      available: true,
+      counts: { waiting: 1, delayed: 2, active: 3, failed: 4 },
+      totalQueued: 3,
+      active: 3,
+    });
+  });
+
+  it('preserves the SMTP provider message id when present', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.EMAIL_FROM = 'bio@example.test';
+    process.env.SMTP_HOST = 'mailpit';
+    const service = new NotificationService();
+    vi.spyOn(service, 'persistComplianceLog').mockResolvedValue(undefined);
+    vi.spyOn(service, 'getSmtpTransport').mockReturnValue({
+      sendMail: vi.fn().mockResolvedValue({ messageId: 'smtp-1' }),
+    });
+
+    await expect(service.sendEmail({
+      to: 'user@example.test',
+      subject: 'Synthetic',
+      text: 'body',
+      notificationType: 'TEST',
+    })).resolves.toMatchObject({
+      provider: 'smtp',
+      messageId: 'smtp-1',
+      notificationType: 'TEST',
+    });
+  });
+
+  it('surfaces the Resend provider error message when supplied', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.EMAIL_FROM = 'bio@example.test';
+    delete process.env.SMTP_HOST;
+    const service = new NotificationService();
+    vi.spyOn(service, 'persistComplianceLog').mockResolvedValue(undefined);
+    vi.spyOn(service, 'getResendClient').mockReturnValue({
+      emails: {
+        send: vi.fn().mockResolvedValue({
+          error: { message: 'resend rejected synthetic recipient' },
+        }),
+      },
+    });
+
+    await expect(service.sendEmail({
+      to: 'user@example.test',
+      subject: 'Synthetic',
+      text: 'body',
+    })).rejects.toThrow('resend rejected synthetic recipient');
+  });
+
   it('records a transport-specific failure code without masking the original SMTP error', async () => {
     process.env.NODE_ENV = 'test';
     process.env.EMAIL_FROM = 'bio@example.test';
