@@ -36,10 +36,10 @@ describe('biomarker-integrity.service', () => {
   });
 
   describe('computeBiomarkerHash', () => {
-    it('produces the expected sha256 hash of patientId|value|isoTimestamp', () => {
+    it('produces the expected sha256 hash of participantId|value|isoTimestamp', () => {
       const timestamp = '2026-07-01T10:00:00.000Z';
       const hash = biomarkerIntegrityService.computeBiomarkerHash({
-        patientId: 'p1',
+        participantId: 'p1',
         value: 5,
         timestamp
       });
@@ -47,10 +47,10 @@ describe('biomarker-integrity.service', () => {
       expect(hash).toBe(expected);
     });
 
-    it('trims patientId and normalizes it as part of the payload', () => {
+    it('trims participantId and normalizes it as part of the payload', () => {
       const timestamp = '2026-07-01T10:00:00.000Z';
       const hash = biomarkerIntegrityService.computeBiomarkerHash({
-        patientId: '  p1  ',
+        participantId: '  p1  ',
         value: 5,
         timestamp
       });
@@ -58,39 +58,39 @@ describe('biomarker-integrity.service', () => {
       expect(hash).toBe(expected);
     });
 
-    it('throws when patientId is missing', () => {
+    it('throws when participantId is missing', () => {
       expect(() =>
         biomarkerIntegrityService.computeBiomarkerHash({ value: 5, timestamp: '2026-07-01T10:00:00.000Z' })
-      ).toThrow('patientId é obrigatório para integridade de biomarcador');
+      ).toThrow('participantId é obrigatório para integridade de biomarcador');
     });
 
-    it('throws when patientId is blank/whitespace only', () => {
+    it('throws when participantId is blank/whitespace only', () => {
       expect(() =>
-        biomarkerIntegrityService.computeBiomarkerHash({ patientId: '   ', value: 5, timestamp: '2026-07-01T10:00:00.000Z' })
-      ).toThrow('patientId é obrigatório para integridade de biomarcador');
+        biomarkerIntegrityService.computeBiomarkerHash({ participantId: '   ', value: 5, timestamp: '2026-07-01T10:00:00.000Z' })
+      ).toThrow('participantId é obrigatório para integridade de biomarcador');
     });
 
     it('throws when timestamp is invalid', () => {
       expect(() =>
-        biomarkerIntegrityService.computeBiomarkerHash({ patientId: 'p1', value: 5, timestamp: 'not-a-date' })
+        biomarkerIntegrityService.computeBiomarkerHash({ participantId: 'p1', value: 5, timestamp: 'not-a-date' })
       ).toThrow('timestamp inválido para integridade de biomarcador');
     });
 
     it('throws when value is non-finite (NaN)', () => {
       expect(() =>
-        biomarkerIntegrityService.computeBiomarkerHash({ patientId: 'p1', value: 'abc', timestamp: '2026-07-01T10:00:00.000Z' })
+        biomarkerIntegrityService.computeBiomarkerHash({ participantId: 'p1', value: 'abc', timestamp: '2026-07-01T10:00:00.000Z' })
       ).toThrow('valor de biomarcador inválido');
     });
 
     it('throws when value is Infinity', () => {
       expect(() =>
-        biomarkerIntegrityService.computeBiomarkerHash({ patientId: 'p1', value: Infinity, timestamp: '2026-07-01T10:00:00.000Z' })
+        biomarkerIntegrityService.computeBiomarkerHash({ participantId: 'p1', value: Infinity, timestamp: '2026-07-01T10:00:00.000Z' })
       ).toThrow('valor de biomarcador inválido');
     });
 
     it('accepts a Date instance for timestamp directly', () => {
       const d = new Date('2026-07-01T10:00:00.000Z');
-      const hash = biomarkerIntegrityService.computeBiomarkerHash({ patientId: 'p1', value: 5, timestamp: d });
+      const hash = biomarkerIntegrityService.computeBiomarkerHash({ participantId: 'p1', value: 5, timestamp: d });
       const expected = sha256Hex(`p1|5|${d.toISOString()}`);
       expect(hash).toBe(expected);
     });
@@ -105,7 +105,7 @@ describe('biomarker-integrity.service', () => {
       expect(db.collection).toHaveBeenCalledWith('biomarker_integrity');
       expect(col.createIndex).toHaveBeenCalledTimes(3);
       expect(col.createIndex).toHaveBeenCalledWith(
-        { patientId: 1, biomarkerType: 1, timestamp: -1 },
+        { participantId: 1, biomarkerType: 1, timestamp: -1 },
         { name: 'biomarker_integrity_patient_type_ts_idx_v1' }
       );
       expect(col.createIndex).toHaveBeenCalledWith(
@@ -132,31 +132,31 @@ describe('biomarker-integrity.service', () => {
 
   describe('appendBiomarkerHash', () => {
     it('throws when db is missing', async () => {
-      await expect(biomarkerIntegrityService.appendBiomarkerHash(null, { patientId: 'p1', biomarkerType: 'glucose', value: 5 }))
+      await expect(biomarkerIntegrityService.appendBiomarkerHash(null, { participantId: 'p1', biomarkerType: 'glucose', value: 5 }))
         .rejects.toThrow('Banco de dados não disponível');
     });
 
-    it('throws when patientId is missing', async () => {
+    it('throws when participantId is missing', async () => {
       const { db } = makeDb();
       await expect(biomarkerIntegrityService.appendBiomarkerHash(db, { biomarkerType: 'glucose', value: 5 }))
-        .rejects.toThrow('patientId e biomarkerType são obrigatórios');
+        .rejects.toThrow('participantId e biomarkerType são obrigatórios');
     });
 
     it('throws when biomarkerType is missing', async () => {
       const { db } = makeDb();
-      await expect(biomarkerIntegrityService.appendBiomarkerHash(db, { patientId: 'p1', value: 5 }))
-        .rejects.toThrow('patientId e biomarkerType são obrigatórios');
+      await expect(biomarkerIntegrityService.appendBiomarkerHash(db, { participantId: 'p1', value: 5 }))
+        .rejects.toThrow('participantId e biomarkerType são obrigatórios');
     });
 
     it('throws when value is non-finite', async () => {
       const { db } = makeDb();
-      await expect(biomarkerIntegrityService.appendBiomarkerHash(db, { patientId: 'p1', biomarkerType: 'glucose', value: 'xx' }))
+      await expect(biomarkerIntegrityService.appendBiomarkerHash(db, { participantId: 'p1', biomarkerType: 'glucose', value: 'xx' }))
         .rejects.toThrow('valor de biomarcador inválido');
     });
 
     it('throws when timestamp is invalid', async () => {
       const { db } = makeDb();
-      await expect(biomarkerIntegrityService.appendBiomarkerHash(db, { patientId: 'p1', biomarkerType: 'glucose', value: 5, timestamp: 'bogus' }))
+      await expect(biomarkerIntegrityService.appendBiomarkerHash(db, { participantId: 'p1', biomarkerType: 'glucose', value: 5, timestamp: 'bogus' }))
         .rejects.toThrow('timestamp inválido para integridade de biomarcador');
     });
 
@@ -165,7 +165,7 @@ describe('biomarker-integrity.service', () => {
       const timestamp = '2026-07-01T10:00:00.000Z';
 
       const result = await biomarkerIntegrityService.appendBiomarkerHash(db, {
-        patientId: 'p1',
+        participantId: 'p1',
         biomarkerType: 'glucose',
         value: 5,
         timestamp,
@@ -177,17 +177,17 @@ describe('biomarker-integrity.service', () => {
       expect(col.insertOne).toHaveBeenCalledTimes(1);
       const insertedDoc = col.insertOne.mock.calls[0][0];
       expect(insertedDoc.day).toBe('2026-07-01');
-      expect(insertedDoc.patientId).toBe('p1');
+      expect(insertedDoc.participantId).toBe('p1');
       expect(insertedDoc.biomarkerType).toBe('glucose');
       expect(insertedDoc.value).toBe(5);
       expect(insertedDoc.source).toBe('lab_x');
       expect(insertedDoc.eventType).toBe('create');
       expect(insertedDoc.algorithm).toBe('sha256');
       expect(insertedDoc.integrityHash).toBe(
-        biomarkerIntegrityService.computeBiomarkerHash({ patientId: 'p1', value: 5, timestamp })
+        biomarkerIntegrityService.computeBiomarkerHash({ participantId: 'p1', value: 5, timestamp })
       );
       expect(result._id).toBe('new-id');
-      expect(result.patientId).toBe('p1');
+      expect(result.participantId).toBe('p1');
       expect(result.integrityHash).toBe(insertedDoc.integrityHash);
     });
 
@@ -195,7 +195,7 @@ describe('biomarker-integrity.service', () => {
       const { db, col } = makeDb();
 
       await biomarkerIntegrityService.appendBiomarkerHash(db, {
-        patientId: 'p1',
+        participantId: 'p1',
         biomarkerType: 'glucose',
         value: 5,
         timestamp: '2026-07-01T10:00:00.000Z'
@@ -267,7 +267,7 @@ describe('biomarker-integrity.service', () => {
       const timestamp = '2026-07-01T10:00:00.000Z';
       const storedDoc = {
         _id: validId,
-        patientId: 'p1',
+        participantId: 'p1',
         biomarkerType: 'glucose',
         value: 5,
         timestamp,
@@ -293,10 +293,10 @@ describe('biomarker-integrity.service', () => {
     it('returns a full verified=true result on a valid round trip with matching hash and valid proof', async () => {
       const validId = new ObjectId();
       const timestamp = '2026-07-01T10:00:00.000Z';
-      const integrityHash = biomarkerIntegrityService.computeBiomarkerHash({ patientId: 'p1', value: 5, timestamp });
+      const integrityHash = biomarkerIntegrityService.computeBiomarkerHash({ participantId: 'p1', value: 5, timestamp });
       const storedDoc = {
         _id: validId,
-        patientId: 'p1',
+        participantId: 'p1',
         biomarkerType: 'glucose',
         value: 5,
         timestamp,
@@ -320,7 +320,7 @@ describe('biomarker-integrity.service', () => {
       expect(verifySpy).toHaveBeenCalledWith(integrityHash, ['proof-step'], 'merkle-root');
       expect(result).toMatchObject({
         biomarkerIntegrityId: validId.toString(),
-        patientId: 'p1',
+        participantId: 'p1',
         biomarkerType: 'glucose',
         day: '2026-07-01',
         integrityHash,
@@ -337,10 +337,10 @@ describe('biomarker-integrity.service', () => {
     it('returns verified=false when contentUntampered is true but proofValid is false', async () => {
       const validId = new ObjectId();
       const timestamp = '2026-07-01T10:00:00.000Z';
-      const integrityHash = biomarkerIntegrityService.computeBiomarkerHash({ patientId: 'p1', value: 5, timestamp });
+      const integrityHash = biomarkerIntegrityService.computeBiomarkerHash({ participantId: 'p1', value: 5, timestamp });
       const storedDoc = {
         _id: validId,
-        patientId: 'p1',
+        participantId: 'p1',
         biomarkerType: 'glucose',
         value: 5,
         timestamp,
@@ -367,10 +367,10 @@ describe('biomarker-integrity.service', () => {
     it('falls back to deriving day from timestamp when doc.day is absent', async () => {
       const validId = new ObjectId();
       const timestamp = '2026-07-01T10:00:00.000Z';
-      const integrityHash = biomarkerIntegrityService.computeBiomarkerHash({ patientId: 'p1', value: 5, timestamp });
+      const integrityHash = biomarkerIntegrityService.computeBiomarkerHash({ participantId: 'p1', value: 5, timestamp });
       const storedDoc = {
         _id: validId,
-        patientId: 'p1',
+        participantId: 'p1',
         biomarkerType: 'glucose',
         value: 5,
         timestamp,

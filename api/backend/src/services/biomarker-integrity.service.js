@@ -24,10 +24,10 @@ function normalizeNumber(value) {
   return numericValue;
 }
 
-function computeBiomarkerHash({ patientId, value, timestamp }) {
-  const normalizedPatientId = String(patientId || '').trim();
+function computeBiomarkerHash({ participantId, value, timestamp }) {
+  const normalizedPatientId = String(participantId || '').trim();
   if (!normalizedPatientId) {
-    throw new Error('patientId é obrigatório para integridade de biomarcador');
+    throw new Error('participantId é obrigatório para integridade de biomarcador');
   }
 
   const normalizedTimestamp = normalizeDate(timestamp).toISOString();
@@ -44,7 +44,7 @@ class BiomarkerIntegrityService {
   async ensureIndexes(db) {
     const collection = db.collection(this.collectionName);
     await Promise.allSettled([
-      collection.createIndex({ patientId: 1, biomarkerType: 1, timestamp: -1 }, { name: 'biomarker_integrity_patient_type_ts_idx_v1' }),
+      collection.createIndex({ participantId: 1, biomarkerType: 1, timestamp: -1 }, { name: 'biomarker_integrity_patient_type_ts_idx_v1' }),
       collection.createIndex({ day: 1, timestamp: 1 }, { name: 'biomarker_integrity_day_ts_idx_v1' }),
       collection.createIndex({ integrityHash: 1 }, { name: 'biomarker_integrity_hash_idx_v1' })
     ]);
@@ -55,25 +55,25 @@ class BiomarkerIntegrityService {
       throw new Error('Banco de dados não disponível');
     }
 
-    const patientId = String(input.patientId || '').trim();
+    const participantId = String(input.participantId || '').trim();
     const biomarkerType = String(input.biomarkerType || '').trim();
     const value = normalizeNumber(input.value);
     const timestamp = normalizeDate(input.timestamp || new Date());
 
-    if (!patientId || !biomarkerType) {
-      throw new Error('patientId e biomarkerType são obrigatórios');
+    if (!participantId || !biomarkerType) {
+      throw new Error('participantId e biomarkerType são obrigatórios');
     }
 
     await this.ensureIndexes(db);
 
     const integrityHash = computeBiomarkerHash({
-      patientId,
+      participantId,
       value,
       timestamp
     });
 
     const document = {
-      patientId,
+      participantId,
       biomarkerType,
       value,
       timestamp,
@@ -134,7 +134,7 @@ class BiomarkerIntegrityService {
     }
 
     const recalculatedHash = computeBiomarkerHash({
-      patientId: doc.patientId,
+      participantId: doc.participantId,
       value: doc.value,
       timestamp: doc.timestamp
     });
@@ -150,7 +150,7 @@ class BiomarkerIntegrityService {
 
     return {
       biomarkerIntegrityId: String(doc._id),
-      patientId: doc.patientId,
+      participantId: doc.participantId,
       biomarkerType: doc.biomarkerType,
       timestamp: doc.timestamp,
       day: date,

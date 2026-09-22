@@ -33,7 +33,7 @@ class SecurityAlertsService {
       const {
         type, // CONSENT_BLOCKED, REVOKED_ACCESS, SUSPICIOUS_ACTIVITY, MULTIPLE_FAILURES, etc
         severity, // low, medium, high, critical
-        patientID,
+        participantId,
         userID,
         action,
         reason,
@@ -46,7 +46,7 @@ class SecurityAlertsService {
       const alert = {
         type,
         severity,
-        patientID,
+        participantId,
         userID,
         action,
         reason,
@@ -80,11 +80,11 @@ class SecurityAlertsService {
   /**
    * Alertas por consentimento bloqueado
    */
-  async alertConsentBlocked(patientID, operation, reason, sourceIP, userAgent) {
+  async alertConsentBlocked(participantId, operation, reason, sourceIP, userAgent) {
     return this.logSecurityAlert({
       type: 'CONSENT_BLOCKED',
       severity: 'high',
-      patientID,
+      participantId,
       action: 'ACCESS_DENIED',
       reason,
       details: {
@@ -93,18 +93,18 @@ class SecurityAlertsService {
       },
       sourceIP,
       userAgent,
-      affectedResources: [{ type: 'Patient', id: patientID }]
+      affectedResources: [{ type: 'Patient', id: participantId }]
     });
   }
 
   /**
    * Alertas por consentimento revogado
    */
-  async alertConsentRevoked(patientID, revokedScopes, sourceIP, userAgent) {
+  async alertConsentRevoked(participantId, revokedScopes, sourceIP, userAgent) {
     return this.logSecurityAlert({
       type: 'REVOKED_ACCESS',
       severity: 'high',
-      patientID,
+      participantId,
       action: 'CONSENT_REVOKED',
       reason: 'Paciente revogou consentimento',
       details: {
@@ -113,7 +113,7 @@ class SecurityAlertsService {
       },
       sourceIP,
       userAgent,
-      affectedResources: [{ type: 'PatientConsent', id: patientID }]
+      affectedResources: [{ type: 'PatientConsent', id: participantId }]
     });
   }
 
@@ -121,7 +121,7 @@ class SecurityAlertsService {
    * Detecta e alerta atividades suspeitas
    * Ex: múltiplas tentativas de acesso em curto período
    */
-  async detectSuspiciousActivity(patientID, userID, attempts = [], sourceIP, userAgent) {
+  async detectSuspiciousActivity(participantId, userID, attempts = [], sourceIP, userAgent) {
     if (attempts.length < 3) {
       return; // Não alerta por poucas tentativas
     }
@@ -129,7 +129,7 @@ class SecurityAlertsService {
     return this.logSecurityAlert({
       type: 'SUSPICIOUS_ACTIVITY',
       severity: 'critical',
-      patientID,
+      participantId,
       userID,
       action: 'MULTIPLE_FAILED_ATTEMPTS',
       reason: `Múltiplas tentativas de acesso negado (${attempts.length}) em curto período`,
@@ -144,7 +144,7 @@ class SecurityAlertsService {
       sourceIP,
       userAgent,
       affectedResources: [
-        { type: 'Patient', id: patientID },
+        { type: 'Patient', id: participantId },
         { type: 'User', id: userID }
       ]
     });

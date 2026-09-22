@@ -189,7 +189,7 @@ class ComplianceReportService {
             $group: {
               _id: '$action',
               count: { $sum: 1 },
-              uniquePatients: { $addToSet: '$payload.patientID' }
+              uniquePatients: { $addToSet: '$payload.participantId' }
             }
           }
         ])

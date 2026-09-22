@@ -96,10 +96,13 @@ describe('complianceReport.service', () => {
     });
 
     it('assembles a full report with score and recommendations on the happy path', async () => {
-      const { db } = makeHappyDb();
+      const { db, collections } = makeHappyDb();
       complianceReportService.init(db);
 
       const report = await complianceReportService.generateComplianceReport('2026-01-01', '2026-01-31');
+
+      const blockedPipeline = collections.logs.aggregate.mock.calls[0][0];
+      expect(blockedPipeline[1].$group.uniquePatients).toEqual({ $addToSet: '$payload.participantId' });
 
       expect(report).not.toBeNull();
       expect(report.period.start).toBe('2026-01-01');

@@ -50,7 +50,7 @@ describe('securityAlerts.service', () => {
       const result = await securityAlertsService.logSecurityAlert({
         type: 'CONSENT_BLOCKED',
         severity: 'high',
-        patientID: 'p1',
+        participantId: 'p1',
         userID: 'u1',
         action: 'ACCESS_DENIED',
         reason: 'no consent',
@@ -137,7 +137,7 @@ describe('securityAlerts.service', () => {
       expect(params.severity).toBe('high');
       expect(params.action).toBe('ACCESS_DENIED');
       expect(params.reason).toBe('no consent');
-      expect(params.patientID).toBe('p1');
+      expect(params.participantId).toBe('p1');
       expect(params.details.operation).toBe('READ');
       expect(params.affectedResources).toEqual([{ type: 'Patient', id: 'p1' }]);
     });
@@ -239,10 +239,10 @@ describe('securityAlerts.service', () => {
       const collection = makeFakeCollection({ docs });
       securityAlertsService.init(makeFakeDb(collection));
 
-      const result = await securityAlertsService.getOpenAlerts({ patientID: 'p1' });
+      const result = await securityAlertsService.getOpenAlerts({ participantId: 'p1' });
 
       expect(result).toEqual(docs);
-      expect(collection.find).toHaveBeenCalledWith({ status: 'open', patientID: 'p1' });
+      expect(collection.find).toHaveBeenCalledWith({ status: 'open', participantId: 'p1' });
       expect(collection.__cursor.sort).toHaveBeenCalledWith({ severity: -1, timestamp: -1 });
     });
 
