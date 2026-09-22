@@ -1,125 +1,105 @@
 # HANDOFF
 
-**Written 2026-09-08, twenty-ninth queue sitting. INTERIM — Dennis gave no
-end signal, so treat the session as CONTINUING.** He asked to read the
-handoff, pick the next *group* of issues, and said Docker is on. I took the
-**unauthenticated e-consent attack surface**: **#823** and **#832**, which
-cross-reference each other and share one root — six routes on
-`src/routes/eConsent.js` that carry no `authenticate`, because the emailed
-token *is* the credential.
+**Written 2026-09-22, thirtieth queue sitting. INTERIM — Dennis gave no end
+signal, so treat the session as CONTINUING.** He asked one question: read the
+old handoff, then check whether the repo owner's recent upstream activity
+contains anything our branch must account for. The sitting was **read-only**.
 
 ## What shipped
 
-Branch `feature/docker-e2e-backend-integration`, tree clean and matching
-origin. `main` untouched and still frozen.
+**Nothing.** No commit, no push, no PR, no write to this repo's tracker. Branch
+`feature/docker-e2e-backend-integration` is unchanged and still 3 doc-only
+commits ahead of its remote.
 
-| commit | issue | what |
-|---|---|---|
-| `c52254dc` | **Fixes #823** | both consent-token handlers answer every failure with one opaque 400, no `message` |
-| `308e09d2` | Refs **#832** | `consentLimiter` on all six unauthenticated e-consent routes, with its own isolated opt-in |
+One issue was filed **on the tooling tracker, not this repo's** — a workflow
+defect, no bearing on this backlog.
 
-**Closed: #823.** **Filed: #1127** (project), pack **#856**, **#857**,
-**#858**, plus recurrence/instance comments on pack **#648** and project
-**#1060**. Query the tracker for state — `gh issue list --state open`.
+## The finding that reshapes the next sitting
 
-## Gates
+**This branch's basis is stale, and `main` is no longer where the upstream work
+is.** `[ran it]` `git fetch origin --prune`, 2026-09-22:
 
-- **Targeted native, per iteration.** `[ran it]` #823: 12 consumer files /
-  466 tests. #832: **76 consumer files / 1187 tests**. `npm run
-  test:architecture` **131/131**, twice. All exit 0.
-- **Full native backend suite: GREEN.** `[ran it]` **470 files / 8852
-  tests**, 0 failures, exit 0, **621.24s** — the sanctioned form
-  `npx vitest run tests/unit tests/integration tests/compliance
-  --reporter=dot` from `api/backend`, backgrounded per the 600s ceiling.
-  This covers the whole tree at `308e09d2`, so it supersedes the previous
-  handoff's caveat that five commits had landed since the last full run.
-  Note the duration is at the top of the 569-615s range the conventions
-  record and now exceeds the Bash ceiling outright; `import` alone was
-  386s of it.
-- **Frontend suite NOT run** — this sitting touched no frontend file.
-- **Docker e2e NOT run.** Docker Desktop is ON; no stack up, no volumes,
-  bootstrap NONE.
-- **`node scripts/test-smoke.js` does NOT apply to this sitting's second
-  commit** — `[ran it]` it refuses at **260 affected files**, because
-  `app.js`/`env.js` are imported by nearly everything. That is the correct
-  answer for a central module, not a stale base ref. Its refusal message
-  tells you to run `npm run test:unit`, which is a bare `vitest run` that
-  `full-suite-guard` blocks — reported upstream.
+- `origin/main` has not moved since 2026-09-13.
+- The live upstream branch is **334 files / +51k / −43k ahead of `main`**, last
+  commit 2026-09-21, and is **not merged**. Two further PRs merged **into that
+  branch**, not into `main`.
+- A trial merge into this branch yields **exactly two conflicts**, both from our
+  doc-only commits: `api/backend/src/services/sensor.service.js` (content) and
+  `api/backend/tests/unit/services/location-storage-backfill.service.test.js`
+  (deleted upstream, modified here). Both resolve by taking upstream.
 
-## Read this before the next Docker gate
+**Our security work survives upstream intact** `[read it]`: `consentLimiter` at
+`api/backend/app.js:234-253` with all four path prefixes and its isolated
+opt-in; #823's opaque 400 at `api/backend/src/controllers/consent.controller.js`
+lines 698 and 732.
 
-**`308e09d2` adds a new env var, and your existing `.env.docker` did not
-have it.** `[ran it]` `CONSENT_RATE_LIMIT_RELAXED` is in
-`.env.docker.example`; the live gitignored `.env.docker` on this machine
-(dated Aug 20) carried only `AUTH_RATE_LIMIT_RELAXED`. **I appended the line
-to the local file** — that is machine-local state only, `git status` stayed
-clean, and it is a workaround rather than a fix.
+**But `consent.service.js` is now a 4-line re-export of a new
+`consent-v2.service.js`** `[read it]`. Any analysis in a prior note citing line
+numbers in that file is void. The behaviour those citations described still
+exists, in `ConsentGovernanceV2Repository.createConsent` (~line 127), now
+explicit as `reasonCode: 'superseded_by_new_consent'`.
 
-Without it `consentLimiter` runs at 10/min instead of 100/min and
-`participant-e-consent-page.spec.ts` can **429 partway through a Docker e2e
-run** — the exact symptom #350 recorded for `authLimiter`. `[not
-established]` whether that spec actually exceeds 10/min; no gate has run.
-This is a fresh instance of open **#1060**, commented there.
+## Two things that block the end-loaded gates
 
-## Things a next session must not undo
+1. **Mongo is now a replica set upstream.** `compose.yml` adds a keyfile-init
+   and an rs-init service, runs `--replSet rs0 --keyFile`, and the healthcheck
+   only greens on `isWritablePrimary`. Root `package.json` compose scripts layer
+   a third compose file and run the foundation bootstrap as a blocking one-shot
+   **before** backend/frontend. **`[not established]`** whether the `chmod 400`
+   keyfile step survives Docker Desktop on this machine — no stack was brought
+   up this sitting.
+2. **The CI minutes are exhausted.** `[read it]` upstream tracker comment dated
+   2026-09-20: 100% of the 3,000 included monthly minutes consumed; four
+   workflows failed in 2–4s having run no steps. **Any plan that depends on a
+   PR for a real CI signal is blocked until that resets** — this is the gate
+   `ship-integration-branch` would otherwise reach for.
 
-1. **The four `patient.service.js` throws stay distinct on purpose.**
-   #823's fix is at the *controller*, which is the disclosure boundary; the
-   service's distinct messages are useful to authenticated callers and to
-   the log, and four `patient.service.*` tests pin them. Do not "finish the
-   job" by collapsing them in the service.
-2. **`consentLimiter` is mounted on four path PREFIXES, not on
-   `/api/e-consent`.** The rest of that router is `authenticate`-gated
-   operator surface; putting it behind a participant budget would 429 a
-   coordinator doing bulk consent work. A CONTROL case pins this.
-3. **`CONSENT_RATE_LIMIT_RELAXED` is deliberately separate from
-   `AUTH_RATE_LIMIT_RELAXED`**, per the repo's own thrice-stated
-   isolated-opt-in doctrine (RNF008.6/#359). A test pins that the auth flag
-   does *not* relax it — without that pin, wiring them together passes
-   everything else.
+## Issues touched, not closed
 
-## The judgment a query cannot carry
+Query the tracker for state — `gh issue list --state open`. This sitting wrote
+to none of them. What a query will not tell you:
 
-- **#832 stays open for its items 2 and 3, which are genuinely Denise's.**
-  Item 2, token reuse: `[read it]` `POST /update` never invalidates the JWT,
-  so a link is replayable for its full lifetime — **two hours**,
-  `CONSENT_EXPIRATION` at `eConsent.js:13` — and `[read it]` each replay
-  runs `consent.service.js:839-843`'s
-  `updateMany({participantId, status:'ACTIVE'}, {status:'REVOKED'})`, so it
-  revokes the prior manifestation and writes a new one. Whether that is the
-  feature or a defect is a question about what a Consent *means*. Item 3 is
-  `CONSENT_SECRET`'s production posture, unestablishable from the repo
-  (no deployment, #362/#682).
-- **#1074 and #1089 are NOT fresh work, whatever a backlog scan suggests.**
-  Both were worked to their owner-decision boundary before this sitting —
-  #1074's shippable half shipped in `58779c2c`; #1089 carries a complete
-  pre-deferral analysis ending in four dictionary-level questions. The
-  previous handoff recommended #1089 as needing someone and cost me a full
-  re-derivation cycle; reported upstream. **Read an issue's comments before
-  picking it up.**
-- **#823's body claim "no rate limiting anywhere in the backend" was false
-  when written**, and the reason generalises: its sweep was scoped to
-  `api/backend/src`, and the limiters live in `api/backend/app.js`, which is
-  **not** under `src/`. Corrected on the issue.
-- **#1127 is the one finding I filed and did not work.** An infrastructure
-  failure inside the consent-token check (a Mongo outage under
-  `getPatientsCollection`) reaches the same opaque 400 and tells the
-  participant their link is invalid — while the controller three lines away
-  *deliberately* 503s the analogous template-lookup failure, with a comment
-  saying why. Pre-existing; `c52254dc` removed the last accidental signal of
-  it. Direction 1 in its body (a marked error class) is the faithful fix and
-  is a small change.
+- **#832, #1127, #1060, #1074, #1089, #1118** — untouched by the upstream
+  reconciliation sweep, which went through the storage/canonical cluster and did
+  not reach the e-consent or temperature-policy issues. #1127's defect is
+  verifiably still live upstream `[read it]` (the two controller lines above are
+  unchanged there).
+- **#988, #990, #1026, #1069** — closed upstream as resolved by the Wave 2 work,
+  each with an evidence comment. Not ours to re-open.
+- **#941, #967, #1124** — classified upstream as backend debt, staying open,
+  each with a recommended reframing in its comments. **Read those comments
+  before picking any of them up.**
 
 ## Recommended next
 
-**None queued by name.** Dennis named no specific issue.
+**None queued by name.** Dennis named no issue.
 
-1. **#1127** — small, direction settled, and it is this sitting's own debt.
-2. **Shipping the integration branch** — still Dennis's call, never yours. The
-   backend suite is now green on the whole tree; the **frontend** suite is
-   the one that has not run since before the previous sitting.
-3. **#1118** remains the live member of the temperature-policy cluster —
-   zero comments, two `[not established]` items that look answerable
-   natively (whether any consumer needs `sourceEventId` unique per
-   notification; whether `docs/docs-7-27-2026/extracted/` states a
-   notification cadence).
+The open decision is not which issue to work — it is whether to keep building on
+`main` at all while the real upstream work sits on an unmerged branch that is
+still moving. That is Dennis's call. **Unverified prescription:** if the answer
+is "merge it in", the two conflicts above make that a `merge-from-main`-shaped
+job, not a scoped single-file pull.
+
+Still undone from the previous note, and now more urgent: **diff Requisitos
+v4.0.0 against v3.0.1 for RF renumbering before building further on
+`E2E_TRACEABILITY_PLAN.md`.** The upstream tracker now declares the v2 Git state
+the *exclusive* normative authority for modelling questions, which directly
+undercuts that plan's v3.0.x basis.
+
+## Things a next session must not undo
+
+Unchanged from the previous note and all three still verified upstream this
+sitting:
+
+1. **The four `patient.service.js` throws stay distinct on purpose.** #823's fix
+   is at the controller, which is the disclosure boundary.
+2. **`consentLimiter` is mounted on four path PREFIXES, not on
+   `/api/e-consent`.** The rest of that router is `authenticate`-gated operator
+   surface. A CONTROL case pins this.
+3. **`CONSENT_RATE_LIMIT_RELAXED` is deliberately separate from
+   `AUTH_RATE_LIMIT_RELAXED`**, per the isolated-opt-in doctrine. A test pins
+   that the auth flag does not relax it.
+
+Also still true: the live gitignored `.env.docker` on this machine carries a
+hand-appended `CONSENT_RATE_LIMIT_RELAXED` line. Machine-local, not a fix.
+
