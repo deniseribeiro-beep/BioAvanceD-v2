@@ -1429,6 +1429,8 @@ function PolicyForm({
 }) {
   const [formData, setFormData] = useState<Partial<Policy>>(
     policy || {
+      // #1089: required by the API as of the temperaturePolicies cutover.
+      policyName: '',
       minThreshold: -85,
       maxThreshold: -75,
       targetTemperature: -80,
@@ -1448,6 +1450,22 @@ function PolicyForm({
   return (
     <form onSubmit={handleSubmit} className="form">
       <div className="form-grid">
+        {/* #1089: sources dict-02 P1X-0106 profileName, which the canonical
+            store requires. Also the first thing to populate the policy
+            table's existing name column, which was blank until now. */}
+        <Input
+          label="Nome da Política"
+          type="text"
+          value={formData.policyName || ''}
+          onChange={(e) =>
+            setFormData({
+              ...formData,
+              policyName: e.target.value,
+            })
+          }
+          helperText="Identifica a política na listagem e nos alertas. Ex.: Freezer -80."
+          required
+        />
         <Input
           label="Temperatura Alvo"
           type="number"

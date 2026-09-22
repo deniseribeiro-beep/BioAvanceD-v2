@@ -5,6 +5,15 @@ class PolicyModel {
   static validate(data) {
     const errors = [];
 
+    // #1089: dict-02 P1X-0106 profileName is 1..1 Core on ThresholdProfile,
+    // and temperaturePolicies -- now this API's store -- requires `name`.
+    // The API had no source for it, so a caller supplies policyName. This
+    // is the REQUEST shape's validator; the canonical mapping itself lives
+    // at the route boundary (policy.routes.js#toCanonical).
+    if (typeof data.policyName !== 'string' || data.policyName.trim() === '') {
+      errors.push('policyName é obrigatório e deve ser string não vazia');
+    }
+
     if (data.minThreshold === undefined || typeof data.minThreshold !== 'number') {
       errors.push('minThreshold é obrigatório e deve ser number');
     }

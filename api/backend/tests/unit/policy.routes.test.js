@@ -165,7 +165,7 @@ describe('policy.routes', () => {
     });
 
     it('returns the max threshold when type=max', async () => {
-      const findOne = vi.fn().mockResolvedValue({ policyId: 1, maxThreshold: 8, minThreshold: 2, temperatureUnit: 'C' });
+      const findOne = vi.fn().mockResolvedValue({ policyId: 1, maxTemp: 8, minTemp: 2, temperatureUnit: 'C' });
       const db = { collection: vi.fn().mockReturnValue({ findOne }) };
       const { router } = loadRoute();
       const app = buildApp(router, db);
@@ -177,7 +177,7 @@ describe('policy.routes', () => {
     });
 
     it('returns the min threshold by default and defaults unit to C', async () => {
-      const findOne = vi.fn().mockResolvedValue({ policyId: 1, maxThreshold: 8, minThreshold: 2 });
+      const findOne = vi.fn().mockResolvedValue({ policyId: 1, maxTemp: 8, minTemp: 2 });
       const db = { collection: vi.fn().mockReturnValue({ findOne }) };
       const { router } = loadRoute();
       const app = buildApp(router, db);
@@ -227,6 +227,7 @@ describe('policy.routes', () => {
       const app = buildApp(router, db);
 
       const res = await request(app).post('/api/policies').send({
+        policyName: 'Freezer -20',
         minThreshold: -20,
         maxThreshold: -10,
         targetTemperature: -15,
@@ -245,6 +246,7 @@ describe('policy.routes', () => {
       const app = buildApp(router, db);
 
       const res = await request(app).post('/api/policies').send({
+        policyName: 'Freezer -20',
         minThreshold: -20,
         maxThreshold: -10,
         targetTemperature: -15,
@@ -252,6 +254,125 @@ describe('policy.routes', () => {
       });
 
       expect(res.status).toBe(400);
+    });
+  });
+
+  // #1089: POST /api/policies wrote db.collection('policies'), while the
+  // telemetry ingestion path (iot.controller#resolveTemperaturePolicy ->
+  // TelemetryMonitor.js:233) resolves a sensor's thresholds out of
+  // 'temperaturePolicies'. No code path joined the two, so a policy
+  // created through this API was invisible to the sensors it was meant to
+  // govern, and checkPolicyAndAlert's `if (!policy) return` made that
+  // silent rather than an error.
+  //
+  // Direction 1 (the issue's own): temperaturePolicies survives, because
+  // contracts/canonical/v1/index.js:232 maps it to dict-02 ThresholdProfile
+  // and models/Policy.js is a temperature policy by its own docblock.
+  // Dennis's calls 2026-09-22 -- Q4: the stored document takes the
+  // canonical shape while the HTTP contract keeps its existing field
+  // names, translated at the route boundary. Q1: the mandatory
+  // profileName/name is sourced from a new caller-supplied policyName.
+  describe("#1089: temperaturePolicies is the single store", () => {
+    const validBody = {
+      policyName: 'Freezer -80',
+      minThreshold: -85,
+      maxThreshold: -75,
+      targetTemperature: -80,
+      temperatureUnit: '\u00b0C',
+      alertDelayMin: 5,
+    };
+
+    it('POST writes to temperaturePolicies, not policies', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const res = await request(app).post('/api/policies').send(validBody);
+
+      expect(res.status).toBe(201);
+      expect(db.collection).toHaveBeenCalledWith('temperaturePolicies');
+      expect(db.collection).not.toHaveBeenCalledWith('policies');
+    });
+
+    it('POST stores the canonical TemperaturePolicy shape', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      await request(app).post('/api/policies').send(validBody);
+
+      const stored = insertOne.mock.calls[0][0];
+      expect(stored.name).toBe('Freezer -80');
+      expect(stored.minTemp).toBe(-85);
+      expect(stored.maxTemp).toBe(-75);
+      expect(stored.targetTemp).toBe(-80);
+      expect(stored.metricType).toBe('temperature');
+      expect(stored.ruleVersion).toBe('1.0.0');
+      expect(stored.effectivePeriod.start).toBeInstanceOf(Date);
+      // The legacy names must NOT survive into the canonical store --
+      // that is what made the two collections diverge in the first place.
+      expect(stored.minThreshold).toBeUndefined();
+      expect(stored.maxThreshold).toBeUndefined();
+      expect(stored.targetTemperature).toBeUndefined();
+    });
+
+    it('POST retains the non-canonical fields the HTTP contract still exposes', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      await request(app).post('/api/policies').send(validBody);
+
+      // Q2/Q3 follow from Q4 rather than being separate calls: a GET still
+      // returns these, so they have to round-trip through storage.
+      const stored = insertOne.mock.calls[0][0];
+      expect(stored.temperatureUnit).toBe('\u00b0C');
+      expect(stored.alertDelayMin).toBe(5);
+    });
+
+    it('POST answers the caller in the legacy HTTP shape', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const res = await request(app).post('/api/policies').send(validBody);
+
+      expect(res.body.data.minThreshold).toBe(-85);
+      expect(res.body.data.maxThreshold).toBe(-75);
+      expect(res.body.data.targetTemperature).toBe(-80);
+      expect(res.body.data.policyName).toBe('Freezer -80');
+    });
+
+    it('POST 422s without policyName, which the canonical shape requires', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, {});
+
+      const { policyName, ...withoutName } = validBody;
+      const res = await request(app).post('/api/policies').send(withoutName);
+
+      expect(res.status).toBe(422);
+    });
+
+    it('GET / reads temperaturePolicies and answers in the legacy shape', async () => {
+      const toArray = vi.fn().mockResolvedValue([
+        { _id: 'p1', name: 'Freezer -80', minTemp: -85, maxTemp: -75, targetTemp: -80 },
+      ]);
+      const find = vi.fn().mockReturnValue({ toArray });
+      const db = { collection: vi.fn().mockReturnValue({ find }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const res = await request(app).get('/api/policies');
+
+      expect(res.status).toBe(200);
+      expect(db.collection).toHaveBeenCalledWith('temperaturePolicies');
+      expect(res.body.data[0].minThreshold).toBe(-85);
+      expect(res.body.data[0].maxThreshold).toBe(-75);
+      expect(res.body.data[0].policyName).toBe('Freezer -80');
     });
   });
 
@@ -299,9 +420,13 @@ describe('policy.routes', () => {
 
     // #875: PUT /:id used to $set req.body verbatim -- an unfiltered or
     // under-filtered body could inject arbitrary keys or overwrite identity
-    // fields. Only PolicyModel.create()'s own fields (minus policyId/policyID,
+    // fields. Only the request's allowlisted fields (minus policyId/policyID,
     // which are business identity) may reach $set.
-    it('#875: filters $set to the PolicyModel allowlist, dropping injected/identity keys', async () => {
+    //
+    // #1089: the allowlist became a map, so the KEY a caller sends and the
+    // PATH it lands on differ. #875's invariant is unchanged and is what
+    // the last three assertions still check -- only the landing names move.
+    it('#875: filters $set to the allowlist, dropping injected/identity keys', async () => {
       const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
       const db = { collection: vi.fn().mockReturnValue({ updateOne }) };
       const { router } = loadRoute();
@@ -313,11 +438,13 @@ describe('policy.routes', () => {
 
       expect(res.status).toBe(200);
       const setArg = updateOne.mock.calls[0][1].$set;
-      expect(setArg).toHaveProperty('minThreshold', 1);
+      expect(setArg).toHaveProperty('minTemp', 1);
       expect(setArg).toHaveProperty('updatedAt');
       expect(setArg).not.toHaveProperty('injected');
       expect(setArg).not.toHaveProperty('policyId');
-      expect(Object.keys(setArg).sort()).toEqual(['minThreshold', 'updatedAt']);
+      // Still absent under its own name, not merely renamed past the check.
+      expect(setArg).not.toHaveProperty('minThreshold');
+      expect(Object.keys(setArg).sort()).toEqual(['minTemp', 'updatedAt']);
     });
   });
 

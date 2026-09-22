@@ -116,6 +116,9 @@ describe('TemperatureModel', () => {
 describe('PolicyModel', () => {
   it('valida política com limites coerentes', () => {
     const result = PolicyModel.validate({
+      // #1089: policyName is now required -- it is the only source for
+      // dict-02 P1X-0106 profileName, which temperaturePolicies mandates.
+      policyName: 'Geladeira 2-8',
       minThreshold: 2,
       maxThreshold: 8,
       targetTemperature: 5,
@@ -155,6 +158,19 @@ describe('PolicyModel', () => {
     expect(created.validFrom).toBeInstanceOf(Date);
     expect(created.createdAt).toBeInstanceOf(Date);
     expect(created.updatedAt).toBeInstanceOf(Date);
+  });
+
+  // #1089: pins the new required field on its own, so a future change to
+  // the other validators cannot silently drop it.
+  it('rejeita política sem policyName', () => {
+    const result = PolicyModel.validate({
+      minThreshold: 2,
+      maxThreshold: 8,
+      targetTemperature: 5
+    });
+
+    expect(result.isValid).toBe(false);
+    expect(result.errors).toContain('policyName é obrigatório e deve ser string não vazia');
   });
 
   it('compara faixas de temperatura corretamente', () => {

@@ -75,7 +75,10 @@ class TemperatureService {
 
   async checkPolicyAndAlert(db, temperature) {
     try {
-      const policiesCollection = db.collection('policies');
+      // #1089: was db.collection('policies'), the store the six CRUD
+      // routes wrote and nothing on the telemetry side read. Both sides
+      // now resolve the same canonical collection.
+      const policiesCollection = db.collection('temperaturePolicies');
       const policyId = temperature.policyId || temperature.policyID;
 
       if (!policyId) {
@@ -90,8 +93,10 @@ class TemperatureService {
       }
 
       // Usa thresholds da policy se não estiverem no temperature
-      const minThreshold = temperature.minThreshold || policy.minThreshold;
-      const maxThreshold = temperature.maxThreshold || policy.maxThreshold;
+      // #1089: the reading still carries its own legacy-named overrides;
+      // the POLICY's bounds are canonical (dict-02 lowerLimit/upperLimit).
+      const minThreshold = temperature.minThreshold || policy.minTemp;
+      const maxThreshold = temperature.maxThreshold || policy.maxTemp;
 
       const isValid = TemperatureModel.validateReading(
         temperature.temperatureValue,

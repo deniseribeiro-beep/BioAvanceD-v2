@@ -535,7 +535,7 @@ export const policyService = {
     api.get<{ limit: number; type: string; unit: string }>(`/policies/${id}/active-limit`, {
       params: { type: isMax ? 'max' : 'min' }
     }), // Implementa Policy.getActiveLimit()
-  create: (data: Partial<Policy>) => api.post<ApiEnvelope<Policy>>('/policies', data), // policy.routes.js:163-167
+  create: (data: Partial<Policy>) => api.post<ApiEnvelope<Policy>>('/policies', data), // policy.routes.js:224 (#1089 moved it)
   update: (id: number, data: Partial<Policy>) => api.put<ApiEnvelope<never>>(`/policies/${id}`, data), // policy.routes.js:220-223, no data key
   delete: (id: number) => api.delete(`/policies/${id}`),
 };
