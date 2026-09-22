@@ -5,7 +5,7 @@ const logger = require('../utils/logger');
 const { revalidateSamplesByParticipantId } = require('../services/sampleComplianceSync.service');
 const { getCollection } = require('../utils/collectionResolver');
 const PatientModel = require('../models/Patient');
-const { LEGACY_PATIENT_IDENTITY_FIELDS } = require('../utils/legacyPatientIdentityFields');
+const { PARTICIPANT_IDENTITY_FIELDS } = require('../utils/participantIdentityFields');
 
 /**
  * Controller para operações relacionadas a pacientes
@@ -19,7 +19,7 @@ class PacienteController {
     // ParticipantIdentity instead, see patient.service.js#createPatient.
     // A new Patient-document field only needs adding in Patient.js now;
     // this list picks it up automatically.
-    const allowed = new Set([...PatientModel.CANONICAL_FIELDS, ...LEGACY_PATIENT_IDENTITY_FIELDS]);
+    const allowed = new Set([...PatientModel.CANONICAL_FIELDS, ...PARTICIPANT_IDENTITY_FIELDS]);
     const fields = Object.keys(payload).filter((field) => !allowed.has(field));
     if (fields.length > 0) {
       const error = new Error('Payload contém campos não canônicos');
