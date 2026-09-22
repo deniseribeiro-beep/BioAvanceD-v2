@@ -335,8 +335,8 @@ describe('reports.routes item 8 more residual canonical branches', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.analysis).toEqual(expect.arrayContaining([
-      expect.objectContaining({ sampleID: 'S-1', resultCount: 2, hasResults: true }),
-      expect.objectContaining({ sampleID: 'S-2', resultCount: 0, hasResults: false }),
+      expect.objectContaining({ specimenId: 'S-1', resultCount: 2, hasResults: true }),
+      expect.objectContaining({ specimenId: 'S-2', resultCount: 0, hasResults: false }),
     ]));
   });
 
