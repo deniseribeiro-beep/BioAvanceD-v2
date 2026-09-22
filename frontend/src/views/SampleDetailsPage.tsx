@@ -46,7 +46,7 @@ export function buildSampleUpdatePayload(form: SampleEditForm, parsedAvailable: 
 
 type ComplianceNode = { valid: boolean; reason?: string };
 type ComplianceReport = {
-  sampleId: string;
+  specimenId: string;
   isReleasable: boolean;
   graphPath: {
     ethics: ComplianceNode;
@@ -102,9 +102,8 @@ export default function SampleDetailsPage() {
       }
       const searchId = String(id || '').trim();
       const foundSample = samples.find(s => {
-        const sampleId = String(s._id || '').trim();
-        const specimenIdStr = String(s.specimenId || '').trim();
-        return sampleId === searchId || specimenIdStr === searchId || sampleId.toLowerCase() === searchId.toLowerCase() || specimenIdStr.toLowerCase() === searchId.toLowerCase();
+        const specimenId = String(s.specimenId || '').trim();
+        return specimenId === searchId || specimenId.toLowerCase() === searchId.toLowerCase();
       });
 
       if (foundSample) {
@@ -117,14 +116,14 @@ export default function SampleDetailsPage() {
           participantId: foundSample.participantId ? String(foundSample.participantId) : '',
         });
       } else {
-        console.warn('Amostra não encontrada:', { searchId: id, availableIds: samples.map(s => ({ _id: s._id, specimenId: s.specimenId })) });
+        console.warn('Amostra não encontrada:', { searchId: id, availableSpecimenIds: samples.map(s => s.specimenId) });
         setSample(null);
       }
     }
   }, [samples, id, loading]);
 
   useEffect(() => {
-    const targetId = sample?.specimenId || sample?._id || id;
+    const targetId = sample?.specimenId || id;
     if (!targetId) {
       setComplianceReport(null);
       return;
@@ -150,7 +149,7 @@ export default function SampleDetailsPage() {
 
     void loadComplianceGraph();
     return () => { active = false; };
-  }, [sample?.specimenId, sample?._id, id]);
+  }, [sample?.specimenId, id]);
 
   const getStorageInfo = (placement: CurrentStoragePlacementDTO | null): { summary: string; details: string } => {
     const boxName = placement?.box?.boxName
@@ -179,8 +178,8 @@ export default function SampleDetailsPage() {
     return { summary, details: summary };
   };
 
-  const loadCurrentStoragePlacement = async (sampleId: string) => {
-    const response = await storageApi.getCurrentStoragePlacement(sampleId);
+  const loadCurrentStoragePlacement = async (specimenId: string) => {
+    const response = await storageApi.getCurrentStoragePlacement(specimenId);
     setCurrentStoragePlacement(response.success && response.data ? response.data : null);
   };
 
@@ -191,7 +190,7 @@ export default function SampleDetailsPage() {
       return;
     }
     void loadCurrentStoragePlacement(String(targetId));
-  }, [sample?.specimenId, sample?._id, id]);
+  }, [sample?.specimenId, id]);
 
   const effectiveSample = useMemo(() => {
     if (!isEditing) return sample;
@@ -365,7 +364,7 @@ export default function SampleDetailsPage() {
         <Card>
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>{t('samples.detail.basicInfoTitle', 'Informações Básicas')}</h3>
           <div style={{ display: 'grid', gap: '0.75rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}><span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.sampleId', 'ID da Amostra')}:</span><span style={{ color: 'var(--text)' }}>{(sample as any).specimenId || sample._id || t('common.notAvailable', 'N/A')}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}><span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.specimenId', 'ID da Amostra')}:</span><span style={{ color: 'var(--text)' }}>{sample.specimenId || t('common.notAvailable', 'N/A')}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}><span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.barcode', 'Código de Barras')}:</span><span style={{ fontFamily: 'monospace', color: 'var(--primary)', fontWeight: 600 }}>{sample.barcode || t('common.notAvailable', 'N/A')}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}><span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.type', 'Tipo')}:</span><span style={{ color: 'var(--text)' }}>{sample.sampleType || t('common.notAvailable', 'N/A')}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}><span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.origin', 'Origem')}:</span>{isEditing ? <div style={{ width: '280px' }}><Input value={form.sampleOrigin} onChange={(e) => handleChange('sampleOrigin', e.target.value)} placeholder={t('samples.origin', 'Origem') || 'Origem'} /></div> : <span style={{ color: 'var(--text)' }}>{sample.sampleOrigin || t('common.notAvailable', 'N/A')}</span>}</div>
