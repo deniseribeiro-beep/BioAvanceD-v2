@@ -7,7 +7,7 @@ const {
   generateIndustrialBarcodeArtifacts,
   parseScannedBarcode
 } = require('../utils/barcodeSymbology');
-const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
+const { generateUniqueSpecimenId } = require('../utils/specimenIdGenerator');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
 const { withMongoTransaction } = require('../utils/mongoTransaction');
@@ -32,7 +32,7 @@ const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadas
 /**
  * Every caller (sample.routes.js) passes an already-cast ObjectId as
  * `specimenId` — but that field on Sample is a separate, server-generated
- * string (see sampleIDGenerator.js), so a bare `{ specimenId }` query never
+ * string (see specimenIdGenerator.js), so a bare `{ specimenId }` query never
  * matched it. Looks up by _id first (the real intent), falling back to the
  * specimenId field for any caller that does pass the string form.
  */
