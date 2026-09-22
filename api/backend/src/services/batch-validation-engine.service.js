@@ -552,6 +552,10 @@ class BatchValidationEngine {
       };
     }
 
+    if (!patientIdentifier || !specimenIdentifier) {
+      throw new Error('participantId e specimenId canônicos são obrigatórios para observações de biomarcadores');
+    }
+
     const biomarkerTokens = biomarkerSource
       .split(/[;,|]/)
       .map((token) => this.normalizeText(token))
