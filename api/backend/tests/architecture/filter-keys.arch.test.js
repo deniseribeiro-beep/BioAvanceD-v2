@@ -215,54 +215,10 @@ const RETIRED_FILTER_KEYS = [
   'clinical_data',
 ];
 
-// #628: Result.specimenId replaced the legacy numeric Sample.sampleID.
-// These four sites are the documented three-tier resolution (_id, then
-// specimenId, then legacy sampleID) that both the live write paths and
-// the one-time backfill use to resolve a caller-supplied identifier
-// against Sample documents that predate #628 and may still carry the
-// retired field. That is the opposite of #788's bug — it is the read half
-// of migrating *away* from the retired key, not a fresh write that
-// invented it — so it is exempted from the retired-key check by site
-// rather than by loosening RETIRED_FILTER_KEYS itself.
-//
-// #857 added four more sites to the same pattern, and they earned the
-// exemption rather than being granted it: before that fix these $or filters
-// resolved an identifier through _id, sampleID, sampleId and barcode with
-// NO specimenId leg at all, so they could not find a sample by the field
-// SampleModel.create actually writes. That is a genuine bug, and this guard
-// is what surfaced it — the $or recursion added for #854 was what made the
-// sites visible in the first place. They are exempt now because they carry
-// the canonical tier, not because the retired legs are harmless.
-//
-// Still unestablished, tracked on #857: whether `{ sampleId: <id> }`
-// (lowercase d) was ever a written field. #628's comment names only
-// sampleID as the legacy form. If it was never written, that leg is dead
-// and should be dropped, which would shrink these four exemptions.
-const RETIRED_KEY_EXEMPT = new Set([
-  'interface/routes/result.routes.js:177',
-  // :440 -> :451 when #1082's destination scope check added 11 lines to
-  // POST /upload, above POST /'s own legacy-resolution tier.
-  'interface/routes/result.routes.js:451',
-  // :522 -> :543 when #875's allowlist rework added ~21 lines above the
-  // link-sample legacy-resolution tier (the entry itself is #628's
-  // deliberate _id -> specimenId -> legacy sampleID fallback; #804 owns
-  // sampleID's eventual retirement).
-  // :543 -> :599 (#875 era) -> :652 when #1082 added the source scope
-  // checks to PUT /:id and link-sample above this site.
-  'interface/routes/result.routes.js:652',
-  'services/result-specimenid-backfill.service.js:56',
-  // #857: _id -> specimenId -> legacy sampleID/sampleId/barcode.
-  // :619/:696/:789 -> :683/:760/:853, a uniform +64 shift, when #789 added
-  // the shared NON_CANONICAL_SAMPLE_ALIASES constant, the GET query guard
-  // and the applied-filter echo above all three sites. The sites themselves
-  // are unchanged -- same reason the result.routes.js entry above moved
-  // under #875. Line-keyed exemptions are load-bearing bookkeeping: this
-  // guard went red on the shift alone, which is the intended behaviour.
-  'interface/routes/sample.routes.js:683',
-  'interface/routes/sample.routes.js:760',
-  'interface/routes/sample.routes.js:853',
-  'services/analysisValidation.service.js:29'
-]);
+// Canonical v2 rule: retired participant/specimen keys have no runtime
+// query exemptions. Migration/backfill code that depended on those aliases
+// has been removed; active queries must use participantId/specimenId.
+const RETIRED_KEY_EXEMPT = new Set();
 
 function keysIn(text, pattern) {
   const keys = [];
