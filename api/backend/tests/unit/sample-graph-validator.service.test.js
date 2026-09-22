@@ -187,11 +187,11 @@ describe('SampleGraphValidator', () => {
     samplesCollection.findOne.mockResolvedValue(validSample);
     consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-    const successReport = await validator.validateSampleCompliance(validSample._id);
+    const successReport = await validator.validateSampleCompliance(validSample.specimenId);
     expect(successReport.graphPath.ethics.valid).toBe(true);
 
     consentsCollection.findOne.mockResolvedValue({ status: 'REVOKED', participantId: '12345678' });
-    const failReport = await validator.validateSampleCompliance(validSample._id);
+    const failReport = await validator.validateSampleCompliance(validSample.specimenId);
     expect(failReport.graphPath.ethics.valid).toBe(false);
   });
 
@@ -200,7 +200,7 @@ describe('SampleGraphValidator', () => {
     samplesCollection.findOne.mockResolvedValue(goodSample);
     consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-    const successReport = await validator.validateSampleCompliance(goodSample._id);
+    const successReport = await validator.validateSampleCompliance(goodSample.specimenId);
     expect(successReport.graphPath.quality.valid).toBe(true);
 
     const badSample = buildSample({
@@ -216,7 +216,7 @@ describe('SampleGraphValidator', () => {
       },
     });
     samplesCollection.findOne.mockResolvedValue(badSample);
-    const failReport = await validator.validateSampleCompliance(badSample._id);
+    const failReport = await validator.validateSampleCompliance(badSample.specimenId);
     expect(failReport.graphPath.quality.valid).toBe(false);
     expect(failReport.suggestedStatus).toBe('QUARANTINE');
   });
@@ -251,7 +251,7 @@ describe('SampleGraphValidator', () => {
       }),
     });
 
-    const report = await validator.validateSampleCompliance(sample._id);
+    const report = await validator.validateSampleCompliance(sample.specimenId);
 
     expect(rcsAssessmentsCollection.find).toHaveBeenCalledWith({ specimenId: 'SPEC-001' });
     expect(report.graphPath.quality.valid).toBe(false);
@@ -306,7 +306,7 @@ describe('SampleGraphValidator', () => {
       [sealedAssessment, laterAssessment].find((a) => a._id === _id) || null
     ));
 
-    const report = await validator.validateSampleCompliance(sample._id);
+    const report = await validator.validateSampleCompliance(sample.specimenId);
 
     expect(rcsAssessmentsCollection.findOne).toHaveBeenCalledWith({ _id: 'assessment-sealed' });
     expect(report.graphPath.integrity.valid).toBe(true);
@@ -317,7 +317,7 @@ describe('SampleGraphValidator', () => {
     samplesCollection.findOne.mockResolvedValue(completeSample);
     consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-    const successReport = await validator.validateSampleCompliance(completeSample._id);
+    const successReport = await validator.validateSampleCompliance(completeSample.specimenId);
     expect(successReport.graphPath.clinical.valid).toBe(true);
 
     const incompleteFabrySample = buildSample({
@@ -332,7 +332,7 @@ describe('SampleGraphValidator', () => {
     });
     samplesCollection.findOne.mockResolvedValue(incompleteFabrySample);
 
-    const failReport = await validator.validateSampleCompliance(incompleteFabrySample._id);
+    const failReport = await validator.validateSampleCompliance(incompleteFabrySample.specimenId);
     expect(failReport.graphPath.clinical.valid).toBe(false);
     expect(failReport.suggestedStatus).toBe('BLOCKED');
   });
@@ -342,7 +342,7 @@ describe('SampleGraphValidator', () => {
     samplesCollection.findOne.mockResolvedValue(validSample);
     consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-    const successReport = await validator.validateSampleCompliance(validSample._id);
+    const successReport = await validator.validateSampleCompliance(validSample.specimenId);
     expect(successReport.graphPath.integrity.valid).toBe(true);
 
     const tampered = {
@@ -357,7 +357,7 @@ describe('SampleGraphValidator', () => {
     };
     samplesCollection.findOne.mockResolvedValue(tampered);
 
-    const failReport = await validator.validateSampleCompliance(tampered._id);
+    const failReport = await validator.validateSampleCompliance(tampered.specimenId);
     expect(failReport.graphPath.integrity.valid).toBe(false);
     expect(failReport.suggestedStatus).toBe('BLOCKED');
   });
@@ -374,13 +374,13 @@ describe('SampleGraphValidator', () => {
       expect(JSON.stringify(filter)).not.toContain('sampleID');
     });
 
-    it('still resolves an ObjectId identifier by _id', async () => {
+    it('treats ObjectId-shaped strings as specimenId values, never as Mongo _id', async () => {
       samplesCollection.findOne.mockResolvedValue(null);
 
       await expect(validator.validateSampleCompliance('507f1f77bcf86cd799439011'))
         .rejects.toThrow('Amostra não encontrada para validação de conformidade');
 
-      expect(samplesCollection.findOne.mock.calls[0][0]).toHaveProperty('_id');
+      expect(samplesCollection.findOne.mock.calls[0][0]).toEqual({ specimenId: '507f1f77bcf86cd799439011' });
     });
   });
 
@@ -400,7 +400,7 @@ describe('SampleGraphValidator', () => {
       samplesCollection.findOne.mockResolvedValue(sample);
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-      const report = await validator.validateSampleCompliance(sample._id);
+      const report = await validator.validateSampleCompliance(sample.specimenId);
 
       expect(report.suggestedStatus).toBe('AVAILABLE');
       const [, update] = samplesCollection.updateOne.mock.calls[0];
@@ -424,7 +424,7 @@ describe('SampleGraphValidator', () => {
       samplesCollection.findOne.mockResolvedValue(sample);
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-      const report = await validator.validateSampleCompliance(sample._id);
+      const report = await validator.validateSampleCompliance(sample.specimenId);
 
       expect(report.suggestedStatus).toBe('QUARANTINE');
       const [, update] = samplesCollection.updateOne.mock.calls[0];
@@ -451,7 +451,7 @@ describe('SampleGraphValidator', () => {
       // pharmacology node's ATC-vs-ORPHA coherence check.
       medicationDictionaryCollection.findOne.mockResolvedValue({ atc_code: 'Z99ZZ99', drug_class: 'Z', active: true });
 
-      const report = await validator.validateSampleCompliance(sample._id);
+      const report = await validator.validateSampleCompliance(sample.specimenId);
 
       expect(report.graphPath.pharmacology.valid).toBe(false);
       expect(report.isReleasable).toBe(false);
@@ -472,7 +472,7 @@ describe('SampleGraphValidator', () => {
       samplesCollection.findOne.mockResolvedValue(sample);
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-      const report = await validator.validateSampleCompliance(sample._id);
+      const report = await validator.validateSampleCompliance(sample.specimenId);
 
       expect(report.suggestedStatus).toBe('BLOCKED');
       const [, update] = samplesCollection.updateOne.mock.calls[0];
@@ -489,7 +489,7 @@ describe('SampleGraphValidator', () => {
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
       mockActiveAction(['COLD_CHAIN_INCIDENT']);
 
-      const report = await validator.validateSampleCompliance(sample._id);
+      const report = await validator.validateSampleCompliance(sample.specimenId);
 
       expect(report.suggestedStatus).toBe('BLOCKED');
       const [, update] = samplesCollection.updateOne.mock.calls[0];
@@ -504,7 +504,7 @@ describe('SampleGraphValidator', () => {
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
       mockActiveAction(['COMPLIANCE_GRAPH_QUALITY']);
 
-      const report = await validator.validateSampleCompliance(sample._id);
+      const report = await validator.validateSampleCompliance(sample.specimenId);
 
       expect(report.suggestedStatus).toBe('AVAILABLE');
       const [, update] = samplesCollection.updateOne.mock.calls[0];
@@ -523,7 +523,7 @@ describe('SampleGraphValidator', () => {
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
       mockActiveAction(['COLD_CHAIN_INCIDENT']);
 
-      const report = await validator.validateSampleCompliance(sample._id);
+      const report = await validator.validateSampleCompliance(sample.specimenId);
 
       expect(report.suggestedStatus).toBe('AVAILABLE');
       const [, update] = samplesCollection.updateOne.mock.calls[0];
@@ -540,26 +540,26 @@ describe('SampleGraphValidator', () => {
 
       const missingIds = buildSample({ consentTemplateId: '', participantId: '' });
       samplesCollection.findOne.mockResolvedValue(missingIds);
-      const missingIdsReport = await validator.validateSampleCompliance(missingIds._id);
+      const missingIdsReport = await validator.validateSampleCompliance(missingIds.specimenId);
       expect(missingIdsReport.graphPath.ethics.valid).toBe(false);
       expect(consentsCollection.findOne).not.toHaveBeenCalled();
 
       const missingConsent = buildSample();
       samplesCollection.findOne.mockResolvedValue(missingConsent);
       consentsCollection.findOne.mockResolvedValueOnce(null);
-      const missingConsentReport = await validator.validateSampleCompliance(missingConsent._id);
+      const missingConsentReport = await validator.validateSampleCompliance(missingConsent.specimenId);
       expect(missingConsentReport.graphPath.ethics.valid).toBe(false);
 
       const mismatchedParticipant = buildSample();
       samplesCollection.findOne.mockResolvedValue(mismatchedParticipant);
       consentsCollection.findOne.mockResolvedValueOnce({ status: 'ACTIVE', participantId: 'OTHER' });
-      const mismatchReport = await validator.validateSampleCompliance(mismatchedParticipant._id);
+      const mismatchReport = await validator.validateSampleCompliance(mismatchedParticipant.specimenId);
       expect(mismatchReport.graphPath.ethics.valid).toBe(false);
 
       const objectIdConsent = buildSample({ consentTemplateId: '507f1f77bcf86cd799439012' });
       samplesCollection.findOne.mockResolvedValue(objectIdConsent);
       consentsCollection.findOne.mockResolvedValueOnce({ status: 'ACTIVE', participantId: '12345678' });
-      const objectIdReport = await validator.validateSampleCompliance(objectIdConsent._id);
+      const objectIdReport = await validator.validateSampleCompliance(objectIdConsent.specimenId);
       expect(objectIdReport.graphPath.ethics.valid).toBe(true);
       expect(consentsCollection.findOne.mock.calls.at(-1)[0].$or[0]._id).toBeTruthy();
     });
@@ -572,7 +572,7 @@ describe('SampleGraphValidator', () => {
       samplesCollection.findOne.mockResolvedValue(noOrpha);
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-      const noOrphaReport = await validator.validateSampleCompliance(noOrpha._id);
+      const noOrphaReport = await validator.validateSampleCompliance(noOrpha.specimenId);
       expect(noOrphaReport.disease).toBeNull();
       expect(noOrphaReport.orphaCode).toBe('');
       expect(diseaseDictionaryCollection.findOne).not.toHaveBeenCalled();
@@ -583,7 +583,7 @@ describe('SampleGraphValidator', () => {
       samplesCollection.findOne.mockResolvedValue(noDictionaryEntry);
       diseaseDictionaryCollection.findOne.mockResolvedValueOnce(null);
 
-      const noDictionaryReport = await validator.validateSampleCompliance(noDictionaryEntry._id);
+      const noDictionaryReport = await validator.validateSampleCompliance(noDictionaryEntry.specimenId);
       expect(noDictionaryReport.disease).toBeNull();
       expect(noDictionaryReport.graphPath.clinical.valid).toBe(true);
       expect(noDictionaryReport.graphPath.pharmacology.valid).toBe(true);
@@ -605,19 +605,19 @@ describe('SampleGraphValidator', () => {
         pharmacologyData: { treatmentStatus: 'NAIVE' },
       });
       samplesCollection.findOne.mockResolvedValue(fallbackArrays);
-      const fallbackReport = await validator.validateSampleCompliance(fallbackArrays._id);
+      const fallbackReport = await validator.validateSampleCompliance(fallbackArrays.specimenId);
       expect(fallbackReport.graphPath.clinical.valid).toBe(true);
       expect(fallbackReport.graphPath.clinical.reason).toBe('Dados clínicos e MIABIS essenciais presentes');
 
       const missingTreatment = buildSample({ pharmacologyData: { treatmentStatus: '' } });
       samplesCollection.findOne.mockResolvedValue(missingTreatment);
-      const missingTreatmentReport = await validator.validateSampleCompliance(missingTreatment._id);
+      const missingTreatmentReport = await validator.validateSampleCompliance(missingTreatment.specimenId);
       expect(missingTreatmentReport.graphPath.clinical.reason).toContain('treatment_status');
       expect(missingTreatmentReport.graphPath.pharmacology.reason).toContain('treatment_status');
 
       const invalidStatus = buildSample({ pharmacologyData: { treatmentStatus: 'INVALID' } });
       samplesCollection.findOne.mockResolvedValue(invalidStatus);
-      const invalidStatusReport = await validator.validateSampleCompliance(invalidStatus._id);
+      const invalidStatusReport = await validator.validateSampleCompliance(invalidStatus.specimenId);
       expect(invalidStatusReport.graphPath.clinical.reason).toContain('inválido');
 
       diseaseDictionaryCollection.findOne.mockResolvedValueOnce({
@@ -632,7 +632,7 @@ describe('SampleGraphValidator', () => {
         pharmacologyData: { treatmentStatus: 'NAIVE', medicationName: '' },
       });
       samplesCollection.findOne.mockResolvedValue(missingRequiredField);
-      const requiredFieldReport = await validator.validateSampleCompliance(missingRequiredField._id);
+      const requiredFieldReport = await validator.validateSampleCompliance(missingRequiredField.specimenId);
       expect(requiredFieldReport.graphPath.clinical.reason).toContain('campo farmacológico obrigatório');
     });
 
@@ -643,7 +643,7 @@ describe('SampleGraphValidator', () => {
         pharmacologyData: { treatmentStatus: 'TREATED', atcCode: '' },
       });
       samplesCollection.findOne.mockResolvedValue(missingAtc);
-      const missingAtcReport = await validator.validateSampleCompliance(missingAtc._id);
+      const missingAtcReport = await validator.validateSampleCompliance(missingAtc.specimenId);
       expect(missingAtcReport.graphPath.pharmacology.reason).toContain('exige atc_code');
 
       const unknownMedication = buildSample({
@@ -651,7 +651,7 @@ describe('SampleGraphValidator', () => {
       });
       samplesCollection.findOne.mockResolvedValue(unknownMedication);
       medicationDictionaryCollection.findOne.mockResolvedValueOnce(null);
-      const unknownMedicationReport = await validator.validateSampleCompliance(unknownMedication._id);
+      const unknownMedicationReport = await validator.validateSampleCompliance(unknownMedication.specimenId);
       expect(unknownMedicationReport.graphPath.pharmacology.valid).toBe(true);
 
       diseaseDictionaryCollection.findOne.mockResolvedValueOnce({
@@ -672,7 +672,7 @@ describe('SampleGraphValidator', () => {
         pharmacologyData: { treatmentStatus: 'TREATED', atcCode: 'ATC:A16AX27', atcClass: 'A' },
       });
       samplesCollection.findOne.mockResolvedValue(noDiseaseClasses);
-      const noDiseaseClassesReport = await validator.validateSampleCompliance(noDiseaseClasses._id);
+      const noDiseaseClassesReport = await validator.validateSampleCompliance(noDiseaseClasses.specimenId);
       expect(noDiseaseClassesReport.graphPath.pharmacology.valid).toBe(true);
     });
 
@@ -682,7 +682,7 @@ describe('SampleGraphValidator', () => {
       samplesCollection.findOne.mockResolvedValue(missingRoot);
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-      const missingRootReport = await validator.validateSampleCompliance(missingRoot._id);
+      const missingRootReport = await validator.validateSampleCompliance(missingRoot.specimenId);
       expect(missingRootReport.graphPath.integrity.valid).toBe(false);
       expect(missingRootReport.suggestedStatus).toBe('BLOCKED');
 
@@ -704,7 +704,7 @@ describe('SampleGraphValidator', () => {
       delete multiFailure.merkleRoot;
       samplesCollection.findOne.mockResolvedValue(multiFailure);
 
-      const multiFailureReport = await validator.validateSampleCompliance(multiFailure._id);
+      const multiFailureReport = await validator.validateSampleCompliance(multiFailure.specimenId);
       expect(multiFailureReport.isReleasable).toBe(false);
       expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -739,7 +739,7 @@ describe('SampleGraphValidator', () => {
         }),
       });
 
-      const report = await validator.validateSampleCompliance(sample._id);
+      const report = await validator.validateSampleCompliance(sample.specimenId);
       expect(report.suggestedStatus).toBe('BLOCKED');
       expect(quarantineActionsCollection.updateOne).toHaveBeenCalledWith(
         { quarantineActionId: 'qa-owned' },
@@ -761,7 +761,7 @@ describe('SampleGraphValidator', () => {
         }),
       });
 
-      const report = await validator.validateSampleCompliance(sample._id);
+      const report = await validator.validateSampleCompliance(sample.specimenId);
       expect(report.suggestedStatus).toBe('AVAILABLE');
       const [, update] = samplesCollection.updateOne.mock.calls[0];
       expect(update.$set.specimenStatus).toBeUndefined();
@@ -793,7 +793,7 @@ describe('SampleGraphValidator', () => {
       });
       samplesCollection.findOne.mockResolvedValue(sample);
 
-      const report = await validator.validateSampleCompliance(sample._id);
+      const report = await validator.validateSampleCompliance(sample.specimenId);
 
       expect(report.graphPath.pharmacology).toEqual({
         valid: true,
@@ -822,23 +822,18 @@ describe('SampleGraphValidator', () => {
       samplesCollection.findOne.mockResolvedValue(sample);
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-      const report = await validator.validateSampleCompliance(sample._id);
+      const report = await validator.validateSampleCompliance(sample.specimenId);
 
       expect(report.graphPath.clinical.valid).toBe(true);
     });
 
-    it('uses Mongo _id for the movement only when canonical specimenId is absent', async () => {
+    it('rejects a stored sample that lacks canonical specimenId', async () => {
       const sample = buildSample({ specimenId: '' });
       samplesCollection.findOne.mockResolvedValue(sample);
-      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-      const report = await validator.validateSampleCompliance(sample._id);
-
-      expect(report.isReleasable).toBe(true);
-      expect(sampleMovementsCollection.insertOne).toHaveBeenCalledWith(
-        expect.objectContaining({ specimenId: String(sample._id) }),
-        undefined
-      );
+      await expect(validator.validateSampleCompliance('SPEC-MISSING-CANONICAL'))
+        .rejects.toThrow('Amostra sem specimenId canônico');
+      expect(sampleMovementsCollection.insertOne).not.toHaveBeenCalled();
     });
 
     it('prefers canonical specimenId over Mongo _id when sealing the compliance movement', async () => {
@@ -846,7 +841,7 @@ describe('SampleGraphValidator', () => {
       samplesCollection.findOne.mockResolvedValue(sample);
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-      const report = await validator.validateSampleCompliance(sample._id);
+      const report = await validator.validateSampleCompliance(sample.specimenId);
 
       expect(report.isReleasable).toBe(true);
       expect(sampleMovementsCollection.insertOne).toHaveBeenCalledWith(
@@ -855,7 +850,7 @@ describe('SampleGraphValidator', () => {
       );
     });
 
-    it('uses canonical specimenId in the compliance report and falls back to the caller only when both stored identifiers are absent', async () => {
+    it('uses canonical specimenId in the compliance report and rejects stored records without it', async () => {
       const canonical = buildSample({ _id: '', specimenId: 'SPEC-CANONICAL-REPORT' });
       samplesCollection.findOne.mockResolvedValue(canonical);
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
@@ -863,16 +858,15 @@ describe('SampleGraphValidator', () => {
       const byCanonical = await validator.validateSampleCompliance('SPEC-LOOKUP-1');
       expect(byCanonical.specimenId).toBe('SPEC-CANONICAL-REPORT');
 
-      const byArgument = buildSample({
+      const withoutCanonical = buildSample({
         _id: '',
         specimenId: '',
         clinicalData: { orphaCode: 'ORPHA:324', cid: '' },
       });
-      samplesCollection.findOne.mockResolvedValue(byArgument);
+      samplesCollection.findOne.mockResolvedValue(withoutCanonical);
 
-      const byArgumentReport = await validator.validateSampleCompliance('SPEC-LOOKUP-2');
-      expect(byArgumentReport.specimenId).toBe('SPEC-LOOKUP-2');
-      expect(byArgumentReport.isReleasable).toBe(false);
+      await expect(validator.validateSampleCompliance('SPEC-LOOKUP-2'))
+        .rejects.toThrow('Amostra sem specimenId canônico');
     });
 
     it('treats an unknown non-terminal specimenStatus as available for compliance-order comparison', async () => {
@@ -880,7 +874,7 @@ describe('SampleGraphValidator', () => {
       samplesCollection.findOne.mockResolvedValue(sample);
       consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
-      const report = await validator.validateSampleCompliance(sample._id);
+      const report = await validator.validateSampleCompliance(sample.specimenId);
 
       expect(report.suggestedStatus).toBe('AVAILABLE');
       const [, update] = samplesCollection.updateOne.mock.calls[0];
