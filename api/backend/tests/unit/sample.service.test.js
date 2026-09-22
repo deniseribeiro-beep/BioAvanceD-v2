@@ -614,14 +614,20 @@ describe('sample.service', () => {
       expect(insertedSample.location).toBeUndefined();
     });
 
-    it('generates a barcode automatically when none is provided', async () => {
+    it.each([
+      ['undefined', undefined],
+      ['null', null],
+      ['empty', ''],
+      ['whitespace', '   '],
+    ])('generates a Data Matrix encoded value when barcode is %s', async (_label, barcode) => {
       const db = makeDb();
       mockOperationalStorage(db);
 
-      const result = await sampleService.createSample(db, validSampleData({ barcode: undefined }));
+      const result = await sampleService.createSample(db, validSampleData({ barcode }));
 
       expect(result.barcode).toBeDefined();
       expect(typeof result.barcode).toBe('string');
+      expect(result.barcode.trim()).not.toBe('');
     });
 
     // #492: live POST /api/samples registration didn't compute or record
