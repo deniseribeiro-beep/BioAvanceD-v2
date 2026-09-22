@@ -29,9 +29,8 @@ describe('SampleService.getBarcodeIndustrialAssets', () => {
     expect(result.qr).toBeUndefined();
   });
 
-  it('rejects retired Code128 and QR scanner inputs', async () => {
-    await expect(sampleService.getBarcodeIndustrialAssets(']C1SMP-001')).rejects.toThrow('inválido');
-    await expect(sampleService.getBarcodeIndustrialAssets(']Q3SMP-001')).rejects.toThrow('inválido');
+  it('rejects unsupported AIM scanner inputs', async () => {
+    await expect(sampleService.getBarcodeIndustrialAssets(']x1SMP-001')).rejects.toThrow('inválido');
   });
 });
 
