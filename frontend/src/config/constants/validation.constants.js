@@ -1,6 +1,6 @@
 export const VALIDATION_PATTERNS = {
   email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-  patientId: /^\d{8}$/,
+  participantId: /^\d{8}$/,
   cpf: /^\d{11}$/,
   numericCode6: /^\d{6}$/,
   phoneDigits: /^\d{10,15}$/,
@@ -12,7 +12,7 @@ export const VALIDATION_PATTERNS = {
 export const VALIDATION_MESSAGES = {
   required: 'Campo obrigatório',
   email: 'Informe um email válido',
-  patientId: 'Informe um identificador de paciente com 8 dígitos',
+  participantId: 'Informe um identificador de paciente com 8 dígitos',
   cpf: 'Informe um CPF com 11 dígitos',
   numericCode6: 'Informe um código numérico de 6 dígitos',
   phoneDigits: 'Informe entre 10 e 15 dígitos',
@@ -36,9 +36,9 @@ export const VALIDATION_RULES = {
     maxLength: 128,
     pattern: VALIDATION_PATTERNS.password,
   },
-  patientId: {
+  participantId: {
     length: 8,
-    pattern: VALIDATION_PATTERNS.patientId,
+    pattern: VALIDATION_PATTERNS.participantId,
   },
   cpf: {
     length: 11,
