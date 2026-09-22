@@ -2666,6 +2666,64 @@ describe('sample.routes', () => {
       );
     });
 
+    it('uses canonical placement fields when the display box object has no label or position', async () => {
+      const { router } = loadRoute({
+        getSamplePhysicalPlacement: async () => ({
+          found: true,
+          placement: {
+            box: {},
+            canonicalPlacement: { boxId: 'RACK-01', positionCode: 'B12' },
+          },
+        }),
+      });
+      const findOne = vi.fn().mockResolvedValue({
+        specimenId: 'SPEC-43',
+        barcode: 'DM-43',
+      });
+      const labelGenerations = {
+        findOne: vi.fn().mockResolvedValue(null),
+        insertOne: vi.fn().mockResolvedValue({ insertedId: 'lg43' }),
+      };
+      const app = buildApp(router, {
+        collection: (name) => (name === 'labelGenerations' ? labelGenerations : { findOne }),
+      });
+
+      const res = await request(app).get('/api/samples/SPEC-43/label/print-job');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.location).toBe('Box RACK-01 / Pos B12');
+      expect(res.body.data.zpl).toContain('^BXN,5,200^FDDM-43^FS');
+      expect(res.body.data.zpl).toContain('Box RACK-01 / Pos B12');
+    });
+
+    it('uses boxId with canonical positionCode when boxName and box.position are absent', async () => {
+      const { router } = loadRoute({
+        getSamplePhysicalPlacement: async () => ({
+          found: true,
+          placement: {
+            box: { boxId: 'RACK-02' },
+            canonicalPlacement: { positionCode: 'C7' },
+          },
+        }),
+      });
+      const findOne = vi.fn().mockResolvedValue({
+        specimenId: 'SPEC-44',
+        barcode: 'DM-44',
+      });
+      const labelGenerations = {
+        findOne: vi.fn().mockResolvedValue(null),
+        insertOne: vi.fn().mockResolvedValue({ insertedId: 'lg44' }),
+      };
+      const app = buildApp(router, {
+        collection: (name) => (name === 'labelGenerations' ? labelGenerations : { findOne }),
+      });
+
+      const res = await request(app).get('/api/samples/SPEC-44/label/print-job');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.location).toBe('Box RACK-02 / Pos C7');
+    });
+
     it('escapes ^ and ~ out of ZPL field data and omits the location line when absent', async () => {
       const { router } = loadRoute();
       const findOne = vi.fn().mockResolvedValue({ sampleID: 42, barcode: 'BC^1~x' });
