@@ -1,108 +1,96 @@
 # HANDOFF
 
-**Written 2026-09-22, thirty-second queue sitting. INTERIM — Dennis gave no
-end signal, so treat the session as CONTINUING.** His instructions this
-sitting: pick the next group of issues, and **keep Docker off** (carried
-forward from the previous sitting and re-confirmed). No Docker command was
-run.
+**Written 2026-09-22, thirty-third queue sitting. INTERIM — Dennis gave no
+end signal, so treat the session as CONTINUING.** His instruction this
+sitting: read the handoff, pick the next group. **Docker stayed off**
+(carried forward and not revisited). No Docker command was run.
 
 ## What shipped
 
-Five commits on `feature/docker-e2e-backend-integration`, all pushed; tree
-clean and matching origin. Last substantive commit `0facaf31`.
+One commit, `d2004471`, on `feature/docker-e2e-backend-integration`, pushed;
+tree clean and matching origin.
 
-The group was **the temperature-policy / threshold subsystem**, picked as a
-cluster rather than by issue number, plus one RBAC sibling.
+**#1146 — filed and closed this sitting, `d2004471`.** The four
+facility/room GETs were `authenticate`-only. They now require a new
+READ-only `viewStorageTopology`, `resourceType: 'StorageContainer'`, seeded
+to Tecnico + Coordenador + Administrador.
 
-- **#1089 — closed, `bb129012`.** The six policy CRUD routes wrote
-  `collection('policies')` while the telemetry path read
-  `temperaturePolicies`. Both sides now resolve the canonical store.
-- **#1074 — closed, `1ace5a27`.** The three policy WRITES moved off
-  `viewTemperature` onto a new `manageTemperaturePolicy`.
-- **#1118 — closed, `aafb2863`.** `checkPolicyAndAlert` deduplicates the
-  threshold-breach row per episode instead of per reading.
-- **#1087 — closed, `b04ba4c3`.** The three equipment GETs gained a new
-  READ-only `viewEquipment`.
-- **#1140 — filed and closed same sitting, `0facaf31`.**
-  `SensorMetadata.temperaturePolicy` had no writer outside the e2e fixture;
-  `linkSensorMetadata` now binds it at registration.
+## The group, and why it is not the one the last note prescribed
 
-## The three decisions Dennis made, which the next session should not re-open
+The previous note's **unverified** prescription was #1145 + #1139. I checked
+both before picking and **#1139 is blocked**: its own body assigns the Q2/Q3
+decision to Denise, and retiring the translation re-opens Dennis's own #1089
+Q4 answer from last sitting. **#1145 direction 1 depends on #1139; direction
+2 does not** and is still a live, workable bug.
 
-1. **#1089 direction 1** — `temperaturePolicies` survives as the single store.
-2. **#1089 Q4** — the HTTP contract keeps its legacy field names, translated
-   at the route boundary. The stored document is canonical.
-3. **#1089 Q1** — `policyName` is a new REQUIRED request field, supplied by
-   the operator, not synthesized.
+Dennis chose the alternative when asked: **the RBAC gate cluster**, the
+unswept remainder of last sitting's #1074/#1087. #1146 was its first member.
 
-**Q2/Q3 were NOT his** — I inferred them from Q4 (a GET still exposes
-`temperatureUnit`/`alertDelayMin`, so they must round-trip and persist as
-non-canonical extensions). That inference is labelled as mine on #1089 and is
-the thing #1139 re-opens.
+## Two issue bodies were stale, and neither was discoverable from the tracker
+
+**This is the sitting's most reusable finding.** Both were overtaken by
+commits citing their own numbers, with nothing recorded on the issue:
+
+- **#929's census is stale.** `[ran it]` All nine equipment/facility/room
+  write sites already gate on `manageStorageTopology`; the catalog's own
+  source comment records the widening under #929's number. Its check-1
+  question (would a READ/UPDATE-only set 403 the creates?) is answered in
+  the code. **Commented twice.**
+- **#921's finding 2 is already done**, `720368c8`. `[read it]`
+  `rbac-actions.arch.test.js` states its own scope: it covers finding 2 and
+  **explicitly not finding 1**. **Commented.**
+
+`git log --oneline --all --grep="#<N>"` would have caught both and is worth
+running before picking anything.
 
 ## Issues touched but not closed
 
-Query for state — `gh issue list --state open`. What a query will not tell
-you, one clause each:
+Query for state — `gh issue list --state open`. One clause each on what a
+query will not tell you:
 
-- **#1139** — filed today. Retires #1089's boundary translation. Carries the
-  frontend's 27 legacy-name occurrences, and a comment recording that #875's
-  PUT allowlist became a *map* whose eight unpinned values are a live typo
-  risk until this lands.
-- **#1141** — filed today. Decision record: should a Técnico rewrite an alert
-  threshold? One line in the seed either way.
-- **#1142** — filed today. The alert-lifecycle pair is now duplicated in full
-  between `scheduler.service.js` and `temperature.service.js`, linked by
-  comments rather than code.
-- **#1143** — filed today. Decision record: the operator is still notified on
-  every breaching reading; only the row was deduped.
-- **#1144** — filed today. Decision record: `b04ba4c3` removed
-  equipment-inventory reads from UsuarioExterno.
-- **#1145** — filed today, and the sharpest of the six. The 'Novo Sensor'
-  policy dropdown writes `Sensor.policyId`, which **no resolver reads**. It
-  is a third disjoint policy reference and an affordance that reports success
-  while binding nothing.
-- **#941** — commented only. The new dedup is check-then-act, so "one row per
-  episode" is the common case, not an invariant; the unique partial index
-  that would make it one cannot be built while this issue stands.
-- **#846** — commented only. A mirror case for that cluster: a mock that
-  *accepts* an operation the real driver rejects.
-- **#1127** — **untouched this sitting.** Still open only on its live-stack
-  proof. Do not re-pick it as unstarted work.
+- **#1147** — filed today. `[ran it]` The facility/room CRUD surface has
+  **no caller anywhere** (only `app.js`'s mounts and its own test).
+  Commented with the RF017 reading below.
+- **#1148** — filed today. Decision record for #1146's seeded population,
+  in #1141's and #1144's shape. **The one that most wants Dennis's eye.**
+- **#929** — commented twice, still open on its real remainder: `eConsent.js:73`
+  alone. I withdrew my own mid-sitting claim that `import-lgpd.routes.js`
+  was a second borrower family — `[read it]` its six `createPatient` sites
+  gate patient routes and are correct.
+- **#921** — commented only; finding 1 and remedy steps 2/4 remain.
+- **#1145, #1139** — read and evaluated, untouched. See above; do not
+  re-pick #1139 as unstarted.
+- **#1127** — untouched again. Still open only on its live-stack proof.
+
+## A doc reading worth keeping
+
+`[ran it]` **RF017's topology begins at Freezer** —
+*"Representar Freezer > Prateleira > Rack > Caixa > Posição"*
+(`docs/docs-7-27-2026/extracted/requisitos-index.md:256`). **Facility and
+Room appear in none of its seven acceptance criteria**, and its
+**Ator primário is Coordenador**. Both route files instead cite dict-02
+`StorageAssignment.facilityId`/`roomId` (ELM-0168/0169, 1..1 Core).
+
+So the requirement and the dictionary disagree on scope, which is what #1147
+and #1148 both turn on. #929's **RF006-vs-RF017 actor disagreement** is
+still the right place to settle the actor question once for the whole
+storage area rather than per issue.
 
 ## Corrections the next session should not re-derive
 
-- **#1087's title says `GET /analytical` "has no org scope either". It does**
-  — #1081 added it. Only the missing-permission half was live.
-- **#312 is CLOSED and resolved.** The 'Novo Sensor' form *does* have
-  `macAddress` and `storageContainer` inputs (`0677cab5`). I asserted
-  otherwise on #1140 from #311's older close comment and corrected it there.
-  **A grade carried from a closed issue's comment is not yours** — re-derive
-  it.
-- **A route-file comment must not spell a permission gate in its literal call
-  form.** `[ran it]` `rbac-actions.arch.test.js` parses these files for gate
-  call sites and reads it as a registration that does not exist — two arch
-  failures, `no action derivable from null`, pointing at a comment.
-
-## Two verification facts worth keeping
-
-- **`[ran it]` The architecture suite runs under `node --test` via
-  `npm run test:architecture`, NOT vitest.** A derived test list from
-  `git grep -l` therefore hands vitest a file it silently ignores at exit 0
-  — named 77, ran 76, and the dropped one was the RBAC arch test. Run it
-  separately after any permission-catalog change.
-- **`[ran it]` A file list passed as `$(cat …)` must use a LITERAL absolute
-  path.** `full-suite-guard` is a native process that never sees your shell,
-  so `$(cat "$SP/list.txt")` reads as unexpanded and blocks.
+- **`Fixes #N` in a pushed commit does NOT auto-close here** — commits land
+  on a non-default branch. Close by hand; the auto-close trap the close
+  discipline warns about cannot fire on this repo.
+- **#929's check 1 is answered**: `manageStorageTopology` already carries
+  the full CRUD set, widened under #929's own number.
 
 ## Carried forward, NOT re-verified this sitting
 
-Both come from the previous note and were not re-measured today:
+Both from the previous note, not re-measured today:
 
 1. **The branch basis is stale and `main` is not where the upstream work
-   is.** **This remains the open decision and it is Dennis's call.**
-2. **CI minutes are exhausted** (upstream tracker comment, 2026-09-20). Any
-   plan needing a PR for a real CI signal is blocked until that resets.
+   is.** **Still the open decision, still Dennis's call.**
+2. **CI minutes are exhausted** (upstream tracker comment, 2026-09-20).
 
 Also still true: Mongo is a replica set upstream, and whether the
 `chmod 400` keyfile step survives Docker Desktop here is
@@ -110,30 +98,35 @@ Also still true: Mongo is a replica set upstream, and whether the
 
 ## Recommended next
 
-**None queued by name.** Dennis named no issue this sitting; he named a
-*shape* ("pick the next group"), and the group is finished.
+**None queued by name.** The group Dennis picked has one member left.
 
-**Unverified prescription:** #1145 and #1139 are the two that most repay
-being taken together — both turn on which policy identifier is canonical
-once the translation layer goes, and deciding that twice separately is how
-a fourth reference gets created.
+**Unverified prescription:** **#929's eConsent leg** is the group's
+remainder, but it is blocked on the same `[not established]` #888 left —
+whether a borrower should be a different *tier* rather than a
+differently-named code at the same tier. That question, #1148's population
+question and #929's RF006-vs-RF017 disagreement are **one decision asked
+three ways**, and answering it once unblocks all three. Worth putting to
+Dennis as a single question rather than working around it.
 
-Still undone from the last three notes: **diff Requisitos v4.0.0 against
+Otherwise **#1123** (three sources of truth for RBAC permissions) is the
+cluster's remaining structural item and needs no owner call to start:
+direction 1 is what dict-02 describes.
+
+Still undone from the last four notes: **diff Requisitos v4.0.0 against
 v3.0.1 for RF renumbering before building further on
 `E2E_TRACEABILITY_PLAN.md`.**
 
 ## Things a next session must not undo
 
-The four from the previous note still hold. This sitting adds:
+The four from before the previous note still hold, plus its 5–8, plus:
 
-5. **`manageTemperaturePolicy` and `viewEquipment` are seeded to their
-   pre-existing populations ON PURPOSE.** Both are capability *splits*, not
-   grants — nobody gained access. #1141 and #1144 are where the populations
-   get decided.
-6. **`viewEquipment` is READ-only deliberately**, so it can never be reused
-   to gate a write the way `viewTemperature` was before #1073.
-7. **`temperaturePolicy` must drop out of `$setOnInsert` whenever it is
-   `$set`.** MongoDB rejects a field named in both, and no mock in this repo
-   can produce that red — `sensor.service.test.js` pins it both ways.
-8. **`policy.routes.js`'s `toCanonical`/`toApiShape` are the whole boundary.**
-   Don't add a third copy of the mapping; #1139 removes the two that exist.
+9. **`viewStorageTopology` is READ-only and seeded to STAFF deliberately.**
+   Unlike #1074's and #1087's splits this is **not** a preserved
+   pre-existing population — that population was everyone authenticated, so
+   any gate narrows. #1148 is where it gets confirmed.
+10. **It is NOT a reuse of `viewEquipment`, on purpose**: `viewEquipment`
+    carries `resourceType: 'Device'`, which a facility is not, and dict-02
+    makes `resourceType` a 1..1 Core field (P1X-0221).
+11. **Run `npm run test:architecture` separately after any
+    permission-catalog change.** It runs under `node --test`, not vitest —
+    a derived file list hands vitest a file it silently ignores at exit 0.
