@@ -1260,6 +1260,99 @@ describe('sample.service', () => {
       expect(updateArg.$set.participantId).toBeUndefined();
     });
 
+    it('rejects non-string and blank Data Matrix values on update', async () => {
+      const db = makeDb();
+      const existing = {
+        _id: 'sample-1',
+        specimenId: 'SPEC-1',
+        barcode: 'DM-001',
+        quantity: 10,
+        initialQuantity: 10,
+        currentQuantity: 10,
+        specimenStatus: 'available',
+      };
+      db.collections.samples.findOne.mockResolvedValue(existing);
+
+      await expect(sampleService.updateSample(db, 'sample-1', { barcode: 12345 }))
+        .rejects.toThrow('barcode deve ser uma string canônica');
+
+      await expect(sampleService.updateSample(db, 'sample-1', { barcode: '   ' }))
+        .rejects.toThrow('barcode não pode ser vazio');
+
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects a duplicate Data Matrix value on update', async () => {
+      const db = makeDb();
+      const existing = {
+        _id: 'sample-1',
+        specimenId: 'SPEC-1',
+        barcode: 'DM-001',
+        quantity: 10,
+        initialQuantity: 10,
+        currentQuantity: 10,
+        specimenStatus: 'available',
+      };
+      db.collections.samples.findOne
+        .mockResolvedValueOnce(existing)
+        .mockResolvedValueOnce({ _id: 'sample-2', specimenId: 'SPEC-2', barcode: 'DM-002' });
+
+      await expect(sampleService.updateSample(db, 'sample-1', { barcode: 'DM-002' }))
+        .rejects.toThrow('Já existe uma amostra com o código de barras DM-002');
+
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('trims and persists a new unique Data Matrix value on update', async () => {
+      const db = makeDb();
+      const existing = {
+        _id: 'sample-1',
+        specimenId: 'SPEC-1',
+        barcode: 'DM-001',
+        quantity: 10,
+        initialQuantity: 10,
+        currentQuantity: 10,
+        specimenStatus: 'available',
+      };
+      db.collections.samples.findOne
+        .mockResolvedValueOnce(existing)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ ...existing, barcode: 'DM-002' });
+
+      const result = await sampleService.updateSample(db, 'sample-1', { barcode: '  DM-002  ' });
+
+      expect(db.collections.samples.findOne).toHaveBeenNthCalledWith(2, { barcode: 'DM-002' });
+      expect(db.collections.samples.updateOne).toHaveBeenCalledWith(
+        { specimenId: 'SPEC-1' },
+        { $set: expect.objectContaining({ barcode: 'DM-002' }) }
+      );
+      expect(result.barcode).toBe('DM-002');
+    });
+
+    it('does not perform a duplicate lookup when the Data Matrix value is unchanged', async () => {
+      const db = makeDb();
+      const existing = {
+        _id: 'sample-1',
+        specimenId: 'SPEC-1',
+        barcode: 'DM-001',
+        quantity: 10,
+        initialQuantity: 10,
+        currentQuantity: 10,
+        specimenStatus: 'available',
+      };
+      db.collections.samples.findOne
+        .mockResolvedValueOnce(existing)
+        .mockResolvedValueOnce(existing);
+
+      await sampleService.updateSample(db, 'sample-1', { barcode: 'DM-001' });
+
+      expect(db.collections.samples.findOne).toHaveBeenCalledTimes(2);
+      expect(db.collections.samples.updateOne).toHaveBeenCalledWith(
+        { specimenId: 'SPEC-1' },
+        { $set: expect.objectContaining({ barcode: 'DM-001' }) }
+      );
+    });
+
     it('returns null when updateOne matches nothing', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', quantity: 10 });
