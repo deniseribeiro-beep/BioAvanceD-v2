@@ -301,6 +301,7 @@ const FABRY_MOCK_BIOMARKERS = [
 // CORREÇÃO: Removidas as declarações de função daqui. 
 // initialState deve ser apenas um objeto com os valores iniciais.
 const initialState = {
+  participantId: '',
   patientName: '',
   birthDate: '',
   email: '',
@@ -1317,7 +1318,7 @@ function buildSampleIntegrityInput(formData, clinicalComorbidityDefinitions = []
     // finalGrade/calculationTrace/axisPenalties are omitted (default to null) since RCS hasn't
     // been computed yet at intake-wizard submission time.
     participant_identity: {
-      participantId: String(formData.patientID || '').trim(),
+      participantId: String(formData.participantId || '').trim(),
       participantName: String(formData.patientName || '').trim(),
     },
     clinicalData: {
@@ -1348,9 +1349,9 @@ function buildSampleIntegrityInput(formData, clinicalComorbidityDefinitions = []
   };
 }
 
-function buildSampleLabelCode({ date = new Date(), patientID = '', sampleType = '' }) {
+function buildSampleLabelCode({ date = new Date(), participantId = '', sampleType = '' }) {
   const normalizedDate = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
-  const normalizedPatient = String(patientID || '').trim() || 'NOID';
+  const normalizedPatient = String(participantId || '').trim() || 'NOID';
   const normalizedSampleType = String(sampleType || '').trim().replace(/\s+/g, '_').toUpperCase() || 'SAMPLE';
   return `${normalizedDate}-${normalizedPatient}-${normalizedSampleType}`;
 }
@@ -1373,24 +1374,20 @@ function buildSampleLabelData(createdSample = {}, payload = {}, formData = {}, d
     || formData?.sprecSampleType
     || ''
   ).trim();
-  const patientID = String(
+  const participantId = String(
     labelData.participantId
-    || labelData.patientCode
     || createdSample.participantId
-    || createdSample.patientId
     || payload?.participant?.participantId
     || ''
   ).trim();
-  const fallbackCode = buildSampleLabelCode({ date, patientID, sampleType });
-  const sampleID = String(
+  const fallbackCode = buildSampleLabelCode({ date, participantId, sampleType });
+  const specimenId = String(
     labelData.specimenId
-    || labelData.sampleId
     || createdSample.specimenId
-    || createdSample.sampleId
     || createdSample._id
     || ''
   ).trim();
-  const barcode = String(labelData.barcode || createdSample.barcode || sampleID || fallbackCode).trim();
+  const barcode = String(labelData.barcode || createdSample.barcode || specimenId || fallbackCode).trim();
   const collectionDate = labelData.collectionDate
     || labelData.registeredAt
     || createdSample.collectionDate
@@ -1400,12 +1397,12 @@ function buildSampleLabelData(createdSample = {}, payload = {}, formData = {}, d
     || date.toISOString();
 
   return {
-    code: barcode || sampleID || fallbackCode,
-    specimenId: sampleID || barcode || fallbackCode,
-    barcode: barcode || sampleID || fallbackCode,
+    code: barcode || specimenId || fallbackCode,
+    specimenId: specimenId || barcode || fallbackCode,
+    barcode: barcode || specimenId || fallbackCode,
     sprecCode: String(formData.sprecCode || payload?.specimen?.sprecCode || '').trim(),
     sampleType,
-    participantId: patientID,
+    participantId,
     collectionDate: formatSampleLabelDate(collectionDate, date),
   };
 }
@@ -1415,13 +1412,13 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
   const sprecMatrixType = String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
   const sprecDictionary = sprecMatrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
   const canonicalSprec = buildIntakeSprecPayload(formData, sprecMatrixType, sprecDictionary);
-  // canonical.v1.participant/specimen both require a non-empty
+  // canonical v2 participant/specimen both require a non-empty
   // participantId (#699) even though the server always discards and
   // regenerates it for a new patient (intakeWizard.js's resolvePatientID
   // only accepts an existing 8-digit id) -- same "required by validation,
   // regenerated server-side" precedent tests/e2e/helpers/seedParticipant.ts's
   // createRealParticipant already documents for POST /api/patients.
-  const participantId = String(formData.patientID || '').trim() || 'placeholder';
+  const participantId = String(formData.participantId || '').trim() || 'placeholder';
   const sampleUnit = getSampleQuantityUnit(formData.sprecSampleType, SPREC_FLUID_DICTIONARY.sampleType.options);
   const patientDocument = normalizeDocumentForPayload(formData.documento);
   const diagnosis = formData.isHealthyControl ? null : {
@@ -2650,8 +2647,8 @@ export default function ClinicalIntakeWizard(props) {
 
     try {
       const payload = buildSubmissionPayload(formData, clinicalComorbidityDefinitions, biomarkerDefinitions, sampleMerkleRoot || null);
-      if (patientMatchInfo?.patient?.patientID) {
-        payload.participant.participantId = String(patientMatchInfo.patient.patientID).trim();
+      if (patientMatchInfo?.patient?.participantId) {
+        payload.participant.participantId = String(patientMatchInfo.patient.participantId).trim();
       }
       console.log('[DEBUG] Payload pronto:', payload);
 
