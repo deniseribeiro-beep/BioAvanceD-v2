@@ -4,7 +4,7 @@ import CryoLabelPrinter from './CryoLabelPrinter';
 
 interface PrintQueueDashboardProps {
   samples: SampleLabelData[];
-  onPrint: (sampleIds: string[]) => void;
+  onPrint: (specimenIds: string[]) => void;
 }
 
 export const PrintQueueDashboard: React.FC<PrintQueueDashboardProps> = ({ samples, onPrint }) => {
@@ -18,7 +18,7 @@ export const PrintQueueDashboard: React.FC<PrintQueueDashboardProps> = ({ sample
       ) : (
         <>
           <CryoLabelPrinter samples={samplesToPrint} />
-          <button onClick={() => onPrint(samplesToPrint.map(s => s.sampleId))}>
+          <button onClick={() => onPrint(samplesToPrint.map(s => s.specimenId))}>
             Marcar como Impresso
           </button>
         </>
