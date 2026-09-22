@@ -14,7 +14,7 @@ const { initScheduler } = require("./src/services/scheduler.service");
 const { initializeSecuritySystem } = require("./src/infrastructure/middleware/integrationSecurityMiddleware");
 const { seedReportTemplates } = require("./src/services/report-template-seed.service");
 const { seedRolesAndPermissions } = require("./src/services/rbac-catalog-seed.service");
-const { validateEncryptionAndHalt } = require("./src/config/validateEnv");
+const { validateEncryptionAndHalt, validateAuditSigningAndWarn } = require("./src/config/validateEnv");
 
 // #1040: Model.createIndexes() index-build errors (and unhandled rejections
 // generally) reach `Model.emit('error')` on a Mongoose Model with no default
@@ -88,6 +88,19 @@ async function startServer() {
     // ele recusa subir, ruidosamente, em vez de guardar identidade civil em
     // texto claro em silêncio.
     validateEncryptionAndHalt();
+
+    // #1154: mesma posição, severidade deliberadamente diferente -- avisa e
+    // segue, em qualquer ambiente. O backend não sela raízes (quem sela é o
+    // job noturno no worker), mas os dois containers compartilham o mesmo
+    // arquivo de ambiente, então uma configuração quebrada fica visível aqui
+    // horas antes de o worker chegar às 02:30 UTC.
+    // NÃO aguardado de propósito: a checagem é um diagnóstico, não um portão.
+    // Aguardá-la atrasaria httpServer.listen() por duas leituras de arquivo sem
+    // nada depender do resultado -- a direção 1 de #1154 promete nenhuma mudança
+    // de comportamento, e isso inclui a ordem do boot. O catch é defensivo: uma
+    // rejeição não tratada aqui cairia no handler de #1040 e derrubaria o
+    // processo, invertendo a postura desta função.
+    validateAuditSigningAndWarn().catch(() => {});
 
     const PORT = parseInt(process.env.PORT || "3000");
     const actualPort = await portManager.getAvailablePort(PORT);

@@ -8,7 +8,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '.e
 const fs = require('fs');
 const { initWorker } = require('./import-worker');
 const { testConnection } = require('../config/queue');
-const { validateEncryptionAndHalt } = require('../config/validateEnv');
+const { validateEncryptionAndHalt, validateAuditSigningAndWarn } = require('../config/validateEnv');
 const logger = require('../utils/logger');
 
 // #992: heartbeat file probed by the container healthcheck (mtime-based).
@@ -88,6 +88,18 @@ async function startWorker() {
     // Aviso em dev/test, fatal em produção; o throw cai no catch abaixo, que
     // já encerra o processo com process.exit(1).
     validateEncryptionAndHalt();
+
+    // #1154: este é o processo que roda daily-merkle.job, então é aqui que a
+    // configuração de assinatura importa de fato -- e era aqui que o único
+    // sinal existente chegava, até 24h depois do boot, engolido pelo catch de
+    // runOnce. Avisa e segue: #989 exige que o job noturno não rejeite.
+    // NÃO aguardado de propósito: a checagem é um diagnóstico, não um portão,
+    // e aguardá-la empurraria o require tardio de ../config/redis abaixo para
+    // fora do tick de carga do módulo -- mudando a ordem do boot, que é
+    // exatamente o que a direção 1 promete não mudar. O catch é defensivo:
+    // uma rejeição não tratada aqui cairia no handler de #1040 e derrubaria
+    // o processo, invertendo a postura desta função.
+    validateAuditSigningAndWarn().catch(() => {});
 
     // Testa conexão Redis diretamente (sem precisar da fila)
     logger.info('[INFO] Testando conexão Redis...');

@@ -159,4 +159,129 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
       expect(exitSpy).not.toHaveBeenCalled();
     });
   });
+
+  // #1154: the audit-signing boot check sits beside #1085's encryption gate in
+  // this same startup sequence, and is deliberately the OPPOSITE severity.
+  // That asymmetry is the whole point of direction 1 -- it is what keeps the
+  // change independent of #979's open fatal-vs-degrade decision -- and a
+  // comment cannot stop the next edit from quietly escalating it, which is the
+  // same reasoning #977 used to pin the fatal posture above.
+  describe('#1154 the audit-signing boot check warns and never exits', () => {
+    const crypto = require('crypto');
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const env = require('../../src/config/env');
+    const validateEnvPath = require.resolve('../../src/config/validateEnv');
+    const auditProviderPath = require.resolve('../../src/services/audit-signing.provider');
+
+    let nodeEnvBefore;
+    let auditBefore;
+    let tmpKeyFile;
+
+    // The boot check is fire-and-forget (see worker.js), so the startup
+    // sequence itself still settles inside loadWorker's two turns -- but the
+    // WARNING lands a few turns later, after the key file read. Drain a fixed
+    // bound, and let the control case assert nothing arrived within it.
+    const SETTLE_TURNS = 50;
+
+    async function bootAndSettleWarnings() {
+      await loadWorker();
+      for (let i = 0; i < SETTLE_TURNS; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    }
+
+    beforeEach(() => {
+      nodeEnvBefore = process.env.NODE_ENV;
+      auditBefore = {
+        key: env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE,
+        id: env.AUDIT_MERKLE_SIGN_KEY_ID,
+        json: env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON,
+        file: env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE,
+      };
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = '';
+      env.AUDIT_MERKLE_SIGN_KEY_ID = '';
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = '';
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE = '';
+      // The encryption gate shares this sequence and exits(1) in production
+      // without a key, which would mask everything below.
+      process.env.ENCRYPTION_KEY = 'chave-de-teste';
+
+      // config/validateEnv.js captures `logger` at ITS first load, which happens
+      // inside the first loadWorker() of this file -- so without this it holds
+      // the FIRST test's stub for the whole run, and every later assertion reads
+      // an object nothing is writing to. worker.js is re-required per test and
+      // does not have the problem; its dependency does. Evict both so they bind
+      // to the stub this test installed.
+      delete require.cache[validateEnvPath];
+      delete require.cache[auditProviderPath];
+    });
+
+    afterEach(() => {
+      if (nodeEnvBefore === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = nodeEnvBefore;
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = auditBefore.key;
+      env.AUDIT_MERKLE_SIGN_KEY_ID = auditBefore.id;
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = auditBefore.json;
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE = auditBefore.file;
+      delete require.cache[validateEnvPath];
+      delete require.cache[auditProviderPath];
+      if (tmpKeyFile) {
+        fs.rmSync(tmpKeyFile, { force: true });
+        tmpKeyFile = undefined;
+      }
+    });
+
+    function auditWarnings() {
+      // The logger stub is rebuilt per test by the outer beforeEach, so read it
+      // back out of require.cache rather than holding a stale reference.
+      return require.cache[loggerPath].exports.warn.mock.calls
+        .map((args) => String(args[0]))
+        .filter((message) => message.includes('[AUDIT]'));
+    }
+
+    function configureSoundKey() {
+      const pair = crypto.generateKeyPairSync('ed25519');
+      tmpKeyFile = path.join(os.tmpdir(), 'worker-entrypoint-1154-' + Date.now() + '-' + Math.random() + '.pem');
+      fs.writeFileSync(tmpKeyFile, pair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'utf8');
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = tmpKeyFile;
+      env.AUDIT_MERKLE_SIGN_KEY_ID = 'key-worker-1';
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = JSON.stringify({
+        'key-worker-1': pair.publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+      });
+    }
+
+    it('starts the worker anyway when the audit signing config is broken in production', async () => {
+      process.env.NODE_ENV = 'production';
+
+      await bootAndSettleWarnings();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(fakeInitWorker).toHaveBeenCalled();
+    });
+
+    it('logs the broken config as an [AUDIT] warning at boot, not at 02:30 UTC', async () => {
+      process.env.NODE_ENV = 'production';
+
+      await bootAndSettleWarnings();
+
+      const warnings = auditWarnings();
+      expect(warnings.length).toBeGreaterThan(0);
+      expect(warnings.join(' ')).toContain('AUDIT_MERKLE_SIGN_KEY_ID');
+    });
+
+    // Control: a sound config must produce NO audit warning, or the check is
+    // noise and an operator learns to ignore it.
+    it('control: says nothing when the signing config round-trips', async () => {
+      process.env.NODE_ENV = 'production';
+      configureSoundKey();
+
+      await bootAndSettleWarnings();
+
+      expect(auditWarnings()).toEqual([]);
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(fakeInitWorker).toHaveBeenCalled();
+    });
+  });
 });
