@@ -237,7 +237,7 @@ describe('ImportLGPDService item 8 branch closure - parsers and mappings', () =>
       patientName: 'Nome Alternativo',
       patientSex: 'F',
       representativeName: 'Resp',
-      barcode: '1234',
+      barcode: 1234,
       quantity: 2.5,
       consentTemplateId: '77',
       boxId: 'box-1',
