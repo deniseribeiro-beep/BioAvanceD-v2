@@ -1,141 +1,148 @@
 # HANDOFF
 
-**Written 2026-09-22, thirty-sixth queue sitting. INTERIM — Dennis gave no
+**Written 2026-09-22, thirty-seventh queue sitting. INTERIM — Dennis gave no
 end signal, so treat the session as CONTINUING.** His instruction: read the
-handoff, Docker is on, pick the next group. **The group picked was the
-audit-signing-config cluster; all three shipped, plus two issues the
-sitting filed and closed itself.**
+handoff, Docker is on, pick the next group. **The group picked was #941, the
+unbuilt-index inventory, on the strength of Denise's own classification
+comment settling the direction question that had stalled it through twelve
+comments.**
 
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, tree clean and matching origin.
-Eight commits, all pushed (this note is the eighth; it replaces two earlier
-rotations, the sitting having continued past both). Last substantive commit
-is the TRUST_PROXY default.
+Four commits this sitting, all pushed. Last substantive commit is the
+wiring-assertion one; this note is the fifth commit and rides alone.
 
-## What shipped — five issues closed
+## What shipped
 
-- **#1157** — the public-key registry can be loaded from a FILE
-  (`AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE`), so a key minted at bring-up can
-  actually be verified. Direction 1 of four, Dennis's call.
-- **#1154** — the audit signing config is now checked at boot in both
-  entrypoints, warning-only in every environment.
-- **#1153** — a fresh `generate-env-docker-secrets.sh` fills from
-  `.env.docker.example` too, not only `--upgrade`.
-- **#1160** — `worker.entrypoint.test.js`'s stubbing now reaches the whole
-  dependency graph, and a late failure no longer kills the run. Filed and
-  closed by this sitting.
-- **#1161** — `NEO4J_CANONICAL_SALT` and `GRAPH_PSEUDONYMIZATION_SALT` are
-  declared in the example, and the architecture test now pins BOTH
-  directions, so the example and a fresh generate must stay exactly equal.
-  Also filed and closed by this sitting.
+**#941 is NOT closed and should not be** — see "the correction" below.
 
-## The four numbers this sitting produced
+- **`5e21ee19`** — `sensorMetadata.macAddress` unique, PARTIAL on
+  `$type: 'string'`. Closes a live inconsistency: `sensor.service.js`
+  documents, catches and returns a *"macAddress duplicado"* failure, and the
+  upsert filter is `{sensorId}`, so that E11000 was one the database could
+  not produce. The handler was unreachable; it is reachable now.
+- **`d248af51`** — three storage lookup indexes BUILT, two DELETED.
+- **`a9c1300c`** — `facilities.name` and `rooms.{facilityId,name}` BUILT.
+  Inventory of the `Schema.index()` call form complete: seven built, two
+  deleted.
+- **`a9b94615`** — pins the three wiring lines that could be deleted with the
+  suite staying green. A recurrence of #1126 that this sitting caused.
 
-**`[ran it]` all four, three of them on the live stack.**
+## The method, because it is the reusable part
 
-1. **The first tree head with a real `publicKeyFingerprint`**
-   (`8e9c1f24…`). The head beside it, sealed last sitting, is still `null`
-   — `createTreeHead` upserts on `{logId, treeSize}` with `$setOnInsert`,
-   so a signed head is never rewritten. Correct for an append-only
-   artifact.
-2. **`processTimestampBacklog` returns `VERIFIED`, not
-   `FAILED/signature_unknown_key_id`** — and it does so on the *pre-fix*
-   null-fingerprint root, because `verifyEnvelopeSignature` skips the
-   fingerprint comparison when the stored value is null. **So the FAILED
-   stamp was never terminal and existing artifacts recover**; #1157 had
-   left that `[not established]`.
-3. **The boot warning lands ~20ms after start**, with
-   `[daily-merkle] Próxima execução em 34359s` on the line above it — the
-   old signal was 9.5 hours away, in the same log.
-4. **A fresh generate went 31 → 81 variables against 80 declared.** The 49
-   it used to omit included `REDIS_URL`/`REDIS_HOST`/`REDIS_PORT`, which
-   `compose.dev.yml` supplies nowhere, so a freshly generated dev stack had
-   **no Redis config at all** and said so only as
-   "Redis não será inicializado". That answers #1153's own open question and
-   makes it a correctness issue, not drift.
+**Every BUILD/DELETE was decided by `explain('executionStats')` on the query
+shapes in `src/`, in a scratch collection, not by reading the code and
+reasoning.** `[ran it]` — and it matters, because **inference gets two of
+them wrong**:
 
-## The stack is UP, and its state matters
+- `StorageContainer {name}` and `StorageBox {name}` were DELETED. Both
+  collections really do `.sort({name:1})`, so "there is a sort on name,
+  therefore keep the name index" is the natural read and it is false — those
+  sorts follow a **selective** filter, so the planner takes the compound
+  index and sorts a handful of rows in memory. Neither is ever the winning
+  plan. Both deletions are pinned by a test asserting the index is NOT built.
+- `Facility {name}` is the same-looking declaration and the **opposite**
+  verdict, because its filter (`deletedAt: null`) is unselective and the sort
+  is then the dominant cost.
 
-14 services, **11 currently `Up (healthy)`**, on the volumes created last
-sitting — not fresh.
+Filed as pack workflow guidance, since nothing in the pack said how to answer
+"is this index needed at runtime".
 
-- **`backend-app-test` and `worker-test` were rebuilt this sitting** and
-  carry #1154's boot check. `tsa`/`witness` were recreated with them.
-- **`frontend-app-test` is `Exited (143)` and was never brought back up** —
-  bring it up before any Playwright run.
-- **`admin-bootstrap-test` ran three hours ago** and its data is in
-  `mongodb-test-data`, which persisted, so `realLogin()` still works.
-- **The 17-service reference-data bootstrap chain has still NOT run.** A
-  full-suite gate needs it (#403: 173/27 without, 193/7 with).
-- **`INFLUXDB_HOST_PORT=18086` is required on this machine.** `[ran it]`
-  `netsh interface ipv4 show excludedportrange protocol=tcp`: five
-  contiguous blocks, **7810–8309**. **8087 does NOT work** — the
-  pack's own docker overlay still prescribes it and the port is inside the
-  range that overlay itself records. Filed as pack #1086.
-- **`audit-signing-test-data` now holds the key AND
-  `merkle_signing_public_keys.json`.** The keygen re-derives the registry
-  from whatever key is on disk on **every** run, so deleting only the
-  registry is safe; deleting the key orphans every signed artifact.
+## The correction a next session must not undo
+
+**My own first inventory comment on #941 was incomplete, and the corrected
+one is the newest comment there.** The grep behind it was
+`git grep -E "\.index\(" -- api/backend/src/models`, which finds only the
+**call** form. **Field-level `unique: true` / `index: true` declarations are
+equally inert and it cannot see them** — `StorageContainer.containerID`, named
+in the issue's own body, is exactly that form.
+
+**Six field-level declarations are still inert**, and they are #941's real
+remainder: `Sample.specimenId`, `Sample.participantId`, `Terminology.codigo`,
+`Terminology.ativo`, `Cid.active`, `StagingImport.status`. In three of four
+cases a native helper already exists for the collection and builds exactly
+one index while the schema declares more, so the work is mostly extending
+helpers. `[not established]` whether any is a winning plan — that is the same
+`explain()` measurement, unrun. **Unverified prescription:** measure
+`Sample.specimenId`/`participantId` first, because `samples` is the largest
+live collection and #779's cost model already rested on an index that did not
+exist.
+
+## The stack is UP, and it is NOT pristine
+
+14 services, 11 `Up (healthy)`, same volumes as the last two sittings.
+
+- **`backend-app-test` carries HAND-COPIED source.** `[ran it]` I
+  `docker cp`'d `storageIndexes.js`, `lookupIndex.js` and `facilityIndexes.js`
+  into `/app/src/utils/` to run the real helpers against real Mongo. They
+  match the committed tree, but **the container was not rebuilt and no longer
+  matches its image.** Rebuild it before trusting it for anything else.
+- Probe scripts were removed; scratch collections (`zz_*`) were dropped.
+  `[ran it]` verified both.
+- **`frontend-app-test` is still `Exited (143)`** — bring it up before any
+  Playwright run.
+- **The 17-service reference-data bootstrap chain has still NOT run.**
+- **`INFLUXDB_HOST_PORT=18086` is required on this machine**; 8087 is inside
+  an excluded range.
 
 ## Things a next session must not undo
 
-Items 12–18 from the previous note still hold, except **item 16 is now
-resolved** (`AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON` stays unset on the test
-stack, but the FILE form supersedes it — that is #1157). Plus:
+Items 12-21 from the previous note still hold. Plus:
 
-19. **The boot check is deliberately NOT awaited** at either call site.
-    `[ran it]` awaiting it pushes `startWorker`'s lazy
-    `require('../config/redis')` out of the module-load tick, which breaks
-    `worker.entrypoint.test.js`'s stubbing. The `.catch()` is load-bearing:
-    an unhandled rejection reaches #1040's handler and exits the process,
-    inverting the function's posture.
-20. **`config/env.js` is exempt from `worker.entrypoint.test.js`'s new
-    prefix eviction on purpose.** Tests write to that object directly
-    instead of through `process.env`, so a fresh copy per test discards
-    every assignment. `[ran it]` removing the exemption turns the control
-    case red with a message that names nothing about module identity.
-21. **`sync_from_example()` never rewrites an existing line, so the
-    generator's values win over the example's.** That is what keeps
-    `AUDIT_RFC3161_MODE=disabled` from being silently re-decided; **#962
-    still owns that call** and an architecture test pins the precedence.
+22. **`macAddress`'s index is PARTIAL and `sensorId`'s is PLAIN, deliberately.**
+    `sensorId` is the upsert FILTER key, so it structurally exists on every
+    row. `macAddress` reaches the document only through `$set`, behind an
+    `if (sensor.macAddress)` guard in the CALLER, and `required: true` is a
+    mongoose validator that never runs because every write here goes through
+    the native driver. A plain unique index would reject the second row that
+    legitimately lacks one. `[ran it]` on mongo:7, 7/7 including two rows
+    with no macAddress and two with an explicit null.
+23. **Each `createIndex` has its OWN try/catch on purpose** — a shared one
+    reports the first failure and skips the rest silently (#1027's shape,
+    where one throw cost 46 index builds). A lookup-index failure message
+    must never borrow the unique-index wording about duplicates already
+    written; a test asserts that distinction by its prose.
+24. **The route wiring is on the READ path, and that is a deliberate
+    divergence** from the unique helpers' write-path wiring. An index that
+    exists for a sort must be built where the sort runs. **This is half of
+    #1163 and is unresolved** — the storage lookup indexes are still ensured
+    only at a one-time backfill's write path, so both conventions are now in
+    the tree. Dennis's call.
+25. **The route wiring tests pass a DISTINCT `collectionName`.** The helpers
+    latch per resolved name for the life of the process, so a shared name
+    lets the first test suppress every later one and the assertions pass or
+    fail by file order.
 
 ## Open, and left in a known state
 
-Query for the backlog — `gh issue list --state open`. **Five issues were filed this
-sitting; #1160 and #1161 were also CLOSED by it. The two left open are
-both decision records — the code already carries the inferred posture and
-the issue exists for Dennis to confirm or reverse it:**
+Query the backlog with `gh issue list --state open` — **redirect it, and do
+not reach for `--limit N | head`**: that bounds rows, not bytes, and costs
+~17 KB. `[ran it]` this sitting paid exactly that, having read the rule.
 
-- **#1159** — should the audit-signing boot gate be fatal in production,
-  like the encryption gate three lines above it? **#979 does NOT cover
-  this** — I checked; its table is Redis and Mongo only.
-- **#1162** — HALF shipped in `1072bd88`. `TRUST_PROXY` now defaults to
-  `0`: `[read it]` nothing in this repo fronts the backend (both compose
-  files publish it directly, and `frontend/nginx.conf` has no
-  `proxy_pass`), so `1` only ever let a client set `req.ip` via a spoofed
-  header. **Left open and genuinely Dennis’s:** whether a fresh generate
-  should inherit `AUTH_RATE_LIMIT_RELAXED=true` and
-  `CONSENT_RATE_LIMIT_RELAXED=true`. Docs and milestones are silent and the
-  example’s own comment cuts both ways; the alternative reintroduces #350.
-- **#1155** — commented, not worked: `[read it]` CI is `ubuntu-latest` and
-  already runs `test:architecture`, so bash/openssl/python3 are all
-  present and a shell-script test can be an ordinary architecture test.
-  **That was its stated first step, and it is now answered.** One of the
-  three scripts has one test; the key-minting behaviour is still untested.
+Touched, not closed:
 
-Pack issue #1086 filed, plus recurrence tallies on pack #809 and #710.
+- **#941** — open, with the six field-level declarations named above as its
+  remainder, and my own incomplete inventory corrected in its newest comment.
+- **#1163** — filed by this sitting. Half 2 shipped (`a9b94615`); **half 1 is
+  open and is a design call**: where a read-serving index's ensure call
+  belongs. Both sides of the split were introduced today, which is why it was
+  named rather than settled.
+- **#1147** is adjacent and unread by this sitting: it says the facility/room
+  CRUD surface has no caller anywhere. Two indexes were built for those
+  routes on the planner's evidence; if #1147 deletes the routes, the indexes
+  go with them. Not a blocker, worth knowing.
+
+Previous sitting's #1159 and #1162 are still open and still Dennis's.
 
 ## Recommended next
 
 **None queued by name** — Dennis named no follow-up.
 
-**Unverified prescription:** #1162 is the one worth his eye first, because
-this sitting caused it. Otherwise a **full-suite e2e gate is the biggest
-un-taken step**: it needs `frontend-app-test` back up, the reference-data
-chain, `--workers=1`, `INFLUXDB_HOST_PORT=18086`,
-`E2E_INFLUXDB_URL=http://localhost:18086` (still unverified), and the
-**skipped** count read rather than the pass count.
+**Unverified prescription, unchanged from the last note:** a full-suite e2e
+gate is still the biggest un-taken step, and it needs `frontend-app-test`
+back up, the reference-data chain, `--workers=1`, and the **skipped** count
+read rather than the pass count.
 
-Still undone from seven notes: **diff Requisitos v4.0.0 against v3.0.1 for
-RF renumbering** before building further on `E2E_TRACEABILITY_PLAN.md`.
+Still undone from eight notes: **diff Requisitos v4.0.0 against v3.0.1 for RF
+renumbering** before building further on `E2E_TRACEABILITY_PLAN.md`.
