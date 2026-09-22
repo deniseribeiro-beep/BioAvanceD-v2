@@ -233,3 +233,29 @@ describe('intakeWizard helpers', () => {
     expect(insertedDocs[0].participantId).toBe('12345678');
   });
 });
+
+
+describe('intakeWizard item 8 normalization branches', () => {
+  it('normaliza números, arrays e objetos pelos contratos dos helpers', () => {
+    expect(helpers.normalizeNumber('12.5', 0)).toBe(12.5);
+    expect(helpers.normalizeNumber('invalid', 7)).toBe(7);
+    expect(helpers.normalizeArray(['A'])).toEqual(['A']);
+    expect(helpers.normalizeArray('A')).toEqual([]);
+    expect(helpers.normalizeObject({ a: 1 })).toEqual({ a: 1 });
+    expect(helpers.normalizeObject(null)).toEqual({});
+    expect(helpers.normalizeObject([])).toEqual({});
+  });
+
+  it('normaliza Date válido e rejeita entradas de data inválidas', () => {
+    const source = new Date(2026, 8, 22, 17, 45, 10);
+    const normalized = helpers.parseBirthDate(source);
+
+    expect(normalized).toBeInstanceOf(Date);
+    expect(normalized.getFullYear()).toBe(2026);
+    expect(normalized.getMonth()).toBe(8);
+    expect(normalized.getDate()).toBe(22);
+    expect(normalized.getHours()).toBe(0);
+    expect(helpers.parseBirthDate('')).toBeNull();
+    expect(helpers.parseBirthDate('invalid-date')).toBeNull();
+  });
+});
