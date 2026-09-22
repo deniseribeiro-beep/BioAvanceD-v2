@@ -42,7 +42,7 @@ function dbWithRbac(collections = {}) {
  * - POST /api/patients/:id/observations - criar observações biomarcadoras
  * 
  * REGRAS DE NEGÓCIO CRÍTICAS:
- * - patientID é gerado automaticamente (8 dígitos)
+ * - participantId é gerado automaticamente (8 dígitos)
  * - Paciente novo sai com status PENDING_CONSENT
  * - Detecção de duplicidade por CPF/documento e nome + nascimento
  * - Paciente falecido exige representante (nome, email, CPF, telefone)
@@ -157,7 +157,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
       vi.restoreAllMocks();
     });
 
-    it('Given: coordenador autenticado | When: submete payload válido | Then: retorna 201 com patientID gerado', async () => {
+    it('Given: coordenador autenticado | When: submete payload válido | Then: retorna 201 com participantId gerado', async () => {
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValue(null),
         find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnThis(), skip: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([]) }),
@@ -330,8 +330,8 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
 
     it('Given: coordenador autenticado | When: requisita lista de pacientes | Then: retorna 200 com array de pacientes', async () => {
       const patientsList = [
-        { patientID: '12345678', patientName: 'Paciente 1', cpf: '11111111111' },
-        { patientID: '87654321', patientName: 'Paciente 2', cpf: '22222222222' },
+        { participantId: '12345678', patientName: 'Paciente 1', cpf: '11111111111' },
+        { participantId: '87654321', patientName: 'Paciente 2', cpf: '22222222222' },
       ];
 
       const patientsCollection = {
@@ -358,7 +358,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
 
     it('Given: filtro de status aplicado | When: requisita com query ?status=PENDING_CONSENT | Then: retorna apenas pacientes com aquele status', async () => {
       const filteredList = [
-        { patientID: '12345678', patientName: 'Paciente 1', status: 'PENDING_CONSENT' },
+        { participantId: '12345678', patientName: 'Paciente 1', status: 'PENDING_CONSENT' },
       ];
 
       const patientsCollection = {
@@ -389,9 +389,9 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
       vi.restoreAllMocks();
     });
 
-    it('Given: patientID válido | When: requisita dados | Then: retorna 200 com dados completos', async () => {
+    it('Given: participantId válido | When: requisita dados | Then: retorna 200 com dados completos', async () => {
       const patient = {
-        patientID: '12345678',
+        participantId: '12345678',
         patientName: 'Paciente QA',
         cpf: '12345678901',
         birthDate: '1990-01-20',
@@ -413,13 +413,13 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         .set('Authorization', `Bearer ${createCoordinatorToken()}`);
 
       expect(response.status).toBe(200);
-      expect(response.body.data.patientID).toBe('12345678');
+      expect(response.body.data.participantId).toBe('12345678');
       // RF005/RNF007 (#363): patientName is civil identity, segregated into
       // ParticipantIdentity — not returned on the participant resource.
       expect(response.body.data.patientName).toBeUndefined();
     });
 
-    it('Given: patientID inexistente | When: requisita | Then: retorna 404', async () => {
+    it('Given: participantId inexistente | When: requisita | Then: retorna 404', async () => {
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValue(null),
       };
@@ -451,7 +451,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
       // organization (buildRbacCollections defaults non-Administrador
       // accessTypes to scopeId 'test-org-default') or the new org-scope
       // check 403s before the update ever runs.
-      const patient = { patientID: '12345678', patientName: 'Paciente Antigo', clinicalUnitId: 'test-org-default' };
+      const patient = { participantId: '12345678', patientName: 'Paciente Antigo', clinicalUnitId: 'test-org-default' };
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValue(patient),
         updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
@@ -505,7 +505,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
 
     it('Given: paciente sem amostras vinculadas | When: submete DELETE | Then: retorna 200 e remove registro', async () => {
       // #626: clinicalUnitId must match the coordinator's scoped organization.
-      const patient = { patientID: '12345678', patientName: 'Paciente QA', clinicalUnitId: 'test-org-default' };
+      const patient = { participantId: '12345678', patientName: 'Paciente QA', clinicalUnitId: 'test-org-default' };
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValue(patient),
         deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
@@ -530,7 +530,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
 
     it('Given: paciente COM amostras vinculadas | When: tenta deletar | Then: retorna 409 (conflito)', async () => {
       // #626: clinicalUnitId must match the coordinator's scoped organization.
-      const patient = { patientID: '12345678', clinicalUnitId: 'test-org-default' };
+      const patient = { participantId: '12345678', clinicalUnitId: 'test-org-default' };
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValue(patient),
         deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }),
@@ -590,7 +590,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
 
     it('Given: paciente já com consentimento ACEITO | When: tenta reenviar | Then: retorna 422 (inválido)', async () => {
       // #626: clinicalUnitId must match the coordinator's scoped organization.
-      const patient = { patientID: '12345678', status: 'ACCEPTED', clinicalUnitId: 'test-org-default' };
+      const patient = { participantId: '12345678', status: 'ACCEPTED', clinicalUnitId: 'test-org-default' };
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValue(patient),
       };
@@ -617,7 +617,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
       vi.restoreAllMocks();
     });
 
-    it('Given: patientID válido | When: requisita observações | Then: retorna 200 com lista (vazia ou preenchida)', async () => {
+    it('Given: participantId válido | When: requisita observações | Then: retorna 200 com lista (vazia ou preenchida)', async () => {
       const observations = [
         { biomarkerType: 'alphaGal', value: 123.45, unit: 'nmol/g', collectedAt: '2025-01-10T00:00:00.000Z' },
       ];
