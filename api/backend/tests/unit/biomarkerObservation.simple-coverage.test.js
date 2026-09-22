@@ -4,6 +4,7 @@ const BiomarkerObservationModel = require('../../src/models/BiomarkerObservation
 
 const base = {
   participantId: 'participant-1',
+  specimenId: 'SPEC-BASE',
   biomarkerType: 'glucose',
   value: 90,
   unit: 'mg/dL',
@@ -69,10 +70,10 @@ describe('BiomarkerObservationModel simple branch coverage for item 8', () => {
     expect(viaEffectiveDate.normalized.eventType).toBe('update');
   });
 
-  it('covers sample identifier, resource, subject/specimen and optional metadata branches', () => {
+  it('covers canonical specimen identifier, resource, subject/specimen and optional metadata branches', () => {
     const explicit = BiomarkerObservationModel.validate({
       ...base,
-      sampleID: 'SAMPLE-A',
+      specimenId: 'SAMPLE-A',
       resourceType: '  DiagnosticReport  ',
       subject: { reference: 'Patient/P1' },
       specimen: { reference: 'Specimen/custom' },
@@ -88,9 +89,9 @@ describe('BiomarkerObservationModel simple branch coverage for item 8', () => {
 
     expect(explicit.isValid).toBe(true);
     expect(explicit.normalized).toEqual(expect.objectContaining({
-      sampleID: 'SAMPLE-A',
-      sampleId: 'SAMPLE-A',
-      specimenID: 'SAMPLE-A',
+      specimenId: 'SAMPLE-A',
+      specimenId: 'SAMPLE-A',
+      specimenId: 'SAMPLE-A',
       specimenId: 'SAMPLE-A',
       resourceType: 'DiagnosticReport',
       subject: { reference: 'Patient/P1' },
@@ -104,18 +105,19 @@ describe('BiomarkerObservationModel simple branch coverage for item 8', () => {
     }));
     expect(explicit.normalized.effectiveDateTime.toISOString()).toBe('2026-04-01T00:00:00.000Z');
 
-    const sampleId = BiomarkerObservationModel.validate({ ...base, sampleId: 'SAMPLE-B' });
-    expect(sampleId.normalized.sampleID).toBe('SAMPLE-B');
-    expect(sampleId.normalized.specimen).toEqual({ reference: 'Specimen/SAMPLE-B' });
+    const canonicalSpecimen = BiomarkerObservationModel.validate({ ...base, specimenId: 'SAMPLE-B' });
+    expect(canonicalSpecimen.normalized.specimenId).toBe('SAMPLE-B');
+    expect(canonicalSpecimen.normalized.specimen).toEqual({ reference: 'Specimen/SAMPLE-B' });
 
-    const specimenID = BiomarkerObservationModel.validate({ ...base, specimenID: 'SAMPLE-C' });
-    expect(specimenID.normalized.sampleID).toBe('SAMPLE-C');
+    const specimenAliasRemoved = BiomarkerObservationModel.validate({ ...base, specimenId: 'SAMPLE-C' });
+    expect(specimenAliasRemoved.normalized.specimenId).toBe('SAMPLE-C');
 
     const specimenId = BiomarkerObservationModel.validate({ ...base, specimenId: 'SAMPLE-D' });
-    expect(specimenId.normalized.sampleID).toBe('SAMPLE-D');
+    expect(specimenId.normalized.specimenId).toBe('SAMPLE-D');
 
-    const noSample = BiomarkerObservationModel.validate({
+    const noSpecimen = BiomarkerObservationModel.validate({
       ...base,
+      specimenId: '',
       resourceType: '   ',
       subject: undefined,
       specimen: undefined,
@@ -125,21 +127,8 @@ describe('BiomarkerObservationModel simple branch coverage for item 8', () => {
       linkedResourceType: '',
       linkedResourceId: '',
     });
-    expect(noSample.normalized).toEqual(expect.objectContaining({
-      sampleID: null,
-      sampleId: null,
-      specimenID: null,
-      specimenId: null,
-      resourceType: 'Observation',
-      subject: null,
-      specimen: null,
-      notes: null,
-      patientObjectId: null,
-      specimenObjectId: null,
-      linkedResourceType: 'Patient',
-      linkedResourceId: 'participant-1',
-    }));
-    expect(noSample.normalized.effectiveDateTime).toEqual(noSample.normalized.collectedAt);
+    expect(noSpecimen.isValid).toBe(false);
+    expect(noSpecimen.errors).toContain('specimenId é obrigatório');
   });
 
   it('covers idempotency fallbacks and create success/failure branches', () => {
@@ -147,8 +136,7 @@ describe('BiomarkerObservationModel simple branch coverage for item 8', () => {
 
     expect(BiomarkerObservationModel.buildIdempotencyKey({
       participantId: 'P',
-      sampleID: 'S1',
-      specimenID: 'S2',
+      specimenId: 'S1',
       linkedResourceId: 'L',
       biomarkerType: 'B',
       collectedAt,
@@ -158,7 +146,7 @@ describe('BiomarkerObservationModel simple branch coverage for item 8', () => {
 
     expect(BiomarkerObservationModel.buildIdempotencyKey({
       participantId: 'P',
-      specimenID: 'S2',
+      specimenId: 'S2',
       linkedResourceId: 'L',
       biomarkerType: 'B',
       collectedAt,
@@ -172,7 +160,7 @@ describe('BiomarkerObservationModel simple branch coverage for item 8', () => {
       biomarkerType: 'B',
       value: 1,
       eventType: 'manual',
-    })).toContain('P|L|B||1|manual');
+    })).toContain('P||B||1|manual');
 
     expect(BiomarkerObservationModel.buildIdempotencyKey({
       participantId: 'P',
@@ -188,12 +176,12 @@ describe('BiomarkerObservationModel simple branch coverage for item 8', () => {
 
     const created = BiomarkerObservationModel.create({
       ...base,
-      sampleID: 'SAMPLE-1',
+      specimenId: 'SAMPLE-1',
       eventType: 'criar',
     });
     expect(created).toEqual(expect.objectContaining({
       participantId: 'participant-1',
-      sampleID: 'SAMPLE-1',
+      specimenId: 'SAMPLE-1',
       eventType: 'create',
       idempotencyKey: expect.any(String),
       createdAt: expect.any(Date),
