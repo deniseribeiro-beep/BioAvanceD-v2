@@ -1,6 +1,12 @@
 const { readFile } = require('fs/promises');
+const { readFileSync } = require('fs');
 const crypto = require('crypto');
 const env = require('../config/env');
+const log = require('../utils/logger');
+
+// Warn once per path, not once per call: getPublicKeyRegistry() is reached from
+// every sign() and every verify(), and processTimestampBacklog loops over 50.
+const warnedRegistryFiles = new Set();
 
 class AuditSigningProvider {
   async loadPrivateKey() {
@@ -15,8 +21,35 @@ class AuditSigningProvider {
     return keyId;
   }
 
+  /**
+   * #1157: returns the registry's raw JSON text, from the file when one is
+   * configured and readable, otherwise from the env var. Kept separate from
+   * the parse so merkle-envelope.service can share the source while keeping
+   * its own (deliberately different) posture on malformed JSON.
+   */
+  readPublicKeyRegistrySource() {
+    const file = String(env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE || '').trim();
+    if (file) {
+      try {
+        return readFileSync(file, 'utf8').trim();
+      } catch (error) {
+        // Fall back rather than throw: signing does not need the registry, and
+        // taking it down here would trade a verification gap for an outage.
+        // #1154 owns making this audible at boot instead of at first use.
+        if (!warnedRegistryFiles.has(file)) {
+          warnedRegistryFiles.add(file);
+          log.warn(
+            `AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE (${file}) não pôde ser lido (${error.code || error.message}); ` +
+              'usando AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON. Raízes assinadas só serão verificadas se esse registro contiver a chave ativa.'
+          );
+        }
+      }
+    }
+    return String(env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON || '').trim();
+  }
+
   getPublicKeyRegistry() {
-    const raw = String(env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON || '').trim();
+    const raw = this.readPublicKeyRegistrySource();
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};

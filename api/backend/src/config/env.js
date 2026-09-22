@@ -82,6 +82,12 @@ module.exports = {
   AUDIT_MERKLE_SIGN_KEY_ID: process.env.AUDIT_MERKLE_SIGN_KEY_ID,
   AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE: process.env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE,
   AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON: process.env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON,
+  // #1157: the registry holds the SPKI half of a key that does not exist until
+  // the stack's keygen one-shot runs, and compose resolves its environment at
+  // parse time -- so no static env entry can ever carry it. This names a file
+  // written beside the private key instead; the JSON var above stays the
+  // fallback, for the host-side generator that already writes it.
+  AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE: process.env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE,
   AUDIT_RFC3161_MODE: process.env.AUDIT_RFC3161_MODE,
   AUDIT_RFC3161_TSA_URL: process.env.AUDIT_RFC3161_TSA_URL,
   AUDIT_RFC3161_TSA_AUTH_TOKEN: process.env.AUDIT_RFC3161_TSA_AUTH_TOKEN,

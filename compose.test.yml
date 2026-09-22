@@ -1,5 +1,10 @@
 name: bioavanced-test
 
+# #1157: audit-keygen-test writes the public-key registry for THIS key id, and
+# the backend/worker read the registry back by it. Anchored so the two cannot
+# drift into a silent signature_unknown_key_id.
+x-audit-key-id: &audit-key-id audit-ed25519-test-1
+
 x-test-env: &test-env
   NODE_ENV: test
   TEST_ENVIRONMENT: "true"
@@ -95,13 +100,16 @@ x-test-env: &test-env
   # audit-keygen-test, never committed -- same posture as infra/witness, whose
   # secrets/ directory tracks only a .gitkeep.
   AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE: /run/secrets/merkle_signing_key.pem
-  AUDIT_MERKLE_SIGN_KEY_ID: audit-ed25519-test-1
-  # Deliberately NOT set: the registry must be the SPKI half of a key that does
-  # not exist until audit-keygen-test runs, and it is read from the environment
-  # only. Signing does not need it -- sign() records publicKeyFingerprint: null --
-  # and the only consumer, processTimestampBacklog, is reached from the nightly
-  # runOnce and never from anchorDate. Tracked separately.
-  # AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON:
+  AUDIT_MERKLE_SIGN_KEY_ID: *audit-key-id
+  # #1157: the registry has to be the SPKI half of a key that does not exist
+  # until audit-keygen-test runs, and compose resolves its environment at parse
+  # time -- so the JSON env var it used to be read from could never carry it,
+  # and every sealed root recorded publicKeyFingerprint: null while
+  # processTimestampBacklog would have stamped it FAILED/signature_unknown_key_id.
+  # The keygen one-shot now writes this file beside the private key, in the same
+  # volume, and the provider prefers it over the env var (which stays the
+  # fallback for the host-side generator the dev stack uses).
+  AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE: /run/secrets/merkle_signing_public_keys.json
 
 services:
   mongodb-test:
@@ -261,9 +269,11 @@ services:
       - node
       - -e
       - |
-        const { generateKeyPairSync } = require('crypto');
-        const { writeFileSync, existsSync, mkdirSync } = require('fs');
+        const { generateKeyPairSync, createPrivateKey, createPublicKey } = require('crypto');
+        const { writeFileSync, readFileSync, existsSync, mkdirSync } = require('fs');
         const path = '/run/secrets/merkle_signing_key.pem';
+        const registryPath = '/run/secrets/merkle_signing_public_keys.json';
+        const keyId = process.env.AUDIT_MERKLE_SIGN_KEY_ID;
         mkdirSync('/run/secrets', { recursive: true });
         if (existsSync(path)) {
           console.log('audit signing key: reusing ' + path);
@@ -272,6 +282,17 @@ services:
           writeFileSync(path, privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), { mode: 0o600 });
           console.log('audit signing key: generated ' + path);
         }
+        // #1157: derive the registry from whatever key is on disk on EVERY run,
+        // not only when minting. A volume created before this existed holds a
+        // key and no registry, and the reuse branch above is the path it takes.
+        const publicPem = createPublicKey(createPrivateKey(readFileSync(path, 'utf8')))
+          .export({ format: 'pem', type: 'spki' }).toString();
+        writeFileSync(registryPath, JSON.stringify({ [keyId]: publicPem }, null, 2));
+        console.log('audit public key registry: wrote ' + registryPath + ' for keyId ' + keyId);
+    environment:
+      # Only the key id: the registry this mints is keyed by it, and the app
+      # reads it back by the same anchor.
+      AUDIT_MERKLE_SIGN_KEY_ID: *audit-key-id
     volumes:
       - audit-signing-test-data:/run/secrets
     networks: [bioavanced-test]
