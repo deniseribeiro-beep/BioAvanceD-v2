@@ -76,7 +76,7 @@ async function hammer(app, target, count) {
   for (let i = 0; i < count; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     responses.push(
-      await request(app)[target.method](target.path).send({ patientId: '00000000', token: 'junk' })
+      await request(app)[target.method](target.path).send({ participantId: '00000000', token: 'junk' })
     );
   }
   return responses;
