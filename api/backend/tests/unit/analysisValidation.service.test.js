@@ -285,7 +285,7 @@ describe('analysisValidationService.validateUploadEligibility', () => {
     const result = await analysisValidationService.validateUploadEligibility(db, 'missing-sample');
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Amostra "missing-sample" não encontrada. Verifique o ID ou código de barras.');
+    expect(result.error).toBe('Amostra "missing-sample" não encontrada. Verifique o specimenId ou o Data Matrix.');
     // Patient lookup must never be attempted once sample validation fails.
     expect(db.__patientsCollection.findOne).not.toHaveBeenCalled();
   });
