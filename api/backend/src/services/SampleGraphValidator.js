@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { ObjectId } = require('mongodb');
 const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
 const { generateSampleHashFromSample } = require('./MerkleService');
