@@ -158,12 +158,9 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), requireOr
       });
     }
 
-    // #628: resolve the referenced Sample first, then store its own
-    // specimenId (business identifier) on the Result -- never the
-    // caller-supplied identifier verbatim, whatever shape it's in.
-    // Tries _id, then the canonical specimenId, then the legacy numeric
-    // sampleID -- same three-tier resolution consent.validator.js's
-    // validateAccess already uses for the same kind of caller-supplied id.
+    // Resolve the referenced Sample first, then store its own canonical
+    // specimenId on the Result. Mongo _id remains accepted as an internal
+    // transport identifier; retired sampleID/sampleId aliases are not queried.
     const samplesCollection = db.collection('amostras');
     const { ObjectId } = require('mongodb');
     let sample = null;
@@ -173,10 +170,6 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), requireOr
     if (!sample) {
       sample = await samplesCollection.findOne({ specimenId: String(specimenId) });
     }
-    if (!sample) {
-      sample = await samplesCollection.findOne({ sampleID: Number(specimenId) });
-    }
-
     if (!sample) {
       if (fs.existsSync(file.path)) {
         fs.unlinkSync(file.path);
@@ -435,9 +428,8 @@ router.post('/', authenticate, requirePermission('createResult'), requireOrganiz
   try {
     const db = req.app.locals.db;
 
-    // #628: resolve the referenced Sample first, same three-tier
-    // resolution POST /upload uses -- never trust the caller-supplied
-    // specimenId verbatim, whatever shape it's in.
+    // Resolve the referenced Sample first; canonical specimenId and Mongo
+    // _id are the only supported identifiers at this boundary.
     const { ObjectId } = require('mongodb');
     const samplesCollection = db.collection('amostras');
     let sample = null;
@@ -446,9 +438,6 @@ router.post('/', authenticate, requirePermission('createResult'), requireOrganiz
     }
     if (!sample) {
       sample = await samplesCollection.findOne({ specimenId: String(req.body?.specimenId || '') });
-    }
-    if (!sample) {
-      sample = await samplesCollection.findOne({ sampleID: Number(req.body?.specimenId) });
     }
     if (!sample) {
       return res.status(404).json({
@@ -535,14 +524,9 @@ router.put('/:id', authenticate, requirePermission('editResult'), requireOrganiz
       return denyOutOfScope(res);
     }
 
-    // #875: a denylist here (previously just specimenId/sampleID/sampleId,
-    // #628) passes every other body key straight into $set, including keys
-    // that don't belong to the Result document at all. Use an allowlist
-    // instead, derived from ResultModel.create()'s field set
-    // (src/models/Result.js:53-70) -- add a field there and here together.
-    // specimenId/sampleID/sampleId stay excluded: that linkage is owned by
-    // PUT /:id/link-sample, not this generic update. resultID and _id are
-    // immutable identity and are excluded too.
+    // #875: generic updates use an allowlist derived from ResultModel.create().
+    // Identity/re-parenting keys are excluded here; specimenId linkage is owned
+    // exclusively by PUT /:id/link-sample, while resultID/_id are immutable.
     const ALLOWED_UPDATE_FIELDS = [
       'fileType',
       'resultFilePath',
@@ -637,9 +621,8 @@ router.put('/:id/link-sample', authenticate, requirePermission('editResult'), re
       return denyOutOfScope(res);
     }
 
-    // #628: resolve the referenced Sample first, same three-tier
-    // resolution the create paths use -- never trust the caller-supplied
-    // specimenId verbatim, whatever shape it's in.
+    // Resolve the destination Sample by canonical specimenId or internal
+    // Mongo _id. Retired sample aliases are not accepted.
     const samplesCollection = db.collection('amostras');
     let sample = null;
     if (ObjectId.isValid(String(specimenId))) {
@@ -647,9 +630,6 @@ router.put('/:id/link-sample', authenticate, requirePermission('editResult'), re
     }
     if (!sample) {
       sample = await samplesCollection.findOne({ specimenId: String(specimenId) });
-    }
-    if (!sample) {
-      sample = await samplesCollection.findOne({ sampleID: Number(specimenId) });
     }
     if (!sample) {
       return res.status(404).json({
