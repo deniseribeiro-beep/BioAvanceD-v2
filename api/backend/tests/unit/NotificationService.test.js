@@ -1010,7 +1010,7 @@ describe('NotificationService', () => {
         expect.objectContaining({
           to: 'oncall@example.com',
           notificationType: 'RF016_TEMPERATURE_ALERT',
-          metadata: { sampleId: 'S-1', currentTemp: -50 }
+          metadata: { specimenId: 'S-1', currentTemp: -50 }
         })
       );
     });
