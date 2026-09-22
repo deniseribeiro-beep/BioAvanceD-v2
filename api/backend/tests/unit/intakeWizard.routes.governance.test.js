@@ -125,7 +125,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.status).toBe('AVAILABLE');
   });
 
-  it('skips persistence when the sample has no id/specimenId/barcode to query by', async () => {
+  it('skips persistence when the sample has no canonical _id/specimenId to query by', async () => {
     const samplesCollection = buildSamplesCollection();
     const getCollectionImpl = buildGetCollectionImpl({ samplesCollection });
     const router = loadRouter({ getCollectionImpl });
@@ -282,30 +282,26 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.quarantineReason).toBeNull();
 
     const [query] = samplesCollection.updateOne.mock.calls[0];
-    expect(query.$or).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ _id: expect.anything() }),
-        { barcode: 'BC-1' },
-      ])
-    );
+    expect(query.$or).toEqual([
+      expect.objectContaining({ _id: expect.anything() }),
+    ]);
   });
 
-  it('ignores an invalid (non-ObjectId) _id when building the persistence query', async () => {
-    const existingSample = { _id: 'sample-mongo-id', barcode: 'BC-2', specimenStatus: 'available' };
-    const samplesCollection = buildSamplesCollection({ existingSample });
+  it('does not use Data Matrix encodedValue as an identity fallback when _id is invalid', async () => {
+    const samplesCollection = buildSamplesCollection();
     const getCollectionImpl = buildGetCollectionImpl({ samplesCollection });
     const router = loadRouter({ getCollectionImpl });
     const app = buildApp(router, {});
 
     const res = await request(app).post('/api/intake-wizard').send({
       success: true,
-      sample: { _id: 'not-an-object-id', barcode: 'BC-2' },
+      sample: { _id: 'not-an-object-id', barcode: 'DM-ONLY-2' },
       consent: { active: true },
     });
 
     expect(res.status).toBe(200);
-    const [query] = samplesCollection.updateOne.mock.calls[0];
-    expect(query).toEqual({ $or: [{ barcode: 'BC-2' }] });
+    expect(samplesCollection.findOne).not.toHaveBeenCalled();
+    expect(samplesCollection.updateOne).not.toHaveBeenCalled();
   });
 
   it('falls back to sanitizing without the persisted governance status when persistence throws', async () => {
@@ -367,7 +363,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
       label: { text: 'label-1' },
       sample: {
         _id: '507f1f77bcf86cd799439011',
-        sampleID: 'sid-1',
+        specimenId: 'sid-1',
         rcs_score: 0,
         final_grade: 'B',
         sprec: { matrixType: 'fluid' },
