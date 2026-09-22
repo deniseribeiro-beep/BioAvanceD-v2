@@ -556,7 +556,7 @@ describe('sample.routes', () => {
 
     it('returns 201 on success', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678', sampleType: 'Sangue', barcode: 'BC1' },
+        sample: { _id: { toString: () => 'sample-1' }, specimenId: 'SPEC-1', participantId: '12345678', sampleType: 'Sangue', barcode: 'BC1' },
         strictMode: true,
         topology: { synced: true, fallbackQueued: false },
       });
@@ -567,15 +567,20 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(201);
       expect(res.body.data.operationMode).toBe('STRICT');
+      expect(res.body.data.specimenId).toBe('SPEC-1');
+      expect(res.body.data).not.toHaveProperty('sampleID');
       expect(res.body.partialSuccess).toBe(false);
       expect(auditLoggerModule.log).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'sample_create' })
+        expect.objectContaining({
+          action: 'sample_create',
+          payload: expect.objectContaining({ specimenId: 'SPEC-1' }),
+        })
       );
     });
 
     it('returns 202 when topology sync falls back to quarantine', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 'sample-1' }, specimenId: 'SPEC-2', participantId: '12345678' },
         strictMode: false,
         topology: { synced: false, fallbackQueued: true },
       });

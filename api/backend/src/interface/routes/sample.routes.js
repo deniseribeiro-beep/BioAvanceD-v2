@@ -333,7 +333,7 @@ router.post('/',
           severity: 'info',
           message: `Amostra criada - Participante ID: ${sample.participantId}`,
           payload: {
-            sampleID: sample._id.toString(),
+            specimenId: sample.specimenId,
             participantId: sample.participantId,
             sampleType: sample.sampleType,
             barcode: sample.barcode,
@@ -351,7 +351,7 @@ router.post('/',
           ? (req.t('samples.createSuccess') || 'Amostra criada com sucesso') + ' (integração topológica em quarentena)'
           : req.t('samples.createSuccess') || 'Amostra criada com sucesso',
         data: {
-          sampleID: sample._id.toString(),
+          specimenId: sample.specimenId,
           participantId: sample.participantId,
           operationMode,
           topology: {
@@ -714,8 +714,7 @@ router.get('/:id', authenticate, requireOrganizationScope, async (req, res) => {
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const sample = await sampleService.getSample(db, new ObjectId(req.params.id));
+    const sample = await sampleService.getSample(db, req.params.id);
 
     if (sample && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
       return res.status(403).json({
@@ -800,7 +799,6 @@ router.post('/:id/withdraw',
         req.body?.requiredScope || req.body?.consentScope || null
       );
 
-      const { ObjectId } = require('mongodb');
       const auditInfo = {
         userId: req.user?.id || req.user?._id?.toString(),
         userName: req.user?.name || req.user?.username,
@@ -809,7 +807,7 @@ router.post('/:id/withdraw',
         userAgent: req.headers['user-agent']
       };
 
-      const result = await sampleService.withdrawSample(db, new ObjectId(req.params.id), req.body, auditInfo);
+      const result = await sampleService.withdrawSample(db, req.params.id, req.body, auditInfo);
 
       if (req.user) {
         const auditLogger = require('../../utils/auditLogger');
@@ -870,8 +868,7 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const result = await sampleService.updateSample(db, new ObjectId(req.params.id), req.body);
+    const result = await sampleService.updateSample(db, req.params.id, req.body);
 
     if (!result) {
       return res.status(404).json({
@@ -949,8 +946,7 @@ router.delete('/:id', authenticate, requirePermission('deleteSample'), requireOr
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const result = await sampleService.deleteSample(db, new ObjectId(req.params.id));
+    const result = await sampleService.deleteSample(db, req.params.id);
 
     if (!result) {
       return res.status(404).json({
@@ -1178,7 +1174,7 @@ router.get('/:id/results', authenticate, requireOrganizationScope, async (req, r
     }
 
     const { ObjectId } = require('mongodb');
-    const results = await sampleService.getSampleResults(db, new ObjectId(req.params.id));
+    const results = await sampleService.getSampleResults(db, req.params.id);
 
     const auditLogger = require('../../utils/auditLogger');
     auditLogger.init(db);
@@ -1189,7 +1185,7 @@ router.get('/:id/results', authenticate, requireOrganizationScope, async (req, r
       status: 'success',
       severity: 'info',
       message: `Arquivos de analise da amostra consultados - ${results.length || 0} registros`,
-      payload: { sampleID: req.params.id, resultsCount: results.length || 0 },
+      payload: { specimenId: req.params.id, resultsCount: results.length || 0 },
       req: req,
       module: 'Amostras'
     });
@@ -1227,7 +1223,6 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
       });
     }
 
-    const { ObjectId } = require('mongodb');
     const auditInfo = {
       userId: req.user?.id || req.user?._id?.toString(),
       userName: req.user?.name || req.user?.username,
@@ -1236,7 +1231,7 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
       userAgent: req.headers['user-agent']
     };
 
-    const result = await sampleService.returnSample(db, new ObjectId(req.params.id), req.body, auditInfo);
+    const result = await sampleService.returnSample(db, req.params.id, req.body, auditInfo);
 
     if (req.user) {
       const auditLogger = require('../../utils/auditLogger');

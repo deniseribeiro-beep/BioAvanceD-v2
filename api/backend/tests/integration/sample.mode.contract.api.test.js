@@ -73,6 +73,7 @@ describe('POST /api/samples - matriz de risco e contrato de projeção assíncro
     // of them was undefined in production. Same blindness class as #797.
     vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: '507f1f77bcf86cd799439012',
+      specimenId: 'SPEC-MODE-1',
       participantId: '12345678',
       sampleType: 'Sangue',
       barcode: 'BR-TEST-0002',
@@ -105,7 +106,8 @@ describe('POST /api/samples - matriz de risco e contrato de projeção assíncro
     expect(typeof response.body.partialSuccess).toBe('boolean');
     expect(response.body.partialSuccess).toBe(false);
     expect(response.body.data).toBeDefined();
-    expect(typeof response.body.data.sampleID).toBe('string');
+    expect(response.body.data.specimenId).toBe('SPEC-MODE-1');
+    expect(response.body.data).not.toHaveProperty('sampleID');
     expect(response.body.data.participantId).toBe('12345678');
     expect(['STRICT', 'PERMISSIVE']).toContain(response.body.data.operationMode);
     expect(response.body.data.operationMode).toBe('STRICT');
