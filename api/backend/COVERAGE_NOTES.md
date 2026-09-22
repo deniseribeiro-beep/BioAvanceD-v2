@@ -75,9 +75,9 @@ malformed CSV content can trigger it, only mocking the module would),
 `queue.js` / `eConsent.js` (issue #242
 merged-vs-isolated drift class — re-check isolated coverage before
 trusting the merged number for either), `NotificationService.js` (issue
-#258, accepted gap — `getNotificationQueue()`'s success path needs a
-real Redis connection, `sendCriticalTempAlertFromInflux()`'s Influx
-calls are destructured at module-require time so can't be spied on).
+#258, accepted gap — `getNotificationQueue()`'s uncached construction path
+still depends on a real Redis connection. The Influx path is now covered
+through a fresh-module test seam and is no longer part of this accepted gap).
 
 **No longer excluded — their blocking issues are now CLOSED:**
 `daily-merkle.job.js`, `audit-v2.service.js`,
