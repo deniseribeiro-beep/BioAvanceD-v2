@@ -12,11 +12,11 @@ const logger = require('../../src/utils/logger');
 vi.spyOn(collectionResolverModule, 'getCollection');
 
 const servicePath = require.resolve('../../src/services/sampleComplianceSync.service');
-let revalidateSamplesByPatientID = require(servicePath).revalidateSamplesByPatientID;
+let revalidateSamplesByParticipantId = require(servicePath).revalidateSamplesByParticipantId;
 
 function reloadServiceWithFreshBinding() {
   delete require.cache[servicePath];
-  revalidateSamplesByPatientID = require(servicePath).revalidateSamplesByPatientID;
+  revalidateSamplesByParticipantId = require(servicePath).revalidateSamplesByParticipantId;
 }
 
 afterEach(() => {
@@ -27,27 +27,27 @@ afterEach(() => {
   reloadServiceWithFreshBinding();
 });
 
-describe('revalidateSamplesByPatientID', () => {
+describe('revalidateSamplesByParticipantId', () => {
   it('returns zeroed result and skips getCollection when participantId is null', async () => {
-    const result = await revalidateSamplesByPatientID({}, null);
+    const result = await revalidateSamplesByParticipantId({}, null);
     expect(result).toEqual({ total: 0, validated: 0, failed: 0 });
     expect(collectionResolverModule.getCollection).not.toHaveBeenCalled();
   });
 
   it('returns zeroed result and skips getCollection when participantId is undefined', async () => {
-    const result = await revalidateSamplesByPatientID({}, undefined);
+    const result = await revalidateSamplesByParticipantId({}, undefined);
     expect(result).toEqual({ total: 0, validated: 0, failed: 0 });
     expect(collectionResolverModule.getCollection).not.toHaveBeenCalled();
   });
 
   it('returns zeroed result and skips getCollection when participantId is empty string', async () => {
-    const result = await revalidateSamplesByPatientID({}, '');
+    const result = await revalidateSamplesByParticipantId({}, '');
     expect(result).toEqual({ total: 0, validated: 0, failed: 0 });
     expect(collectionResolverModule.getCollection).not.toHaveBeenCalled();
   });
 
   it('returns zeroed result and skips getCollection when participantId is whitespace-only', async () => {
-    const result = await revalidateSamplesByPatientID({}, '   ');
+    const result = await revalidateSamplesByParticipantId({}, '   ');
     expect(result).toEqual({ total: 0, validated: 0, failed: 0 });
     expect(collectionResolverModule.getCollection).not.toHaveBeenCalled();
   });
@@ -59,12 +59,12 @@ describe('revalidateSamplesByPatientID', () => {
     collectionResolverModule.getCollection.mockResolvedValue(collection);
 
     const db = { fake: true };
-    await revalidateSamplesByPatientID(db, '  P123  ');
+    await revalidateSamplesByParticipantId(db, '  P123  ');
 
     expect(collectionResolverModule.getCollection).toHaveBeenCalledWith(db, 'samples');
     expect(find).toHaveBeenCalledWith(
       { participantId: 'P123' },
-      { projection: { _id: 1, specimenId: 1 } }
+      { projection: { specimenId: 1 } }
     );
   });
 
@@ -75,17 +75,17 @@ describe('revalidateSamplesByPatientID', () => {
 
     const ctorSpy = vi.spyOn(SampleGraphValidatorModule.prototype, 'validateSampleCompliance');
 
-    const result = await revalidateSamplesByPatientID({}, 'P1');
+    const result = await revalidateSamplesByParticipantId({}, 'P1');
 
     expect(result).toEqual({ total: 0, validated: 0, failed: 0 });
     expect(ctorSpy).not.toHaveBeenCalled();
   });
 
-  it('validates each sample, preferring _id over specimenId, and counts successes', async () => {
+  it('validates each sample by canonical specimenId and counts successes', async () => {
     const samples = [
-      { _id: 'idA', specimenId: 'sA' },
+      { specimenId: 'sA' },
       { specimenId: 'sB' },
-      {},
+      { specimenId: 'sC' },
     ];
     const toArray = vi.fn().mockResolvedValue(samples);
     const find = vi.fn().mockReturnValue({ toArray });
@@ -95,19 +95,19 @@ describe('revalidateSamplesByPatientID', () => {
       .spyOn(SampleGraphValidatorModule.prototype, 'validateSampleCompliance')
       .mockResolvedValue(true);
 
-    const result = await revalidateSamplesByPatientID({}, 'P1');
+    const result = await revalidateSamplesByParticipantId({}, 'P1');
 
     expect(result).toEqual({ total: 3, validated: 3, failed: 0 });
-    expect(validateSpy).toHaveBeenNthCalledWith(1, 'idA');
+    expect(validateSpy).toHaveBeenNthCalledWith(1, 'sA');
     expect(validateSpy).toHaveBeenNthCalledWith(2, 'sB');
-    expect(validateSpy).toHaveBeenNthCalledWith(3, '');
+    expect(validateSpy).toHaveBeenNthCalledWith(3, 'sC');
   });
 
   it('counts per-sample failures without aborting remaining samples, and logs a warning', async () => {
     const samples = [
-      { _id: 'ok1' },
-      { _id: 'bad1' },
-      { _id: 'ok2' },
+      { specimenId: 'ok1' },
+      { specimenId: 'bad1' },
+      { specimenId: 'ok2' },
     ];
     const toArray = vi.fn().mockResolvedValue(samples);
     const find = vi.fn().mockReturnValue({ toArray });
@@ -123,7 +123,7 @@ describe('revalidateSamplesByPatientID', () => {
     );
     const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
 
-    const result = await revalidateSamplesByPatientID({}, 'P9');
+    const result = await revalidateSamplesByParticipantId({}, 'P9');
 
     expect(result).toEqual({ total: 3, validated: 2, failed: 1 });
     expect(warnSpy).toHaveBeenCalledWith(
@@ -133,7 +133,7 @@ describe('revalidateSamplesByPatientID', () => {
   });
 
   it('logs an info summary with total/validated/failed counts on completion', async () => {
-    const samples = [{ _id: 'x1' }];
+    const samples = [{ specimenId: 'x1' }];
     const toArray = vi.fn().mockResolvedValue(samples);
     const find = vi.fn().mockReturnValue({ toArray });
     collectionResolverModule.getCollection.mockResolvedValue({ find });
@@ -141,7 +141,7 @@ describe('revalidateSamplesByPatientID', () => {
     vi.spyOn(SampleGraphValidatorModule.prototype, 'validateSampleCompliance').mockResolvedValue(true);
     const infoSpy = vi.spyOn(logger, 'info').mockImplementation(() => {});
 
-    await revalidateSamplesByPatientID({}, 'P5');
+    await revalidateSamplesByParticipantId({}, 'P5');
 
     expect(infoSpy).toHaveBeenCalledWith(
       '[SAMPLE_COMPLIANCE_SYNC] Revalidação ética concluída para paciente',
@@ -149,7 +149,7 @@ describe('revalidateSamplesByPatientID', () => {
     );
   });
 
-  it('falls back to an empty-string sample id when a rejecting sample has neither _id nor specimenId', async () => {
+  it('passes an empty specimenId only for malformed stored records and counts the validation failure', async () => {
     const samples = [{}];
     const toArray = vi.fn().mockResolvedValue(samples);
     const find = vi.fn().mockReturnValue({ toArray });
@@ -160,7 +160,7 @@ describe('revalidateSamplesByPatientID', () => {
     );
     const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
 
-    const result = await revalidateSamplesByPatientID({}, 'P7');
+    const result = await revalidateSamplesByParticipantId({}, 'P7');
 
     expect(result).toEqual({ total: 1, validated: 0, failed: 1 });
     expect(warnSpy).toHaveBeenCalledWith(
@@ -170,7 +170,7 @@ describe('revalidateSamplesByPatientID', () => {
   });
 
   it('stringifies a non-Error rejection reason in the warning log', async () => {
-    const samples = [{ _id: 'z1' }];
+    const samples = [{ specimenId: 'z1' }];
     const toArray = vi.fn().mockResolvedValue(samples);
     const find = vi.fn().mockReturnValue({ toArray });
     collectionResolverModule.getCollection.mockResolvedValue({ find });
@@ -180,7 +180,7 @@ describe('revalidateSamplesByPatientID', () => {
     );
     const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
 
-    const result = await revalidateSamplesByPatientID({}, 'P8');
+    const result = await revalidateSamplesByParticipantId({}, 'P8');
 
     expect(result).toEqual({ total: 1, validated: 0, failed: 1 });
     expect(warnSpy).toHaveBeenCalledWith(
