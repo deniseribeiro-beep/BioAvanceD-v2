@@ -832,7 +832,7 @@ describe('ImportLGPDService.importSamples', () => {
       expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
       const inserted = samplesCollection.insertOne.mock.calls[0][0];
       expect(inserted.currentStoragePlacement).toBeUndefined();
-      expect(currentAllocateExecute).toHaveBeenCalledWith(expect.objectContaining({ specimenId: 'sample-id-1', boxId: String(chain.boxes[0]._id), position: 'A1' }));
+      expect(currentAllocateExecute).toHaveBeenCalledWith(expect.objectContaining({ specimenId: inserted.specimenId, boxId: String(chain.boxes[0]._id), position: 'A1' }));
     });
 
     it('records a per-row error when autoIncrement is on but no more boxes are available', async () => {
@@ -862,7 +862,7 @@ describe('ImportLGPDService.importSamples', () => {
       expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
       const inserted = samplesCollection.insertOne.mock.calls[0][0];
       expect(inserted.currentStoragePlacement).toBeUndefined();
-      expect(currentAllocateExecute).toHaveBeenCalledWith(expect.objectContaining({ specimenId: 'sample-id-1', boxId: String(chain.boxes[0]._id), position: 'A1' }));
+      expect(currentAllocateExecute).toHaveBeenCalledWith(expect.objectContaining({ specimenId: inserted.specimenId, boxId: String(chain.boxes[0]._id), position: 'A1' }));
     });
 
     it('resolves a CSV-provided boxId directly, without consulting startBoxId/autoIncrement', async () => {
@@ -880,7 +880,7 @@ describe('ImportLGPDService.importSamples', () => {
       expect(result.success).toBe(1);
       const inserted = samplesCollection.insertOne.mock.calls[0][0];
       expect(inserted.currentStoragePlacement).toBeUndefined();
-      expect(currentAllocateExecute).toHaveBeenCalledWith(expect.objectContaining({ specimenId: 'sample-id-1', boxId: String(chain.boxes[1]._id), position: 'A1' }));
+      expect(currentAllocateExecute).toHaveBeenCalledWith(expect.objectContaining({ specimenId: inserted.specimenId, boxId: String(chain.boxes[1]._id), position: 'A1' }));
     });
 
     // #467: bulk LGPD import previously placed samples without checking
