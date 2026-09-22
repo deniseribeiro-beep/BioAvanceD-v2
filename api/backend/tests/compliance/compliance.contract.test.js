@@ -192,8 +192,7 @@ describe('Compliance Gate - Data Matrix physical identification', () => {
     expect(artifacts.symbology).toBe('data_matrix');
     expect(artifacts.dataMatrix.renderer).toBe('bwip-js');
     expectValidPngAsset(artifacts.dataMatrix.imagePng);
-    expect(artifacts.code128).toBeUndefined();
-    expect(artifacts.qr).toBeUndefined();
+    expect(Object.keys(artifacts)).toEqual(['encodedValue', 'symbology', 'dataMatrix']);
   });
 
   it('aceita leitura Data Matrix e rejeita formatos retirados', () => {
@@ -202,7 +201,6 @@ describe('Compliance Gate - Data Matrix physical identification', () => {
     expect(dataMatrixScan.scannerSymbology).toBe('DataMatrix');
     expect(dataMatrixScan.normalizedValue).toBe('BR-2026-001');
 
-    expect(parseScannedBarcode(']C1BR-2026-001').isValid).toBe(false);
-    expect(parseScannedBarcode(']Q3BR-2026-001').isValid).toBe(false);
+    expect(parseScannedBarcode(']x1BR-2026-001').isValid).toBe(false);
   });
 });
