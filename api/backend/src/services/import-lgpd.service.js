@@ -1382,13 +1382,13 @@ class ImportLGPDService {
       if (rows.length > 0) {
         const headers = Object.keys(rows[0]);
         const missingFields = requiredFields.filter(field => !headers.includes(field));
-        const hasPatientIdHeader = headers.includes('participantId') || headers.includes('participantId') || headers.includes('patient_id');
+        const hasParticipantIdHeader = headers.includes('participantId');
         const hasPatientNameHeader = headers.includes('patientName') || headers.includes('nomePaciente') || headers.includes('nome');
         const hasBirthDateHeader = headers.includes('birthDate') || headers.includes('dataNascimento') || headers.includes('patientBirthDate');
         if (missingFields.length > 0) {
           throw new Error(`Campos obrigatórios ausentes: ${missingFields.join(', ')}`);
         } else { void 0; }
-        if (!hasPatientIdHeader && !(hasPatientNameHeader && hasBirthDateHeader)) {
+        if (!hasParticipantIdHeader && !(hasPatientNameHeader && hasBirthDateHeader)) {
           throw new Error('Identificação do paciente ausente: informe participantId ou as colunas patientName + birthDate.');
         } else {
           void 0;
@@ -2073,7 +2073,7 @@ class ImportLGPDService {
       .find((value) => Boolean(this.normalizeText(value)));
 
     return {
-      participantId: row.participantId?.trim() || null, // Aceita participantId, participantId ou patient_id
+      participantId: row.participantId?.trim() || null,
       patientName: row.patientName?.trim() || row.nomePaciente?.trim() || row.nome?.trim() || null,
       patientBirthDate: this.parseBirthDate(row.birthDate || row.dataNascimento || row.patientBirthDate),
       patientEmail: row.email ? String(row.email).trim().toLowerCase() : null,
@@ -2239,8 +2239,6 @@ class ImportLGPDService {
       patientname: 'patientName',
       nomepaciente: 'patientName',
       name: 'patientName',
-      patientid: 'participantId',
-      patient_id: 'participantId',
       email: 'email',
       cpf: 'cpf',
       birthdate: 'birthDate',
