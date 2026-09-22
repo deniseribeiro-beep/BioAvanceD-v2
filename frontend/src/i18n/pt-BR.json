@@ -1247,9 +1247,9 @@
     "searchLabel": "Localizar amostra",
     "searchPlaceholder": "Busque por ID, código de barras ou paciente",
     "searchResultPrefix": "Resultado da pesquisa para \"{query}\".",
-    "searchScanHint": "Modo leitura ativo: use o leitor de barcode ou QR code e depois pressione Pesquisar.",
-    "searchScanPlaceholder": "Escaneie barcode/QR code e pressione pesquisar",
-    "scanModeOff": "Barcode/QR",
+    "searchScanHint": "Modo leitura ativo: use o leitor Data Matrix e depois pressione Pesquisar.",
+    "searchScanPlaceholder": "Escaneie o Data Matrix e pressione pesquisar",
+    "scanModeOff": "Data Matrix",
     "scanModeOn": "Leitura ativa",
     "selectedItems": "itens selecionados",
     "sprec": {
