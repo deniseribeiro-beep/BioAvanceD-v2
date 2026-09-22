@@ -128,7 +128,7 @@ describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
       severity: 'info',
       message: 'Paciente criado via Match Heurístico',
       payload: {
-        patientID: '12345678',
+        participantId: '12345678',
         heuristicScore: 0.95
       }
     };
@@ -201,7 +201,7 @@ describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
     expect(savedLog.entity).toBe('Patient');
   });
 
-  it('deve incluir entityID (patientID) no log', async () => {
+  it('deve incluir entityID (participantId) no log', async () => {
     // Given
     const logsInsert = vi.fn().mockResolvedValue({ insertedId: 'log-entity-id' });
 
@@ -257,7 +257,7 @@ describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
     auditLogger.init(app.locals.db);
 
     const sensitivePayload = {
-      patientID: '11111111',
+      participantId: '11111111',
       patientName: 'João Silva Secreto',
       email: 'joao@example.com',
       cpf: '12345678900',
