@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+const { ObjectId } = require('mongodb');
 const SampleGraphValidator = require('../../src/services/SampleGraphValidator');
 const { generateSampleHash } = require('../../src/services/MerkleService');
 const rcsReferenceData = require('../../src/services/rcs-reference-data');
