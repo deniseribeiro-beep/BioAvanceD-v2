@@ -86,9 +86,12 @@ function toApiShape(doc) {
 // in the UI -- usePolicies' only consumer is FacilityManagementPage, which
 // ProtectedRoute already limits to the three roles seeded with this code.
 //
-// The WRITE half of #1074 is deliberately NOT changed here: whether
-// rewriting an alert threshold should be a Coordenador-and-above capability
-// rather than a Tecnico one is a catalogue decision, not a defect.
+// The WRITE half followed separately: the three writes below now gate on
+// 'manageTemperaturePolicy' (see rbac-catalog-seed.service.js for why that
+// code exists rather than reusing manageTemperature). The grants are
+// unchanged -- whether rewriting an alert threshold should be a
+// Coordenador-and-above capability rather than a Tecnico one is still open,
+// but it is now a catalogue decision rather than a code change.
 router.get('/', authenticate, requirePermission('viewTemperature'), async (req, res) => {
   try {
     const db = req.app.locals.db;
@@ -221,7 +224,7 @@ router.get('/:id/active-limit', authenticate, requirePermission('viewTemperature
   }
 });
 
-router.post('/', authenticate, requirePermission('viewTemperature'), async (req, res) => {
+router.post('/', authenticate, requirePermission('manageTemperaturePolicy'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -260,7 +263,7 @@ router.post('/', authenticate, requirePermission('viewTemperature'), async (req,
   }
 });
 
-router.put('/:id', authenticate, requirePermission('viewTemperature'), async (req, res) => {
+router.put('/:id', authenticate, requirePermission('manageTemperaturePolicy'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -331,7 +334,7 @@ router.put('/:id', authenticate, requirePermission('viewTemperature'), async (re
   }
 });
 
-router.delete('/:id', authenticate, requirePermission('viewTemperature'), async (req, res) => {
+router.delete('/:id', authenticate, requirePermission('manageTemperaturePolicy'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {

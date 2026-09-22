@@ -285,3 +285,136 @@ describe('DELETE /api/policies/:id', () => {
     expect([200, 400]).toContain(res.status);
   });
 });
+
+// #1074 (write half): the three policy WRITES carried requirePermission(
+// 'viewTemperature') -- a READ permission. Its allowedActions had been
+// widened to the full CRUD set, so the writes passed the #631 derived-action
+// check and nothing was broken; what was broken is that "may look at a
+// threshold" and "may rewrite the threshold that decides whether the cold
+// chain reports a failure at all" were ONE capability, and no catalogue
+// edit could separate them.
+//
+// Same defect and same remedy as #1073 one resource over, including the
+// trap that manageTemperature is not the answer despite its name (it is
+// ['UPDATE'] only, so it would 403 POST and DELETE).
+//
+// The grants are DELIBERATELY unchanged: manageTemperaturePolicy is seeded
+// to exactly the three roles that already held viewTemperature, so no
+// caller gains or loses anything today. What changes is that revoking
+// threshold governance from Tecnico -- the open question in #1074, and
+// Denise's to answer -- becomes a catalogue edit rather than a code change.
+// These cases pin that separability, which is the whole content of the fix
+// and is not observable through any seeded role.
+describe('#1074: policy writes are gated on a write permission, not viewTemperature', () => {
+  const VIEW_ONLY_USER = 'qa-policy-view-only';
+  const BOTH_USER = 'qa-policy-governor';
+
+  function tokenFor(userAccountId) {
+    return jwt.sign(
+      { userID: userAccountId, accessType: 2, roleName: 'T\u00e9cnico', name: 'QA', mfaVerified: true },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+  }
+
+  // Neither principal can be built from a seeded role, by construction:
+  // the point of the fix is that the two capabilities used to be one.
+  function rbacSplit() {
+    return buildRbacCollections(
+      [
+        { userAccountId: VIEW_ONLY_USER, roleCodes: ['policy_viewer'], organizationId: 'test-org-default' },
+        { userAccountId: BOTH_USER, roleCodes: ['policy_governor'], organizationId: 'test-org-default' },
+      ],
+      [
+        { roleCode: 'policy_viewer', hierarchyLevel: 2, permissions: ['viewTemperature'] },
+        {
+          roleCode: 'policy_governor',
+          hierarchyLevel: 2,
+          permissions: ['viewTemperature', 'manageTemperaturePolicy'],
+        },
+      ]
+    );
+  }
+
+  function writableCollection() {
+    return createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_POLICY),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'policy-new' }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+      find: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([FAKE_POLICY]),
+        sort: vi.fn().mockReturnThis(),
+        skip: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+        project: vi.fn().mockReturnThis(),
+      }),
+    });
+  }
+
+  // #1089 made policyName required, so a body that omits it 422s before
+  // the gate is even reached -- which would make a 403 assertion vacuous.
+  const VALID_BODY = {
+    policyName: 'Freezer -80',
+    minThreshold: -85,
+    maxThreshold: -75,
+    targetTemperature: -80,
+  };
+
+  beforeEach(() => {
+    givenSession();
+    app.locals.db = createDbMock({ temperaturePolicies: writableCollection(), ...rbacSplit() });
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('POST / refuses a caller holding viewTemperature but NOT manageTemperaturePolicy', async () => {
+    const res = await request(app)
+      .post('/api/policies')
+      .set('Authorization', `Bearer ${tokenFor(VIEW_ONLY_USER)}`)
+      .send(VALID_BODY);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('PUT /:id refuses the same caller', async () => {
+    const res = await request(app)
+      .put('/api/policies/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${tokenFor(VIEW_ONLY_USER)}`)
+      .send({ minThreshold: -90 });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('DELETE /:id refuses the same caller', async () => {
+    const res = await request(app)
+      .delete('/api/policies/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${tokenFor(VIEW_ONLY_USER)}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  // CONTROL, and per #768 this is the ONLY signal that the three cases
+  // above mean what they say: a 403 is satisfied by ANY upstream refusal
+  // (a bad token, a missing assignment, a broken fixture). This proves the
+  // same principal still passes every gate up to the write one.
+  it('CONTROL: the viewTemperature-only caller can still READ policies', async () => {
+    const res = await request(app)
+      .get('/api/policies')
+      .set('Authorization', `Bearer ${tokenFor(VIEW_ONLY_USER)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  // CONTROL: holding BOTH is what the three seeded roles do today, so this
+  // case is green before and after the fix. A red here means the swap took
+  // a capability away from someone, which the fix explicitly must not do.
+  it('CONTROL: a caller holding both permissions can still WRITE', async () => {
+    const res = await request(app)
+      .post('/api/policies')
+      .set('Authorization', `Bearer ${tokenFor(BOTH_USER)}`)
+      .send(VALID_BODY);
+
+    expect(res.status).toBe(201);
+  });
+});

@@ -38,17 +38,17 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 2,
       roleName: 'Tecnico',
-      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'uploadFiles', 'viewReports', 'manageStorageAllocation'],
+      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'uploadFiles', 'viewReports', 'manageStorageAllocation'],
     },
     {
       accessType: 3,
       roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
     },
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
     },
   ],
 };
@@ -159,6 +159,27 @@ const PERMISSION_CATALOG = {
   // allowedActions is derived from METHOD_TO_ACTION (rbac.js), not taste.
   manageSensor: { resourceType: 'Device', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar sensores' },
   recordTemperature: { resourceType: 'Temperature', allowedActions: ['CREATE'], displayName: 'Registrar leitura de temperatura' },
+  // #1074, the write half, and the same defect as #1073 one resource over:
+  // the three policy WRITES were gated on a READ code. Because that code's
+  // allowedActions had already been widened to full CRUD, the #631 derived-
+  // action check passed and nothing was broken -- what was broken is that
+  // "may look at a threshold" and "may rewrite the threshold that decides
+  // whether an excursion is detected at all" were one capability, and no
+  // catalogue edit could separate them.
+  //
+  // manageTemperature is not the answer here either, for the reason recorded
+  // above: ['UPDATE'] only, so it would 403 POST and DELETE.
+  //
+  // resourceType follows the precedent set for manageSensor -- the
+  // dictionary's own entity, not a coinage. dict-02 P1X-0105..0112 is
+  // ThresholdProfile, and contracts/canonical/v1 maps the temperaturePolicies
+  // collection (#1089's surviving store) onto exactly that entity.
+  //
+  // GRANTS ARE DELIBERATELY UNCHANGED: seeded to the same three roles that
+  // already held viewTemperature, so nobody gains or loses access today.
+  // Whether a Tecnico should govern thresholds is #1074's open question and
+  // Denise's to answer; this makes answering it a catalogue edit.
+  manageTemperaturePolicy: { resourceType: 'ThresholdProfile', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar políticas de temperatura' },
   manageOrganizations: { resourceType: 'Organization', allowedActions: ['CREATE', 'UPDATE', 'DELETE'], displayName: 'Gerenciar organizações' },
   viewAuditLogs: { resourceType: 'AuditLog', allowedActions: ['READ'], displayName: 'Visualizar trilhas de auditoria' },
   createResult: { resourceType: 'Result', allowedActions: ['CREATE'], displayName: 'Criar arquivo de análise' },
