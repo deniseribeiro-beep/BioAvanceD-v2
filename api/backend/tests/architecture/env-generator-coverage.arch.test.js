@@ -75,6 +75,31 @@ test('a fresh generate covers every variable .env.docker.example declares (#1153
   }
 });
 
+// #1161: the reverse direction. #1153 fixed "the example declares names the
+// generator never writes"; this pins the mirror, so the two files stay exactly
+// equal rather than merely one-way covered. NEO4J_CANONICAL_SALT was the whole
+// gap when this was added -- written by the generator, declared by neither file,
+// and silently falling back to USER_ANON_SALT.
+test('a fresh generate declares nothing .env.docker.example omits (#1161)', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-generator-arch-'));
+  const outFile = path.join(outDir, '.env.docker');
+  try {
+    execFileSync('bash', [GENERATOR, outFile], { cwd: REPO_ROOT, stdio: 'pipe' });
+
+    const declared = declaredIn(EXAMPLE);
+    const generated = declaredIn(outFile);
+    const undeclared = [...generated].filter((name) => !declared.has(name)).sort();
+
+    assert.deepEqual(
+      undeclared,
+      [],
+      `${undeclared.length} variable(s) are written by the generator but declared nowhere: ${undeclared.join(', ')}`
+    );
+  } finally {
+    fs.rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
 // The generator's own values must win where the two disagree. #1153 recorded
 // one such divergence -- AUDIT_RFC3161_MODE is `remote` in the example and
 // `disabled` from the generator -- and which is intended is #962's open call,
