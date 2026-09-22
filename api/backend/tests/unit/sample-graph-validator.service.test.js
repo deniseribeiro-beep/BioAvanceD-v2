@@ -859,7 +859,24 @@ describe('SampleGraphValidator', () => {
 
       expect(report.isReleasable).toBe(true);
       expect(sampleMovementsCollection.insertOne).toHaveBeenCalledWith(
-        expect.objectContaining({ sampleID: String(sample._id) }),
+        expect.objectContaining({ specimenId: String(sample._id) }),
+        undefined
+      );
+    });
+
+    it('prefers canonical specimenId over Mongo _id and retired sampleID when sealing the compliance movement', async () => {
+      const sample = buildSample({
+        specimenId: 'SPEC-CANONICAL-1',
+        sampleID: 'LEGACY-SAMPLE-1',
+      });
+      samplesCollection.findOne.mockResolvedValue(sample);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+      const report = await validator.validateSampleCompliance(sample._id);
+
+      expect(report.isReleasable).toBe(true);
+      expect(sampleMovementsCollection.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ specimenId: 'SPEC-CANONICAL-1' }),
         undefined
       );
     });
