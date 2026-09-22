@@ -89,11 +89,11 @@ describe('batch-validation-engine.service#buildSampleRow', () => {
   // favor of boxId/positionCode) — the mapping produced a value that was
   // silently discarded. Pinning that the header map no longer claims to
   // handle these columns at all.
-  it('normalizes canonical participantId and historical patientID CSV headers to participantId', () => {
-    expect(batchValidationEngine.buildSampleRow({ participantId: '12345678' }))
-      .toEqual({ participantId: '12345678' });
-    expect(batchValidationEngine.buildSampleRow({ patientID: '87654321' }))
-      .toEqual({ participantId: '87654321' });
+  it('maps only canonical participantId/specimenId identifier headers', () => {
+    expect(batchValidationEngine.buildSampleRow({ participantId: '12345678', specimenId: 'SPEC-1' }))
+      .toEqual({ participantId: '12345678', specimenId: 'SPEC-1' });
+    expect(batchValidationEngine.buildSampleRow({ patientID: '87654321', sampleID: 'OLD-1' }))
+      .toEqual({});
   });
 
   it('does not map legacy locationid/idlocalizacao headers onto any target field', () => {
@@ -139,8 +139,7 @@ describe('batch-validation-engine.service', () => {
     const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: 'sample-object-id-1',
       specimenId: 'SPEC-BATCH-001',
-      sampleID: 'sample-001',
-    });
+          });
     const createObservationSpy = vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({
       _id: 'observation-object-id-1',
     });
@@ -148,7 +147,7 @@ describe('batch-validation-engine.service', () => {
     const result = await batchValidationEngine.persistSample(
       db,
       {
-        patientID: '12345678',
+        participantId: '12345678',
         sampleType: 'Sangue',
         sampleOrigin: 'Coleta',
         extractionProtocol: 'Protocolo A',
@@ -156,17 +155,12 @@ describe('batch-validation-engine.service', () => {
         quantity: '1',
         quality: '1',
         biomarkers: 'alphaGal:12.5',
-        registrationDate: '2026-03-19T10:00:00.000Z',
+        registeredAt: '2026-03-19T10:00:00.000Z',
       },
       2
     );
 
-    // #853: the patients collection stores the linkage key as `participantId`
-    // (never `patientID` -- see Patient.js's CANONICAL_FIELDS), and an 8-digit
-    // patientID column is that canonical participantId. The first criterion
-    // findLinkedPatient tries must therefore be filtered on `participantId`,
-    // not `patientID`, or an existing patient is never found and this row
-    // falls through to the not-found branch instead of linking.
+    // Canonical v2 linkage is keyed only on participantId.
     expect(db.collection('patients').findOne).toHaveBeenCalledWith({ participantId: '12345678' });
 
     expect(createPatientSpy).not.toHaveBeenCalled();
@@ -212,7 +206,7 @@ describe('batch-validation-engine.service', () => {
     });
     const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: 'sample-object-id-2',
-      sampleID: 'sample-002',
+      specimenId: 'SPEC-BATCH-002',
     });
     const createObservationSpy = vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({
       _id: 'observation-object-id-2',
@@ -302,7 +296,7 @@ describe('batch-validation-engine.service', () => {
     const result = await batchValidationEngine.persistSample(
       db,
       {
-        patientID: '12345678',
+        participantId: '12345678',
         sampleType: 'Sangue',
         sampleOrigin: 'Coleta',
         quantity: '1',
@@ -325,7 +319,7 @@ describe('batch-validation-engine.service', () => {
     const result = await batchValidationEngine.persistSample(
       db,
       {
-        patientID: '12345678',
+        participantId: '12345678',
         sampleType: 'Sangue',
         sampleOrigin: 'Coleta',
         quantity: '1',
@@ -348,7 +342,7 @@ describe('batch-validation-engine.service item 8 linkage and biomarker residuals
     const objectId = new ObjectId();
     const criteria = batchValidationEngine.buildPatientLinkageQuery(
       {
-        patientID: '1234-5678',
+        participantId: '1234-5678',
         cpf: '123.456.789-01',
         recordNumber: '42',
         patientObjectId: objectId.toString(),
@@ -370,7 +364,7 @@ describe('batch-validation-engine.service item 8 linkage and biomarker residuals
   it('returns no linkage criteria when every candidate identifier is absent or invalid', () => {
     const criteria = batchValidationEngine.buildPatientLinkageQuery(
       {
-        patientID: 'abc',
+        participantId: 'abc',
         cpf: 'invalid',
         recordNumber: '   ',
         patientObjectId: 'not-an-object-id',
@@ -405,8 +399,7 @@ describe('batch-validation-engine.service item 8 linkage and biomarker residuals
       value: 2.5,
       specimenId: 'SPEC-1',
       specimenObjectId: 'sample-1',
-      sampleID: 'SPEC-1',
-      linkedResourceId: 'patient-1',
+            linkedResourceId: 'patient-1',
       subject: { reference: 'Patient/patient-1', type: 'Patient' },
       specimen: { reference: 'Specimen/SPEC-1' },
       effectiveDateTime: new Date('2026-01-02T03:04:05.000Z'),
@@ -737,7 +730,7 @@ describe('batch-validation-engine.service processBatchImport', () => {
   it('processes a samples JSON file end to end with a fully-valid, warning-free row', async () => {
     const filePath = writeTmpFile('samples.json', JSON.stringify([
       {
-        patientID: '12345678',
+        participantId: '12345678',
         sampleType: 'Sangue',
         sampleOrigin: 'Coleta',
         extractionProtocol: 'Protocolo A',
@@ -755,7 +748,7 @@ describe('batch-validation-engine.service processBatchImport', () => {
       participantId: '12345678',
       patient: { _id: 'patient-object-id-5', participantId: '12345678' },
     });
-    vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-object-id-5' });
+    vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-object-id-5', specimenId: 'SPEC-BATCH-005' });
 
     const result = await batchValidationEngine.processBatchImport(db, 'job-6');
 
