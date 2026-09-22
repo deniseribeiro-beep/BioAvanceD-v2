@@ -700,7 +700,7 @@ class SampleService {
         'initialQuantity', 'totalWithdrawn', 'totalReturned',
         'accessionNumber', 'orderNumber', 'processingStatus',
         'protocolApplied', 'specimenCollection', 'studyId', 'protocolId',
-        'collectionId', 'linkedFiles', 'qrCode', 'notes'
+        'collectionId', 'linkedFiles', 'notes'
       ];
       const restUpdateData = {};
       for (const key of ALLOWED_UPDATE_FIELDS) {
