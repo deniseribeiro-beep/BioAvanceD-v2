@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 
 export const FHIR_EXCEL_COLUMNS = [
-  'patient_external_id',
+  'participantId',
   'patient_name',
   'patient_document',
   'patient_email',
@@ -11,7 +11,7 @@ export const FHIR_EXCEL_COLUMNS = [
   'cid10',
   'orpha_code',
   'omim_code',
-  'sample_external_id',
+  'specimenId',
   'sample_type',
   'matrix',
   'collection_datetime',
@@ -52,8 +52,8 @@ function splitName(name) {
 }
 
 function rowToBundleEntries(row, index) {
-  const patientId = clean(row.patient_external_id) || `patient-${index + 1}`;
-  const sampleId = clean(row.sample_external_id) || `specimen-${index + 1}`;
+  const participantId = clean(row.participantId) || `patient-${index + 1}`;
+  const specimenId = clean(row.specimenId) || `specimen-${index + 1}`;
   const patientName = splitName(row.patient_name);
   const diseaseCodings = [
     makeCoding('http://hl7.org/fhir/sid/icd-10', row.cid10, row.disease_name),
@@ -63,10 +63,10 @@ function rowToBundleEntries(row, index) {
 
   const entries = [
     {
-      fullUrl: `urn:uuid:${patientId}`,
+      fullUrl: `urn:uuid:${participantId}`,
       resource: {
         resourceType: 'Patient',
-        id: patientId,
+        id: participantId,
         identifier: clean(row.patient_document)
           ? [{ system: 'urn:bioavanced:patient-document', value: clean(row.patient_document) }]
           : [],
@@ -79,11 +79,11 @@ function rowToBundleEntries(row, index) {
       },
     },
     {
-      fullUrl: `urn:uuid:${sampleId}`,
+      fullUrl: `urn:uuid:${specimenId}`,
       resource: {
         resourceType: 'Specimen',
-        id: sampleId,
-        subject: { reference: `Patient/${patientId}` },
+        id: specimenId,
+        subject: { reference: `Patient/${participantId}` },
         type: {
           text: clean(row.sample_type),
         },
@@ -92,8 +92,8 @@ function rowToBundleEntries(row, index) {
           : {}),
         container: [
           {
-            identifier: clean(row.sample_external_id)
-              ? [{ system: 'urn:bioavanced:sample-external-id', value: clean(row.sample_external_id) }]
+            identifier: clean(row.specimenId)
+              ? [{ system: 'urn:bioavanced:specimen-id', value: clean(row.specimenId) }]
               : [],
           },
         ],
@@ -117,10 +117,10 @@ function rowToBundleEntries(row, index) {
 
   if (clean(row.disease_name) || diseaseCodings.length) {
     entries.push({
-      fullUrl: `urn:uuid:condition-${patientId}-${index + 1}`,
+      fullUrl: `urn:uuid:condition-${participantId}-${index + 1}`,
       resource: {
         resourceType: 'Condition',
-        subject: { reference: `Patient/${patientId}` },
+        subject: { reference: `Patient/${participantId}` },
         code: {
           coding: diseaseCodings,
           text: clean(row.disease_name),
@@ -131,13 +131,13 @@ function rowToBundleEntries(row, index) {
 
   if (clean(row.biomarker_type)) {
     entries.push({
-      fullUrl: `urn:uuid:biomarker-${sampleId}-${index + 1}`,
+      fullUrl: `urn:uuid:biomarker-${specimenId}-${index + 1}`,
       resource: {
         resourceType: 'Observation',
         status: 'final',
         code: { text: clean(row.biomarker_type) },
-        subject: { reference: `Patient/${patientId}` },
-        specimen: { reference: `Specimen/${sampleId}` },
+        subject: { reference: `Patient/${participantId}` },
+        specimen: { reference: `Specimen/${specimenId}` },
         ...(clean(row.biomarker_value)
           ? {
               valueQuantity: {
@@ -152,7 +152,7 @@ function rowToBundleEntries(row, index) {
 
   if (clean(row.hpo_code)) {
     entries.push({
-      fullUrl: `urn:uuid:hpo-${patientId}-${index + 1}`,
+      fullUrl: `urn:uuid:hpo-${participantId}-${index + 1}`,
       resource: {
         resourceType: 'Observation',
         status: 'final',
@@ -166,7 +166,7 @@ function rowToBundleEntries(row, index) {
           ],
           text: clean(row.hpo_label) || clean(row.hpo_code),
         },
-        subject: { reference: `Patient/${patientId}` },
+        subject: { reference: `Patient/${participantId}` },
       },
     });
   }
