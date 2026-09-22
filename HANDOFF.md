@@ -3,15 +3,16 @@
 **Written 2026-09-22, thirty-sixth queue sitting. INTERIM — Dennis gave no
 end signal, so treat the session as CONTINUING.** His instruction: read the
 handoff, Docker is on, pick the next group. **The group picked was the
-audit-signing-config cluster; all three shipped, plus one issue the sitting
-filed itself.**
+audit-signing-config cluster; all three shipped, plus two issues the
+sitting filed and closed itself.**
 
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, tree clean and matching origin.
-Four commits, all pushed; last substantive one is the test-harness fix.
+Six commits, all pushed (this note is the sixth; the fifth rotation is the
+earlier one it replaces). Last substantive commit is the env-example fix.
 
-## What shipped — four issues closed
+## What shipped — five issues closed
 
 - **#1157** — the public-key registry can be loaded from a FILE
   (`AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE`), so a key minted at bring-up can
@@ -23,6 +24,10 @@ Four commits, all pushed; last substantive one is the test-harness fix.
 - **#1160** — `worker.entrypoint.test.js`'s stubbing now reaches the whole
   dependency graph, and a late failure no longer kills the run. Filed and
   closed by this sitting.
+- **#1161** — `NEO4J_CANONICAL_SALT` and `GRAPH_PSEUDONYMIZATION_SALT` are
+  declared in the example, and the architecture test now pins BOTH
+  directions, so the example and a fresh generate must stay exactly equal.
+  Also filed and closed by this sitting.
 
 ## The four numbers this sitting produced
 
@@ -96,15 +101,14 @@ stack, but the FILE form supersedes it — that is #1157). Plus:
 
 ## Open, and left in a known state
 
-Query for the backlog — `gh issue list --state open`. **Four issues were
-filed this sitting and all four are still open; three are owner's calls:**
+Query for the backlog — `gh issue list --state open`. **Five issues were filed this
+sitting; #1160 and #1161 were also CLOSED by it. The two left open are
+both decision records — the code already carries the inferred posture and
+the issue exists for Dennis to confirm or reverse it:**
 
 - **#1159** — should the audit-signing boot gate be fatal in production,
   like the encryption gate three lines above it? **#979 does NOT cover
   this** — I checked; its table is Redis and Mongo only.
-- **#1161** — `NEO4J_CANONICAL_SALT` is written by the generator and
-  declared by neither env file; graph pseudonymisation silently falls back
-  to `USER_ANON_SALT`.
 - **#1162** — a consequence of #1153: a fresh generate now inherits
   `AUTH_RATE_LIMIT_RELAXED=true`, `CONSENT_RATE_LIMIT_RELAXED=true` and
   `TRUST_PROXY=1` from the example, by mechanical sync rather than by
