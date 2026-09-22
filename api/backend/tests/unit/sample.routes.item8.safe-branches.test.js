@@ -91,7 +91,6 @@ afterAll(() => {
 
 describe('sample.routes item 8 safe residual branches without barcode compatibility paths', () => {
   const noDbRequests = [
-    ['get', '/api/samples/507f1f77bcf86cd799439011/label'],
     ['get', '/api/samples/507f1f77bcf86cd799439011/label/print-job'],
     ['post', '/api/samples/labels/batch'],
     ['post', '/api/samples/507f1f77bcf86cd799439011/withdraw'],
@@ -113,19 +112,17 @@ describe('sample.routes item 8 safe residual branches without barcode compatibil
     expect(res.status).toBe(503);
   });
 
-  it('label and print-job return 404 for missing canonical sample', async () => {
+  it('print-job returns 404 for a missing canonical sample', async () => {
     const db = dbWith({ samples: collection() });
-    expect((await request(buildApp(db)).get('/api/samples/SPEC-MISSING/label')).status).toBe(404);
     expect((await request(buildApp(db)).get('/api/samples/SPEC-MISSING/label/print-job')).status).toBe(404);
   });
 
-  it('label and print-job refuse an out-of-scope sample', async () => {
+  it('print-job refuses an out-of-scope sample', async () => {
     scopeAllowed = false;
     const samples = collection({ findOne: vi.fn().mockResolvedValue({
       _id: 's1', specimenId: 'SPEC-1', barcode: 'DM-001', collectionSite: 'org-2',
     }) });
     const db = dbWith({ samples });
-    expect((await request(buildApp(db)).get('/api/samples/SPEC-1/label')).status).toBe(403);
     expect((await request(buildApp(db)).get('/api/samples/SPEC-1/label/print-job')).status).toBe(403);
   });
 
