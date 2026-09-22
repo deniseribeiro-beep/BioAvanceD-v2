@@ -64,7 +64,7 @@ describe('SampleService.listSamples', () => {
 
   it('returns samples when collection has data', async () => {
     const fakeSamples = [
-      { _id: '507f1f77bcf86cd799439011', sampleID: 1234567, patientID: '12345678', currentStatus: 'AVAILABLE' },
+      { _id: '507f1f77bcf86cd799439011', specimenId: 1234567, participantId: '12345678', specimenStatus: 'available' },
     ];
     const db = makeDb(fakeSamples);
     const result = await sampleService.listSamples(db, {});
