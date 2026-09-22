@@ -304,7 +304,7 @@ export default function StorageHierarchy({ isOpen, sample, t, onClose, onComplet
         <Card>
           <div style={{ display: 'grid', gap: '1rem' }}>
             <div style={{ display: 'grid', gap: '0.5rem' }}>
-              <strong>{sample?.barcode || sample?.sampleID || sample?.id || t('samples.sampleFallback')}</strong>
+              <strong>{sample?.specimenId || sample?.barcode || sample?.id || t('samples.sampleFallback')}</strong>
               <div style={{ color: '#64748b' }}>{t('samples.storageInline.destination')}: {selectedPath || t('samples.storageInline.selectDestination')}</div>
             </div>
 
