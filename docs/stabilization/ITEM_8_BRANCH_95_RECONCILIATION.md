@@ -85,3 +85,42 @@ O marco não será tratado como concluído por contagem estática. Cada branch s
 ## Ordem de trabalho
 
 A priorização considera somente branch paths com linha-fonte real. Os grandes números brutos do relatório (`auth.service.js` 58, `sample-file.controller.js` 50 etc.) não são usados como fila automática, pois a maior parte deles é instrumentação de braços implícitos sem localização. Por exemplo, `auth.service.js` tem 58 reportados, mas só 3 source-located; `sample-file.controller.js`, 50 reportados e 6 source-located.
+
+
+## Classificação v2 — rodada estática antes de novo Actions
+
+O déficit de **321** é uma diferença matemática entre o numerador atual e o numerador mínimo para 95%; ele não identifica 321 branches específicas. Por isso a reconciliação usa os branch paths do `coverage-final.json` e separa evidência executável de artefato do provedor antes de decidir qualquer alteração.
+
+### Artefato de instrumentação já verificado
+
+No artefato do baseline `f94e8f0`, **757 braços zerados** possuem localização V8 sintética vazia (`start/end { }`). O próprio `COVERAGE_NOTES.md` documenta esse padrão como o `implicit else` fantasma do `@vitest/coverage-v8`: adicionar teste não o torna coberto e adicionar `else` artificial em produção é proibido pela regra do projeto. Há ainda **95 contagens** da diferença entre o total de não cobertos do resumo (1.515) e os braços materializados no `branchMap`; elas não têm branch path individual utilizável. Assim, **852 contagens são classificadas `INSTRUMENTATION_ONLY`**, sem mudança de produção e sem teste artificial.
+
+Isso é suficiente para demonstrar que o número bruto 321 **não pode ser tratado como uma fila de 321 testes**. Não significa, porém, que o threshold numérico já tenha sido alcançado: somente uma nova medição consolidada poderá confirmar quantos contadores reais os testes legítimos adicionais alteraram.
+
+### Casos source-located já verificados por teste existente
+
+A inspeção cruzada entre `coverage-final.json`, fonte e suíte atual mostrou source locations zeradas no merge global que já possuem teste direto de comportamento. Exemplos:
+
+- `auth.service.js`: o fallback de role/hierarchy e os fluxos de lockout/MFA/defaults já são exercitados por `auth.service.processLogin.unit.test.js` e suítes residuais; 52/55 braços zerados do arquivo são locations vazias e os 3 source-located não justificam duplicação cega.
+- `NotificationService.js`: a queda para `failed` quando uma rejeição não possui `message` é diretamente assertada em `NotificationService.item8.residual.test.js`, embora o merge global ainda marque o braço correspondente como zero. Classificação: `DEFENSIVE_OR_INSTRUMENTATION` até medição isolada, sem novo teste duplicado.
+- `orphanet.js`: linguagem padrão, clamp de limite, aliases CID/OMIM, deduplicação e fallback de sincronização já são exercitados por `orphanet.item8.residual.test.js`.
+- `terminologies.routes.js`: aliases, hidratação local/remota, limites e normalização ORPHA já possuem cobertura comportamental direta em `terminologies.routes.item8.residual.test.js`.
+
+### Branches estruturais que não serão artificialmente expostas
+
+- `fhir-import-staging.service.js`: os fallbacks `sprec.matrixType || 'fluid'` e `sprec.matrixType || undefined` aparecem como source-located, porém `parseSprecRaw()` sempre produz `fluid` ou `solid`; criar um estado interno sem `matrixType` apenas para o contador violaria o contrato real.
+- `sample-file.controller.js`: os braços de identificador vazio e de Sample persistida sem `specimenId` pertencem a estados que violam a identidade canônica v2; não serão fabricados por mocks apenas para coverage.
+- guards de rota `if (!db)` comprovadamente preemptados por middleware permanecem classificados conforme `COVERAGE_NOTES.md`, sem duplicação de estados impossíveis.
+
+### Testes legítimos adicionados nesta rodada
+
+Sem alterar produção, foram acrescentados testes para comportamentos executáveis e documentados:
+
+- modelos canônicos e validações opcionais/obrigatórias;
+- utilitários de transação, criptografia, barcode, índices, anonimização e ledger;
+- use cases de custódia/linhagem (Allocate/Move/Release/Register);
+- normalizadores de reference data;
+- `batch-validation-engine.service.js`: erro não-`Error` de criação de Patient, Patient vinculada sem `participantId` canônico e Specimen criada sem `specimenId` canônico;
+- `fhir-import-staging.service.js`: preservação de erro 400 canônico de `normalizeEntries` e contagem independente de `WARNING`/`NEEDS_EMAIL`.
+
+Todos os commits desta rodada usam `[skip ci]`. O baseline oficial continua sendo `f94e8f0`; nenhum novo percentual será inferido sem a futura rodada consolidada.
