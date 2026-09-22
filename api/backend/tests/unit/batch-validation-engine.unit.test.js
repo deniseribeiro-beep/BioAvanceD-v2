@@ -1225,3 +1225,79 @@ describe('BatchValidationEngine item 8 canonical linkage fallback', () => {
 });
 
 });
+
+
+describe('BatchValidationEngine item 8 branch-95 source-located guards', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('uses the documented generic persistence error when patient creation rejects with a non-Error value', async () => {
+    vi.spyOn(patientService, 'createPatient').mockRejectedValue({});
+
+    const result = await engine.persistPatient(
+      {},
+      {
+        patientName: 'Synthetic Patient',
+        birthDate: '1990-01-01',
+        sex: 'F',
+        email: 'synthetic@example.test',
+        consentTemplateId: 'TCLE-BRANCH95',
+      },
+      91
+    );
+
+    expect(result).toMatchObject({
+      classification: 'INVALID',
+      rowNumber: 91,
+      errors: ['Erro ao persistir paciente'],
+    });
+  });
+
+  it('refuses sample persistence when a linked Patient has no canonical participantId', async () => {
+    vi.spyOn(engine, 'findLinkedPatient').mockResolvedValue({ _id: 'patient-object-without-participant-id' });
+    const createSample = vi.spyOn(sampleService, 'createSample');
+
+    const result = await engine.persistSample(
+      {},
+      {
+        participantId: '12345678',
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'EDTA',
+        quantity: '1',
+      },
+      92
+    );
+
+    expect(result.classification).toBe('INVALID');
+    expect(result.errors).toContain('Paciente vinculado sem participantId canônico.');
+    expect(createSample).not.toHaveBeenCalled();
+  });
+
+  it('refuses a created Specimen that does not return its canonical specimenId', async () => {
+    vi.spyOn(engine, 'findLinkedPatient').mockResolvedValue({
+      _id: 'patient-branch95',
+      participantId: '12345678',
+    });
+    vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-without-specimen-id' });
+    const createObservation = vi.spyOn(biomarkerObservationService, 'createObservation');
+
+    const result = await engine.persistSample(
+      {},
+      {
+        participantId: '12345678',
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'EDTA',
+        quantity: '1',
+        biomarkers: 'alphaGal:1',
+      },
+      93
+    );
+
+    expect(result.classification).toBe('INVALID');
+    expect(result.errors).toContain('specimenId canônico é obrigatório na Specimen criada.');
+    expect(createObservation).not.toHaveBeenCalled();
+  });
+});
