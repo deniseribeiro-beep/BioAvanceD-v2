@@ -41,7 +41,7 @@ describe('StorageBox model', () => {
     expect(box.getAllValidPositions()).toEqual(['A1', 'A2', 'A3', 'B1', 'B2', 'B3']);
     expect(box.isValidPosition('A1')).toBe(true);
     expect(box.isValidPosition('C1')).toBe(false);
-    expect(box.checkPositionOccupancy('C1')).toEqual({ occupied: null, error: 'INVALID_POSITION', sampleID: null });
+    expect(box.checkPositionOccupancy('C1')).toEqual({ occupied: null, error: 'INVALID_POSITION', specimenObjectId: null });
   });
 
   it('serializa occupancyGrid e calcula posições disponíveis', () => {
