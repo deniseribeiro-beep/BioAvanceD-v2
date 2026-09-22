@@ -23,17 +23,17 @@ class AnalysisValidationService {
       if (ObjectId.isValid(sampleIdentifier)) {
         sample = await samplesCollection.findOne({ _id: new ObjectId(sampleIdentifier) });
         if (sample) {
-          // Um sampleID/barcode que coincide (por acaso ou de forma maliciosa) com o
-          // formato de ObjectId de OUTRA amostra não deve vencer silenciosamente: falha
-          // fechado em vez de anexar o upload à amostra errada (issue #34).
+          // Um specimenId/Data Matrix que coincide (por acaso ou de forma maliciosa)
+          // com o formato de ObjectId de OUTRA amostra não deve vencer silenciosamente:
+          // falha fechado em vez de anexar o upload à amostra errada (issue #34).
           const collision = await samplesCollection.findOne({
             _id: { $ne: sample._id },
-            $or: [{ specimenId: sampleIdentifier }, { sampleID: sampleIdentifier }, { barcode: sampleIdentifier }]
+            $or: [{ specimenId: sampleIdentifier }, { barcode: sampleIdentifier }]
           });
           if (collision) {
             return {
               success: false,
-              error: `Identificador "${sampleIdentifier}" é ambíguo: corresponde ao ID interno de uma amostra e ao sampleID/barcode de outra. Contate o suporte.`
+              error: `Identificador "${sampleIdentifier}" é ambíguo: corresponde ao ID interno de uma amostra e ao specimenId/Data Matrix de outra. Contate o suporte.`
             };
           }
           return { success: true, sample };
@@ -50,7 +50,7 @@ class AnalysisValidationService {
 
       return {
         success: false,
-        error: `Amostra "${sampleIdentifier}" não encontrada. Verifique o ID ou código de barras.`
+        error: `Amostra "${sampleIdentifier}" não encontrada. Verifique o specimenId ou o Data Matrix.`
       };
     } catch (error) {
       logger.error('Erro ao validar existência da amostra:', error.message);
@@ -134,6 +134,12 @@ class AnalysisValidationService {
       }
 
       const sample = sampleValidation.sample;
+      if (!sample?.specimenId) {
+        return {
+          success: false,
+          error: 'Amostra sem specimenId canônico; upload de análise bloqueado'
+        };
+      }
 
       // 2. Valida consentimento do paciente
       const consentValidation = await this.validatePatientConsent(db, sample);
