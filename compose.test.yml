@@ -85,6 +85,23 @@ x-test-env: &test-env
   AUDIT_RFC3161_TSA_URL: http://tsa-test:8095/tsa
   AUDIT_EXTERNAL_WITNESS_URL: http://witness-test:8096/witness
   AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: ""
+  # #959 item 2: both signing chains -- audit-signing.provider.js#loadPrivateKey
+  # and merkle-envelope.service.js#getPrivateKeyPem -- readFile() whatever this
+  # names and throw otherwise, and createTreeHead calls them inside a try/FINALLY,
+  # so the throw propagates and runOnce swallows it. Before this, POST
+  # /api/audit/anchor answered 500 "Audit signing key must be provided via
+  # AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE" and audit_tree_heads stayed empty on every
+  # stack that has ever run. The key itself is minted per stack by
+  # audit-keygen-test, never committed -- same posture as infra/witness, whose
+  # secrets/ directory tracks only a .gitkeep.
+  AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE: /run/secrets/merkle_signing_key.pem
+  AUDIT_MERKLE_SIGN_KEY_ID: audit-ed25519-test-1
+  # Deliberately NOT set: the registry must be the SPKI half of a key that does
+  # not exist until audit-keygen-test runs, and it is read from the environment
+  # only. Signing does not need it -- sign() records publicKeyFingerprint: null --
+  # and the only consumer, processTimestampBacklog, is reached from the nightly
+  # runOnce and never from anchorDate. Tracked separately.
+  # AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON:
 
 services:
   mongodb-test:
@@ -221,6 +238,36 @@ services:
       retries: 20
     networks: [bioavanced-test]
 
+  # #959 item 2: mints the Merkle signing key this stack signs tree heads with.
+  # Modelled on infra/witness/entrypoint.sh, which does the same for the witness
+  # key: generate on first use into a named volume, reuse it afterwards. Nothing
+  # is committed -- git tracks no key material anywhere in this repo, and
+  # infra/tsa/secrets and infra/witness/secrets hold only a .gitkeep.
+  #
+  # Reuse matters rather than being mere tidiness: audit_roots documents already
+  # signed under a key are verified against it later, so regenerating per bring-up
+  # would orphan every artifact a previous run produced on the same volume.
+  audit-keygen-test:
+    image: node:22-alpine
+    command:
+      - node
+      - -e
+      - |
+        const { generateKeyPairSync } = require('crypto');
+        const { writeFileSync, existsSync, mkdirSync } = require('fs');
+        const path = '/run/secrets/merkle_signing_key.pem';
+        mkdirSync('/run/secrets', { recursive: true });
+        if (existsSync(path)) {
+          console.log('audit signing key: reusing ' + path);
+        } else {
+          const { privateKey } = generateKeyPairSync('ed25519');
+          writeFileSync(path, privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), { mode: 0o600 });
+          console.log('audit signing key: generated ' + path);
+        }
+    volumes:
+      - audit-signing-test-data:/run/secrets
+    networks: [bioavanced-test]
+
   tsa-test:
     build:
       context: ./infra/tsa
@@ -291,7 +338,14 @@ services:
     # real fix, and that change deletes this mount.
     volumes:
       - uploads-test-data:/app/uploads
+      # #959 item 2: read-only -- the app signs with this key and must never be
+      # able to rewrite it. POST /api/audit/anchor runs in THIS process and
+      # reaches the same signing chains as the nightly worker job, so the backend
+      # needs the key too, not just worker-test.
+      - audit-signing-test-data:/run/secrets:ro
     depends_on:
+      audit-keygen-test:
+        condition: service_completed_successfully
       mongodb-test:
         condition: service_healthy
       mongo-rs-init-test:
@@ -618,6 +672,8 @@ services:
     # #828: same volume as backend-app-test -- this is the reading half.
     volumes:
       - uploads-test-data:/app/uploads
+      # #959 item 2: the nightly daily-merkle job signs here.
+      - audit-signing-test-data:/run/secrets:ro
     healthcheck:
       test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/worker-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
       interval: 15s
@@ -625,6 +681,8 @@ services:
       retries: 4
       start_period: 60s
     depends_on:
+      audit-keygen-test:
+        condition: service_completed_successfully
       # #959: worker-test runs daily-merkle.job, which reaches the TSA and the
       # witness. It depended on neither, so on a cold bring-up the job could
       # fire against services that were not up yet.
@@ -775,4 +833,7 @@ volumes:
   influxdb-test-data:
   # #828: shared /app/uploads for backend-app-test and worker-test.
   uploads-test-data:
+  # #959 item 2: holds the Merkle signing key audit-keygen-test mints. Named, so
+  # it survives a down/up and the key stays stable across runs of this stack.
+  audit-signing-test-data:
 
