@@ -803,7 +803,7 @@ export interface ImportReport {
 
 export interface SampleFile {
   _id?: string;
-  sampleID: string;
+  specimenId: string;
   fileName: string;
   fileType: 'RAW' | 'ZIP' | 'CSV' | 'XLS' | 'XLSX' | 'PDF' | 'TXT';
   fileSize: number;
