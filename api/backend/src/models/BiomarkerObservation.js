@@ -116,7 +116,7 @@ class BiomarkerObservationModel {
   static buildIdempotencyKey(normalized = {}) {
     return [
       normalized.participantId,
-      normalized.specimenId || normalized.linkedResourceId || '',
+      normalized.specimenId || '',
       normalized.biomarkerType,
       normalized.collectedAt?.toISOString() || '',
       normalized.value,
