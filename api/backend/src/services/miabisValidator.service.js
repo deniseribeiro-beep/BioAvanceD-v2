@@ -5,13 +5,13 @@ const collectionResolver = require('../utils/collectionResolver');
 
 /**
  * MIABIS Compliance Validator
- * @param {string} sampleId
+ * @param {string} specimenId
  * @param {import('mongodb').Db} db
  * @returns {Promise<{isCompliant: boolean, missingFields: string[], consentStatus: string, canBeShared: boolean}>}
  */
-async function validateMiabisCompliance(sampleId, db) {
+async function validateMiabisCompliance(specimenId, db) {
   // 1. MongoDB: Check required fields
-  const sample = await Sample.findById(sampleId).lean();
+  const sample = await Sample.findOne({ specimenId: String(specimenId) }).lean();
   const missingFields = [];
   if (!sample) {
     return { isCompliant: false, missingFields: ['sampleNotFound'], consentStatus: 'sample_not_found', canBeShared: false };
@@ -42,7 +42,7 @@ async function validateMiabisCompliance(sampleId, db) {
       }
     }
   } catch (err) {
-    logger.error(`[MIABIS] Falha ao consultar consentimento para amostra ${sampleId}: ${err.message}`);
+    logger.error(`[MIABIS] Falha ao consultar consentimento para amostra ${specimenId}: ${err.message}`);
     consentStatus = 'error';
     canBeShared = false;
   }
