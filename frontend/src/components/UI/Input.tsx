@@ -6,7 +6,7 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   error?: string;
   helperText?: string;
-  constraintKey?: 'name' | 'username' | 'password' | 'patientId' | 'cpf' | 'mfaCode' | 'phone' | 'birthDate' | 'email' | 'genericText';
+  constraintKey?: 'name' | 'username' | 'password' | 'participantId' | 'cpf' | 'mfaCode' | 'phone' | 'birthDate' | 'email' | 'genericText';
 }
 
 export default function Input({ label, error, helperText, className = '', id, name, constraintKey, ...props }: InputProps) {
