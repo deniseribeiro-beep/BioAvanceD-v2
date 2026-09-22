@@ -16,9 +16,9 @@ const { validateMiabisCompliance } = require('../../src/services/miabisValidator
 
 describe('MIABIS Validator', () => {
   it('should return isCompliant false if diagnosisCode is missing', async () => {
-    const originalFindById = Sample.findById;
+    const originalFindById = Sample.findOne;
 
-    Sample.findById = vi.fn(() => ({
+    Sample.findOne = vi.fn(() => ({
       lean: () => Promise.resolve({
         sampleType: 'Blood',
         anatomicalSite: 'Arm',
@@ -27,11 +27,11 @@ describe('MIABIS Validator', () => {
     }));
 
     try {
-      const result = await validateMiabisCompliance('507f1f77bcf86cd799439011');
+      const result = await validateMiabisCompliance('SPEC-001');
       expect(result.isCompliant).toBe(false);
       expect(result.missingFields).toContain('diagnosisCode');
     } finally {
-      Sample.findById = originalFindById;
+      Sample.findOne = originalFindById;
     }
   });
 });
