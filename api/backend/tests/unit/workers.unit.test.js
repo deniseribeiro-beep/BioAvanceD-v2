@@ -97,7 +97,7 @@ describe('PatientWorker', () => {
   });
 
   it('does not perform FHIR conversion (removed from executable path, see #212/canonical-data-cleanup)', async () => {
-    const fakePatient = { _id: 'p1', patientID: '12345678' };
+    const fakePatient = { _id: 'p1', participantId: '12345678' };
     importLGPDService.importPatients.mockResolvedValue({ total: 1, success: 1, errors: [] });
 
     const db = makeDb([fakePatient]);
@@ -187,7 +187,7 @@ describe('SampleWorker', () => {
   });
 
   it('does not perform FHIR conversion (removed from executable path, see #212/canonical-data-cleanup)', async () => {
-    const fakeSample = { _id: 's1', sampleID: 'SMP-001' };
+    const fakeSample = { _id: 's1', specimenId: 'SMP-001' };
     importLGPDService.importSamples.mockResolvedValue({
       total: 1, success: 1, errors: [], importedSampleIds: ['s1']
     });
