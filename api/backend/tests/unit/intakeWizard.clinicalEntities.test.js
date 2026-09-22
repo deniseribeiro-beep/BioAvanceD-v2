@@ -946,12 +946,13 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
         matched: true,
         created: false,
         matchType: 'participantId',
+        participantId: '12345678',
       });
       expect(res.body.consent).toMatchObject({
         active: true,
         status: 'SIGNED',
         consentId: 'consent-object-id',
-        patientId: '12345678',
+        participantId: '12345678',
         reason: null,
       });
     });
