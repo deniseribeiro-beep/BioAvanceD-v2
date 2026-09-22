@@ -444,16 +444,10 @@ class SampleService {
       const samplesCollection = await getCollection(db, 'samples');
       const movementsCollection = await getCollection(db, 'sampleMovements');
       
-      // Busca a amostra (suporta ObjectId ou barcode)
-      let sample = await findSampleByAnyId(samplesCollection, specimenId);
-
-      if (!sample) {
-        // Tenta buscar por barcode se não encontrou por ID
-        if (typeof specimenId === 'string' && !specimenId.match(/^[0-9a-fA-F]{24}$/)) {
-          const result = await this.getSampleByBarcode(db, specimenId);
-          sample = result.sample;
-        }
-      }
+      // O contrato operacional recebe specimenId (ou o _id interno já
+      // resolvido pela rota); identificação física Data Matrix não é alias
+      // de identidade do espécime.
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
 
       if (!sample) {
         throw new Error('Amostra não encontrada');
@@ -846,16 +840,9 @@ class SampleService {
       const samplesCollection = await getCollection(db, 'samples');
       const movementsCollection = await getCollection(db, 'sampleMovements');
       
-      // Busca a amostra (suporta ObjectId ou barcode)
-      let sample = await findSampleByAnyId(samplesCollection, specimenId);
-
-      if (!sample) {
-        // Tenta buscar por barcode se não encontrou por ID
-        if (typeof specimenId === 'string' && !specimenId.match(/^[0-9a-fA-F]{24}$/)) {
-          const result = await this.getSampleByBarcode(db, specimenId);
-          sample = result.sample;
-        }
-      }
+      // Devolução opera por identidade canônica do espécime. O Data Matrix
+      // é resolvido apenas na fronteira própria de identificação física.
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
 
       if (!sample) {
         throw new Error('Amostra não encontrada');
@@ -992,22 +979,16 @@ class SampleService {
       const samplesCollection = await getCollection(db, 'samples');
       const movementsCollection = await getCollection(db, 'sampleMovements');
 
-      // sampleID (route param) is the Mongo _id; movements store the
-      // separate server-generated specimenId field (RF006, #288) — same
-      // _id/specimenId mismatch class findSampleByAnyId already fixes
-      // for getSample/withdrawSample/returnSample.
+      // Movements are keyed by canonical specimenId. The physical
+      // identifier is retained as event metadata, not as an alternate
+      // identity key for custody-history retrieval.
       const sample = await findSampleByAnyId(samplesCollection, specimenId);
       const specimenIdStr = sample
         ? sample.specimenId
         : (specimenId.toString ? specimenId.toString() : specimenId);
 
       const movements = await movementsCollection
-        .find({
-          $or: [
-            { specimenId: specimenIdStr },
-            { barcode: (sample && sample.barcode) || specimenIdStr }
-          ]
-        })
+        .find({ specimenId: specimenIdStr })
         .sort({ timestamp: -1 })
         .toArray();
 
