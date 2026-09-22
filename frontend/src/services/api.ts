@@ -329,27 +329,27 @@ export const sampleService = {
   return: (specimenId: number | string, data: Partial<Return>) =>
     api.post(`/samples/${specimenId}/return`, data),
   // RF007 - Upload de arquivos de análise
-  uploadFile: (sampleID: string, formData: FormData) => 
-    api.post(`/samples/${sampleID}/files/upload`, formData, {
+  uploadFile: (specimenId: string, formData: FormData) =>
+    api.post(`/samples/${specimenId}/files/upload`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     }),
-  listFiles: (sampleID: string) => 
-    api.get<{ success: boolean; data: any[] }>(`/samples/${sampleID}/files`),
-  downloadFile: (sampleID: string, fileID: string) => 
-    api.get(`/samples/${sampleID}/files/${fileID}/download`, {
+  listFiles: (specimenId: string) =>
+    api.get<{ success: boolean; data: any[] }>(`/samples/${specimenId}/files`),
+  downloadFile: (specimenId: string, fileID: string) =>
+    api.get(`/samples/${specimenId}/files/${fileID}/download`, {
       responseType: 'blob'
     }),
-  deleteFile: (sampleID: string, fileID: string) => 
-    api.delete(`/samples/${sampleID}/files/${fileID}`),
+  deleteFile: (specimenId: string, fileID: string) =>
+    api.delete(`/samples/${specimenId}/files/${fileID}`),
   // Exportação HL7
-  exportHL7v2: (sampleID: string, fileID: string) =>
-    api.get(`/samples/${sampleID}/files/${fileID}/export/hl7`, {
+  exportHL7v2: (specimenId: string, fileID: string) =>
+    api.get(`/samples/${specimenId}/files/${fileID}/export/hl7`, {
       responseType: 'text'
     }),
-  exportFHIR: (sampleID: string, fileID: string) =>
-    api.get(`/samples/${sampleID}/files/${fileID}/export/fhir`),
-  exportCDA: (sampleID: string, fileID: string) =>
-    api.get(`/samples/${sampleID}/files/${fileID}/export/cda`, {
+  exportFHIR: (specimenId: string, fileID: string) =>
+    api.get(`/samples/${specimenId}/files/${fileID}/export/fhir`),
+  exportCDA: (specimenId: string, fileID: string) =>
+    api.get(`/samples/${specimenId}/files/${fileID}/export/cda`, {
       responseType: 'text'
     }),
 };
