@@ -206,14 +206,6 @@ function buildActiveConsentQuery(patient) {
   };
 }
 
-function escapeXml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
 
 function escapeZpl(value) {
   return String(value ?? '').trim().replace(/[\^~]/g, '');
@@ -555,66 +547,6 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Erro ao listar amostras',
-      message: error.message
-    });
-  }
-});
-
-router.get('/:id/label', authenticate, requireOrganizationScope, async (req, res) => {
-  try {
-    const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
-
-    const samplesCollection = await getCollection(db, 'samples');
-    const rawId = String(req.params.id);
-    const sample = await samplesCollection.findOne({
-      $or: [
-        ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
-        { specimenId: rawId },
-        { barcode: rawId },
-      ],
-    });
-    if (!sample) {
-      return res.status(404).json({
-        success: false,
-        error: 'Amostra não encontrada'
-      });
-    }
-
-    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
-      return res.status(403).json({
-        success: false,
-        error: 'Acesso negado',
-        message: 'Esta amostra pertence a outra organização'
-      });
-    }
-
-    const sampleIdentifier = escapeXml(String(sample.specimenId || sample._id || req.params.id));
-    const barcode = escapeXml(String(sample.barcode || sampleIdentifier));
-    const title = escapeXml(String(sample.sampleType || 'AMOSTRA').slice(0, 32));
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="378" height="189" viewBox="0 0 378 189">
-  <rect width="378" height="189" fill="#fff" stroke="#111" stroke-width="2"/>
-  <text x="189" y="34" font-family="Arial, sans-serif" font-size="20" font-weight="700" text-anchor="middle">${title}</text>
-  <text x="189" y="92" font-family="Arial, sans-serif" font-size="24" font-weight="700" text-anchor="middle">${barcode}</text>
-  <text x="189" y="150" font-family="Arial, sans-serif" font-size="18" text-anchor="middle">${sampleIdentifier}</text>
-</svg>`;
-
-    const { reprint } = await recordLabelGeneration(db, { sample, formats: ['svg'], req });
-
-    res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
-    res.setHeader('Content-Disposition', `inline; filename="sample-label-${sampleIdentifier}.svg"`);
-    res.setHeader('X-Label-Reprint', String(reprint));
-    return res.status(200).send(svg);
-  } catch (error) {
-    logger.error('Erro ao gerar etiqueta da amostra:', error.message);
-    return res.status(500).json({
-      success: false,
-      error: 'Erro ao gerar etiqueta da amostra',
       message: error.message
     });
   }
