@@ -302,6 +302,7 @@ const FABRY_MOCK_BIOMARKERS = [
 // initialState deve ser apenas um objeto com os valores iniciais.
 const initialState = {
   participantId: '',
+  specimenId: '',
   patientName: '',
   birthDate: '',
   email: '',
@@ -1264,7 +1265,7 @@ function buildCanonicalSprecPayload(formData, matrixType, dictionary) {
 // no shared constant exists across the frontend/backend split.
 const SPREC_VERSION = 'SPREC-2.0';
 
-// canonical.v1.specimen's sprec (#699) is flat strings with required
+// canonical v2 specimen's sprec (#699) is flat strings with required
 // top-level code/version -- buildCanonicalSprecPayload's {code, label,
 // ...extra} objects (shared with the quality-preview and sample-integrity
 // callers below, which need the fuller shape) don't match it. This
@@ -1527,8 +1528,8 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
     specimen: {
       // Same "required by validation, regenerated server-side" precedent as
       // participantId above -- a new specimen has no id yet at submission
-      // time, but canonical.v1.specimen requires a non-empty specimenId (#699).
-      specimenId: String(formData.specimenId || formData.sampleId || formData.sampleID || '').trim() || 'placeholder',
+      // time, but canonical v2 requires a non-empty specimenId at this boundary.
+      specimenId: String(formData.specimenId || '').trim() || 'placeholder',
       participantId,
       // Real MIABIS-coded selections (#701) -- a different, smaller
       // vocabulary than the SPREC axis fields under sprec.* below; never
@@ -1537,7 +1538,7 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       sampleType: String(formData.sampleType || '').trim(),
       sampleOrigin: String(formData.sampleOrigin || '').trim(),
       // collectionInstitution/collectionInstitutionAcronym have no
-      // equivalent in canonical.v1.specimen (#699) -- the schema's real
+      // equivalent in canonical v2 specimen (#699) -- the schema's real
       // field, collectionSite, is an Organization reference the wizard has
       // no picker for; not sent here, still shown/edited in the UI as
       // formData.collectionInstitution(Acronym) for now.
