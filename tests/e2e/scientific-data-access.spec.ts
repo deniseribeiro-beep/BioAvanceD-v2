@@ -52,7 +52,7 @@ async function createRealSample(request: any, token: string): Promise<string> {
     },
   });
   expect([201, 202]).toContain(create.status());
-  return (await create.json()).data.sampleID;
+  return (await create.json()).data.specimenId;
 }
 
 test.afterAll(async () => {
@@ -67,14 +67,14 @@ test.describe('Scientific files (RF007) — real backend', () => {
     request,
   }) => {
     const admin = await realLogin(request);
-    const sampleID = await createRealSample(request, admin.token);
+    const specimenId = await createRealSample(request, admin.token);
 
     const fileContent = Buffer.from('RF007 e2e raw scientific data payload — deterministic bytes for checksum proof');
     const expectedChecksum = crypto.createHash('sha256').update(fileContent).digest('hex');
 
     const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
 
-    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+    const upload = await request.post(`${apiBaseURL}/api/samples/${specimenId}/files/upload`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       multipart: {
         file: {
@@ -110,7 +110,7 @@ test.describe('Scientific files (RF007) — real backend', () => {
     // plaintext bytes exactly, proving the at-rest cipher didn't corrupt
     // the file and the checksum recorded really matches what's served back.
     const fileID = uploadBody.data._id;
-    const download = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/download`, {
+    const download = await request.get(`${apiBaseURL}/api/samples/${specimenId}/files/${fileID}/download`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     expect(download.status()).toBe(200);
@@ -120,7 +120,7 @@ test.describe('Scientific files (RF007) — real backend', () => {
 
     // AC#7 - list (access) is also audited.
     const listWatch = await watchAuditTrail(request, apiBaseURL!, admin.token);
-    const list = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files`, {
+    const list = await request.get(`${apiBaseURL}/api/samples/${specimenId}/files`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     expect(list.status()).toBe(200);
@@ -133,9 +133,9 @@ test.describe('Scientific files (RF007) — real backend', () => {
 
   test('accepts an explicit fileRole and records it (dict-02 ELM-0317, #679)', async ({ request }) => {
     const admin = await realLogin(request);
-    const sampleID = await createRealSample(request, admin.token);
+    const specimenId = await createRealSample(request, admin.token);
 
-    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+    const upload = await request.post(`${apiBaseURL}/api/samples/${specimenId}/files/upload`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       multipart: {
         fileRole: 'processed',
@@ -154,9 +154,9 @@ test.describe('Scientific files (RF007) — real backend', () => {
 
   test('rejects an unsupported fileRole (400, dict-02 ELM-0317, #679)', async ({ request }) => {
     const admin = await realLogin(request);
-    const sampleID = await createRealSample(request, admin.token);
+    const specimenId = await createRealSample(request, admin.token);
 
-    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+    const upload = await request.post(`${apiBaseURL}/api/samples/${specimenId}/files/upload`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       multipart: {
         fileRole: 'not-a-real-role',
@@ -175,10 +175,10 @@ test.describe('Scientific files (RF007) — real backend', () => {
     request,
   }) => {
     const admin = await realLogin(request);
-    const sampleID = await createRealSample(request, admin.token);
+    const specimenId = await createRealSample(request, admin.token);
 
     const originalContent = Buffer.from('RF007 e2e original file content — before replace');
-    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+    const upload = await request.post(`${apiBaseURL}/api/samples/${specimenId}/files/upload`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       multipart: {
         file: {
@@ -198,7 +198,7 @@ test.describe('Scientific files (RF007) — real backend', () => {
 
     const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
 
-    const replace = await request.put(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/replace`, {
+    const replace = await request.put(`${apiBaseURL}/api/samples/${specimenId}/files/${fileID}/replace`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       multipart: {
         file: {
@@ -224,7 +224,7 @@ test.describe('Scientific files (RF007) — real backend', () => {
     // Round-trip proof: downloading now serves the NEW content, decrypted
     // correctly — proves the replace genuinely swapped the on-disk
     // ciphertext, not just the DB metadata.
-    const download = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/download`, {
+    const download = await request.get(`${apiBaseURL}/api/samples/${specimenId}/files/${fileID}/download`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     expect(download.status()).toBe(200);
@@ -236,9 +236,9 @@ test.describe('Scientific files (RF007) — real backend', () => {
 
   test('rejects a disallowed file format (AC#1)', async ({ request }) => {
     const admin = await realLogin(request);
-    const sampleID = await createRealSample(request, admin.token);
+    const specimenId = await createRealSample(request, admin.token);
 
-    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+    const upload = await request.post(`${apiBaseURL}/api/samples/${specimenId}/files/upload`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       multipart: {
         file: {
@@ -256,11 +256,11 @@ test.describe('Scientific files (RF007) — real backend', () => {
 
   test('rejects a file over the configured size limit (AC#2)', async ({ request }) => {
     const admin = await realLogin(request);
-    const sampleID = await createRealSample(request, admin.token);
+    const specimenId = await createRealSample(request, admin.token);
 
     const oversized = Buffer.alloc(101 * 1024 * 1024, 'x'); // limit is 100MB (sample-file.controller.js)
 
-    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+    const upload = await request.post(`${apiBaseURL}/api/samples/${specimenId}/files/upload`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       multipart: {
         file: {
@@ -283,8 +283,8 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     token: string,
     opts: { studyId: string; duoCode?: string }
   ): Promise<any> {
-    const sampleID = await createRealSample(request, token);
-    const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+    const specimenId = await createRealSample(request, token);
+    const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(sampleDoc.status()).toBe(200);
@@ -486,13 +486,13 @@ test.describe('Workflows and omics data (RF027) — real backend', () => {
     request,
   }) => {
     const admin = await realLogin(request);
-    const sampleID = await createRealSample(request, admin.token);
+    const specimenId = await createRealSample(request, admin.token);
 
     // A real, already-uploaded scientific file (RF007) to link as the
     // workflow run's input — RF027 AC#3 links to files that already
     // exist elsewhere, it doesn't own new file bytes (#716 slice 2/4).
     const fileContent = Buffer.from('RF027 e2e fixture — deterministic raw sequencing bytes for input linkage');
-    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+    const upload = await request.post(`${apiBaseURL}/api/samples/${specimenId}/files/upload`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       multipart: {
         file: {
@@ -622,7 +622,7 @@ test.describe('Reports (RF008) — real backend', () => {
   async function createRealSampleWithParticipant(
     request: any,
     token: string
-  ): Promise<{ sampleID: string; participantId: string }> {
+  ): Promise<{ specimenId: string; participantId: string }> {
     const participant = await createRealParticipant(request, apiBaseURL!, token);
     const seededStorageBox = await seedStorageBoxLocation();
     seededStorageBoxes.push(seededStorageBox);
@@ -638,7 +638,7 @@ test.describe('Reports (RF008) — real backend', () => {
       },
     });
     expect([201, 202]).toContain(create.status());
-    return { sampleID: (await create.json()).data.sampleID, participantId: participant.participantId };
+    return { specimenId: (await create.json()).data.specimenId, participantId: participant.participantId };
   }
 
   async function previewReport(request: any, token: string, type: string, filters: Record<string, unknown>) {
