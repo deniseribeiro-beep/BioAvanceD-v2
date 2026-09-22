@@ -2,15 +2,15 @@ const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
 const SampleGraphValidator = require('./SampleGraphValidator');
 
-async function revalidateSamplesByPatientID(db, participantId) {
-  const normalizedPatientID = String(participantId || '').trim();
-  if (!normalizedPatientID) {
+async function revalidateSamplesByParticipantId(db, participantId) {
+  const normalizedParticipantId = String(participantId || '').trim();
+  if (!normalizedParticipantId) {
     return { total: 0, validated: 0, failed: 0 };
   }
 
   const samplesCollection = await getCollection(db, 'samples');
   const samples = await samplesCollection
-    .find({ participantId: normalizedPatientID }, { projection: { _id: 1, specimenId: 1 } })
+    .find({ participantId: normalizedParticipantId }, { projection: { specimenId: 1 } })
     .toArray();
 
   if (!samples.length) {
@@ -23,20 +23,20 @@ async function revalidateSamplesByPatientID(db, participantId) {
 
   for (const sample of samples) {
     try {
-      await validator.validateSampleCompliance(String(sample._id || sample.specimenId || ''));
+      await validator.validateSampleCompliance(String(sample.specimenId || ''));
       validated += 1;
     } catch (error) {
       failed += 1;
       logger.warn('[SAMPLE_COMPLIANCE_SYNC] Falha ao revalidar amostra vinculada ao paciente', {
-        participantId: normalizedPatientID,
-        specimenId: String(sample._id || sample.specimenId || ''),
+        participantId: normalizedParticipantId,
+        specimenId: String(sample.specimenId || ''),
         error: error?.message || String(error),
       });
     }
   }
 
   logger.info('[SAMPLE_COMPLIANCE_SYNC] Revalidação ética concluída para paciente', {
-    participantId: normalizedPatientID,
+    participantId: normalizedParticipantId,
     total: samples.length,
     validated,
     failed,
@@ -50,5 +50,5 @@ async function revalidateSamplesByPatientID(db, participantId) {
 }
 
 module.exports = {
-  revalidateSamplesByPatientID,
+  revalidateSamplesByParticipantId,
 };
