@@ -129,7 +129,7 @@ describe('sample-file.controller item 8 residual branches', () => {
   });
 
   it('listFiles resolves a canonical non-ObjectId specimenId and sanitizes an unencrypted record', async () => {
-    const sample = { _id: new ObjectId(), collectionSite: 'org-1' };
+    const sample = { _id: new ObjectId(), specimenId: '42', collectionSite: 'org-1' };
     const sampleLookup = vi.fn().mockResolvedValue(sample);
     const find = vi.fn().mockReturnValue({
       toArray: vi.fn().mockResolvedValue([{
