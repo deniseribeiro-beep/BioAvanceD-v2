@@ -13,7 +13,7 @@ function writeTempFile(content, ext = '.csv') {
 
 describe('ImportService.normalizeImportKey', () => {
   it('lowercases string', () => {
-    expect(importService.normalizeImportKey('ParticipantId')).toBe('patientid');
+    expect(importService.normalizeImportKey('ParticipantId')).toBe('participantid');
   });
 
   it('removes accents', () => {
@@ -46,7 +46,7 @@ describe('ImportService.getRowValue', () => {
 
   it('returns value for case-insensitive match', () => {
     const row = { ParticipantId: '12345678' };
-    expect(importService.getRowValue(row, ['patientid'])).toBe('12345678');
+    expect(importService.getRowValue(row, ['participantId'])).toBe('12345678');
   });
 
   it('returns value for accent-stripped alias', () => {
