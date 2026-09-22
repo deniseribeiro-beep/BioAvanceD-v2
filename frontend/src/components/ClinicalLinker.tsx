@@ -20,18 +20,18 @@ const samplesByPatient: Record<string, Array<{ id: string; label: string }>> = {
 const tcles: Array<{ id: string; label: string }> = [];
 
 const ClinicalLinker: React.FC = () => {
-  const [patientId, setPatientId] = useState('');
-  const [sampleId, setSampleId] = useState('');
+  const [participantId, setParticipantId] = useState('');
+  const [specimenId, setSpecimenId] = useState('');
   const [tcleId, setTcleId] = useState('');
   const [showToast, setShowToast] = useState(false);
 
   const handlePatientChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setPatientId(e.target.value);
-    setSampleId('');
+    setParticipantId(e.target.value);
+    setSpecimenId('');
   };
 
   const handleSampleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setSampleId(e.target.value);
+    setSpecimenId(e.target.value);
   };
 
   const handleTcleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -40,7 +40,7 @@ const ClinicalLinker: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const payload = { patientId, sampleId, tcleId };
+    const payload = { participantId, specimenId, tcleId };
     void payload;
     setShowToast(false);
     // console.log('Payload enviado:', payload);
@@ -52,7 +52,7 @@ const ClinicalLinker: React.FC = () => {
       <div className="mb-4">
         <label className="block mb-1 font-medium">Paciente</label>
         <SelectComponent
-          value={patientId}
+          value={participantId}
           onChange={handlePatientChange}
           required
           options={[
@@ -65,18 +65,18 @@ const ClinicalLinker: React.FC = () => {
       <div className="mb-4">
         <label className="block mb-1 font-medium">Amostra</label>
         <SelectComponent
-          value={sampleId}
+          value={specimenId}
           onChange={handleSampleChange}
           required
-          disabled={!patientId}
+          disabled={!participantId}
           options={[
             { value: '', label: 'Selecione uma amostra' },
-            ...(patientId && samplesByPatient[patientId]
-              ? samplesByPatient[patientId].map((s) => ({ value: s.id, label: s.label }))
+            ...(participantId && samplesByPatient[participantId]
+              ? samplesByPatient[participantId].map((s) => ({ value: s.id, label: s.label }))
               : []),
           ]}
         />
-        {patientId && !samplesByPatient[patientId]?.length && <p className="text-sm text-gray-500 mt-1">Nenhuma amostra vinculada.</p>}
+        {participantId && !samplesByPatient[participantId]?.length && <p className="text-sm text-gray-500 mt-1">Nenhuma amostra vinculada.</p>}
       </div>
       <div className="mb-4">
         <label className="block mb-1 font-medium">TCLE</label>
@@ -91,7 +91,7 @@ const ClinicalLinker: React.FC = () => {
         />
         {tcles.length === 0 && <p className="text-sm text-gray-500 mt-1">Nenhum TCLE disponível.</p>}
       </div>
-      <ButtonComponent type="submit" className="w-full" disabled={!patientId || !sampleId || !tcleId}
+      <ButtonComponent type="submit" className="w-full" disabled={!participantId || !specimenId || !tcleId}
         >Gerar Vínculo e Solicitar Assinatura</ButtonComponent>
       {showToast && (
         <ToastComponent
