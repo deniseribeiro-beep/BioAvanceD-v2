@@ -67,7 +67,7 @@ describe('eConsent.routes POST /generate-link', () => {
 
     const res = await request(app)
       .post('/e-consent/generate-link')
-      .send({ patientId: '12345678', email: 'a@b.com' });
+      .send({ participantId: '12345678', email: 'a@b.com' });
 
     expect(res.status).toBe(401);
   });
