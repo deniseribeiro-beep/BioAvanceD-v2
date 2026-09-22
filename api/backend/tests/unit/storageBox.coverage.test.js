@@ -27,11 +27,11 @@ describe('StorageBox item 8 simple branches', () => {
     expect(box.checkPositionOccupancy('bad')).toEqual({
       occupied: null,
       error: 'INVALID_POSITION',
-      sampleID: null,
+      specimenObjectId: null,
     });
 
     box.occupancyGrid = undefined;
-    expect(box.checkPositionOccupancy('A1')).toEqual({ occupied: false, sampleID: null });
+    expect(box.checkPositionOccupancy('A1')).toEqual({ occupied: false, specimenObjectId: null });
 
     const json = box.toJSON();
     expect(json.capacityTotal).toBe(4);
@@ -58,19 +58,19 @@ describe('StorageBox item 8 simple branches', () => {
     expect(box.addSample('bad', sampleA)).toEqual({ success: false, error: 'INVALID_POSITION' });
     expect(box.addSample('A1', sampleA)).toEqual({ success: true });
     expect(box.currentOccupancy).toBe(1);
-    expect(box.checkPositionOccupancy('A1')).toEqual({ occupied: true, sampleID: sampleA });
+    expect(box.checkPositionOccupancy('A1')).toEqual({ occupied: true, specimenObjectId: sampleA });
 
     expect(box.addSample('A1', sampleB)).toEqual({
       success: false,
       error: 'POSITION_OCCUPIED',
-      sampleID: sampleA,
+      specimenObjectId: sampleA,
     });
 
     expect(box.getAvailablePositions()).toEqual(['A2', 'B1', 'B2']);
 
     expect(box.removeSample('bad')).toEqual({ success: false, error: 'INVALID_POSITION' });
     expect(box.removeSample('A2')).toEqual({ success: false, error: 'POSITION_EMPTY' });
-    expect(box.removeSample('A1')).toEqual({ success: true, sampleID: sampleA });
+    expect(box.removeSample('A1')).toEqual({ success: true, specimenObjectId: sampleA });
     expect(box.currentOccupancy).toBe(0);
 
     expect(box.getStats()).toEqual({
