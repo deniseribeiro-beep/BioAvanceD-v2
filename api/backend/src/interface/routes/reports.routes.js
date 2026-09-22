@@ -409,7 +409,7 @@ async function buildPreviewData(db, rawType, filters = {}) {
 
 async function handleSamplesByPatient(db, filters) {
   const patientsCollection = resolveCollection(db, ['patients', 'pacientes']);
-  const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+  const samplesCollection = resolveCollection(db, ['samples']);
   const sampleQuery = await buildSampleQuery(db, filters);
   const matchingPatientIds = await getMatchingPatientIds(samplesCollection, sampleQuery);
 
@@ -572,9 +572,7 @@ async function handleSampleAnalysis(db, filters) {
       : {};
   const samples = await samplesCollection.find(sampleAnalysisQuery).limit(100).toArray();
 
-  // #633: `sample.sampleID` doesn't exist on the canonical Sample
-  // model (only `specimenId` does) -- this join reads specimenId, the
-  // same field Result.specimenId references (Result.js, #628).
+  // Canonical v2 joins Sample and Result exclusively through specimenId.
   const sampleIds = samples.map((sample) => sample.specimenId).filter((specimenId) => specimenId !== undefined && specimenId !== null);
   const results = sampleIds.length
     ? await resultsCollection.find({ specimenId: { $in: sampleIds } }).toArray()
@@ -596,10 +594,10 @@ async function handleSampleAnalysis(db, filters) {
     const key = String(sample.specimenId || '');
     const sampleResults = groupedResults[key] || [];
     return {
-      sampleID: sample.specimenId || sample._id,
+      specimenId: sample.specimenId,
       barcode: sample.barcode || null,
       sampleType: sample.sampleType || null,
-      patientID: sample.participantId || null,
+      participantId: sample.participantId || null,
       // #539: derives from the canonical specimenStatus (dict-02
       // ELM-0123) instead of the legacy currentStatus/status fields
       // canonical-data-contract-v1.md bans.
@@ -995,7 +993,7 @@ const EXPORT_CATALOG = {
   // allow-list; restated here so the catalog is the single place to read.
   sampleAnalysis: {
     rowKey: 'analysis',
-    columns: ['sampleID', 'barcode', 'sampleType', 'patientID', 'status', 'resultCount', 'hasResults'],
+    columns: ['specimenId', 'barcode', 'sampleType', 'participantId', 'status', 'resultCount', 'hasResults'],
   },
   // Excluded: `operatorId` -- who took a reading is operator identity, and
   // nothing in a temperature report needs it.
