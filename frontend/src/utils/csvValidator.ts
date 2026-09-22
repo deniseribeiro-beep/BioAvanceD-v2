@@ -15,12 +15,12 @@ export interface CSVValidationResult {
 /**
  * Campos obrigatórios para importação de amostras
  */
-const REQUIRED_FIELDS = ['patientID', 'sampleType', 'sampleOrigin'];
+const REQUIRED_FIELDS = ['participantId', 'sampleType', 'sampleOrigin'];
 
 /**
  * Campos opcionais mas recomendados
  */
-const RECOMMENDED_FIELDS = ['extractionProtocol', 'quantity', 'quality', 'linkedProject', 'registrationDate'];
+const RECOMMENDED_FIELDS = ['extractionProtocol', 'quantity', 'quality', 'linkedProject', 'registeredAt'];
 
 /**
  * Valida arquivo CSV antes de enviar
@@ -109,11 +109,11 @@ export async function validateCSVFile(file: File): Promise<CSVValidationResult> 
         }
       }
 
-      // Valida formato do patientID (8 dígitos)
-      if (row.patientID) {
-        const patientID = String(row.patientID).trim();
-        if (!/^\d{8}$/.test(patientID)) {
-          result.errors.push(`Linha ${rowNumber}: patientID deve ter exatamente 8 dígitos numéricos`);
+      // Valida formato do participantId canônico (8 dígitos)
+      if (row.participantId) {
+        const participantId = String(row.participantId).trim();
+        if (!/^\d{8}$/.test(participantId)) {
+          result.errors.push(`Linha ${rowNumber}: participantId deve ter exatamente 8 dígitos numéricos`);
           result.isValid = false;
         }
       }
