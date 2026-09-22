@@ -830,4 +830,72 @@ describe('SampleGraphValidator', () => {
     });
   });
 
+
+  describe('item 8 remaining executable branches', () => {
+    it('ignores a biomarker key that normalizes to empty without invalidating otherwise complete clinical data', async () => {
+      const sample = buildSample({
+        clinicalData: {
+          biomarkerValues: {
+            '': 'synthetic-value',
+            'Lyso-Gb3': '4.2',
+            'Atividade de Alfa-galactosidase A': '2.1',
+          },
+        },
+      });
+      samplesCollection.findOne.mockResolvedValue(sample);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+      const report = await validator.validateSampleCompliance(sample._id);
+
+      expect(report.graphPath.clinical.valid).toBe(true);
+    });
+
+    it('uses _id as the movement sample identifier when the legacy sampleID field is blank', async () => {
+      const sample = buildSample({ sampleID: '' });
+      samplesCollection.findOne.mockResolvedValue(sample);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+      const report = await validator.validateSampleCompliance(sample._id);
+
+      expect(report.isReleasable).toBe(true);
+      expect(sampleMovementsCollection.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ sampleID: String(sample._id) }),
+        undefined
+      );
+    });
+
+    it('falls back from _id to sampleID and finally to the caller identifier in the compliance report', async () => {
+      const sampleIdFallback = buildSample({ _id: '', sampleID: 'S-FALLBACK' });
+      samplesCollection.findOne.mockResolvedValue(sampleIdFallback);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+      const bySampleId = await validator.validateSampleCompliance('SPEC-LOOKUP-1');
+      expect(bySampleId.sampleId).toBe('S-FALLBACK');
+
+      const byArgument = buildSample({
+        _id: '',
+        sampleID: '',
+        clinicalData: { orphaCode: 'ORPHA:324', cid: '' },
+      });
+      samplesCollection.findOne.mockResolvedValue(byArgument);
+
+      const byArgumentReport = await validator.validateSampleCompliance('SPEC-LOOKUP-2');
+      expect(byArgumentReport.sampleId).toBe('SPEC-LOOKUP-2');
+      expect(byArgumentReport.isReleasable).toBe(false);
+    });
+
+    it('treats an unknown non-terminal specimenStatus as available for compliance-order comparison', async () => {
+      const sample = buildSample({ specimenStatus: 'legacy_unknown_state' });
+      samplesCollection.findOne.mockResolvedValue(sample);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+      const report = await validator.validateSampleCompliance(sample._id);
+
+      expect(report.suggestedStatus).toBe('AVAILABLE');
+      const [, update] = samplesCollection.updateOne.mock.calls[0];
+      expect(update.$set.specimenStatus).toBeUndefined();
+      expect(quarantineActionsCollection.find).not.toHaveBeenCalled();
+    });
+  });
+
 });
