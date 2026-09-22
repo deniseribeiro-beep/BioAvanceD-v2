@@ -388,8 +388,8 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
   it('warns and skips a biomarker with a negative or non-finite value', () => {
     const { payloads, warnings } = engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'alphaGal:-5' },
-      {},
-      {}
+      { participantId: 'P1' },
+      { specimenId: 'S1' }
     );
 
     expect(payloads).toHaveLength(0);
@@ -405,8 +405,8 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
   it('warns and skips a biomarker token with no value (no colon separator)', () => {
     const { payloads, warnings } = engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'alphaGal' },
-      {},
-      {}
+      { participantId: 'P1' },
+      { specimenId: 'S1' }
     );
 
     expect(payloads).toHaveLength(0);
@@ -441,8 +441,8 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
   it('uses collectedAt from the specimen registeredAt when the row has no date fields', () => {
     const { payloads } = engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'alphaGal:1' },
-      {},
-      { registeredAt: '2026-02-01T00:00:00.000Z' }
+      { participantId: 'P1' },
+      { specimenId: 'S1', registeredAt: '2026-02-01T00:00:00.000Z' }
     );
 
     expect(payloads[0].collectedAt.toISOString()).toBe('2026-02-01T00:00:00.000Z');
@@ -469,7 +469,7 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
 
     const { payloads } = engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'alphaGal:1' },
-      {},
+      { participantId: 'P-768' },
       specimen
     );
 
@@ -484,9 +484,9 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
   // Unlike the specimen legs, these are real user input, not a dead name.
   it('still honours a raw CSV column literally named registrationDate', () => {
     const { payloads } = engine.buildBiomarkerObservationPayloads(
-      { biomarkers: 'alphaGal:1', registrationDate: '2026-03-05T00:00:00.000Z' },
+      { participantId: 'P1', biomarkers: 'alphaGal:1', registrationDate: '2026-03-05T00:00:00.000Z' },
       {},
-      {}
+      { specimenId: 'S1' }
     );
 
     expect(payloads[0].collectedAt.toISOString()).toBe('2026-03-05T00:00:00.000Z');
@@ -554,21 +554,21 @@ describe('BatchValidationEngine item 8 reader/linkage residuals', () => {
     ]);
   });
 
-  it('uses participantId and barcode fallbacks when internal object identifiers are legitimately absent', () => {
+  it('uses canonical participantId and specimenId when internal object identifiers are legitimately absent', () => {
     const result = engine.buildBiomarkerObservationPayloads(
       { participantId: '12345678', biomarkers: 'alphaGal:2.5' },
       {},
-      { barcode: 'BC-ITEM8' }
+      { specimenId: 'SPEC-ITEM8' }
     );
 
     expect(result.payloads[0]).toMatchObject({
       participantId: '12345678',
       patientObjectId: null,
-      specimenId: 'BC-ITEM8',
-      specimenId: 'BC-ITEM8',
+      specimenId: 'SPEC-ITEM8',
+      specimenObjectId: null,
       linkedResourceId: '12345678',
       subject: { reference: 'Patient/12345678' },
-      specimen: { reference: 'Specimen/BC-ITEM8' },
+      specimen: { reference: 'Specimen/SPEC-ITEM8' },
     });
   });
 });
@@ -1007,18 +1007,18 @@ describe('BatchValidationEngine item 8 legitimate residuals', () => {
 
   it('uses raw registerDate and a current-time fallback for biomarker observations when no earlier date exists', () => {
     const fromRegisterDate = engine.buildBiomarkerObservationPayloads(
-      { biomarkers: 'alphaGal:1', registerDate: '2026-04-01T00:00:00.000Z' },
+      { participantId: 'P1', biomarkers: 'alphaGal:1', registerDate: '2026-04-01T00:00:00.000Z' },
       {},
-      {}
+      { specimenId: 'S1' }
     );
     expect(fromRegisterDate.payloads[0].collectedAt.toISOString())
       .toBe('2026-04-01T00:00:00.000Z');
 
     const before = Date.now();
     const fallback = engine.buildBiomarkerObservationPayloads(
-      { biomarkers: 'alphaGal:1' },
+      { participantId: 'P1', biomarkers: 'alphaGal:1' },
       {},
-      {}
+      { specimenId: 'S1' }
     );
     const after = Date.now();
     expect(fallback.payloads[0].collectedAt.getTime()).toBeGreaterThanOrEqual(before);
@@ -1028,7 +1028,7 @@ describe('BatchValidationEngine item 8 legitimate residuals', () => {
   it('persists a provided linkedProject through the sample import normalization path', async () => {
     const patient = { _id: 'patient-1', participantId: '12345678' };
     vi.spyOn(engine, 'findLinkedPatient').mockResolvedValue(patient);
-    vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-1' });
+    vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-1', specimenId: 'SPEC-21' });
     vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({ _id: 'obs-1' });
 
     const result = await engine.persistSample(
