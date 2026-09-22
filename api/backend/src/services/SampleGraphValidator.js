@@ -399,6 +399,9 @@ class SampleGraphValidator {
     if (!sample) {
       throw new Error('Amostra não encontrada para validação de conformidade');
     }
+    if (!normalizeString(sample.specimenId)) {
+      throw new Error('Amostra sem specimenId canônico');
+    }
 
     const consentsCollection = await getCollection(this.db, 'consents');
 
