@@ -9,8 +9,9 @@ sitting filed and closed itself.**
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, tree clean and matching origin.
-Six commits, all pushed (this note is the sixth; the fifth rotation is the
-earlier one it replaces). Last substantive commit is the env-example fix.
+Eight commits, all pushed (this note is the eighth; it replaces two earlier
+rotations, the sitting having continued past both). Last substantive commit
+is the TRUST_PROXY default.
 
 ## What shipped — five issues closed
 
@@ -109,12 +110,14 @@ the issue exists for Dennis to confirm or reverse it:**
 - **#1159** — should the audit-signing boot gate be fatal in production,
   like the encryption gate three lines above it? **#979 does NOT cover
   this** — I checked; its table is Redis and Mongo only.
-- **#1162** — a consequence of #1153: a fresh generate now inherits
-  `AUTH_RATE_LIMIT_RELAXED=true`, `CONSENT_RATE_LIMIT_RELAXED=true` and
-  `TRUST_PROXY=1` from the example, by mechanical sync rather than by
-  decision. `[read it]` `parseTrustProxy('1')` returns the integer 1, so
-  `req.ip` comes from a client-supplied header on a stack with no proxy —
-  which is what the rate limiters key on.
+- **#1162** — HALF shipped in `1072bd88`. `TRUST_PROXY` now defaults to
+  `0`: `[read it]` nothing in this repo fronts the backend (both compose
+  files publish it directly, and `frontend/nginx.conf` has no
+  `proxy_pass`), so `1` only ever let a client set `req.ip` via a spoofed
+  header. **Left open and genuinely Dennis’s:** whether a fresh generate
+  should inherit `AUTH_RATE_LIMIT_RELAXED=true` and
+  `CONSENT_RATE_LIMIT_RELAXED=true`. Docs and milestones are silent and the
+  example’s own comment cuts both ways; the alternative reintroduces #350.
 - **#1155** — commented, not worked: `[read it]` CI is `ubuntu-latest` and
   already runs `test:architecture`, so bash/openssl/python3 are all
   present and a shell-script test can be an ordinary architecture test.
