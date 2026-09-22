@@ -38,17 +38,17 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 2,
       roleName: 'Tecnico',
-      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'uploadFiles', 'viewReports', 'manageStorageAllocation'],
+      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'uploadFiles', 'viewReports', 'viewEquipment', 'manageStorageAllocation'],
     },
     {
       accessType: 3,
       roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'manageStorageAllocation', 'manageStorageTopology'],
     },
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'manageStorageAllocation', 'manageStorageTopology'],
     },
   ],
 };
@@ -120,6 +120,32 @@ const PERMISSION_CATALOG = {
   // READ/UPDATE-only set would 403 every create and every delete on those
   // three routers -- six of the nine sites -- while looking like a rename.
   manageStorageTopology: { resourceType: 'StorageContainer', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar topologia de armazenamento' },
+  // #1087: the three equipment GETs carried no permission at all, so every
+  // authenticated principal could list the inventory -- UsuarioExterno
+  // included, whose only seeded grant is viewReports. The sibling route
+  // family already gated its reads (sensor.routes.js, on viewTemperature),
+  // so this was a divergence between files written alongside each other.
+  //
+  // NOT manageStorageTopology, and the reason is a requirement rather than a
+  // preference: Tecnico does not hold that code, while RF025's primary actor
+  // IS Tecnico and its AC#3 is "Registrar equipamentos utilizados". Reusing
+  // the write code would have 403'd the role the requirement is written for
+  // -- the same allowedActions/population trap #929 records, reached from the
+  // population side instead of the actions side.
+  //
+  // READ-only on purpose: the #631 derived-action check passes for GET, and
+  // the code can never later be reused to gate a write the way
+  // viewTemperature was before #1073.
+  //
+  // resourceType 'Device' follows manageSensor's precedent of taking the
+  // dictionary's own entity; #666 records dict-02's Device as the counterpart
+  // of this repo's Equipment model.
+  //
+  // Granted to the three roles the frontend already admits: rolePermissions.ts
+  // gates /equipment to STAFF (Administrador, Coordenador, Tecnico). This
+  // narrows the BACKEND to what the UI already assumed, and the one principal
+  // that loses access -- UsuarioExterno -- had no UI path to it.
+  viewEquipment: { resourceType: 'Device', allowedActions: ['READ'], displayName: 'Visualizar equipamentos' },
   uploadSampleFiles: { resourceType: 'SampleFile', allowedActions: ['CREATE'], displayName: 'Enviar arquivos da amostra' },
   deleteSampleFiles: { resourceType: 'SampleFile', allowedActions: ['DELETE'], displayName: 'Excluir arquivos da amostra' },
   // #632: broadened from ['UPDATE'] to cover backup.routes.js's real

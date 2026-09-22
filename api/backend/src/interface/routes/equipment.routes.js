@@ -48,9 +48,20 @@ async function assertOrganizationIdResolves(db, organizationId) {
 }
 
 // CRUD de Equipamentos
+// #1087: the three GETs below now also carry a viewEquipment gate, a new
+// READ-only code. (Named without the call syntax on purpose: the #921/#630
+// architecture test parses this file for gate call sites, and a literal one
+// in a comment reads to it as a route registration that does not exist.)
+// They were authenticate + scope only, so any
+// authenticated principal could list the inventory. See
+// rbac-catalog-seed.service.js for why it is not manageStorageTopology --
+// short version, Tecnico does not hold that one and RF025 AC#3 is written
+// for Tecnico. The permission runs BEFORE the scope check, matching the
+// writes in this file.
+//
 // #635: requireOrganizationScope filters/gates by the caller's own
 // organizationId scope -- see the query build below and GET /:id.
-router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
+router.get('/', authenticate, requirePermission('viewEquipment'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -91,7 +102,7 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
  * Retorna apenas equipamentos analíticos (excluindo freezers)
  * Filtra por type='Analytical' e status != 'Maintenance'
  */
-router.get('/analytical', authenticate, requireOrganizationScope, async (req, res) => {
+router.get('/analytical', authenticate, requirePermission('viewEquipment'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -137,7 +148,7 @@ router.get('/analytical', authenticate, requireOrganizationScope, async (req, re
   }
 });
 
-router.get('/:id', authenticate, requireOrganizationScope, async (req, res) => {
+router.get('/:id', authenticate, requirePermission('viewEquipment'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
