@@ -49,9 +49,9 @@ async function createRealSample(request: any, token: string): Promise<string> {
     },
   });
   expect([201, 202]).toContain(create.status());
-  // #647: sample.routes.js's POST handler returns sampleID = sample._id.toString()
+  // #647: sample.routes.js's POST handler returns specimenId = sample._id.toString()
   // — the same identifier SampleDetailsPage's `/samples/:id` route expects.
-  return (await create.json()).data.sampleID;
+  return (await create.json()).data.specimenId;
 }
 
 test.afterAll(async () => {
@@ -72,12 +72,12 @@ test.describe('Scientific files (RF007) through the real UI (#647)', () => {
     }
     await seedRealAuth(page, session);
 
-    const sampleID = await createRealSample(request, session.token);
+    const specimenId = await createRealSample(request, session.token);
     const fileContent = Buffer.from('RF007 UI e2e raw scientific data payload — deterministic bytes');
     const expectedChecksum = crypto.createHash('sha256').update(fileContent).digest('hex');
     const fileName = `rf007-ui-e2e-${Date.now()}.csv`;
 
-    await page.goto(`/samples/${sampleID}`);
+    await page.goto(`/samples/${specimenId}`);
     await expect(page.getByTestId('sample-detail-page-title')).toBeVisible();
 
     await page.getByTestId('sample-files-open-upload-button').click();
@@ -93,7 +93,7 @@ test.describe('Scientific files (RF007) through the real UI (#647)', () => {
     // Real-backend proof the upload actually persisted through the UI path,
     // not just that the row rendered — same checksum/URI shape
     // scientific-data-access.spec.ts proves at the API layer directly.
-    const listResponse = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files`, {
+    const listResponse = await request.get(`${apiBaseURL}/api/samples/${specimenId}/files`, {
       headers: { Authorization: `Bearer ${session.token}` },
     });
     expect(listResponse.ok()).toBeTruthy();
@@ -122,7 +122,7 @@ test.describe('Scientific files (RF007) through the real UI (#647)', () => {
     await page.getByTestId(`sample-file-delete-button-${fileID}`).click();
     await expect(page.getByText(fileName, { exact: true })).not.toBeVisible();
 
-    const afterDelete = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files`, {
+    const afterDelete = await request.get(`${apiBaseURL}/api/samples/${specimenId}/files`, {
       headers: { Authorization: `Bearer ${session.token}` },
     });
     expect(afterDelete.ok()).toBeTruthy();
