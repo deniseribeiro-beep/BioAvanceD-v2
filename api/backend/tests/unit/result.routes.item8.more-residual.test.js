@@ -357,12 +357,12 @@ describe('result.routes item 8 more residual canonical branches', () => {
     const id = new ObjectId().toString();
     const { db, captured } = buildDb({
       result: { _id: id, specimenId: 'SPEC-OLD' },
-      samples: [{ specimenId: 'SPEC-CANONICAL', sampleID: 77, collectionSite: 'org-1' }],
+      samples: [{ specimenId: 'SPEC-CANONICAL', collectionSite: 'org-1' }],
     });
 
     const res = await request(buildApp(db))
       .put(`/api/results/${id}/link-sample`)
-      .send({ specimenId: '77' });
+      .send({ specimenId: 'SPEC-CANONICAL' });
 
     expect(res.status).toBe(200);
     expect(captured.updates).toHaveLength(1);
