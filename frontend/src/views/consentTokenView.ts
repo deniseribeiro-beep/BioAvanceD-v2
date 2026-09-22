@@ -102,3 +102,40 @@ export function mapConsentTokenError(status?: number): string {
   }
   return 'Não foi possível carregar seu termo de consentimento. Tente novamente em alguns minutos.';
 }
+
+// #1152: mapConsentTokenError decides by STATUS, and in a real outage there is no
+// response to take a status from. Measured on a live stack 2026-09-22: the backend
+// answers 503 after 30s (mongo stopped) or 60s (partitioned) -- serverSelectionTimeoutMS
+// is 30000 on the native client -- while api.ts aborts at its own 10s timeout. So the
+// participant NEVER received the 503 #1127 shipped; axios threw ECONNABORTED with no
+// `response`, the mapper got undefined, and they got the generic arm instead.
+//
+// This takes the whole error rather than a status, so the "no response at all" case
+// is distinguishable from "a response we have no arm for".
+export function mapConsentTokenRequestError(error?: unknown): string {
+  const err = error as
+    | { response?: { status?: number }; request?: unknown; code?: string }
+    | undefined;
+
+  const status = err?.response?.status;
+  if (typeof status === "number") {
+    return mapConsentTokenError(status);
+  }
+
+  // A request left the browser and nothing came back: our own timeout, a dropped
+  // connection, a DNS failure. The CAUSE differs -- it can be their network rather
+  // than ours -- but the participant's situation does not: the link is not spent and
+  // retrying is the right advice. The copy therefore makes only the promise all of
+  // them share, and deliberately does not assert the service is down, which would be
+  // wrong when their own connection dropped.
+  const reachedTheNetwork =
+    err?.code === "ECONNABORTED" || err?.code === "ETIMEDOUT" || err?.request !== undefined;
+
+  if (reachedTheNetwork) {
+    return 'Não foi possível falar com o serviço de consentimento. Seu link continua válido -- tente novamente em alguns minutos.';
+  }
+
+  // Neither a response nor a request: the throw never reached the network, so it is a
+  // fault in this page rather than an outage. Claiming either would be a guess.
+  return mapConsentTokenError(undefined);
+}

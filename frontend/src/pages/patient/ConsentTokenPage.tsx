@@ -3,7 +3,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { consentTokenService } from '../../services/api';
 import {
   ConsentTokenTemplate,
-  mapConsentTokenError,
+  mapConsentTokenRequestError,
   normalizeConsentTemplate,
   resolveConsentTokenParams,
 } from '../../views/consentTokenView';
@@ -59,7 +59,7 @@ export default function ConsentTokenPage() {
         setTemplate(normalizeConsentTemplate(resp.data?.data?.template));
       } catch (err: any) {
         if (cancelled) return;
-        setError(mapConsentTokenError(err?.response?.status));
+        setError(mapConsentTokenRequestError(err));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -79,7 +79,7 @@ export default function ConsentTokenPage() {
       await consentTokenService.accept(params.participantId, params.token);
       setAccepted(true);
     } catch (err: any) {
-      setError(mapConsentTokenError(err?.response?.status));
+      setError(mapConsentTokenRequestError(err));
     } finally {
       setSubmitting(false);
     }

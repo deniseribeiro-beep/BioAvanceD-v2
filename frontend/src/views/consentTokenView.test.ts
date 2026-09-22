@@ -3,6 +3,7 @@ import {
   resolveConsentTokenParams,
   normalizeConsentTemplate,
   mapConsentTokenError,
+  mapConsentTokenRequestError,
 } from './consentTokenView';
 
 describe('resolveConsentTokenParams', () => {
@@ -139,5 +140,44 @@ describe('mapConsentTokenError', () => {
   it('falls back to a generic message for an unknown status', () => {
     expect(mapConsentTokenError(undefined)).toBeTruthy();
     expect(mapConsentTokenError(500)).toBeTruthy();
+  });
+});
+
+// #1152: the status-only mapper above is reached with `err.response?.status`,
+// and in a REAL outage there is no response to take a status from. Measured on a
+// live stack: the backend answers 503 after 30s (mongo stopped) or 60s
+// (partitioned), while api.ts aborts the request at its own 10s timeout -- so
+// axios throws ECONNABORTED with no `response`, the mapper got `undefined`, and
+// the participant fell to the generic arm. The 503 copy #1127 shipped was
+// unreachable through the UI in exactly the outage it was written for.
+describe('mapConsentTokenRequestError', () => {
+  // THE BUG. A client-side abort during an outage must still make the one promise
+  // that matters -- the link is not spent -- because requesting a new invitation
+  // would not help here any more than it would on a 503.
+  it('tells the participant their link is still valid when the request times out', () => {
+    const timeout = { code: 'ECONNABORTED', request: {}, message: 'timeout of 10000ms exceeded' };
+    expect(mapConsentTokenRequestError(timeout)).toMatch(/link continua válido/i);
+    expect(mapConsentTokenRequestError(timeout)).not.toMatch(/inválido/i);
+    expect(mapConsentTokenRequestError(timeout)).not.toMatch(/novo convite/i);
+  });
+
+  // CONTROL: a real response still decides, unchanged. These two are the whole
+  // reason this is a new function rather than a change to the mapper above.
+  it('still sends the participant for a new invitation on a real 400', () => {
+    expect(mapConsentTokenRequestError({ response: { status: 400 } })).toMatch(/novo convite/i);
+  });
+
+  it('still reports a real 503 with the 503 copy', () => {
+    expect(mapConsentTokenRequestError({ response: { status: 503 } })).toMatch(/link continua válido/i);
+  });
+
+  // CONTROL, and the one that pins the DESIGN: a throw with neither a response
+  // nor a request is a bug in the page, not an outage. Mapping `undefined` to the
+  // 503 copy would have been the smaller diff and would have claimed the service
+  // was unavailable every time this page threw for any other reason.
+  it('does not claim an outage for an error that never reached the network', () => {
+    const bug = new Error('Cannot read properties of undefined');
+    expect(mapConsentTokenRequestError(bug)).not.toMatch(/link continua válido/i);
+    expect(mapConsentTokenRequestError(bug)).toBeTruthy();
   });
 });
