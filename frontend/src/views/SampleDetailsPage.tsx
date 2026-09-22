@@ -454,7 +454,7 @@ export default function SampleDetailsPage() {
         {sample && <Card><SampleFilesSection specimenId={String(sample.specimenId || sample._id || id || '')} /></Card>}
       </div>
 
-      {sample && <AnalysisUploadModal isOpen={showUploadModal} onClose={() => setShowUploadModal(false)} onSuccess={handleUploadSuccess} sampleId={String(sample._id || (sample as any).specimenId || '')} />}
+      {sample && <AnalysisUploadModal isOpen={showUploadModal} onClose={() => setShowUploadModal(false)} onSuccess={handleUploadSuccess} specimenId={String(sample.specimenId || '')} />}
     </div>
   );
 }
