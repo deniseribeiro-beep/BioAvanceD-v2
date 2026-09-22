@@ -1961,22 +1961,26 @@ describe('sample.service item 8 residual branch coverage', () => {
     }
   });
 
-  it('generates a barcode for blank input and normalizes a numeric barcode', async () => {
-    let db = makeDb();
+  it('generates a canonical encoded value for blank input', async () => {
+    const db = makeDb();
     mockOperationalStorage(db);
-    let result = await sampleService.createSample(db, validSampleData({
+
+    const result = await sampleService.createSample(db, validSampleData({
       specimenId: 600001,
       barcode: '   ',
     }));
-    expect(result.barcode).toMatch(/^BR-/);
 
-    db = makeDb();
+    expect(result.barcode).toMatch(/^BR-/);
+  });
+
+  it('rejects numeric legacy identifiers instead of coercing them', async () => {
+    const db = makeDb();
     mockOperationalStorage(db);
-    result = await sampleService.createSample(db, validSampleData({
+
+    await expect(sampleService.createSample(db, validSampleData({
       specimenId: 600002,
       barcode: 12345,
-    }));
-    expect(result.barcode).toBe('12345');
+    }))).rejects.toThrow('barcode deve ser uma string canônica');
   });
 
   it('records RCS/SPREC snapshots after successful creation and keeps their ids on the returned sample', async () => {
