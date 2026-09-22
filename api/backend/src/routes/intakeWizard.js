@@ -579,15 +579,15 @@ function buildReadableStoragePlacement(automaticLocation, placement) {
 }
 
 function buildLabelLinks(sample) {
-  const sampleId = normalizeString(sample?.specimenId || sample?._id?.toString?.() || sample?._id);
+  const specimenId = normalizeString(sample?.specimenId);
   const encodedValue = normalizeString(sample?.barcode);
   return {
-    sampleId,
+    specimenId,
     symbologyAssetsUrl: encodedValue
       ? `/api/samples/by-barcode/${encodeURIComponent(encodedValue)}/symbology-assets`
       : null,
-    printJobUrl: sampleId
-      ? `/api/samples/${encodeURIComponent(sampleId)}/label/print-job`
+    printJobUrl: specimenId
+      ? `/api/samples/${encodeURIComponent(specimenId)}/label/print-job`
       : null,
   };
 }
