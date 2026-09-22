@@ -145,7 +145,7 @@ describe('consent.controller item 8 residual branches', () => {
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
-  it('createPatientConsent prefers canonical patientId and allows network metadata to be absent', async () => {
+  it('createPatientConsent prefers canonical participantId and allows network metadata to be absent', async () => {
     const consent = {
       _id: { toString: () => 'consent-1' },
       participantId: 'canonical-patient',
@@ -155,8 +155,7 @@ describe('consent.controller item 8 residual branches', () => {
     const create = vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue(consent);
     const req = requestMock({
       body: {
-        patientId: 'canonical-patient',
-        patientID: 'legacy-patient',
+        participantId: 'canonical-patient',
         consentTemplateId: 'template-1',
       },
       headers: {},
@@ -168,8 +167,7 @@ describe('consent.controller item 8 residual branches', () => {
     await controller.createPatientConsent(req, res);
 
     expect(create).toHaveBeenCalledWith(req.app.locals.db, expect.objectContaining({
-      patientId: 'canonical-patient',
-      patientID: 'legacy-patient',
+      participantId: 'canonical-patient',
       ipAddress: undefined,
       userAgent: undefined,
     }));
@@ -183,7 +181,7 @@ describe('consent.controller item 8 residual branches', () => {
     const res = responseMock();
 
     await controller.createPatientConsent(
-      requestMock({ body: { patientId: 'p1' } }),
+      requestMock({ body: { participantId: 'p1' } }),
       res
     );
 
@@ -195,7 +193,7 @@ describe('consent.controller item 8 residual branches', () => {
     }));
   });
 
-  it('validateConsentToken accepts the body patientID alias and normalizes optional public-template fields', async () => {
+  it('validateConsentToken accepts the body participantId and normalizes optional public-template fields', async () => {
     const validate = vi.spyOn(patientService, 'validateConsentToken').mockResolvedValue({
       valid: true,
       participantId: 'body-alias',
@@ -211,8 +209,8 @@ describe('consent.controller item 8 residual branches', () => {
 
     await controller.validateConsentToken(
       requestMock({
-        body: { patientID: 'body-alias', token: 'token-body' },
-        query: { patientId: 'query-value', token: 'token-query' },
+        body: { participantId: 'body-alias', token: 'token-body' },
+        query: { participantId: 'query-value', token: 'token-query' },
       }),
       res
     );
@@ -232,7 +230,7 @@ describe('consent.controller item 8 residual branches', () => {
     });
   });
 
-  it('validateConsentToken accepts query.patientId when both body aliases are absent', async () => {
+  it('validateConsentToken accepts query.participantId when body value is absent', async () => {
     const validate = vi.spyOn(patientService, 'validateConsentToken').mockResolvedValue({
       valid: true,
       participantId: 'query-canonical',
@@ -242,7 +240,7 @@ describe('consent.controller item 8 residual branches', () => {
     await controller.validateConsentToken(
       requestMock({
         body: {},
-        query: { patientId: 'query-canonical', token: 'query-token' },
+        query: { participantId: 'query-canonical', token: 'query-token' },
       }),
       responseMock()
     );
@@ -254,13 +252,13 @@ describe('consent.controller item 8 residual branches', () => {
     );
   });
 
-  it('acceptConsentToken covers body.patientID and query.patientId aliases without exposing token failures', async () => {
+  it('acceptConsentToken covers body.participantId and query.participantId aliases without exposing token failures', async () => {
     const accept = vi.spyOn(patientService, 'acceptConsentToken').mockResolvedValue({ accepted: true });
 
     await controller.acceptConsentToken(
       requestMock({
-        body: { patientID: 'body-legacy', token: 'body-token' },
-        query: { patientId: 'query-canonical', token: 'query-token' },
+        body: { participantId: 'body-legacy', token: 'body-token' },
+        query: { participantId: 'query-canonical', token: 'query-token' },
       }),
       responseMock()
     );
@@ -274,7 +272,7 @@ describe('consent.controller item 8 residual branches', () => {
     await controller.acceptConsentToken(
       requestMock({
         body: {},
-        query: { patientId: 'query-canonical', token: 'query-token' },
+        query: { participantId: 'query-canonical', token: 'query-token' },
       }),
       responseMock()
     );

@@ -3,6 +3,24 @@ const patientService = require('../services/patient.service');
 const participantIdentityService = require('../services/participantIdentity.service');
 const logger = require('../utils/logger');
 
+const RETIRED_PARTICIPANT_ALIASES = Object.freeze(['patientID', 'patientId']);
+
+function rejectRetiredParticipantAliases(req, res) {
+  const fields = RETIRED_PARTICIPANT_ALIASES.filter((field) =>
+    Object.prototype.hasOwnProperty.call(req.body || {}, field) ||
+    Object.prototype.hasOwnProperty.call(req.query || {}, field)
+  );
+
+  if (fields.length === 0) return false;
+
+  res.status(422).json({
+    success: false,
+    error: 'NON_CANONICAL_FIELD',
+    fields
+  });
+  return true;
+}
+
 class ConsentController {
     // List all patients with PENDING_CONSENT for a given TCLE (policy/template ID)
     async getPendingPatientsForPolicy(req, res) {
@@ -503,9 +521,11 @@ class ConsentController {
         });
       }
 
+      if (rejectRetiredParticipantAliases(req, res)) return;
+
       const payload = {
         ...req.body,
-        patientId: req.body.patientId || req.body.patientID,
+        participantId: req.body.participantId,
         ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
         userAgent: req.headers['user-agent']
       };
@@ -642,10 +662,12 @@ class ConsentController {
         });
       }
 
-      const patientId = req.body.patientId || req.body.patientID || req.query.patientId || req.query.patientID;
+      if (rejectRetiredParticipantAliases(req, res)) return;
+
+      const participantId = req.body.participantId || req.query.participantId;
       const token = req.body.token || req.query.token;
 
-      const result = await patientService.validateConsentToken(db, String(patientId), String(token));
+      const result = await patientService.validateConsentToken(db, String(participantId), String(token));
 
       // #809: the page behind this token's link (/patients/:id/consent?token=)
       // is unauthenticated -- it is emailed to a participant, not to a user of
@@ -710,10 +732,12 @@ class ConsentController {
         });
       }
 
-      const patientId = req.body.patientId || req.body.patientID || req.query.patientId || req.query.patientID;
+      if (rejectRetiredParticipantAliases(req, res)) return;
+
+      const participantId = req.body.participantId || req.query.participantId;
       const token = req.body.token || req.query.token;
 
-      const result = await patientService.acceptConsentToken(db, String(patientId), String(token));
+      const result = await patientService.acceptConsentToken(db, String(participantId), String(token));
 
       return res.status(200).json({
         success: true,

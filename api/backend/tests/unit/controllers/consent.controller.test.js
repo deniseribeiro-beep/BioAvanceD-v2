@@ -757,6 +757,22 @@ describe('ConsentController.getCurrentTemplate', () => {
 });
 
 describe('ConsentController.createPatientConsent', () => {
+  it('rejects retired participant aliases with 422 NON_CANONICAL_FIELD', async () => {
+    const createSpy = vi.spyOn(consentService, 'createPatientConsent');
+    const req = createReq({ body: { patientId: 'legacy-p1', consentTemplateId: 't1' } });
+    const res = createRes();
+
+    await consentController.createPatientConsent(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'NON_CANONICAL_FIELD',
+      fields: ['patientId'],
+    });
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
   it('returns 503 when db is unavailable', async () => {
     const req = NO_DB_REQ();
     const res = createRes();
@@ -764,11 +780,11 @@ describe('ConsentController.createPatientConsent', () => {
     expect(res.status).toHaveBeenCalledWith(503);
   });
 
-  it('builds payload with patientID fallback and ip/user-agent, returns 201', async () => {
-    const consent = { _id: { toString: () => 'c1' }, patientId: 'p1', templateId: 't1', status: 'SIGNED' };
+  it('builds payload with participantId fallback and ip/user-agent, returns 201', async () => {
+    const consent = { _id: { toString: () => 'c1' }, participantId: 'p1', templateId: 't1', status: 'SIGNED' };
     const createSpy = vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue(consent);
     const req = createReq({
-      body: { patientID: 'p1', templateId: 't1' },
+      body: { participantId: 'p1', templateId: 't1' },
       ip: '10.0.0.1',
       headers: { 'user-agent': 'test-agent' },
     });
@@ -777,8 +793,7 @@ describe('ConsentController.createPatientConsent', () => {
     await consentController.createPatientConsent(req, res);
 
     expect(createSpy).toHaveBeenCalledWith(req.app.locals.db, expect.objectContaining({
-      patientId: 'p1',
-      patientID: 'p1',
+      participantId: 'p1',
       templateId: 't1',
       ipAddress: '10.0.0.1',
       userAgent: 'test-agent',
@@ -793,7 +808,7 @@ describe('ConsentController.createPatientConsent', () => {
 
   it('returns 400 when the service throws', async () => {
     vi.spyOn(consentService, 'createPatientConsent').mockRejectedValue(new Error('invalid'));
-    const req = createReq({ body: { patientId: 'p1' } });
+    const req = createReq({ body: { participantId: 'p1' } });
     const res = createRes();
 
     await consentController.createPatientConsent(req, res);
@@ -802,10 +817,10 @@ describe('ConsentController.createPatientConsent', () => {
   });
 
   it('falls back to x-forwarded-for header when req.ip is absent', async () => {
-    const consent = { _id: { toString: () => 'c2' }, patientId: 'p1', status: 'SIGNED' };
+    const consent = { _id: { toString: () => 'c2' }, participantId: 'p1', status: 'SIGNED' };
     const createSpy = vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue(consent);
     const req = createReq({
-      body: { patientId: 'p1' },
+      body: { participantId: 'p1' },
       ip: undefined,
       headers: { 'x-forwarded-for': '1.2.3.4' },
     });
@@ -817,10 +832,10 @@ describe('ConsentController.createPatientConsent', () => {
   });
 
   it('falls back to req.connection.remoteAddress when req.ip and forwarded header are absent', async () => {
-    const consent = { _id: { toString: () => 'c3' }, patientId: 'p1', status: 'SIGNED' };
+    const consent = { _id: { toString: () => 'c3' }, participantId: 'p1', status: 'SIGNED' };
     const createSpy = vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue(consent);
     const req = createReq({
-      body: { patientId: 'p1' },
+      body: { participantId: 'p1' },
       ip: undefined,
       headers: {},
       connection: { remoteAddress: '5.6.7.8' },
@@ -833,11 +848,11 @@ describe('ConsentController.createPatientConsent', () => {
   });
 
   it('logs audit entry when req.user is present', async () => {
-    const consent = { _id: { toString: () => 'c1' }, patientId: 'p1', templateId: 't1', status: 'SIGNED' };
+    const consent = { _id: { toString: () => 'c1' }, participantId: 'p1', templateId: 't1', status: 'SIGNED' };
     vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue(consent);
     const initSpy = vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
-    const req = createReq({ body: { patientId: 'p1' }, user: { id: 'u1' } });
+    const req = createReq({ body: { participantId: 'p1' }, user: { id: 'u1' } });
     const res = createRes();
 
     await consentController.createPatientConsent(req, res);
@@ -867,7 +882,7 @@ describe('ConsentController.revokeConsent', () => {
   });
 
   it('returns 200 on success and skips audit log without req.user', async () => {
-    const consent = { patientId: 'p1', templateId: 't1' };
+    const consent = { participantId: 'p1', templateId: 't1' };
     vi.spyOn(consentService, 'revokeConsent').mockResolvedValue(consent);
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
     const req = createReq({ params: { id: '1' } });
@@ -885,7 +900,7 @@ describe('ConsentController.revokeConsent', () => {
   });
 
   it('logs audit entry with REVOKE action when req.user is present', async () => {
-    const consent = { patientId: 'p1', templateId: 't1' };
+    const consent = { participantId: 'p1', templateId: 't1' };
     vi.spyOn(consentService, 'revokeConsent').mockResolvedValue(consent);
     const initSpy = vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
@@ -919,7 +934,7 @@ describe('ConsentController.getPatientConsent', () => {
 
   it('returns 404 when consent is not found', async () => {
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
-    const req = createReq({ params: { patientId: 'p1' } });
+    const req = createReq({ params: { participantId: 'p1' } });
     const res = createRes();
 
     await consentController.getPatientConsent(req, res);
@@ -929,7 +944,7 @@ describe('ConsentController.getPatientConsent', () => {
 
   it('returns 200 with the consent', async () => {
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue({ _id: '1' });
-    const req = createReq({ params: { patientId: 'p1' } });
+    const req = createReq({ params: { participantId: 'p1' } });
     const res = createRes();
 
     await consentController.getPatientConsent(req, res);
@@ -940,7 +955,7 @@ describe('ConsentController.getPatientConsent', () => {
 
   it('returns 500 when the service throws', async () => {
     vi.spyOn(consentService, 'getPatientConsent').mockRejectedValue(new Error('fail'));
-    const req = createReq({ params: { patientId: 'p1' } });
+    const req = createReq({ params: { participantId: 'p1' } });
     const res = createRes();
 
     await consentController.getPatientConsent(req, res);
@@ -950,6 +965,22 @@ describe('ConsentController.getPatientConsent', () => {
 });
 
 describe('ConsentController.validateConsentToken', () => {
+  it('rejects retired token participant aliases before service validation', async () => {
+    const validateSpy = vi.spyOn(patientService, 'validateConsentToken');
+    const req = createReq({ body: { patientID: 'legacy-p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.validateConsentToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'NON_CANONICAL_FIELD',
+      fields: ['patientID'],
+    });
+    expect(validateSpy).not.toHaveBeenCalled();
+  });
+
   const ACTIVE_TEMPLATE = {
     _id: 'tpl-1',
     title: 'TCLE Biobanco v2',
@@ -973,7 +1004,7 @@ describe('ConsentController.validateConsentToken', () => {
     const validateSpy = vi.spyOn(patientService, 'validateConsentToken')
       .mockResolvedValue({ valid: true, participantId: 'p1' });
     vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(ACTIVE_TEMPLATE);
-    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const req = createReq({ body: { participantId: 'p1', token: 'tok' } });
     const res = createRes();
 
     await consentController.validateConsentToken(req, res);
@@ -997,7 +1028,7 @@ describe('ConsentController.validateConsentToken', () => {
     vi.spyOn(patientService, 'validateConsentToken')
       .mockResolvedValue({ valid: true, participantId: 'p1' });
     const templateSpy = vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(ACTIVE_TEMPLATE);
-    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const req = createReq({ body: { participantId: 'p1', token: 'tok' } });
     const res = createRes();
 
     await consentController.validateConsentToken(req, res);
@@ -1021,7 +1052,7 @@ describe('ConsentController.validateConsentToken', () => {
     vi.spyOn(patientService, 'validateConsentToken')
       .mockResolvedValue({ valid: true, participantId: 'p1' });
     vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(null);
-    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const req = createReq({ body: { participantId: 'p1', token: 'tok' } });
     const res = createRes();
 
     await consentController.validateConsentToken(req, res);
@@ -1040,7 +1071,7 @@ describe('ConsentController.validateConsentToken', () => {
       .mockResolvedValue({ valid: true, participantId: 'p1' });
     vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(ACTIVE_TEMPLATE);
     const identitySpy = vi.spyOn(participantIdentityService, 'decryptIdentity');
-    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const req = createReq({ body: { participantId: 'p1', token: 'tok' } });
     const res = createRes();
 
     await consentController.validateConsentToken(req, res);
@@ -1054,7 +1085,7 @@ describe('ConsentController.validateConsentToken', () => {
     const validateSpy = vi.spyOn(patientService, 'validateConsentToken')
       .mockResolvedValue({ valid: true, participantId: 'p2' });
     vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(ACTIVE_TEMPLATE);
-    const req = createReq({ body: {}, query: { patientID: 'p2', token: 'tok2' } });
+    const req = createReq({ body: {}, query: { participantId: 'p2', token: 'tok2' } });
     const res = createRes();
 
     await consentController.validateConsentToken(req, res);
@@ -1068,7 +1099,7 @@ describe('ConsentController.validateConsentToken', () => {
   // response must now carry no service detail at all.
   it('returns 400 with an opaque error when the service throws', async () => {
     vi.spyOn(patientService, 'validateConsentToken').mockRejectedValue(new Error('expired'));
-    const req = createReq({ body: { patientId: 'p1', token: 'bad' } });
+    const req = createReq({ body: { participantId: 'p1', token: 'bad' } });
     const res = createRes();
 
     await consentController.validateConsentToken(req, res);
@@ -1087,7 +1118,7 @@ describe('ConsentController.validateConsentToken', () => {
     vi.spyOn(patientService, 'validateConsentToken')
       .mockResolvedValue({ valid: true, participantId: 'p1' });
     vi.spyOn(consentService, 'getActiveTemplate').mockRejectedValue(new Error('mongo down'));
-    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const req = createReq({ body: { participantId: 'p1', token: 'tok' } });
     const res = createRes();
 
     await consentController.validateConsentToken(req, res);
@@ -1109,7 +1140,7 @@ describe('ConsentController.acceptConsentToken', () => {
 
   it('returns 200 with confirmation on success', async () => {
     const acceptSpy = vi.spyOn(patientService, 'acceptConsentToken').mockResolvedValue({ accepted: true });
-    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const req = createReq({ body: { participantId: 'p1', token: 'tok' } });
     const res = createRes();
 
     await consentController.acceptConsentToken(req, res);
@@ -1129,7 +1160,7 @@ describe('ConsentController.acceptConsentToken', () => {
   // played off each other.
   it('returns 400 with an opaque error when the service throws', async () => {
     vi.spyOn(patientService, 'acceptConsentToken').mockRejectedValue(new Error('invalid token'));
-    const req = createReq({ body: { patientId: 'p1', token: 'bad' } });
+    const req = createReq({ body: { participantId: 'p1', token: 'bad' } });
     const res = createRes();
 
     await consentController.acceptConsentToken(req, res);
@@ -1143,7 +1174,7 @@ describe('ConsentController.acceptConsentToken', () => {
 
   it('falls back to query values when body is empty', async () => {
     const acceptSpy = vi.spyOn(patientService, 'acceptConsentToken').mockResolvedValue({ accepted: true });
-    const req = createReq({ body: {}, query: { patientID: 'p2', token: 'tok2' } });
+    const req = createReq({ body: {}, query: { participantId: 'p2', token: 'tok2' } });
     const res = createRes();
 
     await consentController.acceptConsentToken(req, res);

@@ -839,12 +839,12 @@ export const consentTokenService = {
   validate: (participantId: string, token: string) =>
     api.post<{ success: boolean; data: { valid: boolean; participantId: string; template: ConsentTokenTemplatePayload | null } }>(
       '/e-consent/consent-tokens/validate',
-      { patientId: participantId, token }
+      { participantId, token }
     ),
   accept: (participantId: string, token: string) =>
     api.post<{ success: boolean; message: string; data: { success: boolean; participantId: string } }>(
       '/e-consent/consent-tokens/accept',
-      { patientId: participantId, token }
+      { participantId, token }
     ),
 };
 

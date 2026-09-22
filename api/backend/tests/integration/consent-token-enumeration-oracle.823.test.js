@@ -13,7 +13,7 @@ const consentService = require('../../src/services/consent.service');
 // unauthenticated BY DESIGN -- the emailed token is the only credential, so
 // there is no session to gate them with. That makes their failure response the
 // entire disclosure boundary: an unauthenticated caller supplying a guessed
-// `patientId` and a junk token must learn nothing about whether that
+// `participantId` and a junk token must learn nothing about whether that
 // participant exists, and nothing about their consent state.
 //
 // `patientService.validateConsentToken` throws four DIFFERENT messages for the
@@ -126,7 +126,7 @@ describe('#823: the consent-token endpoints are not a participant-enumeration or
       useDb(probe.patient);
       const response = await request(app)
         .post(path)
-        .send({ patientId: PARTICIPANT_ID, token: probe.token });
+        .send({ participantId: PARTICIPANT_ID, token: probe.token });
       results.push({ name: probe.name, status: response.status, body: response.body });
     }
     return results;
@@ -171,7 +171,7 @@ describe('#823: the consent-token endpoints are not a participant-enumeration or
 
     const response = await request(app)
       .post('/api/e-consent/consent-tokens/validate')
-      .send({ patientId: PARTICIPANT_ID, token: VALID_TOKEN });
+      .send({ participantId: PARTICIPANT_ID, token: VALID_TOKEN });
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
@@ -184,7 +184,7 @@ describe('#823: the consent-token endpoints are not a participant-enumeration or
 
     const response = await request(app)
       .post('/api/e-consent/consent-tokens/accept')
-      .send({ patientId: PARTICIPANT_ID, token: VALID_TOKEN });
+      .send({ participantId: PARTICIPANT_ID, token: VALID_TOKEN });
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);

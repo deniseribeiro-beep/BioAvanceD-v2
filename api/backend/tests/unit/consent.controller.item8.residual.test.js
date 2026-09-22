@@ -128,7 +128,7 @@ describe('consent.controller.js item 8 residual branches', () => {
     });
   });
 
-  it('builds patient-consent payload from patientID and the connection address when primary aliases are absent', async () => {
+  it('builds patient-consent payload from participantId and the connection address when primary aliases are absent', async () => {
     const createSpy = vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({
       _id: 'consent-1',
       participantId: 'P-200',
@@ -136,7 +136,7 @@ describe('consent.controller.js item 8 residual branches', () => {
     });
     const db = {};
     const req = requestWithDb(db, {
-      body: { patientID: 'P-200', consentTemplateId: 'template-1' },
+      body: { participantId: 'P-200', consentTemplateId: 'template-1' },
       ip: '',
       headers: { 'user-agent': 'vitest-agent' },
       connection: { remoteAddress: '198.51.100.24' },
@@ -147,14 +147,14 @@ describe('consent.controller.js item 8 residual branches', () => {
     await controller.createPatientConsent(req, res);
 
     expect(createSpy).toHaveBeenCalledWith(db, expect.objectContaining({
-      patientId: 'P-200',
+      participantId: 'P-200',
       ipAddress: '198.51.100.24',
       userAgent: 'vitest-agent',
     }));
     expect(res.status).toHaveBeenCalledWith(201);
   });
 
-  it('resolves validate-token inputs from query aliases and normalizes optional template fields', async () => {
+  it('resolves validate-token inputs from canonical query fields and normalizes optional template fields', async () => {
     const validateSpy = vi.spyOn(patientService, 'validateConsentToken').mockResolvedValue({
       valid: true,
       participantId: 'P-300',
@@ -168,7 +168,7 @@ describe('consent.controller.js item 8 residual branches', () => {
     });
     const req = requestWithDb({}, {
       body: {},
-      query: { patientID: 'P-300', token: 'query-token' },
+      query: { participantId: 'P-300', token: 'query-token' },
     });
     const res = responseMock();
 
