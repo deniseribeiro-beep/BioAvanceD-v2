@@ -52,6 +52,7 @@ describe('BiomarkerObservationModel.validate', () => {
 describe('BiomarkerObservationModel item 8 branch coverage', () => {
   const baseData = {
     participantId: 'p-1',
+    specimenId: 'SPEC-1',
     biomarkerType: 'glucose',
     value: 90,
     unit: 'mg/dL',
