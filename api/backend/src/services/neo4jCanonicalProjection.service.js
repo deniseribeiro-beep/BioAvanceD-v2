@@ -195,7 +195,7 @@ class Neo4jCanonicalProjectionService {
       ON CREATE SET r.createdAt = datetime(), r.source = $sourceService
       SET r.updatedAt = datetime(), r.schemaVersion = $schemaVersion, r.eventId = $eventId
 
-      RETURN sample.id AS sampleId, assessment.id AS assessmentId
+      RETURN sample.id AS specimenId, assessment.id AS assessmentId
     `;
 
     await session.run(cypher, {
@@ -237,7 +237,7 @@ class Neo4jCanonicalProjectionService {
       ON CREATE SET r.createdAt = datetime(), r.source = $sourceService
       SET r.updatedAt = datetime(), r.schemaVersion = $schemaVersion, r.eventId = $eventId
 
-      RETURN sample.id AS sampleId, incident.id AS incidentId
+      RETURN sample.id AS specimenId, incident.id AS incidentId
     `;
 
     await session.run(cypher, {
