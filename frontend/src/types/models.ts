@@ -183,8 +183,8 @@ export interface SpecimenPreanalyticsProfile {
 
 export interface Sample {
   _id?: string;
+  specimenId: string;
   participantId: string;
-  sampleID?: number | null;
   sampleType: string;
   sampleOrigin?: string;
   extractionProtocol?: string;

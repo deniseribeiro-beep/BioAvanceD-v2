@@ -10,7 +10,7 @@ export type SampleWithId = Sample & {
 };
 
 function getSampleId(sample: Sample): string {
-  return (sample as any)._id || String(sample.sampleID ?? sample.barcode ?? sample.participantId);
+  return String(sample.specimenId || (sample as any)._id || sample.barcode || sample.participantId);
 }
 
 export function useSamplesPage() {
@@ -37,7 +37,7 @@ export function useSamplesPage() {
       .filter((sample) => {
         const mongoId = String((sample as any)._id || '');
         const barcode = String(sample.barcode || '');
-        const sampleId = String(sample.sampleID || '');
+        const specimenId = String(sample.specimenId || '');
         const participantId = String(sample.participantId || (sample as any).patient?.participantId || '');
         const patientName =
           String(
@@ -56,7 +56,7 @@ export function useSamplesPage() {
 
         return (
           mongoId.toLowerCase().includes(term) ||
-          sampleId.toLowerCase().includes(term) ||
+          specimenId.toLowerCase().includes(term) ||
           barcode.toLowerCase().includes(term) ||
           participantId.toLowerCase().includes(term) ||
           patientName.toLowerCase().includes(term) ||

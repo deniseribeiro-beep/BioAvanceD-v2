@@ -103,7 +103,7 @@ export default function SampleDetailsPage() {
       const searchId = String(id || '').trim();
       const foundSample = samples.find(s => {
         const sampleId = String(s._id || '').trim();
-        const specimenIdStr = String((s as any).specimenId || s.sampleID || '').trim();
+        const specimenIdStr = String(s.specimenId || '').trim();
         return sampleId === searchId || specimenIdStr === searchId || sampleId.toLowerCase() === searchId.toLowerCase() || specimenIdStr.toLowerCase() === searchId.toLowerCase();
       });
 
@@ -117,14 +117,14 @@ export default function SampleDetailsPage() {
           participantId: (foundSample as any).participantId ? String((foundSample as any).participantId) : String((foundSample as any).patientID || ''),
         });
       } else {
-        console.warn('Amostra não encontrada:', { searchId: id, availableIds: samples.map(s => ({ _id: s._id, sampleID: s.sampleID })) });
+        console.warn('Amostra não encontrada:', { searchId: id, availableIds: samples.map(s => ({ _id: s._id, specimenId: s.specimenId })) });
         setSample(null);
       }
     }
   }, [samples, id, loading]);
 
   useEffect(() => {
-    const targetId = sample?._id || (sample as any)?.specimenId || id;
+    const targetId = sample?.specimenId || sample?._id || id;
     if (!targetId) {
       setComplianceReport(null);
       return;
@@ -150,7 +150,7 @@ export default function SampleDetailsPage() {
 
     void loadComplianceGraph();
     return () => { active = false; };
-  }, [sample?._id, sample?.sampleID, id]);
+  }, [sample?.specimenId, sample?._id, id]);
 
   const getStorageInfo = (placement: CurrentStoragePlacementDTO | null): { summary: string; details: string } => {
     const boxName = placement?.box?.boxName
@@ -185,13 +185,13 @@ export default function SampleDetailsPage() {
   };
 
   useEffect(() => {
-    const targetId = sample?._id || (sample as any)?.specimenId || id;
+    const targetId = sample?.specimenId || sample?._id || id;
     if (!targetId) {
       setCurrentStoragePlacement(null);
       return;
     }
     void loadCurrentStoragePlacement(String(targetId));
-  }, [sample?._id, sample?.sampleID, id]);
+  }, [sample?.specimenId, sample?._id, id]);
 
   const effectiveSample = useMemo(() => {
     if (!isEditing) return sample;
@@ -295,7 +295,7 @@ export default function SampleDetailsPage() {
     }
     const payload = buildSampleUpdatePayload(form, parsedAvailable);
     try {
-      const targetId = sample._id || (sample as any).specimenId || id || '';
+      const targetId = sample.specimenId || sample._id || id || '';
       const updated = await updateSample(targetId, payload);
       setSample(prev => ({ ...prev!, ...payload, currentQuantity: payload.currentQuantity ?? prev?.currentQuantity, volumeCurrent: payload.volumeCurrent ?? prev?.volumeCurrent }));
       if (updated) setSample(updated as Sample);
@@ -406,13 +406,13 @@ export default function SampleDetailsPage() {
             </div>
             {showStoragePanel && sample && (
               <InlineStorageMovementPanel
-                sample={{ ...sample, id: String(sample._id || (sample as any).specimenId || id || '') }}
+                sample={{ ...sample, id: String(sample.specimenId || sample._id || id || '') }}
                 t={(key: string) => t(key) || key}
                 onCancel={() => setShowStoragePanel(false)}
                 onCompleted={() => {
                   setShowStoragePanel(false);
                   loadSamples();
-                  const targetId = sample?._id || (sample as any)?.specimenId || id;
+                  const targetId = sample?.specimenId || sample?._id || id;
                   if (targetId) void loadCurrentStoragePlacement(String(targetId));
                 }}
               />
@@ -451,7 +451,7 @@ export default function SampleDetailsPage() {
           </Card>
         )}
 
-        {sample && <Card><SampleFilesSection sampleID={String(sample._id || (sample as any).specimenId || id || '')} /></Card>}
+        {sample && <Card><SampleFilesSection sampleID={String(sample.specimenId || sample._id || id || '')} /></Card>}
       </div>
 
       {sample && <AnalysisUploadModal isOpen={showUploadModal} onClose={() => setShowUploadModal(false)} onSuccess={handleUploadSuccess} sampleId={String(sample._id || (sample as any).specimenId || '')} />}
