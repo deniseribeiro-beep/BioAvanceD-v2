@@ -17,7 +17,7 @@ type AnalysisUploadModalProps = {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: () => void;
-  sampleId?: string;
+  specimenId?: string;
   inline?: boolean;
 };
 
@@ -25,7 +25,7 @@ export default function AnalysisUploadModal({
   isOpen,
   onClose,
   onSuccess,
-  sampleId,
+  specimenId,
   inline = false,
 }: AnalysisUploadModalProps) {
   const { samples } = useSamples();
@@ -48,7 +48,7 @@ export default function AnalysisUploadModal({
   const [error, setError] = useState('');
   const [showValidation, setShowValidation] = useState(false);
 
-  const resolvedSampleId = sampleId || sampleInput;
+  const resolvedSpecimenId = specimenId || sampleInput;
   const canEditResearcher = hasRole(['Administrador']) || user?.roleName === 'Administrador';
 
   // Carrega equipamentos analíticos quando o modal abre
@@ -159,13 +159,13 @@ export default function AnalysisUploadModal({
       setResearcher(
         user?.name || user?.username || user?.email || ''
       );
-      if (sampleId) {
-        setSampleInput(sampleId);
+      if (specimenId) {
+        setSampleInput(specimenId);
       } else {
         setSampleInput('');
       }
     }
-  }, [isOpen, sampleId, user]);
+  }, [isOpen, specimenId, user]);
 
   const handleSubmit = async () => {
     if (!isFormValid) {
@@ -189,7 +189,7 @@ export default function AnalysisUploadModal({
       // #628: backend's wire contract for this field is now specimenId
       // (result.routes.js resolves it against a real Sample lookup; the
       // canonical frontend submits specimenId, while _id support remains an internal boundary detail).
-      formData.append('specimenId', resolvedSampleId);
+      formData.append('specimenId', resolvedSpecimenId);
       formData.append('method', method.trim());
       formData.append('responsibleResearcher', researcher.trim());
       formData.append('description', description.trim());
@@ -203,7 +203,7 @@ export default function AnalysisUploadModal({
       setEquipmentId('');
       setMethod('');
       setDescription('');
-      if (!sampleId) setSampleInput('');
+      if (!specimenId) setSampleInput('');
     } catch (err: any) {
       setError(err?.message || 'Erro ao enviar arquivo');
     } finally {
@@ -214,7 +214,7 @@ export default function AnalysisUploadModal({
   const isFormValid = Boolean(
     file &&
     analysisType &&
-    resolvedSampleId &&
+    resolvedSpecimenId &&
     method &&
     researcher.trim() &&
     equipmentId
@@ -225,7 +225,7 @@ export default function AnalysisUploadModal({
   const equipmentError = showValidation && !equipmentId ? 'Selecione o equipamento utilizado' : '';
   const methodError = showValidation && !method ? 'Selecione o método/protocolo' : '';
   const researcherError = showValidation && !researcher.trim() ? 'Informe o pesquisador responsável' : '';
-  const sampleError = showValidation && !resolvedSampleId ? 'Selecione a amostra' : '';
+  const sampleError = showValidation && !resolvedSpecimenId ? 'Selecione a amostra' : '';
 
   if (!isOpen) return null;
 
@@ -305,7 +305,7 @@ export default function AnalysisUploadModal({
           />
         </div>
 
-        {!sampleId && (
+        {!specimenId && (
           <div>
             <label>ID da Amostra</label>
             <Input
@@ -326,10 +326,10 @@ export default function AnalysisUploadModal({
           </div>
         )}
 
-        {sampleId && (
+        {specimenId && (
           <div>
             <label>ID da Amostra</label>
-            <Input value={sampleId} disabled />
+            <Input value={specimenId} disabled />
           </div>
         )}
 
