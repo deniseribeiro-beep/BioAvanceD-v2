@@ -31,8 +31,8 @@ class SampleFileModel {
   static validate(data) {
     const errors = [];
 
-    if (!data.sampleID) {
-      errors.push('sampleID é obrigatório');
+    if (!data.specimenId) {
+      errors.push('specimenId é obrigatório');
     }
 
     if (!data.fileName || typeof data.fileName !== 'string') {
@@ -74,8 +74,7 @@ class SampleFileModel {
 
   static create(data) {
     const baseData = {
-      sampleID: data.sampleID, // ID da amostra (pode ser ObjectId string ou número)
-      specimenId: data.specimenId || data.sampleID, // referência usada por listFiles/downloadFile/deleteFile
+      specimenId: String(data.specimenId), // referência canônica ao espécime
       fileName: data.fileName, // Nome original do arquivo
       fileType: data.fileType.toUpperCase(), // Tipo: RAW, ZIP, CSV, XLS, XLSX, PDF, TXT
       fileRole: data.fileRole || 'raw', // dict-02 ELM-0317 -- papel no pipeline

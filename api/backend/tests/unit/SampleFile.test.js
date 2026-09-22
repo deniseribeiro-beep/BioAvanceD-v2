@@ -4,7 +4,7 @@ const SampleFileModel = require('../../src/models/SampleFile');
 
 describe('SampleFileModel.validate', () => {
   const validData = {
-    sampleID: 'sample-1',
+    specimenId: 'SPEC-1',
     fileName: 'result.csv',
     fileType: 'CSV',
     storagePath: '/storage/result.csv',
@@ -17,10 +17,10 @@ describe('SampleFileModel.validate', () => {
     expect(errors).toEqual([]);
   });
 
-  it('rejects missing sampleID', () => {
-    const { isValid, errors } = SampleFileModel.validate({ ...validData, sampleID: undefined });
+  it('rejects missing specimenId', () => {
+    const { isValid, errors } = SampleFileModel.validate({ ...validData, specimenId: undefined });
     expect(isValid).toBe(false);
-    expect(errors).toContain('sampleID é obrigatório');
+    expect(errors).toContain('specimenId é obrigatório');
   });
 
   it('rejects missing fileName', () => {
@@ -104,7 +104,7 @@ describe('SampleFileModel.validate', () => {
   it('accumulates multiple errors when several fields are invalid', () => {
     const { isValid, errors } = SampleFileModel.validate({});
     expect(isValid).toBe(false);
-    // sampleID, fileName, fileType, storagePath, fileSize all missing
+    // specimenId, fileName, fileType, storagePath, fileSize all missing
     expect(errors.length).toBe(5);
   });
 
@@ -131,7 +131,7 @@ describe('SampleFileModel.validate', () => {
 
 describe('SampleFileModel.create', () => {
   const baseInput = {
-    sampleID: 'sample-1',
+    specimenId: 'SPEC-1',
     fileName: 'result.csv',
     fileType: 'csv',
     fileSize: 100,
@@ -141,7 +141,7 @@ describe('SampleFileModel.create', () => {
   it('builds a normalized object with uppercased fileType', () => {
     const result = SampleFileModel.create(baseInput);
     expect(result.fileType).toBe('CSV');
-    expect(result.sampleID).toBe('sample-1');
+    expect(result.specimenId).toBe('SPEC-1');
     expect(result.fileName).toBe('result.csv');
     expect(result.fileSize).toBe(100);
     expect(result.storagePath).toBe('/storage/result.csv');
