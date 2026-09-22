@@ -4,14 +4,14 @@ import { useSampleCustodyReports } from '../hooks/samples/useSampleCustodyReport
 
 export default function SampleCustodyReportsPage() {
   const { t } = useLanguage();
-  const { loading, rows, movementBySampleId, toggleMovements } = useSampleCustodyReports();
+  const { loading, rows, movementBySpecimenId, toggleMovements } = useSampleCustodyReports();
 
   return (
     <SampleCustodyReportsView
       t={t}
       loading={loading}
       rows={rows}
-      movementBySampleId={movementBySampleId}
+      movementBySpecimenId={movementBySpecimenId}
       onToggleMovements={toggleMovements}
     />
   );
