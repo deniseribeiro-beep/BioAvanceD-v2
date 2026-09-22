@@ -73,9 +73,9 @@ export function useSamples() {
     });
   }, []);
 
-  const getSampleResults = async (sampleID: number): Promise<Result[]> => {
+  const getSampleResults = async (specimenId: number | string): Promise<Result[]> => {
     try {
-      const response = await samplesApi.getResults(sampleID);
+      const response = await samplesApi.getResults(specimenId);
       return extractResultItems(response.data);
     } catch (err: unknown) {
       throw new Error(extractErrorMessage(err, 'Erro ao buscar resultados'));

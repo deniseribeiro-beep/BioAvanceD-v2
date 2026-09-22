@@ -141,8 +141,8 @@ export default function AnalysisUploadModal({
   const sampleOptions = useMemo(() => {
     if (!samples || samples.length === 0) return [];
     return samples.map((s: Sample) => ({
-      value: String(s.sampleID || s._id || ''),
-      label: `${s.sampleID || s._id} ${s.barcode ? `• ${s.barcode}` : ''}`,
+      value: String(s.specimenId || s._id || ''),
+      label: `${s.specimenId || s._id} ${s.barcode ? `• ${s.barcode}` : ''}`,
     }));
   }, [samples]);
 
@@ -187,8 +187,8 @@ export default function AnalysisUploadModal({
       formData.append('file', file);
       formData.append('analysisType', analysisType);
       // #628: backend's wire contract for this field is now specimenId
-      // (result.routes.js resolves it against a real Sample lookup,
-      // accepting an _id, a specimenId, or the legacy numeric sampleID).
+      // (result.routes.js resolves it against a real Sample lookup; the
+      // canonical frontend submits specimenId, while _id support remains an internal boundary detail).
       formData.append('specimenId', resolvedSampleId);
       formData.append('method', method.trim());
       formData.append('responsibleResearcher', researcher.trim());

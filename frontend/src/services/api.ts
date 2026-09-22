@@ -316,18 +316,18 @@ export const phoneCodeService = {
 // ========== SAMPLE SERVICES ==========
 export const sampleService = {
   getAll: () => api.get<ApiEnvelope<Sample[]>>('/samples'),
-  getById: (id: number) => api.get<Sample>(`/samples/${id}`),
+  getById: (id: number | string) => api.get<Sample>(`/samples/${id}`),
   getComplianceGraph: (id: number | string) => api.get(`/samples/${id}/compliance-graph`),
   getByBarcode: (barcode: string) => api.get<{ sample: Sample; patient: { participantId: number; patientName: string; recordNumber: number } | null }>(`/samples/by-barcode/${encodeURIComponent(barcode)}`),
-  getResults: (id: number) => api.get<ApiEnvelope<Result[]>>(`/samples/${id}/results`), // Implementa Sample.getResults()
+  getResults: (id: number | string) => api.get<ApiEnvelope<Result[]>>(`/samples/${id}/results`), // Implementa Sample.getResults()
   getMovements: (id: string) => api.get<{ success: boolean; data: any[] }>(`/samples/${id}/movements`), // Histórico de movimentações
   create: (data: Partial<Sample>) => api.post<Sample>('/samples', data),
   update: (id: number | string, data: Partial<Sample>) => api.put<Sample>(`/samples/${id}`, data),
   delete: (id: number | string) => api.delete(`/samples/${id}`),
-  withdraw: (sampleID: number | string, data: Partial<Withdrawal>) => 
-    api.post(`/samples/${sampleID}/withdraw`, data),
-  return: (sampleID: number | string, data: Partial<Return>) => 
-    api.post(`/samples/${sampleID}/return`, data),
+  withdraw: (specimenId: number | string, data: Partial<Withdrawal>) =>
+    api.post(`/samples/${specimenId}/withdraw`, data),
+  return: (specimenId: number | string, data: Partial<Return>) =>
+    api.post(`/samples/${specimenId}/return`, data),
   // RF007 - Upload de arquivos de análise
   uploadFile: (sampleID: string, formData: FormData) => 
     api.post(`/samples/${sampleID}/files/upload`, formData, {

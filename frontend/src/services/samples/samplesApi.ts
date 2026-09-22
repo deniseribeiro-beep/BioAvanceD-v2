@@ -5,7 +5,7 @@ export type TemplateFormat = 'csv' | 'xlsx';
 
 export const samplesApi = {
   getAll: () => sampleService.getAll(),
-  getResults: (id: number) => sampleService.getResults(id),
+  getResults: (id: number | string) => sampleService.getResults(id),
   create: (data: Partial<Sample>) => sampleService.create(data),
   update: (id: number | string, data: Partial<Sample>) => sampleService.update(id, data),
   remove: (id: number | string) => sampleService.delete(id),
