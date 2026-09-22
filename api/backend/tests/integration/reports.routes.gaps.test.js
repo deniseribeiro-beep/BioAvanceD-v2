@@ -257,7 +257,7 @@ describe('reports.routes.js gaps', () => {
       // `sprec.*`/`final_grade` directly off Sample — one combined
       // specimenId $in condition per entity, not one per field.
       const { db, capturedQueries } = buildCollectionDb({
-        samples: [{ sampleID: 'S1' }],
+        samples: [{ specimenId: 'S1' }],
         specimenPreanalytics: [{
           specimenId: 'SPEC-1',
           sampleType: 'WHOLE BLOOD',
@@ -297,7 +297,7 @@ describe('reports.routes.js gaps', () => {
     });
 
     it('normaliza treatmentStatus WASHOUT e releaseStatus QUARANTINE/BLOCKED', async () => {
-      const { db: dbWashout, capturedQueries: capturedWashout } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
+      const { db: dbWashout, capturedQueries: capturedWashout } = buildCollectionDb({ samples: [{ specimenId: 'S1' }] });
       const washoutResponse = await request(appWithDb(dbWashout)).post('/api/reports/samples/preview').send({
         filters: { treatmentStatus: 'lavagem', status: 'em quarentena' },
       });
@@ -309,7 +309,7 @@ describe('reports.routes.js gaps', () => {
         ])
       );
 
-      const { db: dbBlocked, capturedQueries: capturedBlocked } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
+      const { db: dbBlocked, capturedQueries: capturedBlocked } = buildCollectionDb({ samples: [{ specimenId: 'S1' }] });
       const blockedResponse = await request(appWithDb(dbBlocked)).post('/api/reports/samples/preview').send({
         filters: { status: 'bloqueada' },
       });
@@ -323,8 +323,8 @@ describe('reports.routes.js gaps', () => {
   it('paciente: retorna lista paginada de pacientes sem o agrupamento samplesbypatient', async () => {
     const { db } = buildCollectionDb({
       patients: [
-        { patientID: 'P1', patientName: 'Ana' },
-        { patientID: 'P2', patientName: 'Bruno' },
+        { participantId: 'P1', patientName: 'Ana' },
+        { participantId: 'P2', patientName: 'Bruno' },
       ],
     });
     const testApp = appWithDb(db);
@@ -363,8 +363,8 @@ describe('reports.routes.js gaps', () => {
   });
 
   // #633: Sample documents only ever have `specimenId` (the canonical
-  // field) — `sampleID` doesn't exist on the real model. This fixture
-  // deliberately has no `sampleID` at all, matching a real Sample
+  // field) — `specimenId` doesn't exist on the real model. This fixture
+  // deliberately has no `specimenId` at all, matching a real Sample
   // document shape, to prove the join actually works rather than
   // relying on a mock that happens to carry the buggy field name.
   it('sampleanalysis: amostra com specimenId e resultado correspondente mostra hasResults true', async () => {
@@ -380,7 +380,7 @@ describe('reports.routes.js gaps', () => {
     const row = response.body.data.analysis.find((item) => item.barcode === 'B1');
     expect(row.hasResults).toBe(true);
     expect(row.resultCount).toBe(1);
-    expect(row.sampleID).toBe('SPEC-1');
+    expect(row.specimenId).toBe('SPEC-1');
   });
 
   it('sampleanalysis: amostras sem specimenId são ignoradas no agrupamento de resultados', async () => {
@@ -400,10 +400,10 @@ describe('reports.routes.js gaps', () => {
     expect(response.body.data.analysis.find((item) => item.barcode === 'B2').hasResults).toBe(false);
   });
 
-  // #595: patientID isn't a real field on Sample documents (Sample.js uses
+  // #595: participantId isn't a real field on Sample documents (Sample.js uses
   // participantId) — the preview row must resolve from participantId, not
   // always output null.
-  it('sampleanalysis: linha de análise resolve patientID a partir de participantId', async () => {
+  it('sampleanalysis: linha de análise resolve participantId a partir de participantId', async () => {
     const { db } = buildCollectionDb({
       samples: [{ specimenId: 'SPEC-1', barcode: 'B1', participantId: 'P1' }],
       results: [],
@@ -413,7 +413,7 @@ describe('reports.routes.js gaps', () => {
     const response = await request(testApp).post('/api/reports/sample_analysis/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
-    expect(response.body.data.analysis.find((item) => item.sampleID === 'SPEC-1').patientID).toBe('P1');
+    expect(response.body.data.analysis.find((item) => item.specimenId === 'SPEC-1').participantId).toBe('P1');
   });
 
   it('temperatura: sem filtros de data nem alerta crítico usa query vazia e modo report', async () => {
@@ -567,7 +567,7 @@ describe('reports.routes.js gaps', () => {
             return {
               find() {
                 const chain = {
-                  toArray: async () => [{ patientID: 'P1', patientName: 'Ana' }],
+                  toArray: async () => [{ participantId: 'P1', patientName: 'Ana' }],
                   limit() {
                     return chain;
                   },
@@ -643,7 +643,7 @@ describe('reports.routes.js gaps', () => {
   });
 
   it('amostra: treatmentStatus e status desconhecidos retornam o valor normalizado bruto', async () => {
-    const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
+    const { db, capturedQueries } = buildCollectionDb({ samples: [{ specimenId: 'S1' }] });
     const testApp = appWithDb(db);
 
     const response = await request(testApp).post('/api/reports/samples/preview').send({
@@ -663,8 +663,8 @@ describe('reports.routes.js gaps', () => {
     const { db } = buildCollectionDb({
       patients: [{ participantId: 'P1', patientName: 'Ana' }],
       samples: [
-        { participantId: 'P1', sampleID: 'S1' },
-        { participantId: 'P2', sampleID: 'S2' },
+        { participantId: 'P1', specimenId: 'S1' },
+        { participantId: 'P2', specimenId: 'S2' },
       ],
     });
     const testApp = appWithDb(db);
@@ -970,7 +970,7 @@ describe('reports.routes.js gaps', () => {
   it('paciente: com orphaCode (sem keyword) e matchingPatientIds não vazio', async () => {
     const { db } = buildCollectionDb({
       patients: [{ participantId: 'P1', patientName: 'Ana' }],
-      samples: [{ participantId: 'P1', sampleID: 'S1' }],
+      samples: [{ participantId: 'P1', specimenId: 'S1' }],
     });
     const testApp = appWithDb(db);
 
@@ -999,8 +999,8 @@ describe('reports.routes.js gaps', () => {
     const { db } = buildCollectionDb({
       patients: [{ participantId: 'P1', patientName: 'Ana' }],
       samples: [
-        { participantId: 'P1', sampleID: 'S1' },
-        { participantId: '', sampleID: 'S2' },
+        { participantId: 'P1', specimenId: 'S1' },
+        { participantId: '', specimenId: 'S2' },
       ],
     });
     const testApp = appWithDb(db);
@@ -1027,7 +1027,7 @@ describe('reports.routes.js gaps', () => {
   });
 
   it('amostra: treatmentStatus NAIVE/INICIAL é normalizado', async () => {
-    const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
+    const { db, capturedQueries } = buildCollectionDb({ samples: [{ specimenId: 'S1' }] });
     const testApp = appWithDb(db);
 
     const response = await request(testApp).post('/api/reports/samples/preview').send({
@@ -1042,7 +1042,7 @@ describe('reports.routes.js gaps', () => {
 
   it('tissueoriginhistory: filtra amostras com sampleOrigin/linkedProject existentes', async () => {
     const { db, capturedQueries } = buildCollectionDb({
-      samples: [{ sampleID: 'S1', sampleOrigin: 'Fígado' }],
+      samples: [{ specimenId: 'S1', sampleOrigin: 'Fígado' }],
     });
     const testApp = appWithDb(db);
 
@@ -1143,7 +1143,7 @@ describe('reports.routes.js gaps', () => {
     // see the #620 describe block below).
 
     it('amostra: filtra a query por collectionSite para um usuário organization-scoped', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ sampleID: 'S1', collectionSite: 'org-1' }] });
+      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ specimenId: 'S1', collectionSite: 'org-1' }] });
       const testApp = appWithDb(db);
 
       const response = await request(testApp).post('/api/reports/samples/preview').send({ filters: {} });
@@ -1185,7 +1185,7 @@ describe('reports.routes.js gaps', () => {
     });
 
     it('paciente: filtra diretamente por clinicalUnitId mesmo sem keyword/orphaCode/matchingPatientIds', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, patients: [{ patientID: 'P1', clinicalUnitId: 'org-1' }] });
+      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, patients: [{ participantId: 'P1', clinicalUnitId: 'org-1' }] });
       const testApp = appWithDb(db);
 
       const response = await request(testApp).post('/api/reports/patients/preview').send({ filters: {} });
@@ -1197,7 +1197,7 @@ describe('reports.routes.js gaps', () => {
     });
 
     it('tissueoriginhistory: combina o filtro de origem com collectionSite via $and', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ sampleID: 'S1', sampleOrigin: 'Fígado', collectionSite: 'org-1' }] });
+      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ specimenId: 'S1', sampleOrigin: 'Fígado', collectionSite: 'org-1' }] });
       const testApp = appWithDb(db);
 
       const response = await request(testApp).post('/api/reports/tissue_origin_history/preview').send({ filters: {} });
@@ -1209,7 +1209,7 @@ describe('reports.routes.js gaps', () => {
     });
 
     it('amostra: Administrador (scope global) não recebe filtro de collectionSite', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
+      const { db, capturedQueries } = buildCollectionDb({ samples: [{ specimenId: 'S1' }] });
       const testApp = appWithDb(db);
 
       const response = await request(testApp).post('/api/reports/samples/preview').send({ filters: {} });
