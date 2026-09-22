@@ -939,6 +939,23 @@ function defaultStorageContainersFindOne({ _id }) {
       return { getCollectionImpl, identityFindOne, identityFind, patientsFindOne };
     }
 
+    it('does not accept retired patientID/patientId query aliases', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, {});
+
+      const oldUpper = await request(app)
+        .get('/api/intake-wizard/patient-match')
+        .query({ patientID: '12345678' });
+      const oldCamel = await request(app)
+        .get('/api/intake-wizard/patient-match')
+        .query({ patientId: '12345678' });
+
+      expect(oldUpper.status).toBe(400);
+      expect(oldCamel.status).toBe(400);
+      expect(oldUpper.body.error).toContain('participantId');
+      expect(oldCamel.body.error).toContain('participantId');
+    });
+
     it('returns matched:false when no patient is found by participantId', async () => {
       const { getCollectionImpl } = makeIdentityCollectionRouter();
       const { router } = loadRoute({ getCollectionImpl });
