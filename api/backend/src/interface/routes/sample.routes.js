@@ -60,7 +60,7 @@ router.get('/:id/compliance-graph', authenticate, requireOrganizationScope, asyn
     }
 
     const validator = new SampleGraphValidator(db);
-    const report = await validator.validateSampleCompliance(req.params.id);
+    const report = await validator.validateSampleCompliance(String(sampleForScope?.specimenId || req.params.id));
 
     return res.status(200).json({
       success: true,
@@ -295,11 +295,11 @@ router.post('/',
 
       const sampleRepository = {
         create: async (sampleData, options = {}) => sampleService.createSample(db, sampleData, options),
-        deleteById: async (sampleId) => {
+        deleteById: async (sampleObjectId) => {
           const samplesCollection = await getCollection(db, 'samples');
-          const filter = ObjectId.isValid(sampleId)
-            ? { _id: new ObjectId(sampleId) }
-            : { _id: sampleId };
+          const filter = ObjectId.isValid(sampleObjectId)
+            ? { _id: new ObjectId(sampleObjectId) }
+            : { _id: sampleObjectId };
           await samplesCollection.deleteOne(filter);
         }
       };
