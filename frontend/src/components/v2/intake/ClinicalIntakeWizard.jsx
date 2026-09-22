@@ -1390,7 +1390,7 @@ function buildSampleLabelData(createdSample = {}, payload = {}, formData = {}, d
     || createdSample._id
     || ''
   ).trim();
-  const barcode = String(labelData.barcode || createdSample.barcode || createdSample.qrCode || sampleID || fallbackCode).trim();
+  const barcode = String(labelData.barcode || createdSample.barcode || sampleID || fallbackCode).trim();
   const collectionDate = labelData.collectionDate
     || labelData.registeredAt
     || createdSample.collectionDate
