@@ -1,134 +1,117 @@
 # HANDOFF
 
-**Written 2026-09-22, thirty-fourth queue sitting. INTERIM — Dennis gave no
+**Written 2026-09-22, thirty-fifth queue sitting. INTERIM — Dennis gave no
 end signal, so treat the session as CONTINUING.** His instruction: read the
-handoff, pick the next group. **Docker was AUTHORIZED mid-sitting** ("you can
-start docker") but **the engine was never reachable** — see "Waiting on
-Dennis".
+handoff, Docker is turning on, pick the next group. **Docker came up and the
+whole sitting ran against a live stack.**
 
-## What shipped
+## Repo state
 
-Two commits on `feature/docker-e2e-backend-integration`, both pushed; tree
-clean and matching origin.
+`feature/docker-e2e-backend-integration`, tree clean and matching origin.
+Four commits, all pushed; last substantive one is the compose port change.
 
-- **`23b57fc1` — #929 closed.** `eConsent.js:73`'s `POST /generate-link` was
-  the last of #888's four `createPatient` borrowers. It now gates on a new
-  `requestConsent` (`resourceType: 'Consent'`, `allowedActions: ['CREATE']`),
-  seeded to Coordenador + Administrador — the tier `createPatient` already
-  resolved to, so a no-op for every real caller.
-- **`61a8e294` — #1150 closed** (filed and fixed the same sitting).
-  `POST /api/e-consent/consents` was `authenticate`-only: any authenticated
-  principal could record a consent for any participant. Now
-  `requireRole(3, 4)`, matching the revoke sibling #684 fixed.
+## What shipped — five issues closed
 
-## Dennis's two decisions this sitting — do not re-litigate
+- **#1127** — the live-stack proof it was held open for. **The driver
+  REJECTS; there is no buffered hang**, so `f1c8deff`'s 503 arm is the real
+  path. Closed `premise-corrected`.
+- **#1060** — `generate-env-docker-secrets.sh --upgrade`. Adds only what is
+  missing, never regenerates an existing credential, backs up first.
+- **#959** — the test stack can sign. **The project's first sealed tree head
+  exists.**
+- **#1152** — the 503 copy was unreachable through the UI; now reached.
+- **#1156** — `compose.test.yml`'s host ports are overridable.
 
-1. **"We don't touch Denise's branches ever unless stated otherwise."** Not
-   just `main`. No merge from, into, or push to any branch this session did
-   not create. **Reading one is fine and is how you find upstream work.**
-   This came up because the branch measures **18 ahead / 699 behind**
-   `origin/stabilize/v2.0.0-prototype`, which already contains this branch's
-   older commits — she absorbs our work periodically. **That is context, not
-   a task.** Filed as a conventions gap on the pack tracker.
-2. **Técnico reads storage topology; Coordenador and above write it.** This
-   answered #929's check 2 (same tier, different code), #1148's seeded
-   population, and the RF006-vs-RF017 actor question in one go. **#1146
-   stands as shipped.**
+## The three numbers this sitting produced
 
-## The RF006-vs-RF017 "actor disagreement" does not exist
+**`[ran it]` all three, on the live stack.**
 
-Four issues carried it (#888 → #929 → #1148 → #1151) and none had read the
-entries. **[read it]** `requisitos-index.md:82-95` and `:256-270`: **RF006 is
-specimen custody** (Ator Técnico; 6 ACs, all custody events), **RF017 is
-equipment and topology** (Ator Coordenador; 7 ACs, all containers/devices).
-Different subjects, so different primary actors is expected, not a
-contradiction — and Dennis's answer matches the documents rather than going
-beyond them. **#1151 was filed and then closed `premise-corrected` this same
-sitting on that reading. Do not re-open the actor question.**
+1. **A Mongo outage answers 503 in 30.008s (stopped) / 60.083s
+   (partitioned).** 30s is `serverSelectionTimeoutMS: 30000` on the **native**
+   client (`database/mongo.js:236`) — not the mongoose 10000. The backend
+   recovers unaided.
+2. **`api.ts` aborts at 10s** (`:153`, the only `timeout:` in the file), so
+   before `fa1530cd` the mapper got `undefined` and no participant ever saw
+   the 503 copy.
+3. **`audit_tree_heads` went 0 → 1, `anchorStatus: ANCHORED`**, with a real
+   RFC3161 token and a witness receipt. The prior live reading was 0 against
+   1471 events.
 
-What IS open on that axis is **scope**, and it belongs to **#1147**: RF017's
-ACs begin at **Freezer** and **Facility/Room appear in none of the seven**,
-while both route files cite dict-02 `facilityId`/`roomId` (ELM-0168/0169,
-1..1 Core).
+## The stack is UP, and its state matters
 
-## The most reusable finding: #921's premise is wrong
+11 services healthy, `RestartCount=0`, on **fresh volumes created this
+sitting**.
 
-**[ran it]** The issue says 53 RBAC gate call sites. The real number is
-**194** — `git grep -o -I -E "requireRole[(]|requirePermission[(]"` over the
-two route dirs gives 207, minus 13 prose-in-comment lines, across 39 files.
-**No derivation reproduces 53; treat it as unsourced.**
-
-Worse, **its proposed guard would certify the hole it was built to find.**
-Remedy step 2 asks that some test contain the route path *and* the literal
-role list — and for `requireRole(4)` the literal is the character `4`.
-**[ran it]** `compliance.routes.js:20` passes that check while
-`compliance.api.test.js:33` stubs the gate to `next()` in the same file.
-**Do not build finding 1's remedy as written** — full corrections and a
-redesign sketch are in the issue's comments.
-
-## Waiting on Dennis
-
-- **Start Docker Desktop.** He authorized Docker and chose the test stack for
-  **#1127's live-stack proof**; `docker version` could not reach
-  `dockerDesktopLinuxEngine` all sitting, and the skills forbid launching the
-  GUI unprompted. Nothing Docker ran. **No stack state exists** — no
-  bring-up, no bootstrap, no seed.
-- **#1123's ownership question**, which also gates #1149:
-  **are role→permission grants catalog-owned or operator-owned?**
-  `[ran it]` `upsertRole` (`rbac-catalog-seed.service.js:404-418`) union-merges
-  on every boot, so a runtime permission toggle can be switched **on** but
-  never **off**. Everything else for that pair is measured and ready to build.
-
-## Issues touched but not closed
-
-Query for state — `gh issue list --state open`. One clause each on what a
-query will not tell you:
-
-- **#1123** — commented, not started. Four sources of truth, not three; both
-  its `[not established]`s settled; direction 1 blocked on the question above.
-  **Recommendation in the comment is read-only + delete the PUT**, inferred
-  from dict-02 giving `UserRoleAssignment` a full grant/revoke audit and
-  `Role.permissionIds` none.
-- **#1149** — filed this sitting. The `PUT /api/security/permissions` no-op.
-  Direction 1 needs no answer from #1123; direction 2 is incoherent until it.
-  **[read it]** It also writes a `severity: 'critical'`, `status: 'success'`
-  audit row per toggle (`security.service.js:555-574`) for a change that
-  alters no authorization decision — an affirmatively misleading compliance
-  record, which rules out direction 3.
-- **#921** — commented, `premise-corrected`. See above. Needs a redesign, not
-  a build.
-- **#1127** — untouched again, still open only on its live-stack proof.
-- **#1147** — untouched this sitting.
-
-## Recommended next
-
-**None queued by name.** **Unverified prescription:** once Docker is up, the
-test stack discharges **#1127** and re-checks #1150's three e2e callers
-(`pipeline-continuity`, `study-protocol-collection-crud`,
-`interop-monitoring`) — **[read it]** all three authenticate as admin, so they
-should pass the new gate unchanged, but that is read, not run.
-
-Still undone from five notes: **diff Requisitos v4.0.0 against v3.0.1 for RF
-renumbering** before building further on `E2E_TRACEABILITY_PLAN.md`. It now
-also bears on #1147 — the RF006/RF017 reading above is against the
-`docs-7-27-2026` extraction as it stands in the tree today, and a renumbering
-would move the identifiers under it.
+- **`admin-bootstrap-test` has run** (`Exited (0)`) — `realLogin()` works.
+- **The 17-service reference-data bootstrap chain has NOT run.** A full-suite
+  gate needs it (#403: 173/27 without, 193/7 with).
+- **InfluxDB is published on host 18086, not 8086** — this machine reserves
+  **7810-8309** (~500 ports), so 8086 *and* 8087 are both unbindable.
+  `[ran it]` `netsh interface ipv4 show excludedportrange protocol=tcp`.
+  Bring it up with `INFLUXDB_HOST_PORT=18086`. **A host-side Playwright run
+  therefore also needs `E2E_INFLUXDB_URL=http://localhost:18086`** —
+  unverified, not run this sitting.
+- `audit-signing-test-data` holds the minted Ed25519 key. **Do not delete
+  that volume** without knowing the sealed tree head is disposable: signed
+  artifacts are verified against that key later.
 
 ## Things a next session must not undo
 
-Items 9-11 from the previous note still hold (`viewStorageTopology` is
-READ-only and deliberately STAFF-seeded and now owner-ratified; it is not a
-`viewEquipment` reuse; run `npm run test:architecture` separately after any
-permission-catalog change — it is `node --test` and vitest silently ignores
-its files). Plus:
+Items 12-14 from the previous note still hold (`requestConsent` is CREATE-only
+on purpose; `POST /consents`' `requireRole(3, 4)` is #684's settled reasoning;
+the `#921` slice-5 pin table says 12 real sites). Plus:
 
-12. **`requestConsent` is CREATE-only on purpose.** The route is a POST and
-    `METHOD_TO_ACTION` derives CREATE; a wider set would let it later gate a
-    read or delete the way `viewTemperature` was reused before #1073.
-13. **`POST /consents`' gate is `requireRole(3, 4)`, not a permission code,
-    and that is #684's settled reasoning, not an oversight.** Ownership is
-    not available on that route: `req.user` carries a userID into `users`,
-    never a participantId.
-14. **The `#921` slice-5 pin table in `eConsent.routes.test.js` now says 12
-    real sites, re-derived.** It said 10 of 11 and cited a line number that
-    had moved. Re-derive rather than trusting it if you add a gate there.
+15. **`set_var` in `generate-env-docker-secrets.sh` is pure bash on purpose.**
+    `[ran it]` MSYS rewrites a Unix absolute path on the way to a native
+    program **both as an argv token and as an environment value**, which
+    turned the container path `/run/secrets/merkle_signing_key.pem` into
+    `C:/Program Files/Git/run/secrets/...`. Routing that value through
+    `python3` or `node` reintroduces the bug. Pack #1082 corrects the rule.
+16. **`AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON` is unset on the test stack on
+    purpose**, and `compose.test.yml` says why. It must be the SPKI of a key
+    that does not exist until the keygen runs, and it is read from env only.
+    **#1157** owns it. Signing does not need it; verification does.
+17. **`mapConsentTokenError` was deliberately NOT changed to map `undefined`
+    to the 503 copy.** An error with neither `response` nor `request` never
+    reached the network, so that would claim an outage whenever the page threw
+    for any other reason. A control case pins it.
+18. **The frontend files under `frontend/src/views/` and
+    `pages/patient/` are CRLF** while the shell and compose files are LF. An
+    `\n`-only anchor matches **zero** against them.
+
+## Open, and left in a known state
+
+Query for the backlog — `gh issue list --state open`. **Nine issues were filed
+this sitting; five are still open and this is the state each was left in:**
+
+- **#1153** — a *fresh* generate writes 31 of the example's 79 variables, and
+  the two disagree on whether the RFC3161 TSA is on. Directions listed, none
+  chosen.
+- **#1154** — boot-time validation of the signing config. **Genuinely
+  blocked**: the check is trivial, but its disposition is the same
+  fatal-vs-degrade call #979 has open and undecided.
+- **#1155** — the three tracked `.sh` files have no tests. First step is
+  checking whether CI's runner image has `bash`/`openssl`/`python3`; that
+  decides the direction.
+- **#1157** — see item 16.
+- **#1158** — `EConsentPage`/`EConsentImportPage` have the same status-only
+  mapping at four call sites. **The mechanism is measured, the consequence is
+  not**: read those two mappers' default copy first, because that is what
+  decides whether it is a real defect or a tidy-up.
+
+Four pack issues were also filed (DyeAllPies/dyeallpies-skills-pack #1079-#1082),
+plus recurrence tallies on its #852 and #896.
+
+## Recommended next
+
+**None queued by name** — Dennis named no follow-up.
+
+**Unverified prescription:** #1158 is the cheapest real win (one read decides
+its size, and `fa1530cd` is a directly reusable template). #1156 having landed
+means the stack now comes up on this machine without a private override, so a
+**full-suite e2e gate is newly possible** — it would need the reference-data
+chain above, `--workers=1`, and the skipped count read rather than the pass
+count. Not run this sitting.
+
+Still undone from six notes: **diff Requisitos v4.0.0 against v3.0.1 for RF
+renumbering** before building further on `E2E_TRACEABILITY_PLAN.md`.
