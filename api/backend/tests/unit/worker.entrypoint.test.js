@@ -19,6 +19,13 @@ const redisConfigPath = require.resolve('../../src/config/redis');
 const loggerPath = require.resolve('../../src/utils/logger');
 const dailyMerkleJobPath = require.resolve('../../src/workers/jobs/daily-merkle.job');
 const dotenvPath = require.resolve('dotenv');
+const SRC_ROOT = require('path').resolve(__dirname, '../../src') + require('path').sep;
+// config/env.js is exempt from that eviction on purpose. It is a plain literal
+// module.exports object that tests deliberately WRITE to (env.FOO = ...) instead
+// of going through process.env, so a fresh copy per test would silently discard
+// every assignment the test just made -- the code under test would then read
+// defaults and the assertion would fail for a reason nothing in the test names.
+const envModulePath = require.resolve('../../src/config/env');
 
 let fakeInitWorker;
 let fakeTestRedisConnection;
@@ -41,9 +48,19 @@ async function loadWorker() {
 
 describe('#977 src/workers/worker.js — the worker treats every Redis failure as fatal', () => {
   beforeEach(() => {
+    // #1160: uncaughtException/unhandledRejection are in this set too, not just
+    // the signals. worker.js registers all four at load, afterEach dropped only
+    // the signals, and the #1040 handlers therefore accumulated one pair per
+    // loadWorker() across the file. Any late failure -- from a boot still in
+    // flight after its own test ended -- then reached a stale handler and called
+    // the REAL process.exit(1), which vitest reports as "Worker exited
+    // unexpectedly" with no pass or fail counts at all. The cause is invisible
+    // from the failure.
     signalListenersBefore = {
       SIGTERM: process.listeners('SIGTERM').slice(),
       SIGINT: process.listeners('SIGINT').slice(),
+      uncaughtException: process.listeners('uncaughtException').slice(),
+      unhandledRejection: process.listeners('unhandledRejection').slice(),
     };
 
     fakeInitWorker = vi.fn().mockResolvedValue({});
@@ -60,17 +77,29 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
   });
 
   afterEach(() => {
-    // worker.js registers SIGTERM/SIGINT handlers at load; drop the ones this
-    // test added so repeated loads do not leak listeners into sibling tests.
-    for (const signal of ['SIGTERM', 'SIGINT']) {
-      for (const listener of process.listeners(signal)) {
-        if (!signalListenersBefore[signal].includes(listener)) {
-          process.removeListener(signal, listener);
+    // worker.js registers SIGTERM/SIGINT and, since #1040, uncaughtException and
+    // unhandledRejection, all at load; drop the ones this test added so repeated
+    // loads do not leak listeners into sibling tests.
+    for (const event of ['SIGTERM', 'SIGINT', 'uncaughtException', 'unhandledRejection']) {
+      for (const listener of process.listeners(event)) {
+        if (!signalListenersBefore[event].includes(listener)) {
+          process.removeListener(event, listener);
         }
       }
     }
-    for (const path of [workerPath, importWorkerPath, queueConfigPath, redisConfigPath, loggerPath, dailyMerkleJobPath, dotenvPath]) {
-      delete require.cache[path];
+    // #1160: evict by PREFIX, not by hand-kept list. The list held only the
+    // modules worker.js requires DIRECTLY, so anything reached through one of
+    // them -- config/validateEnv is the live example -- was loaded once, bound
+    // whatever was in require.cache at that moment (the FIRST test's stubs) and
+    // kept it for the rest of the file. An assertion on a later stub then reads
+    // an object nothing writes to, and reports zero as though the code under
+    // test never ran. A prefix rule cannot fall behind the dependency graph the
+    // way a list does.
+    for (const path of Object.keys(require.cache)) {
+      if (path === envModulePath) continue;
+      if (path.startsWith(SRC_ROOT) || path === dotenvPath) {
+        delete require.cache[path];
+      }
     }
     vi.restoreAllMocks();
   });
@@ -172,8 +201,6 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
     const os = require('os');
     const path = require('path');
     const env = require('../../src/config/env');
-    const validateEnvPath = require.resolve('../../src/config/validateEnv');
-    const auditProviderPath = require.resolve('../../src/services/audit-signing.provider');
 
     let nodeEnvBefore;
     let auditBefore;
@@ -207,15 +234,6 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
       // The encryption gate shares this sequence and exits(1) in production
       // without a key, which would mask everything below.
       process.env.ENCRYPTION_KEY = 'chave-de-teste';
-
-      // config/validateEnv.js captures `logger` at ITS first load, which happens
-      // inside the first loadWorker() of this file -- so without this it holds
-      // the FIRST test's stub for the whole run, and every later assertion reads
-      // an object nothing is writing to. worker.js is re-required per test and
-      // does not have the problem; its dependency does. Evict both so they bind
-      // to the stub this test installed.
-      delete require.cache[validateEnvPath];
-      delete require.cache[auditProviderPath];
     });
 
     afterEach(() => {
@@ -225,8 +243,6 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
       env.AUDIT_MERKLE_SIGN_KEY_ID = auditBefore.id;
       env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = auditBefore.json;
       env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE = auditBefore.file;
-      delete require.cache[validateEnvPath];
-      delete require.cache[auditProviderPath];
       if (tmpKeyFile) {
         fs.rmSync(tmpKeyFile, { force: true });
         tmpKeyFile = undefined;
