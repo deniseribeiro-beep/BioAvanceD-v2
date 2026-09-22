@@ -260,9 +260,12 @@ describe('BatchValidationEngine.buildSampleRow', () => {
 });
 
 describe('BatchValidationEngine.classifyPatientRow', () => {
-  it('warns when patientID was supplied (ignored, auto-generated)', () => {
-    const warnings = engine.classifyPatientRow({ patientID: '123' }, {});
-    expect(warnings).toContain('patientID fornecido será ignorado; o sistema gera o identificador automaticamente');
+  it('does not emit a legacy-alias warning for canonical participantId input', () => {
+    const warnings = engine.classifyPatientRow(
+      { participantId: '12345678' },
+      { phone: '1', recordNumber: 'RN', clinicalUnit: 'X', unitAcronym: 'U', cpf: '1' }
+    );
+    expect(warnings).toEqual([]);
   });
 
   it('warns when email/phone/clinicalUnit differ from normalized values', () => {
@@ -318,13 +321,11 @@ describe('BatchValidationEngine.classifySampleRow', () => {
 });
 
 describe('BatchValidationEngine.buildPatientLinkageQuery', () => {
-  // #853: the input key stays `patientID` -- that is the operator-facing CSV
-  // column -- but the emitted filter is keyed on `participantId`, the field
-  // the patients collection actually writes.
+  // Canonical v2 linkage accepts only participantId for participant identity.
   it('builds criteria in participantId, cpf, recordNumber, _id order', () => {
     const criteria = engine.buildPatientLinkageQuery(
       {},
-      { patientID: '12345678', cpf: '12345678901', recordNumber: '42', _id: '507f1f77bcf86cd799439011' }
+      { participantId: '12345678', cpf: '12345678901', recordNumber: '42', _id: '507f1f77bcf86cd799439011' }
     );
 
     expect(criteria[0]).toEqual({ participantId: '12345678' });
@@ -334,14 +335,14 @@ describe('BatchValidationEngine.buildPatientLinkageQuery', () => {
     expect(criteria[4]._id).toBeDefined();
   });
 
-  it('falls back to rawRow fields when patientData lacks them', () => {
-    const criteria = engine.buildPatientLinkageQuery({ patientID: '12345678' }, {});
+  it('uses canonical rawRow participantId when patientData lacks it', () => {
+    const criteria = engine.buildPatientLinkageQuery({ participantId: '12345678' }, {});
     expect(criteria).toEqual([{ participantId: '12345678' }]);
   });
 
-  it('uses canonical participantId from parsed Patient data before historical input aliases', () => {
+  it('uses canonical participantId from parsed Patient data before rawRow participantId', () => {
     const criteria = engine.buildPatientLinkageQuery(
-      { patientID: '87654321' },
+      { participantId: '87654321' },
       { participantId: '12345678' }
     );
     expect(criteria[0]).toEqual({ participantId: '12345678' });
@@ -373,7 +374,7 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
     const { payloads, warnings } = engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'alphaGal:12.5,lysoGb3:4.2' },
       { participantId: 'P1', _id: 'patient-1' },
-      { sampleID: 'S1', _id: 'sample-1' }
+      { specimenId: 'S1', _id: 'sample-1' }
     );
 
     expect(payloads).toHaveLength(2);
@@ -414,23 +415,21 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
 
   it('falls back through specimen sampleId/barcode and patient rawRow.patientID identifiers', () => {
     const { payloads } = engine.buildBiomarkerObservationPayloads(
-      { patientID: 'raw-patient-id', biomarkers: 'alphaGal:1' },
+      { participantId: 'raw-patient-id', biomarkers: 'alphaGal:1' },
       {},
-      { sampleId: 'specimen-sample-id' }
+      { specimenId: 'specimen-sample-id' }
     );
 
     expect(payloads[0].participantId).toBe('raw-patient-id');
-    expect(payloads[0].sampleID).toBe('specimen-sample-id');
+    expect(payloads[0].specimenId).toBe('specimen-sample-id');
   });
 
-  it('falls back to specimen.barcode when no other specimen identifier is present', () => {
-    const { payloads } = engine.buildBiomarkerObservationPayloads(
+  it('rejects biomarker payloads without canonical participantId/specimenId', () => {
+    expect(() => engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'alphaGal:1' },
-      {},
+      { participantId: '12345678' },
       { barcode: 'BC-9' }
-    );
-
-    expect(payloads[0].sampleID).toBe('BC-9');
+    )).toThrow('participantId e specimenId canônicos são obrigatórios');
   });
 
   // #768: this used to pass a specimen shaped `{ registrationDate }` -- a
@@ -523,7 +522,7 @@ describe('BatchValidationEngine item 8 reader/linkage residuals', () => {
     const db = { collection: vi.fn(() => ({ findOne })) };
 
     const result = await engine.findLinkedPatient(db, {}, {
-      patientID: '12345678',
+      participantId: '12345678',
       cpf: '12345678901',
       recordNumber: '42',
     });
@@ -546,7 +545,7 @@ describe('BatchValidationEngine item 8 reader/linkage residuals', () => {
     const result = engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'alphaGal' },
       { participantId: '12345678' },
-      { sampleID: 'S-1' }
+      { specimenId: 'S-1' }
     );
 
     expect(result.payloads).toEqual([]);
@@ -557,7 +556,7 @@ describe('BatchValidationEngine item 8 reader/linkage residuals', () => {
 
   it('uses patientID and barcode fallbacks when internal object identifiers are legitimately absent', () => {
     const result = engine.buildBiomarkerObservationPayloads(
-      { patientID: '12345678', biomarkers: 'alphaGal:2.5' },
+      { participantId: '12345678', biomarkers: 'alphaGal:2.5' },
       {},
       { barcode: 'BC-ITEM8' }
     );
@@ -565,7 +564,7 @@ describe('BatchValidationEngine item 8 reader/linkage residuals', () => {
     expect(result.payloads[0]).toMatchObject({
       participantId: '12345678',
       patientObjectId: null,
-      sampleID: 'BC-ITEM8',
+      specimenId: 'BC-ITEM8',
       specimenId: 'BC-ITEM8',
       linkedResourceId: '12345678',
       subject: { reference: 'Patient/12345678' },
@@ -634,11 +633,11 @@ describe('BatchValidationEngine.persistPatient', () => {
     expect(patientService.createPatient).toHaveBeenCalledTimes(1);
   });
 
-  it('returns PARTIAL with warnings when patientID was supplied and ignored', async () => {
+  it('returns PARTIAL with warnings when participantId was supplied and ignored', async () => {
     vi.spyOn(patientService, 'createPatient').mockResolvedValue({ _id: 'new-patient-id-2' });
 
     const result = await engine.persistPatient(
-      { patientID: 'should-be-ignored' },
+      { participantId: 'should-be-ignored' },
       {
         patientName: 'Bruno Costa',
         birthDate: '1985-02-02',
@@ -846,8 +845,8 @@ describe('BatchValidationEngine file readers', () => {
     const rows = await engine.readXlsxRows(filePath);
 
     expect(rows).toEqual([
-      { patientID: '12345678', sampleType: 'Sangue' },
-      { patientID: '87654321', sampleType: 'Plasma' },
+      { participantId: '12345678', sampleType: 'Sangue' },
+      { participantId: '87654321', sampleType: 'Plasma' },
     ]);
   });
 
@@ -1035,7 +1034,7 @@ describe('BatchValidationEngine item 8 legitimate residuals', () => {
     const result = await engine.persistSample(
       {},
       {
-        patientID: '12345678',
+        participantId: '12345678',
         sampleType: 'Sangue',
         sampleOrigin: 'Coleta',
         extractionProtocol: 'EDTA',
@@ -1181,7 +1180,7 @@ describe('BatchValidationEngine item 8 canonical linkage fallback', () => {
     const result = await engine.persistSample(
       {},
       {
-        patientID: '12345678',
+        participantId: '12345678',
         sampleType: 'PLASMA',
         sampleOrigin: 'VENOUS_BLOOD',
         extractionProtocol: 'EDTA',
@@ -1211,7 +1210,7 @@ describe('BatchValidationEngine item 8 canonical linkage fallback', () => {
     const result = await engine.persistSample(
       {},
       {
-        patientID: '12345678',
+        participantId: '12345678',
         sampleType: 'PLASMA',
         sampleOrigin: 'VENOUS_BLOOD',
         extractionProtocol: 'EDTA',
