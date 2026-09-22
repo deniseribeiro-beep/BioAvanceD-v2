@@ -42,13 +42,13 @@ const StorageBoxSchema = new mongoose.Schema(
       },
     },
 
-    // Grid de ocupação: mapa posição -> sampleID
-    // Estructura: { "A1": sampleID, "A2": null, "B1": sampleID, ... }
+    // Grid de ocupação: mapa posição -> specimenObjectId
+    // Estructura: { "A1": specimenObjectId, "A2": null, "B1": specimenObjectId, ... }
     occupancyGrid: {
       type: Map,
       of: mongoose.Schema.Types.ObjectId,
       default: new Map(),
-      comment: "Map<position, sampleID>. null significa vazio.",
+      comment: "Map<position, specimenObjectId>. null significa vazio.",
     },
 
     // Contadores
@@ -208,22 +208,22 @@ StorageBoxSchema.methods.isValidPosition = function (position) {
 
 /**
  * Verificar se uma posição está ocupada
- * Retorna: { occupied: boolean, sampleID: ObjectId | null }
+ * Retorna: { occupied: boolean, specimenObjectId: ObjectId | null }
  */
 StorageBoxSchema.methods.checkPositionOccupancy = function (position) {
   if (!this.isValidPosition(position)) {
-    return { occupied: null, error: "INVALID_POSITION", sampleID: null };
+    return { occupied: null, error: "INVALID_POSITION", specimenObjectId: null };
   }
 
-  const sampleID = this.occupancyGrid?.get(position) || null;
-  return { occupied: !!sampleID, sampleID };
+  const specimenObjectId = this.occupancyGrid?.get(position) || null;
+  return { occupied: !!specimenObjectId, specimenObjectId };
 };
 
 /**
  * Adicionar amostra a uma posição (PASSO 2 usará isso)
  * Retorna: { success: boolean, error?: string }
  */
-StorageBoxSchema.methods.addSample = function (position, sampleID) {
+StorageBoxSchema.methods.addSample = function (position, specimenObjectId) {
   // Validar posição
   if (!this.isValidPosition(position)) {
     return { success: false, error: "INVALID_POSITION" };
@@ -231,11 +231,11 @@ StorageBoxSchema.methods.addSample = function (position, sampleID) {
 
   // Verificar colisão
   if (this.occupancyGrid?.has(position) && this.occupancyGrid.get(position)) {
-    return { success: false, error: "POSITION_OCCUPIED", sampleID: this.occupancyGrid.get(position) };
+    return { success: false, error: "POSITION_OCCUPIED", specimenObjectId: this.occupancyGrid.get(position) };
   }
 
   // Adicionar
-  this.occupancyGrid.set(position, sampleID);
+  this.occupancyGrid.set(position, specimenObjectId);
   this.currentOccupancy += 1;
 
   return { success: true };
@@ -253,11 +253,11 @@ StorageBoxSchema.methods.removeSample = function (position) {
     return { success: false, error: "POSITION_EMPTY" };
   }
 
-  const sampleID = this.occupancyGrid.get(position);
+  const specimenObjectId = this.occupancyGrid.get(position);
   this.occupancyGrid.delete(position);
   this.currentOccupancy -= 1;
 
-  return { success: true, sampleID };
+  return { success: true, specimenObjectId };
 };
 
 /**
