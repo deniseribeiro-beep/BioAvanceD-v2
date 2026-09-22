@@ -577,10 +577,10 @@ class ImportService {
               }
             }
             try {
-              await validator.validateSampleCompliance(String(insertResult.insertedId));
+              await validator.validateSampleCompliance(String(sample.specimenId));
             } catch (validationError) {
               logger.warn('[IMPORT_SERVICE] Falha ao validar compliance após importação JSON, mantendo em quarentena', {
-                specimenId: String(insertResult.insertedId),
+                specimenId: String(sample.specimenId),
                 error: validationError?.message || String(validationError),
               });
             }
@@ -679,10 +679,10 @@ class ImportService {
               }
             }
             try {
-              await validator.validateSampleCompliance(String(insertResult.insertedId));
+              await validator.validateSampleCompliance(String(sample.specimenId));
             } catch (validationError) {
               logger.warn('[IMPORT_SERVICE] Falha ao validar compliance após importação tabular, mantendo em quarentena', {
-                specimenId: String(insertResult.insertedId),
+                specimenId: String(sample.specimenId),
                 error: validationError?.message || String(validationError),
               });
             }
