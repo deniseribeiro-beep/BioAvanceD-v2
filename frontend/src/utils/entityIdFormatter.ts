@@ -1,6 +1,6 @@
 /**
  * Utilitário para formatar entityID de logs
- * Trata diferentes tipos de IDs (ObjectId, patientID, etc.)
+ * Trata diferentes tipos de IDs (ObjectId, participantId, etc.)
  */
 
 /**
