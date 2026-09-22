@@ -160,8 +160,8 @@ export default function SampleWithdrawalReturnPage() {
         if (result.sample.linkedProject) {
           setWithdrawForm(prev => ({ ...prev, linkedProject: result.sample.linkedProject || '' }));
         }
-        await loadMovements(result.sample._id || '');
-        await loadCurrentStoragePlacement(result.sample._id || '');
+        await loadMovements(result.sample.specimenId || '');
+        await loadCurrentStoragePlacement(result.sample.specimenId || '');
         setActiveTab(resolveInitialTab(result.sample));
       } else {
         setMessage({ type: 'error', text: t('samples.sampleNotFound') || 'Amostra não encontrada' });
@@ -234,7 +234,7 @@ export default function SampleWithdrawalReturnPage() {
   };
 
   const handleWithdraw = async () => {
-    if (!sample?._id) return;
+    if (!sample?.specimenId) return;
     setLoading(true);
     setMessage(null);
     setShowConfirmModal(false);
@@ -250,7 +250,7 @@ export default function SampleWithdrawalReturnPage() {
         observations: withdrawForm.observations
       };
 
-      const response = await sampleService.withdraw(sample._id as string, data);
+      const response = await sampleService.withdraw(sample.specimenId, data);
       if (response.data?.success) {
         setMessage({ type: 'success', text: `Retirada registrada com sucesso! Quantidade retirada: ${response.data.data?.withdrawnQuantity || '-'} ${sample.unit || 'µL'}` });
         await handleSearch();
@@ -287,7 +287,7 @@ export default function SampleWithdrawalReturnPage() {
         observations: returnForm.observations
       };
 
-      const response = await sampleService.return(sample._id as string, data);
+      const response = await sampleService.return(sample.specimenId, data);
       if (response.data?.success) {
         setMessage({ type: 'success', text: `Devolução registrada com sucesso! Quantidade devolvida: ${response.data.data?.returnedQuantity || '-'} ${sample.unit || 'µL'}` });
         await handleSearch();
@@ -349,7 +349,7 @@ export default function SampleWithdrawalReturnPage() {
             <div className="sample-info-grid">
               <div className="info-section">
                 <h4>Identificação</h4>
-                <div className="info-row"><span className="info-label">ID Interno:</span><span className="info-value">{sample._id || '-'}</span></div>
+                <div className="info-row"><span className="info-label">ID da Amostra:</span><span className="info-value">{sample.specimenId || '-'}</span></div>
                 <div className="info-row"><span className="info-label">Código de Barras:</span><span className="info-value barcode">{sample.barcode || '-'}</span></div>
                 <div className="info-row"><span className="info-label">Tipo:</span><span className="info-value">{sample.sampleType || '-'}</span></div>
                 <div className="info-row"><span className="info-label">Projeto:</span><span className="info-value">{sample.linkedProject || '-'}</span></div>
