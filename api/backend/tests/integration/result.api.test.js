@@ -29,7 +29,7 @@ function givenSession() {
 
 const FAKE_RESULT = {
   _id: 'result-1',
-  sampleID: 'SAMPLE-001',
+  specimenId: 'SPECIMEN-001',
   fileName: 'result_abc123.pdf',
   fileType: 'PDF',
   uploadedAt: new Date().toISOString(),
