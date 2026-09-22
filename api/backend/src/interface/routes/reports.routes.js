@@ -296,7 +296,7 @@ async function getMatchingPatientIds(samplesCollection, sampleQuery) {
 
   const patientIds = await samplesCollection.distinct('participantId', sampleQuery);
   return Array.isArray(patientIds)
-    ? patientIds.map((patientID) => String(patientID || '').trim()).filter(Boolean)
+    ? patientIds.map((participantId) => String(participantId || '').trim()).filter(Boolean)
     : [];
 }
 
