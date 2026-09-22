@@ -249,9 +249,9 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
         },
       });
       expect([201, 202]).toContain(sampleCreate.status());
-      const sampleID = (await sampleCreate.json()).data.sampleID;
+      const specimenId = (await sampleCreate.json()).data.specimenId;
 
-      await page.goto(`/samples/${sampleID}/label`);
+      await page.goto(`/samples/${specimenId}/label`);
       await expect(page.getByTestId('sample-label-page')).toBeVisible();
       await beat(page, MEDIUM);
       await expect(page.getByTestId('sample-label-data-matrix-image')).toBeVisible();

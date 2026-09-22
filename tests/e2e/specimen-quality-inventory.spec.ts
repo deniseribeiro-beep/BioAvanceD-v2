@@ -180,17 +180,17 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     // conditional, not the specimen registration this criterion covers.
     const first = await create();
     expect([201, 202]).toContain(first.status());
-    const firstSampleID = (await first.json()).data.sampleID;
+    const firstSpecimenId = (await first.json()).data.specimenId;
 
     const second = await create();
     expect([201, 202]).toContain(second.status());
-    const secondSampleID = (await second.json()).data.sampleID;
+    const secondSpecimenId = (await second.json()).data.specimenId;
 
     const [firstGet, secondGet] = await Promise.all([
-      request.get(`${apiBaseURL}/api/samples/${firstSampleID}`, {
+      request.get(`${apiBaseURL}/api/samples/${firstSpecimenId}`, {
         headers: { Authorization: `Bearer ${admin.token}` },
       }),
-      request.get(`${apiBaseURL}/api/samples/${secondSampleID}`, {
+      request.get(`${apiBaseURL}/api/samples/${secondSpecimenId}`, {
         headers: { Authorization: `Bearer ${admin.token}` },
       }),
     ]);
@@ -231,9 +231,9 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     });
 
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const specimenId = (await create.json()).data.specimenId;
 
-    const get = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+    const get = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     const persistedSprec = (await get.json()).data.sprec;
@@ -263,9 +263,9 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const specimenId = (await create.json()).data.specimenId;
 
-    const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+    const withdraw = await request.post(`${apiBaseURL}/api/samples/${specimenId}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         withdrawalType: 'Total',
@@ -282,7 +282,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     // exists for the participant, the identical withdraw request succeeds.
     await seedActiveConsent(participant.participantId);
 
-    const withdrawAfterConsent = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+    const withdrawAfterConsent = await request.post(`${apiBaseURL}/api/samples/${specimenId}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         withdrawalType: 'Total',
@@ -407,9 +407,9 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     });
 
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const specimenId = (await create.json()).data.specimenId;
 
-    const get = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+    const get = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     const persisted = (await get.json()).data;
@@ -548,19 +548,19 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
-    return { sampleID };
+    const specimenId = (await create.json()).data.specimenId;
+    return { specimenId };
   }
 
   test('records origin/destination/responsible/purpose/quantity for a withdrawal, and appends to the audit trail (criteria 1, 6)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
-    const { sampleID } = await seedWithdrawableSample(request, admin);
+    const { specimenId } = await seedWithdrawableSample(request, admin);
 
     const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
 
-    const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+    const withdraw = await request.post(`${apiBaseURL}/api/samples/${specimenId}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         withdrawalType: 'Parcial',
@@ -575,7 +575,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
 
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
 
-    const movementsGet = await request.get(`${apiBaseURL}/api/samples/${sampleID}/movements`, {
+    const movementsGet = await request.get(`${apiBaseURL}/api/samples/${specimenId}/movements`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     expect(movementsGet.status()).toBe(200);
@@ -594,9 +594,9 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     request,
   }) => {
     const admin = await realLogin(request);
-    const { sampleID } = await seedWithdrawableSample(request, admin);
+    const { specimenId } = await seedWithdrawableSample(request, admin);
 
-    const partial = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+    const partial = await request.post(`${apiBaseURL}/api/samples/${specimenId}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         withdrawalType: 'Parcial',
@@ -608,12 +608,12 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     expect(partial.status()).toBe(200);
     expect((await partial.json()).data.newStatus).toBe('partial');
 
-    const afterPartial = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+    const afterPartial = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     expect((await afterPartial.json()).data.specimenStatus).toBe('partial');
 
-    const total = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+    const total = await request.post(`${apiBaseURL}/api/samples/${specimenId}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         withdrawalType: 'Total',
@@ -624,7 +624,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     expect(total.status()).toBe(200);
     expect((await total.json()).data.newStatus).toBe('depleted');
 
-    const afterTotal = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+    const afterTotal = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     expect((await afterTotal.json()).data.specimenStatus).toBe('depleted');
@@ -632,9 +632,9 @@ test.describe('Chain of custody (RF006) — real backend', () => {
 
   test('blocks a withdrawal against a specimen in a blocked lifecycle status (criterion 4)', async ({ request }) => {
     const admin = await realLogin(request);
-    const { sampleID } = await seedWithdrawableSample(request, admin);
+    const { specimenId } = await seedWithdrawableSample(request, admin);
 
-    const block = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+    const block = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: { specimenStatus: 'destroyed' },
     });
@@ -642,7 +642,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     const blockBody = (await block.json()).data;
     expect(blockBody.specimenStatus).toBe('destroyed');
 
-    const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+    const withdraw = await request.post(`${apiBaseURL}/api/samples/${specimenId}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         withdrawalType: 'Total',
@@ -660,9 +660,9 @@ test.describe('Chain of custody (RF006) — real backend', () => {
 
   test('custody events cannot be altered or deleted — no route accepts a mutation (criterion 5)', async ({ request }) => {
     const admin = await realLogin(request);
-    const { sampleID } = await seedWithdrawableSample(request, admin);
+    const { specimenId } = await seedWithdrawableSample(request, admin);
 
-    const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+    const withdraw = await request.post(`${apiBaseURL}/api/samples/${specimenId}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         withdrawalType: 'Parcial',
@@ -674,23 +674,23 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     expect(withdraw.status()).toBe(200);
     const movementID = (await withdraw.json()).data.movementID;
 
-    const before = await request.get(`${apiBaseURL}/api/samples/${sampleID}/movements`, {
+    const before = await request.get(`${apiBaseURL}/api/samples/${specimenId}/movements`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     const movementsBefore = (await before.json()).data;
 
-    const put = await request.put(`${apiBaseURL}/api/samples/${sampleID}/movements/${movementID}`, {
+    const put = await request.put(`${apiBaseURL}/api/samples/${specimenId}/movements/${movementID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: { quantity: 999 },
     });
     expect(put.status()).toBe(404);
 
-    const del = await request.delete(`${apiBaseURL}/api/samples/${sampleID}/movements/${movementID}`, {
+    const del = await request.delete(`${apiBaseURL}/api/samples/${specimenId}/movements/${movementID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     expect(del.status()).toBe(404);
 
-    const after = await request.get(`${apiBaseURL}/api/samples/${sampleID}/movements`, {
+    const after = await request.get(`${apiBaseURL}/api/samples/${specimenId}/movements`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     const movementsAfter = (await after.json()).data;
@@ -739,17 +739,17 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
-    return { sampleID };
+    const specimenId = (await create.json()).data.specimenId;
+    return { specimenId };
   }
 
   test('places a specimen into quarantine with cause and originating event recorded, and blocks withdrawal while quarantined (criteria 1, 5, 6)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
-    const { sampleID } = await seedQuarantinableSample(request, admin);
+    const { specimenId } = await seedQuarantinableSample(request, admin);
 
-    const quarantine = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+    const quarantine = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         specimenStatus: 'quarantined',
@@ -761,7 +761,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     expect(quarantined.specimenStatus).toBe('quarantined');
     expect(quarantined.quarantineReason).toBe('RF019 e2e: consent revocation');
 
-    const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+    const withdraw = await request.post(`${apiBaseURL}/api/samples/${specimenId}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         withdrawalType: 'Total',
@@ -779,9 +779,9 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
 
   test('release requires an authorized actor and is audited with an evidence trail (criteria 7, 8)', async ({ request }) => {
     const admin = await realLogin(request);
-    const { sampleID } = await seedQuarantinableSample(request, admin);
+    const { specimenId } = await seedQuarantinableSample(request, admin);
 
-    const quarantine = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+    const quarantine = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         specimenStatus: 'quarantined',
@@ -791,14 +791,14 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     expect(quarantine.status()).toBe(200);
 
     // No token — release is not open to unauthenticated callers.
-    const unauthorized = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+    const unauthorized = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
       data: { specimenStatus: 'available', quarantineReason: 'unauthorized attempt' },
     });
     expect(unauthorized.status()).toBe(401);
 
     const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
 
-    const release = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+    const release = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         specimenStatus: 'available',
@@ -913,7 +913,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     await closeSeedDb();
   });
 
-  async function createRealSample(request: any, token: string): Promise<{ sampleID: string; barcode: string }> {
+  async function createRealSample(request: any, token: string): Promise<{ specimenId: string; barcode: string }> {
     const participant = await createRealParticipant(request, apiBaseURL!, token);
     const seededStorageBox = await seedStorageBoxLocation();
     seededStorageBoxes.push(seededStorageBox);
@@ -926,11 +926,11 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     expect([201, 202]).toContain(create.status());
     const body = (await create.json()).data;
 
-    const get = await request.get(`${apiBaseURL}/api/samples/${body.sampleID}`, {
+    const get = await request.get(`${apiBaseURL}/api/samples/${body.specimenId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const sample = (await get.json()).data;
-    return { sampleID: body.sampleID, barcode: sample.barcode };
+    return { specimenId: body.specimenId, barcode: sample.barcode };
   }
 
   test('generates the canonical Data Matrix asset tied to the specimen container identifier (criteria 1, 2)', async ({ request }) => {
@@ -988,7 +988,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
 
     const res = await request.post(`${apiBaseURL}/api/samples/labels/batch`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { specimenIds: [sampleA.sampleID, sampleB.sampleID, 'does-not-exist'] },
+      data: { specimenIds: [sampleA.specimenId, sampleB.specimenId, 'does-not-exist'] },
     });
     expect(res.ok(), await res.text()).toBeTruthy();
     const body = (await res.json()).data;
@@ -997,7 +997,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     expect(body.generated).toBe(2);
     expect(body.failed).toBe(1);
 
-    const resultA = body.results.find((r: any) => r.specimenId === sampleA.sampleID);
+    const resultA = body.results.find((r: any) => r.specimenId === sampleA.specimenId);
     expect(resultA).toMatchObject({
       success: true,
       encodedValue: sampleA.barcode,
@@ -1045,9 +1045,9 @@ test.describe('Sample labeling (RF016) — through the real UI (#655)', () => {
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const specimenId = (await create.json()).data.specimenId;
 
-    await page.goto(`/samples/${sampleID}/label`);
+    await page.goto(`/samples/${specimenId}/label`);
 
     await expect(page.getByTestId('sample-label-page')).toBeVisible();
     await expect(page.getByTestId('sample-label-data-matrix-image')).toBeVisible();
@@ -1057,7 +1057,7 @@ test.describe('Sample labeling (RF016) — through the real UI (#655)', () => {
       page.waitForEvent('download'),
       page.getByTestId('sample-label-print-job-button').click(),
     ]);
-    expect(download.suggestedFilename()).toBe(`label-${sampleID}-print-job.json`);
+    expect(download.suggestedFilename()).toBe(`label-${specimenId}-print-job.json`);
   });
 
   test('renders the error state for a sample that does not exist', async ({ page, request }) => {
@@ -1142,7 +1142,7 @@ test.describe('Storage location availability (RF017 AC#7) — real backend', () 
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleId = (await create.json()).data.sampleID;
+    const sampleId = (await create.json()).data.specimenId;
 
     const destination = await seedStorageBoxLocation();
     seededStorageBoxes.push(destination);
@@ -1251,7 +1251,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
-    const specimenId = String((await sampleRes.json()).data.sampleID);
+    const specimenId = String((await sampleRes.json()).data.specimenId);
 
     const reagentRes = await request.post(`${apiBaseURL}/api/reagent-lots`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1327,7 +1327,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
-    const specimenId = String((await sampleRes.json()).data.sampleID);
+    const specimenId = String((await sampleRes.json()).data.specimenId);
 
     const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
       headers: { Authorization: `Bearer ${admin.token}` },

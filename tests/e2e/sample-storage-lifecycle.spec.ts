@@ -73,7 +73,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleId = (await create.json()).data.sampleID;
+    const sampleId = (await create.json()).data.specimenId;
     expect(sampleId).toBeTruthy();
 
     // --- MoveSampleUseCase#execute -> withTransaction ---
@@ -185,7 +185,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
       },
     });
     expect([201, 202]).toContain(create2.status());
-    const sample2Id = (await create2.json()).data.sampleID;
+    const sample2Id = (await create2.json()).data.specimenId;
 
     const release2 = await request.delete(`${apiBaseURL}/api/storage/release/${sample2Id}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -236,7 +236,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleId = (await create.json()).data.sampleID;
+    const sampleId = (await create.json()).data.specimenId;
     expect(sampleId).toBeTruthy();
 
     // The only way to reach an unallocated sample: release it first, since
