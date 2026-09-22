@@ -10,7 +10,7 @@ const TemperatureModel = require('../models/Temperature');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
-const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
+const { omitParticipantIdentityFields } = require('../utils/participantIdentityFields');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const participantIdentityService = require('./participantIdentity.service');
 const SampleGraphValidator = require('./SampleGraphValidator');
@@ -18,7 +18,7 @@ const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
-const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
+const { generateUniqueSpecimenId } = require('../utils/specimenIdGenerator');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 
 /**
@@ -352,7 +352,7 @@ class ImportService {
           patientData.consentToken = consentMetadata.token;
           patientData.consentTokenCreatedAt = consentMetadata.createdAt;
           patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
-          const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
+          const patient = PatientModel.create(omitParticipantIdentityFields(patientData));
           const insertResult = await patientsCollection.insertOne(patient);
 
           // RF005/RNF007 (#575): patientName/birthDate/identityDocument are
@@ -391,7 +391,7 @@ class ImportService {
           // never land on Patient — `merged` (used below, un-stripped, for
           // the ParticipantIdentity sync) may still carry them from
           // `existing` (pre-#575 data) even when `patientData` doesn't.
-          await patientsCollection.updateOne({ _id: existing._id }, { $set: omitLegacyIdentityFields(merged) });
+          await patientsCollection.updateOne({ _id: existing._id }, { $set: omitParticipantIdentityFields(merged) });
 
           // RF005/RNF007 (#561/#563): keep ParticipantIdentity in sync on
           // update, same as patient.service.js#updatePatient — an import
@@ -432,7 +432,7 @@ class ImportService {
               continue;
             }
             const identityErrors = validateIdentityFieldsPresent(patientData);
-            const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
+            const validation = PatientModel.validate(omitParticipantIdentityFields(patientData));
             const errors = [...identityErrors, ...validation.errors];
             if (errors.length > 0) {
               results.errors.push({
@@ -477,7 +477,7 @@ class ImportService {
               continue;
             }
             const identityErrors = validateIdentityFieldsPresent(patientData);
-            const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
+            const validation = PatientModel.validate(omitParticipantIdentityFields(patientData));
             const errors = [...identityErrors, ...validation.errors];
             if (errors.length > 0) {
               results.errors.push({
