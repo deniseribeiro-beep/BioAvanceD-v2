@@ -1747,7 +1747,7 @@ class ImportLGPDService {
           // candidate resolved above.
           if (candidateLocation?.boxId) {
             await allocateUseCase.execute({
-              specimenId: insertResult.insertedId,
+              specimenId: sample.specimenId,
               boxId: String(candidateLocation.boxId),
               position: candidateLocation.position,
               actor: {
@@ -1761,10 +1761,10 @@ class ImportLGPDService {
           } else { void 0; }
 
           try {
-            await validator.validateSampleCompliance(String(insertResult.insertedId));
+            await validator.validateSampleCompliance(String(sample.specimenId));
           } catch (validationError) {
             logger.warn('[IMPORT_LGPD] Falha no SampleGraphValidator durante importação', {
-              specimenId: String(insertResult.insertedId),
+              specimenId: String(sample.specimenId),
               row: rowNumber,
               error: validationError?.message || String(validationError),
             });
