@@ -13,6 +13,28 @@ const { isRecordInOrganizationScope } = require('../services/rbac-assignment.ser
 const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
 const { STORAGE_BASE } = require('../config/uploadConfig');
 
+async function findSampleByIdentifier(samplesCollection, identifier) {
+  const raw = String(identifier ?? '').trim();
+  if (!raw) return null;
+
+  if (ObjectId.isValid(raw)) {
+    const byInternalId = await samplesCollection.findOne({ _id: new ObjectId(raw) });
+    if (byInternalId) return byInternalId;
+  }
+
+  return samplesCollection.findOne({ specimenId: raw });
+}
+
+function requireCanonicalSpecimenId(sample) {
+  const specimenId = String(sample?.specimenId ?? '').trim();
+  if (!specimenId) {
+    const error = new Error('Amostra sem specimenId canônico');
+    error.statusCode = 422;
+    throw error;
+  }
+  return specimenId;
+}
+
 /**
  * Controller de Upload de Arquivos de Análise de Amostras
  * RF007 - Upload de Arquivos da Análise
@@ -127,16 +149,10 @@ class SampleFileController {
         });
       }
 
-      // Valida se a amostra existe
+      // Resolve a amostra pelo identificador canônico; _id é aceito apenas
+      // como identificador interno de transporte e nunca é persistido no vínculo.
       const samplesCollection = db.collection('samples');
-      let sample;
-      try {
-        // Tenta buscar por ObjectId primeiro
-        sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
-      } catch (idError) {
-        // Se não for ObjectId válido, tenta buscar por specimenId numérico
-        sample = await samplesCollection.findOne({ specimenId: Number(specimenId) });
-      }
+      const sample = await findSampleByIdentifier(samplesCollection, specimenId);
 
       if (!sample) {
         // Remove arquivo se amostra não existe
@@ -170,6 +186,8 @@ class SampleFileController {
           message: 'Esta amostra pertence a outra organização'
         });
       }
+
+      const canonicalSpecimenId = requireCanonicalSpecimenId(sample);
 
       // Obtém ID anonimizado do uploader (LGPD)
       const uploaderAnonId = await getUserAnonId(req.user, db);
@@ -222,13 +240,12 @@ class SampleFileController {
       if (encryption) {
         fs.writeFileSync(file.path, encryption.ciphertext);
       }
-      const storageUri = `objstore://samples/${sample._id.toString()}/files/${path.basename(file.path)}`;
+      const storageUri = `objstore://samples/${canonicalSpecimenId}/files/${path.basename(file.path)}`;
 
       // Cria registro na collection sample_files
       const sampleFilesCollection = db.collection('sample_files');
       const sampleFileData = {
-        sampleID: sample._id.toString(), // SampleFileModel.validate requires sampleID
-        specimenId: sample._id.toString(), // Usa _id da amostra como referência principal
+        specimenId: canonicalSpecimenId, // referência canônica ao espécime
         fileName: file.originalname,
         fileType: fileType,
         fileRole: fileRole || 'raw',
@@ -283,7 +300,7 @@ class SampleFileController {
             fileName: file.originalname,
             fileSize: file.size,
             fileType: fileType,
-            specimenId: sample._id.toString(),
+            specimenId: canonicalSpecimenId,
             checksum,
             checksumAlgorithm: 'sha256'
             // Não inclui dados sensíveis
@@ -359,14 +376,9 @@ class SampleFileController {
 
       const { specimenId } = req.params;
 
-      // Valida se a amostra existe
+      // Valida se a amostra existe e normaliza o vínculo para specimenId.
       const samplesCollection = db.collection('samples');
-      let sample;
-      try {
-        sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
-      } catch (idError) {
-        sample = await samplesCollection.findOne({ specimenId: Number(specimenId) });
-      }
+      const sample = await findSampleByIdentifier(samplesCollection, specimenId);
 
       if (!sample) {
         return res.status(404).json({
@@ -386,7 +398,7 @@ class SampleFileController {
 
       // Busca arquivos da amostra
       const sampleFilesCollection = db.collection('sample_files');
-      const specimenIdString = sample._id.toString();
+      const specimenIdString = requireCanonicalSpecimenId(sample);
       const files = await sampleFilesCollection.find({ specimenId: specimenIdString }).toArray();
 
       // Remove caminhos sensíveis da resposta (LGPD)
@@ -482,9 +494,7 @@ class SampleFileController {
       }
 
       // Verifica se o arquivo pertence à amostra correta
-      const specimenIdString = typeof specimenId === 'string' && ObjectId.isValid(specimenId) 
-        ? new ObjectId(specimenId).toString()
-        : String(specimenId);
+      const specimenIdString = String(specimenId).trim();
       
       if (fileRecord.specimenId !== specimenIdString) {
         return res.status(403).json({
@@ -502,7 +512,7 @@ class SampleFileController {
         const samplesCollection = db.collection('samples');
         let sampleForScope = null;
         try {
-          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
+          sampleForScope = await samplesCollection.findOne({ specimenId: specimenIdString });
         } catch (_) {}
         if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
           return res.status(403).json({
@@ -613,9 +623,7 @@ class SampleFileController {
       }
 
       // Verifica se o arquivo pertence à amostra correta
-      const specimenIdString = typeof specimenId === 'string' && ObjectId.isValid(specimenId) 
-        ? new ObjectId(specimenId).toString()
-        : String(specimenId);
+      const specimenIdString = String(specimenId).trim();
       
       if (fileRecord.specimenId !== specimenIdString) {
         return res.status(403).json({
@@ -632,7 +640,7 @@ class SampleFileController {
         const samplesCollection = db.collection('samples');
         let sampleForScope = null;
         try {
-          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
+          sampleForScope = await samplesCollection.findOne({ specimenId: specimenIdString });
         } catch (_) {}
         if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
           return res.status(403).json({
@@ -753,9 +761,7 @@ class SampleFileController {
       }
 
       // Verifica se o arquivo pertence à amostra correta
-      const specimenIdString = typeof specimenId === 'string' && ObjectId.isValid(specimenId)
-        ? new ObjectId(specimenId).toString()
-        : String(specimenId);
+      const specimenIdString = String(specimenId).trim();
 
       if (fileRecord.specimenId !== specimenIdString) {
         cleanupUploadedFile();
@@ -771,7 +777,7 @@ class SampleFileController {
         const samplesCollection = db.collection('samples');
         let sampleForScope = null;
         try {
-          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
+          sampleForScope = await samplesCollection.findOne({ specimenId: specimenIdString });
         } catch (_) {}
         if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
           cleanupUploadedFile();
@@ -845,8 +851,7 @@ class SampleFileController {
 
       const validation = SampleFileModel.validate({
         ...fileRecord,
-        ...updatedFields,
-        sampleID: fileRecord.sampleID || fileRecord.specimenId
+        ...updatedFields
       });
       if (!validation.isValid) {
         cleanupUploadedFile();
@@ -974,7 +979,7 @@ class SampleFileController {
 
       // Busca amostra
       const samplesCollection = db.collection('samples');
-      const sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
+      const sample = await samplesCollection.findOne({ specimenId: specimenIdString });
 
       if (!sample) {
         return res.status(404).json({
@@ -1075,7 +1080,7 @@ class SampleFileController {
 
       // Busca amostra
       const samplesCollection = db.collection('samples');
-      const sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
+      const sample = await samplesCollection.findOne({ specimenId: specimenIdString });
 
       if (!sample) {
         return res.status(404).json({
@@ -1175,7 +1180,7 @@ class SampleFileController {
 
       // Busca amostra
       const samplesCollection = db.collection('samples');
-      const sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
+      const sample = await samplesCollection.findOne({ specimenId: specimenIdString });
 
       if (!sample) {
         return res.status(404).json({
