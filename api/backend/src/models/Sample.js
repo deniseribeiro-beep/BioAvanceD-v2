@@ -155,6 +155,13 @@ class SampleModel {
     if (!this.validateSampleOrigin(data.sampleOrigin)) errors.push('sampleOrigin inválido conforme MIABIS');
     if (!this.validateExtractionType(data.extractionProtocol)) errors.push('extractionProtocol inválido conforme MIABIS');
     if (!data.registeredAt) errors.push('registeredAt é obrigatório');
+    if (
+      data.barcode !== undefined &&
+      data.barcode !== null &&
+      typeof data.barcode !== 'string'
+    ) {
+      errors.push('barcode deve ser uma string canônica para identificação Data Matrix');
+    }
     if (!(Number(data.quantity) > 0)) errors.push('quantity deve ser maior que zero');
     if (data.quality !== undefined && data.quality !== null && !validateQualityMIABIS(data.quality)) {
       errors.push('quality deve estar na escala MIABIS: GOOD, COMPROMISED ou UNKNOWN');
