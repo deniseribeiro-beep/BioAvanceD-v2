@@ -1,5 +1,5 @@
 export interface SampleLabelData {
-  sampleId: string;
+  specimenId: string;
   equipmentId: string;
   boxId: string;
   coordinate: string;
