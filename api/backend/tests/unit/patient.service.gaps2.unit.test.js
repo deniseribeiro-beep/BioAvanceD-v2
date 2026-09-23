@@ -151,19 +151,20 @@ describe('PatientService.ensurePatientIndexes', () => {
   });
 
   // RF005/RNF007 (#575): patients_name_document_text_v1/patients_name_idx_v1
-  // are dropped, not created — only 2 indexes get createIndex'd now.
-  it('creates both remaining indexes, drops the three legacy names, and memoizes so a second call is a no-op', async () => {
+  // are dropped, not created. #1166 slice 4: so is the phone index, whose
+  // column is gone -- only the recordNumber index is createIndex'd now.
+  it('creates the one remaining index, drops the four legacy names, and memoizes so a second call is a no-op', async () => {
     const collection = makeFakeCollection();
     const collectionName = `patients_test_${Date.now()}`;
 
     await patientService.ensurePatientIndexes(collection, collectionName);
-    expect(collection.createIndex).toHaveBeenCalledTimes(2);
+    expect(collection.createIndex).toHaveBeenCalledTimes(1);
     expect(collection.dropIndex).toHaveBeenCalledWith('patients_name_document_text_v1');
     expect(collection.dropIndex).toHaveBeenCalledWith('patients_name_idx_v1');
 
     await patientService.ensurePatientIndexes(collection, collectionName);
-    expect(collection.createIndex).toHaveBeenCalledTimes(2);
-    expect(collection.dropIndex).toHaveBeenCalledTimes(3);
+    expect(collection.createIndex).toHaveBeenCalledTimes(1);
+    expect(collection.dropIndex).toHaveBeenCalledTimes(4);
   });
 
   // #1165: the v1 spec filtered on `{ $type: 'string', $ne: '' }`, and `$ne`
@@ -173,19 +174,16 @@ describe('PatientService.ensurePatientIndexes', () => {
   // handlePhoneUniqueConstraint's "Telefone ... já cadastrado" branch unreachable.
   // `{ $gt: '' }` is the same intent ("a non-empty string") in a legal form,
   // and one the planner can also use for lookups (#1164).
-  it('builds the phone unique index with a legal { $gt: "" } filter, as v2', async () => {
+  // #1166 slice 4: that v2 index is superseded in turn. The column it indexed
+  // is no longer written, and phone uniqueness lives on
+  // participant_identities_phone_hash_unique_v1.
+  it('#1166: no longer builds a patients phone index, and drops v2', async () => {
     const collection = makeFakeCollection();
 
-    await patientService.ensurePatientIndexes(collection, `patients_test_1165_${Date.now()}`);
+    await patientService.ensurePatientIndexes(collection, `patients_test_1166_${Date.now()}`);
 
-    const phoneCall = collection.createIndex.mock.calls.find(([keys]) => keys.phone === 1);
-    expect(phoneCall).toBeDefined();
-    expect(phoneCall[1]).toEqual({
-      name: 'patients_phone_unique_sanitized_v2',
-      unique: true,
-      partialFilterExpression: { phone: { $gt: '' } },
-    });
-    expect(JSON.stringify(phoneCall[1].partialFilterExpression)).not.toContain('$ne');
+    expect(collection.createIndex.mock.calls.find(([keys]) => keys.phone === 1)).toBeUndefined();
+    expect(collection.dropIndex).toHaveBeenCalledWith('patients_phone_unique_sanitized_v2');
   });
 
   // The v1 name could not be created on any compose-pinned mongo:7, but the
@@ -205,7 +203,7 @@ describe('PatientService.ensurePatientIndexes', () => {
     const collectionName = `patients_test_fail_${Date.now()}`;
 
     await expect(patientService.ensurePatientIndexes(collection, collectionName)).resolves.toBeUndefined();
-    expect(collection.createIndex).toHaveBeenCalledTimes(2);
+    expect(collection.createIndex).toHaveBeenCalledTimes(1);
   });
 });
 

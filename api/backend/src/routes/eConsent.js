@@ -78,12 +78,11 @@ router.post('/generate-link', authenticate, requirePermission('requestConsent'),
   const patient = await db.collection('patients').findOne({ participantId });
   if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
 
-  // #1166 slice 2: the address on file is identity data (dict-02 P1X-0352),
-  // so the check reads the decrypted ParticipantIdentity record, falling back
-  // to the Patient's own copy only until slice 4 stops writing it. Compared
-  // case-insensitively because both stores canonicalize the address to
-  // lowercase at rest (ParticipantIdentityModel.fieldsOf, PatientModel.create),
-  // so only the caller's spelling can differ in case.
+  // #1166: the address on file is identity data (dict-02 P1X-0352), so the
+  // check reads the decrypted ParticipantIdentity record, its only home since
+  // slice 4. Compared case-insensitively because every writer canonicalizes
+  // the address to lowercase before encrypting it, so only the caller's
+  // spelling can differ in case.
   const rawIdentity = await db.collection('participantIdentities').findOne({ participantId });
   const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
   const emailOnFile = participantIdentityService.withIdentityContact(patient, identity).email;

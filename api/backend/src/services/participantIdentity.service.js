@@ -26,9 +26,8 @@ class ParticipantIdentityService {
   // birthDate half safe to do.
   //
   // #1166: plus the participant's contact, dict-02 P1X-0352/P1X-0353
-  // (ParticipantIdentity.email/phone, "MongoDB protegido"). Additive for now:
-  // the plaintext copy on `patients` is still written (slice 4 drops it), but
-  // every reader takes the contact from here through withIdentityContact.
+  // (ParticipantIdentity.email/phone, "MongoDB protegido"). This is its only
+  // home since slice 4, and it is ciphertext-only (getCiphertextOnlyFields).
   getEncryptedFieldMap() {
     return {
       patientName: 'patientNameEncrypted',
@@ -130,8 +129,10 @@ class ParticipantIdentityService {
   // (patient.service.js#listPatients' $regex substring search, which a blind
   // index cannot serve) and identityDocument still has plaintext query arms,
   // so both keep dual-writing until those are resolved.
+  // #1166 slice 4: email and phone have no plaintext query anywhere (phone
+  // uniqueness is phoneHash), and every reader decrypts.
   getCiphertextOnlyFields() {
-    return ['birthDate'];
+    return ['birthDate', 'email', 'phone'];
   }
 
   // #1166: phoneHash is what lets phone uniqueness (#1165) move off the
@@ -237,17 +238,19 @@ class ParticipantIdentityService {
     return doc;
   }
 
-  // #1166 slice 2: the participant's contact is identity data (dict-02
-  // P1X-0352/P1X-0353), so a reader overlays it from the DECRYPTED identity
-  // record onto the Patient document. The Patient's own copy survives only
-  // where the identity record holds no value, which is a fallback for the
-  // transition: slice 4 stops writing it, and with it goes the fallback.
+  // #1166: the participant's contact is identity data (dict-02
+  // P1X-0352/P1X-0353), so a reader takes it from the DECRYPTED identity
+  // record. Since slice 4 the Patient document is not a fallback: nothing
+  // writes the contact there, and a copy left on a row the backfill has not
+  // reached yet is stale by definition, so it is overwritten, not kept.
   withIdentityContact(patient, identity) {
     const doc = { ...(patient || {}) };
     for (const field of ['email', 'phone']) {
       const value = identity?.[field];
       if (value !== undefined && value !== null && value !== '') {
         doc[field] = value;
+      } else {
+        delete doc[field];
       }
     }
     return doc;

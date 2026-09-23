@@ -111,8 +111,9 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       expect(result.created).toBe(true);
       expect(patientsCollection.insertOne).toHaveBeenCalled();
       const insertedDoc = patientsCollection.insertOne.mock.calls[0][0];
-      expect(insertedDoc.email).toBe('novo.paciente@test.com');
-      expect(insertedDoc.phone).toBe('+5511988887777');
+      // #1166 slice 4: the contact is identity data -- never on Patient.
+      expect(insertedDoc).not.toHaveProperty('email');
+      expect(insertedDoc).not.toHaveProperty('phone');
       expect(insertedDoc.sex).toBe('F');
       expect(insertedDoc.cpf).toBe('98765432100');
 
@@ -437,11 +438,12 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
 
       const updateCall = patientsCollection.updateOne.mock.calls[0][1];
       expect(updateCall.$set).toMatchObject({
-        email: 'john@test.com',
-        phone: '+5511987654321',
         sex: 'M',
         cpf: '12345678900',
       });
+      // #1166 slice 4: the contact is identity data -- never on Patient.
+      expect(updateCall.$set).not.toHaveProperty('email');
+      expect(updateCall.$set).not.toHaveProperty('phone');
 
       // RF005/RNF007 (#575): civil identity never lands on Patient, even
       // when carried on `existing` from pre-#575 data.

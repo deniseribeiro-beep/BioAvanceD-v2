@@ -818,6 +818,20 @@ describe('NotificationService', () => {
         'http://link/9'
       );
     });
+
+    // #1166 slice 4: the Patient copy is gone, and so is the worker's read of it.
+    it('#1166: does not read the contact off patients', async () => {
+      const findOne = vi.fn(async () => ({ participantId: '12345678', patientName: 'Maria' }));
+      const db = { collection: vi.fn(() => ({ findOne })) };
+      vi.spyOn(notificationService, 'notifyPatientConsent').mockResolvedValue([{ channel: 'email', success: true }]);
+
+      await notificationService.processConsentNotificationJob(
+        { patientData: { participantId: '12345678' }, consentLink: 'http://link/10' },
+        db
+      );
+
+      expect(db.collection).not.toHaveBeenCalledWith('patients');
+    });
   });
 
   describe('initSocketIO', () => {

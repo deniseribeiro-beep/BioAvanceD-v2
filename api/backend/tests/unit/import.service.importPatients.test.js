@@ -129,6 +129,27 @@ describe('ImportService.importPatients (JSON)', () => {
     expect(deleted).toEqual([{ _id: 'generated-id' }]);
   });
 
+  // #1166 slice 4: a merge that carries a contact writes it to the identity
+  // record, encrypted, and not to the Patient row.
+  it('#1166: a merge writes the contact to the identity record, not to patients', async () => {
+    const filePath = writeTmpFile('merge-contact.json', JSON.stringify(validPatient({ phone: '11944443333' })));
+    const patients = makeCollection({
+      existing: { _id: 'existing-1', participantId: '10203040', birthDate: '1985-05-20' },
+    });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocument: '12345678900' },
+    });
+
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge-contact.json' });
+
+    expect(result.success).toBe(1);
+    expect(patients.updates[0].update.$set).not.toHaveProperty('email');
+    expect(patients.updates[0].update.$set).not.toHaveProperty('phone');
+    const identitySet = participantIdentities.updates[0].update.$set;
+    expect(identitySet.emailEncrypted).toBeTruthy();
+    expect(identitySet.phoneHash).toBeTruthy();
+  });
+
   it('swallows notification errors and still counts the patient as successfully imported', async () => {
     vi.spyOn(notificationService, 'enqueueConsentNotification').mockRejectedValue(new Error('queue down'));
     const filePath = writeTmpFile('notify-fails.json', JSON.stringify(validPatient()));
@@ -312,9 +333,10 @@ describe('ImportService.importPatients (CSV)', () => {
     expect(result.errors).toHaveLength(0);
     expect(patients.inserted).toHaveLength(1);
     expect(patients.inserted[0]).toMatchObject({
-      email: 'joao@example.com',
       consentTemplateId: 'tcle-1',
     });
+    // #1166 slice 4: the email is identity data -- identity row only, encrypted.
+    expect(patients.inserted[0]).not.toHaveProperty('email');
     // RF005/RNF007 (#575): identityDocument is civil identity — never on
     // Patient, only on the ParticipantIdentity assertion below.
     expect(patients.inserted[0].identityDocument).toBeUndefined();
@@ -326,6 +348,7 @@ describe('ImportService.importPatients (CSV)', () => {
       participantId: patients.inserted[0].participantId,
       identityDocument: '98765432100',
     });
+    expect(participantIdentityService.decryptIdentity(participantIdentities.inserted[0]).email).toBe('joao@example.com');
   });
 
   it('records an error for a CSV row that fails model validation', async () => {

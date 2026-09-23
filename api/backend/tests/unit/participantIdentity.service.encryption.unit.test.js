@@ -317,10 +317,10 @@ describe('ParticipantIdentityService.decryptIdentity', () => {
 });
 
 // dict-02 P1X-0352/P1X-0353 (#1166): participant email and phone are
-// ParticipantIdentity fields, "MongoDB protegido". Additive for now -- the
-// plaintext stays until #1166's readers are repointed.
+// ParticipantIdentity fields, "MongoDB protegido". Since slice 4 they are
+// ciphertext-only: every reader decrypts, and no query reads the plaintext.
 describe('ParticipantIdentityService -- contact fields encrypted at rest (#1166)', () => {
-  it('#1166: encrypts email and phone, keeping the plaintext (additive)', () => {
+  it('#1166: encrypts email and phone and drops the plaintext (slice 4)', () => {
     const result = participantIdentityService.encryptIdentityFields({
       participantId: '12345678',
       email: 'maria@example.com',
@@ -330,8 +330,29 @@ describe('ParticipantIdentityService -- contact fields encrypted at rest (#1166)
     expect(result.emailEncrypted).toBeTruthy();
     expect(result.phoneEncrypted).toBeTruthy();
     expect(JSON.stringify(result.emailEncrypted)).not.toContain('maria@example.com');
-    expect(result.email).toBe('maria@example.com');
-    expect(result.phone).toBe('11987654321');
+    expect(result.email).toBeNull();
+    expect(result.phone).toBeNull();
+  });
+
+  // #1166 slice 4: the Patient copy is no longer written, so it is no longer
+  // a fallback either. A stale one left on an un-migrated row must not win.
+  it('#1166: withIdentityContact takes the contact from the identity record only', () => {
+    const resolved = participantIdentityService.withIdentityContact(
+      { participantId: '12345678', email: 'stale@example.com', phone: '11900000000' },
+      { participantId: '12345678', email: null, phone: null }
+    );
+
+    expect(resolved.email ?? null).toBeNull();
+    expect(resolved.phone ?? null).toBeNull();
+  });
+
+  it('#1166: withIdentityContact overlays the identity contact (control)', () => {
+    const resolved = participantIdentityService.withIdentityContact(
+      { participantId: '12345678', status: 'PENDING_CONSENT' },
+      { email: 'maria@example.com', phone: '11987654321' }
+    );
+
+    expect(resolved).toMatchObject({ status: 'PENDING_CONSENT', email: 'maria@example.com', phone: '11987654321' });
   });
 
   it('#1166: email and phone round-trip through decryptIdentity from ciphertext alone', () => {

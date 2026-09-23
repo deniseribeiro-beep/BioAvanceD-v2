@@ -240,14 +240,18 @@ describe('PatientModel.create', () => {
       .toThrow('Payload contém campos não canônicos');
   });
 
-  it('normalizes email to lowercase/trimmed', () => {
+  // #1166 slice 4: the participant's contact is identity data (dict-02
+  // P1X-0352/P1X-0353). It is still accepted and validated as input, because
+  // every writer routes it on to ParticipantIdentity, but it never lands on
+  // the Patient document.
+  it('#1166: does not emit email or phone -- the contact lives on ParticipantIdentity', () => {
     const result = PatientModel.create(baseData);
-    expect(result.email).toBe('maria@example.com');
+    expect(result).not.toHaveProperty('email');
+    expect(result).not.toHaveProperty('phone');
   });
 
-  it('normalizes phone digits', () => {
-    const result = PatientModel.create(baseData);
-    expect(result.phone).toBe('11987654321');
+  it('#1166: still rejects an invalid email it no longer persists', () => {
+    expect(() => PatientModel.create({ ...baseData, email: 'not-an-email' })).toThrow('email inválido');
   });
 
   it('defaults status to PENDING_CONSENT', () => {

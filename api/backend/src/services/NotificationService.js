@@ -594,25 +594,17 @@ class NotificationService {
 
   // #1166 slice 2: a queued job carries only the participantId, so the name
   // and contact come from the decrypted ParticipantIdentity record at send
-  // time. The Patient's own contact copy is read as a fallback only, the same
-  // one the synchronous readers keep, until slice 4 stops writing it. A job
-  // queued before this change still carries its own fields, which stay the
-  // base the resolved values are laid over.
+  // time. Since slice 4 that record is the contact's only home, so `patients`
+  // is not read at all.
   async resolveConsentRecipient(patientData = {}, db = null) {
     const participantId = patientData?.participantId;
     if (!participantId) return patientData;
 
     const database = db || await connectDB();
-    const [rawIdentity, patient] = await Promise.all([
-      database.collection('participantIdentities').findOne({ participantId }),
-      database.collection('patients').findOne({ participantId }, { projection: { email: 1, phone: 1 } }),
-    ]);
+    const rawIdentity = await database.collection('participantIdentities').findOne({ participantId });
     const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
 
-    const resolved = participantIdentityService.withIdentityContact(
-      participantIdentityService.withIdentityContact(patientData, patient),
-      identity
-    );
+    const resolved = participantIdentityService.withIdentityContact(patientData, identity);
     if (identity?.patientName) resolved.patientName = identity.patientName;
     return resolved;
   }

@@ -420,6 +420,23 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     expect(identity.phoneHash).toBe(participantIdentityService.computeBlindIndex('phone', '11987654321'));
   });
 
+  // #1166 slice 4: the edit goes to the identity record only.
+  it('#1166: updatePatient does not write an edited contact to patients', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '45454545' }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '45454545', email: 'old@example.com' }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '45454545', { phone: '(11) 98765-4321', email: 'New@Example.com' });
+
+    const patientSet = patients.updateOne.mock.calls[0][1].$set;
+    expect(patientSet).not.toHaveProperty('email');
+    expect(patientSet).not.toHaveProperty('phone');
+    expect(patients._docs[0]).not.toHaveProperty('email');
+  });
+
   it('updatePatient clearing a civil-identity field clears its ciphertext and hash too', async () => {
     const participantIdentityService = require('../../src/services/participantIdentity.service');
     const patients = makeInMemoryCollection([{ participantId: '33333333' }]);

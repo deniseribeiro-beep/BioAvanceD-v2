@@ -104,4 +104,25 @@ describe('PatientIdentityService (import-time matching) resolves via Participant
     expect(identity.patientName).toBe('Carla Souza');
     expect(identity.identityDocument).toBe('11144477735');
   });
+
+  // #1166 slice 4: the contact is identity data, written through
+  // encryptIdentityFields (ciphertext + phoneHash) and never onto patients.
+  it('#1166: writes a supplied contact to the identity record only, encrypted', async () => {
+    const patients = makeCollection([]);
+    const participantIdentities = makeCollection([]);
+    const db = makeDb({ patients, participantIdentities });
+
+    const result = await participantIdentityService.matchOrUpsertParticipant(db, {
+      patientName: 'Carla Souza',
+      birthDate: '05/03/1988',
+      email: 'carla@example.com',
+      phone: '11955554444',
+    });
+
+    expect(patients.insertOne.mock.calls[0][0]).not.toHaveProperty('email');
+    expect(patients.insertOne.mock.calls[0][0]).not.toHaveProperty('phone');
+    const identity = participantIdentities._docs.find((doc) => doc.participantId === result.patient.participantId);
+    expect(identity.emailEncrypted).toBeTruthy();
+    expect(identity.phoneHash).toBeTruthy();
+  });
 });

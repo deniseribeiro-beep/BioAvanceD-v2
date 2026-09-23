@@ -4,6 +4,9 @@
 // previously duplicated identically between validate() and create(), plus
 // a third, payload-level copy in paciente.controller.js#rejectCanonicalAliases
 // that now builds its own allow-list off this same list).
+// #1166 slice 4: 'email' and 'phone' stay on this list as accepted, validated
+// INPUT only. create() no longer emits them: the contact is written to
+// ParticipantIdentity alone (dict-02 P1X-0352/P1X-0353).
 const CANONICAL_FIELDS = [
   'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos','studyId'
 ];
@@ -50,11 +53,15 @@ class ParticipantModel {
       throw error;
     }
 
+    // #1166 slice 4: validated here, persisted on ParticipantIdentity only.
+    const email = data.email ? String(data.email).trim().toLowerCase() : null;
+    if (email && !this.isValidEmail(email)) {
+      throw new Error('email inválido');
+    }
+
     const normalized = {
       participantId: String(data.participantId || '').trim(),
       sex: String(data.sex || '').trim(),
-      email: data.email ? String(data.email).trim().toLowerCase() : null,
-      phone: this.normalizePhone(data.phone),
       recordNumber: data.recordNumber ? String(data.recordNumber).trim() : null,
       clinicalUnitId: data.clinicalUnitId || null,
       clinicalUnit: data.clinicalUnit || null,

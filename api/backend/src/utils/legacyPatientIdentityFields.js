@@ -10,4 +10,22 @@ function omitLegacyIdentityFields(data = {}) {
   return result;
 }
 
-module.exports = { LEGACY_PATIENT_IDENTITY_FIELDS, omitLegacyIdentityFields };
+// #1166 slice 4: the participant's contact is identity data too (dict-02
+// P1X-0352/P1X-0353, ParticipantIdentity only). Kept apart from the list
+// above because PatientModel still accepts and validates it as input: every
+// writer routes it on to ParticipantIdentity, then strips it before a
+// Patient write that does not go through PatientModel.create.
+const PARTICIPANT_CONTACT_FIELDS = ['email', 'phone'];
+
+function omitParticipantContactFields(data = {}) {
+  const result = { ...data };
+  for (const field of PARTICIPANT_CONTACT_FIELDS) delete result[field];
+  return result;
+}
+
+module.exports = {
+  LEGACY_PATIENT_IDENTITY_FIELDS,
+  omitLegacyIdentityFields,
+  PARTICIPANT_CONTACT_FIELDS,
+  omitParticipantContactFields,
+};

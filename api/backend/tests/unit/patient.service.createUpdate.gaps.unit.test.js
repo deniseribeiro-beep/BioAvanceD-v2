@@ -198,6 +198,34 @@ describe('PatientService.createPatient additional branches', () => {
     ).rejects.toMatchObject({ statusCode: 409, message: 'Telefone 11999999999 já cadastrado no sistema.' });
     expect(patientsCollection.deleteOne).toHaveBeenCalledWith({ _id: 'fake-id-1' });
   });
+
+  // #1166 slice 4: the contact is written to ParticipantIdentity only,
+  // ciphertext and phoneHash, never to the Patient row.
+  it('#1166: writes the contact to the identity row only, never to patients', async () => {
+    const consentTemplatesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
+    });
+    const patientsCollection = makeFakeCollection();
+    const identitiesCollection = makeFakeCollection();
+    const db = makeFakeDb({
+      patients: patientsCollection,
+      participantIdentities: identitiesCollection,
+      consent_templates: consentTemplatesCollection
+    });
+
+    await patientService.createPatient(db, validPatientData({ phone: '(11) 98888-7777' }), {
+      skipConsentNotification: true,
+      skipBiomarkerArtifacts: true
+    });
+
+    const patientRow = patientsCollection.insertOne.mock.calls[0][0];
+    expect(patientRow).not.toHaveProperty('email');
+    expect(patientRow).not.toHaveProperty('phone');
+    const identityRow = identitiesCollection.insertOne.mock.calls[0][0];
+    expect(identityRow.emailEncrypted).toBeTruthy();
+    expect(identityRow.phoneEncrypted).toBeTruthy();
+    expect(identityRow.phoneHash).toBeTruthy();
+  });
 });
 
 describe('PatientService.updatePatient additional branches', () => {
@@ -213,6 +241,48 @@ describe('PatientService.updatePatient additional branches', () => {
     await expect(
       patientService.updatePatient(db, '12345678', { phone: '123' })
     ).rejects.toThrow('Telefone (phone) inválido');
+  });
+
+  // #1166 slice 4: with patients_phone_unique_sanitized_v2 gone, the only
+  // phone uniqueness is the identity side's phoneHash index, and the identity
+  // write comes AFTER the Patient write. So the duplicate is refused before
+  // either write, or the Patient row would already be updated when it lands.
+  it('#1166: refuses a phone another participant holds before writing anything', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678' })
+    });
+    const identitiesCollection = makeFakeCollection({
+      find: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([
+          { participantId: '87654321', phoneHash: participantIdentityService.computeBlindIndex('phone', '11977776666') }
+        ])
+      })
+    });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: identitiesCollection });
+
+    await expect(
+      patientService.updatePatient(db, '12345678', { phone: '(11) 97777-6666' })
+    ).rejects.toMatchObject({ statusCode: 409, message: 'Telefone 11977776666 já cadastrado no sistema.' });
+    expect(patientsCollection.updateOne).not.toHaveBeenCalled();
+    expect(identitiesCollection.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('#1166: re-saving the participant\'s own phone is not a duplicate (control)', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678' })
+    });
+    const identitiesCollection = makeFakeCollection({
+      find: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([
+          { participantId: '12345678', phoneHash: participantIdentityService.computeBlindIndex('phone', '11977776666') }
+        ])
+      })
+    });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: identitiesCollection });
+
+    await expect(patientService.updatePatient(db, '12345678', { phone: '11977776666' })).resolves.toEqual({ success: true });
   });
 
   it('resolves and merges a clinicalUnit snapshot into updateData', async () => {

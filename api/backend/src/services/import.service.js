@@ -10,7 +10,7 @@ const TemperatureModel = require('../models/Temperature');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
-const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
+const { omitLegacyIdentityFields, PARTICIPANT_CONTACT_FIELDS, omitParticipantContactFields } = require('../utils/legacyPatientIdentityFields');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const participantIdentityService = require('./participantIdentity.service');
 const SampleGraphValidator = require('./SampleGraphValidator');
@@ -393,7 +393,12 @@ class ImportService {
           // never land on Patient — `merged` (used below, un-stripped, for
           // the ParticipantIdentity sync) may still carry them from
           // `existing` (pre-#575 data) even when `patientData` doesn't.
-          await patientsCollection.updateOne({ _id: existing._id }, { $set: omitLegacyIdentityFields(merged) });
+          // #1166 slice 4: likewise the contact, which goes to the identity
+          // sync below and nowhere else.
+          await patientsCollection.updateOne(
+            { _id: existing._id },
+            { $set: omitParticipantContactFields(omitLegacyIdentityFields(merged)) }
+          );
 
           // RF005/RNF007 (#561/#563): keep ParticipantIdentity in sync on
           // update, same as patient.service.js#updatePatient — an import
@@ -402,9 +407,17 @@ class ImportService {
           if (merged.participantId && (
             Object.prototype.hasOwnProperty.call(merged, 'patientName') ||
             Object.prototype.hasOwnProperty.call(merged, 'birthDate') ||
-            Object.prototype.hasOwnProperty.call(merged, 'identityDocument')
+            Object.prototype.hasOwnProperty.call(merged, 'identityDocument') ||
+            PARTICIPANT_CONTACT_FIELDS.some((field) => merged[field])
           )) {
             const identityUpdate = { updatedAt: merged.updatedAt };
+            for (const field of PARTICIPANT_CONTACT_FIELDS) {
+              if (merged[field]) {
+                identityUpdate[field] = field === 'email'
+                  ? String(merged.email).trim().toLowerCase()
+                  : merged[field];
+              }
+            }
             if (Object.prototype.hasOwnProperty.call(merged, 'patientName')) identityUpdate.patientName = merged.patientName;
             if (Object.prototype.hasOwnProperty.call(merged, 'birthDate')) identityUpdate.birthDate = merged.birthDate ? new Date(merged.birthDate) : null;
             if (Object.prototype.hasOwnProperty.call(merged, 'identityDocument')) identityUpdate.identityDocument = merged.identityDocument;

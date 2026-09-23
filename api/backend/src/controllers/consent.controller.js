@@ -25,15 +25,14 @@ class ConsentController {
         const pendingPatients = await patientsCollection.find({
           status: 'PENDING_CONSENT',
           consentTemplateId: policyId
-        }).project({ participantId: 1, email: 1, clinicalUnit: 1, consentNotifiedAt: 1 }).toArray();
+        }).project({ participantId: 1, clinicalUnit: 1, consentNotifiedAt: 1 }).toArray();
 
         // RF005/RNF007 (#562/#574): patientName is civil identity — resolved via
         // ParticipantIdentity, not read directly off Patient. Decrypted via
         // decryptIdentity so this keeps working once the plaintext field is
         // dropped in favor of the ciphertext-only sibling (#566).
-        // #1166 slice 2: the email is identity data too, taken from the same
-        // decrypted record; the Patient projection above is only its fallback
-        // until slice 4 stops writing it there.
+        // #1166: the email is identity data too, taken from the same
+        // decrypted record. `patients` no longer carries it (slice 4).
         const identitiesCollection = db.collection('participantIdentities');
         const participantIds = pendingPatients.map((patient) => patient.participantId).filter(Boolean);
         const identities = participantIds.length > 0

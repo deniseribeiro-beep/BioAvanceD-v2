@@ -7,7 +7,7 @@ const { generateUniqueParticipantId, sanitizePatientForLogs } = require('../util
 const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require('../utils/fieldEncryption');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
-const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
+const { omitLegacyIdentityFields, PARTICIPANT_CONTACT_FIELDS, omitParticipantContactFields } = require('../utils/legacyPatientIdentityFields');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 
 const indexedPatientCollections = new Set();
@@ -136,23 +136,10 @@ class PatientService {
   async ensurePatientIndexes(collection, collectionName) {
     if (!collection || !collectionName || indexedPatientCollections.has(collectionName)) return;
 
+    // #1166 slice 4: no phone index any more. `patients` no longer carries the
+    // contact, and phone uniqueness is participant_identities_phone_hash_unique_v1
+    // (participantIdentityIndexes.js), checked ahead of the write in updatePatient.
     const indexDefinitions = [
-      [
-        { phone: 1 },
-        // #1165: v1's `{ $type: 'string', $ne: '' }` could never be built --
-        // `$ne` is not a legal partialFilterExpression operator (code 67 on
-        // mongo:7), so the catch below logged and phone uniqueness was never
-        // enforced. `$gt: ''` states the same intent, "a non-empty string",
-        // legally (comparisons are type-bracketed), and unlike `$type` the
-        // planner can also use it for lookups (#1164).
-        {
-          name: 'patients_phone_unique_sanitized_v2',
-          unique: true,
-          partialFilterExpression: {
-            phone: { $gt: '' }
-          }
-        }
-      ],
       [{ recordNumber: 1 }, { name: 'patients_record_number_idx_v1' }]
     ];
 
@@ -169,7 +156,15 @@ class PatientService {
     // collections (no-op via IndexNotFound if never created).
     // #1165: plus the phone index's superseded v1 name, which could not be
     // built on mongo:7 -- dropped anyway so no collection carries both.
-    const legacyIndexNames = ['patients_name_document_text_v1', 'patients_name_idx_v1', 'patients_phone_unique_sanitized_v1'];
+    // #1166 slice 4: and v2, whose column is gone. Run the ParticipantIdentity
+    // backfill (src/scripts/backfillParticipantIdentities.js) on a database
+    // with pre-slice-1 identity rows, so their phones get a phoneHash.
+    const legacyIndexNames = [
+      'patients_name_document_text_v1',
+      'patients_name_idx_v1',
+      'patients_phone_unique_sanitized_v1',
+      'patients_phone_unique_sanitized_v2'
+    ];
     for (const indexName of legacyIndexNames) {
       try {
         await collection.dropIndex(indexName);
@@ -212,6 +207,26 @@ class PatientService {
     const duplicateError = new Error(`Telefone ${phone} já cadastrado no sistema.`);
     duplicateError.statusCode = 409;
     throw duplicateError;
+  }
+
+  // #1166 slice 4: phone uniqueness is only enforced on the identity side now,
+  // and updatePatient writes `patients` before its identity sync. Refusing
+  // the duplicate there would leave the Patient row already updated, so the
+  // check runs first. The index still catches a race, in the catch below.
+  async assertPhoneAvailable(db, patientsCollection, query, phone) {
+    const candidates = participantIdentityService.computeBlindIndexCandidates('phone', phone);
+    if (candidates.length === 0) return;
+
+    const identityCollection = await this.getIdentityCollection(db);
+    const holders = await identityCollection.find({ phoneHash: { $in: candidates } }).toArray();
+    if (holders.length === 0) return;
+
+    const target = await patientsCollection.findOne(query);
+    if (holders.some((holder) => holder.participantId !== target?.participantId)) {
+      const duplicateError = new Error(`Telefone ${phone} já cadastrado no sistema.`);
+      duplicateError.statusCode = 409;
+      throw duplicateError;
+    }
   }
 
   normalizeClinicalUnit(value) {
@@ -900,6 +915,7 @@ class PatientService {
   }
 
   async updatePatient(db, participantId, updateData, options = {}) {
+    let submittedPhone = null;
     try {
       const patientsCollection = await this.getPatientsCollection(db);
 
@@ -922,6 +938,7 @@ class PatientService {
           throw new Error('Telefone (phone) inválido. Informe de 10 a 15 dígitos');
         }
         updateData.phone = normalizedPhone;
+        submittedPhone = normalizedPhone;
       }
 
       const encryptedFieldMap = this.getEncryptedFieldMap();
@@ -1002,14 +1019,15 @@ class PatientService {
         }
       }
       updateData = omitLegacyIdentityFields(updateData);
-      // #1166: the contact is mirrored too, but NOT stripped -- `patients`
-      // keeps its copy until that copy's readers are repointed.
+      // #1166: the contact is mirrored too, and since slice 4 stripped as
+      // well -- ParticipantIdentity is its only home.
       const contactFieldsFromUpdate = {};
-      for (const field of ['email', 'phone']) {
+      for (const field of PARTICIPANT_CONTACT_FIELDS) {
         if (Object.prototype.hasOwnProperty.call(updateData, field)) {
           contactFieldsFromUpdate[field] = updateData[field];
         }
       }
+      updateData = omitParticipantContactFields(updateData);
 
       // Busca por participantId (string de 8 dígitos), _id (ObjectId de 24
       // caracteres hex) ou participantId de formato livre (#604 -- mesmo
@@ -1025,6 +1043,10 @@ class PatientService {
         query = { _id: new ObjectId(participantId) };
       } else {
         query = { participantId };
+      }
+
+      if (contactFieldsFromUpdate.phone) {
+        await this.assertPhoneAvailable(db, patientsCollection, query, contactFieldsFromUpdate.phone);
       }
 
       const result = await patientsCollection.updateOne(
@@ -1097,7 +1119,7 @@ class PatientService {
       return { success: true };
     } catch (error) {
       if (error?.code === 11000) {
-        this.handlePhoneUniqueConstraint(error, updateData?.phone);
+        this.handlePhoneUniqueConstraint(error, submittedPhone);
       }
       logger.error('Erro ao atualizar paciente:', error.message);
       throw error;
