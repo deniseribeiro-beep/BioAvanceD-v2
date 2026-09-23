@@ -125,11 +125,12 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       expect(insertedDoc).not.toHaveProperty('identityDocument');
 
       const identityDoc = identitiesCollection.updateOne.mock.calls[0][1].$set;
-      expect(identityDoc.patientName).toBe('Novo Paciente');
-      // RF005/RNF007, dict-07 row 1 (#1104): birthDate is ciphertext-only
-      // now -- the plaintext is dropped once the ciphertext exists, so the
-      // value lives in birthDateEncrypted and stays matchable via
-      // birthDateHash. patientName above still dual-writes.
+      // RF005/RNF007, dict-07 row 1 (#1104): all three civil-identity fields
+      // are ciphertext-only -- the plaintext is dropped once the ciphertext
+      // exists, so each value lives in its *Encrypted sibling and stays
+      // matchable via its blind index.
+      expect(identityDoc.patientName).toBeNull();
+      expect(identityCryptoService.decryptIdentity(identityDoc).patientName).toBe('Novo Paciente');
       expect(identityDoc.birthDate).toBeNull();
       expect(identityDoc.birthDateEncrypted).toBeTruthy();
       expect(identityDoc.birthDateHash).toBeTruthy();
@@ -324,13 +325,17 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       });
 
       const identitySet = identitiesCollection.updateOne.mock.calls[0][1].$set;
-      expect(identitySet.patientName).toBe('Paciente QA');
-      expect(identitySet.identityDocument).toBe('11144477735');
-      // birthDate is ciphertext-only since #1104, so the plaintext is
+      // All three are ciphertext-only since #1104, so the plaintext is
       // deliberately absent -- the ciphertext and blind index are the
-      // representation that must survive.
+      // representation that must survive, and it must decrypt to the
+      // stored values.
+      expect(identityCryptoService.decryptIdentity(identitySet)).toMatchObject({
+        patientName: 'Paciente QA',
+        identityDocument: '11144477735',
+      });
       expect(identitySet.birthDateEncrypted).toBeTruthy();
       expect(identitySet.birthDateHash).toBeTruthy();
+      expect(identitySet.patientNameHash).toBe(identityCryptoService.computeBlindIndex('patientName', 'Paciente QA'));
     });
 
     it('never writes null over a stored civil-identity field', async () => {
@@ -341,10 +346,14 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
         participantId: '77777777',
       });
 
+      // #1104: the plaintext column is null by design now, so "not nulled"
+      // means the ciphertext written in its place still carries the value.
       const identitySet = identitiesCollection.updateOne.mock.calls[0][1].$set;
+      const decrypted = identityCryptoService.decryptIdentity(identitySet);
       for (const field of ['patientName', 'identityDocument']) {
-        expect(identitySet[field]).not.toBeNull();
-        expect(identitySet[field]).not.toBeUndefined();
+        expect(identitySet[`${field}Encrypted`]).toBeTruthy();
+        expect(decrypted[field]).not.toBeNull();
+        expect(decrypted[field]).not.toBeUndefined();
       }
     });
 
@@ -360,7 +369,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       });
 
       const identitySet = identitiesCollection.updateOne.mock.calls[0][1].$set;
-      expect(identitySet.patientName).toBe('Nome Novo');
+      expect(identityCryptoService.decryptIdentity(identitySet).patientName).toBe('Nome Novo');
     });
   });
 

@@ -100,7 +100,12 @@ describe('PatientService.listPatients', () => {
 
     const result = await patientService.listPatients(db, { patientName: 'Maria', clinicalUnit: 'UTI' });
 
-    expect(identitiesCollection.find).toHaveBeenCalledWith({ patientName: { $regex: 'Maria', $options: 'i' } });
+    // #1104: an exact match on the name's blind index, not a substring $regex
+    // over the plaintext, which is no longer written.
+    const identityCrypto = require('../../src/services/participantIdentity.service');
+    expect(identitiesCollection.find).toHaveBeenCalledWith({
+      patientNameHash: { $in: identityCrypto.computeBlindIndexCandidates('patientName', 'Maria') },
+    });
     const queryArg = patientsCollection.find.mock.calls[0][0];
     expect(queryArg.participantId).toEqual({ $in: ['12345678'] });
     expect(queryArg.clinicalUnit).toBe('UTI');

@@ -409,9 +409,14 @@ class PatientService {
       // was invisible -- under the cutover the identityDocument uniqueness
       // check would have gone dead, allowing a second participant for the same
       // document. #1099: match under every registered key.
+      // #1104: identityDocument is ciphertext-only, so the plaintext arm can
+      // never match a row written since, and keeping it would make this $or
+      // unindexable (the plaintext column is deliberately unindexed, #1102).
+      // The keyless branch still queries the plaintext, which is the only
+      // thing a stack with no ENCRYPTION_KEY writes (#1083).
       const identityDocumentHashes = participantIdentityService.computeBlindIndexCandidates('identityDocument', normalizedidentityDocument);
       const documentOrConditions = identityDocumentHashes.length
-        ? [{ identityDocumentHash: { $in: identityDocumentHashes } }, { identityDocument: normalizedidentityDocument }]
+        ? [{ identityDocumentHash: { $in: identityDocumentHashes } }]
         : [{ identityDocument: normalizedidentityDocument }];
       const existingIdentity = await identityCollection.findOne({ $or: documentOrConditions });
       if (existingIdentity) {
@@ -761,8 +766,21 @@ class PatientService {
       // ParticipantIdentity, not read/filtered directly off Patient.
       if (filters.patientName) {
         const identityCollection = await this.getIdentityCollection(db);
+        // #1104: patientName is ciphertext-only, so this is an EXACT match on
+        // the normalized full name (accents, case and spacing ignored) through
+        // patientNameHash. It used to be a case-insensitive substring $regex,
+        // which a blind index cannot serve; no screen sent this filter.
+        // #1099: match under every registered key. The keyless branch queries
+        // the plaintext, the only thing a stack with no ENCRYPTION_KEY writes
+        // (#1083), with the same exact-match semantics: anchored and escaped,
+        // so the caller's term is never read as a pattern.
+        const patientNameHashes = participantIdentityService.computeBlindIndexCandidates('patientName', filters.patientName);
+        const escapedName = String(filters.patientName).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const nameCondition = patientNameHashes.length
+          ? { patientNameHash: { $in: patientNameHashes } }
+          : { patientName: { $regex: `^${escapedName}$`, $options: 'i' } };
         const matchingIdentities = await identityCollection
-          .find({ patientName: { $regex: filters.patientName, $options: 'i' } })
+          .find(nameCondition)
           .toArray();
         query.participantId = { $in: matchingIdentities.map((identity) => identity.participantId) };
       }

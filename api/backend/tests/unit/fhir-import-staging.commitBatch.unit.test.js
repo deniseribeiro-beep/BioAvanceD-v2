@@ -110,12 +110,17 @@ describe('fhir-import-staging.service#commitBatch — ParticipantIdentity dual-w
 
     const identity = db.collections.participantIdentities.docs.find((doc) => doc.participantId === 'PART-563');
     expect(identity).toBeTruthy();
-    expect(identity.patientName).toBe('Maria Silva');
-    expect(identity.identityDocument).toBe('12345678900');
-    // RF005/RNF007, dict-07 row 1 (#1104): birthDate is ciphertext-only now.
-    // The plaintext is dropped once the ciphertext exists, so the value lives
-    // in birthDateEncrypted and stays matchable via birthDateHash.
-    // patientName and identityDocument above still dual-write.
+    // RF005/RNF007, dict-07 row 1 (#1104): all three civil-identity fields
+    // are ciphertext-only now. The plaintext is dropped once the ciphertext
+    // exists, so each value lives in its *Encrypted sibling and stays
+    // matchable via its blind index.
+    const identityCrypto = require('../../src/services/participantIdentity.service');
+    expect(identity.patientName).toBeNull();
+    expect(identity.identityDocument).toBeNull();
+    expect(identityCrypto.decryptIdentity(identity)).toMatchObject({
+      patientName: 'Maria Silva',
+      identityDocument: '12345678900',
+    });
     expect(identity.birthDate).toBeNull();
     expect(identity.birthDateEncrypted).toBeTruthy();
     expect(identity.birthDateHash).toBeTruthy();

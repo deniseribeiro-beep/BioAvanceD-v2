@@ -135,9 +135,9 @@ router.get('/validate/:token', async (req, res) => {
     if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
 
     // RF005/RNF007 (#562/#574): patientName/birthDate/identityDocument are civil
-    // identity — resolved via ParticipantIdentity, not trusted from Patient's
-    // own (soon to be removed) copy of the fields. decryptIdentity falls back
-    // to the ciphertext sibling once the plaintext field is dropped (#566).
+    // identity — resolved via ParticipantIdentity, never from the Patient
+    // document (#575). All three are ciphertext-only there (#1104), so
+    // decryptIdentity is what recovers them.
     const rawIdentity = await db.collection('participantIdentities').findOne({ participantId: payload.participantId });
     const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
     const patientWithIdentity = identity

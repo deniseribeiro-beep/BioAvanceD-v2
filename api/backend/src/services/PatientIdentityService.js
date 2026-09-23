@@ -65,8 +65,8 @@ class participantIdentityService {
     }
 
     // RF005/RNF007 (#561): resolve the name+birthDate match via
-    // ParticipantIdentity, not Patient's own (soon to be removed)
-    // patientNameNormalized/birthDateKey fields.
+    // ParticipantIdentity, not Patient's own patientNameNormalized/
+    // birthDateKey fields, which no longer land on Patient (#575).
     let matchedParticipantId = validParticipantId;
     const matchedBySuppliedId = Boolean(validParticipantId);
     if (!matchedParticipantId) {
@@ -86,8 +86,8 @@ class participantIdentityService {
         : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
       const candidates = await identities.find({ $or: dateOrConditions }).toArray();
       const matchedIdentity = candidates.find((rawCandidate) => {
-        // patientName is civil identity -- decrypt before comparing so this
-        // keeps matching once the plaintext field is eventually dropped.
+        // patientName is civil identity and ciphertext-only (#1104), so
+        // decrypt before comparing.
         const candidate = identityCryptoService.decryptIdentity(rawCandidate);
         return normalizeName(candidate.patientName) === normalizedName;
       });

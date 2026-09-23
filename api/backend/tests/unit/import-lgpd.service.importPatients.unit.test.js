@@ -231,7 +231,10 @@ describe('ImportLGPDService.importPatients', () => {
     expect(participantIdentitiesCollection.insertOne).toHaveBeenCalledTimes(1);
     const insertedIdentity = participantIdentitiesCollection.insertOne.mock.calls[0][0];
     expect(insertedIdentity.participantId).toBe(insertedPatient.participantId);
-    expect(insertedIdentity.patientName).toBe('Maria Silva');
+    // #1104: ciphertext-only -- no plaintext at rest, recovered by decryption.
+    const identityCrypto = require('../../src/services/participantIdentity.service');
+    expect(insertedIdentity.patientName).toBeNull();
+    expect(identityCrypto.decryptIdentity(insertedIdentity).patientName).toBe('Maria Silva');
   });
 
   // #1166 slice 3: the identity row is written after the Patient row, and it

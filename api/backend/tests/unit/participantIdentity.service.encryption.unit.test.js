@@ -37,8 +37,9 @@ describe('ParticipantIdentityService.getEncryptedFieldMap', () => {
 });
 
 describe('ParticipantIdentityService.getHashFieldMap', () => {
-  it('returns map for the fields queried by exact/range match (RF005/RNF007, #574) plus phone uniqueness (#1166)', () => {
+  it('returns map for the fields queried by exact/range match (RF005/RNF007, #574, #1104) plus phone uniqueness (#1166)', () => {
     expect(participantIdentityService.getHashFieldMap()).toEqual({
+      patientName: 'patientNameHash',
       identityDocument: 'identityDocumentHash',
       birthDate: 'birthDateHash',
       phone: 'phoneHash'
@@ -79,6 +80,26 @@ describe('ParticipantIdentityService.computeBlindIndex', () => {
     const a = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20));
     const b = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 21));
     expect(a).not.toBe(b);
+  });
+
+  // #1104: listPatients' name filter is an exact match on this hash, so it
+  // has to agree with the in-memory comparison PatientIdentityService and
+  // intakeWizard's /patient-match already make.
+  it('#1104: is the same patientName hash regardless of accents, case and spacing', () => {
+    const a = participantIdentityService.computeBlindIndex('patientName', 'José  da Silva');
+    const b = participantIdentityService.computeBlindIndex('patientName', ' jose DA silva ');
+    expect(a).toBeTruthy();
+    expect(a).toBe(b);
+  });
+
+  it('#1104: still differs across genuinely different names', () => {
+    const a = participantIdentityService.computeBlindIndex('patientName', 'José da Silva');
+    const b = participantIdentityService.computeBlindIndex('patientName', 'José da Silveira');
+    expect(a).not.toBe(b);
+  });
+
+  it('#1104: returns null for a whitespace-only patientName', () => {
+    expect(participantIdentityService.computeBlindIndex('patientName', '   ')).toBeNull();
   });
 
   it('returns null for null/undefined/empty', () => {
@@ -130,7 +151,7 @@ describe('ParticipantIdentityService.computeBlindIndexCandidates', () => {
 });
 
 describe('ParticipantIdentityService.encryptIdentityFields', () => {
-  it('encrypts patientName/birthDate/identityDocument at rest without dropping the plaintext (dual-write, #566 is additive-only)', () => {
+  it('encrypts patientName/birthDate/identityDocument at rest, ciphertext-only (#566, #1104)', () => {
     const fields = {
       participantId: '12345678',
       patientName: 'Paciente QA Teste',
@@ -147,16 +168,20 @@ describe('ParticipantIdentityService.encryptIdentityFields', () => {
     expect(result.birthDateEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
     expect(result.identityDocumentEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
 
-    // Existing consumers (#561-#564) still read these directly off the
-    // document — dropping them now would regress every one of them.
-    expect(result.patientName).toBe('Paciente QA Teste');
-    expect(result.identityDocument).toBe('11144477735');
+    // #1104: dict-07 row 1 ("cifrar") -- a field encrypted beside its own
+    // plaintext copy is not encrypted at rest, and decryptIdentity prefers
+    // the plaintext whenever it is present.
+    expect(result.patientName).toBeNull();
+    expect(result.birthDate).toBeNull();
+    expect(result.identityDocument).toBeNull();
 
     // dict-02 P1X-0362: encryptionKeyVersion records the key used, for
     // auditable rotation.
     expect(result.encryptionKeyVersion).toBe('test-key-1');
 
-    // RF005/RNF007 (#574): blind-index siblings for the two queried fields.
+    // RF005/RNF007 (#574, #1104): blind-index siblings for the three
+    // queried fields.
+    expect(result.patientNameHash).toBe(participantIdentityService.computeBlindIndex('patientName', 'Paciente QA Teste'));
     expect(result.identityDocumentHash).toBe(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
     expect(result.birthDateHash).toBe(participantIdentityService.computeBlindIndex('birthDate', new Date('1990-01-20')));
   });
@@ -170,7 +195,9 @@ describe('ParticipantIdentityService.encryptIdentityFields', () => {
       identityDocument: '111.444.777-35',
     });
 
-    expect(result.identityDocument).toBe('11144477735');
+    // #1104: the plaintext is dropped, so the canonical form is read back
+    // through the ciphertext.
+    expect(participantIdentityService.decryptIdentity(result).identityDocument).toBe('11144477735');
     expect(result.identityDocumentHash).toBe(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
     expect(JSON.stringify(result.identityDocumentEncrypted)).not.toContain('111.444.777-35');
   });
@@ -183,7 +210,7 @@ describe('ParticipantIdentityService.encryptIdentityFields', () => {
       identityDocument: '11144477735',
     });
 
-    expect(result.identityDocument).toBe('11144477735');
+    expect(participantIdentityService.decryptIdentity(result).identityDocument).toBe('11144477735');
   });
 
   it('does not mutate the input object', () => {
@@ -258,18 +285,37 @@ describe('ParticipantIdentityService.encryptIdentityFields -- birthDate cipherte
     expect(result.birthDate.getFullYear()).toBe(1990);
   });
 
-  // Control: this is a birthDate-ONLY cutover. patientName and
-  // identityDocument still have live plaintext readers and plaintext query
-  // arms, so their dual-write must be untouched. Expected behaviour is the
-  // same before and after, so a red here is the fixture, not the cutover.
-  it('#1104 control: patientName and identityDocument keep their plaintext', () => {
+  // The second half of the cutover: patientName's one plaintext query became
+  // an exact match on patientNameHash, and identityDocument's $or plaintext
+  // arms became hash-only, so neither needs its plaintext at rest.
+  it('#1104: writes NO plaintext patientName or identityDocument once the ciphertext exists, and both round-trip', () => {
     const result = participantIdentityService.encryptIdentityFields({
       participantId: '12345678',
       patientName: 'Paciente QA Teste',
-      birthDate: new Date(1990, 0, 20),
       identityDocument: '11144477735',
     });
 
+    expect(result.patientName).toBeNull();
+    expect(result.identityDocument).toBeNull();
+    expect(result.patientNameEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+    expect(result.identityDocumentEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+
+    const decrypted = participantIdentityService.decryptIdentity(result);
+    expect(decrypted.patientName).toBe('Paciente QA Teste');
+    expect(decrypted.identityDocument).toBe('11144477735');
+  });
+
+  // #1083, as for birthDate above: a keyless stack must keep the value.
+  it('#1104/#1083: KEEPS the plaintext patientName and identityDocument when no ciphertext could be produced', () => {
+    vi.spyOn(keyRegistry, 'getActiveKey').mockReturnValue(null);
+
+    const result = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      patientName: 'Paciente QA Teste',
+      identityDocument: '111.444.777-35',
+    });
+
+    expect(result.patientNameEncrypted).toBeUndefined();
     expect(result.patientName).toBe('Paciente QA Teste');
     expect(result.identityDocument).toBe('11144477735');
   });

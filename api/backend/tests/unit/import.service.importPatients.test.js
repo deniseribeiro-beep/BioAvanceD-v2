@@ -97,8 +97,13 @@ describe('ImportService.importPatients (JSON)', () => {
     expect(notifySpy).toHaveBeenCalledTimes(1);
 
     expect(participantIdentities.inserted).toHaveLength(1);
+    // #1104: ciphertext-only -- no plaintext at rest, recovered by decryption.
     expect(participantIdentities.inserted[0]).toMatchObject({
       participantId: patients.inserted[0].participantId,
+      patientName: null,
+      identityDocument: null,
+    });
+    expect(participantIdentityService.decryptIdentity(participantIdentities.inserted[0])).toMatchObject({
       patientName: 'Maria Silva',
       identityDocument: '12345678900',
     });
@@ -203,7 +208,12 @@ describe('ImportService.importPatients (JSON)', () => {
 
     expect(participantIdentities.updates).toHaveLength(1);
     expect(participantIdentities.updates[0].query).toEqual({ participantId: '10203040' });
+    // #1104: ciphertext-only -- no plaintext at rest, recovered by decryption.
     expect(participantIdentities.updates[0].update.$set).toMatchObject({
+      patientName: null,
+      identityDocument: null,
+    });
+    expect(participantIdentityService.decryptIdentity(participantIdentities.updates[0].update.$set)).toMatchObject({
       patientName: 'Maria Silva',
       identityDocument: '12345678900',
     });
@@ -244,11 +254,32 @@ describe('ImportService.importPatients (JSON)', () => {
     );
 
     expect(result.success).toBe(1);
-    expect(capturedQuery.$or).toEqual(
-      expect.arrayContaining([{ identityDocumentHash: { $in: expect.arrayContaining([expectedHash]) } }])
-    );
+    // #1104: the hash arm ALONE. identityDocument is ciphertext-only, so a
+    // plaintext arm beside it matches nothing and makes the $or unindexable.
+    expect(capturedQuery.$or).toEqual([
+      { identityDocumentHash: { $in: expect.arrayContaining([expectedHash]) } },
+    ]);
     expect(patientsCollection.updates).toHaveLength(1);
     expect(patientsCollection.updates[0].update.$set.participantId).toBe('10203040');
+  });
+
+  // #1083: with no key only the plaintext is written, so the keyless branch
+  // queries it -- in the digits-only form every writer stores (#1109), not
+  // the punctuated form the import row carried.
+  it('#1104/#1083: on a keyless stack, dedups on the canonical plaintext identityDocument', async () => {
+    const keyRegistry = require2('../../src/config/keyRegistry');
+    vi.spyOn(keyRegistry, 'getFallbackKeys').mockReturnValue([]);
+    const filePath = writeTmpFile('keyless.json', JSON.stringify(validPatient({ cpf: '123.456.789-00' })));
+    let capturedQuery = null;
+    const patients = makeCollection();
+    const participantIdentities = {
+      ...makeCollection(),
+      findOne: async (query) => { capturedQuery = query; return null; },
+    };
+
+    await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'keyless.json' });
+
+    expect(capturedQuery).toEqual({ $or: [{ identityDocument: '12345678900' }] });
   });
 
   it('records a merge error when birthDate conflicts with the existing record, without touching ParticipantIdentity', async () => {
@@ -364,10 +395,12 @@ describe('ImportService.importPatients (CSV)', () => {
     expect(patients.inserted[0].participantId).toMatch(/^\d{8}$/);
 
     expect(participantIdentities.inserted).toHaveLength(1);
+    // #1104: ciphertext-only -- no plaintext at rest, recovered by decryption.
     expect(participantIdentities.inserted[0]).toMatchObject({
       participantId: patients.inserted[0].participantId,
-      identityDocument: '98765432100',
+      identityDocument: null,
     });
+    expect(participantIdentityService.decryptIdentity(participantIdentities.inserted[0]).identityDocument).toBe('98765432100');
     expect(participantIdentityService.decryptIdentity(participantIdentities.inserted[0]).email).toBe('joao@example.com');
   });
 

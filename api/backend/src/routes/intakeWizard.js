@@ -1031,8 +1031,8 @@ router.get('/patient-match', async (req, res) => {
         : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
       const candidates = await identityCollection.find({ $or: dateOrConditions }).toArray();
       identity = candidates.find((rawCandidate) => {
-        // patientName is civil identity -- decrypt before comparing so this
-        // keeps matching once the plaintext field is eventually dropped.
+        // patientName is civil identity and ciphertext-only (#1104), so
+        // decrypt before comparing.
         const candidate = participantIdentityService.decryptIdentity(rawCandidate);
         const candidateNormalized = normalizeString(candidate.patientName)
           .normalize('NFD')

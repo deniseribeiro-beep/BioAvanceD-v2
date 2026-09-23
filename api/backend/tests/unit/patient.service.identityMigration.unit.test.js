@@ -89,8 +89,12 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     const patients = makeInMemoryCollection([
       { participantId: '11111111', recordNumber: 'PRONT-1' },
     ]);
+    // #1104: built through the real write path -- identityDocument is
+    // ciphertext-only, so a hand-written plaintext-only row represents
+    // nothing a writer produces with a key configured.
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
     const participantIdentities = makeInMemoryCollection([
-      { participantId: '11111111', identityDocument: '11144477735' },
+      participantIdentityService.encryptIdentityFields({ participantId: '11111111', identityDocument: '11144477735' }),
     ]);
     const db = makeDb({ patients, participantIdentities });
 
@@ -278,20 +282,63 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     expect(duplicate).toBeNull();
   });
 
-  it('listPatients({ patientName }) resolves matching participantIds via ParticipantIdentity, not Patient.patientName', async () => {
-    const patients = makeInMemoryCollection([
+  // #1104: patientName is ciphertext-only, so the filter is an EXACT match on
+  // the normalized full name through patientNameHash. It used to be a
+  // case-insensitive substring $regex over the plaintext, which a blind
+  // index cannot serve.
+  function nameIdentities() {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    return makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '11111111', patientName: 'Ana Silva' }),
+      participantIdentityService.encryptIdentityFields({ participantId: '22222222', patientName: 'Bruno Costa' }),
+    ]);
+  }
+
+  function stalePatients() {
+    return makeInMemoryCollection([
       { participantId: '11111111', patientName: 'STALE' },
       { participantId: '22222222', patientName: 'STALE' },
     ]);
+  }
+
+  it('#1104: listPatients({ patientName }) matches a CIPHERTEXT-ONLY identity via patientNameHash, ignoring accents, case and spacing', async () => {
+    const participantIdentities = nameIdentities();
+    expect(participantIdentities._docs.every((doc) => doc.patientName === null)).toBe(true);
+    const db = makeDb({ patients: stalePatients(), participantIdentities });
+
+    const result = await patientService.listPatients(db, { patientName: '  ÁNA   silva ' });
+
+    expect(result.patients.map((p) => p.participantId)).toEqual(['11111111']);
+  });
+
+  // The semantics change, pinned: a partial name no longer matches.
+  it('#1104: listPatients({ patientName }) no longer matches a SUBSTRING of the name', async () => {
+    const db = makeDb({ patients: stalePatients(), participantIdentities: nameIdentities() });
+
+    const result = await patientService.listPatients(db, { patientName: 'ana' });
+
+    expect(result.patients).toEqual([]);
+  });
+
+  // #1083: with no key, only the plaintext is written, so the keyless branch
+  // queries it -- with the same exact-match semantics, and escaped, so a
+  // term like '.*' is a literal rather than a pattern matching everyone.
+  it('#1104/#1083: on a keyless stack, listPatients matches the plaintext name exactly and escapes the term', async () => {
+    const keyRegistry = require('../../src/config/keyRegistry');
+    vi.spyOn(keyRegistry, 'getFallbackKeys').mockReturnValue([]);
     const participantIdentities = makeInMemoryCollection([
       { participantId: '11111111', patientName: 'Ana Silva' },
       { participantId: '22222222', patientName: 'Bruno Costa' },
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ patients: stalePatients(), participantIdentities });
 
-    const result = await patientService.listPatients(db, { patientName: 'ana' });
+    const exact = await patientService.listPatients(db, { patientName: 'ana silva' });
+    const partial = await patientService.listPatients(db, { patientName: 'ana' });
+    const pattern = await patientService.listPatients(db, { patientName: '.*' });
 
-    expect(result.patients.map((p) => p.participantId)).toEqual(['11111111']);
+    expect(exact.patients.map((p) => p.participantId)).toEqual(['11111111']);
+    expect(partial.patients).toEqual([]);
+    expect(pattern.patients).toEqual([]);
   });
 
   it('searchPatients(term) resolves a birthDate-shaped term via ParticipantIdentity, not Patient.birthDate', async () => {
@@ -348,8 +395,12 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
 
     await patientService.updatePatient(db, '11111111', { patientName: 'New Name' });
 
+    // #1104: ciphertext-only, with the hash re-derived for the new name.
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
     const identity = await participantIdentities.findOne({ participantId: '11111111' });
-    expect(identity.patientName).toBe('New Name');
+    expect(identity.patientName).toBeNull();
+    expect(identity.patientNameHash).toBe(participantIdentityService.computeBlindIndex('patientName', 'New Name'));
+    expect(participantIdentityService.decryptIdentity(identity).patientName).toBe('New Name');
   });
 
   it('updatePatient upserts into ParticipantIdentity when no prior identity record exists', async () => {
@@ -361,9 +412,12 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
 
     await patientService.updatePatient(db, '22222222', { identityDocument: '11144477735' });
 
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
     const identity = await participantIdentities.findOne({ participantId: '22222222' });
     expect(identity).toBeTruthy();
-    expect(identity.identityDocument).toBe('11144477735');
+    // #1104: ciphertext-only.
+    expect(identity.identityDocument).toBeNull();
+    expect(participantIdentityService.decryptIdentity(identity).identityDocument).toBe('11144477735');
   });
 
   // updatePatient's identity sync is a participantIdentities WRITER, and it
@@ -396,7 +450,9 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     await patientService.updatePatient(db, '22222222', { identityDocument: '111.444.777-35' });
 
     const identity = await participantIdentities.findOne({ participantId: '22222222' });
-    expect(identity.identityDocument).toBe('11144477735');
+    // #1104: ciphertext-only, so the canonical form is read back decrypted.
+    expect(identity.identityDocument).toBeNull();
+    expect(participantIdentityService.decryptIdentity(identity).identityDocument).toBe('11144477735');
     expect(identity.identityDocumentHash).toBe(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
   });
 

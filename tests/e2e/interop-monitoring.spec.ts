@@ -676,8 +676,18 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
       // canonical Patient document, only onto the segregated
       // ParticipantIdentity collection, so it's asserted there instead.
       await expect.poll(() => findCommittedPatient(patientId), { timeout: 10_000 }).not.toBeNull();
+      // #1104: patientName is ciphertext-only at rest, so the raw row holds
+      // no plaintext, and the name is read back through the one authorized
+      // re-identification path, which decrypts.
       const committedIdentity = await findCommittedParticipantIdentity(patientId);
-      expect(committedIdentity?.patientName).toContain('RF011 e2e patient');
+      expect(committedIdentity?.patientName ?? null).toBeNull();
+      expect(committedIdentity?.patientNameEncrypted).toBeTruthy();
+      const reidentifyResponse = await request.post(`${apiBaseURL}/api/patients/${patientId}/reidentify`, {
+        headers: { Authorization: `Bearer ${token}` },
+        data: { reason: 'RF011 e2e: confirm the committed participant name' },
+      });
+      expect(reidentifyResponse.status(), await reidentifyResponse.text()).toBe(200);
+      expect((await reidentifyResponse.json())?.data?.patientName).toContain('RF011 e2e patient');
 
       // Criteria 3, 5, 6: Specimen mapped, provenance recorded
       // (importBatchId/importedBy/importedAt), quarantine released once

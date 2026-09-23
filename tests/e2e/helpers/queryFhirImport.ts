@@ -92,8 +92,9 @@ export async function findCommittedPatient(participantId: string) {
 
 // RF005/RNF007 (#571/#575): patientName is civil identity — commitBatch
 // never writes it onto the canonical Patient document; its sole write
-// target is this segregated collection (plaintext-additive pending #574's
-// ciphertext-only cutover, so no decryption needed here).
+// target is this segregated collection. It is ciphertext-only there (#1104),
+// so this raw row carries no plaintext name -- read it back decrypted through
+// the API's re-identification endpoint.
 export async function findCommittedParticipantIdentity(participantId: string) {
   const db = await getDb();
   return db.collection('participantIdentities').findOne({ participantId });

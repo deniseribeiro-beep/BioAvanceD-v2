@@ -228,7 +228,10 @@ describe('ImportLGPDService.importPatientsSmart', () => {
     expect(participantIdentitiesCollection.insertOne).toHaveBeenCalledTimes(1);
     const insertedIdentity = participantIdentitiesCollection.insertOne.mock.calls[0][0];
     expect(insertedIdentity.participantId).toBe(insertedPatient.participantId);
-    expect(insertedIdentity.patientName).toBe('MARIA SILVA');
+    // #1104: ciphertext-only -- no plaintext at rest, recovered by decryption.
+    const identityCrypto = require('../../src/services/participantIdentity.service');
+    expect(insertedIdentity.patientName).toBeNull();
+    expect(identityCrypto.decryptIdentity(insertedIdentity).patientName).toBe('MARIA SILVA');
   });
 
   // #1166 slice 3: same rollback as importPatients -- a refused identity

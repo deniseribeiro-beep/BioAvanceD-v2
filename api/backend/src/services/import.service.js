@@ -322,17 +322,20 @@ class ImportService {
         if (patientData.identityDocument) {
           const identityCollection = getCollection(db, 'participantIdentities');
           // RF005/RNF007 (#574): identityDocumentHash lets this dedup match
-          // without querying the plaintext field once it's eventually
-          // dropped; the plaintext branch stays as a fallback for records
-          // written before the hash sibling existed.
+          // without querying the plaintext field.
           // #1099: match under EVERY registered key, not just the active
           // one -- a hash written before a rotation is otherwise
           // unmatchable, and a missed dedup here creates a DUPLICATE
           // participant rather than raising an error.
+          // #1104: identityDocument is ciphertext-only, so a plaintext arm
+          // beside the hash would match nothing and make this $or
+          // unindexable. The plaintext is queried only on a keyless stack
+          // (#1083), the one case that still writes it -- canonicalized,
+          // because every writer stores the digits-only form (#1109).
           const identityDocumentHashes = participantIdentityService.computeBlindIndexCandidates('identityDocument', patientData.identityDocument);
           const orConditions = identityDocumentHashes.length
-            ? [{ identityDocumentHash: { $in: identityDocumentHashes } }, { identityDocument: patientData.identityDocument }]
-            : [{ identityDocument: patientData.identityDocument }];
+            ? [{ identityDocumentHash: { $in: identityDocumentHashes } }]
+            : [{ identityDocument: participantIdentityService.normalizeIdentityDocument(patientData.identityDocument) }];
           const existingIdentity = await identityCollection.findOne({ $or: orConditions });
           if (existingIdentity) {
             existing = await patientsCollection.findOne({ participantId: existingIdentity.participantId });

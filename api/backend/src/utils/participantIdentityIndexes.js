@@ -25,7 +25,8 @@ const logger = require('./logger');
  * - `identityDocumentHash` and `birthDateHash` are the blind-index siblings
  *   #574 added so the identity-matching sites could stop querying plaintext.
  *   A deterministic blind index whose entire purpose is to be queryable, and
- *   which is not indexed, is only half the construct.
+ *   which is not indexed, is only half the construct. `patientNameHash`
+ *   joined them in #1104, for listPatients' exact name filter.
  * - `participantId` is what every *other* reader of this collection matches
  *   on -- `eConsent.js:131`, `consent.service.js:552`, `patient.service.js:588`,
  *   `intakeWizard.js:1008` and `getIdentityByParticipantId`.
@@ -39,18 +40,21 @@ const logger = require('./logger');
  * ciphertext-only, its plaintext arm has been removed from all four matching
  * sites, and those queries are now a single indexed condition.
  *
- * `identity_document_hash` is **not** yet, and it would be wrong to imply
- * otherwise. identityDocument is still dual-written, so its matching sites
- * query `{ $or: [{ identityDocumentHash: { $in: [...] } }, { <plaintext arm> }] }`,
- * and Mongo can only serve an `$or` from indexes when EVERY arm is indexed.
- * Until that plaintext column is dropped (#1104) that union still scans.
+ * `identity_document_hash` and `patient_name_hash` are too, as of #1104's
+ * cutover of the last two civil-identity fields. Both are ciphertext-only.
+ * The `$or` plaintext arms on identityDocument are gone, because Mongo can
+ * only serve an `$or` from indexes when EVERY arm is indexed. listPatients'
+ * `$regex` on patientName became an exact match on `patientNameHash`. The
+ * plaintext conditions that remain are the keyless-stack branch (#1083),
+ * reached only when no ENCRYPTION_KEY is configured and the plaintext is
+ * therefore the only thing written.
  *
- * The plaintext arms are deliberately left unindexed rather than indexed to
- * close that gap: they are the columns being removed, so indexing them buys
- * write amplification on a field with a scheduled deletion date. This is the
- * cost half of the sequencing argument #1099 makes about correctness -- the
- * index has to exist *before* the plaintext arm goes, or the day it goes is
- * the day every import-path dedup becomes an unindexed scan per row.
+ * The plaintext columns were deliberately never indexed: they were the
+ * columns being removed, so indexing them would have bought write
+ * amplification on a field with a scheduled deletion date. This is the cost
+ * half of the sequencing argument #1099 makes about correctness -- the index
+ * had to exist *before* the plaintext arm went, or the day it went would have
+ * been the day every import-path dedup became an unindexed scan per row.
  *
  * #1102 originally cited "#574/#1072" for that removal. Both are CLOSED and
  * #1072 is about mfaSecret, not identity -- #574 shipped only its own
@@ -106,6 +110,7 @@ const logger = require('./logger');
  */
 const PARTICIPANT_IDENTITY_INDEXES = [
   [{ identityDocumentHash: 1 }, { name: 'participant_identities_identity_document_hash_idx_v1' }],
+  [{ patientNameHash: 1 }, { name: 'participant_identities_patient_name_hash_idx_v1' }],
   [{ birthDateHash: 1 }, { name: 'participant_identities_birth_date_hash_idx_v1' }],
   [{ participantId: 1 }, { name: 'participant_identities_participant_id_idx_v1' }],
   [

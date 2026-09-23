@@ -101,8 +101,14 @@ describe('PatientIdentityService (import-time matching) resolves via Participant
 
     const identity = participantIdentities._docs.find((doc) => doc.participantId === result.patient.participantId);
     expect(identity).toBeTruthy();
-    expect(identity.patientName).toBe('Carla Souza');
-    expect(identity.identityDocument).toBe('11144477735');
+    // #1104: ciphertext-only -- no plaintext at rest, recovered by decryption.
+    const identityCrypto = require('../../src/services/participantIdentity.service');
+    expect(identity.patientName).toBeNull();
+    expect(identity.identityDocument).toBeNull();
+    expect(identityCrypto.decryptIdentity(identity)).toMatchObject({
+      patientName: 'Carla Souza',
+      identityDocument: '11144477735',
+    });
   });
 
   // #1166 slice 4: the contact is identity data, written through

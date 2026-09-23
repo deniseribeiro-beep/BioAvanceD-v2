@@ -98,7 +98,10 @@ describe('participant-identity-backfill.service#backfillParticipantIdentities', 
     expect(db.collections.participantIdentities.docs).toHaveLength(1);
     const created = db.collections.participantIdentities.docs[0];
     expect(created.participantId).toBe('11111111');
-    expect(created.patientName).toBe('Paciente Legado');
+    // #1104: ciphertext-only -- no plaintext at rest, recovered by decryption.
+    const identityCrypto = require('../../../src/services/participantIdentity.service');
+    expect(created.patientName).toBeNull();
+    expect(identityCrypto.decryptIdentity(created).patientName).toBe('Paciente Legado');
     // Backfilled records go through the same #566 encryption as new ones.
     expect(created.identityDocumentEncrypted).toMatchObject({ alg: 'aes-256-gcm' });
   });
