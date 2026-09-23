@@ -14,13 +14,14 @@ const ProtocolModel = require('../../src/models/Protocol');
 const QuarantineActionModel = require('../../src/models/QuarantineAction');
 const ReferenceImportRunModel = require('../../src/models/ReferenceImportRun');
 const ReportTemplateModel = require('../../src/models/ReportTemplate');
-const SampleModel = require('../../src/models/Sample');
+const { SampleModel } = require('../../src/models/Sample');
 const SensorModel = require('../../src/models/Sensor');
 const StorageBox = require('../../src/models/StorageBox');
 const StorageContainer = require('../../src/models/StorageContainer');
 const StudyModel = require('../../src/models/Study');
 const TemperatureModel = require('../../src/models/Temperature');
 const TemperatureIncidentModel = require('../../src/models/TemperatureIncident');
+const TerminologyRelationModel = require('../../src/models/TerminologyRelation');
 const { isEquipmentReady } = require('../../src/models/equipmentStatus');
 
 describe('item 8 branch-95 model behaviors', () => {

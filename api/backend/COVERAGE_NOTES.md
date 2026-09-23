@@ -42,6 +42,10 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
+**2026-09-23, Item 8 / Stage 2 local**: base HEAD `dd265f698897dc88e8a951d885b47269a870b1c7`, with pre-existing local dependency changes preserved and test corrections described in `docs/stabilization/ITEM_8_BRANCH_95_RECONCILIATION.md`. Windows / Node 24.19.0, Vitest and coverage-v8 4.1.11. Full and coverage: **559 files / 10,021 tests passed, zero failures/skips**. Statements **97.35% (26465/27184)**, Branches **94.04% (22461/23883)**, Functions **95.96% (3190/3324)**, Lines **97.49% (25140/25787)**. Branch-95 deficit: **228**. Uncovered paths: 768 empty-location zero counters, 96 empty-location negative counters, 558 source-located zeros. Orphanet lines 307–308: global `[0,0]`, isolated existing test `[7,7]` for both branches. **BLOCKED_BY_COVERAGE_INSTRUMENTATION**; Docker not started. Older buckets below are historical, not regenerated current priorities.
+
+### Historical reconcile
+
 **2026-07-27 (session 17)**, snapshot from `feature/docker-e2e-backend-integration`
 (commit `65667eac`, full suite, **all green: 297 test files / 6158 tests
 passed, 0 failures** — the previously-tracked 1 pre-existing failure in

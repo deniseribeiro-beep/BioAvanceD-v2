@@ -286,7 +286,7 @@ describe('fhir-import-staging.service.js item 8 branch-95 source-located guards'
     expect(db.collections.import_batches.docs).toHaveLength(0);
   });
 
-  it('counts WARNING and NEEDS_EMAIL records independently in consent-status reconciliation', async () => {
+  it('returns each staging record identity and status independently in consent-status reconciliation', async () => {
     const db = createDb();
     const batchId = new ObjectId();
     await db.collection('import_batches').insertOne({
@@ -316,7 +316,11 @@ describe('fhir-import-staging.service.js item 8 branch-95 source-located guards'
 
     const result = await fhirImportStagingService.getConsentStatus(db, batchId);
 
-    expect(result.counts.warnings).toBe(1);
-    expect(result.counts.errors).toBe(1);
+    expect(result.batch._id).toEqual(batchId);
+    expect(result.records).toHaveLength(2);
+    expect(result.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ participantId: 'P-WARN', specimenId: 'S-WARN', status: fhirImportStagingService.STATUS.WARNING }),
+      expect.objectContaining({ participantId: 'P-EMAIL', specimenId: 'S-EMAIL', status: fhirImportStagingService.STATUS.NEEDS_EMAIL }),
+    ]));
   });
 });

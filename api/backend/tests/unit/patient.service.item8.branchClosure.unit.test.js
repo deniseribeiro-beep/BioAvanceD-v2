@@ -166,15 +166,18 @@ describe('PatientService item 8 branch closure - identifier and duplicate checks
     await expect(patientService.checkDuplicatePatient(db, { patientName: 'Ana', birthDate: '1990-06-15' })).resolves.toBeNull();
   });
 
-  it('covers matching duplicate when decrypted birthDate is a string', async () => {
-    const raw = { participantId: 'dup' };
+  it('matches a duplicate through the real encrypted identity date contract', async () => {
+    const raw = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      patientName: 'Ana Silva',
+      birthDate: new Date('1990-06-15T00:00:00.000Z'),
+    });
     const identities = makeCollection({
       find: vi.fn().mockReturnValue(makeCursor([raw]))
     });
-    vi.spyOn(participantIdentityService, 'decryptIdentity').mockReturnValue({
-      patientName: 'Ana Silva',
-      birthDate: '1990-06-15T00:00:00.000Z'
-    });
+    expect(raw.birthDate).toBeNull();
+    expect(raw.birthDateEncrypted).toBeTruthy();
+    expect(participantIdentityService.decryptIdentity(raw).birthDate).toBeInstanceOf(Date);
     const db = makeDb({ participantIdentities: identities });
     const result = await patientService.checkDuplicatePatient(db, { patientName: '  ana   silva ', birthDate: '1990-06-15' });
     expect(result).toBe(raw);

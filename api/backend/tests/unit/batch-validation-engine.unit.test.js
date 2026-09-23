@@ -1254,8 +1254,8 @@ describe('BatchValidationEngine item 8 branch-95 source-located guards', () => {
     });
   });
 
-  it('refuses sample persistence when a linked Patient has no canonical participantId', async () => {
-    vi.spyOn(engine, 'findLinkedPatient').mockResolvedValue({ _id: 'patient-object-without-participant-id' });
+  it('refuses sample persistence when no Patient exists and registration data is insufficient', async () => {
+    vi.spyOn(engine, 'findLinkedPatient').mockResolvedValue(null);
     const createSample = vi.spyOn(sampleService, 'createSample');
 
     const result = await engine.persistSample(
@@ -1271,16 +1271,16 @@ describe('BatchValidationEngine item 8 branch-95 source-located guards', () => {
     );
 
     expect(result.classification).toBe('INVALID');
-    expect(result.errors).toContain('Paciente vinculado sem participantId canônico.');
+    expect(result.errors).toContain('Paciente não encontrado e dados insuficientes para criar um novo registro. Informe os campos do paciente ou um identificador já existente.');
     expect(createSample).not.toHaveBeenCalled();
   });
 
-  it('refuses a created Specimen that does not return its canonical specimenId', async () => {
+  it('does not create biomarker observations when Specimen persistence fails', async () => {
     vi.spyOn(engine, 'findLinkedPatient').mockResolvedValue({
       _id: 'patient-branch95',
       participantId: '12345678',
     });
-    vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-without-specimen-id' });
+    vi.spyOn(sampleService, 'createSample').mockRejectedValue(new Error('Specimen persistence unavailable'));
     const createObservation = vi.spyOn(biomarkerObservationService, 'createObservation');
 
     const result = await engine.persistSample(
@@ -1297,7 +1297,7 @@ describe('BatchValidationEngine item 8 branch-95 source-located guards', () => {
     );
 
     expect(result.classification).toBe('INVALID');
-    expect(result.errors).toContain('specimenId canônico é obrigatório na Specimen criada.');
+    expect(result.errors).toContain('Specimen persistence unavailable');
     expect(createObservation).not.toHaveBeenCalled();
   });
 });

@@ -124,3 +124,61 @@ Sem alterar produção, foram acrescentados testes para comportamentos executáv
 - `fhir-import-staging.service.js`: preservação de erro 400 canônico de `normalizeEntries` e contagem independente de `WARNING`/`NEEDS_EMAIL`.
 
 Todos os commits desta rodada usam `[skip ci]`. O baseline oficial continua sendo `f94e8f0`; nenhum novo percentual será inferido sem a futura rodada consolidada.
+
+## Stage 2 — validação local de 2026-09-23
+
+Autoridade desta sessão: HEAD `dd265f698897dc88e8a951d885b47269a870b1c7`, branch `stabilize/v2.0.0-prototype`. O checkpoint acima é histórico, não o HEAD atual. Havia alterações locais em `api/backend/package.json` e `package-lock.json` (Argon2 e Mongoose), preservadas sem inclusão em commits desta sessão. Node local: 24.19.0; Vitest instalado: 4.1.11; coverage-v8 instalado: 4.1.10.
+
+A primeira tentativa direcionada não coletou testes por ausência de `@rolldown/binding-win32-x64-msvc@1.2.10`. O pacote exato declarado no lockfile foi extraído em `node_modules`, sem alterar manifests. A execução seguinte mediu 6 arquivos, 183 testes: 179 aprovados e 4 falhas (6,31 s).
+
+| Arquivo / caso | Classificação | Evidência e correção somente de teste | Resultado direcionado |
+| --- | --- | --- | --- |
+| `item8.branch95.models.test.js`: TerminologyRelation | TEST_V2 | Import ausente; usar o modelo público existente. Contrato `contracts/canonical/v2`: `relationVersion` e `relationStatus` obrigatórios. | aprovado |
+| `item8.branch95.models.test.js`: datas Sample | TEST_V2 | O export padrão é Mongoose; usar o export público `SampleModel`, como `sample.model.unit.test.js` e `sample.models.test.js`. Nenhuma mudança no modelo. | aprovado |
+| `fhir-import-staging.item8.residual.test.js`: consulta de consentimento | TEST_V2 | `getConsentStatus` retorna `{ batch, records }`, como a suíte `services/fhir-import-staging-consent.service.test.js`; conferir identidades/status individuais, não contadores inexistentes. O teste anterior não comprovava `summarize`. | aprovado |
+| `batch-validation-engine.unit.test.js`: Patient ausente | TEST_V2 | Migrar mock de documento sem identidade para ausência real de Patient e dados insuficientes para cadastro; verificar rejeição e ausência de criação de Sample. | aprovado |
+| `batch-validation-engine.unit.test.js`: falha de persistência Specimen | TEST_V2 | Migrar retorno impossível sem `specimenId` para rejeição de persistência; verificar propagação do erro e ausência de observações. Contrato v2 exige `specimenId`/`participantId`; Wave 2 documenta identidade canônica. | aprovado |
+| `batch-validation-engine.service.js`: guards de documento persistido sem identidade | DEFENSIVE_OR_INSTRUMENTATION | Não fabricar documentos persistidos inválidos para atingir os guards. Produção preservada; os dois testes anteriores foram migrados para falhas legítimas. | não perseguir por coverage |
+
+Após esse lote: 6/6 arquivos e 183/183 testes aprovados, zero skips, 7,43 s. Architecture: 169/169, zero falhas/skips. Current-State: aprovado, dicionário com 1.644 elementos (929 históricos + 715 novos), 146 entidades. Release Manifest: 9/9 artefatos íntegros. A medição Full Vitest e a reconciliação de coverage serão registradas após conclusão; estes resultados direcionados não substituem os gates completos.
+
+A primeira rodada Full Vitest terminou em 642,16 s: 559 arquivos (557 aprovados, 2 com falha), 10.021 testes (10.019 aprovados, 2 falhas, zero skips). Como as correções direcionadas foram aplicadas durante a execução, essa rodada é diagnóstica, não um snapshot final imutável. Falhas: a expectativa antiga de batch (executada antes da correção) e `patient.service.item8.branchClosure.unit.test.js:180`, reproduzida isoladamente.
+
+O segundo caso é `TEST_V2`: o mock devolvia `birthDate` descriptografada como string UTC, enquanto o fluxo cifrado real de `participantIdentity.service.js:216` devolve `Date`. No fuso America/Sao_Paulo, o mock compara meia-noite UTC com meia-noite local. O teste foi migrado para `encryptIdentityFields`/`decryptIdentity` reais, verificando ausência do valor plano (`null`), presença de ciphertext, tipo `Date` e retorno da identidade original na detecção de duplicidade. Autoridade: dicionário v2 `P1X-0351`, data exata obrigatória em ParticipantIdentity, fronteira protegida MongoDB; suíte existente `patient.service.identityMigration.unit.test.js`. Produção preservada; o braço de string não é perseguido com mock incompatível com o fluxo cifrado. As duas suítes afetadas passaram: 76/76 testes.
+
+O provedor coverage-v8 instalado foi alinhado a 4.1.11 (Vitest 4.1.11), seguindo o procedimento do workflow diagnóstico. Somente `node_modules` foi atualizado; manifests, thresholds e exclusões de coverage permanecem intactos.
+
+### Resultado consolidado local
+
+- Full Vitest após correções, arquivos estáveis: **559/559 arquivos, 10.021/10.021 testes, zero falhas/skips**, exit 0, **513,61 s**.
+- Coverage completo: **559/559 arquivos, 10.021/10.021 testes, zero falhas/skips**, exit 0, **651,93 s**.
+- Comandos no backend: `node node_modules/vitest/vitest.mjs run --reporter=dot --reporter=json --outputFile=<arquivo-local>`; coverage acrescenta `--coverage --testTimeout=15000`, conforme workflow diagnóstico. Nenhuma restrição de diretórios ou mudança de threshold.
+
+| Métrica | Cobertos / total | Percentual |
+| --- | --- | --- |
+| Statements | 26.465 / 27.184 | 97,35% |
+| Branches | 22.461 / 23.883 | 94,04% |
+| Functions | 3.190 / 3.324 | 95,96% |
+| Lines | 25.140 / 25.787 | 97,49% |
+
+Déficit atualizado: `ceil(23883 * 0.95) - 22461 = 22689 - 22461 = 228`. O exit 0 do comando não significa atingir 95%: os thresholds originais do projeto foram preservados.
+
+Dos **1.422** contadores não cobertos, **768** têm hits zero e location vazia, **96** têm contador negativo e location vazia, e **558** têm location de fonte e hits zero. Nesta rodada a diferença resumo menos braços materializados é zero. Portanto **864/1.422 (60,76%)** são contadores sem localização utilizável; não confundir esse cálculo com a decomposição do baseline histórico.
+
+| Arquivo / linha ou branch | Classificação | Evidência atual |
+| --- | --- | --- |
+| Locations vazias em `coverage-final.json` | DEFENSIVE_OR_INSTRUMENTATION | 768 braços zerados + 96 negativos; não justificam estados artificiais ou `else` em produção. |
+| `src/routes/orphanet.js:307–308`, branches 53/54 | DEFENSIVE_OR_INSTRUMENTATION | Global `[0,0]` em cada branch; execução isolada de `orphanet.item8.residual.test.js` produz `[7,7]` em cada branch. Teste existente de linguagem/default/clamp nas linhas 288–316. Prova direta da divergência global versus isolado, sem adicionar teste. |
+| `src/services/fhir-import-staging.service.js:211,238` | DEFENSIVE_OR_INSTRUMENTATION | Fallbacks de `matrixType`; `parseSprecRaw` sempre produz `solid` ou `fluid`. Não fabricar matriz ausente. |
+| `src/services/fhir-import-staging.service.js:604` | DEFENSIVE_OR_INSTRUMENTATION | Global zerado apesar de teste direto aprovado de preservação do status 400 em `fhir-import-staging.item8.residual.test.js:275`. |
+| Outros 558 gaps source-located, incluindo os casos acima | inventário, não classificação coletiva | Maior concentração: intakeWizard 29; orphanet 18; SampleGraphValidator 18; terminologies.routes 16; fhir-import-staging 14; batch-validation-engine 13; sample.service 10. Nem todos foram demonstrados como artefatos; não afirmar impossibilidade matemática de alcançar 95%. |
+
+A execução isolada usou `--coverage.include=src/routes/orphanet.js --coverage.reportsDirectory=../../logs/item8-stage2/orphanet-coverage`, preservando o relatório completo em `api/backend/coverage`. Evidência detalhada, locations e logs locais em `logs/item8-stage2/`; estes artefatos são ignorados pelo Git.
+
+Encerramento conforme critério 18 desta sessão: residual majoritariamente instrumental, com divergência comprovada em teste já existente. Não criar testes adicionais exclusivamente para perseguir o contador global. Status: **BLOCKED_BY_COVERAGE_INSTRUMENTATION**. Não há produção alterada nesta sessão, `PRODUCTION_DEFECT` ou `LEGACY_RETIRE` executado, nem caso funcional `AMBIGUOUS` pendente identificado nos casos selecionados. Esta evidência não equivale a uma revisão exaustiva dos 558 braços localizados.
+
+### Docker / segredos / auditoria final
+
+Em **2026-09-23**, base auditada `dd265f698897dc88e8a951d885b47269a870b1c7`: Docker final **não executado** pelo bloqueio de coverage. Inspecionados `compose.test.yml` e `compose.test.foundation.yml` e os workflows oficiais; nenhum `compose config`, build, healthcheck ou gate de container foi executado. Nenhum serviço foi iniciado nesta sessão; não houve teardown nem remoção de volumes. Não confundir com o checkpoint Docker histórico.
+
+`.env` e `.env.docker`: não tracked e ignorados por Git. Credenciais de containers geradas: **no** (fase não alcançada). Nenhum segredo incluído no diff. O diff da sessão contém apenas quatro arquivos de teste e documentação; as alterações preexistentes de dependências foram preservadas. `git diff --check` aprovado. Nenhuma mudança de branch, reset, descarte, push ou execução de GitHub Actions.
