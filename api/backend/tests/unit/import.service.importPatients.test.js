@@ -104,6 +104,31 @@ describe('ImportService.importPatients (JSON)', () => {
     });
   });
 
+  // #1166 slice 3: the identity row is written after the Patient row and can
+  // now be refused on its own (the phoneHash unique index). The Patient row
+  // must not survive that with no identity.
+  it('#1166: rolls back the Patient row when the identity insert fails', async () => {
+    vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+    const filePath = writeTmpFile('identity-refused.json', JSON.stringify(validPatient()));
+    const patients = makeCollection();
+    const deleted = [];
+    patients.deleteOne = async (query) => {
+      deleted.push(query);
+      return { deletedCount: 1 };
+    };
+    const participantIdentities = makeCollection();
+    participantIdentities.insertOne = async () => {
+      throw Object.assign(new Error('E11000 duplicate key'), { code: 11000, keyPattern: { phoneHash: 1 } });
+    };
+    const db = makeDb({ patients, participantIdentities });
+
+    const result = await importService.importPatients(db, { path: filePath, originalname: 'identity-refused.json' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(deleted).toEqual([{ _id: 'generated-id' }]);
+  });
+
   it('swallows notification errors and still counts the patient as successfully imported', async () => {
     vi.spyOn(notificationService, 'enqueueConsentNotification').mockRejectedValue(new Error('queue down'));
     const filePath = writeTmpFile('notify-fails.json', JSON.stringify(validPatient()));

@@ -848,7 +848,10 @@ class ImportLGPDService {
           const identityDoc = participantIdentityEncryptionService.encryptIdentityFields(
             ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
           );
-          await identityCollection.insertOne(identityDoc);
+          // #1166 slice 3: a refused identity insert must not leave the Patient behind.
+          await participantIdentityEncryptionService.insertIdentityOrRollbackPatient(
+            identityCollection, identityDoc, patientsCollection, insertResult.insertedId
+          );
 
           try {
             const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
@@ -2464,7 +2467,10 @@ class ImportLGPDService {
         const identityDoc = participantIdentityEncryptionService.encryptIdentityFields(
           ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
         );
-        await identityCollection.insertOne(identityDoc);
+        // #1166 slice 3: a refused identity insert must not leave the Patient behind.
+        await participantIdentityEncryptionService.insertIdentityOrRollbackPatient(
+          identityCollection, identityDoc, patientsCollection, insertResult.insertedId
+        );
 
         try {
           const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);

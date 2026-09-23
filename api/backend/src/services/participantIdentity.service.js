@@ -1,5 +1,6 @@
 const { getCollection } = require('../utils/collectionResolver');
 const { encryptValue, decryptValue, hmacBlindIndex, hmacBlindIndexCandidates } = require('../utils/fieldEncryption');
+const logger = require('../utils/logger');
 
 // RF005/RNF007 (#560): read access to ParticipantIdentity, the segregated
 // civil-identity collection created by #363. Kept separate from
@@ -250,6 +251,29 @@ class ParticipantIdentityService {
       }
     }
     return doc;
+  }
+
+  // #1166 slice 3: every writer that creates a participant inserts the
+  // Patient row first and the identity row second, and none undid the first
+  // when the second failed -- leaving a Patient with no identity at all. With
+  // phone uniqueness enforced on the identity side (phoneHash), that failure
+  // is an ordinary duplicate-phone refusal rather than an outage. Undo the
+  // Patient insert, then rethrow the identity error unchanged so each
+  // caller's own handling (409, per-row import error) still applies.
+  async insertIdentityOrRollbackPatient(identityCollection, identityDoc, patientsCollection, patientInsertedId) {
+    try {
+      return await identityCollection.insertOne(identityDoc);
+    } catch (error) {
+      try {
+        await patientsCollection.deleteOne({ _id: patientInsertedId });
+      } catch (rollbackError) {
+        logger.error(
+          'Falha ao desfazer o paciente após erro na identidade (#1166):',
+          rollbackError?.message || rollbackError
+        );
+      }
+      throw error;
+    }
   }
 
   // RF005/RNF007 (#560/#566): the sole authorized re-identification access

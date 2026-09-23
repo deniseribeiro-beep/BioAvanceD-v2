@@ -71,6 +71,23 @@ const logger = require('./logger');
  * the planner declines to use it -- which would leave exactly the collection
  * scans this exists to remove.
  *
+ * ## The one exception: phoneHash is UNIQUE and partial (#1166 slice 3)
+ *
+ * Everything above is about lookup cost. `phoneHash` is a constraint: phone
+ * uniqueness (#1165) moves onto the identity side, over the digits-only blind
+ * index, because the plaintext `patients.phone` column it is enforced on
+ * today is being removed (#1166 slice 4). It is partial on `$gt: ''` for the
+ * reason #1165 gives: a participant with no phone -- a null or absent hash,
+ * and every identity row written before #1166 slice 1 has none -- must not
+ * collide with every other one, and `$ne` is not a legal partial-filter
+ * operator. `[ran it]` on mongo:7: builds, rejects a duplicate hash with
+ * E11000 keyPattern { phoneHash: 1 }, admits any number of null, missing or
+ * empty hashes.
+ *
+ * Because rows without a hash are outside it, this does not yet cover
+ * participants written before slice 1; `patients_phone_unique_sanitized_v2`
+ * still does, and stays until slice 4 backfills their hash.
+ *
  * ## Failure posture
  *
  * Best-effort and logged, like the two precedents: a failed index build must
@@ -90,7 +107,15 @@ const logger = require('./logger');
 const PARTICIPANT_IDENTITY_INDEXES = [
   [{ identityDocumentHash: 1 }, { name: 'participant_identities_identity_document_hash_idx_v1' }],
   [{ birthDateHash: 1 }, { name: 'participant_identities_birth_date_hash_idx_v1' }],
-  [{ participantId: 1 }, { name: 'participant_identities_participant_id_idx_v1' }]
+  [{ participantId: 1 }, { name: 'participant_identities_participant_id_idx_v1' }],
+  [
+    { phoneHash: 1 },
+    {
+      name: 'participant_identities_phone_hash_unique_v1',
+      unique: true,
+      partialFilterExpression: { phoneHash: { $gt: '' } }
+    }
+  ]
 ];
 
 async function ensureParticipantIdentityIndexes(collection) {

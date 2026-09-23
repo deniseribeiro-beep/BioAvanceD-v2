@@ -165,6 +165,39 @@ describe('PatientService.createPatient additional branches', () => {
       })
     ).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('11999999999') });
   });
+
+  // #1166 slice 3: phone uniqueness is enforced on the identity side too
+  // (participant_identities_phone_hash_unique_v1), and the identity row is
+  // written AFTER the Patient row. A refusal there must not leave the Patient
+  // row behind with no identity, and must still answer 409 with the phone
+  // the caller sent rather than the hash the index holds.
+  it('#1166: rolls back the Patient row and answers 409 when the identity insert hits the phoneHash index', async () => {
+    const consentTemplatesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
+    });
+    const duplicateKeyError = Object.assign(new Error('E11000 duplicate key'), {
+      code: 11000,
+      keyPattern: { phoneHash: 1 },
+      keyValue: { phoneHash: 'b1ind3x' }
+    });
+    const patientsCollection = makeFakeCollection();
+    const identitiesCollection = makeFakeCollection({
+      insertOne: vi.fn().mockRejectedValue(duplicateKeyError)
+    });
+    const db = makeFakeDb({
+      patients: patientsCollection,
+      participantIdentities: identitiesCollection,
+      consent_templates: consentTemplatesCollection
+    });
+
+    await expect(
+      patientService.createPatient(db, validPatientData({ phone: '11999999999' }), {
+        skipConsentNotification: true,
+        skipBiomarkerArtifacts: true
+      })
+    ).rejects.toMatchObject({ statusCode: 409, message: 'Telefone 11999999999 já cadastrado no sistema.' });
+    expect(patientsCollection.deleteOne).toHaveBeenCalledWith({ _id: 'fake-id-1' });
+  });
 });
 
 describe('PatientService.updatePatient additional branches', () => {

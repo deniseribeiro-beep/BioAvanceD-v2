@@ -194,13 +194,22 @@ class PatientService {
     return patientsCollection;
   }
 
-  handlePhoneUniqueConstraint(error) {
+  // #1166 slice 3: the refusal can also come from the identity side's
+  // participant_identities_phone_hash_unique_v1, whose keyValue is the blind
+  // index -- meaningless to the caller -- so the message carries the phone
+  // the caller sent whenever one is known.
+  handlePhoneUniqueConstraint(error, submittedPhone) {
     const keyPattern = error?.keyPattern || {};
     const keyValue = error?.keyValue || {};
-    const isPhoneDuplicate = Boolean(keyPattern.phone || Object.prototype.hasOwnProperty.call(keyValue, 'phone'));
+    const isPhoneDuplicate = Boolean(
+      keyPattern.phone || keyPattern.phoneHash
+      || Object.prototype.hasOwnProperty.call(keyValue, 'phone')
+      || Object.prototype.hasOwnProperty.call(keyValue, 'phoneHash')
+    );
     if (!isPhoneDuplicate) return;
 
-    const duplicateError = new Error(`Telefone ${String(keyValue.phone || '').trim()} já cadastrado no sistema.`);
+    const phone = String(submittedPhone || keyValue.phone || '').trim();
+    const duplicateError = new Error(`Telefone ${phone} já cadastrado no sistema.`);
     duplicateError.statusCode = 409;
     throw duplicateError;
   }
@@ -659,7 +668,9 @@ class PatientService {
       const identityDoc = participantIdentityService.encryptIdentityFields(
         ParticipantIdentityModel.create({ ...patientData, participantId })
       );
-      await identityCollection.insertOne(identityDoc);
+      await participantIdentityService.insertIdentityOrRollbackPatient(
+        identityCollection, identityDoc, patientsCollection, result.insertedId
+      );
 
       if (options.skipConsentNotification !== true) {
         try {
@@ -686,7 +697,7 @@ class PatientService {
       };
     } catch (error) {
       if (error?.code === 11000) {
-        this.handlePhoneUniqueConstraint(error);
+        this.handlePhoneUniqueConstraint(error, patientData?.phone);
       }
       logger.error('Erro ao criar paciente:', error.message);
       throw error;
@@ -1086,7 +1097,7 @@ class PatientService {
       return { success: true };
     } catch (error) {
       if (error?.code === 11000) {
-        this.handlePhoneUniqueConstraint(error);
+        this.handlePhoneUniqueConstraint(error, updateData?.phone);
       }
       logger.error('Erro ao atualizar paciente:', error.message);
       throw error;

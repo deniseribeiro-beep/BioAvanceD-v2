@@ -362,7 +362,10 @@ class ImportService {
           const identityDoc = participantIdentityService.encryptIdentityFields(
             ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
           );
-          await identityCollection.insertOne(identityDoc);
+          // #1166 slice 3: a refused identity insert must not leave the Patient behind.
+          await participantIdentityService.insertIdentityOrRollbackPatient(
+            identityCollection, identityDoc, patientsCollection, insertResult.insertedId
+          );
 
           if (patient.participantId) {
             try {

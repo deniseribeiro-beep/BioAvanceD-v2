@@ -231,6 +231,26 @@ describe('ImportLGPDService.importPatientsSmart', () => {
     expect(insertedIdentity.patientName).toBe('MARIA SILVA');
   });
 
+  // #1166 slice 3: same rollback as importPatients -- a refused identity
+  // insert must not leave the Patient row behind with no identity.
+  it('#1166: rolls back the Patient row when the identity insert fails', async () => {
+    participantIdentitiesCollection.insertOne.mockRejectedValue(
+      Object.assign(new Error('E11000 duplicate key'), { code: 11000, keyPattern: { phoneHash: 1 } })
+    );
+    patientsCollection.deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+    vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid()]);
+
+    const result = await service.importPatientsSmart(
+      db,
+      { path: '/x.csv', originalname: 'x.csv' },
+      { mapping: MAPPING }
+    );
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(patientsCollection.deleteOne).toHaveBeenCalledWith({ _id: 'patient-id-1' });
+  });
+
   it('records a per-row error and does not insert when patientName is missing', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid({ Nome: '' })]);
     const result = await service.importPatientsSmart(db, { path: '/x.csv', originalname: 'x.csv' }, { mapping: MAPPING });

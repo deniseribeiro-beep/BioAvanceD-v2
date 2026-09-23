@@ -234,6 +234,23 @@ describe('ImportLGPDService.importPatients', () => {
     expect(insertedIdentity.patientName).toBe('Maria Silva');
   });
 
+  // #1166 slice 3: the identity row is written after the Patient row, and it
+  // can now be refused on its own (the phoneHash unique index). The Patient
+  // row must not survive that with no identity.
+  it('#1166: rolls back the Patient row when the identity insert fails', async () => {
+    participantIdentitiesCollection.insertOne.mockRejectedValue(
+      Object.assign(new Error('E11000 duplicate key'), { code: 11000, keyPattern: { phoneHash: 1 } })
+    );
+    patientsCollection.deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(patientsCollection.deleteOne).toHaveBeenCalledWith({ _id: 'patient-id-1' });
+  });
+
   it('still counts the row as a success when notification enqueueing fails (the failure is logged, not fatal)', async () => {
     notificationService.enqueueConsentNotification.mockRejectedValue(new Error('queue down'));
     vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
