@@ -448,11 +448,15 @@ describe('ImportService.importPatients (CSV)', () => {
 });
 
 describe('ImportService.importPatients (top-level error)', () => {
+  // #1176: this used to pass `{}` as the db and assert a bare `toThrow()`, so
+  // it passed on getCollection's `db.collection is not a function` TypeError
+  // and never reached the missing file.
   it('rejects when the file does not exist', async () => {
-    await expect(importService.importPatients({}, {
+    const db = makeDb({ patients: {}, participantIdentities: {} });
+    await expect(importService.importPatients(db, {
       path: path.join(os.tmpdir(), 'does-not-exist-patients.json'),
       originalname: 'does-not-exist-patients.json',
-    })).rejects.toThrow();
+    })).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   // #1175: .pipe() does not forward the SOURCE stream's 'error', so a missing
