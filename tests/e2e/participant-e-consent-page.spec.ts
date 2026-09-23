@@ -61,8 +61,16 @@ async function seedParticipant(): Promise<{ participantId: string; email: string
   const email = `e2e-822-${participantId}@example.test`;
   await db.collection('patients').insertOne({
     participantId,
-    email,
     status: 'PENDING_CONSENT',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  // #1166 slice 4: the contact lives on ParticipantIdentity only, which is
+  // where /generate-link checks it. Seeded in plaintext, the keyless-row
+  // shape decryptIdentity reads as-is -- this file holds no ENCRYPTION_KEY.
+  await db.collection('participantIdentities').insertOne({
+    participantId,
+    email,
     createdAt: new Date(),
     updatedAt: new Date(),
   });
@@ -109,6 +117,7 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
     if (!client) return;
     await db.collection('patientConsents').deleteMany({ participantId: { $in: seededParticipantIds } });
     await db.collection('patients').deleteMany({ participantId: { $in: seededParticipantIds } });
+    await db.collection('participantIdentities').deleteMany({ participantId: { $in: seededParticipantIds } });
     await db.collection('consent_templates').deleteMany({ version: 'e2e-822' });
     await client.close();
     client = null;

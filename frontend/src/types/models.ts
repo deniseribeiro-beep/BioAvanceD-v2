@@ -11,9 +11,8 @@ export interface Patient {
   // only ever present via an authorized re-identification response.
   patientName?: string;
 
-  // Contato para envio do TCLE
-  email?: string;
-  phone?: string;
+  // #1166: the participant's contact (email/phone) is ParticipantIdentity
+  // data (dict-02 P1X-0352/P1X-0353) and is never returned on Patient.
 
   // 3. DATA_NASCIMENTO - Caractere - Data de nascimento (formato DD/MM/YYYY)
   // RF005/RNF007 (#575): civil identity — segregated to ParticipantIdentity,
