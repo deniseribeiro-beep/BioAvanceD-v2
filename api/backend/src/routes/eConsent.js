@@ -81,8 +81,9 @@ router.post('/generate-link', authenticate, requirePermission('requestConsent'),
   // #1166 slice 2: the address on file is identity data (dict-02 P1X-0352),
   // so the check reads the decrypted ParticipantIdentity record, falling back
   // to the Patient's own copy only until slice 4 stops writing it. Compared
-  // case-insensitively because every ParticipantIdentity writer lowercases it
-  // (ParticipantIdentityModel.fieldsOf) and the Patient copy never was.
+  // case-insensitively because both stores canonicalize the address to
+  // lowercase at rest (ParticipantIdentityModel.fieldsOf, PatientModel.create),
+  // so only the caller's spelling can differ in case.
   const rawIdentity = await db.collection('participantIdentities').findOne({ participantId });
   const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
   const emailOnFile = participantIdentityService.withIdentityContact(patient, identity).email;
