@@ -1,93 +1,73 @@
 # HANDOFF
 
-**Written 2026-09-23, thirty-eighth queue sitting. INTERIM: Dennis gave no
+**Written 2026-09-23, thirty-ninth queue sitting. INTERIM: Dennis gave no
 end signal, so treat the session as CONTINUING.** His instruction was to read
-the handoff, pick the next group, with Docker on and RAM tight. **The group
-picked was #941's remainder. It grew into #1164 and #1165, and all three are
-now CLOSED.**
+the handoff and pick the next group, with Docker on. **The group picked was
+#1166** (participant `email`/`phone` in plaintext). Its consumer audit turned
+up #1167, fixed and closed, and #1168/#1169, filed.
 
 ## Repo state
 
-`feature/docker-e2e-backend-integration`, pushed. This is the sitting's
-**second** `HANDOFF.md`-only commit. The first rotation went stale when the
-sitting kept working, and a note listing closed issues as unstarted is the
-worse failure.
+`feature/docker-e2e-backend-integration`, pushed. The last substantive commit
+is `ba9e9f19`. This is the sitting's first `HANDOFF.md`-only commit.
 
 ## What shipped
 
-- **`d413923d`**: `samples.specimenId` and `samples.participantId` lookup
-  indexes BUILT.
-- **`c6f0f58d`**: `Terminology.ativo`, `Terminology.codigo`, `Cid.active` and
-  `StagingImport.status` declarations DELETED, each one pinned as not built.
-  **#941 closed.**
-- **`9bb33aa6`**: the four `$type: 'string'` partial unique indexes
-  (`samples.barcode`, `containerID`, `macAddress`, terminologies
-  `{sistema,codigo}`) now filter on `$gt: ''`, under new versioned names. They
-  enforced uniqueness but could never serve a lookup; now they do (COLLSCAN
-  3000 → 1, `[ran it]` live). A shared `utils/legacyIndex.js` drops each
-  superseded name, **only after the replacement builds**. **#1164 closed.**
-- **`e6834e0f`**: `patients_phone_unique_sanitized_v2` with `{ phone: { $gt: '' } }`.
-  v1's `$ne` filter could never be created (code 67), so phone uniqueness had
-  never been enforced. The 409 "Telefone … já cadastrado" path is live now.
-  **#1165 closed.**
-
-## Filed this sitting and still open
-
-- **#1166**: participant `email`/`phone` persist in **plaintext** on
-  `patients`, while dict-02 places them only on `ParticipantIdentity`
-  (protected, *Crítica*). It's a #575-sized consumer audit plus an atomic
-  move. **I chose to stop on it this sitting.** Nothing blocks it, it just
-  needs its own sitting. Its body lists what isn't established yet.
-- **Pack #1121**: `full-suite-guard` prints 5.9 KB when its first paragraph
-  already diagnosed the case. Workable only from the pack repo.
-
-## Docker is NOT in the state the previous note described
-
-**At the start of this sitting the engine had zero containers, zero volumes
-and zero images**, so the 14-service stack is gone. Now: no containers, and
-one image, `mongo:7` (1.18 GB), **kept on purpose** for `explain()` probes. A
-throwaway `docker run --rm --memory 700m mongo:7 --wiredTigerCacheSizeGB 0.25`
-is the cheap instrument this sitting used for every index decision.
-
-- **Any gate needs a from-scratch build and bring-up**, plus the reference-
-  data chain, which has never run.
-- **RAM is the constraint:** 2.3-3.7 GB free during the sitting.
-  `[not established]` whether the full stack fits. Ask Dennis first.
-- `INFLUXDB_HOST_PORT=18086` is still required on this machine.
-
-## Things a next session must not undo
-
-Items 12-25 from earlier notes still hold (`git log -p -- HANDOFF.md`). Plus:
-
-- **A DELETED index declaration is a measured decision.** `{ativo:1}` and
-  `{active:1}` are *harmful if built*: the planner picks them and examines
-  more docs than a COLLSCAN does. Never re-add an index without an
-  `explain()` run.
-- **Never use `$type` (or `$ne`) in a `partialFilterExpression`.** `$type`
-  makes the index a constraint only, and `$ne` makes it unbuildable. For
-  "non-empty string", use `$gt: ''`.
-- **A changed partial filter needs a NEW index name, plus a drop of the old
-  name AFTER the new one builds** (`dropLegacyIndex`). A failed build must
-  keep the old constraint.
-- Per-index try/catch; lookup-failure wording never borrows the duplicates
-  wording; distinct `collectionName`s in latch tests.
+- **`0a9b8770`**: `updatePatient`'s ParticipantIdentity sync now goes through
+  `encryptIdentityFields`. Before, an edit put plaintext `birthDate` back,
+  left the blind index on the old value, stored a punctuated CPF verbatim, and
+  a cleared field came back via `decryptIdentity`. **#1167 closed.**
+- **`ba9e9f19`**: slice 1 of #1166. `email`/`phone` are in the identity
+  encrypted-field map, with a digits-only `phoneHash`, and `updatePatient`
+  now mirrors contact edits to the identity copy. **Additive only: no privacy
+  gain until slice 4.**
 
 ## Open, and left in a known state
 
 Query the backlog with `gh issue list --state open --json number,title,labels`,
 redirected to a file.
 
-- **#1163**: its read-path placement question gained a second concrete
-  member this sitting. A plain `{sistema:1, codigo:1}` terminologies lookup
-  is the measured winner for `GET /api/terminologies` (20,000 → 100 docs),
-  per the [comment there](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/1163#issuecomment-5800349025).
-  It's blocked only on where the read-path ensure call goes, which is still
-  Dennis's call.
-- #1159 and #1162: still Dennis's.
+- **#1166**: OPEN on purpose. Closing on a precondition is #574's mistake.
+  The consumer audit and the 4-slice plan are in the
+  [audit comment](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/1166#issuecomment-5800675130).
+  Slice 1's status is in the
+  [next comment](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/1166#issuecomment-5800751357).
+  **Slice 2 is next:** repoint `consent.controller.js:28`, `eConsent.js:80`,
+  `resendConsentNotification` and `toClientPatient` onto `decryptIdentity`.
+  Then slice 3 (a `phoneHash` unique index replaces #1165's `patients` index)
+  and slice 4 (drop from `patients`, ciphertext-only).
+- **#1168** (filed): the same mismatch for the four `representative*` fields
+  (dict-02 P1X-0357..0360). Reuse whatever #1166 builds. Unstarted.
+- **#1169** (filed): `createPatient` enqueues the whole payload (civil
+  identity, contact, consent token) into Redis in plaintext, kept 24h, or 7
+  days on failure. `[ran it]` the worker reads only contact, `patientName`
+  and `participantId`. It fits naturally with #1166 slice 2. Unstarted.
+- **#1104**: unchanged. `identityDocument` waits on #1112, and `patientName`
+  waits on a design call.
+- #1163, #1159, #1162: still Dennis's.
+- Pack **#1122** (filed): `branch-guard.cjs` misparses `git push -q; git …`.
+  Until it's fixed, don't chain a command after a flagged push with `;`.
+
+## Docker
+
+No containers. One image, `mongo:7`, kept for `explain()` probes. Nothing
+this sitting needed it: every check was native. Any gate still needs a
+from-scratch build and bring-up. RAM is tight, so ask Dennis first.
+`INFLUXDB_HOST_PORT=18086` is still required on this machine.
+
+## Things a next session must not undo
+
+Items 12-25 from earlier notes and the index rules from the last rotation
+still hold (`git log -p -- HANDOFF.md`). Plus:
+
+- **Every `participantIdentities` writer goes through `encryptIdentityFields`,
+  and a writer that clears a field must also null its `*Encrypted`/`*Hash`
+  siblings.** `[ran it]` otherwise `decryptIdentity` resurrects the old value
+  (#1167's third test).
+- **`email`/`phone` stay on `patients` until #1166 slice 4.** `updatePatient`
+  mirrors them without stripping them, deliberately.
 
 ## Recommended next
 
-**None queued by name.** Unverified prescription: #1166 is the one open
-issue this sitting filed and didn't work. Start with its consumer audit
-(every reader of `patients.email`/`patients.phone`), which is what #575
-needed first.
+**None queued by name.** Unverified prescription: #1166 slice 2, with
+#1169 folded in. Its readers are the ones slice 2 repoints.
