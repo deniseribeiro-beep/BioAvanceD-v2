@@ -6,6 +6,7 @@ const qualityDomain = require('./quality-domain.service');
 const logger = require('../utils/logger');
 const { SampleModel } = require('../models/Sample');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
+const PatientModel = require('../models/Patient');
 const participantIdentityService = require('./participantIdentity.service');
 const quarantineActionService = require('./quarantine-action.service');
 const { withMongoTransaction, isTransactionCapable } = require('../utils/mongoTransaction');
@@ -990,12 +991,37 @@ async function commitBatch(db, batchIdRaw) {
     // — kept as an upsert (rather than a plain insertOne) to match the
     // Patient upsert above's own idempotent-on-participantId semantics.
     const identities = collection(db, 'participantIdentities');
+    // #1171: plus the contact. Since #1166 every later consent path reads it
+    // from this record alone, so a participant committed without it could
+    // never be invited again. The phone is left out when another participant
+    // already holds it: participant_identities_phone_hash_unique_v1 would
+    // refuse the upsert, and this loop has no per-record catch, so one
+    // duplicate would abort every record after it. Nothing is lost against
+    // the previous behaviour, which recorded no contact at all.
+    const contact = {};
+    if (isValidEmail(normalized.patientEmail)) contact.email = normalized.patientEmail;
+    const phone = PatientModel.normalizePhone(normalized.patientPhone);
+    if (phone) {
+      const phoneHashes = participantIdentityService.computeBlindIndexCandidates('phone', phone);
+      const holders = phoneHashes.length
+        ? await identities.find({ phoneHash: { $in: phoneHashes } }).toArray()
+        : [];
+      if (holders.some((holder) => holder.participantId !== normalized.participantId)) {
+        logger.warn('[FHIR_IMPORT] Telefone já pertence a outro participante; registro confirmado sem telefone (#1171)', {
+          batchId: String(batchId),
+          recordId: String(record._id),
+        });
+      } else {
+        contact.phone = phone;
+      }
+    }
     const identityFields = participantIdentityService.encryptIdentityFields(
       ParticipantIdentityModel.fieldsOf({
         participantId: normalized.participantId,
         patientName: normalized.patientName,
         birthDate: normalized.patientBirthDate,
         identityDocument: normalized.patientDocument,
+        ...contact,
       })
     );
     await identities.updateOne(
