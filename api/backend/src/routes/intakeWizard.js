@@ -304,7 +304,7 @@ async function recordClinicalEntities(db, { participantId, clinicalData, pharmac
   return outcome;
 }
 
-const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
+const { CRITICAL_SENSOR_STATUSES } = require('../models/equipmentStatus');
 const BLOCKED_BOX_STATUSES = ['FULL', 'RETIRED', 'INACTIVE'];
 
 function normalizeString(value) {
@@ -340,15 +340,13 @@ function collectCanonicalViolations(payload, aliasMap = {}) {
   return [...new Set(fields)];
 }
 
-function buildIdVariants(...values) {
+function buildCanonicalIdentifierVariants(...values) {
   const variants = [];
   values.forEach((value) => {
-    if (value === undefined || value === null || value === '') return;
-    const stringValue = String(value).trim();
+    if (typeof value !== 'string') return;
+    const stringValue = value.trim();
     if (!stringValue) return;
     variants.push(stringValue);
-    const numericValue = Number(stringValue);
-    if (Number.isFinite(numericValue)) variants.push(numericValue);
   });
   return [...new Set(variants)];
 }
@@ -489,7 +487,7 @@ function isOperationalSensor(sensor) {
 
 async function hasOperationalSensorForContainer(db, freezer) {
   const sensorsCollection = db.collection('sensors');
-  const variants = buildIdVariants(freezer?.containerID);
+  const variants = buildCanonicalIdentifierVariants(freezer?.containerID);
   const sensors = await sensorsCollection.find({
     $or: [
       { locationId: { $in: variants } },
@@ -499,21 +497,17 @@ async function hasOperationalSensorForContainer(db, freezer) {
   return sensors.some(isOperationalSensor);
 }
 
-async function isEquipmentReadyForContainer(db, freezer) {
-  if (freezer?.containerID === undefined || freezer?.containerID === null || freezer?.containerID === '') return false;
-  const equipmentCollection = db.collection('equipment');
-  const equipment = await equipmentCollection.findOne({ equipmentID: { $in: buildIdVariants(freezer.containerID) } });
-  if (!equipment) return false;
-  const status = normalizeString(equipment.status || equipment.maintenanceStatus || equipment.operationalStatus).toLowerCase();
-  return !isEquipmentBlocked(status);
+async function isDeviceQualifiedForContainer(db, freezer) {
+  const deviceId = buildCanonicalIdentifierVariants(freezer?.containerID)[0];
+  if (!deviceId) return false;
+  const devicesCollection = db.collection('devices');
+  const device = await devicesCollection.findOne({ deviceId });
+  return normalizeString(device?.qualificationStatus).toLowerCase() === 'qualified';
 }
 
 async function resolveStorageHierarchyForBox(db, box) {
   const storageContainersCollection = db.collection('storageContainers');
-  let rack = box.parent_id ? await storageContainersCollection.findOne({ _id: box.parent_id }) : null;
-  if (rack && rack.containerType === 'DRAWER') {
-    rack = rack.parent_id ? await storageContainersCollection.findOne({ _id: rack.parent_id }) : null;
-  }
+  const rack = box.parent_id ? await storageContainersCollection.findOne({ _id: box.parent_id }) : null;
   const shelf = rack?.parent_id ? await storageContainersCollection.findOne({ _id: rack.parent_id }) : null;
   const freezer = shelf?.parent_id ? await storageContainersCollection.findOne({ _id: shelf.parent_id }) : null;
   return { rack, shelf, freezer };
@@ -559,7 +553,7 @@ async function resolveAutomaticLocation(db) {
   for (const box of candidates) {
     const { rack, shelf, freezer } = await resolveStorageHierarchyForBox(db, box);
     if (!freezer) continue;
-    if (!(await isEquipmentReadyForContainer(db, freezer))) continue;
+    if (!(await isDeviceQualifiedForContainer(db, freezer))) continue;
     if (!(await hasOperationalSensorForContainer(db, freezer))) continue;
     return { box, rack, shelf, freezer, previewPosition: findFirstAvailablePosition(box) };
   }
@@ -783,13 +777,14 @@ router.get('/patient-match', async (req, res) => {
     let identity = rawIdentityById ? participantIdentityService.decryptIdentity(rawIdentityById) : null;
 
     if (!identity && patientNameNormalized && birthDate) {
-      const startOfDay = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
-      const endOfDay = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), startOfDay.getDate() + 1);
       const birthDateHashes = participantIdentityService.computeBlindIndexCandidates('birthDate', birthDate);
-      const dateOrConditions = birthDateHashes.length
-        ? [{ birthDateHash: { $in: birthDateHashes } }]
-        : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
-      const candidates = await identityCollection.find({ $or: dateOrConditions }).toArray();
+      if (birthDateHashes.length === 0) {
+        return res.status(503).json({
+          success: false,
+          error: 'Busca protegida de identidade indisponível.',
+        });
+      }
+      const candidates = await identityCollection.find({ $or: [{ birthDateHash: { $in: birthDateHashes } }] }).toArray();
       identity = candidates.find((rawCandidate) => {
         const candidate = participantIdentityService.decryptIdentity(rawCandidate);
         const candidateNormalized = normalizeString(candidate.patientName).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');

@@ -181,7 +181,7 @@ describe('intakeWizard routes', () => {
       const db = {
         collection: (name) => {
           if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
-          if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
+          if (name === 'devices') return { findOne: vi.fn().mockResolvedValue({ deviceId: 'EQ-1', qualificationStatus: 'qualified' }) };
           if (name === 'storageBoxes') {
             return {
               find: () => makeCursor([{
@@ -270,7 +270,7 @@ describe('intakeWizard routes', () => {
       const db = {
         collection: (name) => {
           if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
-          if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
+          if (name === 'devices') return { findOne: vi.fn().mockResolvedValue({ deviceId: 'EQ-1', qualificationStatus: 'qualified' }) };
           if (name === 'storageBoxes') {
             return {
               find: () => makeCursor([{
@@ -472,7 +472,7 @@ function defaultStorageContainersFindOne({ _id }) {
       const db = {
         collection: (name) => {
           if (name === 'sensors') return { find: sensorsFind || (() => makeCursor([{ locationId: 'EQ-1', status: 'ok' }])) };
-          if (name === 'equipment') return { findOne: equipmentFindOne || vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
+          if (name === 'devices') return { findOne: equipmentFindOne || vi.fn().mockResolvedValue({ deviceId: 'EQ-1', qualificationStatus: 'qualified' }) };
           if (name === 'storageBoxes') {
             return {
               find: storageBoxesFind || (() => makeCursor([{
@@ -602,7 +602,7 @@ function defaultStorageContainersFindOne({ _id }) {
         if (variants.includes('EQ-1')) return makeCursor([{ locationId: 'EQ-1', status: 'maintenance' }]);
         return makeCursor([{ locationId: 'EQ-2', status: 'ok' }]);
       });
-      const equipmentFindOne = vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' });
+      const equipmentFindOne = vi.fn((query) => Promise.resolve({ deviceId: query.deviceId, qualificationStatus: 'qualified' }));
 
       const { db, consentsCollection } = buildHappyPathDb({ sensorsFind, storageBoxesFind, storageContainersFindOne, equipmentFindOne });
       const { samplesCollection, patientsCollection } = setupHappyMocks();
@@ -651,9 +651,8 @@ function defaultStorageContainersFindOne({ _id }) {
         return null;
       };
       const equipmentFindOne = vi.fn((query) => {
-        const variants = query.equipmentID.$in;
-        if (variants.includes('EQ-1')) return Promise.resolve({ equipmentID: 'EQ-1', status: 'maintenance' });
-        return Promise.resolve({ equipmentID: 'EQ-2', status: 'active' });
+        if (query.deviceId === 'EQ-1') return Promise.resolve({ deviceId: 'EQ-1', qualificationStatus: 'maintenance' });
+        return Promise.resolve({ deviceId: 'EQ-2', qualificationStatus: 'qualified' });
       });
 
       const { db, consentsCollection } = buildHappyPathDb({ equipmentFindOne, storageBoxesFind, storageContainersFindOne });
@@ -703,6 +702,65 @@ function defaultStorageContainersFindOne({ _id }) {
 
       expect(res.status).toBe(422);
       expect(res.body.success).toBe(false);
+    });
+
+    it('rejects a numeric equipment identifier instead of coercing it', async () => {
+      const equipmentFindOne = vi.fn();
+      const storageContainersFindOne = async ({ _id }) => {
+        if (_id === 'rack-1') return { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' };
+        if (_id === 'shelf-1') return { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' };
+        if (_id === 'freezer-1') return { _id: 'freezer-1', containerType: 'FREEZER', containerID: 123 };
+        return null;
+      };
+      const { db, consentsCollection } = buildHappyPathDb({ equipmentFindOne, storageContainersFindOne });
+      const { samplesCollection, patientsCollection } = setupHappyMocks();
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+      const res = await request(buildApp(router, db)).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(422);
+      expect(equipmentFindOne).not.toHaveBeenCalled();
+    });
+
+    it.each(['maintenanceStatus', 'operationalStatus'])('does not treat %s as the canonical equipment state', async (legacyStatusField) => {
+      const equipmentFindOne = vi.fn().mockResolvedValue({ deviceId: 'EQ-1', [legacyStatusField]: 'maintenance' });
+      const { db, consentsCollection } = buildHappyPathDb({ equipmentFindOne });
+      const { samplesCollection, patientsCollection } = setupHappyMocks();
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+      const res = await request(buildApp(router, db)).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(422);
+    });
+
+    it('does not resolve a legacy DRAWER as a canonical storage rack', async () => {
+      const storageContainersFindOne = async ({ _id }) => {
+        if (_id === 'drawer-1') return { _id: 'drawer-1', containerType: 'DRAWER', parent_id: 'rack-1' };
+        if (_id === 'rack-1') return { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' };
+        if (_id === 'shelf-1') return { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' };
+        if (_id === 'freezer-1') return { _id: 'freezer-1', containerType: 'FREEZER', containerID: 'EQ-1' };
+        return null;
+      };
+      const storageBoxesFind = () => makeCursor([{
+        _id: 'box-1', name: 'Box A', status: 'ACTIVE', dimension: { rows: 1, cols: 1 },
+        currentOccupancy: 0, occupancyGrid: {}, parent_id: 'drawer-1',
+      }]);
+      const { db, consentsCollection } = buildHappyPathDb({ storageBoxesFind, storageContainersFindOne });
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const res = await request(buildApp(router, db)).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(422);
     });
 
     it('returns 409 when a qualifying location has no available storage box', async () => {
@@ -760,7 +818,7 @@ function defaultStorageContainersFindOne({ _id }) {
         if (variants.includes('EQ-1')) return makeCursor([{ locationId: 'EQ-1', maintenanceStatus: 'calibration' }]);
         return makeCursor([{ locationId: 'EQ-2', operationalStatus: 'ok' }]);
       });
-      const equipmentFindOne = vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' });
+      const equipmentFindOne = vi.fn((query) => Promise.resolve({ deviceId: query.deviceId, qualificationStatus: 'qualified' }));
 
       const { db, consentsCollection } = buildHappyPathDb({ sensorsFind, storageBoxesFind, storageContainersFindOne, equipmentFindOne });
       const { samplesCollection, patientsCollection } = setupHappyMocks();
@@ -1085,6 +1143,21 @@ function defaultStorageContainersFindOne({ _id }) {
           $or: expect.arrayContaining([{ birthDateHash: { $in: expect.arrayContaining([expectedHash]) } }]),
         })
       );
+    });
+
+    it('fails closed when a protected birth-date lookup representation is unavailable', async () => {
+      const { getCollectionImpl, identityFind } = makeIdentityCollectionRouter();
+      const { router } = loadRoute({ getCollectionImpl });
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      vi.spyOn(participantIdentityService, 'computeBlindIndexCandidates').mockReturnValue([]);
+
+      const res = await request(buildApp(router, {}))
+        .get('/api/intake-wizard/patient-match')
+        .query({ patientName: 'João Cão', birthDate: '01/02/2000' });
+
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({ success: false, error: 'Busca protegida de identidade indisponível.' });
+      expect(identityFind).not.toHaveBeenCalled();
     });
 
     it('returns 500 when the query throws', async () => {

@@ -201,10 +201,10 @@ Notação `id:braço` identifica exatamente a entrada do relatório global prese
 | `intakeWizard.js:576,740` | `163:0;164:0;165:0;205:0;205:1` (5) | DEFENSIVE_OR_INSTRUMENTATION | Fixtures com `name: 'Box A'` e resposta `boxName: 'Box A'` assertada em `exposes currentStoragePlacement...`; expressão verdadeira/nome continua zero no relatório isolado. Não remover nome válido para perseguir fallback. |
 | `intakeWizard.js:682,721,762,823` | `183:0;201:0;214:0;235:0` (4) | DEFENSIVE_OR_INSTRUMENTATION | matchType não vazio, erro real de RCS e erros reais de POST/GET já exercitados nas suítes de rotas/clínica. Relatórios isolados mantêm zero. As asserções de mensagem POST/GET foram reforçadas; não contabilizar esses quatro braços como ganho novo. |
 | `intakeWizard.js:698` | `192:0` (1) | DEFENSIVE_OR_INSTRUMENTATION | O produtor real `quality-domain`/`rcs-certification` devolve SPREC em `calculation_trace.sprec`, não em `qualityAssessment.sprec`. Não fabricar retorno do serviço apenas para ativar esse if. O novo teste usa avaliação RCS real e verifica bloqueio sem inventar SPREC no topo. |
-| `intakeWizard.js:351` | `89:0` (1) | AMBIGUOUS | Coerção numérica de identificador de equipamento dentro de `buildIdVariants`. O papel dessa compatibilidade no contrato v2 não está comprovado; não adicionar número histórico como fixture nem remover produção. |
-| `intakeWizard.js:507` | `136:1;136:2` (2) | AMBIGUOUS | Fallbacks `maintenanceStatus`/`operationalStatus`: modelo Equipment escreve `status` com default; falta decisão documental sobre documentos operacionais sem esse campo versus compatibilidade antiga. Não fabricar equipamento incompleto. |
-| `intakeWizard.js:514–515` | `138:0;140:0` (2) | AMBIGUOUS | Modelo operacional aceita DRAWER e há teste semelhante em sample.service, mas contratos v2 normalizados usam StorageRack/StoragePosition e assignments. A equivalência documental de BOX→DRAWER→RACK precisa ser definida antes de teste de compatibilidade/remoção. |
-| `intakeWizard.js:791` | `223:1` (1) | AMBIGUOUS | Consulta plaintext por birthDate quando blind-index está vazio. Fronteira protegida v2 versus configuração sem chave: não desligar criptografia para cobrir fallback; decidir admissibilidade/aposentadoria. |
+| `intakeWizard.js:351` | `89:0` (1) | LEGACY_RETIRE | Stage 2D: removida coerção numérica; somente identificador string canônico chega a Device. Teste de rota rejeita número sem consulta. |
+| `intakeWizard.js:507` | `136:1;136:2` (2) | LEGACY_RETIRE | Stage 2D: Intake consulta `devices.deviceId` e somente `qualificationStatus === qualified`; aliases isolados falham fechados. Teste de rota aprovado. |
+| `intakeWizard.js:514–515` | `138:0;140:0` (2) | LEGACY_RETIRE | Stage 2D: removida travessia especial DRAWER→RACK; DRAWER não é rack implícito. Teste de rota aprovado. |
+| `intakeWizard.js:791` | `223:1` (1) | PRODUCTION_DEFECT | Stage 2D: removido fallback plaintext por `birthDate`; ausência de representação protegida retorna 503 sem consulta. Teste de rota aprovado. |
 | `SampleGraphValidator.js:31,35,45,52,54,55` | `3:0;4:0;5:0/1/2;6:0;7:0;8:0/1;9:0/1;10:0/1;11:0/1` (15) | DEFENSIVE_OR_INSTRUMENTATION | `hashSampleIntegrityPayload` privado só aparece na declaração; `stableObject` só é chamado por ele e recursivamente. Caminho sem entrada executável. A integridade ativa usa `generateSampleHashFromSample`. Não exportar helper, invocar código morto ou removê-lo sem prova documental de aposentadoria. |
 | `SampleGraphValidator.js:65` | `13:0` (1) | DEFENSIVE_OR_INSTRUMENTATION | Único chamador de `normalizeBiomarkerMap` fornece objeto ou `{}`; guard preemptado. Suíte `sample-graph-validator.service.test.js` aprovada. |
 | `SampleGraphValidator.js:369,423` | `70:0;77:0` (2) | DEFENSIVE_OR_INSTRUMENTATION | Testes existentes `prefers canonical specimenId...` e `uses canonical specimenId in the compliance report...` assertam esses efeitos e passam; contadores isolados permanecem zero. |
@@ -218,3 +218,16 @@ Notação `id:braço` identifica exatamente a entrada do relatório global prese
 - Evidência isolada anterior às adições: rotas **32/32**, clínica **34/34**, `sample.service.test.js` **147/147**, `sample-graph-validator.service.test.js` **28/28**, com coverage restrito ao respectivo arquivo e diretório separado. Confirmação sem coverage de `sample.service.item8.executable-residual.test.js`: **14/14**. Logs em `logs/item8-stage2/stage2b-*`.
 - Contribuição potencial conservadora: **0–6 braços dos 228**, sem promessa sobre o merge V8; sete testes não equivalem a sete branches. Não houve Full Vitest, Coverage completo, Docker ou CI.
 - **HUMAN_DECISION_REQUIRED**, restrito aos seis braços ambíguos de compatibilidade acima. Parada pelo critério (b), sem converter esses casos em testes artificiais. Isso não resolve nem bloqueia coletivamente os outros 494: a auditoria da fila restante permanece necessária antes de qualquer conclusão definitiva sobre o gate global.
+
+### Stage 2D — decisões humanas aplicadas
+
+| Case | Classificação final | Produção | Teste | Resultado |
+| --- | --- | --- | --- | --- |
+| 1 — `351` | LEGACY_RETIRE | yes | ID numérico rejeitado | aprovado |
+| 2 — `507 maintenanceStatus` | LEGACY_RETIRE | yes | alias isolado não substitui estado canônico | aprovado |
+| 3 — `507 operationalStatus` | LEGACY_RETIRE | yes | alias isolado não substitui estado canônico | aprovado |
+| 4 — `514 DRAWER` | LEGACY_RETIRE | yes | DRAWER não resolve rack implícito | aprovado |
+| 5 — `515 DRAWER.parent_id` | LEGACY_RETIRE | yes | sem suposição DRAWER→RACK | aprovado |
+| 6 — `791 birthDate` | PRODUCTION_DEFECT | yes | ausência de busca protegida falha fechada | aprovado |
+
+Teste direcionado: `intakeWizard.routes.test.js`, 40/40; sem skips. Nenhum dos seis casos permanece `AMBIGUOUS`.
