@@ -29,26 +29,42 @@ function base64url(input: Buffer | string): string {
     .replace(/\//g, '_');
 }
 
+// Matches compose.test.yml's x-test-env. Deliberately a throwaway; never a
+// real secret, same convention as every other value in that block.
+function consentSecret(): string {
+  return process.env.E2E_CONSENT_SECRET || 'vitest-consent-secret-key';
+}
+
+function signHs256(claims: Record<string, unknown>, ttlSeconds: number): string {
+  const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const payload = base64url(JSON.stringify({ ...claims, iat: issuedAt, exp: issuedAt + ttlSeconds }));
+
+  const signature = base64url(
+    crypto.createHmac('sha256', consentSecret()).update(`${header}.${payload}`).digest()
+  );
+
+  return `${header}.${payload}.${signature}`;
+}
+
 /**
  * @param participantId the 8-digit id the route puts in the payload
  * @param ttlSeconds    defaults to the route's own CONSENT_EXPIRATION (2h)
  */
 export function mintConsentToken(participantId: string, ttlSeconds = 60 * 60 * 2): string {
-  // Matches compose.test.yml's x-test-env. Deliberately a throwaway; never a
-  // real secret, same convention as every other value in that block.
-  const secret = process.env.E2E_CONSENT_SECRET || 'vitest-consent-secret-key';
+  return signHs256({ participantId }, ttlSeconds);
+}
 
-  const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const payload = base64url(
-    JSON.stringify({ participantId, iat: issuedAt, exp: issuedAt + ttlSeconds })
-  );
-
-  const signature = base64url(
-    crypto.createHmac('sha256', secret).update(`${header}.${payload}`).digest()
-  );
-
-  return `${header}.${payload}.${signature}`;
+/**
+ * #1173: the FHIR-import consent token, as buildImportConsentToken
+ * (fhir-import-staging.service.js) signs it -- same secret, its own scope,
+ * and the staging coordinates validateImportConsentToken looks up.
+ */
+export function mintImportConsentToken(
+  claims: { batchId: string; recordId: string; participantId: string },
+  ttlSeconds = 60 * 60 * 2
+): string {
+  return signHs256({ scope: 'fhir-import-consent', ...claims }, ttlSeconds);
 }
 
 /** The path the emailed link points at, relative to the frontend origin. */
