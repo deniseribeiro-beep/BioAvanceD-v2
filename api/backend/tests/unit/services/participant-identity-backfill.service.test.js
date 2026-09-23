@@ -7,7 +7,8 @@ process.env.ENCRYPTION_KEY_ID = 'test-key-1';
 const require = createRequire(import.meta.url);
 const {
   backfillParticipantIdentities,
-  checkParticipantIdentityParity
+  checkParticipantIdentityParity,
+  moveParticipantContactToIdentity
 } = require('../../../src/services/participant-identity-backfill.service');
 
 /**
@@ -35,6 +36,22 @@ function createFakeCollection(name) {
     find(filter = {}) {
       const current = docs.filter((d) => matches(d, filter));
       return { toArray: async () => current };
+    },
+    // #1166 slice 4: $set/$unset only, plus a hook to refuse a write the way
+    // a unique index would.
+    refuseUpdate: null,
+    async updateOne(filter, update = {}) {
+      const doc = docs.find((d) => matches(d, filter));
+      if (!doc) return { matchedCount: 0, modifiedCount: 0 };
+      if (this.refuseUpdate && this.refuseUpdate(doc, update)) {
+        const error = new Error('E11000 duplicate key error');
+        error.code = 11000;
+        error.keyPattern = { phoneHash: 1 };
+        throw error;
+      }
+      Object.assign(doc, update.$set || {});
+      for (const key of Object.keys(update.$unset || {})) delete doc[key];
+      return { matchedCount: 1, modifiedCount: 1 };
     }
   };
 }
@@ -276,6 +293,121 @@ describe('participant-identity-backfill.service#checkParticipantIdentityParity',
   it('ignores a Patient document with no participantId', async () => {
     const db = createFakeDb({
       patients: [{ _id: 'p1', patientName: 'Sem Id', birthDate: new Date('1990-01-01'), identityDocument: '00000000000' }]
+    });
+
+    const parity = await checkParticipantIdentityParity(db);
+
+    expect(parity).toEqual({ isFullParity: true, totalPatients: 1, missing: [], drifted: [] });
+  });
+});
+
+describe('participant-identity-backfill.service#moveParticipantContactToIdentity (#1166 slice 4)', () => {
+  const participantIdentityService = require('../../../src/services/participantIdentity.service');
+
+  it('copies a Patient contact the identity record lacks, encrypted and hashed, then removes it from the Patient', async () => {
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '61616161', email: 'contato@example.com', phone: '11988887777' }],
+      participantIdentities: [{ _id: 'i1', participantId: '61616161', patientName: 'Paciente', email: null, phone: null }]
+    });
+
+    const { summary } = await moveParticipantContactToIdentity(db);
+
+    const patient = db.collections.patients.docs[0];
+    expect(patient).not.toHaveProperty('email');
+    expect(patient).not.toHaveProperty('phone');
+    const identity = db.collections.participantIdentities.docs[0];
+    expect(identity.emailEncrypted).toBeTruthy();
+    expect(identity.phoneEncrypted).toBeTruthy();
+    expect(identity.phoneHash).toBe(participantIdentityService.computeBlindIndex('phone', '11988887777'));
+    const decrypted = participantIdentityService.decryptIdentity(identity);
+    expect(decrypted.email).toBe('contato@example.com');
+    expect(decrypted.phone).toBe('11988887777');
+    expect(summary.contactsMoved).toBe(1);
+  });
+
+  it('treats the Patient copy as authoritative over a stale identity contact written before ba9e9f19', async () => {
+    const stale = participantIdentityService.encryptIdentityFields({ email: 'antigo@example.com' });
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '62626262', email: 'novo@example.com', phone: null }],
+      participantIdentities: [{ _id: 'i1', participantId: '62626262', ...stale }]
+    });
+
+    await moveParticipantContactToIdentity(db);
+
+    const decrypted = participantIdentityService.decryptIdentity(db.collections.participantIdentities.docs[0]);
+    expect(decrypted.email).toBe('novo@example.com');
+  });
+
+  it('keeps the Patient copy when there is no identity record to move it to', async () => {
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '63636363', email: 'orfao@example.com' }]
+    });
+
+    const { summary } = await moveParticipantContactToIdentity(db);
+
+    expect(db.collections.patients.docs[0].email).toBe('orfao@example.com');
+    expect(summary.skippedNoIdentity).toEqual(['63636363']);
+  });
+
+  it('keeps the Patient copy and reports the participant when the phone is refused as a duplicate', async () => {
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '64646464', phone: '11977776666' }],
+      participantIdentities: [{ _id: 'i1', participantId: '64646464', patientName: 'Paciente' }]
+    });
+    db.collections.participantIdentities.refuseUpdate = (doc, update) => Boolean(update.$set?.phoneHash);
+
+    const { summary } = await moveParticipantContactToIdentity(db);
+
+    expect(db.collections.patients.docs[0].phone).toBe('11977776666');
+    expect(summary.phoneConflicts).toEqual(['64646464']);
+  });
+
+  it('hashes and encrypts an identity phone written before slice 1 even when no Patient copy remains', async () => {
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '65656565' }],
+      participantIdentities: [{ _id: 'i1', participantId: '65656565', patientName: 'Paciente', phone: '11966665555' }]
+    });
+
+    const { summary } = await moveParticipantContactToIdentity(db);
+
+    const identity = db.collections.participantIdentities.docs[0];
+    expect(identity.phoneHash).toBe(participantIdentityService.computeBlindIndex('phone', '11966665555'));
+    expect(identity.phoneEncrypted).toBeTruthy();
+    expect(summary.identitiesRehashed).toBe(1);
+  });
+
+  it('leaves a Patient with no contact and an already-hashed identity untouched (control)', async () => {
+    const hashed = participantIdentityService.encryptIdentityFields({ phone: '11955554444' });
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '66666666' }],
+      participantIdentities: [{ _id: 'i1', participantId: '66666666', ...hashed, phone: null }]
+    });
+    const before = JSON.stringify(db.collections.participantIdentities.docs[0]);
+
+    const { summary } = await moveParticipantContactToIdentity(db);
+
+    expect(JSON.stringify(db.collections.participantIdentities.docs[0])).toBe(before);
+    expect(summary.contactsMoved).toBe(0);
+    expect(summary.identitiesRehashed).toBe(0);
+  });
+});
+
+describe('participant-identity-backfill.service#checkParticipantIdentityParity contact fields (#1166 slice 4)', () => {
+  it('flags a Patient whose email differs from the identity record', async () => {
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '67676767', email: 'novo@example.com' }],
+      participantIdentities: [{ _id: 'i1', participantId: '67676767', patientName: 'Paciente', email: 'antigo@example.com' }]
+    });
+
+    const parity = await checkParticipantIdentityParity(db);
+
+    expect(parity.drifted).toEqual(['67676767']);
+  });
+
+  it('reports parity when the contact matches up to case and phone punctuation (control)', async () => {
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '68686868', email: 'Mesmo@Example.com', phone: '(11) 94444-3333' }],
+      participantIdentities: [{ _id: 'i1', participantId: '68686868', patientName: 'Paciente', email: 'mesmo@example.com', phone: '11944443333' }]
     });
 
     const parity = await checkParticipantIdentityParity(db);
