@@ -231,3 +231,16 @@ Notação `id:braço` identifica exatamente a entrada do relatório global prese
 | 6 — `791 birthDate` | PRODUCTION_DEFECT | yes | ausência de busca protegida falha fechada | aprovado |
 
 Teste direcionado: `intakeWizard.routes.test.js`, 40/40; sem skips. Nenhum dos seis casos permanece `AMBIGUOUS`.
+
+### Stage 2E-1 — lote 1
+
+| Arquivo / linhas | id:braço | Classificação | Evidência / resultado |
+| --- | --- | --- | --- |
+| `terminologySync.service.js:107,141,196,207,211,215` | `19:1;25:3/4;46:1;48:0;52:0;55:1/2` (6) | DEFENSIVE_OR_INSTRUMENTATION | `terminologySync.service.test.js` e `terminologySync.service.item8.residual.test.js` cobrem normalização ORPHA/OMIM, fonte, referências externas e upsert. Guards de redundância exigem payload normalizado; não fabricar payload sem código. 59/59 aprovados. |
+
+STAGE_2E_1_CURSOR
+
+last_file=src/services/terminologySync.service.js
+last_branch=55:2
+reviewed_this_session=6
+remaining_estimate=488
