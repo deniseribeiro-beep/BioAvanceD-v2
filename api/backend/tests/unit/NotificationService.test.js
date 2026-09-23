@@ -733,9 +733,9 @@ describe('NotificationService', () => {
       vi.spyOn(notificationService, 'getNotificationQueue').mockReturnValue({ add: addMock });
       const notifySpy = vi.spyOn(notificationService, 'notifyPatientConsent');
 
-      const result = await notificationService.enqueueConsentNotification({ patientID: 'P-1' }, 'http://link');
+      const result = await notificationService.enqueueConsentNotification({ participantId: '12345678' }, 'http://link');
       expect(addMock).toHaveBeenCalledWith('consent-notification', {
-        patientData: { patientID: 'P-1' },
+        patientData: { participantId: '12345678' },
         consentLink: 'http://link'
       });
       expect(notifySpy).not.toHaveBeenCalled();
@@ -745,7 +745,9 @@ describe('NotificationService', () => {
     // #1169: the job body is persisted in Redis (24h, 7 days on failure), so
     // it carries only what the send path reads -- never civil identity or
     // the consent credential.
-    it('#1169: enqueues only the fields the send path reads', async () => {
+    // #1166 slice 2 narrows #1169's list to the id alone: the name and the
+    // contact are identity data, and the worker resolves them at send time.
+    it('#1169/#1166: enqueues only the participantId, no name or contact', async () => {
       const addMock = vi.fn().mockResolvedValue({ id: 'job-1' });
       vi.spyOn(notificationService, 'getNotificationQueue').mockReturnValue({ add: addMock });
 
@@ -761,12 +763,7 @@ describe('NotificationService', () => {
       }, 'http://link');
 
       expect(addMock).toHaveBeenCalledWith('consent-notification', {
-        patientData: {
-          participantId: '12345678',
-          patientName: 'Maria',
-          email: 'maria@example.com',
-          phone: '11987654321',
-        },
+        patientData: { participantId: '12345678' },
         consentLink: 'http://link'
       });
     });
@@ -785,6 +782,41 @@ describe('NotificationService', () => {
 
       expect(notifySpy).toHaveBeenCalledWith({ patientID: 'P-9' }, 'http://link/9');
       expect(result).toEqual([{ channel: 'email', success: true }]);
+    });
+
+    // #1166 slice 2: the job carries only the participantId, so the worker
+    // resolves name and contact from the participant's identity record,
+    // decrypting a ciphertext-only one, at send time.
+    it('#1166: resolves name and contact from the decrypted identity record', async () => {
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      const encrypted = participantIdentityService.encryptIdentityFields({
+        participantId: '12345678',
+        patientName: 'Maria',
+        email: 'maria@example.com',
+        phone: '11987654321',
+      });
+      const identity = { ...encrypted, patientName: null, email: null, phone: null };
+      const findOne = vi.fn(async (filter) => (filter.participantId === '12345678' ? identity : null));
+      const db = { collection: vi.fn(() => ({ findOne })) };
+      const notifySpy = vi
+        .spyOn(notificationService, 'notifyPatientConsent')
+        .mockResolvedValue([{ channel: 'email', success: true }]);
+
+      await notificationService.processConsentNotificationJob(
+        { patientData: { participantId: '12345678' }, consentLink: 'http://link/9' },
+        db
+      );
+
+      expect(db.collection).toHaveBeenCalledWith('participantIdentities');
+      expect(notifySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          participantId: '12345678',
+          patientName: 'Maria',
+          email: 'maria@example.com',
+          phone: '11987654321',
+        }),
+        'http://link/9'
+      );
     });
   });
 

@@ -451,7 +451,7 @@ async function initWorker() {
           }
 
           const notificationService = getNotificationService();
-          return notificationService.processConsentNotificationJob(job.data);
+          return notificationService.processConsentNotificationJob(job.data, db);
         },
         {
           connection,

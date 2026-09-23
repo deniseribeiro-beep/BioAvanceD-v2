@@ -31,22 +31,34 @@ class ConsentController {
         // ParticipantIdentity, not read directly off Patient. Decrypted via
         // decryptIdentity so this keeps working once the plaintext field is
         // dropped in favor of the ciphertext-only sibling (#566).
+        // #1166 slice 2: the email is identity data too, taken from the same
+        // decrypted record; the Patient projection above is only its fallback
+        // until slice 4 stops writing it there.
         const identitiesCollection = db.collection('participantIdentities');
         const participantIds = pendingPatients.map((patient) => patient.participantId).filter(Boolean);
         const identities = participantIds.length > 0
           ? await identitiesCollection.find({ participantId: { $in: participantIds } })
-            .project({ participantId: 1, patientName: 1, patientNameEncrypted: 1 }).toArray()
+            .project({
+              participantId: 1,
+              patientName: 1,
+              patientNameEncrypted: 1,
+              email: 1,
+              emailEncrypted: 1,
+            }).toArray()
           : [];
-        const nameByParticipantId = new Map(
+        const identityByParticipantId = new Map(
           identities.map((identity) => {
             const decrypted = participantIdentityService.decryptIdentity(identity);
-            return [decrypted.participantId, decrypted.patientName];
+            return [decrypted.participantId, decrypted];
           })
         );
-        const patientsWithNames = pendingPatients.map((patient) => ({
-          ...patient,
-          patientName: nameByParticipantId.get(patient.participantId) || null,
-        }));
+        const patientsWithNames = pendingPatients.map((patient) => {
+          const identity = identityByParticipantId.get(patient.participantId);
+          return {
+            ...participantIdentityService.withIdentityContact(patient, identity),
+            patientName: identity?.patientName || null,
+          };
+        });
 
         return res.status(200).json({
           success: true,

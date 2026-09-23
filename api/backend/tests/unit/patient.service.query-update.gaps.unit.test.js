@@ -512,6 +512,43 @@ describe('PatientService.resendConsentNotification', () => {
     );
   });
 
+  // #1166 slice 2: the contact is identity data. With the Patient document
+  // holding none (the slice-4 end state), the invitation still has to reach
+  // the address on the identity record.
+  it('#1166: takes email and phone from the decrypted identity, not the Patient document', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      patientName: 'Ana Silva',
+      email: 'ana@example.com',
+      phone: '11987654321',
+    });
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({
+        _id: 'p1',
+        participantId: '12345678',
+        status: 'PENDING_CONSENT',
+        consentToken: 'existing-token',
+        consentTokenExpiresAt: new Date(Date.now() + 60000)
+      }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+    });
+    const identitiesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ ...encrypted, patientName: null, email: null, phone: null })
+    });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: identitiesCollection });
+
+    vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('http://link');
+    const enqueueSpy = vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+    await patientService.resendConsentNotification(db, '12345678');
+
+    expect(enqueueSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'ana@example.com', phone: '11987654321' }),
+      'http://link'
+    );
+  });
+
   it('generates a new token when there is no valid existing one', async () => {
     const newExpiry = new Date(Date.now() + 3600000);
     const patientsCollection = makeFakeCollection({

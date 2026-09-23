@@ -136,6 +136,39 @@ describe('eConsent.routes POST /generate-link', () => {
     sendConsentEmailSpy.mockRestore();
   });
 
+  // #1166 slice 2: the email check compares against the identity record,
+  // decrypted, because dict-02 places the contact there and nowhere else.
+  // The Patient row here carries no email, as it will after slice 4.
+  it('#1166: checks the email against the decrypted identity record, not the Patient document', async () => {
+    const router = loadAuthenticatedRouter();
+    const notificationService = require('../../src/services/notification.service');
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const sendConsentEmailSpy = vi
+      .spyOn(notificationService, 'sendConsentEmail')
+      .mockResolvedValue({ channel: 'email', success: true, provider: 'resend' });
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      email: 'a@b.com',
+    });
+    const byCollection = {
+      patients: { findOne: vi.fn().mockResolvedValue({ participantId: '12345678' }) },
+      participantIdentities: { findOne: vi.fn().mockResolvedValue({ ...encrypted, email: null }) },
+    };
+    const db = { collection: vi.fn((name) => byCollection[name]) };
+    const app = buildApp(router, db);
+
+    const res = await request(app)
+      .post('/e-consent/generate-link')
+      .send({ participantId: '12345678', email: 'a@b.com' });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(byCollection.participantIdentities.findOne).toHaveBeenCalledWith({ participantId: '12345678' });
+    expect(sendConsentEmailSpy).toHaveBeenCalledWith(
+      { participantId: '12345678', email: 'a@b.com' },
+      res.body.link
+    );
+  });
+
   // #829: the handler had no try/catch, so a throw from sendConsentEmail was
   // an unhandled promise rejection and Node *exited the process*. Observed on
   // the test stack: backend-app-test went Up (healthy) -> Exited (1) on a

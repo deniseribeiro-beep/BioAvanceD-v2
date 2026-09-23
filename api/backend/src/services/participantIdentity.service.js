@@ -26,7 +26,8 @@ class ParticipantIdentityService {
   //
   // #1166: plus the participant's contact, dict-02 P1X-0352/P1X-0353
   // (ParticipantIdentity.email/phone, "MongoDB protegido"). Additive for now:
-  // their readers still take the plaintext copy on `patients`.
+  // the plaintext copy on `patients` is still written (slice 4 drops it), but
+  // every reader takes the contact from here through withIdentityContact.
   getEncryptedFieldMap() {
     return {
       patientName: 'patientNameEncrypted',
@@ -232,6 +233,22 @@ class ParticipantIdentityService {
       doc[plainField] = plainField === 'birthDate' ? new Date(decryptedValue) : decryptedValue;
     }
 
+    return doc;
+  }
+
+  // #1166 slice 2: the participant's contact is identity data (dict-02
+  // P1X-0352/P1X-0353), so a reader overlays it from the DECRYPTED identity
+  // record onto the Patient document. The Patient's own copy survives only
+  // where the identity record holds no value, which is a fallback for the
+  // transition: slice 4 stops writing it, and with it goes the fallback.
+  withIdentityContact(patient, identity) {
+    const doc = { ...(patient || {}) };
+    for (const field of ['email', 'phone']) {
+      const value = identity?.[field];
+      if (value !== undefined && value !== null && value !== '') {
+        doc[field] = value;
+      }
+    }
     return doc;
   }
 

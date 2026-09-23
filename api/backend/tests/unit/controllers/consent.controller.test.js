@@ -129,6 +129,45 @@ describe('ConsentController.getPendingPatientsForPolicy', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true, data: [{ participantId: 'p1', patientName: 'Paciente Cifrado' }] });
   });
 
+  // #1166 slice 2: email is identity data too. The Patient row carries none
+  // here, as it will after slice 4, so the value must come from the
+  // decrypted identity record.
+  it('#1166: resolves email from a ciphertext-only ParticipantIdentity record', async () => {
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: 'p1',
+      patientName: 'Paciente Cifrado',
+      email: 'cifrado@example.com'
+    });
+    const ciphertextOnlyIdentity = { ...encrypted, patientName: null, email: null };
+
+    const patientsToArray = vi.fn().mockResolvedValue([{ participantId: 'p1' }]);
+    const patientsProject = vi.fn().mockReturnValue({ toArray: patientsToArray });
+    const patientsFind = vi.fn().mockReturnValue({ project: patientsProject });
+
+    // Honours the projection it is handed, so a projection that leaves out
+    // the ciphertext sibling fails here the way it would against Mongo.
+    const identitiesProject = vi.fn((projection) => ({
+      toArray: vi.fn().mockResolvedValue([
+        Object.fromEntries(Object.entries(ciphertextOnlyIdentity).filter(([key]) => projection[key]))
+      ])
+    }));
+    const identitiesFind = vi.fn().mockReturnValue({ project: identitiesProject });
+
+    const collection = vi.fn((name) =>
+      name === 'participantIdentities' ? { find: identitiesFind } : { find: patientsFind }
+    );
+    const req = createReq({ params: { id: 'policy1' }, app: { locals: { db: { collection } } } });
+    const res = createRes();
+
+    await consentController.getPendingPatientsForPolicy(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [{ participantId: 'p1', patientName: 'Paciente Cifrado', email: 'cifrado@example.com' }]
+    });
+  });
+
   it('skips the ParticipantIdentity lookup when no pending patients are found', async () => {
     const patientsToArray = vi.fn().mockResolvedValue([]);
     const patientsProject = vi.fn().mockReturnValue({ toArray: patientsToArray });

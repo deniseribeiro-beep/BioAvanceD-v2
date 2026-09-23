@@ -568,7 +568,10 @@ class ConsentService {
             // once the plaintext field is dropped (#566).
             const rawIdentity = await identityCollection.findOne({ participantId: patient.participantId });
             const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
-            const patientWithIdentity = identity ? { ...patient, patientName: identity.patientName } : patient;
+            // #1166 slice 2: the contact comes from the same decrypted record.
+            const patientWithIdentity = identity
+              ? { ...participantIdentityService.withIdentityContact(patient, identity), patientName: identity.patientName }
+              : patient;
 
             // Generate new consent token for each patient
             const consentMetadata = notificationService.buildConsentMetadata();

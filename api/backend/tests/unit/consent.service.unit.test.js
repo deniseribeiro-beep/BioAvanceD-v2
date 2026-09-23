@@ -1055,6 +1055,36 @@ describe('ConsentService.createPolicy', () => {
       expect(result.consentNotifications).toEqual({ total: 3, notified: 2, failed: 1 });
     });
 
+    // #1166 slice 2: the sweep hands the send path the contact from the
+    // decrypted identity record. These pending rows carry no email, as every
+    // Patient will after slice 4.
+    it('#1166: notifies with the email and phone from the decrypted identity record', async () => {
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      const pending = THREE_PENDING();
+      const { db } = setup(pending);
+      const identities = await db.collection('participantIdentities');
+      identities.findOne = vi.fn(async ({ participantId }) => ({
+        ...participantIdentityService.encryptIdentityFields({
+          participantId,
+          email: `${participantId}@example.com`,
+          phone: '11987654321',
+        }),
+        email: null,
+        phone: null,
+      }));
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
+
+      expect(
+        notificationService.enqueueConsentNotification.mock.calls.map(([patient]) => [patient.email, patient.phone])
+      ).toEqual([
+        ['10203041@example.com', '11987654321'],
+        ['10203042@example.com', '11987654321'],
+        ['10203043@example.com', '11987654321'],
+      ]);
+    });
+
     it('reports a clean sweep when every patient succeeds', async () => {
       const pending = THREE_PENDING();
       const { db } = setup(pending);

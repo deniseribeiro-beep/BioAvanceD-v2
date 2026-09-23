@@ -1190,7 +1190,11 @@ class PatientService {
     // ciphertext-only row sends the consent invitation with no name. This read
     // had no decryptIdentity anywhere in its path.
     const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
-    const patientWithIdentity = identity ? { ...patient, patientName: identity.patientName } : patient;
+    // #1166 slice 2: and the contact the invitation goes to, from the same
+    // decrypted record rather than the Patient's own copy.
+    const patientWithIdentity = identity
+      ? { ...participantIdentityService.withIdentityContact(patient, identity), patientName: identity.patientName }
+      : patient;
 
     const consentLink = notificationService.buildConsentLink(patientWithIdentity, token);
     await notificationService.enqueueConsentNotification(patientWithIdentity, consentLink);

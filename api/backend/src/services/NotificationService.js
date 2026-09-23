@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 const { connectDB } = require('../database/mongo');
+const participantIdentityService = require('./participantIdentity.service');
 const { initRedis } = require('../config/queue');
 const {
   connectInfluxDB,
@@ -24,14 +25,11 @@ function isLoopbackHostname(hostname) {
   return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
 }
 
-// #1169: every patientData field the consent send path reads -- the contact
-// aliases resolvePatientEmail/resolvePatientPhone accept, the display name,
-// and the two ids its log lines carry. Nothing else goes into a queued job.
-const CONSENT_JOB_PATIENT_FIELDS = [
-  'participantId', 'patientID', 'patientName',
-  'email', 'emailAddress', 'contactEmail',
-  'phone', 'mobile', 'whatsapp', 'phoneNumber',
-];
+// #1169: the only patientData field a queued consent job carries. #1166
+// slice 2 took the name and the contact out too: they are identity data, and
+// processConsentNotificationJob resolves them from the participant's
+// identity record at send time, so none of it is persisted in Redis.
+const CONSENT_JOB_PATIENT_FIELDS = ['participantId'];
 
 class NotificationService {
   constructor() {
@@ -573,9 +571,9 @@ class NotificationService {
     }
 
     // #1169: the job body is persisted in Redis (24h, 7 days on failure), so
-    // it carries only what notifyPatientConsent's send path reads. Callers
-    // hand over the whole request payload -- civil identity, the consent
-    // token -- none of which the worker needs.
+    // it carries only the participantId. Callers hand over the whole request
+    // payload -- civil identity, contact, the consent token -- and the worker
+    // looks the name and contact up itself (#1166).
     const queuedPatientData = {};
     for (const field of CONSENT_JOB_PATIENT_FIELDS) {
       if (patientData?.[field] !== undefined) queuedPatientData[field] = patientData[field];
@@ -589,8 +587,34 @@ class NotificationService {
     return [{ channel: 'queue', success: true, provider: 'bullmq' }];
   }
 
-  async processConsentNotificationJob(jobData) {
-    return this.notifyPatientConsent(jobData.patientData, jobData.consentLink);
+  async processConsentNotificationJob(jobData, db = null) {
+    const patientData = await this.resolveConsentRecipient(jobData.patientData, db);
+    return this.notifyPatientConsent(patientData, jobData.consentLink);
+  }
+
+  // #1166 slice 2: a queued job carries only the participantId, so the name
+  // and contact come from the decrypted ParticipantIdentity record at send
+  // time. The Patient's own contact copy is read as a fallback only, the same
+  // one the synchronous readers keep, until slice 4 stops writing it. A job
+  // queued before this change still carries its own fields, which stay the
+  // base the resolved values are laid over.
+  async resolveConsentRecipient(patientData = {}, db = null) {
+    const participantId = patientData?.participantId;
+    if (!participantId) return patientData;
+
+    const database = db || await connectDB();
+    const [rawIdentity, patient] = await Promise.all([
+      database.collection('participantIdentities').findOne({ participantId }),
+      database.collection('patients').findOne({ participantId }, { projection: { email: 1, phone: 1 } }),
+    ]);
+    const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
+
+    const resolved = participantIdentityService.withIdentityContact(
+      participantIdentityService.withIdentityContact(patientData, patient),
+      identity
+    );
+    if (identity?.patientName) resolved.patientName = identity.patientName;
+    return resolved;
   }
 
   initSocketIO(serverOrIo) {

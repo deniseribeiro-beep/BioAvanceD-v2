@@ -77,7 +77,17 @@ router.post('/generate-link', authenticate, requirePermission('requestConsent'),
   const db = req.app.locals.db;
   const patient = await db.collection('patients').findOne({ participantId });
   if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
-  if (patient.email !== email) {
+
+  // #1166 slice 2: the address on file is identity data (dict-02 P1X-0352),
+  // so the check reads the decrypted ParticipantIdentity record, falling back
+  // to the Patient's own copy only until slice 4 stops writing it. Compared
+  // case-insensitively because every ParticipantIdentity writer lowercases it
+  // (ParticipantIdentityModel.fieldsOf) and the Patient copy never was.
+  const rawIdentity = await db.collection('participantIdentities').findOne({ participantId });
+  const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
+  const emailOnFile = participantIdentityService.withIdentityContact(patient, identity).email;
+  const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+  if (!emailOnFile || normalizeEmail(emailOnFile) !== normalizeEmail(email)) {
     return res.status(403).json({ error: 'Email não corresponde ao paciente' });
   }
 
@@ -97,7 +107,7 @@ router.post('/generate-link', authenticate, requirePermission('requestConsent'),
     // was the more dangerous of the two: had the strict path not thrown, it
     // would have emailed a real participant a link to their own localhost.
     const link = `${notificationService.getFrontendUrl()}/patient/e-consent/${token}`;
-    await notificationService.sendConsentEmail({ participantId, email }, link);
+    await notificationService.sendConsentEmail({ participantId, email: emailOnFile }, link);
     return res.json({ success: true, link });
   } catch (error) {
     logger.error('Erro ao gerar link de consentimento:', error);
