@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { ImportConsentPayload, eConsentService } from '../../services/api';
-import { mapEConsentError, mapEConsentSubmitError } from '../../views/eConsentView';
+import { mapEConsentError, mapEConsentRequestError, mapEConsentSubmitRequestError } from '../../views/eConsentView';
 
 // #822: same defect and same fix as EConsentPage -- this page called raw axios
 // with a relative `/api/...` URL, which resolves against the frontend origin
@@ -33,7 +33,7 @@ export default function EConsentImportPage() {
         if (!cancelled) setData(resp.data);
       } catch (err) {
         if (!cancelled) {
-          setError(mapEConsentError((err as { response?: { status?: number } })?.response?.status));
+          setError(mapEConsentRequestError(err));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -55,7 +55,7 @@ export default function EConsentImportPage() {
       setSuccess(true);
     } catch (err) {
       setError(
-        mapEConsentSubmitError((err as { response?: { status?: number } })?.response?.status)
+        mapEConsentSubmitRequestError(err)
       );
     } finally {
       setSubmitting(false);

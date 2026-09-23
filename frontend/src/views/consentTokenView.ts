@@ -7,6 +7,8 @@
 // Kept separate from the component so the parsing/normalisation rules are unit
 // tested directly, per this repo's frontend testing convention.
 
+import { classifyRequestFailure } from './requestFailure';
+
 export type ConsentTokenPermission = {
   key: string;
   label: string;
@@ -113,13 +115,9 @@ export function mapConsentTokenError(status?: number): string {
 // This takes the whole error rather than a status, so the "no response at all" case
 // is distinguishable from "a response we have no arm for".
 export function mapConsentTokenRequestError(error?: unknown): string {
-  const err = error as
-    | { response?: { status?: number }; request?: unknown; code?: string }
-    | undefined;
-
-  const status = err?.response?.status;
-  if (typeof status === "number") {
-    return mapConsentTokenError(status);
+  const failure = classifyRequestFailure(error);
+  if (failure.kind === "response") {
+    return mapConsentTokenError(failure.status);
   }
 
   // A request left the browser and nothing came back: our own timeout, a dropped
@@ -128,10 +126,7 @@ export function mapConsentTokenRequestError(error?: unknown): string {
   // retrying is the right advice. The copy therefore makes only the promise all of
   // them share, and deliberately does not assert the service is down, which would be
   // wrong when their own connection dropped.
-  const reachedTheNetwork =
-    err?.code === "ECONNABORTED" || err?.code === "ETIMEDOUT" || err?.request !== undefined;
-
-  if (reachedTheNetwork) {
+  if (failure.kind === "no-response") {
     return 'Não foi possível falar com o serviço de consentimento. Seu link continua válido -- tente novamente em alguns minutos.';
   }
 
