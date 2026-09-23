@@ -1,53 +1,65 @@
 # HANDOFF
 
-**Written 2026-09-23, forty-third queue sitting. INTERIM: Dennis gave no end
+**Written 2026-09-23, forty-fourth queue sitting. INTERIM: Dennis gave no end
 signal, so treat the session as CONTINUING.** The instruction was to read the
-handoff and pick the next group, with Docker on and a parallel session sharing
-the machine (it was waiting on a download). The group was **the #1104 Docker
-proof, then #1158, then #1172**.
+handoff and pick the next group, with Docker on. The group was **#1173, then the
+#1174 it spun off**.
 
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, pushed. The last substantive commit is
-`be59cab0`.
+`c8c72f96`.
 
 ## What shipped
 
-- **#1104 CLOSED** ([comment](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/1104)).
-  - The test stack was rebuilt with `--build`, and the running backend image was confirmed to carry `b1f28a19`.
-  - `interop-monitoring.spec.ts`: **26 passed, 0 skipped**.
-- **#1158 CLOSED, `e3a7ec4a`.** `EConsentPage` and `EConsentImportPage` now map a failure from the whole error: `mapEConsent[Submit]RequestError`.
-  - On no response, the copy promises the link is still valid.
-  - The classifier lives once, in `frontend/src/views/requestFailure.ts`, and `consentTokenView` uses it too.
-  - `participantPages.guard.test.ts` now pins that no participant page passes `response?.status` to a mapper.
-
-- **#1172 CLOSED, `be59cab0`**: four e2e tests abort a request with `page.route(...abort('timedout'))` and assert the rendered no-response copy on `EConsentPage` and `ConsentTokenPage`. **13/13** green on the Docker stack. The probe with the pages reverted gave exactly 2 red.
+- **#1173 CLOSED, `c8c72f96`**
+  ([comment](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/1173)):
+  `tests/e2e/e-consent-import-page.spec.ts` has 6 tests. It seeds a
+  `FHIR_BUNDLE` batch and a `PENDING_CONSENT` staging record, and mints the
+  import-scope JWT with the new `mintImportConsentToken` in
+  `helpers/consentJwt.ts`.
+  - `[ran it]` 6 passed, 0 skipped.
+  - A probe with the wrong secret turned exactly the 4 token-dependent tests red.
 
 ## Filed this sitting
 
-- **#1173** (open): `EConsentImportPage` has no e2e spec at all. Disposition: I chose to stop. It needs a seeding path traced (`validateImportConsentToken`) and a Docker run.
-- **Pack #1130** (open, skills-pack): the recipe's `up -d --wait admin-bootstrap-test` once **recreated** mongo, neo4j, redis and influx under a live stack, which killed `neo4j-projection-worker-test`. `[ran it]` It is intermittent and the cause is not established. **Until #1130 lands, check `docker ps -a` after the bootstrap and confirm the projection worker is still `Up`** before any gate that needs it.
+- **#1174** (open, bug): under parallel workers, the consent-page specs race on
+  the global "active consent template" singleton
+  (`consent.service.js:639`, newest `createdAt` wins).
+  - The sibling specs and the 10 specs using `seedParticipant.ts` all seed one.
+  - `[ran it]` 1 failed / 18 passed on 3 of 3 multi-worker runs, and 19/19 with
+    `--workers=1`.
+  - Left **awaiting Dennis's direction**
+    ([comment](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/1174#issuecomment-5804273623)).
+    The choice is (a) `workers: 1` unconditionally in `playwright.config.ts`
+    (recommended) or (b) making 12 specs singleton-safe.
+  - The gate is unaffected, because it already runs `--workers=1`.
 
 ## Open, and left in a known state
 
 Query the backlog with `gh issue list --state open --json number,title,labels`,
-**redirected to a file**, because the unredirected result is about 18 KB.
+redirected to a file. The table alone is about 18 KB.
 
-- I read #1163, #1149 and #1145 while triaging this sitting and left them unchanged. Each is half a design question: #1163 on which index-ensure convention, #1149 on whether to delete the inert store or wire it, #1145 on which policy reference wins.
-- #1103, #1112, #682, #1159, #1162: unchanged.
+- #1163, #1149 and #1145 are unchanged, and each still needs a design direction
+  (see the previous note in `git log -p -- HANDOFF.md`).
 
 ## Docker and the machine
 
-The stack was torn down after #1172's run; no containers are running. `builder prune -af` ran (1.06 GB); the images are kept. `[ran it]`:
-- Free RAM was 3.4 GB before the bring-up and 2.4 GB with the stack up.
-- Port 8086 was not in an excluded range. Derive it each time with `netsh interface ipv4 show excludedportrange protocol=tcp`.
+**The test stack is LEFT RUNNING.**
+- The images were newer than the last `src` commits, so there was no rebuild.
+- The twelve services are up, and `admin-bootstrap-test` exited 0 with `--no-deps`.
+- `neo4j-projection-worker-test` was still `Up` after the bootstrap (#1130 check).
+- The reference-data bootstrap chain was NOT run, so this stack is not ready for a full-suite gate.
+
+Port 8086 was not excluded this time. Free RAM was 5.1 GB before the bring-up.
+Tear the stack down at the sitting's end.
 
 ## Things a next session must not undo
 
-Earlier notes' items still hold (`git log -p -- HANDOFF.md`). Plus:
-
-- **Participant consent pages map errors through a `*RequestError(err)` mapper, never through `response?.status`.** The guard test enforces it.
+Earlier notes' items still hold. Plus:
+- **Run multi-file e2e locally with `--workers=1` until #1174 is decided.**
+  Otherwise a consent-page failure reads as a regression.
 
 ## Recommended next
 
-**None queued by name.** Unverified: #1173 is the natural continuation. The design-shaped bugs above need a direction from Dennis first.
+**None queued by name.** #1174 needs Dennis's (a)/(b) call first.
