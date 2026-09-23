@@ -365,4 +365,55 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     expect(identity).toBeTruthy();
     expect(identity.identityDocument).toBe('11144477735');
   });
+
+  // updatePatient's identity sync is a participantIdentities WRITER, and it
+  // was the one writer that never went through encryptIdentityFields: an
+  // edit wrote raw plaintext beside the ciphertext and hash it left stale.
+  it('updatePatient re-derives birthDate ciphertext and blind index and keeps it ciphertext-only (#1104)', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const oldDate = new Date(1990, 0, 20);
+    const newDate = new Date(1985, 5, 1);
+    const patients = makeInMemoryCollection([{ participantId: '11111111' }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '11111111', patientName: 'Maria', birthDate: oldDate }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '11111111', { birthDate: newDate });
+
+    const identity = await participantIdentities.findOne({ participantId: '11111111' });
+    expect(identity.birthDate).toBeNull();
+    expect(identity.birthDateHash).toBe(participantIdentityService.computeBlindIndex('birthDate', newDate));
+    expect(participantIdentityService.decryptIdentity(identity).birthDate.getTime()).toBe(newDate.getTime());
+  });
+
+  it('updatePatient stores identityDocument digits-only with a matching hash (#1109)', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '22222222' }]);
+    const participantIdentities = makeInMemoryCollection([]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '22222222', { identityDocument: '111.444.777-35' });
+
+    const identity = await participantIdentities.findOne({ participantId: '22222222' });
+    expect(identity.identityDocument).toBe('11144477735');
+    expect(identity.identityDocumentHash).toBe(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
+  });
+
+  it('updatePatient clearing a civil-identity field clears its ciphertext and hash too', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '33333333' }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '33333333', identityDocument: '11144477735' }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '33333333', { identityDocument: null });
+
+    const identity = participantIdentityService.decryptIdentity(
+      await participantIdentities.findOne({ participantId: '33333333' })
+    );
+    expect(identity.identityDocument ?? null).toBeNull();
+    expect(identity.identityDocumentHash ?? null).toBeNull();
+  });
 });

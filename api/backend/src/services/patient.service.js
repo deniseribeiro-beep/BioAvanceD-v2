@@ -1044,10 +1044,32 @@ class PatientService {
           identityUpdate.identityDocument = identityFieldsFromUpdate.identityDocument;
         }
 
+        // RF005/RNF007 (#1104, #1109): this sync is a participantIdentities
+        // writer like any other, so it goes through encryptIdentityFields --
+        // otherwise an edit writes raw plaintext onto a ciphertext-only field,
+        // stores an uncanonicalized identityDocument, and leaves the blind
+        // index on the OLD value for every matching site to find. A field
+        // cleared here must clear its ciphertext and hash as well, or
+        // decryptIdentity recovers the old value from the ciphertext.
+        const encryptedFieldMap = participantIdentityService.getEncryptedFieldMap();
+        const hashFieldMap = participantIdentityService.getHashFieldMap();
+        const clearedSiblings = {};
+        for (const [plainField, encryptedField] of Object.entries(encryptedFieldMap)) {
+          if (Object.prototype.hasOwnProperty.call(identityUpdate, plainField)
+            && (identityUpdate[plainField] === null || identityUpdate[plainField] === '')) {
+            clearedSiblings[encryptedField] = null;
+            if (hashFieldMap[plainField]) clearedSiblings[hashFieldMap[plainField]] = null;
+          }
+        }
+        const encryptedIdentityUpdate = {
+          ...participantIdentityService.encryptIdentityFields(identityUpdate),
+          ...clearedSiblings,
+        };
+
         const identityCollection = await this.getIdentityCollection(db);
         await identityCollection.updateOne(
           { participantId: updatedPatient.participantId },
-          { $set: identityUpdate },
+          { $set: encryptedIdentityUpdate },
           { upsert: true }
         );
       }
