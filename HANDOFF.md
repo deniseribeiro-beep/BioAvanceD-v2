@@ -1,53 +1,50 @@
 # HANDOFF
 
-**Written 2026-09-23, forty-second queue sitting. INTERIM: Dennis gave no end
+**Written 2026-09-23, forty-third queue sitting. INTERIM: Dennis gave no end
 signal, so treat the session as CONTINUING.** The instruction was to read the
 handoff and pick the next group, with Docker on and a parallel session sharing
-the machine. The group was **the #1166 Docker gate, then #1104**.
+the machine (it was waiting on a download). The group was **the #1104 Docker
+proof, then #1158**.
 
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, pushed. The last substantive commit is
-`b1f28a19`.
+`e3a7ec4a`.
 
 ## What shipped
 
-- **#1166 CLOSED** ([comment](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/1166#issuecomment-5803267089)):
-  - The test stack was built from scratch at `0b383e24`, with the full bootstrap chain.
-  - Full e2e suite: **223 passed, 0 failed, 0 skipped**, `--workers=1`.
-  - That covers #1166 slice 4, #1168 and #1171.
-- **#1104, `b1f28a19`**: `patientName` and `identityDocument` are now **ciphertext-only**. All three civil-identity fields are done.
-  - `listPatients`' name filter is an **exact match** on a new `patientNameHash`: accents stripped, lowercased, whitespace collapsed. That was Dennis's call this sitting; no screen sent that filter.
-  - The `identityDocument` `$or` query sites are hash-only.
-  - New index `participant_identities_patient_name_hash_idx_v1`.
+- **#1104 CLOSED** ([comment](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/1104)).
+  - The test stack was rebuilt with `--build`, and the running backend image was confirmed to carry `b1f28a19`.
+  - `interop-monitoring.spec.ts`: **26 passed, 0 skipped**.
+- **#1158 CLOSED, `e3a7ec4a`.** `EConsentPage` and `EConsentImportPage` now map a failure from the whole error: `mapEConsent[Submit]RequestError`.
+  - On no response, the copy promises the link is still valid.
+  - The classifier lives once, in `frontend/src/views/requestFailure.ts`, and `consentTokenView` uses it too.
+  - `participantPages.guard.test.ts` now pins that no participant page passes `response?.status` to a mapper.
+
+## Filed this sitting
+
+- **#1172**: the participant pages' no-response copy is proven at unit level only. The direction is a `page.route(...abort('timedout'))` test in the two existing participant specs. It needs the Docker stack.
 
 ## Open, and left in a known state
 
 Query the backlog with `gh issue list --state open --json number,title,labels`,
 **redirected to a file**, because the unredirected result is about 18 KB.
 
-- **#1104**: OPEN only for the **Docker e2e proof** of `interop-monitoring.spec.ts`, whose FHIR-commit assertion now reads the name through `POST /api/patients/:id/reidentify` ([comment](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/1104#issuecomment-5803475856)). Close it when that spec runs green. The unit sweep, architecture suite and root `tsc` are green.
-- #1103 (re-encryption tooling) now also covers rows written before `b1f28a19`, which keep their plaintext and have no `patientNameHash`.
-- #1112, #682, #1163, #1159, #1162: unchanged.
+- I read #1163, #1149 and #1145 while triaging this sitting and left them unchanged. Each is half a design question: #1163 on which index-ensure convention, #1149 on whether to delete the inert store or wire it, #1145 on which policy reference wins.
+- #1103, #1112, #682, #1159, #1162: unchanged.
 
 ## Docker and the machine
 
-No containers are running. **RAM is the constraint:**
-- After `compose down`, free RAM was 1.1 GB, with `vmmemWSL` still holding ~3 GB.
-- Dennis warned mid-sitting.
-- Tear the stack down as soon as a gate's result is in, and run native vitest with `--maxWorkers=1`, one file set at a time.
-- `docker desktop stop` is Dennis's call, because a parallel session may be using the engine.
-
-`[ran it]` Port 8086 was **not** reserved this time: the excluded ranges were `23761-24260`. So `INFLUXDB_HOST_PORT=18086` is no longer a standing requirement. Derive it from `netsh interface ipv4 show excludedportrange protocol=tcp` each time.
+The stack was torn down after #1104's run; no containers are running. `[ran it]`:
+- Free RAM was 3.4 GB before the bring-up and 2.4 GB with the stack up.
+- Port 8086 was not in an excluded range. Derive it each time with `netsh interface ipv4 show excludedportrange protocol=tcp`.
 
 ## Things a next session must not undo
 
 Earlier notes' items still hold (`git log -p -- HANDOFF.md`). Plus:
 
-- **Every field in `participantIdentity.service#getEncryptedFieldMap` is ciphertext-only.** A new reader decrypts, and a new query needs a blind index. A new encrypted field joins `getCiphertextOnlyFields` only once its readers decrypt.
-- **The plaintext query arms exist only in the keyless-stack branch (#1083).** Don't re-add one beside a hash arm, because Mongo can't serve that `$or` from indexes.
-- **The e2e suite must not read civil identity off a raw `participantIdentities` row.** Read it through the reidentify endpoint.
+- **Participant consent pages map errors through a `*RequestError(err)` mapper, never through `response?.status`.** The guard test enforces it.
 
 ## Recommended next
 
-**None queued by name.** Unverified: the natural step is a targeted Docker run of `interop-monitoring.spec.ts`, which closes #1104, once RAM allows. It needs a `--build`, because `b1f28a19` touched `api/backend/src`.
+**None queued by name.** Unverified: #1172 is small and only needs the Docker stack. The design-shaped bugs above need a direction from Dennis first.
