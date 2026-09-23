@@ -315,6 +315,27 @@ describe('ImportService.importSamples (CSV)', () => {
       expect(u.update.$set || {}).not.toHaveProperty('releaseStatus');
     }
   });
+
+  it('short-circuits with a structural error naming the read failure when the CSV does not exist (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `does-not-exist-samples-${Date.now()}.csv`);
+    const collection = makeSamplesCollection();
+
+    const result = await importService.importSamples(makeDb(collection), { path: missingPath, originalname: 'missing.csv' });
+
+    expect(result).toEqual({ success: 0, errors: [{ row: 0, error: expect.stringContaining('ENOENT') }], total: 0 });
+  });
+
+  // #1175: the row read is a second stream, after validateCSVStructure's own.
+  // Its source 'error' was never listened for, so a file removed between the
+  // two reads crashed the process instead of rejecting.
+  it('rejects when the row read fails after the structure check passed (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `does-not-exist-samples-${Date.now()}.csv`);
+    vi.spyOn(importService, 'validateCSVStructure').mockResolvedValueOnce({ valid: true });
+    const collection = makeSamplesCollection();
+
+    await expect(importService.importSamples(makeDb(collection), { path: missingPath, originalname: 'missing.csv' }))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });
 
 describe('ImportService.importSamples (unsupported extension / top-level error)', () => {

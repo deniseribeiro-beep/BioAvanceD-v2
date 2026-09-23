@@ -190,6 +190,7 @@ class ResultWorker {
     return new Promise((resolve, reject) => {
       const rows = [];
       fs.createReadStream(filePath)
+        .on('error', reject)
         .pipe(csv())
         .on('data', (row) => {
           rows.push(row);

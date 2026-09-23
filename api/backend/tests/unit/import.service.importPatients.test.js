@@ -454,4 +454,15 @@ describe('ImportService.importPatients (top-level error)', () => {
       originalname: 'does-not-exist-patients.json',
     })).rejects.toThrow();
   });
+
+  // #1175: .pipe() does not forward the SOURCE stream's 'error', so a missing
+  // CSV was an uncaught exception that crashed the process instead of this
+  // rejection -- the JSON case above fails in a synchronous readFileSync.
+  it('rejects when the CSV file does not exist (#1175)', async () => {
+    const db = makeDb({ patients: {}, participantIdentities: {} });
+    await expect(importService.importPatients(db, {
+      path: path.join(os.tmpdir(), `does-not-exist-patients-${Date.now()}.csv`),
+      originalname: 'does-not-exist-patients.csv',
+    })).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });

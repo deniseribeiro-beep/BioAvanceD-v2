@@ -280,6 +280,7 @@ class ImportLGPDService {
       };
       const sourceLines = [];
       fs.createReadStream(filePath)
+        .on('error', reject)
         .pipe(csv({
           separator,
           skipEmptyLines: true,

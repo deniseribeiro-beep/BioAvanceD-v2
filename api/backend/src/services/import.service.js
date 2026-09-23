@@ -139,6 +139,7 @@ class ImportService {
       let headerRow = null;
 
       const stream = fs.createReadStream(file.path)
+        .on('error', reject)
         .pipe(csv())
         .on('headers', (headers) => {
           headerRow = headers;
@@ -483,6 +484,7 @@ class ImportService {
         const rows = [];
         await new Promise((resolve, reject) => {
           fs.createReadStream(file.path)
+            .on('error', reject)
             .pipe(csv())
             .on('data', (row) => rows.push(row))
             .on('end', resolve)
@@ -631,6 +633,7 @@ class ImportService {
           : await new Promise((resolve, reject) => {
             const dataRows = [];
             fs.createReadStream(file.path)
+              .on('error', reject)
               .pipe(csv())
               .on('data', (row) => dataRows.push(row))
               .on('end', () => resolve(dataRows))
@@ -747,6 +750,7 @@ class ImportService {
       const rows = [];
       await new Promise((resolve, reject) => {
         fs.createReadStream(file.path)
+          .on('error', reject)
           .pipe(csv())
           .on('data', (row) => rows.push(row))
           .on('end', resolve)

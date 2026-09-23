@@ -738,6 +738,17 @@ describe('BatchValidationEngine file readers', () => {
     expect(rows.sourceLines[3001]).toBe(3005);
   });
 
+  // #1175: .pipe() does not forward the SOURCE stream's 'error', so a read
+  // failure after the separator sniff (the file removed in between) was an
+  // uncaught exception that crashed the process instead of a rejection.
+  it('readCsvRows rejects when the read stream fails after the separator sniff (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `batch-validation-missing-${Date.now()}.csv`);
+    const readFileSyncSpy = vi.spyOn(fs, 'readFileSync').mockReturnValueOnce('a,b\n1,2\n');
+
+    await expect(engine.readCsvRows(missingPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    readFileSyncSpy.mockRestore();
+  });
+
   it('readCsvRows parses rows using the detected separator', async () => {
     const filePath = writeTmpFile('data.csv', 'a;b\n1;2\n3;4\n');
     const rows = await engine.readCsvRows(filePath);

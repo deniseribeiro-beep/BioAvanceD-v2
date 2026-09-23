@@ -253,6 +253,7 @@ class BatchValidationEngine {
       const separator = this.detectCsvSeparator(filePath);
 
       fs.createReadStream(filePath)
+        .on('error', reject)
         .pipe(newlineIndexer)
         .pipe(csvParser({ separator, outputByteOffset: true }))
         .on('data', ({ row, byteOffset }) => {

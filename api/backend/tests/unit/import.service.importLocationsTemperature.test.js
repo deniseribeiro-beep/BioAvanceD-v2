@@ -30,6 +30,17 @@ describe('ImportService.importLocations (disabled, #466)', () => {
 });
 
 describe('ImportService.importTemperature', () => {
+  // #1175: .pipe() does not forward the SOURCE stream's 'error', so a missing
+  // file was an uncaught exception that crashed the process (or the
+  // temperature worker) instead of this rejection.
+  it('rejects when the CSV file does not exist (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `import-service-missing-${Date.now()}-temps.csv`);
+    const db = { collection: () => ({ insertOne: async () => ({ insertedId: 't1' }) }) };
+
+    await expect(importService.importTemperature(db, { path: missingPath, originalname: 'temps.csv' }))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('imports a valid temperature CSV row', async () => {
     const filePath = writeTmpFile('temps.csv', 'sensorId,temperatureValue\nS1,-20\n');
     const inserted = [];

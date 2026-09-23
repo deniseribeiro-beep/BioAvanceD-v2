@@ -718,4 +718,15 @@ describe('ResultWorker.processCSV — stream-level failures', () => {
     await expect(resultWorker.process(db, 'job-16', csvFile)).rejects.toThrow('row processing exploded');
     fs.unlinkSync(csvFile);
   });
+
+  // #1175: .pipe() does not forward the SOURCE stream's 'error', so a file
+  // removed after process()'s existsSync check crashed the worker with an
+  // uncaught exception instead of rejecting.
+  it('rejects when the source read stream fails (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `result-worker-missing-${Date.now()}.csv`);
+    const results = { success: 0, errors: [], total: 0 };
+
+    await expect(resultWorker.processCSV(makeDb(), 'job-17', missingPath, results, []))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });
