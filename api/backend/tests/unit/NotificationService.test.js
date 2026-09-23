@@ -741,6 +741,35 @@ describe('NotificationService', () => {
       expect(notifySpy).not.toHaveBeenCalled();
       expect(result).toEqual([{ channel: 'queue', success: true, provider: 'bullmq' }]);
     });
+
+    // #1169: the job body is persisted in Redis (24h, 7 days on failure), so
+    // it carries only what the send path reads -- never civil identity or
+    // the consent credential.
+    it('#1169: enqueues only the fields the send path reads', async () => {
+      const addMock = vi.fn().mockResolvedValue({ id: 'job-1' });
+      vi.spyOn(notificationService, 'getNotificationQueue').mockReturnValue({ add: addMock });
+
+      await notificationService.enqueueConsentNotification({
+        participantId: '12345678',
+        patientName: 'Maria',
+        email: 'maria@example.com',
+        phone: '11987654321',
+        birthDate: new Date(1990, 0, 20),
+        identityDocument: '11144477735',
+        consentToken: 'secret-token',
+        consentTemplateId: 'tpl-1',
+      }, 'http://link');
+
+      expect(addMock).toHaveBeenCalledWith('consent-notification', {
+        patientData: {
+          participantId: '12345678',
+          patientName: 'Maria',
+          email: 'maria@example.com',
+          phone: '11987654321',
+        },
+        consentLink: 'http://link'
+      });
+    });
   });
 
   describe('processConsentNotificationJob', () => {

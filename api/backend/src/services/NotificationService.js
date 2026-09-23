@@ -24,6 +24,15 @@ function isLoopbackHostname(hostname) {
   return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
 }
 
+// #1169: every patientData field the consent send path reads -- the contact
+// aliases resolvePatientEmail/resolvePatientPhone accept, the display name,
+// and the two ids its log lines carry. Nothing else goes into a queued job.
+const CONSENT_JOB_PATIENT_FIELDS = [
+  'participantId', 'patientID', 'patientName',
+  'email', 'emailAddress', 'contactEmail',
+  'phone', 'mobile', 'whatsapp', 'phoneNumber',
+];
+
 class NotificationService {
   constructor() {
     this.resendClient = null;
@@ -563,8 +572,17 @@ class NotificationService {
       return this.notifyPatientConsent(patientData, consentLink);
     }
 
+    // #1169: the job body is persisted in Redis (24h, 7 days on failure), so
+    // it carries only what notifyPatientConsent's send path reads. Callers
+    // hand over the whole request payload -- civil identity, the consent
+    // token -- none of which the worker needs.
+    const queuedPatientData = {};
+    for (const field of CONSENT_JOB_PATIENT_FIELDS) {
+      if (patientData?.[field] !== undefined) queuedPatientData[field] = patientData[field];
+    }
+
     await queue.add('consent-notification', {
-      patientData,
+      patientData: queuedPatientData,
       consentLink
     });
 
