@@ -991,6 +991,14 @@ class PatientService {
         }
       }
       updateData = omitLegacyIdentityFields(updateData);
+      // #1166: the contact is mirrored too, but NOT stripped -- `patients`
+      // keeps its copy until that copy's readers are repointed.
+      const contactFieldsFromUpdate = {};
+      for (const field of ['email', 'phone']) {
+        if (Object.prototype.hasOwnProperty.call(updateData, field)) {
+          contactFieldsFromUpdate[field] = updateData[field];
+        }
+      }
 
       // Busca por participantId (string de 8 dígitos), _id (ObjectId de 24
       // caracteres hex) ou participantId de formato livre (#604 -- mesmo
@@ -1031,9 +1039,10 @@ class PatientService {
       if (updatedPatient?.participantId && (
         Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'patientName') ||
         Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'birthDate') ||
-        Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'identityDocument')
+        Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'identityDocument') ||
+        Object.keys(contactFieldsFromUpdate).length > 0
       )) {
-        const identityUpdate = { updatedAt: updateData.updatedAt };
+        const identityUpdate = { ...contactFieldsFromUpdate, updatedAt: updateData.updatedAt };
         if (Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'patientName')) {
           identityUpdate.patientName = identityFieldsFromUpdate.patientName;
         }

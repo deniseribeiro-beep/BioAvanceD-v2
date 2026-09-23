@@ -20,21 +20,24 @@ function makeFakeDb(collectionsByName = {}) {
 }
 
 describe('ParticipantIdentityService.getEncryptedFieldMap', () => {
-  it('returns map for the three civil-identity fields (RF005/RNF007, dict-07 row 1, #566)', () => {
+  it('returns map for the three civil-identity fields plus the contact (RF005/RNF007, dict-07 row 1, #566, #1166)', () => {
     const map = participantIdentityService.getEncryptedFieldMap();
     expect(map).toEqual({
       patientName: 'patientNameEncrypted',
       birthDate: 'birthDateEncrypted',
-      identityDocument: 'identityDocumentEncrypted'
+      identityDocument: 'identityDocumentEncrypted',
+      email: 'emailEncrypted',
+      phone: 'phoneEncrypted'
     });
   });
 });
 
 describe('ParticipantIdentityService.getHashFieldMap', () => {
-  it('returns map for the two fields queried by exact/range match (RF005/RNF007, #574)', () => {
+  it('returns map for the fields queried by exact/range match (RF005/RNF007, #574) plus phone uniqueness (#1166)', () => {
     expect(participantIdentityService.getHashFieldMap()).toEqual({
       identityDocument: 'identityDocumentHash',
-      birthDate: 'birthDateHash'
+      birthDate: 'birthDateHash',
+      phone: 'phoneHash'
     });
   });
 });
@@ -310,6 +313,46 @@ describe('ParticipantIdentityService.decryptIdentity', () => {
   it('returns non-object input unchanged', () => {
     expect(participantIdentityService.decryptIdentity(null)).toBeNull();
     expect(participantIdentityService.decryptIdentity('x')).toBe('x');
+  });
+});
+
+// dict-02 P1X-0352/P1X-0353 (#1166): participant email and phone are
+// ParticipantIdentity fields, "MongoDB protegido". Additive for now -- the
+// plaintext stays until #1166's readers are repointed.
+describe('ParticipantIdentityService -- contact fields encrypted at rest (#1166)', () => {
+  it('#1166: encrypts email and phone, keeping the plaintext (additive)', () => {
+    const result = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      email: 'maria@example.com',
+      phone: '11987654321',
+    });
+
+    expect(result.emailEncrypted).toBeTruthy();
+    expect(result.phoneEncrypted).toBeTruthy();
+    expect(JSON.stringify(result.emailEncrypted)).not.toContain('maria@example.com');
+    expect(result.email).toBe('maria@example.com');
+    expect(result.phone).toBe('11987654321');
+  });
+
+  it('#1166: email and phone round-trip through decryptIdentity from ciphertext alone', () => {
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      email: 'maria@example.com',
+      phone: '11987654321',
+    });
+
+    const decrypted = participantIdentityService.decryptIdentity({ ...encrypted, email: null, phone: null });
+
+    expect(decrypted.email).toBe('maria@example.com');
+    expect(decrypted.phone).toBe('11987654321');
+  });
+
+  it('#1166: writes a phoneHash, and a punctuated phone hashes like its digits', () => {
+    const result = participantIdentityService.encryptIdentityFields({ participantId: '12345678', phone: '11987654321' });
+
+    expect(result.phoneHash).toBeTruthy();
+    expect(participantIdentityService.computeBlindIndex('phone', '(11) 98765-4321')).toBe(result.phoneHash);
+    expect(participantIdentityService.computeBlindIndex('phone', '11912345678')).not.toBe(result.phoneHash);
   });
 });
 

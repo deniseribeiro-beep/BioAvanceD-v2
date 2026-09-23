@@ -400,6 +400,26 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     expect(identity.identityDocumentHash).toBe(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
   });
 
+  // #1166: an edited contact used to update patients and leave the identity
+  // copy stale -- the sync forwarded only the three civil-identity fields.
+  it('updatePatient syncs an edited phone and email into ParticipantIdentity, encrypted (#1166)', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '44444444', phone: '11900000000', email: 'old@example.com' }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '44444444', phone: '11900000000', email: 'old@example.com' }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '44444444', { phone: '(11) 98765-4321', email: 'New@Example.com' });
+
+    const identity = participantIdentityService.decryptIdentity(
+      { ...(await participantIdentities.findOne({ participantId: '44444444' })), phone: null, email: null }
+    );
+    expect(identity.phone).toBe('11987654321');
+    expect(identity.email).toBe('new@example.com');
+    expect(identity.phoneHash).toBe(participantIdentityService.computeBlindIndex('phone', '11987654321'));
+  });
+
   it('updatePatient clearing a civil-identity field clears its ciphertext and hash too', async () => {
     const participantIdentityService = require('../../src/services/participantIdentity.service');
     const patients = makeInMemoryCollection([{ participantId: '33333333' }]);

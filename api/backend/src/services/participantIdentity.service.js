@@ -23,11 +23,17 @@ class ParticipantIdentityService {
   // these off the plaintext fields while #566's own scope was storage only.
   // Every reader now goes through decryptIdentity, which is what made the
   // birthDate half safe to do.
+  //
+  // #1166: plus the participant's contact, dict-02 P1X-0352/P1X-0353
+  // (ParticipantIdentity.email/phone, "MongoDB protegido"). Additive for now:
+  // their readers still take the plaintext copy on `patients`.
   getEncryptedFieldMap() {
     return {
       patientName: 'patientNameEncrypted',
       birthDate: 'birthDateEncrypted',
-      identityDocument: 'identityDocumentEncrypted'
+      identityDocument: 'identityDocumentEncrypted',
+      email: 'emailEncrypted',
+      phone: 'phoneEncrypted'
     };
   }
 
@@ -126,10 +132,13 @@ class ParticipantIdentityService {
     return ['birthDate'];
   }
 
+  // #1166: phoneHash is what lets phone uniqueness (#1165) move off the
+  // plaintext `patients.phone` column once the ciphertext is all that's left.
   getHashFieldMap() {
     return {
       identityDocument: 'identityDocumentHash',
-      birthDate: 'birthDateHash'
+      birthDate: 'birthDateHash',
+      phone: 'phoneHash'
     };
   }
 
@@ -161,6 +170,13 @@ class ParticipantIdentityService {
     // identity.
     if (field === 'identityDocument') {
       return this.normalizeIdentityDocument(value);
+    }
+
+    // #1166: digits only, the spelling patient.service.js#normalizePhone
+    // stores, so a punctuated phone hashes the same as its stored form.
+    if (field === 'phone') {
+      const digits = String(value).replace(/\D/g, '');
+      return digits || null;
     }
 
     if (field === 'birthDate') {
