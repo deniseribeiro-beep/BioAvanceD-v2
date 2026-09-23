@@ -139,11 +139,17 @@ class PatientService {
     const indexDefinitions = [
       [
         { phone: 1 },
+        // #1165: v1's `{ $type: 'string', $ne: '' }` could never be built --
+        // `$ne` is not a legal partialFilterExpression operator (code 67 on
+        // mongo:7), so the catch below logged and phone uniqueness was never
+        // enforced. `$gt: ''` states the same intent, "a non-empty string",
+        // legally (comparisons are type-bracketed), and unlike `$type` the
+        // planner can also use it for lookups (#1164).
         {
-          name: 'patients_phone_unique_sanitized_v1',
+          name: 'patients_phone_unique_sanitized_v2',
           unique: true,
           partialFilterExpression: {
-            phone: { $type: 'string', $ne: '' }
+            phone: { $gt: '' }
           }
         }
       ],
@@ -161,7 +167,9 @@ class PatientService {
     // RF005/RNF007 (#575): patientName/identityDocument no longer live on
     // Patient — drop the indexes built on them from already-deployed
     // collections (no-op via IndexNotFound if never created).
-    const legacyIndexNames = ['patients_name_document_text_v1', 'patients_name_idx_v1'];
+    // #1165: plus the phone index's superseded v1 name, which could not be
+    // built on mongo:7 -- dropped anyway so no collection carries both.
+    const legacyIndexNames = ['patients_name_document_text_v1', 'patients_name_idx_v1', 'patients_phone_unique_sanitized_v1'];
     for (const indexName of legacyIndexNames) {
       try {
         await collection.dropIndex(indexName);
