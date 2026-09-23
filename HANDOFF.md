@@ -8,7 +8,7 @@ slices 2 and 3.** Both shipped. The issue stays open for slice 4.
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, pushed. The last substantive commit
-is `714d0b5d`. This is the sitting's only `HANDOFF.md`-only commit.
+is `2467f01f`. This is the sitting's **second** `HANDOFF.md`-only commit; the first went stale when #1170 was closed after it.
 
 ## What shipped
 
@@ -40,9 +40,11 @@ redirected to a file.
   `patients` and remove the fallbacks, drop the `patients` phone index (which
   first needs an `updatePatient` phoneHash pre-check), then the frontend type
   and the e2e seed.
-- **#1170** (filed): decision record for `/generate-link`'s case-insensitive
-  email check against the identity record. Labelled `question`, and left open
-  like the other decision records.
+- **#1170** (filed, then CLOSED `premise-corrected`): `/generate-link`'s
+  case-insensitive check. Both stores already lowercase the email at rest
+  (`Patient.js:56`, `ParticipantIdentity.js:11`), so the check follows
+  from the repo's own choice. `2467f01f` fixed the code comment that said
+  otherwise.
 - **#1168**: representative fields, the same mismatch. Unstarted. Reuse
   `withIdentityContact` and the rollback helper.
 - **#1104**, #1163, #1159, #1162: unchanged from the last note.
