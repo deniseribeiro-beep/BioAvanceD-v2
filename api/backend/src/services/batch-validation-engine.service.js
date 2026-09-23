@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { Transform } = require('stream');
 const ExcelJS = require('exceljs');
 const csvParser = require('csv-parser');
 const { ObjectId } = require('mongodb');
@@ -216,18 +217,47 @@ class BatchValidationEngine {
       // incremented on EVERY data event and pushed only for rows we keep --
       // the same shape as import-lgpd.service.js's #1023 reader.
       //
-      // The residual is #1035's and is unchanged here: csv-parser emits one
-      // data event per RECORD, so a quoted embedded newline still spans
-      // physical lines this counter cannot see.
-      let physicalLine = 1;
+      // #1065: the physical line comes from the record's `byteOffset`
+      // (csv-parser 3.2.0, `outputByteOffset: true`), not a per-event counter.
+      // csv-parser emits one data event per RECORD, so a quoted field with an
+      // embedded newline spans several physical lines in one event, and a
+      // counter drifts low for every record after it. Same derivation as
+      // import-lgpd.service.js#readCSV (#1035), with one difference: that
+      // reader already held the whole file, this one streams it. So the 0x0A
+      // positions are collected from each chunk as it passes to the parser --
+      // a chunk always passes before any record starting in it is emitted --
+      // costing 8 bytes per line instead of a resident copy of the file.
+      // Bytes, not characters: the corpus is accented Portuguese.
+      const newlineByteOffsets = [];
+      let bytesSeen = 0;
+      const newlineIndexer = new Transform({
+        transform(chunk, _encoding, callback) {
+          for (let i = 0; i < chunk.length; i += 1) {
+            if (chunk[i] === 0x0a) newlineByteOffsets.push(bytesSeen + i);
+          }
+          bytesSeen += chunk.length;
+          callback(null, chunk);
+        },
+      });
+      const physicalLineForByteOffset = (byteOffset) => {
+        let lo = 0;
+        let hi = newlineByteOffsets.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (newlineByteOffsets[mid] < byteOffset) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo + 1;
+      };
       const sourceLines = [];
       const separator = this.detectCsvSeparator(filePath);
 
       fs.createReadStream(filePath)
-        .pipe(csvParser({ separator }))
-        .on('data', (row) => {
+        .pipe(newlineIndexer)
+        .pipe(csvParser({ separator, outputByteOffset: true }))
+        .on('data', ({ row, byteOffset }) => {
           if (row && typeof row === 'object') {
-            physicalLine += 1;
+            const physicalLine = physicalLineForByteOffset(byteOffset);
             const hasData = Object.values(row).some((value) => value && String(value).trim());
             if (hasData) {
               rows.push(row);

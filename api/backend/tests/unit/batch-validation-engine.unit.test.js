@@ -707,6 +707,37 @@ describe('BatchValidationEngine file readers', () => {
     expect(Object.prototype.propertyIsEnumerable.call(rows, 'sourceLines')).toBe(false);
   });
 
+  // #1065: csv-parser emits one data event per RECORD, so a quoted field with an
+  // embedded newline spans two physical lines in one event. A per-event counter
+  // reports every later row one line low; the line must come from the record's
+  // byteOffset instead.
+  it('readCsvRows reports the true physical line for rows after a quoted embedded newline (#1065)', async () => {
+    const filePath = writeTmpFile('rows.csv', 'a,b\n"multi\nline",x\n3,z\n');
+
+    const rows = await engine.readCsvRows(filePath);
+
+    expect(rows).toEqual([{ a: 'multi\nline', b: 'x' }, { a: '3', b: 'z' }]);
+    // Header is line 1; the quoted record occupies lines 2-3, so `3,z` is line 4.
+    expect(rows.sourceLines).toEqual([2, 4]);
+  });
+
+  it('readCsvRows keeps the physical line exact across stream chunks and multi-byte text (#1065)', async () => {
+    // ~110 KB: past fs.createReadStream's 64 KB highWaterMark, so the newline
+    // index is built from more than one chunk. Accented text makes byte and
+    // character offsets diverge, which a string-index implementation misreports.
+    const filler = Array.from({ length: 3000 }, (_, i) => `${i},ação-${i}-çãõéíú`);
+    const content = ['a,b', ...filler, '"x\ny\nz",após', 'último,fim', ''].join('\n');
+    const filePath = writeTmpFile('big.csv', content);
+
+    const rows = await engine.readCsvRows(filePath);
+
+    expect(rows).toHaveLength(3002);
+    // Filler rows are lines 2..3001, the quoted record spans 3002-3004.
+    expect(rows.sourceLines[2999]).toBe(3001);
+    expect(rows.sourceLines[3000]).toBe(3002);
+    expect(rows.sourceLines[3001]).toBe(3005);
+  });
+
   it('readCsvRows parses rows using the detected separator', async () => {
     const filePath = writeTmpFile('data.csv', 'a;b\n1;2\n3;4\n');
     const rows = await engine.readCsvRows(filePath);
