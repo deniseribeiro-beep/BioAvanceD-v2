@@ -34,7 +34,7 @@ describe('#936 ensureSampleIndexes', () => {
     const [keys, options] = collection.createIndex.mock.calls[0];
     expect(keys).toEqual({ barcode: 1 });
     expect(options.unique).toBe(true);
-    expect(options.name).toBe('samples_barcode_unique_v1');
+    expect(options.name).toBe('samples_barcode_unique_v2');
   });
 
   // The filter is the whole design decision, so it is pinned by value, not
@@ -44,13 +44,20 @@ describe('#936 ensureSampleIndexes', () => {
   // (what StorageBox.boxID uses) would both match those nulls, so the
   // second barcodeless sample ever created would collide with the first and
   // the insert would fail. `$type: 'string'` indexes only real barcodes.
-  it('filters on $type string, not $exists or sparse, because barcode is written as an explicit null', async () => {
+  //
+  // #1164: and `$gt: ''` rather than `$type: 'string'`. Both exclude the
+  // nulls, but the planner cannot prove `{ barcode: 'BR-1' }` implies
+  // `{ $type: 'string' }`, so the v1 index could never serve a lookup --
+  // every findOne({ barcode }) was a COLLSCAN. It can prove the implication
+  // for `$gt: ''` (comparisons are type-bracketed, so it still means
+  // "a non-empty string").
+  it("filters on $gt '', not $type, $exists or sparse, because barcode is written as an explicit null", async () => {
     const collection = makeCollection();
 
     await ensureSampleIndexes(collection);
 
     const [, options] = collection.createIndex.mock.calls[0];
-    expect(options.partialFilterExpression).toEqual({ barcode: { $type: 'string' } });
+    expect(options.partialFilterExpression).toEqual({ barcode: { $gt: '' } });
     expect(options.sparse).toBeUndefined();
     expect(JSON.stringify(options.partialFilterExpression)).not.toContain('$exists');
   });
@@ -62,7 +69,7 @@ describe('#936 ensureSampleIndexes', () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     const collection = makeCollection(async (keys) => {
       if (keys.barcode) {
-        throw new Error('E11000 duplicate key error collection: bio.samples index: samples_barcode_unique_v1');
+        throw new Error('E11000 duplicate key error collection: bio.samples');
       }
       return 'ok';
     });
@@ -125,6 +132,37 @@ describe('#936 ensureSampleIndexes', () => {
     expect(warn.mock.calls[0][0]).toContain('samples_specimenid_idx_v1');
     expect(warn.mock.calls[0][0]).toContain('desempenho');
     expect(warn.mock.calls[0][0]).not.toContain('duplicados');
+  });
+
+  // #1164: the superseded v1 carries a different partial filter, so it is a
+  // different index and would otherwise linger beside v2. Built first, then
+  // dropped, so the constraint never has a gap.
+  it('drops the superseded samples_barcode_unique_v1 only AFTER building v2', async () => {
+    const collection = makeCollection();
+    collection.dropIndex = vi.fn(async () => {});
+
+    await ensureSampleIndexes(collection);
+
+    expect(collection.dropIndex).toHaveBeenCalledWith('samples_barcode_unique_v1');
+    const buildV2 = collection.createIndex.mock.calls.findIndex(([, o]) => o.name === 'samples_barcode_unique_v2');
+    expect(collection.createIndex.mock.invocationCallOrder[buildV2])
+      .toBeLessThan(collection.dropIndex.mock.invocationCallOrder[0]);
+  });
+
+  // The drop is conditional: if v2 cannot be built (an E11000 over existing
+  // duplicates, or anything transient), dropping v1 anyway would leave no
+  // constraint at all.
+  it('keeps samples_barcode_unique_v1 when building v2 fails', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const collection = makeCollection(async (keys) => {
+      if (keys.barcode) throw new Error('boom');
+      return 'ok';
+    });
+    collection.dropIndex = vi.fn(async () => {});
+
+    await ensureSampleIndexes(collection);
+
+    expect(collection.dropIndex).not.toHaveBeenCalled();
   });
 
   it('is a no-op for a collection handle that cannot create indexes', async () => {

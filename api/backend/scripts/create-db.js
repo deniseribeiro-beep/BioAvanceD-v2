@@ -89,7 +89,7 @@ const COLLECTIONS = [
 //     builds both, unique:true. {accessType:1} dropped -- no longer persisted
 //     on a user; the level is resolved per request from the role assignment.
 //   - samples: {barcode:1} dropped -- src/utils/sampleIndexes.js builds
-//     samples_barcode_unique_v1, unique with a partial filter.
+//     samples_barcode_unique_v2, unique with a partial filter (#1164).
 
 async function createDatabase() {
   try {

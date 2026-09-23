@@ -1,5 +1,6 @@
 const logger = require('./logger');
 const { buildLookupIndex } = require('./lookupIndex');
+const { dropLegacyIndex } = require('./legacyIndex');
 
 /**
  * #941: unique indexes on `storageContainers.containerID`,
@@ -80,18 +81,26 @@ async function ensureStorageContainerIndexes(collection) {
   if (storageContainersIndexed.has(name)) return;
   storageContainersIndexed.add(name);
 
+  // #1164: `$gt: ''`, not `$type: 'string'`. Both keep missing/null rows
+  // out (comparisons are type-bracketed, so `$gt: ''` means "a non-empty
+  // string"), but the planner cannot prove a plain equality implies a
+  // `$type` filter, so the `$type` version enforced uniqueness while never
+  // serving a single lookup. The new name is built FIRST, then the
+  // superseded one dropped, so the constraint never has a gap.
   try {
     await collection.createIndex(
       { containerID: 1 },
       {
-        name: 'storage_containers_containerid_unique_v1',
+        name: 'storage_containers_containerid_unique_v2',
         unique: true,
-        partialFilterExpression: { containerID: { $type: 'string' } }
+        partialFilterExpression: { containerID: { $gt: '' } }
       }
     );
+    // Only once the replacement exists: a failed build keeps the old constraint.
+    await dropLegacyIndex(collection, 'storage_containers_containerid_unique_v1', 'STORAGE');
   } catch (error) {
     logger.warn(
-      '[STORAGE][INDEX] Não foi possível criar storage_containers_containerid_unique_v1 (#941). '
+      '[STORAGE][INDEX] Não foi possível criar storage_containers_containerid_unique_v2 (#941). '
         + 'Um E11000 aqui significa containerID duplicados já gravados -- '
         + 'a unicidade segue apenas em nível de aplicação até que sejam corrigidos: '
         + (error?.message || error)
@@ -167,18 +176,26 @@ async function ensureSensorMetadataIndexes(collection) {
   // above. A single catch around both builds would let a failure on the
   // first index skip the second silently -- the exact shape #1027 corrected
   // in create-db.js, where one throw cost 46 index builds.
+  // #1164: `$gt: ''`, not `$type: 'string'`. Both keep missing/null rows
+  // out (comparisons are type-bracketed, so `$gt: ''` means "a non-empty
+  // string"), but the planner cannot prove a plain equality implies a
+  // `$type` filter, so the `$type` version enforced uniqueness while never
+  // serving a single lookup. The new name is built FIRST, then the
+  // superseded one dropped, so the constraint never has a gap.
   try {
     await collection.createIndex(
       { macAddress: 1 },
       {
-        name: 'sensor_metadata_macaddress_unique_v1',
+        name: 'sensor_metadata_macaddress_unique_v2',
         unique: true,
-        partialFilterExpression: { macAddress: { $type: 'string' } }
+        partialFilterExpression: { macAddress: { $gt: '' } }
       }
     );
+    // Only once the replacement exists: a failed build keeps the old constraint.
+    await dropLegacyIndex(collection, 'sensor_metadata_macaddress_unique_v1', 'SENSOR_METADATA');
   } catch (error) {
     logger.warn(
-      '[SENSOR_METADATA][INDEX] Não foi possível criar sensor_metadata_macaddress_unique_v1 (#941). '
+      '[SENSOR_METADATA][INDEX] Não foi possível criar sensor_metadata_macaddress_unique_v2 (#941). '
         + 'Um E11000 aqui significa macAddress duplicados já gravados -- '
         + 'o erro "macAddress duplicado" que sensor.service.js documenta segue '
         + 'impossível de produzir até que sejam corrigidos: '

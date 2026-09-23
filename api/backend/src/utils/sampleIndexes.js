@@ -1,5 +1,6 @@
 const logger = require('./logger');
 const { buildLookupIndex } = require('./lookupIndex');
+const { dropLegacyIndex } = require('./legacyIndex');
 
 /**
  * #936 item 1: a unique index on `samples.barcode`.
@@ -49,18 +50,26 @@ const { buildLookupIndex } = require('./lookupIndex');
 async function ensureSampleIndexes(collection) {
   if (!collection || typeof collection.createIndex !== 'function') return;
 
+  // #1164: `$gt: ''`, not `$type: 'string'`. Both keep missing/null rows
+  // out (comparisons are type-bracketed, so `$gt: ''` means "a non-empty
+  // string"), but the planner cannot prove a plain equality implies a
+  // `$type` filter, so the `$type` version enforced uniqueness while never
+  // serving a single lookup. The new name is built FIRST, then the
+  // superseded one dropped, so the constraint never has a gap.
   try {
     await collection.createIndex(
       { barcode: 1 },
       {
-        name: 'samples_barcode_unique_v1',
+        name: 'samples_barcode_unique_v2',
         unique: true,
-        partialFilterExpression: { barcode: { $type: 'string' } }
+        partialFilterExpression: { barcode: { $gt: '' } }
       }
     );
+    // Only once the replacement exists: a failed build keeps the old constraint.
+    await dropLegacyIndex(collection, 'samples_barcode_unique_v1', 'SAMPLES');
   } catch (error) {
     logger.warn(
-      '[SAMPLES][INDEX] Não foi possível criar samples_barcode_unique_v1 (#936). '
+      '[SAMPLES][INDEX] Não foi possível criar samples_barcode_unique_v2 (#936). '
         + 'Um E11000 aqui significa barcodes duplicados já gravados -- '
         + 'a unicidade segue apenas em nível de aplicação até que sejam corrigidos: '
         + (error?.message || error)

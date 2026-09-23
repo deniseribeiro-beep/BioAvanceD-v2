@@ -212,6 +212,29 @@ describe('terminologySync.service', () => {
       expect(built).not.toContain(JSON.stringify(keys));
     });
 
+    // #1164: v2's `$type: 'string'` filter made the index a constraint only --
+    // the planner cannot use it for the upsert's plain `{ sistema, codigo }`
+    // equality, so every synced record paid a COLLSCAN. v3 is built first,
+    // then v2 dropped, so uniqueness never has a gap.
+    it('drops the superseded terminologies_sistema_codigo_unique_v2 only AFTER building v3', async () => {
+      const createIndex = vi.fn(async () => {});
+      const dropIndex = vi.fn(async () => {});
+
+      await svc.ensureTerminologyIndexes({ createIndex, dropIndex }, '1164-drop-v2');
+
+      expect(dropIndex).toHaveBeenCalledWith('terminologies_sistema_codigo_unique_v2');
+      expect(createIndex.mock.invocationCallOrder[0]).toBeLessThan(dropIndex.mock.invocationCallOrder[0]);
+    });
+
+    it('keeps terminologies_sistema_codigo_unique_v2 when building v3 fails', async () => {
+      const createIndex = vi.fn(async () => { throw new Error('boom'); });
+      const dropIndex = vi.fn(async () => {});
+
+      await svc.ensureTerminologyIndexes({ createIndex, dropIndex }, '1164-keep-v2');
+
+      expect(dropIndex).not.toHaveBeenCalled();
+    });
+
     it('creates a unique index on { sistema: 1, codigo: 1 }, pinned by value', async () => {
       const createIndex = vi.fn(async () => {});
       const collection = { createIndex };
@@ -222,9 +245,9 @@ describe('terminologySync.service', () => {
       const [keys, options] = createIndex.mock.calls[0];
       expect(keys).toEqual({ sistema: 1, codigo: 1 });
       expect(options).toEqual({
-        name: 'terminologies_sistema_codigo_unique_v2',
+        name: 'terminologies_sistema_codigo_unique_v3',
         unique: true,
-        partialFilterExpression: { sistema: { $type: 'string' }, codigo: { $type: 'string' } },
+        partialFilterExpression: { sistema: { $gt: '' }, codigo: { $gt: '' } },
       });
     });
 
@@ -264,9 +287,11 @@ describe('terminologySync.service', () => {
       // one, `unique: true` indexes them as four identical { SPREC, null }.
       expect(options.partialFilterExpression).toBeDefined();
 
+      // #1164: the filter is `{ $gt: '' }` per field -- Mongo's comparisons are
+      // type-bracketed, so it admits exactly the non-empty strings.
       const matchesFilter = (doc) =>
         Object.entries(options.partialFilterExpression).every(
-          ([field, cond]) => typeof doc[field] === (cond.$type === 'string' ? 'string' : typeof doc[field])
+          ([field, cond]) => (cond.$gt === '' ? typeof doc[field] === 'string' && doc[field] > '' : false)
         );
 
       expect(seededDocs.filter(matchesFilter)).toEqual([]);
@@ -283,7 +308,7 @@ describe('terminologySync.service', () => {
 
       const realRow = { sistema: 'ORPHA', codigo: 'ORPHA:558', descricao: 'Marfan' };
       const matchesFilter = Object.entries(options.partialFilterExpression).every(
-        ([field, cond]) => cond.$type !== 'string' || typeof realRow[field] === 'string'
+        ([field, cond]) => cond.$gt === '' && typeof realRow[field] === 'string' && realRow[field] > ''
       );
 
       expect(matchesFilter).toBe(true);
@@ -316,14 +341,14 @@ describe('terminologySync.service', () => {
       const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
       const collection = {
         createIndex: vi.fn(async () => {
-          throw new Error('E11000 duplicate key error collection: bio.terminologies index: terminologies_sistema_codigo_unique_v2');
+          throw new Error('E11000 duplicate key error collection: bio.terminologies');
         }),
       };
 
       await expect(svc.ensureTerminologyIndexes(collection, '941-fails')).resolves.toBeUndefined();
 
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0][0]).toContain('terminologies_sistema_codigo_unique_v2');
+      expect(warn.mock.calls[0][0]).toContain('terminologies_sistema_codigo_unique_v3');
       expect(warn.mock.calls[0][0]).toContain('E11000');
     });
 
@@ -431,9 +456,9 @@ describe('terminologySync.service', () => {
       const [keys, options] = createIndex.mock.calls[0];
       expect(keys).toEqual({ sistema: 1, codigo: 1 });
       expect(options).toEqual({
-        name: 'terminologies_sistema_codigo_unique_v2',
+        name: 'terminologies_sistema_codigo_unique_v3',
         unique: true,
-        partialFilterExpression: { sistema: { $type: 'string' }, codigo: { $type: 'string' } },
+        partialFilterExpression: { sistema: { $gt: '' }, codigo: { $gt: '' } },
       });
       expect(createIndex.mock.invocationCallOrder[0]).toBeLessThan(updateOne.mock.invocationCallOrder[0]);
     });

@@ -49,21 +49,37 @@ describe('#941 ensureStorageContainerIndexes', () => {
     const [keys, options] = containerIdCall;
     expect(keys).toEqual({ containerID: 1 });
     expect(options.unique).toBe(true);
-    expect(options.name).toBe('storage_containers_containerid_unique_v1');
+    expect(options.name).toBe('storage_containers_containerid_unique_v2');
   });
 
   // The filter is the whole design decision, so it is pinned by value.
   // `findOrCreateContainer`'s SHELF/RACK/DRAWER path never sets containerID
   // at all, so a plain unique index would collide on the second such
   // container; `$type: 'string'` indexes only the rows with a real value.
-  it('filters on $type string', async () => {
+  // #1164: `$gt: ''`, not `$type: 'string'` -- the planner cannot use a
+  // `$type` partial index for `{ containerID: 'X' }`, so v1 never served a
+  // lookup. `$gt: ''` excludes the same missing/null rows.
+  it("filters on $gt ''", async () => {
     const { ensureStorageContainerIndexes } = freshStorageIndexes();
     const collection = makeCollection('storageContainers');
 
     await ensureStorageContainerIndexes(collection);
 
     const [, options] = collection.createIndex.mock.calls[0];
-    expect(options.partialFilterExpression).toEqual({ containerID: { $type: 'string' } });
+    expect(options.partialFilterExpression).toEqual({ containerID: { $gt: '' } });
+  });
+
+  it('drops the superseded storage_containers_containerid_unique_v1 only AFTER building v2', async () => {
+    const { ensureStorageContainerIndexes } = freshStorageIndexes();
+    const collection = makeCollection('storageContainers-1164-drop');
+    collection.dropIndex = vi.fn(async () => {});
+
+    await ensureStorageContainerIndexes(collection);
+
+    expect(collection.dropIndex).toHaveBeenCalledWith('storage_containers_containerid_unique_v1');
+    const buildV2 = collection.createIndex.mock.calls.findIndex(([, o]) => o.name === 'storage_containers_containerid_unique_v2');
+    expect(collection.createIndex.mock.invocationCallOrder[buildV2])
+      .toBeLessThan(collection.dropIndex.mock.invocationCallOrder[0]);
   });
 
   it('logs and does not throw when the index cannot be built', async () => {
@@ -71,7 +87,7 @@ describe('#941 ensureStorageContainerIndexes', () => {
     const logger = require('../../src/utils/logger');
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     const collection = makeCollection('storageContainers', async () => {
-      throw new Error('E11000 duplicate key error collection: bio.storageContainers index: storage_containers_containerid_unique_v1');
+      throw new Error('E11000 duplicate key error collection: bio.storageContainers');
     });
 
     await expect(ensureStorageContainerIndexes(collection)).resolves.toBeUndefined();
@@ -84,7 +100,7 @@ describe('#941 ensureStorageContainerIndexes', () => {
     });
 
     const warned = warn.mock.calls.map(([message]) => message);
-    const uniqueWarning = warned.find((m) => m.includes('storage_containers_containerid_unique_v1'));
+    const uniqueWarning = warned.find((m) => m.includes('storage_containers_containerid_unique_v2'));
     expect(uniqueWarning).toContain('E11000');
 
     // A lookup-index failure costs performance and nothing else, so its
@@ -295,8 +311,41 @@ describe('#941 ensureSensorMetadataIndexes', () => {
     const [keys, options] = macCall;
     expect(keys).toEqual({ macAddress: 1 });
     expect(options.unique).toBe(true);
-    expect(options.name).toBe('sensor_metadata_macaddress_unique_v1');
-    expect(options.partialFilterExpression).toEqual({ macAddress: { $type: 'string' } });
+    expect(options.name).toBe('sensor_metadata_macaddress_unique_v2');
+    // #1164: `$gt: ''`, not `$type: 'string'`, so the index can serve lookups.
+    expect(options.partialFilterExpression).toEqual({ macAddress: { $gt: '' } });
+  });
+
+  // #1164: a failed replacement build must keep the old constraint.
+  it.each([
+    ['ensureStorageContainerIndexes', 'containerID', 'storageContainers-1164-keep'],
+    ['ensureSensorMetadataIndexes', 'macAddress', 'sensorMetadata-1164-keep'],
+  ])('%s keeps the v1 %s index when building v2 fails', async (fn, field, collectionName) => {
+    const logger = require('../../src/utils/logger');
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const helpers = freshStorageIndexes();
+    const collection = makeCollection(collectionName, async (keys) => {
+      if (Object.prototype.hasOwnProperty.call(keys, field)) throw new Error('boom');
+      return 'ok';
+    });
+    collection.dropIndex = vi.fn(async () => {});
+
+    await helpers[fn](collection);
+
+    expect(collection.dropIndex).not.toHaveBeenCalled();
+  });
+
+  it('drops the superseded sensor_metadata_macaddress_unique_v1 only AFTER building v2', async () => {
+    const { ensureSensorMetadataIndexes } = freshStorageIndexes();
+    const collection = makeCollection('sensorMetadata-1164-drop');
+    collection.dropIndex = vi.fn(async () => {});
+
+    await ensureSensorMetadataIndexes(collection);
+
+    expect(collection.dropIndex).toHaveBeenCalledWith('sensor_metadata_macaddress_unique_v1');
+    const buildV2 = collection.createIndex.mock.calls.findIndex(([, o]) => o.name === 'sensor_metadata_macaddress_unique_v2');
+    expect(collection.createIndex.mock.invocationCallOrder[buildV2])
+      .toBeLessThan(collection.dropIndex.mock.invocationCallOrder[0]);
   });
 
   it('logs and does not throw when the index cannot be built', async () => {
@@ -319,7 +368,7 @@ describe('#941 ensureSensorMetadataIndexes', () => {
     });
     const warned = warn.mock.calls.map(([message]) => message).join('\n');
     expect(warned).toContain('sensor_metadata_sensorid_unique_v1');
-    expect(warned).toContain('sensor_metadata_macaddress_unique_v1');
+    expect(warned).toContain('sensor_metadata_macaddress_unique_v2');
   });
 
   it('is a no-op for a collection handle that cannot create indexes', async () => {
