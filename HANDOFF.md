@@ -4,12 +4,13 @@
 end signal, so treat the session as CONTINUING.** His instruction was to read
 the handoff and pick the next group, with Docker on. **The group picked was
 #1166** (participant `email`/`phone` in plaintext). Its consumer audit turned
-up #1167, fixed and closed, and #1168/#1169, filed.
+up #1167 and #1169, both fixed and closed, and #1168, filed.
 
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, pushed. The last substantive commit
-is `ba9e9f19`. This is the sitting's first `HANDOFF.md`-only commit.
+is `a5f3ec84`. This is the sitting's **second** `HANDOFF.md`-only commit.
+The first went stale when #1169 was worked after it.
 
 ## What shipped
 
@@ -21,6 +22,11 @@ is `ba9e9f19`. This is the sitting's first `HANDOFF.md`-only commit.
   encrypted-field map, with a digits-only `phoneHash`, and `updatePatient`
   now mirrors contact edits to the identity copy. **Additive only: no privacy
   gain until slice 4.**
+- **`a5f3ec84`**: the consent queue job carries only the ten fields the send
+  path reads, so civil identity and the consent token no longer reach Redis.
+  **#1169 closed.** Name and contact still travel in the job. Moving them
+  out is now part of #1166 slice 2
+  ([comment](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/1166#issuecomment-5800843978)).
 
 ## Open, and left in a known state
 
@@ -38,10 +44,6 @@ redirected to a file.
   and slice 4 (drop from `patients`, ciphertext-only).
 - **#1168** (filed): the same mismatch for the four `representative*` fields
   (dict-02 P1X-0357..0360). Reuse whatever #1166 builds. Unstarted.
-- **#1169** (filed): `createPatient` enqueues the whole payload (civil
-  identity, contact, consent token) into Redis in plaintext, kept 24h, or 7
-  days on failure. `[ran it]` the worker reads only contact, `patientName`
-  and `participantId`. It fits naturally with #1166 slice 2. Unstarted.
 - **#1104**: unchanged. `identityDocument` waits on #1112, and `patientName`
   waits on a design call.
 - #1163, #1159, #1162: still Dennis's.
@@ -69,5 +71,5 @@ still hold (`git log -p -- HANDOFF.md`). Plus:
 
 ## Recommended next
 
-**None queued by name.** Unverified prescription: #1166 slice 2, with
-#1169 folded in. Its readers are the ones slice 2 repoints.
+**None queued by name.** Unverified prescription: #1166 slice 2,
+including the queue-job change from #1169.
